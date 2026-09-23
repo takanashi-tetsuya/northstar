@@ -295,7 +295,7 @@ pub async fn upload_put(
             object_version: promoted.object_version.as_deref(),
             content_sha256: &content_sha256,
             size: promoted.size,
-            retention_seconds: state.config.upload_retention_seconds,
+            retention_seconds: state.upload_retention_seconds(),
             storage_fence: lease.storage_fence,
         })
         .await?;
@@ -411,7 +411,7 @@ async fn stored_object_digest(state: &AppState, slot: &UploadSlot) -> Result<[u8
         AppError::Internal(anyhow::anyhow!("committed upload has no object locator"))
     })?;
     let Some(stored) = tokio::time::timeout(
-        Duration::from_secs(state.config.upload_download_read_timeout_seconds),
+        state.upload_download_read_timeout(),
         state
             .upload_store()
             .get(object_key, slot.storage_object_version.as_deref()),
@@ -440,9 +440,8 @@ async fn stored_object_digest(state: &AppState, slot: &UploadSlot) -> Result<[u8
     let mut digest = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
-    let total_deadline =
-        tokio::time::Instant::now() + Duration::from_secs(state.config.upload_download_max_seconds);
-    let idle_timeout = Duration::from_secs(state.config.upload_download_read_timeout_seconds);
+    let total_deadline = tokio::time::Instant::now() + state.upload_download_max_duration();
+    let idle_timeout = state.upload_download_read_timeout();
     loop {
         let deadline = (tokio::time::Instant::now() + idle_timeout).min(total_deadline);
         let read = tokio::time::timeout_at(deadline, reader.read(&mut buffer))

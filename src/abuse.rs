@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{
     collections::{HashSet, VecDeque},
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -838,6 +840,77 @@ pub(crate) struct PersistentVerificationInput<'a> {
     pub(crate) intent: Option<&'a PowIntent>,
 }
 
+pub(crate) type AbusePersistenceFuture<'a, T> =
+    Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;
+pub(crate) type IssueDecision<'a> = Box<
+    dyn FnOnce(
+            &mut [DbActorState],
+            chrono::DateTime<chrono::Utc>,
+        )
+            -> anyhow::Result<crate::db::abuse_challenge_issuance_repository::IssueRecord>
+        + Send
+        + 'a,
+>;
+pub(crate) type VerificationPolicy<'a> = Box<
+    dyn FnOnce(
+            &mut [DbActorState],
+            chrono::DateTime<chrono::Utc>,
+            Option<crate::db::abuse_verification_repository::ConsumedChallenge>,
+        )
+            -> anyhow::Result<crate::db::abuse_verification_repository::VerificationDecision>
+        + Send
+        + 'a,
+>;
+pub(crate) type RequirementPolicy<'a> = Box<
+    dyn FnOnce(&mut [DbActorState], chrono::DateTime<chrono::Utc>) -> WorkRequirement + Send + 'a,
+>;
+pub(crate) type FailurePolicy<'a> =
+    Box<dyn FnOnce(&mut [DbActorState], chrono::DateTime<chrono::Utc>) + Send + 'a>;
+
+/// Persistence operations own their transactions and connection pool. Policy,
+/// signing, and key-rotation decisions remain with the guard and run only
+/// while the repository holds the required actor-state locks.
+pub(crate) trait AbusePersistence: Send + Sync {
+    fn issue<'a>(
+        &'a self,
+        request: crate::db::abuse_challenge_issuance_repository::IssueRequest,
+        decide: IssueDecision<'a>,
+    ) -> AbusePersistenceFuture<'a, PowChallenge>;
+
+    fn verify<'a>(
+        &'a self,
+        actor_state_keys: &'a [String],
+        challenge_id: Option<Uuid>,
+        decide: VerificationPolicy<'a>,
+    ) -> AbusePersistenceFuture<'a, std::result::Result<WorkRequirement, GuardError>>;
+
+    fn current_requirement<'a>(
+        &'a self,
+        actor_state_keys: &'a [String],
+        decide: RequirementPolicy<'a>,
+    ) -> AbusePersistenceFuture<'a, WorkRequirement>;
+
+    fn record_failure<'a>(
+        &'a self,
+        actor_state_keys: &'a [String],
+        decide: FailurePolicy<'a>,
+    ) -> AbusePersistenceFuture<'a, ()>;
+
+    fn begin_message_admission<'a, 'r: 'a>(
+        &'a self,
+        guard: &'a AbuseGuard,
+        request: &'a MessageAdmissionRequest<'r>,
+        candidates: &'a [MessageAdmissionCandidate],
+        offline_dedupe: MessageDedupeIdentity,
+    ) -> AbusePersistenceFuture<'a, MessageAdmissionStart>;
+
+    fn cleanup<'a>(
+        &'a self,
+        window_seconds: u64,
+        stale_seconds: u64,
+    ) -> AbusePersistenceFuture<'a, ()>;
+}
+
 struct ActorState {
     events: VecDeque<Instant>,
     penalty_level: u32,
@@ -893,7 +966,7 @@ pub struct AbuseGuard {
     /// and multi-process deployments do not reset penalties or permit two
     /// concurrent uses of a challenge. Unit tests may omit it to exercise the
     /// deterministic in-memory model without an external service.
-    pool: Option<PgPool>,
+    persistence: Option<Arc<dyn AbusePersistence>>,
     actor_key_secret: Zeroizing<Vec<u8>>,
     actor_key_id: String,
     previous_actor_key_secret: Option<Zeroizing<Vec<u8>>>,
@@ -915,13 +988,13 @@ pub struct AbuseGuard {
 
 impl AbuseGuard {
     pub(crate) fn persistent_storage_enabled(&self) -> bool {
-        self.pool.is_some()
+        self.persistence.is_some()
     }
 
     pub fn new(config: AbuseConfig) -> Self {
         Self {
             config,
-            pool: None,
+            persistence: None,
             actor_key_secret: Zeroizing::new(Vec::new()),
             actor_key_id: "memory-only".to_owned(),
             previous_actor_key_secret: None,
@@ -967,7 +1040,9 @@ impl AbuseGuard {
         legacy_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
         let mut guard = Self::new(config);
-        guard.pool = Some(pool);
+        guard.persistence = Some(Arc::new(
+            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool),
+        ));
         if let Some(secret) = shared_secret {
             guard.actor_key_secret = Zeroizing::new(derive_actor_key_secret(secret));
         } else {
@@ -1323,7 +1398,7 @@ impl AbuseGuard {
         actors: &[String],
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<PowChallenge> {
-        if self.pool.is_some() {
+        if self.persistence.is_some() {
             self.issue_persistent_bound(action, subject, actors, intent)
                 .await
         } else {
@@ -1559,7 +1634,7 @@ impl AbuseGuard {
         proof: Option<&PowProof>,
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
-        if self.pool.is_some() {
+        if self.persistence.is_some() {
             self.verify_persistent_bound(action, subject, actors, proof, intent)
                 .await
         } else {
@@ -1630,7 +1705,7 @@ impl AbuseGuard {
                 Err(error) => MessageAdmissionStart::Denied(error),
             });
         };
-        let Some(pool) = self.pool.as_ref() else {
+        let Some(persistence) = self.persistence.as_ref() else {
             let intent = PowIntent::xmpp(
                 AbuseAction::Message,
                 "/xmpp/message",
@@ -1682,14 +1757,9 @@ impl AbuseGuard {
                 })
                 .collect(),
         };
-        crate::db::message_admission_repository::begin_message_admission(
-            pool,
-            self,
-            request,
-            &candidate_material,
-            offline_dedupe,
-        )
-        .await
+        persistence
+            .begin_message_admission(self, request, &candidate_material, offline_dedupe)
+            .await
     }
 
     #[cfg(test)]
@@ -1835,7 +1905,7 @@ impl AbuseGuard {
         action: AbuseAction,
         actors: &[String],
     ) -> anyhow::Result<WorkRequirement> {
-        if self.pool.is_some() {
+        if self.persistence.is_some() {
             self.current_requirement_persistent(action, actors).await
         } else {
             Ok(self.requirement(action, actors, Instant::now()))
@@ -1872,7 +1942,7 @@ impl AbuseGuard {
         action: AbuseAction,
         actors: &[String],
     ) -> anyhow::Result<()> {
-        if self.pool.is_some() {
+        if self.persistence.is_some() {
             self.record_failure_persistent(action, actors).await
         } else {
             self.record_failure_memory(action, actors);
@@ -1994,7 +2064,7 @@ impl AbuseGuard {
     ) -> anyhow::Result<PowChallenge> {
         use crate::db::abuse_challenge_issuance_repository::{IssueRecord, IssueRequest};
 
-        let pool = self.pool.as_ref().expect("persistent abuse pool");
+        let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
         let request = IssueRequest {
             issue_groups: self.challenge_issue_groups(action, actors),
@@ -2006,71 +2076,77 @@ impl AbuseGuard {
         let (primary_key_id, primary_secret) = self.primary_actor_key();
         let subject_hash = subject_hash(action, subject, primary_secret);
         let primary_actor_state_keys = actor_state_keys(action, actors, primary_secret);
-        crate::db::abuse_challenge_issuance_repository::issue(pool, request, |states, now| {
-            decay_db_states(states, now, &self.config);
-            self.merge_previous_actor_states(action, actors, states);
-            let requirement =
-                requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
-            let mut random = [0_u8; 18];
-            rand::thread_rng().fill_bytes(&mut random);
-            let id = Uuid::new_v4();
-            let server_nonce = URL_SAFE_NO_PAD.encode(random);
-            let ttl = Duration::from_secs(120)
-                .max(Duration::from_secs(requirement.hard_wait_seconds + 30));
-            let expires_at = now + chrono_duration(ttl);
-            let version = if intent.is_some() {
-                POW_INTENT_VERSION
-            } else {
-                1
-            };
-            let prefix = pow_prefix(
-                primary_secret,
-                version,
-                id,
-                action,
-                primary_key_id,
-                subject,
-                actors,
-                requirement.work_factor,
-                now,
-                expires_at,
-                &server_nonce,
-                intent,
-            );
-            // During key rotation, sign only the primary generation's sequence
-            // snapshot; a dual-key verifier may load additional mirrored rows.
-            let actor_sequences = serde_json::Value::Object(
-                states
-                    .iter()
-                    .filter(|state| {
-                        primary_actor_state_keys.contains(&state.key)
-                            && !shared_ip_keys.contains(&state.key)
+        persistence
+            .issue(
+                request,
+                Box::new(|states, now| {
+                    decay_db_states(states, now, &self.config);
+                    self.merge_previous_actor_states(action, actors, states);
+                    let requirement =
+                        requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
+                    let mut random = [0_u8; 18];
+                    rand::thread_rng().fill_bytes(&mut random);
+                    let id = Uuid::new_v4();
+                    let server_nonce = URL_SAFE_NO_PAD.encode(random);
+                    let ttl = Duration::from_secs(120)
+                        .max(Duration::from_secs(requirement.hard_wait_seconds + 30));
+                    let expires_at = now + chrono_duration(ttl);
+                    let version = if intent.is_some() {
+                        POW_INTENT_VERSION
+                    } else {
+                        1
+                    };
+                    let prefix = pow_prefix(
+                        primary_secret,
+                        version,
+                        id,
+                        action,
+                        primary_key_id,
+                        subject,
+                        actors,
+                        requirement.work_factor,
+                        now,
+                        expires_at,
+                        &server_nonce,
+                        intent,
+                    );
+                    // During key rotation, sign only the primary generation's sequence
+                    // snapshot; a dual-key verifier may load additional mirrored rows.
+                    let actor_sequences = serde_json::Value::Object(
+                        states
+                            .iter()
+                            .filter(|state| {
+                                primary_actor_state_keys.contains(&state.key)
+                                    && !shared_ip_keys.contains(&state.key)
+                            })
+                            .map(|state| {
+                                (state.key.clone(), serde_json::Value::from(state.sequence))
+                            })
+                            .collect(),
+                    );
+                    Ok(IssueRecord {
+                        action,
+                        challenge: PowChallenge {
+                            version,
+                            challenge_id: id,
+                            prefix,
+                            key_id: primary_key_id.to_owned(),
+                            issued_at: now,
+                            expires_at,
+                            expires_in_seconds: ttl.as_secs(),
+                            server_nonce,
+                            intent: intent.map(PowIntent::view),
+                            requirement,
+                        },
+                        subject_hash: subject_hash.clone(),
+                        actor_sequences,
+                        intent_method: intent.map(|intent| intent.method.clone()),
+                        intent_path: intent.map(|intent| intent.path.clone()),
+                        body_sha256: intent.map(|intent| intent.body_sha256.to_vec()),
                     })
-                    .map(|state| (state.key.clone(), serde_json::Value::from(state.sequence)))
-                    .collect(),
-            );
-            Ok(IssueRecord {
-                action,
-                challenge: PowChallenge {
-                    version,
-                    challenge_id: id,
-                    prefix,
-                    key_id: primary_key_id.to_owned(),
-                    issued_at: now,
-                    expires_at,
-                    expires_in_seconds: ttl.as_secs(),
-                    server_nonce,
-                    intent: intent.map(PowIntent::view),
-                    requirement,
-                },
-                subject_hash: subject_hash.clone(),
-                actor_sequences,
-                intent_method: intent.map(|intent| intent.method.clone()),
-                intent_path: intent.map(|intent| intent.path.clone()),
-                body_sha256: intent.map(|intent| intent.body_sha256.to_vec()),
-            })
-        })
-        .await
+                }),
+            )
+            .await
     }
 
     async fn current_requirement_persistent(
@@ -2078,16 +2154,20 @@ impl AbuseGuard {
         action: AbuseAction,
         actors: &[String],
     ) -> anyhow::Result<WorkRequirement> {
-        let pool = self.pool.as_ref().expect("persistent abuse pool");
+        let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
         let keys = self.persistent_actor_state_keys(action, actors);
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        crate::db::abuse_actor_state_repository::current_requirement(pool, &keys, |states, now| {
-            decay_db_states(states, now, &self.config);
-            self.merge_previous_actor_states(action, actors, states);
-            requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
-        })
-        .await
+        persistence
+            .current_requirement(
+                &keys,
+                Box::new(|states, now| {
+                    decay_db_states(states, now, &self.config);
+                    self.merge_previous_actor_states(action, actors, states);
+                    requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
+                }),
+            )
+            .await
     }
 
     async fn record_failure_persistent(
@@ -2095,13 +2175,17 @@ impl AbuseGuard {
         action: AbuseAction,
         actors: &[String],
     ) -> anyhow::Result<()> {
-        let pool = self.pool.as_ref().expect("persistent abuse pool");
+        let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
         let keys = self.persistent_actor_state_keys(action, actors);
-        crate::db::abuse_actor_state_repository::record_failure(pool, &keys, |states, now| {
-            self.record_failure_decision(action, actors, states, now);
-        })
-        .await
+        persistence
+            .record_failure(
+                &keys,
+                Box::new(|states, now| {
+                    self.record_failure_decision(action, actors, states, now);
+                }),
+            )
+            .await
     }
 
     async fn verify_persistent_bound(
@@ -2112,29 +2196,29 @@ impl AbuseGuard {
         proof: Option<&PowProof>,
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
-        let pool = self.pool.as_ref().expect("persistent abuse pool");
+        let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
         let keys = self.persistent_actor_state_keys(action, actors);
-        crate::db::abuse_verification_repository::verify(
-            pool,
-            &keys,
-            proof.map(|proof| proof.challenge_id),
-            |states, now, challenge| {
-                self.decide_persistent_verification(
-                    PersistentVerificationInput {
-                        action,
-                        subject,
-                        actors,
-                        proof,
-                        intent,
-                    },
-                    states,
-                    now,
-                    challenge,
-                )
-            },
-        )
-        .await
+        persistence
+            .verify(
+                &keys,
+                proof.map(|proof| proof.challenge_id),
+                Box::new(|states, now, challenge| {
+                    self.decide_persistent_verification(
+                        PersistentVerificationInput {
+                            action,
+                            subject,
+                            actors,
+                            proof,
+                            intent,
+                        },
+                        states,
+                        now,
+                        challenge,
+                    )
+                }),
+            )
+            .await
     }
 
     pub(crate) fn decide_persistent_verification(
@@ -2340,19 +2424,16 @@ impl AbuseGuard {
     }
 
     pub(crate) async fn cleanup_challenges(&self) -> anyhow::Result<()> {
-        if let Some(pool) = self.pool.as_ref() {
+        if let Some(persistence) = self.persistence.as_ref() {
             let stale_seconds = self
                 .config
                 .window
                 .max(self.config.max_wait)
                 .max(max_penalty_decay_horizon(self.config.cooldown_step))
                 .as_secs();
-            return crate::db::challenge_cleanup_repository::cleanup(
-                pool,
-                self.config.window.as_secs(),
-                stale_seconds,
-            )
-            .await;
+            return persistence
+                .cleanup(self.config.window.as_secs(), stale_seconds)
+                .await;
         }
         self.cleanup_challenges_memory();
         Ok(())

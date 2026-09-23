@@ -375,7 +375,7 @@ where
         PeerIdleTracker::new(session.authenticated.is_some(), tokio::time::Instant::now());
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
-        (session.state.config.sm_live_lease_seconds / 3).max(1),
+        (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -415,7 +415,7 @@ where
             }
             _ = authentication_watch.tick(), if session.authenticated.is_none() => {
                 if session.connected_at.elapsed()
-                    >= Duration::from_secs(session.state.config.unauthenticated_timeout_seconds)
+                    >= session.state.unauthenticated_timeout()
                 {
                     tracing::debug!(peer_ip = %session.peer_ip, "closed unauthenticated XMPP connection after deadline");
                     return Ok(DriveOutcome::Done);
@@ -1090,7 +1090,7 @@ pub async fn websocket_connection(
     };
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
-        (session.state.config.sm_live_lease_seconds / 3).max(1),
+        (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut peer_idle =
@@ -1141,7 +1141,7 @@ pub async fn websocket_connection(
             }
             _ = authentication_watch.tick(), if session.authenticated.is_none() => {
                 if session.connected_at.elapsed()
-                    >= Duration::from_secs(session.state.config.unauthenticated_timeout_seconds)
+                    >= session.state.unauthenticated_timeout()
                 {
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
                     session.sm_resume_allowed = false;

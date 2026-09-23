@@ -260,7 +260,8 @@ impl BoshManager {
             return Err("bad-request");
         }
 
-        let wait_seconds = negotiated_wait(request.wait, state.config.bosh_max_wait_seconds);
+        let policy = state.bosh_policy();
+        let wait_seconds = negotiated_wait(request.wait, policy.max_wait_seconds);
         let requested_hold = negotiated_hold(request.hold, wait_seconds);
         let requests = usize::from(requested_hold) + 1;
         let content_type = request
@@ -268,7 +269,7 @@ impl BoshManager {
             .clone()
             .unwrap_or_else(|| "text/xml; charset=utf-8".to_owned());
 
-        let (outbound_tx, outbound_rx) = mpsc::channel(state.config.bosh_max_output_stanzas);
+        let (outbound_tx, outbound_rx) = mpsc::channel(policy.max_output_stanzas);
         let mut protocol = ProtocolSession::new(
             state.clone(),
             crate::outbound::OutboundSender::new(outbound_tx),
@@ -323,23 +324,22 @@ impl BoshManager {
             output_bytes: 0,
             wait: Duration::from_secs(wait_seconds),
             hold: requested_hold,
-            inactivity: Duration::from_secs(state.config.bosh_inactivity_seconds),
-            active_inactivity: Duration::from_secs(state.config.bosh_inactivity_seconds),
-            polling: Duration::from_secs(state.config.bosh_polling_seconds),
-            max_pause: state.config.bosh_max_pause_seconds,
-            max_response_bytes: state.config.bosh_max_response_bytes,
-            max_output_stanzas: state.config.bosh_max_output_stanzas,
-            max_output_bytes: state.config.bosh_max_output_bytes,
+            inactivity: Duration::from_secs(policy.inactivity_seconds),
+            active_inactivity: Duration::from_secs(policy.inactivity_seconds),
+            polling: Duration::from_secs(policy.polling_seconds),
+            max_pause: policy.max_pause_seconds,
+            max_response_bytes: policy.max_response_bytes,
+            max_output_stanzas: policy.max_output_stanzas,
+            max_output_bytes: policy.max_output_bytes,
             content_type: content_type.clone(),
             last_response: Instant::now(),
             last_empty_poll: None,
             expected_key: request.newkey.clone(),
             client_acknowledgements: request.ack == Some(1),
             delivery_session_id: uuid::Uuid::new_v4(),
-            delivery_fence_ttl_seconds: state
-                .config
-                .bosh_inactivity_seconds
-                .max(state.config.bosh_max_pause_seconds)
+            delivery_fence_ttl_seconds: policy
+                .inactivity_seconds
+                .max(policy.max_pause_seconds)
                 .max(wait_seconds)
                 .saturating_add(30)
                 .min(86_400),
@@ -370,9 +370,9 @@ impl BoshManager {
             .attr("wait", wait_seconds)
             .attr("hold", requested_hold)
             .attr("requests", requests)
-            .attr("inactivity", state.config.bosh_inactivity_seconds)
-            .attr("polling", state.config.bosh_polling_seconds)
-            .attr("maxpause", state.config.bosh_max_pause_seconds)
+            .attr("inactivity", policy.inactivity_seconds)
+            .attr("polling", policy.polling_seconds)
+            .attr("maxpause", policy.max_pause_seconds)
             .attr("ver", version)
             .attr("from", state.local_domain())
             .attr("ack", request.rid)
@@ -597,7 +597,7 @@ impl BoshActor {
                 _ = maintenance.tick() => {
                     if self.protocol.authenticated.is_none()
                         && self.protocol.connected_at.elapsed()
-                            >= Duration::from_secs(state.config.unauthenticated_timeout_seconds)
+                            >= state.unauthenticated_timeout()
                     {
                         self.terminate_waiters("policy-violation");
                         keep_running = false;
@@ -1592,7 +1592,7 @@ pub async fn http_bind(
     request: axum::extract::Request,
 ) -> Response {
     let headers = request.headers().clone();
-    if !secure_proxy_request(peer.ip(), &headers, &state.config.trusted_proxy_ips) {
+    if !secure_proxy_request(peer.ip(), &headers, state.trusted_proxy_ips()) {
         return cors_response(StatusCode::OK, terminal_response("policy-violation"));
     }
     if !supported_request_headers(&headers) {
@@ -1601,9 +1601,10 @@ pub async fn http_bind(
     let Some(body_read_slot) = state.bosh_manager().try_body_read() else {
         return cors_response(StatusCode::OK, terminal_response("policy-violation"));
     };
+    let policy = state.bosh_policy();
     let body = match tokio::time::timeout(
-        Duration::from_secs(state.config.bosh_body_read_timeout_seconds),
-        axum::body::to_bytes(request.into_body(), state.config.bosh_max_request_bytes),
+        Duration::from_secs(policy.body_read_timeout_seconds),
+        axum::body::to_bytes(request.into_body(), policy.max_request_bytes),
     )
     .await
     {
@@ -1620,7 +1621,7 @@ pub async fn http_bind(
     };
     let parsed = std::str::from_utf8(&body)
         .map_err(|_| "bad-request")
-        .and_then(|raw| parse_body(raw, state.config.bosh_max_stanzas_per_request));
+        .and_then(|raw| parse_body(raw, policy.max_stanzas_per_request));
     drop(body);
     drop(body_read_slot);
     let response = match parsed {

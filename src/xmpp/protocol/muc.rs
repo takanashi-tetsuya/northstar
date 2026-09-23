@@ -4669,7 +4669,6 @@ impl ProtocolSession {
             .map(|membership| membership.value().clone())
         {
             let joined_nick = joined.nick;
-            let old_key = muc_occupant_key(&room_jid, &joined_nick);
             let Some(mut occupant) = self.authorized_muc_occupant(&room_jid).await? else {
                 self.joined_rooms.remove(&room_jid);
                 return Ok(Action::Send(muc_stanza_error(
@@ -4723,7 +4722,15 @@ impl ProtocolSession {
                             "item-not-found",
                         )));
                     }
-                    let Some(current) = self.state.muc_occupants.get(&old_key) else {
+                    let Some(current) = self.state.local_muc_occupant_exact(
+                        crate::state::LocalMucOccupantIdentity {
+                            room_jid: &room_jid,
+                            nick: &joined_nick,
+                            full_jid: &full_jid,
+                            connection_id: self.connection_id,
+                            cluster_epoch: joined.cluster_epoch,
+                        },
+                    ) else {
                         return Ok(Action::Send(muc_stanza_error(
                             root,
                             &full_jid,
@@ -4731,20 +4738,8 @@ impl ProtocolSession {
                             "not-acceptable",
                         )));
                     };
-                    if current.full_jid != full_jid
-                        || current.connection_id != self.connection_id
-                        || current.cluster_epoch != joined.cluster_epoch
-                    {
-                        return Ok(Action::Send(muc_stanza_error(
-                            root,
-                            &full_jid,
-                            "cancel",
-                            "not-acceptable",
-                        )));
-                    }
                     let requested_payload = occupant.payload.clone();
-                    occupant = current.clone();
-                    drop(current);
+                    occupant = current;
                     occupant.payload = requested_payload;
                     let affiliation = self
                         .state
@@ -4829,7 +4824,16 @@ impl ProtocolSession {
                         )));
                     }
                 }
-                let Some(mut current) = self.state.muc_occupants.get_mut(&old_key) else {
+                occupant = if let Some(updated) = self
+                    .state
+                    .refresh_local_muc_presence_exact(&occupant, local_refresh_guard.is_some())
+                {
+                    updated
+                } else if self.state.cluster.is_enabled() {
+                    tracing::warn!(room=%room_jid, %nick,
+                        "PG-authoritative MUC presence refresh lost its exact local incarnation; reconciliation will repair the cache");
+                    return Ok(Action::None);
+                } else {
                     return Ok(Action::Send(muc_stanza_error(
                         root,
                         &full_jid,
@@ -4837,20 +4841,6 @@ impl ProtocolSession {
                         "not-acceptable",
                     )));
                 };
-                if current.full_jid != full_jid
-                    || current.connection_id != self.connection_id
-                    || current.cluster_epoch != joined.cluster_epoch
-                {
-                    return Ok(Action::Send(muc_stanza_error(
-                        root,
-                        &full_jid,
-                        "cancel",
-                        "not-acceptable",
-                    )));
-                }
-                *current = occupant.clone();
-                occupant = current.clone();
-                drop(current);
                 drop(local_refresh_guard);
                 let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                 if let Ok(json) = serde_json::to_string(&serializable) {
@@ -5163,8 +5153,12 @@ impl ProtocolSession {
                 }
             }
 
-            let new_key = muc_occupant_key(&room_jid, nick);
-            if !self.state.cluster.is_enabled() && self.state.muc_occupants.contains_key(&new_key) {
+            if !self.state.cluster.is_enabled()
+                && self
+                    .state
+                    .local_muc_occupant_by_nick(&room_jid, nick)
+                    .is_some()
+            {
                 return Ok(Action::Send(muc_stanza_error(
                     root, &full_jid, "cancel", "conflict",
                 )));
@@ -5238,7 +5232,7 @@ impl ProtocolSession {
                         "MUC rename committed; signed wake failed and PostgreSQL polling will catch up");
                 }
             }
-            match self
+            let redis_renamed = match self
                 .state
                 .cluster
                 .rename_muc_occupant(
@@ -5251,38 +5245,79 @@ impl ProtocolSession {
                 )
                 .await
             {
-                Ok(crate::cluster::MucRename::Renamed) => {}
+                Ok(crate::cluster::MucRename::Renamed) => true,
                 Ok(crate::cluster::MucRename::Conflict) => {
+                    if cluster_operation.is_none() {
+                        return Ok(Action::Send(muc_stanza_error(
+                            root, &full_jid, "cancel", "conflict",
+                        )));
+                    }
                     tracing::warn!(%room_jid, old_nick=%joined_nick, new_nick=%nick,
                         "Redis MUC nickname cache conflicted after PostgreSQL committed; reconciliation will replace soft state");
+                    false
                 }
                 Ok(crate::cluster::MucRename::Stale) => {
+                    if cluster_operation.is_none() {
+                        return Ok(Action::Send(muc_stanza_error(
+                            root,
+                            &full_jid,
+                            "cancel",
+                            "not-acceptable",
+                        )));
+                    }
                     tracing::warn!(%room_jid, old_nick=%joined_nick, new_nick=%nick,
                         "Redis MUC nickname cache was stale after PostgreSQL committed");
+                    false
                 }
                 Err(error) => {
+                    if cluster_operation.is_none() {
+                        return Err(error);
+                    }
                     self.state.cluster.record_control_plane_failure(&error);
                     tracing::warn!(?error, %room_jid,
                         "PostgreSQL committed MUC rename; Redis wake/cache update will be reconciled");
+                    false
                 }
-            }
-            // DashMap cannot atomically move an entry between two keys.  The
-            // room writer gate makes the single-node transition linearizable:
-            // remove the exact old incarnation first, then publish the new
-            // nickname with Entry. Readers can briefly observe the actor as
-            // absent, but never as two occupants. Cluster mode has already
-            // committed the rename in PostgreSQL; its local map is soft state
-            // and follows the same old-first ordering without rolling PG back.
-            let removed_old = self.state.muc_occupants.remove_if(&old_key, |_, current| {
-                current.full_jid == full_jid
-                    && current.connection_id == self.connection_id
-                    && current.cluster_epoch == occupant.cluster_epoch
-            });
-            if removed_old.is_none() {
-                if cluster_operation.is_some() {
-                    tracing::warn!(room=%room_jid, old_nick=%joined_nick, new_nick=%nick,
-                        "PG-authoritative MUC rename found an already-pruned old local cache entry");
-                } else {
+            };
+            let move_outcome = self.state.move_local_muc_nickname_exact(
+                crate::state::LocalMucOccupantIdentity::from(&old_occupant),
+                &occupant,
+                cluster_operation.is_some(),
+            );
+            match move_outcome {
+                crate::state::LocalMucNicknameMove::Published
+                | crate::state::LocalMucNicknameMove::AlreadyPublished => {}
+                crate::state::LocalMucNicknameMove::DeferredToReconciliation
+                    if cluster_operation.is_some() =>
+                {
+                    tracing::warn!(room=%room_jid, %nick,
+                        "PG-authoritative MUC rename found another local incarnation; reconciliation will repair the cache");
+                }
+                crate::state::LocalMucNicknameMove::CollisionRestored
+                | crate::state::LocalMucNicknameMove::CollisionRestoreFailed => {
+                    if move_outcome == crate::state::LocalMucNicknameMove::CollisionRestoreFailed {
+                        tracing::error!(room=%room_jid, old_nick=%joined_nick,
+                            "could not restore local MUC actor after nickname collision");
+                    }
+                    if redis_renamed {
+                        let _ = self
+                            .state
+                            .cluster
+                            .rename_muc_occupant(
+                                &room_jid,
+                                nick,
+                                &joined_nick,
+                                occupant.cluster_epoch,
+                                &new_json,
+                                &old_json,
+                            )
+                            .await;
+                    }
+                    return Ok(Action::Send(muc_stanza_error(
+                        root, &full_jid, "cancel", "conflict",
+                    )));
+                }
+                _ => {
                     self.joined_rooms.remove_if(&room_jid, |_, current| {
                         current.cluster_epoch == occupant.cluster_epoch
                     });
@@ -5293,54 +5328,6 @@ impl ProtocolSession {
                         "not-acceptable",
                     )));
                 }
-            }
-            if self.state.cluster.is_enabled() {
-                if let Some((_, stale)) = self.state.muc_occupants.remove(&new_key) {
-                    tracing::warn!(
-                        %room_jid,
-                        %nick,
-                        stale_full_jid = %stale.full_jid,
-                        stale_epoch = %stale.cluster_epoch,
-                        "evicting stale local MUC nickname cache entry after PostgreSQL rename"
-                    );
-                }
-            }
-            let locally_reserved = match self.state.muc_occupants.entry(new_key.clone()) {
-                dashmap::mapref::entry::Entry::Occupied(_) => false,
-                dashmap::mapref::entry::Entry::Vacant(entry) => {
-                    entry.insert(occupant.clone());
-                    true
-                }
-            };
-            if !locally_reserved {
-                if !self.state.cluster.is_enabled() {
-                    // The exact old entry was removed above. Restore it before
-                    // rejecting so a failed rename cannot silently evict the
-                    // actor. An occupied old key indicates an out-of-contract
-                    // ungated writer; do not overwrite that actor.
-                    if let dashmap::mapref::entry::Entry::Vacant(entry) =
-                        self.state.muc_occupants.entry(old_key.clone())
-                    {
-                        entry.insert(old_occupant);
-                    } else {
-                        tracing::error!(%room_jid, old_nick=%joined_nick,
-                            "could not restore local MUC actor after nickname collision");
-                    }
-                }
-                return Ok(Action::Send(muc_stanza_error(
-                    root,
-                    &full_jid,
-                    if self.state.cluster.is_enabled() {
-                        "wait"
-                    } else {
-                        "cancel"
-                    },
-                    if self.state.cluster.is_enabled() {
-                        "internal-server-error"
-                    } else {
-                        "conflict"
-                    },
-                )));
             }
             self.joined_rooms.insert(
                 room_jid.clone(),

@@ -28,6 +28,7 @@ const [abuse, abuseTransaction, abuseVerification, config, envExample, apiRouter
 ]);
 const api = `${apiRouter}\n${authRoutes}\n${reportRoutes}`;
 const protocol = `${protocolSession}\n${messaging}\n${xmlUtil}`;
+const abusePersistence = await read('src/db/abuse_persistence_repository.rs');
 const { httpPowIntent, xmppPowIntent } = await import(new URL('../web/pow.js', import.meta.url));
 
 const browserIntentVector = await httpPowIntent('/api/v1/register', {
@@ -99,6 +100,16 @@ assert.match(abuseVerification, /pub\(crate\) async fn verify_in_tx\([\s\S]+DELE
   'one-use proof deletion and actor-state persistence must share that transaction');
 assert.doesNotMatch(abuse, /sqlx::Transaction/,
   'anti-abuse policy must not accept database transactions');
+assert.match(abuse, /persistence: Option<Arc<dyn AbusePersistence>>/,
+  'the guard must hold a persistence port instead of a connection pool');
+assert.doesNotMatch(abuse.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0], /self\.pool/,
+  'guard operations must not access a PostgreSQL pool directly');
+assert.match(abusePersistence, /struct PostgresAbusePersistence\s*\{\s*pool: PgPool/,
+  'the PostgreSQL adapter must own the pool');
+for (const operation of ['issue', 'verify', 'current_requirement', 'record_failure', 'begin_message_admission', 'cleanup']) {
+  assert.match(abusePersistence, new RegExp(`fn ${operation}<'a`),
+    `the PostgreSQL adapter must implement ${operation}`);
+}
 assert.match(abuse, /PasswordChange, "XMPP", "\/xmpp\/account-remove"/,
   'authenticated XMPP account removal must have a closed v2 intent route');
 assert.match(miscProtocol, /PasswordChangeRequest[\s\S]+\/xmpp\/account-remove[\s\S]+DeletionQuiesceRequest/,

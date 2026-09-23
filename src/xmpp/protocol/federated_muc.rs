@@ -856,7 +856,7 @@ async fn federated_muc_presence_owned(
             "bad-request",
         ));
     }
-    if let Some((mut key, mut occupant)) = existing {
+    if let Some((_, mut occupant)) = existing {
         let mut guarded_room = None;
         let local_actor_guard = if state.cluster.is_enabled() {
             None
@@ -897,7 +897,7 @@ async fn federated_muc_presence_owned(
                     "item-not-found",
                 ));
             }
-            let Some((current_key, current)) =
+            let Some((_, current)) =
                 state
                     .muc_occupants_for(&room_jid)
                     .into_iter()
@@ -914,7 +914,6 @@ async fn federated_muc_presence_owned(
                     "not-acceptable",
                 ));
             };
-            key = current_key;
             occupant = current;
             guarded_room = Some(refreshed_room);
             Some(guard)
@@ -1073,65 +1072,23 @@ async fn federated_muc_presence_owned(
                     }
                 }
             }
-            let new_key = muc_occupant_key(&room_jid, nick);
-            // Publish an old-key -> new-key move in old-first order. The
-            // single-node writer gate prevents another room mutation from
-            // interleaving; readers may see a short absence but can never see
-            // the same actor under both nicknames.
-            let removed_old = state.muc_occupants.remove_if(&key, |_, current| {
-                current.full_jid == actor_full_jid
-                    && current.connection_id == occupant.connection_id
-                    && current.cluster_epoch == occupant.cluster_epoch
-            });
-            if removed_old.is_none() {
-                if cluster_operation.is_some() {
-                    tracing::warn!(room=%room_jid, old_nick=%old_nick, new_nick=%nick,
-                        "PG-authoritative MUC rename found an already-pruned old soft-state entry");
-                } else {
-                    let _ = state
-                        .cluster
-                        .rename_muc_occupant(
-                            &room_jid,
-                            nick,
-                            &old_nick,
-                            occupant.cluster_epoch,
-                            &new_json,
-                            &old_json,
-                        )
-                        .await;
-                    return Ok(federated_error(
-                        &request.stanza,
-                        from,
-                        "cancel",
-                        "not-acceptable",
-                    ));
+            let move_outcome = state.move_local_muc_nickname_exact(
+                crate::state::LocalMucOccupantIdentity::from(&old_occupant),
+                &occupant,
+                cluster_operation.is_some(),
+            );
+            match move_outcome {
+                crate::state::LocalMucNicknameMove::Published
+                | crate::state::LocalMucNicknameMove::AlreadyPublished => {}
+                crate::state::LocalMucNicknameMove::DeferredToReconciliation
+                    if cluster_operation.is_some() =>
+                {
+                    tracing::warn!(room=%room_jid, %nick,
+                        "PG-authoritative federated MUC rename found another local incarnation; reconciliation will repair the cache");
                 }
-            }
-            if state.cluster.is_enabled() {
-                if let Some((_, stale)) = state.muc_occupants.remove(&new_key) {
-                    tracing::warn!(
-                        room=%room_jid,
-                        %nick,
-                        stale_full_jid=%stale.full_jid,
-                        stale_epoch=%stale.cluster_epoch,
-                        "evicting stale federated MUC nickname cache entry after PostgreSQL rename"
-                    );
-                }
-            }
-            let locally_reserved = match state.muc_occupants.entry(new_key.clone()) {
-                dashmap::mapref::entry::Entry::Occupied(_) => false,
-                dashmap::mapref::entry::Entry::Vacant(entry) => {
-                    entry.insert(occupant.clone());
-                    true
-                }
-            };
-            if !locally_reserved {
-                if !state.cluster.is_enabled() {
-                    if let dashmap::mapref::entry::Entry::Vacant(entry) =
-                        state.muc_occupants.entry(key.clone())
-                    {
-                        entry.insert(old_occupant);
-                    } else {
+                crate::state::LocalMucNicknameMove::CollisionRestored
+                | crate::state::LocalMucNicknameMove::CollisionRestoreFailed => {
+                    if move_outcome == crate::state::LocalMucNicknameMove::CollisionRestoreFailed {
                         tracing::error!(room=%room_jid, old_nick=%old_nick,
                             "could not restore federated MUC actor after nickname collision");
                     }
@@ -1149,12 +1106,28 @@ async fn federated_muc_presence_owned(
                         .await;
                     return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
                 }
-                return Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    "wait",
-                    "internal-server-error",
-                ));
+                _ => {
+                    if cluster_operation.is_none() {
+                        drop(local_actor_guard);
+                        let _ = state
+                            .cluster
+                            .rename_muc_occupant(
+                                &room_jid,
+                                nick,
+                                &old_nick,
+                                occupant.cluster_epoch,
+                                &new_json,
+                                &old_json,
+                            )
+                            .await;
+                    }
+                    return Ok(federated_error(
+                        &request.stanza,
+                        from,
+                        "cancel",
+                        "not-acceptable",
+                    ));
+                }
             }
             drop(local_actor_guard);
             if let Some(operation_id) = cluster_operation {
@@ -1235,8 +1208,6 @@ async fn federated_muc_presence_owned(
             connection_id,
         };
         occupant.payload = request.payload.clone();
-        let serializable = SerializableMucOccupant::from(&occupant);
-        let json = serde_json::to_string(&serializable)?;
         if state.cluster.is_enabled() {
             let room = state
                 .muc_service()
@@ -1270,28 +1241,26 @@ async fn federated_muc_presence_owned(
                 ));
             }
         }
-        if state.cluster.is_enabled() {
-            // PostgreSQL accepted the exact occupancy refresh. Any local
-            // value under this nickname is only stale soft state.
-            state.muc_occupants.insert(key.clone(), occupant.clone());
+        let refreshed = state.refresh_local_muc_presence_exact(&occupant, guarded_room.is_some());
+        occupant = if let Some(refreshed) = refreshed {
+            refreshed
+        } else if state.cluster.is_enabled() {
+            tracing::warn!(room=%room_jid, %nick,
+                "PG-authoritative MUC presence refresh lost its exact local incarnation; reconciliation will repair the cache");
+            return Ok(None);
+        } else if state.local_muc_occupant_by_nick(&room_jid, nick).is_some() {
+            return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         } else {
-            let Some(mut current) = state.muc_occupants.get_mut(&key) else {
-                return Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    "cancel",
-                    "not-acceptable",
-                ));
-            };
-            if current.full_jid != actor_full_jid
-                || current.connection_id != occupant.connection_id
-                || current.cluster_epoch != occupant.cluster_epoch
-            {
-                return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
-            }
-            *current = occupant.clone();
-        }
+            return Ok(federated_error(
+                &request.stanza,
+                from,
+                "cancel",
+                "not-acceptable",
+            ));
+        };
         drop(local_actor_guard);
+        let serializable = SerializableMucOccupant::from(&occupant);
+        let json = serde_json::to_string(&serializable)?;
         if state.cluster.is_enabled() {
             if let Err(error) = state
                 .cluster

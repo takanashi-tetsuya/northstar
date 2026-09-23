@@ -428,6 +428,7 @@ fn fast_token_xml(issued: &crate::services::authentication::IssuedFastToken) -> 
 }
 
 pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
+    let fast_policy = session.state.sasl2_fast_token_policy();
     let mut mechanism_names = Vec::with_capacity(6);
     if !session.client_certificate_identities.is_empty() {
         mechanism_names.push("EXTERNAL");
@@ -436,7 +437,7 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
         mechanism_names.push("SCRAM-SHA-256-PLUS");
     }
     mechanism_names.push("SCRAM-SHA-256");
-    if session.state.config.scram_sha1_enabled {
+    if session.state.c2s_scram_sha1_enabled() {
         if session.channel_bindings.is_some() {
             mechanism_names.push("SCRAM-SHA-1-PLUS");
         }
@@ -445,7 +446,7 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     mechanism_names.push("PLAIN");
 
     let mut fast_mechanism_names = Vec::with_capacity(3);
-    if session.state.config.fast_token_enabled {
+    if fast_policy.enabled {
         if let Some(bindings) = session.channel_bindings.as_ref() {
             if bindings.get("tls-server-end-point").is_some() {
                 fast_mechanism_names.push("HT-SHA-256-ENDP");
@@ -465,18 +466,14 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
         .child(XmlElement::new("feature").attr("var", "urn:xmpp:carbons:2"));
     if session
         .state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0352::XEP_ID)
+        .xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
     {
         bind_inline
             .push_child(XmlElement::new("feature").attr("var", northstar_xep_0352::NAMESPACE));
     }
     if session
         .state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0198::XEP_ID)
+        .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
     {
         bind_inline
             .push_child(XmlElement::new("feature").attr("var", northstar_xep_0198::NAMESPACE));
@@ -484,14 +481,12 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     let mut inline = XmlElement::new("inline");
     if session
         .state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0198::XEP_ID)
+        .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
     {
         inline.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
     }
     inline.push_child(XmlElement::namespaced("bind", BIND2_NS).child(bind_inline));
-    if session.state.config.fast_token_enabled {
+    if fast_policy.enabled {
         let mut fast = XmlElement::namespaced("fast", FAST_NS);
         for mechanism in fast_mechanism_names {
             fast.push_child(XmlElement::new("mechanism").text(mechanism));
@@ -757,9 +752,7 @@ impl ProtocolSession {
         if (request.resume.is_some() || request.bind.as_ref().is_some_and(|bind| bind.sm.is_some()))
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0198::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
         {
             return Ok(Action::Send(failure_xml("malformed-request", None)));
         }
@@ -769,9 +762,7 @@ impl ProtocolSession {
             .is_some_and(|bind| bind.csi_active.is_some())
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0352::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
         {
             return Ok(Action::Send(failure_xml("malformed-request", None)));
         }
@@ -831,7 +822,7 @@ impl ProtocolSession {
                     bindings,
                 ))
             }
-            "SCRAM-SHA-1" if self.state.config.scram_sha1_enabled => {
+            "SCRAM-SHA-1" if self.state.c2s_scram_sha1_enabled() => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         auth::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
@@ -844,7 +835,7 @@ impl ProtocolSession {
                     ))
                 }
             }
-            "SCRAM-SHA-1-PLUS" if self.state.config.scram_sha1_enabled => {
+            "SCRAM-SHA-1-PLUS" if self.state.c2s_scram_sha1_enabled() => {
                 let Some(bindings) = self.channel_bindings.clone() else {
                     return Ok(Action::Send(failure_xml("invalid-mechanism", None)));
                 };
@@ -939,7 +930,7 @@ impl ProtocolSession {
                 initiator_proof: &decoded[separator + 1..],
                 channel_binding,
                 invalidate: fast.invalidate,
-                rotate_within_days: self.state.config.fast_token_rotation_days,
+                rotate_within_days: self.state.sasl2_fast_token_policy().rotation_days,
             })
             .await;
         let (
@@ -1493,6 +1484,7 @@ impl ProtocolSession {
         &self,
         context: &Sasl2Context,
     ) -> crate::services::authentication::FastCommitPlan {
+        let fast_policy = self.state.sasl2_fast_token_policy();
         let mechanism = if context.fast_should_rotate {
             context
                 .request
@@ -1509,8 +1501,8 @@ impl ProtocolSession {
                 |(mechanism, device_id)| crate::services::authentication::FastTokenIssue {
                     device_id,
                     mechanism: mechanism.to_owned(),
-                    ttl_days: self.state.config.fast_token_ttl_days,
-                    strong_reauth_max_days: self.state.config.fast_strong_reauth_max_days,
+                    ttl_days: fast_policy.ttl_days,
+                    strong_reauth_max_days: fast_policy.strong_reauth_max_days,
                     inherited_chain: context.inherited_fast_chain,
                 },
             );
@@ -1588,7 +1580,7 @@ impl ProtocolSession {
     }
 
     fn fast_mechanism_available(&self, mechanism: &str) -> bool {
-        if !self.state.config.fast_token_enabled {
+        if !self.state.sasl2_fast_token_policy().enabled {
             return false;
         }
         match mechanism {

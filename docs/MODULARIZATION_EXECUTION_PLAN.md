@@ -556,8 +556,13 @@ Abuse admission transactions now remain inside PostgreSQL adapters rather than
 passing SQLx transactions through the policy guard. XMPP extension and stream
 management policy reads use narrow state methods or immutable snapshots.
 Registration, voice and administrator MUC updates compare the exact occupant
-connection and epoch before changing the local projection; presence refresh
-and nickname changes still need the same boundary.
+connection and epoch before changing the local projection. Presence refresh
+and nickname changes now use the same exact identity boundary; join, departure
+and clustered projection updates still need this treatment.
+The abuse guard's persistent operations now use a typed PostgreSQL port that
+owns its pool. BOSH, component transport, upload HTTP, session cleanup and
+additional protocol adapters read subsystem policy snapshots rather than the
+application configuration directly.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

@@ -127,7 +127,7 @@ impl ProtocolSession {
                 && target_domain != self.pubsub_domain())
             .then_some(target_domain);
             if let Some(domain) = remote_domain {
-                if !self.state.config.external_route_domain_allowed(domain) {
+                if !self.state.xmpp_external_route_domain_allowed(domain) {
                     return Ok(Action::Send(stanza_error(
                         root,
                         "cancel",
@@ -164,7 +164,7 @@ impl ProtocolSession {
                         "resource-constraint",
                     )));
                 }
-                if subscription_kind && !self.state.config.component_domain_configured(domain) {
+                if subscription_kind && !self.state.xmpp_component_domain_configured(domain) {
                     match self
                         .update_remote_presence_subscription(RemoteSubscriptionRequest {
                             actor_id: user.id,
@@ -657,8 +657,7 @@ impl ProtocolSession {
                             }
                         } else if self
                             .state
-                            .config
-                            .external_route_domain_allowed(contact.domainpart())
+                            .xmpp_external_route_domain_allowed(contact.domainpart())
                         {
                             let _ = self
                                 .state
@@ -706,8 +705,7 @@ impl ProtocolSession {
                             }
                         } else if self
                             .state
-                            .config
-                            .external_route_domain_allowed(contact.domainpart())
+                            .xmpp_external_route_domain_allowed(contact.domainpart())
                         {
                             let _ = self
                                 .state
@@ -1691,8 +1689,7 @@ impl ProtocolSession {
         }
         if !self
             .state
-            .config
-            .external_route_domain_allowed(contact_jid.domainpart())
+            .xmpp_external_route_domain_allowed(contact_jid.domainpart())
         {
             return;
         }

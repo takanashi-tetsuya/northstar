@@ -8,10 +8,10 @@ use crate::services::{
         PepDeleteNodeCommand, PepDeleteNodeWrite, PepDirectStateSnapshot, PepDirectStateTransition,
         PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind, PepOwnerMutationOutcome,
         PepProfileWrite, PepPublishOutcome, PepPublishWrite, PepPurgeNodeCommand,
-        PepPurgeNodeWrite, PepQuotas, PepRetractCommand, PepRetractWrite,
-        PepSetAffiliationsCommand, PepSetAffiliationsWrite, PepSubscribeOutcome,
-        PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeOutcome,
-        PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert, PubSubService,
+        PepPurgeNodeWrite, PepRetractCommand, PepRetractWrite, PepSetAffiliationsCommand,
+        PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite,
+        PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
+        PubSubOutboxInsert, PubSubService,
     },
 };
 use crate::xmpp::xml_builder::XmlElement;
@@ -357,10 +357,7 @@ impl ProtocolSession {
             event.push_validated_fragment(&strip_pubsub_item_root_namespaces(&payload)?)?;
             Some(event.finish())
         };
-        let quotas = PepQuotas {
-            max_nodes: self.state.config.pep_max_nodes_per_account,
-            max_storage_bytes: self.state.config.pep_max_storage_bytes_per_account,
-        };
+        let quotas = self.state.pep_account_quotas();
         let mut avatar_presence = AvatarPresenceUpdate::Unchanged;
         let (outcome, _content_changed) = if node == AVATAR_METADATA {
             let event = profile_event
@@ -560,7 +557,7 @@ impl ProtocolSession {
                 user.id,
                 node,
                 &crate::services::pubsub::default_pep_node_config(node),
-                self.state.config.pep_max_nodes_per_account,
+                self.state.pep_account_quotas().max_nodes,
             )
             .await?
         {

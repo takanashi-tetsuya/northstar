@@ -1844,6 +1844,118 @@ fn refresh_local_muc_policy_exact_in(
     })
 }
 
+fn muc_presence_endpoint_matches(current: &MucOccupant, prepared: &MucOccupant) -> bool {
+    match (&current.endpoint, &prepared.endpoint) {
+        (MucOccupantEndpoint::Local(_), MucOccupantEndpoint::Local(_)) => true,
+        (
+            MucOccupantEndpoint::Federated {
+                authenticated_domain: current_domain,
+                connection_id: current_connection,
+            },
+            MucOccupantEndpoint::Federated {
+                authenticated_domain: prepared_domain,
+                connection_id: prepared_connection,
+            },
+        ) => current_domain == prepared_domain && current_connection == prepared_connection,
+        (MucOccupantEndpoint::Suspended(current), MucOccupantEndpoint::Suspended(prepared)) => {
+            Arc::ptr_eq(current, prepared)
+        }
+        _ => false,
+    }
+}
+
+fn refresh_local_muc_presence_exact_in(
+    occupants: &DashMap<String, MucOccupant>,
+    prepared: &MucOccupant,
+    apply_policy: bool,
+) -> Option<MucOccupant> {
+    with_local_muc_occupant_exact(occupants, prepared.into(), |current| {
+        if !muc_presence_endpoint_matches(current, prepared) {
+            return None;
+        }
+        current.payload.clone_from(&prepared.payload);
+        if apply_policy {
+            current.affiliation.clone_from(&prepared.affiliation);
+            current.role.clone_from(&prepared.role);
+            current.room_non_anonymous = prepared.room_non_anonymous;
+        }
+        Some(current.clone())
+    })
+    .flatten()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LocalMucNicknameMove {
+    Published,
+    AlreadyPublished,
+    DeferredToReconciliation,
+    OldMissing,
+    CollisionRestored,
+    CollisionRestoreFailed,
+}
+
+fn move_local_muc_nickname_exact_in(
+    occupants: &DashMap<String, MucOccupant>,
+    old: LocalMucOccupantIdentity<'_>,
+    renamed: &MucOccupant,
+    cluster_committed: bool,
+) -> LocalMucNicknameMove {
+    let Some(room_jid) = crate::jid::canonicalize_bare(old.room_jid).ok() else {
+        return LocalMucNicknameMove::OldMissing;
+    };
+    if old.nick == renamed.nick
+        || renamed.room_jid != room_jid
+        || renamed.full_jid != old.full_jid
+        || renamed.connection_id != old.connection_id
+        || renamed.cluster_epoch != old.cluster_epoch
+        || old.connection_id.is_nil()
+        || old.cluster_epoch.is_nil()
+    {
+        return LocalMucNicknameMove::OldMissing;
+    }
+    let old_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, old.nick);
+    let removed_old = remove_local_muc_occupant_exact_from(occupants, old);
+    if removed_old.is_none() {
+        return if cluster_committed {
+            LocalMucNicknameMove::DeferredToReconciliation
+        } else {
+            LocalMucNicknameMove::OldMissing
+        };
+    }
+    let new_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &renamed.nick);
+    let destination = match occupants.entry(new_key) {
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(renamed.clone());
+            LocalMucNicknameMove::Published
+        }
+        dashmap::mapref::entry::Entry::Occupied(entry)
+            if entry.get().room_jid == room_jid
+                && muc_departure_identity_matches(
+                    entry.get(),
+                    &renamed.full_jid,
+                    renamed.connection_id,
+                    renamed.cluster_epoch,
+                ) =>
+        {
+            LocalMucNicknameMove::AlreadyPublished
+        }
+        dashmap::mapref::entry::Entry::Occupied(_) => {
+            LocalMucNicknameMove::DeferredToReconciliation
+        }
+    };
+    if destination != LocalMucNicknameMove::DeferredToReconciliation || cluster_committed {
+        return destination;
+    }
+    let old_occupant = removed_old.expect("old occupancy was removed above");
+    match occupants.entry(old_key) {
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(old_occupant);
+            LocalMucNicknameMove::CollisionRestored
+        }
+        dashmap::mapref::entry::Entry::Occupied(_) => LocalMucNicknameMove::CollisionRestoreFailed,
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct SerializableMucOccupant {
     pub full_jid: String,
@@ -2731,6 +2843,42 @@ pub(crate) struct SmSessionPolicy {
     pub(crate) max_global: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct BoshPolicy {
+    pub(crate) max_wait_seconds: u64,
+    pub(crate) inactivity_seconds: u64,
+    pub(crate) polling_seconds: u64,
+    pub(crate) max_pause_seconds: u64,
+    pub(crate) body_read_timeout_seconds: u64,
+    pub(crate) max_request_bytes: usize,
+    pub(crate) max_response_bytes: usize,
+    pub(crate) max_stanzas_per_request: usize,
+    pub(crate) max_output_stanzas: usize,
+    pub(crate) max_output_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ComponentRuntimePolicy {
+    pub(crate) enabled: bool,
+    pub(crate) max_connections: usize,
+    pub(crate) handshake_timeout: Duration,
+    pub(crate) queue_capacity: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PubSubOwnerLimits {
+    pub(crate) max_nodes: i64,
+    pub(crate) max_storage_bytes: i64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Sasl2FastTokenPolicy {
+    pub(crate) enabled: bool,
+    pub(crate) rotation_days: i64,
+    pub(crate) ttl_days: i64,
+    pub(crate) strong_reauth_max_days: i64,
+}
+
 pub struct AppState {
     pub config: Config,
     pool: PgPool,
@@ -3323,6 +3471,18 @@ impl AppState {
         &self.config.domain
     }
 
+    pub(crate) fn server_name(&self) -> &str {
+        &self.config.server_name
+    }
+
+    pub(crate) fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
+        self.config.external_route_domain_allowed(domain)
+    }
+
+    pub(crate) fn xmpp_component_domain_configured(&self, domain: &str) -> bool {
+        self.config.component_domain_configured(domain)
+    }
+
     pub(crate) fn s2s_federation_enabled(&self) -> bool {
         self.config.federation_enabled
     }
@@ -3389,6 +3549,29 @@ impl AppState {
         }
     }
 
+    pub(crate) fn bosh_policy(&self) -> BoshPolicy {
+        BoshPolicy {
+            max_wait_seconds: self.config.bosh_max_wait_seconds,
+            inactivity_seconds: self.config.bosh_inactivity_seconds,
+            polling_seconds: self.config.bosh_polling_seconds,
+            max_pause_seconds: self.config.bosh_max_pause_seconds,
+            body_read_timeout_seconds: self.config.bosh_body_read_timeout_seconds,
+            max_request_bytes: self.config.bosh_max_request_bytes,
+            max_response_bytes: self.config.bosh_max_response_bytes,
+            max_stanzas_per_request: self.config.bosh_max_stanzas_per_request,
+            max_output_stanzas: self.config.bosh_max_output_stanzas,
+            max_output_bytes: self.config.bosh_max_output_bytes,
+        }
+    }
+
+    pub(crate) fn unauthenticated_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.unauthenticated_timeout_seconds)
+    }
+
+    pub(crate) fn trusted_proxy_ips(&self) -> &[std::net::IpAddr] {
+        &self.config.trusted_proxy_ips
+    }
+
     pub(crate) fn sm_session_policy(&self) -> SmSessionPolicy {
         SmSessionPolicy {
             require_same_device: self.config.sm_require_same_device,
@@ -3410,6 +3593,33 @@ impl AppState {
 
     pub(crate) fn c2s_scram_sha1_enabled(&self) -> bool {
         self.config.scram_sha1_enabled
+    }
+
+    pub(crate) fn sasl2_fast_token_policy(&self) -> Sasl2FastTokenPolicy {
+        Sasl2FastTokenPolicy {
+            enabled: self.config.fast_token_enabled,
+            rotation_days: self.config.fast_token_rotation_days,
+            ttl_days: self.config.fast_token_ttl_days,
+            strong_reauth_max_days: self.config.fast_strong_reauth_max_days,
+        }
+    }
+
+    pub(crate) fn capacity_session_lease_seconds(&self) -> u64 {
+        self.config.capacity_session_lease_seconds
+    }
+
+    pub(crate) fn pubsub_owner_limits(&self) -> PubSubOwnerLimits {
+        PubSubOwnerLimits {
+            max_nodes: self.config.pubsub_max_nodes_per_owner,
+            max_storage_bytes: self.config.pubsub_max_storage_bytes_per_owner,
+        }
+    }
+
+    pub(crate) fn pep_account_quotas(&self) -> crate::services::pubsub::PepQuotas {
+        crate::services::pubsub::PepQuotas {
+            max_nodes: self.config.pep_max_nodes_per_account,
+            max_storage_bytes: self.config.pep_max_storage_bytes_per_account,
+        }
     }
 
     pub(crate) fn validate_routed_message(
@@ -5362,12 +5572,41 @@ impl AppState {
             .expect("upload routes and workers require an enabled or draining runtime")
     }
 
+    pub(crate) fn upload_retention_seconds(&self) -> u64 {
+        self.config.upload_retention_seconds
+    }
+
+    pub(crate) fn upload_download_read_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.upload_download_read_timeout_seconds)
+    }
+
+    pub(crate) fn upload_download_max_duration(&self) -> Duration {
+        Duration::from_secs(self.config.upload_download_max_seconds)
+    }
+
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
         self.web_admin_gateway_token.is_some()
     }
 
+    pub(crate) fn public_http_bind_address(&self) -> std::net::SocketAddr {
+        self.config.http_bind
+    }
+
+    pub(crate) fn admin_http_bind_address(&self) -> std::net::SocketAddr {
+        self.config.web_admin_bind
+    }
+
     pub(crate) fn has_component_credentials(&self) -> bool {
         !self.component_credentials.is_empty()
+    }
+
+    pub(crate) fn component_runtime_policy(&self) -> ComponentRuntimePolicy {
+        ComponentRuntimePolicy {
+            enabled: self.config.components_enabled,
+            max_connections: self.config.max_component_connections,
+            handshake_timeout: Duration::from_secs(self.config.component_handshake_timeout_seconds),
+            queue_capacity: self.config.component_queue_capacity,
+        }
     }
 
     /// Authenticated external-component ownership and wake-up authority.
@@ -5749,6 +5988,33 @@ impl AppState {
     ) -> anyhow::Result<()> {
         self.muc_service()
             .wake_committed_operation(&self.cluster, operation_id)
+            .await
+    }
+
+    pub(crate) async fn publish_local_muc_departure(
+        &self,
+        departed: &MucOccupant,
+        was_last: bool,
+    ) -> anyhow::Result<()> {
+        self.cluster
+            .unregister_muc_occupant_epoch(
+                &departed.room_jid,
+                &departed.nick,
+                departed.cluster_epoch,
+                departed.connection_id,
+            )
+            .await?;
+        if was_last {
+            self.cluster.leave_muc(&departed.room_jid).await?;
+        }
+        self.cluster
+            .send_muc_presence(
+                &departed.room_jid,
+                &SerializableMucOccupant::from(departed),
+                true,
+                false,
+                None,
+            )
             .await
     }
 
@@ -6656,6 +6922,35 @@ impl AppState {
             .get(&key)
             .filter(|occupant| occupant.room_jid == room_jid)
             .map(|occupant| occupant.value().clone())
+    }
+
+    pub(crate) fn local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        with_local_muc_occupant_exact(&self.muc_occupants, identity, |current| current.clone())
+    }
+
+    /// Refresh presence fields only while this exact transport still owns the
+    /// nickname. Keep the current endpoint so an SM suspension cannot be undone.
+    pub(crate) fn refresh_local_muc_presence_exact(
+        &self,
+        prepared: &MucOccupant,
+        apply_policy: bool,
+    ) -> Option<MucOccupant> {
+        refresh_local_muc_presence_exact_in(&self.muc_occupants, prepared, apply_policy)
+    }
+
+    /// Move a nickname after the caller's room gate or PG transition. A local
+    /// collision restores the exact removed old value; a committed cluster
+    /// collision leaves the other incarnation untouched for reconciliation.
+    pub(crate) fn move_local_muc_nickname_exact(
+        &self,
+        old: LocalMucOccupantIdentity<'_>,
+        renamed: &MucOccupant,
+        cluster_committed: bool,
+    ) -> LocalMucNicknameMove {
+        move_local_muc_nickname_exact_in(&self.muc_occupants, old, renamed, cluster_committed)
     }
 
     /// Compare and remove under one map shard lock. Callers retain the removed
@@ -9173,17 +9468,19 @@ mod session_key_tests {
         append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
         canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff,
         encode_api_control_entropy, ephemeral_api_control_secret, federation_rule_matches,
-        insert_restored_muc_occupant, muc_actor_identity_matches, muc_departure_identity_matches,
-        muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-        refresh_local_muc_policy_exact_in, remove_local_muc_occupant_exact_from,
+        insert_restored_muc_occupant, move_local_muc_nickname_exact_in, muc_actor_identity_matches,
+        muc_departure_identity_matches, muc_suspended_teardown_identity_matches,
+        promote_suspended_muc_buffer, refresh_local_muc_policy_exact_in,
+        refresh_local_muc_presence_exact_in, remove_local_muc_occupant_exact_from,
         runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
         session_lookup, set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
         snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
         transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
-        LocalMucOccupantIdentity, MucOccupant, MucOccupantEndpoint, RouteIncarnationSignal,
-        SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck, StagedRouteIdentity,
-        SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
+        LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant, MucOccupantEndpoint,
+        RouteIncarnationSignal, SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck,
+        StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase,
+        SuspendedMucRoute,
     };
     use dashmap::DashMap;
     use std::collections::{BTreeSet, VecDeque};
@@ -10229,6 +10526,117 @@ mod session_key_tests {
         assert!(
             set_local_muc_role_exact_in(&occupants, identity, "visitor", "moderator", None)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn presence_refresh_rejects_reused_or_suspended_transport() {
+        let old = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let mut prepared = old.clone();
+        prepared.payload = "<show>chat</show>".to_owned();
+        let mut replacement =
+            test_muc_occupant(&old.full_jid, uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        replacement.payload = "<show>away</show>".to_owned();
+        let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+        let occupants = DashMap::new();
+        occupants.insert(key.clone(), replacement.clone());
+        assert!(refresh_local_muc_presence_exact_in(&occupants, &prepared, true).is_none());
+        assert_eq!(occupants.get(&key).unwrap().payload, replacement.payload);
+
+        let mut suspended = old.clone();
+        suspended.endpoint = MucOccupantEndpoint::Suspended(Arc::new(SuspendedMucEndpoint::new(
+            uuid::Uuid::new_v4(),
+        )));
+        occupants.insert(key.clone(), suspended);
+        assert!(refresh_local_muc_presence_exact_in(&occupants, &prepared, true).is_none());
+        assert!(matches!(
+            &occupants.get(&key).unwrap().endpoint,
+            MucOccupantEndpoint::Suspended(_)
+        ));
+    }
+
+    #[test]
+    fn nickname_move_restores_local_actor_and_defers_cluster_collision() {
+        let old = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let mut renamed = old.clone();
+        renamed.nick = "Bob".to_owned();
+        let mut other = test_muc_occupant(
+            "bob@example.test/Laptop",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        other.nick = renamed.nick.clone();
+        let old_key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+        let new_key = crate::xmpp::xml_util::muc_occupant_key(&renamed.room_jid, &renamed.nick);
+        let occupants = DashMap::new();
+        occupants.insert(old_key.clone(), old.clone());
+        occupants.insert(new_key.clone(), other.clone());
+
+        assert_eq!(
+            move_local_muc_nickname_exact_in(
+                &occupants,
+                LocalMucOccupantIdentity::from(&old),
+                &renamed,
+                false,
+            ),
+            LocalMucNicknameMove::CollisionRestored
+        );
+        assert_eq!(
+            occupants.get(&old_key).unwrap().connection_id,
+            old.connection_id
+        );
+        assert_eq!(
+            occupants.get(&new_key).unwrap().connection_id,
+            other.connection_id
+        );
+
+        assert_eq!(
+            move_local_muc_nickname_exact_in(
+                &occupants,
+                LocalMucOccupantIdentity::from(&old),
+                &renamed,
+                true,
+            ),
+            LocalMucNicknameMove::DeferredToReconciliation
+        );
+        assert!(!occupants.contains_key(&old_key));
+        assert_eq!(
+            occupants.get(&new_key).unwrap().connection_id,
+            other.connection_id
+        );
+
+        occupants.remove(&new_key);
+        assert_eq!(
+            move_local_muc_nickname_exact_in(
+                &occupants,
+                LocalMucOccupantIdentity::from(&old),
+                &renamed,
+                true,
+            ),
+            LocalMucNicknameMove::DeferredToReconciliation
+        );
+        assert!(!occupants.contains_key(&new_key));
+        occupants.insert(old_key, old.clone());
+        assert_eq!(
+            move_local_muc_nickname_exact_in(
+                &occupants,
+                LocalMucOccupantIdentity::from(&old),
+                &renamed,
+                false,
+            ),
+            LocalMucNicknameMove::Published
+        );
+        assert_eq!(
+            occupants.get(&new_key).unwrap().connection_id,
+            old.connection_id
         );
     }
 

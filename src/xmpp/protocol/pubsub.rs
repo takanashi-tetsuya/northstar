@@ -179,10 +179,7 @@ pub(crate) fn service_disco_payload(state: &AppState) -> String {
             XmlElement::new("identity")
                 .attr("category", "pubsub")
                 .attr("type", "service")
-                .attr(
-                    "name",
-                    format!("{} PubSub Service", state.config.server_name),
-                ),
+                .attr("name", format!("{} PubSub Service", state.server_name())),
         )
         .child(XmlElement::new("feature").attr("var", NS_PUBSUB));
     for feature in SERVICE_FEATURES {
@@ -1163,7 +1160,7 @@ async fn handle_entity_set(
                 creator_jid: &requester,
                 node: node_name,
                 config: &config,
-                max_nodes_per_owner: state.config.pubsub_max_nodes_per_owner,
+                max_nodes_per_owner: state.pubsub_owner_limits().max_nodes,
             });
             match state
                 .pubsub_service()
@@ -1275,13 +1272,14 @@ async fn handle_entity_set(
                 }
                 items.push((item_id, item_xml));
             }
+            let limits = state.pubsub_owner_limits();
             let cmd = PubSubPublishCommand::from(PubSubPublishWrite {
                 publisher_jid: &requester,
                 node: node_name,
                 items: &items,
                 publish_options: publish_options.as_ref(),
-                max_storage_bytes_per_owner: state.config.pubsub_max_storage_bytes_per_owner,
-                max_nodes_per_owner: state.config.pubsub_max_nodes_per_owner,
+                max_storage_bytes_per_owner: limits.max_storage_bytes,
+                max_nodes_per_owner: limits.max_nodes,
             });
             let result = state.pubsub_service().execute_pubsub_publish(cmd).await?;
             let item_ids = match result.outcome {

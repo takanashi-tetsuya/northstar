@@ -607,7 +607,7 @@ impl ProtocolSession {
                 user.id,
                 user.auth_generation,
                 &key,
-                self.state.config.capacity_session_lease_seconds,
+                self.state.capacity_session_lease_seconds(),
             ))
             .await?
         {
@@ -993,11 +993,7 @@ pub(crate) async fn send_push_notification(
     state: &crate::state::AppState,
     recipient_id: uuid::Uuid,
 ) -> Result<()> {
-    if !state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0357::XEP_ID)
-    {
+    if !state.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
         return Ok(());
     }
     let batch = state.push_service().claim_batch(recipient_id).await?;
@@ -1107,11 +1103,7 @@ pub(crate) async fn handle_push_delivery_response(
     kind: &str,
     from: &str,
 ) -> Result<bool> {
-    if !state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0357::XEP_ID)
-    {
+    if !state.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
         return Ok(false);
     }
     let Some(request_id) = id
@@ -1151,11 +1143,7 @@ pub(crate) async fn handle_push_disable(
     from: &str,
     to: &str,
 ) -> Result<bool> {
-    if !state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0357::XEP_ID)
-    {
+    if !state.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
         return Ok(false);
     }
     if !matches!(

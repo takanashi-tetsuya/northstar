@@ -252,10 +252,8 @@ pub async fn serve(
     // component configuration is an idle listener state, not a successful
     // listener termination: returning here would make main shut down every
     // otherwise healthy service.
-    if !state.config.components_enabled
-        || state.config.max_component_connections == 0
-        || !state.has_component_credentials()
-    {
+    let policy = state.component_runtime_policy();
+    if !policy.enabled || policy.max_connections == 0 || !state.has_component_credentials() {
         // A zero actor budget is an explicit hard-disable: do not bind the
         // inbound listener and do not start any connect-mode supervisor.
         wait_for_component_shutdown(&cancel).await;
@@ -467,7 +465,7 @@ async fn outbound_component_connection(
         credential.connection == ComponentConnectionMode::Connect && credential.legacy_0114,
         "invalid outbound component profile"
     );
-    let handshake_timeout = Duration::from_secs(state.config.component_handshake_timeout_seconds);
+    let handshake_timeout = state.component_runtime_policy().handshake_timeout;
     let mut stream = connect_component_endpoint(Arc::clone(&state), credential.clone()).await?;
     stream.set_nodelay(true)?;
     write_legacy_connect_open(&mut stream, &domain).await?;
@@ -497,7 +495,7 @@ async fn outbound_component_connection(
     }
 
     let connection_id = Uuid::new_v4();
-    let (sender, receiver) = mpsc::channel(state.config.component_queue_capacity);
+    let (sender, receiver) = mpsc::channel(state.component_runtime_policy().queue_capacity);
     state
         .component_registry()
         .register_domain(&domain, connection_id, sender.clone())?;
@@ -540,8 +538,7 @@ async fn connect_component_endpoint(
         Err(_) => crate::jid::domain_to_ascii(&endpoint.host)
             .context("component endpoint cannot be represented as a DNS host")?,
     };
-    let deadline =
-        Instant::now() + Duration::from_secs(state.config.component_handshake_timeout_seconds);
+    let deadline = Instant::now() + state.component_runtime_policy().handshake_timeout;
     let resolved =
         tokio::time::timeout_at(deadline, lookup_host((dns_host.as_str(), endpoint.port)))
             .await
@@ -603,7 +600,7 @@ async fn component_connection(
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
-    let handshake_timeout = Duration::from_secs(state.config.component_handshake_timeout_seconds);
+    let handshake_timeout = state.component_runtime_policy().handshake_timeout;
     let mut input = s2s::S2sInputState::default();
     let opening = match read_handshake_frame(handshake_timeout, &mut stream, &mut input).await {
         Ok(opening) => opening,
@@ -641,7 +638,7 @@ async fn legacy_connection(
     mut input: s2s::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let handshake_timeout = Duration::from_secs(state.config.component_handshake_timeout_seconds);
+    let handshake_timeout = state.component_runtime_policy().handshake_timeout;
     let component_domain =
         match component_stream_attribute(&opening, "to", COMPONENT_ACCEPT_NS, false)
             .and_then(|domain| crate::jid::prepare_domainpart(&domain).ok())
@@ -694,7 +691,7 @@ async fn legacy_connection(
     }
 
     let connection_id = Uuid::new_v4();
-    let (sender, receiver) = mpsc::channel(state.config.component_queue_capacity);
+    let (sender, receiver) = mpsc::channel(state.component_runtime_policy().queue_capacity);
     if state
         .component_registry()
         .register_domain(&component_domain, connection_id, sender.clone())
@@ -742,7 +739,7 @@ async fn modern_connection(
     mut input: s2s::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let handshake_timeout = Duration::from_secs(state.config.component_handshake_timeout_seconds);
+    let handshake_timeout = state.component_runtime_policy().handshake_timeout;
     if component_stream_attribute(&opening, "version", "jabber:client", false).as_deref()
         != Some("1.0")
     {
@@ -828,7 +825,7 @@ async fn modern_connection(
     let material = state.tls_context().c2s_snapshot(false);
     let acceptor = TlsAcceptor::from(material.server_config.clone());
     let mut secure = tokio::time::timeout(
-        Duration::from_secs(state.config.component_handshake_timeout_seconds),
+        state.component_runtime_policy().handshake_timeout,
         acceptor.accept(stream),
     )
     .await
@@ -952,7 +949,7 @@ async fn modern_connection(
     .await?;
 
     let connection_id = Uuid::new_v4();
-    let (sender, receiver) = mpsc::channel(state.config.component_queue_capacity);
+    let (sender, receiver) = mpsc::channel(state.component_runtime_policy().queue_capacity);
     tracing::info!(domain = %credential.primary_domain, "XEP-0225 component authenticated; hostname binding required");
     let _active_connection = state.component_telemetry().active_connection();
     let result = drive_component(
@@ -997,9 +994,8 @@ where
 {
     let mut durable_poll = tokio::time::interval(Duration::from_millis(250));
     durable_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let initial_binding_deadline = tokio::time::sleep(Duration::from_secs(
-        state.config.component_handshake_timeout_seconds,
-    ));
+    let initial_binding_deadline =
+        tokio::time::sleep(state.component_runtime_policy().handshake_timeout);
     tokio::pin!(initial_binding_deadline);
     let mut initial_binding_complete = protocol != ComponentProtocol::Modern0225;
     let cancellation = cancel.clone().cancelled_owned();
@@ -1475,7 +1471,7 @@ async fn route_component_stanza(
         });
     }
 
-    if state.config.component_domain_configured(&target) {
+    if state.xmpp_component_domain_configured(&target) {
         let error = component_stanza_error(root, "service-unavailable");
         let federation = state.federation_outbox().clone();
         let from = from.to_owned();

@@ -801,6 +801,7 @@ impl SessionCleanupService {
                         .await;
                     capacity.take();
                 } else {
+                    let sm_limits = self.state.sm_buffer_limits();
                     match self
                         .step(
                             deadline,
@@ -813,8 +814,8 @@ impl SessionCleanupService {
                                 account.auth_generation,
                                 &exact_snapshot,
                                 ttl_seconds,
-                                self.state.config.sm_max_unacked_stanzas,
-                                self.state.config.sm_max_unacked_bytes,
+                                sm_limits.max_unacked_stanzas,
+                                sm_limits.max_unacked_bytes,
                             ),
                             &mut report,
                         )
@@ -1073,30 +1074,14 @@ impl SessionCleanupService {
         report: &mut CleanupReport,
     ) {
         for departure in departures {
-            let serializable = crate::state::SerializableMucOccupant::from(&departure.departed);
-            let room_jid = departure.room_jid.clone();
-            let nick = departure.departed.nick.clone();
-            let epoch = departure.departed.cluster_epoch;
-            let connection_id = departure.departed.connection_id;
             let was_last = departure.remaining.is_empty();
-            let cluster = self.state.cluster.clone();
-            let cluster_cleanup = async move {
-                cluster
-                    .unregister_muc_occupant_epoch(&room_jid, &nick, epoch, connection_id)
-                    .await?;
-                if was_last {
-                    cluster.leave_muc(&room_jid).await?;
-                }
-                cluster
-                    .send_muc_presence(&room_jid, &serializable, true, false, None)
-                    .await
-            };
             let _ = self
                 .step(
                     deadline,
                     "unregister-muc-occupant",
                     CleanupRecovery::ClusterReconciliation,
-                    cluster_cleanup,
+                    self.state
+                        .publish_local_muc_departure(&departure.departed, was_last),
                     report,
                 )
                 .await;

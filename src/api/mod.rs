@@ -1084,7 +1084,9 @@ pub async fn serve(
     cancel: tokio_util::sync::CancellationToken,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let address = listener.local_addr().unwrap_or(state.config.http_bind);
+    let address = listener
+        .local_addr()
+        .unwrap_or(state.public_http_bind_address());
     tracing::info!(address = %address, "public HTTP capability listener ready");
     axum::serve(
         listener,
@@ -1100,7 +1102,9 @@ pub async fn serve_administration(
     cancel: tokio_util::sync::CancellationToken,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let address = listener.local_addr().unwrap_or(state.config.web_admin_bind);
+    let address = listener
+        .local_addr()
+        .unwrap_or(state.admin_http_bind_address());
     tracing::info!(
         address = %address,
         gateway_authentication = state.admin_gateway_authentication_enabled(),

@@ -1,3 +1,7 @@
+pub use crate::services::governance::{
+    AuditExport, AuditExportCursor, AuditExportEntry, HeldRecordExport, LegalHoldError,
+    LegalHoldExport, LegalHoldExportCursor, LegalHoldSummary, LegalHoldTarget,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
@@ -8,7 +12,8 @@ use uuid::Uuid;
 
 pub const MAX_HOLD_TARGETS: usize = 1_000;
 pub const MAX_GOVERNANCE_EXPORT_ROWS: i64 = 10_000;
-pub const GOVERNANCE_EXPORT_LEASE_SECONDS: i64 = 15 * 60;
+pub const GOVERNANCE_EXPORT_LEASE_SECONDS: i64 =
+    crate::services::governance::GOVERNANCE_EXPORT_LEASE_SECONDS;
 pub const GOVERNANCE_SNAPSHOT_ISOLATION_SQL: &str =
     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ";
 
@@ -266,19 +271,6 @@ pub async fn set_muc_retention_policy_in_tx(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
-pub enum LegalHoldTarget {
-    PersonalArchive(Uuid),
-    MucArchive(Uuid),
-    OfflineMessage(Uuid),
-    ReportEvidence(Uuid),
-    PersonalArchiveOwner(Uuid),
-    MucArchiveRoom(Uuid),
-    OfflineMessageRecipient(Uuid),
-    ReportEvidenceReport(Uuid),
-}
-
 #[derive(Debug)]
 pub struct CreateLegalHold<'a> {
     pub id: Uuid,
@@ -287,22 +279,6 @@ pub struct CreateLegalHold<'a> {
     pub reason: &'a str,
     pub targets: &'a [LegalHoldTarget],
     pub request_id: Uuid,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum LegalHoldError {
-    #[error("legal-hold operation is not authorized")]
-    Forbidden,
-    #[error("legal hold or one of its targets does not exist")]
-    NotFound,
-    #[error("legal hold is already released or conflicts with immutable history")]
-    Conflict,
-    #[error("governance export cursor is invalid or expired")]
-    InvalidCursor,
-    #[error("legal hold request is invalid")]
-    Invalid,
-    #[error("legal hold backend failed")]
-    Internal(#[source] anyhow::Error),
 }
 
 async fn require_admin(
@@ -559,20 +535,6 @@ pub async fn release_legal_hold_in_tx(
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct LegalHoldSummary {
-    pub id: Uuid,
-    pub title: String,
-    pub authority_reference: String,
-    pub reason: String,
-    pub created_by: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
-    pub released_by: Option<Uuid>,
-    pub released_at: Option<DateTime<Utc>>,
-    pub release_reason: Option<String>,
-    pub target_count: i64,
-}
-
 /// Reading governance data is itself audited. The read and access event use
 /// one repeatable-read transaction, so the returned snapshot has an exact
 /// audit boundary.
@@ -669,94 +631,6 @@ pub async fn list_legal_holds_audited(
         .await
         .map_err(|error| LegalHoldError::Internal(error.into()))?;
     Ok(output)
-}
-
-#[derive(Debug, Serialize)]
-pub struct AuditExportEntry {
-    pub id: i64,
-    pub actor_id: Option<Uuid>,
-    pub action: String,
-    pub target: Option<String>,
-    pub details: serde_json::Value,
-    pub ip_address: Option<String>,
-    pub request_id: Option<Uuid>,
-    pub operation_id: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
-    pub previous_hash: String,
-    pub entry_hash: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuditExportCursor {
-    pub export_id: Uuid,
-    pub after_id: i64,
-    pub snapshot_max_id: i64,
-    pub snapshot_at: DateTime<Utc>,
-    pub chain_root: [u8; 32],
-}
-
-#[derive(Debug, Serialize)]
-pub struct AuditExport {
-    pub format: &'static str,
-    pub export_id: Uuid,
-    pub exported_at: DateTime<Utc>,
-    pub snapshot_at: DateTime<Utc>,
-    pub snapshot_max_id: i64,
-    pub lease_expires_at: DateTime<Utc>,
-    pub first_id: Option<i64>,
-    pub last_id: Option<i64>,
-    pub entries: Vec<AuditExportEntry>,
-    pub chain_start_sha256: String,
-    pub chain_root_sha256: String,
-    pub complete: bool,
-    /// Kept for wire compatibility; `next_cursor` is the authoritative
-    /// continuation signal and makes every bounded page retrievable.
-    pub truncated: bool,
-    #[serde(skip)]
-    pub next: Option<AuditExportCursor>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct HeldRecordExport {
-    pub resource_type: String,
-    pub record_id: Uuid,
-    pub subject_id: Uuid,
-    pub encrypted: bool,
-    pub record_created_at: DateTime<Utc>,
-    /// For OMEMO-backed archive/offline records this is the original encrypted
-    /// stanza. Encrypted report evidence has no authoritative ciphertext
-    /// column, so its user-supplied decrypted body is deliberately omitted.
-    pub server_visible_payload: Option<String>,
-    pub payload_disposition: String,
-    pub previous_hash: String,
-    pub entry_hash: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LegalHoldExportCursor {
-    pub export_id: Uuid,
-    pub after_resource_order: i64,
-    pub after_created_at: DateTime<Utc>,
-    pub after_record_id: Uuid,
-    pub snapshot_at: DateTime<Utc>,
-    pub chain_root: [u8; 32],
-}
-
-#[derive(Debug, Serialize)]
-pub struct LegalHoldExport {
-    pub format: &'static str,
-    pub export_id: Uuid,
-    pub exported_at: DateTime<Utc>,
-    pub snapshot_at: DateTime<Utc>,
-    pub lease_expires_at: Option<DateTime<Utc>>,
-    pub hold: LegalHoldSummary,
-    pub records: Vec<HeldRecordExport>,
-    pub chain_start_sha256: String,
-    pub chain_root_sha256: String,
-    pub complete: bool,
-    pub truncated: bool,
-    #[serde(skip)]
-    pub next: Option<LegalHoldExportCursor>,
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -398,7 +398,9 @@ repository transaction for their operation and side records. Deployment
 capacity lease renewal and expiry cleanup now
 use a typed maintenance service and PostgreSQL repository. The renewal context
 keeps only the shared route map needed to snapshot exact cancellation tokens;
-the reaper has no session-map authority. Legal holds, exports and the remaining
+the reaper has no session-map authority. Legal holds and governance exports
+now use complete repository operations, including cursor validation on the
+owned transaction and bounded response replay before commit. Remaining
 runtime commands still need their own boundaries.
 Public configuration and host metadata now read a narrow discovery context;
 transport and administrator gateway middleware receive only their required

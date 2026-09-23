@@ -170,7 +170,9 @@ Key ownership:
 - User and room retention policies have a separate context containing the
   service, policy ceilings and read timers. Reads hold bearer/account locks
   through the policy snapshot; writes preserve policy, audit and replay in one
-  transaction. Legal-hold/export endpoints still need persistence boundaries.
+  transaction. Legal-hold and governance-export endpoints now use their own
+  service/context. The repository retains authorized snapshots, export leases,
+  audit and bounded replay bytes in the same transaction.
 - Deployment capacity renewal and expiry cleanup use a typed maintenance
   service and PostgreSQL repository. Renewal snapshots exact route IDs and
   cancellation tokens from the shared session map; the reaper has no session

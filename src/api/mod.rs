@@ -32,6 +32,7 @@ use tower_http::trace::TraceLayer;
 use axum::http::request::Parts;
 
 pub mod extract;
+pub(crate) mod governance_cursor;
 pub use extract::{ApiPath, ApiQuery};
 
 const API_BODY_LIMIT_BYTES: usize = 256 * 1024;

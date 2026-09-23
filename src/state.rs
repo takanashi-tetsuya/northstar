@@ -31,6 +31,18 @@ impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
     }
 }
 
+pub(crate) mod governance;
+pub(crate) type GovernanceContext = governance::GovernanceContext<
+    db::governance_repository::PostgresGovernanceRepository<
+        crate::api::governance_cursor::SignedGovernanceCursors,
+    >,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for GovernanceContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.governance_context.clone()
+    }
+}
+
 pub(crate) mod retention_policy;
 pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContext<
     db::retention_policy_repository::PostgresRetentionPolicyRepository,
@@ -1881,14 +1893,9 @@ pub struct AppState {
     report_moderation_service: ReportModerationContext,
     invitation_admin_service: InvitationAdminContext,
     retention_policy_context: RetentionPolicyContext,
+    governance_context: GovernanceContext,
     report_service:
         crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>,
-    /// Opaque REST pagination cursors use purpose-separated subkeys derived
-    /// from the same current/previous process secrets as API idempotency.
-    /// Keeping both keyrings on the state makes rotation atomic at startup:
-    /// cursors issued with the previous secret remain valid only for the
-    /// configured overlap window enforced by the cursor token lifetime.
-    api_cursor: Arc<crate::api::cursor::CursorKeyring>,
     /// XEP-0363 bearer-token and capacity admission authority. Protocol code
     /// receives typed slot outcomes, never the PostgreSQL pool.
     upload_service: Option<UploadService>,
@@ -3111,6 +3118,19 @@ impl AppState {
             ),
             Arc::clone(&metrics),
         );
+        let governance_context = governance::GovernanceContext::new(
+            crate::services::governance::GovernanceService::new(
+                db::governance_repository::PostgresGovernanceRepository::new(
+                    pool.clone(),
+                    admin_mutations.clone(),
+                    Arc::clone(&api_control),
+                    crate::api::governance_cursor::SignedGovernanceCursors::new(Arc::clone(
+                        &api_cursor,
+                    )),
+                ),
+            ),
+            Arc::clone(&metrics),
+        );
         let invitation_admin_service =
             crate::services::invitation_admin::InvitationAdminService::new(
                 db::invitation_admin_repository::PostgresInvitationAdminRepository::new(
@@ -3189,7 +3209,7 @@ impl AppState {
             report_moderation_service,
             invitation_admin_service,
             retention_policy_context,
-            api_cursor,
+            governance_context,
             upload_service,
             upload_store,
             upload_storage_namespace_sha256: upload_namespace,
@@ -3364,10 +3384,6 @@ impl AppState {
 
     pub(crate) fn api_control(&self) -> &db::ApiControlKeyring {
         &self.api_control
-    }
-
-    pub(crate) fn api_cursor(&self) -> &crate::api::cursor::CursorKeyring {
-        &self.api_cursor
     }
 
     pub(crate) fn upload_store(&self) -> &dyn UploadStore {

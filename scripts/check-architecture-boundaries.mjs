@@ -2075,6 +2075,8 @@ for (const [name, source] of [
   ['ReportContext', read('src/state/reports.rs')],
   ['OperationAdminService', read('src/services/operations.rs')],
   ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
+  ['GovernanceService', read('src/services/governance.rs')],
+  ['GovernanceContext', read('src/state/governance.rs')],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],
@@ -2141,6 +2143,14 @@ for (const [path, names, context] of [
     if (!signature.includes(`State<crate::state::${context}>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
       throw new Error(`${name} must retain its command service and narrow context`);
     }
+  }
+}
+const governanceApiSource = read('src/api/data_lifecycle.rs');
+for (const name of ['list_legal_holds', 'create_legal_hold', 'release_legal_hold', 'export_legal_hold', 'export_audit']) {
+  const body = structBody(governanceApiSource, `pub async fn ${name}(`);
+  const signature = governanceApiSource.slice(governanceApiSource.indexOf(`pub async fn ${name}(`)).split(') ->')[0];
+  if (!signature.includes('State<GovernanceContext>') || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+    throw new Error(`${name} must retain its governance use-case context`);
   }
 }
 const reportApiSource = productionWithoutCfgTestModules(read('src/api/reports.rs'), 'Reports HTTP');

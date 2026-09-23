@@ -94,6 +94,7 @@ if ! grep -Eq 'test result: ok\. 12 passed; 0 failed' <<<"$test_output"; then
 fi
 
 for port_test in \
+  db::governance_repository::tests::governance_ports_replay_before_cursor_validation_and_bound_exports_before_commit \
   db::report_moderation_repository::tests::moderation_ports_commit_decisions_and_replay_terminal_errors_once \
   db::invitation_admin_repository::tests::invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once \
   db::retention_policy_repository::tests::policy_ports_preserve_ceilings_room_ownership_and_response_replay \

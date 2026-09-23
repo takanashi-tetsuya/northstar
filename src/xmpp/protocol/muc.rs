@@ -1791,7 +1791,7 @@ impl ProtocolSession {
                 .external_route_domain_allowed(target.domainpart())
                 || !self
                     .state
-                    .federation
+                    .federation_outbox()
                     .send(target.domainpart(), forwarded, Some(room_jid.clone()))
                     .await
             {
@@ -2822,13 +2822,13 @@ impl ProtocolSession {
                                         invitee_domain,
                                         &forwarded,
                                         Some(&room_jid),
-                                        self.state.federation.outbox_policy(),
+                                        self.state.federation_outbox().outbox_policy(),
                                         cluster_authority.as_ref(),
                                     )
                                     .await
                                 {
                                     Ok(true) => {
-                                        self.state.federation.wake_outbox();
+                                        self.state.federation_outbox().wake_outbox();
                                         if cluster_authority.is_some() {
                                             self.state
                                                 .muc_service()
@@ -2860,7 +2860,7 @@ impl ProtocolSession {
                             } else {
                                 if !self
                                     .state
-                                    .federation
+                                    .federation_outbox()
                                     .send(invitee_domain, forwarded, Some(room_jid.clone()))
                                     .await
                                 {

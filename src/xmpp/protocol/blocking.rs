@@ -383,7 +383,7 @@ where
                 .external_route_domain_allowed(target_jid.domainpart())
             {
                 let _ = state
-                    .federation
+                    .federation_outbox()
                     .send(target_jid.domainpart(), delivery, Some(from.clone()))
                     .await;
             }

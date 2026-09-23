@@ -95,7 +95,7 @@ async fn route_account_removal_presence(state: &AppState, from: &str, to: &str, 
         }
     } else if state.federation_domain_allowed(domain) {
         let _ = state
-            .federation
+            .federation_outbox()
             .send(domain, stanza, Some(from.to_owned()))
             .await;
     }

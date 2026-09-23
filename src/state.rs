@@ -1938,7 +1938,7 @@ pub struct AppState {
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
     upload_startup_audits: Arc<crate::upload_worker::StartupAuditHandoff>,
-    pub federation: FederationRouter,
+    federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
     component_credentials: Arc<[crate::config::ComponentCredential]>,
@@ -2075,6 +2075,10 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
+    pub(crate) fn federation_outbox(&self) -> &FederationRouter {
+        &self.federation_outbox
+    }
+
     pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
         &self.tls_context
     }
@@ -3289,7 +3293,7 @@ impl AppState {
             upload_authority_generation,
             upload_safety_gate,
             upload_startup_audits: Arc::new(upload_startup_audits),
-            federation,
+            federation_outbox: federation,
             component_credentials,
             components,
             s2s_connection_registry: crate::s2s::S2sConnectionRegistry::default(),
@@ -4584,7 +4588,7 @@ impl AppState {
                 ..
             } => {
                 anyhow::ensure!(
-                    self.federation
+                    self.federation_outbox
                         .send(authenticated_domain, stanza, None)
                         .await,
                     "federation queue rejected MUC stanza"
@@ -5289,7 +5293,7 @@ impl AppState {
             .external_route_domain_allowed(target_jid.domainpart())
         {
             anyhow::ensure!(
-                self.federation
+                self.federation_outbox
                     .send(target_jid.domainpart(), delivery, Some(from.to_owned()))
                     .await,
                 "federation queue rejected SM unavailable presence"

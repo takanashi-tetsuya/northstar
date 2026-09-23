@@ -254,7 +254,7 @@ impl ProtocolSession {
             let unsubscribed = roster_removal_presence(&owner_jid, &parsed.contact, "unsubscribed");
             let remote = contact_jid.domainpart() != self.state.config.domain && !hosted_service;
             let route = if remote {
-                let policy = self.state.federation.outbox_policy();
+                let policy = self.state.federation_outbox().outbox_policy();
                 RosterRemovalRoute::Remote {
                     target_domain: contact_jid.domainpart(),
                     unsubscribe_stanza: &unsubscribe,
@@ -300,7 +300,7 @@ impl ProtocolSession {
                 // Both cancellation rows committed with the roster removal;
                 // this wake is only an edge trigger and restart recovery is
                 // provided by the periodic durable-outbox poll.
-                self.state.federation.wake_outbox();
+                self.state.federation_outbox().wake_outbox();
             }
             if let Some(contact) = removal.local_contact.as_ref() {
                 let target_jid = format!("{}@{}", contact.username, self.state.config.domain);

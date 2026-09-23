@@ -264,13 +264,12 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 8;
+const MAX_APP_STATE_PUBLIC_FIELDS = 7;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
   'abuse',
   'cluster',
   'config',
-  'federation',
   'metrics',
   'muc_occupants',
   'pool',
@@ -347,6 +346,7 @@ for (const field of [
   'registration_closed',
   'federation_write_policy',
   'tls_context',
+  'federation_outbox',
   's2s_connection_registry',
 ]) {
   if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(appState)) {
@@ -1074,11 +1074,11 @@ const mixOutboxDbMethods = new Map([
   [
     'outbox_admit_federated_stanza',
     {
-      description: 'FederationRouter::send durable outbox admission',
+      description: 'FederationOutboxAdmission::admit durable outbox admission',
       callPattern:
-        /\bfederation\s*\.\s*send\s*\(\s*target_domain\s*,\s*stanza\s*,\s*None\s*\)\s*\.\s*await\b/,
+        /\bfederation\s*\.\s*admit\s*\(\s*target_domain\s*,\s*stanza\s*\)\s*\.\s*await\b/,
       awaitPattern:
-        /\bfederation\s*\.\s*send\s*\(\s*target_domain\s*,\s*stanza\s*,\s*None\s*\)/,
+        /\bfederation\s*\.\s*admit\s*\(\s*target_domain\s*,\s*stanza\s*\)/,
     },
   ],
   ['claim_mix_deliveries', 'claim_mix_deliveries'],
@@ -2079,6 +2079,7 @@ for (const [name, source] of [
   ['GovernanceService', read('src/services/governance.rs')],
   ['GovernanceContext', read('src/state/governance.rs')],
   ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
+  ['FederationOutboxService', read('src/services/federation_outbox.rs')],
   ['TlsContext', read('src/tls.rs')],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],

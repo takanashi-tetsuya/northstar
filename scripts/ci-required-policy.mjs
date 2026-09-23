@@ -47,6 +47,9 @@ export function verifyJobResults(event, needs, endurance = false) {
 }
 
 export function verifyWorkflowCoverage(workflow) {
+  if (!/^on:\n  push:\n    branches: \['\*\*'\]$/m.test(workflow)) {
+    throw new Error('CI must run automatically for commits pushed to every branch');
+  }
   const declared = [...workflow.matchAll(/^  ([a-z][a-z0-9-]*):\s*$/gm)]
     .map((match) => match[1])
     .filter((job) => !['push', 'pull_request', 'workflow_dispatch', 'schedule', 'contents'].includes(job));

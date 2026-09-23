@@ -1115,7 +1115,7 @@ pub(crate) async fn send_push_notification(
         } else if let Some(domain) = service.as_ref().map(|jid| jid.domainpart()) {
             if state.federation_domain_allowed(domain) {
                 delivered = state
-                    .federation
+                    .federation_outbox()
                     .send(domain, notification.clone(), None)
                     .await;
             }

@@ -1988,20 +1988,22 @@ impl<R: MixRepository> MixService<R> {
 
     /// Durably admit a claimed MIX outbox stanza to federation.
     ///
-    /// `FederationRouter::send` is an S2S *outbox admission* operation here:
+    /// `FederationOutboxAdmission::admit` is an S2S outbox admission here:
     /// it performs one PostgreSQL enqueue/commit followed only by local,
     /// non-awaiting wake-ups. It does not open a peer connection or write a
     /// socket. The permit is consequently released before the S2S dispatcher
     /// performs any network work, while preserving component-route wake-up
-    /// semantics owned by the router.
-    pub(crate) async fn outbox_admit_federated_stanza(
+    /// semantics owned by the outbox service.
+    pub(crate) async fn outbox_admit_federated_stanza<
+        F: crate::services::federation_outbox::FederationOutboxAdmission,
+    >(
         &self,
-        federation: &crate::s2s::FederationRouter,
+        federation: &F,
         target_domain: &str,
         stanza: String,
     ) -> bool {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        federation.send(target_domain, stanza, None).await
+        federation.admit(target_domain, stanza).await
     }
     pub(crate) async fn pep_node(
         &self,

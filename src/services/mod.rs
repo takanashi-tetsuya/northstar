@@ -7,6 +7,7 @@ pub(crate) mod blocking;
 pub(crate) mod capacity_maintenance;
 pub(crate) mod durable_outbox;
 pub(crate) mod extdisco;
+pub(crate) mod federation_outbox;
 pub(crate) mod governance;
 pub(crate) mod invitation_admin;
 pub(crate) mod mam;

@@ -111,7 +111,7 @@ in large root orchestration modules and infrastructure ownership:
   traits;
 - transport actors still reach a broad protocol session object.
 
-`AppState` has been reduced to eight public fields and protocol modules have no
+`AppState` has been reduced to seven public fields and protocol modules have no
 direct `db::`, `PgPool`, SQLx or `state.pool` authority according to the
 architecture gate. This is an intermediate boundary, not the final service
 graph.
@@ -415,9 +415,11 @@ use broader state.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 TLS now sits behind a private context with immutable handshake snapshots and
-the existing current-CRL registration check. AppState still has eight public
-fields, so stage 1 remains open. Changing field
-visibility alone does not demonstrate reduced authority.
+the existing current-CRL registration check. Federation outbox admission now
+uses an application service and a database repository; callers receive a
+copied policy and post-commit wake capability. AppState still has seven public
+fields, so stage 1 remains open. Changing field visibility alone does not
+demonstrate reduced authority.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

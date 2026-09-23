@@ -1452,7 +1452,7 @@ async fn route_component_stanza(
 
     if state.config.component_domain_configured(&target) {
         let error = component_stanza_error(root, "service-unavailable");
-        let federation = state.federation.clone();
+        let federation = state.federation_outbox().clone();
         let from = from.to_owned();
         drop(document);
         return match federation.send(&target, raw, Some(from)).await {
@@ -1467,7 +1467,7 @@ async fn route_component_stanza(
         return Ok(component_stanza_error(root, "remote-server-not-found"));
     }
     let timeout_error = component_stanza_error(root, "remote-server-timeout");
-    let federation = state.federation.clone();
+    let federation = state.federation_outbox().clone();
     let from = from.to_owned();
     drop(document);
     if federation.send(&target, raw, Some(from)).await {

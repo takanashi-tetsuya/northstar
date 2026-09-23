@@ -2142,7 +2142,7 @@ async fn federated_muc_message_owned(
             .config
             .external_route_domain_allowed(target.domainpart())
             || !state
-                .federation
+                .federation_outbox()
                 .send(target.domainpart(), forwarded, Some(room_jid.clone()))
                 .await
         {
@@ -2961,13 +2961,13 @@ async fn federated_muc_message_owned(
                         invitee_domain,
                         &invitation,
                         Some(&room_jid),
-                        state.federation.outbox_policy(),
+                        state.federation_outbox().outbox_policy(),
                         cluster_authority.as_ref(),
                     )
                     .await
                 {
                     Ok(true) => {
-                        state.federation.wake_outbox();
+                        state.federation_outbox().wake_outbox();
                         if cluster_authority.is_some() {
                             state
                                 .muc_service()
@@ -2989,7 +2989,7 @@ async fn federated_muc_message_owned(
                     }
                 }
             } else if !state
-                .federation
+                .federation_outbox()
                 .send(invitee_domain, invitation, Some(room_jid.clone()))
                 .await
             {

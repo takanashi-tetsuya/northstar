@@ -228,7 +228,7 @@ impl ProtocolSession {
                     if should_route
                         && !self
                             .state
-                            .federation
+                            .federation_outbox()
                             .send(domain, outbound, Some(bounce_to))
                             .await
                     {
@@ -661,7 +661,7 @@ impl ProtocolSession {
                         {
                             let _ = self
                                 .state
-                                .federation
+                                .federation_outbox()
                                 .send(contact.domainpart(), request, Some(account.clone()))
                                 .await;
                         }
@@ -710,7 +710,7 @@ impl ProtocolSession {
                         {
                             let _ = self
                                 .state
-                                .federation
+                                .federation_outbox()
                                 .send(contact.domainpart(), delivery, Some(from.to_owned()))
                                 .await;
                         }
@@ -888,7 +888,7 @@ impl ProtocolSession {
                 target_domain,
                 stanza,
                 Some(bounce_to),
-                self.state.federation.outbox_policy(),
+                self.state.federation_outbox().outbox_policy(),
             )
             .await?;
         let transition = match outcome {
@@ -902,7 +902,7 @@ impl ProtocolSession {
             PresenceMutation::Transition(transition) => transition,
         };
         if transition.routed {
-            self.state.federation.wake_outbox();
+            self.state.federation_outbox().wake_outbox();
         }
         self.finish_remote_presence_transition(&contact, transition)
             .await;
@@ -1437,7 +1437,7 @@ impl ProtocolSession {
             } else {
                 let _ = self
                     .state
-                    .federation
+                    .federation_outbox()
                     .send(jid.domainpart(), delivery, Some(from.to_owned()))
                     .await;
             }
@@ -1687,7 +1687,7 @@ impl ProtocolSession {
             .finish();
         let _ = self
             .state
-            .federation
+            .federation_outbox()
             .send(
                 contact_jid.domainpart(),
                 probe,

@@ -2036,7 +2036,7 @@ async fn deliver_mix_relay_stanza(state: &Arc<AppState>, recipient: &str, stanza
             let _ = target.sender.try_send(stanza.clone());
         }
     } else if state.federation_domain_allowed(domain) {
-        let _ = state.federation.send(domain, stanza, None).await;
+        let _ = state.federation_outbox().send(domain, stanza, None).await;
     }
 }
 
@@ -2320,7 +2320,7 @@ async fn handle_channel_relay_request(
     }
     let outbound = relay_iq_xml(request, &relay_id, &requester_encoded, &target_real_jid);
     if !state
-        .federation
+        .federation_outbox()
         .send(target_domain, outbound, Some(channel.jid()))
         .await
     {
@@ -2765,12 +2765,12 @@ async fn deliver_channel_stanza(
         }
         let admitted = match database_lane {
             ChannelStanzaDatabaseLane::LiveIngress => {
-                state.federation.send(domain, stanza, None).await
+                state.federation_outbox().send(domain, stanza, None).await
             }
             ChannelStanzaDatabaseLane::DurableOutbox => {
                 state
                     .mix_service()
-                    .outbox_admit_federated_stanza(&state.federation, domain, stanza)
+                    .outbox_admit_federated_stanza(state.federation_outbox(), domain, stanza)
                     .await
             }
         };
@@ -3651,7 +3651,7 @@ impl ProtocolSession {
         let outbound = relay_iq_xml(&request, &relay_id, full_jid, &request.to);
         if !self
             .state
-            .federation
+            .federation_outbox()
             .send(
                 channel_domain,
                 outbound,
@@ -3786,7 +3786,7 @@ impl ProtocolSession {
                     {
                         PamOperationReplay::Replay(response) => return Ok(Action::Send(response)),
                         PamOperationReplay::Pending => {
-                            self.state.federation.wake_outbox();
+                            self.state.federation_outbox().wake_outbox();
                             return Ok(Action::None);
                         }
                         PamOperationReplay::Conflict => {
@@ -3842,7 +3842,7 @@ impl ProtocolSession {
                             request_digest,
                             remote_domain: domain.to_owned(),
                             outbound_stanza: outbound,
-                            policy: self.state.federation.outbox_policy(),
+                            policy: self.state.federation_outbox().outbox_policy(),
                         })
                         .await?;
                     match admitted {
@@ -3857,7 +3857,7 @@ impl ProtocolSession {
                             )));
                         }
                         PamOperationReplay::Pending => {
-                            self.state.federation.wake_outbox();
+                            self.state.federation_outbox().wake_outbox();
                         }
                         PamOperationReplay::Miss => {
                             return Ok(Action::Send(iq_error_to(
@@ -3948,7 +3948,7 @@ impl ProtocolSession {
                     {
                         PamOperationReplay::Replay(response) => return Ok(Action::Send(response)),
                         PamOperationReplay::Pending => {
-                            self.state.federation.wake_outbox();
+                            self.state.federation_outbox().wake_outbox();
                             return Ok(Action::None);
                         }
                         PamOperationReplay::Conflict => {
@@ -3992,7 +3992,7 @@ impl ProtocolSession {
                             request_digest,
                             remote_domain: domain.to_owned(),
                             outbound_stanza: outbound,
-                            policy: self.state.federation.outbox_policy(),
+                            policy: self.state.federation_outbox().outbox_policy(),
                         })
                         .await?;
                     match admitted {
@@ -4006,7 +4006,7 @@ impl ProtocolSession {
                                 "conflict",
                             )));
                         }
-                        PamOperationReplay::Pending => self.state.federation.wake_outbox(),
+                        PamOperationReplay::Pending => self.state.federation_outbox().wake_outbox(),
                         PamOperationReplay::Miss => {
                             return Ok(Action::Send(iq_error_to(
                                 &request.id,
@@ -4191,7 +4191,7 @@ impl ProtocolSession {
             } else if self.state.federation_domain_allowed(domain) {
                 let _ = self
                     .state
-                    .federation
+                    .federation_outbox()
                     .send(domain, directed, Some(actor_bare.clone()))
                     .await;
             }
@@ -5783,7 +5783,7 @@ pub(crate) async fn disconnect_mix_presence(
             let _ = process_channel_presence(state, actor_bare, actor_full, &directed).await?;
         } else if state.federation_domain_allowed(domain) {
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(domain, directed, Some(actor_bare.to_owned()))
                 .await;
         }
@@ -5897,7 +5897,7 @@ pub(crate) async fn publish_verified_mix_presence(
                 .await?;
         } else if state.federation_domain_allowed(domain) {
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(domain, directed, Some(actor_bare.clone()))
                 .await;
         }
@@ -5993,7 +5993,7 @@ pub(crate) fn start_mix_presence_recovery(
                 .attr("from", &probe.channel_jid)
                 .attr("to", &probe.participant_jid)
                 .finish();
-            let _ = state.federation.send(domain, stanza, None).await;
+            let _ = state.federation_outbox().send(domain, stanza, None).await;
         }
         // The deadline is intentionally short and bounded: a remote resource
         // that cannot answer a startup probe is no longer authoritative
@@ -6951,7 +6951,7 @@ pub(crate) async fn federated_mix_iq(
         let requester = authenticated_mix_disco_requester(&request.from, authenticated_domain)?;
         let response = federated_mix_disco_info(&state, &request, &requester).await?;
         let _ = state
-            .federation
+            .federation_outbox()
             .send(authenticated_domain, response, None)
             .await;
         return Ok(true);
@@ -6974,7 +6974,7 @@ pub(crate) async fn federated_mix_iq(
             request_digest,
             addressed: to_jid.to_string(),
             reply_to: actor.reply_to.clone(),
-            policy: state.federation.outbox_policy(),
+            policy: state.federation_outbox().outbox_policy(),
         });
         if mutation {
             match state
@@ -6993,10 +6993,10 @@ pub(crate) async fn federated_mix_iq(
                         .enqueue_s2s_response_batch(
                             authenticated_domain,
                             &[response],
-                            state.federation.outbox_policy(),
+                            state.federation_outbox().outbox_policy(),
                         )
                         .await?;
-                    state.federation.wake_outbox();
+                    state.federation_outbox().wake_outbox();
                     return Ok(true);
                 }
                 FederatedMixIqReplay::Conflict => {
@@ -7012,10 +7012,10 @@ pub(crate) async fn federated_mix_iq(
                         .enqueue_s2s_response_batch(
                             authenticated_domain,
                             &[response],
-                            state.federation.outbox_policy(),
+                            state.federation_outbox().outbox_policy(),
                         )
                         .await?;
-                    state.federation.wake_outbox();
+                    state.federation_outbox().wake_outbox();
                     return Ok(true);
                 }
                 FederatedMixIqReplay::Miss => {}
@@ -7040,7 +7040,7 @@ pub(crate) async fn federated_mix_iq(
             // terminal IQ. Admit every stanza into the durable S2S outbox in
             // one transaction so a quota/backend failure can never expose a
             // prefix without its `fin`, nor a `fin` without every result.
-            let policy = state.federation.outbox_policy();
+            let policy = state.federation_outbox().outbox_policy();
             if let Err(error) = state
                 .mix_service()
                 .enqueue_s2s_response_batch(authenticated_domain, &responses, policy)
@@ -7053,7 +7053,7 @@ pub(crate) async fn federated_mix_iq(
                     "federated MIX MAM stream was rejected atomically"
                 );
                 let _ = state
-                    .federation
+                    .federation_outbox()
                     .send(
                         authenticated_domain,
                         iq_error_to(
@@ -7068,7 +7068,7 @@ pub(crate) async fn federated_mix_iq(
                     .await;
                 return Ok(true);
             }
-            state.federation.wake_outbox();
+            state.federation_outbox().wake_outbox();
             return Ok(true);
         }
         let response = match handle_channel_iq(
@@ -7104,7 +7104,7 @@ pub(crate) async fn federated_mix_iq(
                             ?error,
                             "recovered committed federated MIX mutation result"
                         );
-                        state.federation.wake_outbox();
+                        state.federation_outbox().wake_outbox();
                         return Ok(true);
                     }
                     FederatedMixIqReplay::Conflict => {
@@ -7120,10 +7120,10 @@ pub(crate) async fn federated_mix_iq(
                             .enqueue_s2s_response_batch(
                                 authenticated_domain,
                                 &[conflict],
-                                state.federation.outbox_policy(),
+                                state.federation_outbox().outbox_policy(),
                             )
                             .await?;
-                        state.federation.wake_outbox();
+                        state.federation_outbox().wake_outbox();
                         return Ok(true);
                     }
                     FederatedMixIqReplay::Miss => return Err(error),
@@ -7147,7 +7147,7 @@ pub(crate) async fn federated_mix_iq(
                         journaled == response,
                         "atomic federated MIX result differs from protocol result"
                     );
-                    state.federation.wake_outbox();
+                    state.federation_outbox().wake_outbox();
                 }
                 FederatedMixIqReplay::Conflict => {
                     let conflict = iq_error_to(
@@ -7162,10 +7162,10 @@ pub(crate) async fn federated_mix_iq(
                         .enqueue_s2s_response_batch(
                             authenticated_domain,
                             &[conflict],
-                            state.federation.outbox_policy(),
+                            state.federation_outbox().outbox_policy(),
                         )
                         .await?;
-                    state.federation.wake_outbox();
+                    state.federation_outbox().wake_outbox();
                 }
                 FederatedMixIqReplay::Miss => {
                     let response_kind = Document::parse(&response).ok().and_then(|document| {
@@ -7183,11 +7183,11 @@ pub(crate) async fn federated_mix_iq(
                             &request.id,
                             &request_digest,
                             &response,
-                            state.federation.outbox_policy(),
+                            state.federation_outbox().outbox_policy(),
                         )
                         .await?
                     {
-                        FederatedMixIqReplay::Replay(_) => state.federation.wake_outbox(),
+                        FederatedMixIqReplay::Replay(_) => state.federation_outbox().wake_outbox(),
                         FederatedMixIqReplay::Conflict => {
                             anyhow::bail!("federated MIX error result raced a changed request")
                         }
@@ -7199,7 +7199,7 @@ pub(crate) async fn federated_mix_iq(
             }
         } else {
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, response, None)
                 .await;
         }
@@ -7419,7 +7419,7 @@ async fn federated_mix_iq_relay(
         let response = handle_channel_relay_request(state, &request, &request.from).await?;
         if !response.is_empty() {
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, response, None)
                 .await;
         }
@@ -7445,7 +7445,7 @@ async fn federated_mix_iq_relay(
                 "item-not-found",
             );
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, response, None)
                 .await;
             return Ok(true);
@@ -7464,7 +7464,7 @@ async fn federated_mix_iq_relay(
             let response =
                 relay_error(&request.id, &request.to, &request.from, "auth", "forbidden");
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, response, None)
                 .await;
             return Ok(true);
@@ -7482,7 +7482,7 @@ async fn federated_mix_iq_relay(
             }
         };
         let _ = state
-            .federation
+            .federation_outbox()
             .send(authenticated_domain, response, None)
             .await;
         return Ok(true);
@@ -7527,7 +7527,7 @@ pub(crate) async fn federated_mix_message(
         if kind != "error" {
             let response = message_error(&id, &to, &from, error_type, condition);
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, response, None)
                 .await;
         }
@@ -7539,7 +7539,7 @@ pub(crate) async fn federated_mix_message(
         if let Some(error) = process_channel_message(&state, &actor_bare, &actor_full, &raw).await?
         {
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, error, None)
                 .await;
         }
@@ -7667,7 +7667,7 @@ pub(crate) async fn federated_mix_presence(
                     .attr("to", channel.to_string())
                     .finish();
                 let _ = state
-                    .federation
+                    .federation_outbox()
                     .send(authenticated_domain, response, Some(to.clone()))
                     .await;
             }
@@ -7689,7 +7689,7 @@ pub(crate) async fn federated_mix_presence(
         let actor_bare = crate::jid::CanonicalJid::parse(&actor)?.bare();
         if let Some(error) = process_channel_presence(&state, &actor_bare, &actor, &raw).await? {
             let _ = state
-                .federation
+                .federation_outbox()
                 .send(authenticated_domain, error, None)
                 .await;
         }

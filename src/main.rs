@@ -352,8 +352,21 @@ async fn run() -> Result<()> {
     db::ensure_bootstrap_admin(&pool, &config).await?;
     startup_phase.complete();
     let components = components::registry();
-    let (federation, federation_rx) =
-        s2s::FederationRouter::channel(pool.clone(), &config, components.clone());
+    let (federation, federation_rx) = services::federation_outbox::FederationOutboxService::channel(
+        db::federation_outbox_repository::PostgresFederationOutboxRepository::new(pool.clone()),
+        northstar_federation_core::S2sOutboxPolicy::new(
+            config.s2s_outbox_ttl_seconds,
+            config.s2s_outbox_max_rows,
+            config.s2s_outbox_max_bytes,
+            config.s2s_outbox_max_per_domain,
+        ),
+        components.clone(),
+        config
+            .components
+            .iter()
+            .flat_map(|credential| credential.allowed_domains.iter().cloned())
+            .collect(),
+    );
     let cancel = CancellationToken::new();
     let startup_phase = logging::StartupPhase::begin("application_state");
     let state = AppState::new(

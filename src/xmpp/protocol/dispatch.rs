@@ -715,7 +715,7 @@ impl ProtocolSession {
             }
             if !self
                 .state
-                .federation
+                .federation_outbox()
                 .send(domain, set_from(raw, from), Some(from.to_owned()))
                 .await
             {

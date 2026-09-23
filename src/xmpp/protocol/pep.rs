@@ -1857,7 +1857,7 @@ async fn route_pep_message(
             anyhow::bail!("no local PEP resource accepted the notification");
         }
     } else if state.federation_domain_allowed(domain) {
-        if !state.federation.send(domain, message, None).await {
+        if !state.federation_outbox().send(domain, message, None).await {
             anyhow::bail!("federated PEP notification was not admitted to the durable outbox");
         }
     } else {

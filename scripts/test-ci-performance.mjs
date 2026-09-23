@@ -45,10 +45,10 @@ test('only superseded PR revisions share cancellable CI groups', () => {
     scheduling(workflow, event('pull_request', '', 102, 4)).group);
 });
 
-test('main and PRs own source CI; tags retain exact-source release qualification', () => {
+test('every branch push and PR runs source CI; tags retain exact-source release qualification', () => {
   const triggers = workflow.split('\non:\n')[1].split('\npermissions:')[0];
   const push = triggers.split('  push:\n')[1].split(/^  [a-z_]+:/m)[0];
-  assert.match(push, /^    branches: \[main\]$/m);
+  assert.match(push, /^    branches: \['\*\*'\]$/m);
   assert.doesNotMatch(push, /tags:|branches-ignore:/);
   assert.match(triggers, /^  pull_request:$/m);
   assert.match(release, /tags:\n\s+- "v\*"/);

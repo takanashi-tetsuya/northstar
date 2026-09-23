@@ -165,7 +165,7 @@ durable fallback result.
 ### Packet 7 — Administration and final composition
 
 Move REST/admin operation transactions behind command-role ports, privatize
-the remaining nine `AppState` capabilities, regenerate configuration/docs from
+the remaining seven `AppState` capabilities, regenerate configuration/docs from
 the effective capability graph, and remove obsolete facades. Then execute the
 complete environment-dependent release matrix.
 

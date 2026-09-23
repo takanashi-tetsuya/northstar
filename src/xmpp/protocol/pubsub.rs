@@ -2854,7 +2854,7 @@ async fn route_service_message(
         }
     } else if state.federation_domain_allowed(target_domain) {
         if !state
-            .federation
+            .federation_outbox()
             .send(target_domain, message, Some(service.to_owned()))
             .await
         {

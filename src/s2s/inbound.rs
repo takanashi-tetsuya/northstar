@@ -1110,7 +1110,7 @@ fn publish_inbound_route(
         )
         .is_ok();
     if registered {
-        state.federation.wake_outbox();
+        state.federation_outbox().wake_outbox();
     }
     registered
 }
@@ -1730,7 +1730,7 @@ async fn route_inbound_scoped(
     }
     if from_is_authenticated && state.config.component_domain_configured(to_domain) {
         return if state
-            .federation
+            .federation_outbox()
             .send(to_domain, client_raw.clone(), None)
             .await
         {
@@ -1992,7 +1992,11 @@ pub(crate) async fn route_inbound_presence(
                 .expect("canonical federated contact")
                 .domainpart()
                 .to_owned();
-            if !state.federation.send(&remote_domain, response, None).await {
+            if !state
+                .federation_outbox()
+                .send(&remote_domain, response, None)
+                .await
+            {
                 return Ok(Some(s2s_stanza_error(root, "wait", "resource-constraint")));
             }
             if reply_kind == "subscribed" {
@@ -2081,7 +2085,11 @@ async fn send_unavailable_presence_to_remote(state: &AppState, owner: &str, cont
             .attr("to", contact)
             .attr("type", "unavailable")
             .finish();
-        if !state.federation.send(&remote_domain, stanza, None).await {
+        if !state
+            .federation_outbox()
+            .send(&remote_domain, stanza, None)
+            .await
+        {
             state
                 .metrics
                 .post_accept_side_effect_failures_total
@@ -2123,7 +2131,11 @@ async fn send_current_presence_to_remote(state: &AppState, owner: &str, contact:
                     .attr("to", contact)
                     .finish()
             });
-        if !state.federation.send(&remote_domain, stanza, None).await {
+        if !state
+            .federation_outbox()
+            .send(&remote_domain, stanza, None)
+            .await
+        {
             state
                 .metrics
                 .post_accept_side_effect_failures_total
@@ -2241,7 +2253,7 @@ async fn route_inbound_presence_probe(
         // original presence id.  The probe id is mirrored only for
         // unavailable/unsubscribed/error responses above.
         if !state
-            .federation
+            .federation_outbox()
             .send(&requester_domain, response, None)
             .await
         {

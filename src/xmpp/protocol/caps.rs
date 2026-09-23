@@ -250,7 +250,7 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
                 .domainpart()
                 .to_owned();
             state
-                .federation
+                .federation_outbox()
                 .send(&domain, query, Some(state.config.domain.clone()))
                 .await
         }

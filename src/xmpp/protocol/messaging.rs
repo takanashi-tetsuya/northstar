@@ -474,7 +474,7 @@ impl ProtocolSession {
                     target_domain: domain,
                     stanza: &routed,
                     bounce_to: Some(from),
-                    outbox_policy: self.state.federation.outbox_policy().into(),
+                    outbox_policy: self.state.federation_outbox().outbox_policy().into(),
                     cluster_authority: cluster_authority.as_ref(),
                 };
                 match self
@@ -484,7 +484,7 @@ impl ProtocolSession {
                     .await
                 {
                     Ok(RemoteMucInviteAdmissionOutcome::Stored) => {
-                        self.state.federation.wake_outbox();
+                        self.state.federation_outbox().wake_outbox();
                         if cluster_authority.is_some() {
                             if let Err(error) = self
                                 .state
@@ -537,7 +537,7 @@ impl ProtocolSession {
                     .await
                 {
                     Ok(RetractionOutcome::Applied { .. }) => {
-                        self.state.federation.wake_outbox();
+                        self.state.federation_outbox().wake_outbox();
                     }
                     Ok(RetractionOutcome::Replay) => {
                         self.finalize_message_admission(
@@ -590,7 +590,7 @@ impl ProtocolSession {
                         target_domain: domain,
                         stanza: &routed,
                         bounce_to: Some(from),
-                        limits: self.state.federation.outbox_policy(),
+                        limits: self.state.federation_outbox().outbox_policy(),
                     }),
                 };
                 match self
@@ -602,7 +602,7 @@ impl ProtocolSession {
                     Ok(DurableAdmissionOutcome::Stored { post_commit, .. }) => {
                         debug_assert_eq!(post_commit, MessagePostCommit::WakeFederationOutbox);
                         if post_commit == MessagePostCommit::WakeFederationOutbox {
-                            self.state.federation.wake_outbox();
+                            self.state.federation_outbox().wake_outbox();
                         }
                     }
                     Ok(DurableAdmissionOutcome::Replay) => {

@@ -252,12 +252,12 @@ Key ownership:
   its private device/session keys.
 
 The architecture gate measures protocol/database dependency and public state
-capability in monotonic budgets. The current baseline is `AppState=8` public
+capability in monotonic budgets. The current baseline is `AppState=7` public
 fields and, across the production protocol tree (excluding `#[cfg(test)]` code),
 `0 db authority references / 0 db domain-model references / 0 state.pool / 0
 sqlx:: / 0 PgPool`. Importing or aliasing database symbols is rejected so an
 import cannot hide authority. These zero protocol/database ceilings must remain
-zero; the eight public `AppState` capabilities may only decrease as narrower
+zero; the seven public `AppState` capabilities may only decrease as narrower
 domain ports replace them. API, service, worker and repository transaction
 boundaries require separate runtime checks; subsystem-specific database roles
 remain incomplete. `messaging.rs` additionally has semantic

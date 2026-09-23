@@ -37,6 +37,7 @@ pub mod cluster_keys;
 pub mod cluster_muc;
 pub mod data_lifecycle;
 pub mod fast;
+pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod mam;

@@ -153,7 +153,7 @@ impl ProtocolSession {
             target_domain,
             stanza,
             bounce_to: Some(sender_jid),
-            policy: self.state.federation.outbox_policy().into(),
+            policy: self.state.federation_outbox().outbox_policy().into(),
         };
         self.state
             .retraction_service()

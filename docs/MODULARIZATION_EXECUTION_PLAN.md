@@ -439,8 +439,11 @@ The administrator MUC-destroy worker now validates its room command in an
 application service and commits the exact intent, room mutation, intent removal
 and audit fact through one repository transaction. The signed wake and local
 occupant cleanup still run only after that commit.
-Readiness persistence checks use an immutable cluster-instance snapshot, and
-inbound S2S roster visibility reads use a scoped authorization port.
+Readiness persistence checks use an immutable cluster-instance snapshot. The
+`/readyz` endpoint receives read-only runtime probes and the persistence
+service rather than `AppState`; its cache, deadlines and live rechecks stay at
+the HTTP boundary. Inbound S2S roster visibility reads use a scoped
+authorization port.
 Inbound S2S presence, IQ and message adapters also use the existing presence,
 messaging, profile and PubSub ports for recipient and policy reads. S2S stream
 management and outbound/component dispatch use fenced outbox services for
@@ -453,9 +456,13 @@ a worker context. The account-revocation consumer uses one cluster-instance
 snapshot through read, local fencing and exact revision acknowledgement.
 Message admission, challenge issuance/cleanup, SASL penalties and Passkey proof
 checks now expose separate grants over the anti-abuse owner, removing the
-public `AppState.abuse` field. Remaining work includes the other S2S and
-operation transactions, live-session and account-recovery workers, and the
-six broad AppState capabilities.
+public `AppState.abuse` field. Inbound S2S offline admission and best-effort
+history now use the message service. Administrator target claim, lease renewal,
+settlement and parent terminalization use a journal worker service. Its
+initial claim and target snapshot now share one repository transaction;
+the live-session snapshot is taken only after a successful claim.
+Remaining work includes live-session and account-recovery workers and the six
+broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a

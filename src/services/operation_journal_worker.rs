@@ -41,9 +41,31 @@ pub(crate) enum ParentTerminalization {
     LeaseLost,
 }
 
+/// Only the fields needed to choose local fan-out targets are exposed to the
+/// callback. The repository retains the claimed lease and its transaction.
+pub(crate) struct ClaimedOperation<'a> {
+    pub(crate) kind: &'a str,
+    pub(crate) payload: &'a Value,
+}
+
+pub(crate) struct TargetSeed {
+    pub(crate) target_key: String,
+    pub(crate) ordinal: i64,
+    pub(crate) payload: Value,
+}
+
 pub(crate) trait OperationJournalWorkerRepository: Send + Sync {
     type Parent;
     type Target;
+
+    fn claim_parent_with_targets<F>(
+        &self,
+        worker_id: Uuid,
+        lease_seconds: i64,
+        planner: F,
+    ) -> impl Future<Output = Result<Option<Self::Parent>>> + Send
+    where
+        F: for<'a> FnOnce(ClaimedOperation<'a>) -> Result<Vec<TargetSeed>> + Send;
 
     fn claim_target(
         &self,
@@ -92,6 +114,20 @@ pub(crate) struct OperationJournalWorkerService<R> {
 impl<R: OperationJournalWorkerRepository> OperationJournalWorkerService<R> {
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
+    }
+
+    pub(crate) async fn claim_parent_with_targets<F>(
+        &self,
+        worker_id: Uuid,
+        lease_seconds: i64,
+        planner: F,
+    ) -> Result<Option<R::Parent>>
+    where
+        F: for<'a> FnOnce(ClaimedOperation<'a>) -> Result<Vec<TargetSeed>> + Send,
+    {
+        self.repository
+            .claim_parent_with_targets(worker_id, lease_seconds, planner)
+            .await
     }
 
     pub(crate) async fn next_target(
@@ -192,6 +228,13 @@ mod tests {
     impl OperationJournalWorkerRepository for RecordingRepository {
         type Parent = ();
         type Target = usize;
+
+        async fn claim_parent_with_targets<F>(&self, _: Uuid, _: i64, _: F) -> Result<Option<()>>
+        where
+            F: for<'a> FnOnce(ClaimedOperation<'a>) -> Result<Vec<TargetSeed>> + Send,
+        {
+            Ok(None)
+        }
 
         async fn claim_target(&self, _: &(), _: Uuid, _: i64) -> Result<TargetClaim<usize>> {
             self.events.lock().unwrap().push("claim-committed");

@@ -56,6 +56,20 @@ pub(crate) struct UploadSafetyGate {
     changes: watch::Sender<u64>,
 }
 
+#[derive(Clone)]
+pub(crate) struct UploadSafetyReadiness {
+    snapshot: Arc<RwLock<UploadSafetySnapshot>>,
+}
+
+impl UploadSafetyReadiness {
+    pub(crate) fn state(&self) -> UploadSafetyState {
+        self.snapshot
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .state
+    }
+}
+
 impl UploadSafetyGate {
     pub(crate) fn new() -> Arc<Self> {
         Self::with_initial_state(
@@ -86,6 +100,12 @@ impl UploadSafetyGate {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .state
+    }
+
+    pub(crate) fn readiness_probe(&self) -> UploadSafetyReadiness {
+        UploadSafetyReadiness {
+            snapshot: Arc::clone(&self.snapshot),
+        }
     }
 
     pub(crate) fn metric_code(&self) -> u64 {
@@ -294,6 +314,23 @@ impl UploadIoPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_probe_tracks_live_upload_authority() {
+        let gate = UploadSafetyGate::new();
+        let probe = gate.readiness_probe();
+        assert_eq!(probe.state(), UploadSafetyState::Unproven);
+        gate.establish(
+            UploadAuthorityGeneration {
+                namespace: 1,
+                capacity_policy: 1,
+            },
+            false,
+        );
+        assert_eq!(probe.state(), gate.state());
+        gate.mark_namespace_unsafe("readiness test");
+        assert_eq!(probe.state(), UploadSafetyState::NamespaceUnsafe);
+    }
 
     #[test]
     fn recovery_draining_rejects_only_new_physical_writes() {

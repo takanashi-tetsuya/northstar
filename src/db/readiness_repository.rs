@@ -9,6 +9,7 @@ use crate::services::readiness::ReadinessRepository;
 use anyhow::{ensure, Result};
 use sqlx::PgPool;
 
+#[derive(Clone)]
 pub(crate) struct PostgresReadinessRepository {
     pool: PgPool,
 }

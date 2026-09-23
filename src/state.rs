@@ -1822,6 +1822,58 @@ type PasskeyService =
 type RosterService = crate::services::roster::RosterService<db::roster::PostgresRosterRepository>;
 type UploadService = crate::services::upload::UploadService<db::upload::PostgresUploadRepository>;
 
+/// Private observability capability. It contains only read-only live probes
+/// and the existing typed persistence service, never AppState or a mutable
+/// cluster, worker, connection, upload, or SM owner.
+pub(crate) struct ReadinessContext {
+    connection: crate::connection_actors::ConnectionAdmissionReadiness,
+    sm: crate::services::sm_capacity::SmMemoryReadiness,
+    upload: crate::services::upload_safety::UploadSafetyReadiness,
+    cluster: crate::cluster::ClusterReadinessProbe,
+    workers: crate::workers::WorkerReadinessProbe,
+    abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
+    persistence: crate::services::readiness::ReadinessService<
+        db::readiness_repository::PostgresReadinessRepository,
+    >,
+}
+
+impl ReadinessContext {
+    pub(crate) fn connection_accepting(&self) -> bool {
+        self.connection.is_accepting()
+    }
+
+    pub(crate) fn sm_ready(&self) -> bool {
+        self.sm.is_ready()
+    }
+
+    pub(crate) fn upload_state(&self) -> crate::services::upload_safety::UploadSafetyState {
+        self.upload.state()
+    }
+
+    pub(crate) fn cluster_error(&self) -> Option<String> {
+        self.cluster.readiness_error()
+    }
+
+    pub(crate) fn worker_error(&self) -> Option<String> {
+        self.workers.readiness_error()
+    }
+
+    pub(crate) fn cluster_authority_snapshot(
+        &self,
+    ) -> Option<crate::cluster::ClusterReadinessAuthority> {
+        self.cluster.authority_snapshot()
+    }
+
+    pub(crate) async fn validate_persistence(
+        &self,
+        cluster_authority: Option<&crate::cluster::ClusterReadinessAuthority>,
+    ) -> anyhow::Result<()> {
+        self.persistence
+            .validate_persistence(self.abuse_key_deployment.as_ref(), cluster_authority)
+            .await
+    }
+}
+
 pub struct AppState {
     pub config: Config,
     pub pool: PgPool,
@@ -2146,12 +2198,16 @@ impl AppState {
         &self.metrics_snapshot_service
     }
 
-    pub(crate) fn readiness_service(
-        &self,
-    ) -> &crate::services::readiness::ReadinessService<
-        db::readiness_repository::PostgresReadinessRepository,
-    > {
-        &self.readiness_service
+    pub(crate) fn readiness_context(&self) -> ReadinessContext {
+        ReadinessContext {
+            connection: self.connection_actors.readiness_probe(),
+            sm: self.sm_memory_governor.readiness_probe(),
+            upload: self.upload_safety_gate.readiness_probe(),
+            cluster: self.cluster.readiness_probe(),
+            workers: self.workers.readiness_probe(),
+            abuse_key_deployment: self.abuse_key_deployment.clone(),
+            persistence: self.readiness_service.clone(),
+        }
     }
 
     pub(crate) fn http_transport_policy(&self) -> HttpTransportPolicy {

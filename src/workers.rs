@@ -117,11 +117,102 @@ impl WorkerShutdownReport {
 
 #[derive(Default)]
 pub struct WorkerRegistry {
-    workers: RwLock<HashMap<&'static str, WorkerHealth>>,
-    supervisors: Mutex<HashMap<&'static str, SupervisorTask>>,
-    shutting_down: AtomicBool,
+    workers: Arc<RwLock<HashMap<&'static str, WorkerHealth>>>,
+    supervisors: Arc<Mutex<HashMap<&'static str, SupervisorTask>>>,
+    shutting_down: Arc<AtomicBool>,
     #[cfg(test)]
     supervisor_panic_injections: Mutex<HashSet<&'static str>>,
+}
+
+/// Read-only worker health capability for the private readiness endpoint.
+/// The registry remains private and cannot be used to register or stop work.
+#[derive(Clone)]
+pub(crate) struct WorkerReadinessProbe {
+    workers: Arc<RwLock<HashMap<&'static str, WorkerHealth>>>,
+    supervisors: Arc<Mutex<HashMap<&'static str, SupervisorTask>>>,
+    shutting_down: Arc<AtomicBool>,
+}
+
+impl WorkerReadinessProbe {
+    pub(crate) fn readiness_error(&self) -> Option<String> {
+        worker_readiness_error(&self.workers, &self.supervisors, &self.shutting_down)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn readiness_probe_observes_live_registry_shutdown() {
+    let registry = WorkerRegistry::new();
+    let probe = registry.readiness_probe();
+    assert_eq!(probe.readiness_error(), registry.readiness_error());
+    registry.shutting_down.store(true, Ordering::Release);
+    assert_eq!(probe.readiness_error(), registry.readiness_error());
+    assert!(probe.readiness_error().is_some());
+}
+
+fn worker_readiness_error(
+    workers: &RwLock<HashMap<&'static str, WorkerHealth>>,
+    supervisors: &Mutex<HashMap<&'static str, SupervisorTask>>,
+    shutting_down: &AtomicBool,
+) -> Option<String> {
+    if shutting_down.load(Ordering::Acquire) {
+        return Some("background worker registry is shutting down".to_owned());
+    }
+    // Snapshot task completion separately: readiness never takes the
+    // supervisor and health locks together.
+    let finished_supervisors = supervisors
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter_map(|(name, task)| task.handle.is_finished().then_some(*name))
+        .collect::<HashSet<_>>();
+    let now = Instant::now();
+    let workers = workers
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut unhealthy = workers
+        .iter()
+        .filter_map(|(name, health)| {
+            let stale = health.max_silence.is_some_and(|limit| {
+                health.state == RunState::Running
+                    && now.saturating_duration_since(health.last_heartbeat) > limit
+            });
+            let supervisor_disappeared = finished_supervisors.contains(name)
+                && !matches!(health.state, RunState::Completed | RunState::Stopped);
+            if matches!(health.state, RunState::Restarting | RunState::Stopped)
+                || stale
+                || health.consecutive_errors >= CONSECUTIVE_ERROR_THRESHOLD
+                || supervisor_disappeared
+            {
+                Some((
+                    *name,
+                    health.criticality,
+                    if supervisor_disappeared {
+                        Some("supervisor task exited without a terminal health transition")
+                    } else {
+                        health.last_error.as_deref()
+                    },
+                    health.restart_failures,
+                    health.supervisor_failures,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    unhealthy.sort_by_key(|(name, _, _, _, _)| *name);
+    unhealthy.first().map(
+        |(name, criticality, error, restart_failures, supervisor_failures)| {
+            let class = criticality_name(*criticality);
+            let attempts = format!(
+                "restart failures={restart_failures}, supervisor failures={supervisor_failures}"
+            );
+            match error {
+                Some(error) => format!("{class} worker {name} is unhealthy: {error} ({attempts})"),
+                None => format!("{class} worker {name} is unhealthy ({attempts})"),
+            }
+        },
+    )
 }
 
 #[derive(Clone)]
@@ -175,69 +266,16 @@ impl WorkerRegistry {
         Arc::new(Self::default())
     }
 
-    pub fn readiness_error(&self) -> Option<String> {
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Some("background worker registry is shutting down".to_owned());
+    pub(crate) fn readiness_probe(self: &Arc<Self>) -> WorkerReadinessProbe {
+        WorkerReadinessProbe {
+            workers: Arc::clone(&self.workers),
+            supervisors: Arc::clone(&self.supervisors),
+            shutting_down: Arc::clone(&self.shutting_down),
         }
-        // Snapshot task completion separately: readiness never takes the
-        // supervisor and health locks together.
-        let finished_supervisors = self
-            .supervisors
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .filter_map(|(name, task)| task.handle.is_finished().then_some(*name))
-            .collect::<HashSet<_>>();
-        let now = Instant::now();
-        let workers = self
-            .workers
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut unhealthy = workers
-            .iter()
-            .filter_map(|(name, health)| {
-                let stale = health.max_silence.is_some_and(|limit| {
-                    health.state == RunState::Running
-                        && now.saturating_duration_since(health.last_heartbeat) > limit
-                });
-                let supervisor_disappeared = finished_supervisors.contains(name)
-                    && !matches!(health.state, RunState::Completed | RunState::Stopped);
-                if matches!(health.state, RunState::Restarting | RunState::Stopped)
-                    || stale
-                    || health.consecutive_errors >= CONSECUTIVE_ERROR_THRESHOLD
-                    || supervisor_disappeared
-                {
-                    Some((
-                        *name,
-                        health.criticality,
-                        if supervisor_disappeared {
-                            Some("supervisor task exited without a terminal health transition")
-                        } else {
-                            health.last_error.as_deref()
-                        },
-                        health.restart_failures,
-                        health.supervisor_failures,
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        unhealthy.sort_by_key(|(name, _, _, _, _)| *name);
-        unhealthy.first().map(
-            |(name, criticality, error, restart_failures, supervisor_failures)| {
-                let class = criticality_name(*criticality);
-                let attempts = format!(
-                    "restart failures={restart_failures}, supervisor failures={supervisor_failures}"
-                );
-                match error {
-                    Some(error) => {
-                        format!("{class} worker {name} is unhealthy: {error} ({attempts})")
-                    }
-                    None => format!("{class} worker {name} is unhealthy ({attempts})"),
-                }
-            },
-        )
+    }
+
+    pub fn readiness_error(&self) -> Option<String> {
+        worker_readiness_error(&self.workers, &self.supervisors, &self.shutting_down)
     }
 
     /// Return only a terminal critical-worker failure. Normal service
@@ -265,7 +303,6 @@ impl WorkerRegistry {
             .first()
             .map(|(name, error)| format!("critical worker {name} failed: {error}"))
     }
-
     /// Register a synchronous health boundary which has no long-lived task.
     pub fn register_observer(&self, name: &'static str, criticality: WorkerCriticality) {
         let _registration = self

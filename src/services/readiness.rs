@@ -35,6 +35,7 @@ pub(crate) trait ReadinessRepository: Send + Sync {
     ) -> impl Future<Output = Result<AdminSessionCleanupSnapshot>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct ReadinessService<R> {
     repository: R,
 }

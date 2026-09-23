@@ -14,7 +14,9 @@ use crate::services::admin_session_cleanup_worker::{
     AdminSessionCleanupWorkerService,
 };
 use crate::services::operation_effect_fence::FencedEffect;
-use crate::services::operation_journal_worker::{LeaseRenewal, NextTarget, TargetSettlement};
+use crate::services::operation_journal_worker::{
+    ClaimedOperation, LeaseRenewal, NextTarget, TargetSeed, TargetSettlement,
+};
 use crate::{db, state::AppState};
 
 const LEASE_SECONDS: i64 = 60;
@@ -266,16 +268,15 @@ async fn execute_admin_session_cleanup(
 }
 
 async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
-    if !db::operation_work_pending(&state.pool, worker_id, LEASE_SECONDS).await? {
-        return Ok(false);
-    }
-    let mut tx = state.pool.begin().await?;
-    let Some(lease) = db::claim_operation_in_tx(&mut tx, worker_id, LEASE_SECONDS).await? else {
-        tx.commit().await?;
+    let Some(lease) = state
+        .operation_journal_worker_service()
+        .claim_parent_with_targets(worker_id, LEASE_SECONDS, |operation| {
+            local_target_seeds(state, operation)
+        })
+        .await?
+    else {
         return Ok(false);
     };
-    ensure_targets(state, &mut tx, &lease.operation).await?;
-    tx.commit().await?;
 
     loop {
         let target = match state
@@ -353,41 +354,55 @@ async fn lease_heartbeat(
     }
 }
 
-async fn ensure_targets(
+struct BroadcastRoute {
+    session_key: String,
+    user_id: Uuid,
+    auth_generation: i64,
+    connection_id: Uuid,
+}
+
+fn local_target_seeds(
     state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    operation: &db::OperationRecord,
-) -> Result<()> {
+    operation: ClaimedOperation<'_>,
+) -> Result<Vec<TargetSeed>> {
+    let routes = state.sessions.iter().filter_map(|entry| {
+        let session = entry.value();
+        session
+            .routable
+            .load(Ordering::Acquire)
+            .then(|| BroadcastRoute {
+                session_key: entry.key().clone(),
+                user_id: session.user_id,
+                auth_generation: session.auth_generation,
+                connection_id: session.connection_id,
+            })
+    });
+    target_seeds_for_operation(operation, &state.cluster.node_id, routes)
+}
+
+fn target_seeds_for_operation(
+    operation: ClaimedOperation<'_>,
+    node_id: &str,
+    routes: impl Iterator<Item = BroadcastRoute>,
+) -> Result<Vec<TargetSeed>> {
     if operation.kind == "admin.broadcast" {
         let message = operation
             .payload
             .get("message")
             .and_then(Value::as_str)
             .context("broadcast message is missing")?;
-        let mut ordinal = 0_i64;
-        for entry in state.sessions.iter() {
-            let session = entry.value();
-            if !session.routable.load(Ordering::Acquire) {
-                continue;
-            }
-            let payload = json!({"message":message,"session_key":entry.key(),"user_id":session.user_id,
-                "auth_generation":session.auth_generation,"connection_id":session.connection_id});
-            db::enqueue_operation_target_in_tx(
-                tx,
-                &db::EnqueueOperationTarget {
-                    operation_id: operation.id,
-                    target_key: &format!("connection:{}", session.connection_id),
-                    ordinal,
-                    payload: &payload,
-                    max_attempts: operation.max_attempts,
-                    deadline_seconds: 24 * 60 * 60,
-                },
-            )
-            .await?;
-            ordinal += 1;
+        let mut seeds = Vec::new();
+        for (ordinal, route) in routes.enumerate() {
+            let payload = json!({"message":message,"session_key":route.session_key,"user_id":route.user_id,
+                "auth_generation":route.auth_generation,"connection_id":route.connection_id});
+            seeds.push(TargetSeed {
+                target_key: format!("connection:{}", route.connection_id),
+                ordinal: ordinal as i64,
+                payload,
+            });
         }
-        if ordinal > 0 {
-            return Ok(());
+        if !seeds.is_empty() {
+            return Ok(seeds);
         }
     }
     let target_key = if operation.kind == "admin.session_kick" {
@@ -400,21 +415,13 @@ async fn ensure_targets(
                 .context("connection id is missing")?
         )
     } else {
-        format!("node:{}", state.cluster.node_id)
+        format!("node:{node_id}")
     };
-    db::enqueue_operation_target_in_tx(
-        tx,
-        &db::EnqueueOperationTarget {
-            operation_id: operation.id,
-            target_key: &target_key,
-            ordinal: 0,
-            payload: &operation.payload,
-            max_attempts: operation.max_attempts,
-            deadline_seconds: 24 * 60 * 60,
-        },
-    )
-    .await?;
-    Ok(())
+    Ok(vec![TargetSeed {
+        target_key,
+        ordinal: 0,
+        payload: operation.payload.clone(),
+    }])
 }
 
 async fn execute_effect(
@@ -633,6 +640,97 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::Notify;
+
+    #[test]
+    fn broadcast_target_snapshot_preserves_connection_order_and_payload() {
+        let alice = Uuid::new_v4();
+        let bob = Uuid::new_v4();
+        let alice_connection = Uuid::new_v4();
+        let bob_connection = Uuid::new_v4();
+        let operation_payload = json!({"message":"maintenance"});
+        let seeds = target_seeds_for_operation(
+            ClaimedOperation {
+                kind: "admin.broadcast",
+                payload: &operation_payload,
+            },
+            "node-1",
+            [
+                BroadcastRoute {
+                    session_key: "alice@example.test/phone".to_owned(),
+                    user_id: alice,
+                    auth_generation: 3,
+                    connection_id: alice_connection,
+                },
+                BroadcastRoute {
+                    session_key: "bob@example.test/laptop".to_owned(),
+                    user_id: bob,
+                    auth_generation: 5,
+                    connection_id: bob_connection,
+                },
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        assert_eq!(seeds.len(), 2);
+        assert_eq!(
+            seeds[0].target_key,
+            format!("connection:{alice_connection}")
+        );
+        assert_eq!(seeds[0].ordinal, 0);
+        assert_eq!(
+            seeds[0].payload,
+            json!({
+                "message":"maintenance",
+                "session_key":"alice@example.test/phone",
+                "user_id":alice,
+                "auth_generation":3,
+                "connection_id":alice_connection,
+            })
+        );
+        assert_eq!(seeds[1].target_key, format!("connection:{bob_connection}"));
+        assert_eq!(seeds[1].ordinal, 1);
+        assert_eq!(
+            seeds[1].payload,
+            json!({
+                "message":"maintenance",
+                "session_key":"bob@example.test/laptop",
+                "user_id":bob,
+                "auth_generation":5,
+                "connection_id":bob_connection,
+            })
+        );
+    }
+
+    #[test]
+    fn empty_broadcast_and_nonbroadcast_target_fallbacks_are_exact() {
+        for (kind, payload, expected_key) in [
+            (
+                "admin.broadcast",
+                json!({"message":"maintenance"}),
+                "node:node-1",
+            ),
+            ("admin.tls_reload", json!({}), "node:node-1"),
+            (
+                "admin.session_kick",
+                json!({"connection_id":"exact-connection"}),
+                "connection:exact-connection",
+            ),
+        ] {
+            let seeds = target_seeds_for_operation(
+                ClaimedOperation {
+                    kind,
+                    payload: &payload,
+                },
+                "node-1",
+                std::iter::empty(),
+            )
+            .unwrap();
+            assert_eq!(seeds.len(), 1);
+            assert_eq!(seeds[0].target_key, expected_key);
+            assert_eq!(seeds[0].ordinal, 0);
+            assert_eq!(seeds[0].payload, payload);
+        }
+    }
 
     struct DropSignal(Arc<AtomicBool>);
 

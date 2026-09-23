@@ -568,7 +568,7 @@ fn host_meta_route_contributions(websocket: bool, bosh: bool, xep_0487: bool) ->
 }
 
 pub fn public_router(state: Arc<AppState>) -> Router {
-    let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let readiness = ReadyEndpointState::new(state.readiness_context());
     let policy = state.public_discovery_context().policy();
     let mut router = Router::new()
         .route("/healthz", get(health))
@@ -611,7 +611,7 @@ pub fn public_router(state: Arc<AppState>) -> Router {
 }
 
 pub fn administrator_router(state: Arc<AppState>) -> Router {
-    let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let readiness = ReadyEndpointState::new(state.readiness_context());
     let policy = state.public_discovery_context().policy();
     let router = Router::new()
         .route("/healthz", get(health))

@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::error::{AppError, Result};
-use crate::state::AppState;
+use crate::state::{AppState, ReadinessContext};
 use crate::xmpp;
 
 use crate::services::metrics_snapshot::DatabaseMetricsSnapshot;
@@ -47,19 +47,19 @@ enum ReadinessSnapshot {
     Unavailable(&'static str),
 }
 
-/// A bounded readiness capability. It deliberately owns no database pool of
-/// its own: one single-flight probe may use the application's authoritative
-/// pool, while anonymous duplicates consume only the short cache or fail fast.
+/// A bounded readiness capability. Its context exposes only live read-only
+/// health probes and a typed persistence service; one single-flight probe may
+/// use the authoritative pool while duplicates use the cache or fail fast.
 pub struct ReadyEndpointState {
-    app: Arc<AppState>,
+    context: ReadinessContext,
     gate: Semaphore,
     cache: Mutex<Option<(Instant, ReadinessSnapshot)>>,
 }
 
 impl ReadyEndpointState {
-    pub fn new(app: Arc<AppState>) -> Arc<Self> {
+    pub(crate) fn new(context: ReadinessContext) -> Arc<Self> {
         Arc::new(Self {
-            app,
+            context,
             gate: Semaphore::new(1),
             cache: Mutex::new(None),
         })
@@ -150,11 +150,11 @@ pub async fn api_docs() -> Response {
 pub async fn ready(
     State(endpoint): State<Arc<ReadyEndpointState>>,
 ) -> Result<&'static str, AppError> {
-    if let Some(error) = current_runtime_readiness_error(&endpoint.app) {
+    if let Some(error) = current_runtime_readiness_error(&endpoint.context) {
         return Err(AppError::Unavailable(error.into()));
     }
     if let Some(snapshot) = endpoint.cached().await {
-        return runtime_readiness_response(&endpoint.app, snapshot);
+        return runtime_readiness_response(&endpoint.context, snapshot);
     }
     let permit = tokio::time::timeout(READINESS_GATE_WAIT, endpoint.gate.acquire())
         .await
@@ -163,46 +163,46 @@ pub async fn ready(
     // The cache is deliberately only for database work. Re-check cheap,
     // process-local safety authorities after waiting for the single-flight
     // gate so an old Ready snapshot cannot mask a worker or cluster failure.
-    if let Some(error) = current_runtime_readiness_error(&endpoint.app) {
+    if let Some(error) = current_runtime_readiness_error(&endpoint.context) {
         drop(permit);
         return Err(AppError::Unavailable(error.into()));
     }
     if let Some(snapshot) = endpoint.cached().await {
         drop(permit);
-        return runtime_readiness_response(&endpoint.app, snapshot);
+        return runtime_readiness_response(&endpoint.context, snapshot);
     }
-    let snapshot = probe_readiness(&endpoint.app).await;
+    let snapshot = probe_readiness(&endpoint.context).await;
     *endpoint.cache.lock().await = Some((Instant::now(), snapshot.clone()));
     drop(permit);
-    runtime_readiness_response(&endpoint.app, snapshot)
+    runtime_readiness_response(&endpoint.context, snapshot)
 }
 
-fn current_runtime_readiness_error(state: &AppState) -> Option<&'static str> {
-    if !state.connection_actors().is_accepting() {
+fn current_runtime_readiness_error(context: &ReadinessContext) -> Option<&'static str> {
+    if !context.connection_accepting() {
         return Some("connection admission is closed");
     }
-    if !state.sm_memory_governor().is_ready() {
+    if !context.sm_ready() {
         return Some("XEP-0198 memory or recovery capacity is not ready");
     }
-    if !upload_storage_ready(state.upload_safety_gate().state()) {
+    if !upload_storage_ready(context.upload_state()) {
         return Some("upload storage authority is not ready");
     }
-    if state.cluster.readiness_error().is_some() {
+    if context.cluster_error().is_some() {
         return Some("cluster policy is not ready");
     }
-    if state.worker_registry().readiness_error().is_some() {
+    if context.worker_error().is_some() {
         return Some("background workers are not ready");
     }
     None
 }
 
 fn runtime_readiness_response(
-    state: &AppState,
+    context: &ReadinessContext,
     snapshot: ReadinessSnapshot,
 ) -> Result<&'static str, AppError> {
     // Admission can close while awaiting either the cache mutex or the
     // database. Every response rechecks live authority after its last await.
-    if let Some(error) = current_runtime_readiness_error(state) {
+    if let Some(error) = current_runtime_readiness_error(context) {
         return Err(AppError::Unavailable(error.into()));
     }
     readiness_response(snapshot)
@@ -224,36 +224,34 @@ fn upload_storage_ready(state: crate::services::upload_safety::UploadSafetyState
     )
 }
 
-async fn probe_readiness(state: &AppState) -> ReadinessSnapshot {
-    let cluster_authority = state.cluster.readiness_authority_snapshot();
-    let persistence_probe = state
-        .readiness_service()
-        .validate_persistence(state.abuse_key_deployment(), cluster_authority.as_ref());
+async fn probe_readiness(context: &ReadinessContext) -> ReadinessSnapshot {
+    let cluster_authority = context.cluster_authority_snapshot();
+    let persistence_probe = context.validate_persistence(cluster_authority.as_ref());
     match tokio::time::timeout(READINESS_PROBE_TIMEOUT, persistence_probe).await {
         Ok(Ok(())) => {
             // An instance lease may be replaced while the persistence query is
             // in flight. Never report ready for a superseded local epoch.
-            if cluster_authority != state.cluster.readiness_authority_snapshot() {
+            if cluster_authority != context.cluster_authority_snapshot() {
                 tracing::warn!("readiness cluster authority changed during persistence probe");
                 return ReadinessSnapshot::Unavailable(
                     "database or persisted security authority is not ready",
                 );
             }
-            if !state.sm_memory_governor().is_ready() {
+            if !context.sm_ready() {
                 return ReadinessSnapshot::Unavailable(
                     "XEP-0198 memory or recovery capacity is not ready",
                 );
             }
-            let upload_state = state.upload_safety_gate().state();
+            let upload_state = context.upload_state();
             if !upload_storage_ready(upload_state) {
                 tracing::warn!(?upload_state, "readiness upload authority probe failed");
                 return ReadinessSnapshot::Unavailable("upload storage authority is not ready");
             }
-            if let Some(error) = state.cluster.readiness_error() {
+            if let Some(error) = context.cluster_error() {
                 tracing::warn!(%error, "readiness cluster policy probe failed");
                 return ReadinessSnapshot::Unavailable("cluster policy is not ready");
             }
-            if let Some(error) = state.worker_registry().readiness_error() {
+            if let Some(error) = context.worker_error() {
                 tracing::warn!(%error, "readiness worker probe failed");
                 ReadinessSnapshot::Unavailable("background workers are not ready")
             } else {
@@ -1118,7 +1116,7 @@ mod tests {
             .next()
             .expect("runtime readiness helper follows ready handler");
         let first_runtime_check = ready
-            .find("current_runtime_readiness_error(&endpoint.app)")
+            .find("current_runtime_readiness_error(&endpoint.context)")
             .expect("ready handler checks current runtime health");
         let first_cache_read = ready
             .find("endpoint.cached().await")
@@ -1126,23 +1124,25 @@ mod tests {
         assert!(first_runtime_check < first_cache_read);
         assert_eq!(
             ready
-                .matches("current_runtime_readiness_error(&endpoint.app)")
+                .matches("current_runtime_readiness_error(&endpoint.context)")
                 .count(),
             2,
             "runtime health must be checked before and after waiting for the gate"
         );
         assert_eq!(
             ready
-                .matches("runtime_readiness_response(&endpoint.app, snapshot)")
+                .matches("runtime_readiness_response(&endpoint.context, snapshot)")
                 .count(),
             3,
             "both cached responses and the completed probe must recheck live authority"
         );
         assert!(
             ready
-                .rfind("runtime_readiness_response(&endpoint.app, snapshot)")
+                .rfind("runtime_readiness_response(&endpoint.context, snapshot)")
                 .unwrap()
-                > ready.find("probe_readiness(&endpoint.app).await").unwrap(),
+                > ready
+                    .find("probe_readiness(&endpoint.context).await")
+                    .unwrap(),
             "a database probe started before shutdown cannot restore readiness"
         );
     }
@@ -1157,7 +1157,8 @@ mod tests {
             .split("pub async fn metrics(")
             .next()
             .expect("metrics handler follows readiness probe");
-        assert!(probe.contains(".readiness_service()"));
+        assert!(probe.contains("context.validate_persistence("));
+        assert!(probe.contains("context.cluster_authority_snapshot()"));
         assert!(!probe.contains("state.pool"));
         assert!(!probe.contains("crate::db::"));
         assert!(probe.contains("READINESS_PROBE_TIMEOUT"));

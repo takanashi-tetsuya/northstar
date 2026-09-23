@@ -118,8 +118,20 @@ pub struct ConnectionActorRegistry {
     inner: Arc<RegistryInner>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ConnectionAdmissionReadiness {
+    accepting: Arc<AtomicBool>,
+    shutdown: CancellationToken,
+}
+
+impl ConnectionAdmissionReadiness {
+    pub(crate) fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire) && !self.shutdown.is_cancelled()
+    }
+}
+
 struct RegistryInner {
-    accepting: AtomicBool,
+    accepting: Arc<AtomicBool>,
     total_capacity: Arc<Semaphore>,
     client_capacity: Arc<Semaphore>,
     s2s_capacity: Arc<Semaphore>,
@@ -183,7 +195,7 @@ impl ConnectionActorRegistry {
     fn with_capacities(total: usize, client: usize, s2s: usize, component: usize) -> Self {
         Self {
             inner: Arc::new(RegistryInner {
-                accepting: AtomicBool::new(true),
+                accepting: Arc::new(AtomicBool::new(true)),
                 total_capacity: Arc::new(Semaphore::new(total)),
                 client_capacity: Arc::new(Semaphore::new(client)),
                 s2s_capacity: Arc::new(Semaphore::new(s2s)),
@@ -207,8 +219,16 @@ impl ConnectionActorRegistry {
         self.inner.shutdown.clone()
     }
 
+    #[cfg(test)]
     pub fn is_accepting(&self) -> bool {
         self.inner.accepting.load(Ordering::Acquire) && !self.inner.shutdown.is_cancelled()
+    }
+
+    pub(crate) fn readiness_probe(&self) -> ConnectionAdmissionReadiness {
+        ConnectionAdmissionReadiness {
+            accepting: Arc::clone(&self.inner.accepting),
+            shutdown: self.inner.shutdown.clone(),
+        }
     }
 
     pub fn active_count(&self) -> usize {
@@ -355,6 +375,8 @@ mod tests {
     #[tokio::test]
     async fn registry_bounds_admission_and_cooperatively_drains() {
         let registry = ConnectionActorRegistry::new(1);
+        let readiness = registry.readiness_probe();
+        assert!(readiness.is_accepting());
         let shutdown = registry.shutdown_token();
         let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
         registry
@@ -368,6 +390,7 @@ mod tests {
             Err(ConnectionActorSpawnError::CapacityReached)
         );
         registry.begin_shutdown();
+        assert!(!readiness.is_accepting());
         assert_eq!(
             registry.try_spawn(ConnectionActorKind::C2sTcp, None, async {}),
             Err(ConnectionActorSpawnError::AdmissionClosed)

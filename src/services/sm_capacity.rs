@@ -51,8 +51,30 @@ pub(crate) struct SmMemoryGovernor {
     max_recovery_bytes: usize,
     max_recovery_jobs: usize,
     max_snapshot_bytes: usize,
-    unhealthy: AtomicBool,
+    unhealthy: Arc<AtomicBool>,
     metrics: Arc<SmCapacityMetrics>,
+}
+
+/// Only the live capacity verdict, without reservation or failure mutation.
+#[derive(Clone)]
+pub(crate) struct SmMemoryReadiness {
+    unhealthy: Arc<AtomicBool>,
+    metrics: Arc<SmCapacityMetrics>,
+    max_bytes: usize,
+    max_recovery_bytes: usize,
+    max_recovery_jobs: usize,
+}
+
+impl SmMemoryReadiness {
+    pub(crate) fn is_ready(&self) -> bool {
+        sm_memory_is_ready(
+            &self.unhealthy,
+            &self.metrics,
+            self.max_bytes,
+            self.max_recovery_bytes,
+            self.max_recovery_jobs,
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -120,7 +142,7 @@ impl SmMemoryGovernor {
             max_recovery_bytes,
             max_recovery_jobs,
             max_snapshot_bytes,
-            unhealthy: AtomicBool::new(false),
+            unhealthy: Arc::new(AtomicBool::new(false)),
             metrics,
         }))
     }
@@ -223,16 +245,25 @@ impl SmMemoryGovernor {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     pub(crate) fn is_ready(&self) -> bool {
-        if self.unhealthy.load(Ordering::Acquire) {
-            return false;
+        sm_memory_is_ready(
+            &self.unhealthy,
+            &self.metrics,
+            self.max_bytes,
+            self.max_recovery_bytes,
+            self.max_recovery_jobs,
+        )
+    }
+
+    pub(crate) fn readiness_probe(&self) -> SmMemoryReadiness {
+        SmMemoryReadiness {
+            unhealthy: Arc::clone(&self.unhealthy),
+            metrics: Arc::clone(&self.metrics),
+            max_bytes: self.max_bytes,
+            max_recovery_bytes: self.max_recovery_bytes,
+            max_recovery_jobs: self.max_recovery_jobs,
         }
-        let bytes = self.metrics.reserved_bytes.load(Ordering::Relaxed) as usize;
-        let recovery_bytes = self.metrics.recovery_queue_bytes.load(Ordering::Relaxed) as usize;
-        let recovery_jobs = self.metrics.recovery_queue_jobs.load(Ordering::Relaxed) as usize;
-        bytes.saturating_mul(100) < self.max_bytes.saturating_mul(85)
-            && recovery_bytes.saturating_mul(100) < self.max_recovery_bytes.saturating_mul(85)
-            && recovery_jobs.saturating_mul(100) < self.max_recovery_jobs.saturating_mul(85)
     }
 
     pub(crate) fn max_bytes(&self) -> usize {
@@ -247,6 +278,24 @@ impl SmMemoryGovernor {
     pub(crate) fn metrics(&self) -> &Arc<SmCapacityMetrics> {
         &self.metrics
     }
+}
+
+fn sm_memory_is_ready(
+    unhealthy: &AtomicBool,
+    metrics: &SmCapacityMetrics,
+    max_bytes: usize,
+    max_recovery_bytes: usize,
+    max_recovery_jobs: usize,
+) -> bool {
+    if unhealthy.load(Ordering::Acquire) {
+        return false;
+    }
+    let bytes = metrics.reserved_bytes.load(Ordering::Relaxed) as usize;
+    let recovery_bytes = metrics.recovery_queue_bytes.load(Ordering::Relaxed) as usize;
+    let recovery_jobs = metrics.recovery_queue_jobs.load(Ordering::Relaxed) as usize;
+    bytes.saturating_mul(100) < max_bytes.saturating_mul(85)
+        && recovery_bytes.saturating_mul(100) < max_recovery_bytes.saturating_mul(85)
+        && recovery_jobs.saturating_mul(100) < max_recovery_jobs.saturating_mul(85)
 }
 
 impl SmCapacityLease {
@@ -411,6 +460,20 @@ pub(crate) struct SmRecoveryQueueSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_probe_tracks_live_capacity_and_invariant_failure() {
+        let metrics = Arc::new(SmCapacityMetrics::default());
+        let governor = SmMemoryGovernor::new(1_000, 500, 10, 400, Arc::clone(&metrics)).unwrap();
+        let probe = governor.readiness_probe();
+        assert_eq!(probe.is_ready(), governor.is_ready());
+        metrics.reserved_bytes.store(850, Ordering::Release);
+        assert!(!probe.is_ready());
+        metrics.reserved_bytes.store(0, Ordering::Release);
+        assert!(probe.is_ready());
+        governor.mark_invariant_failure();
+        assert!(!probe.is_ready());
+    }
 
     #[test]
     fn one_thousand_empty_live_leases_fit_without_static_maximum_reservation() {

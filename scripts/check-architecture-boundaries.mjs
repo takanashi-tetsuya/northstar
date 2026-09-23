@@ -2223,6 +2223,10 @@ const operationRuntimeSource = productionWithoutCfgTestModules(
   read('src/operation_runtime.rs'),
   'operation_runtime.rs production',
 );
+if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation_in_tx|enqueue_operation_target_in_tx)\s*\(/.test(operationRuntimeSource)
+    || !operationRuntimeSource.includes('.claim_parent_with_targets(')) {
+  throw new Error('administrator operation worker must keep its initial claim and target writes behind the journal service');
+}
 if (/\.wake_committed_muc_operation\s*\(/.test(operationRuntimeSource)
     || /\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSource)) {
   throw new Error('operation_runtime.rs bypasses MucService for committed MUC wakes');
@@ -3099,6 +3103,14 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
+const readinessEndpointSource = read('src/api/system.rs');
+const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
+const readinessContext = structBody(state, 'pub(crate) struct ReadinessContext');
+if (!readinessEndpoint.includes('context: ReadinessContext')
+    || /Arc<AppState>|(?:AppState|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
+    || countMatches(read('src/api/mod.rs'), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
+  throw new Error('readiness listeners must receive only a narrow read-only runtime context');
+}
 const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
 if (!clusterMaintenance.includes('.session_authority_sweep_service()')
     || /(?:crate::)?db::(?:auth_states_for_users|user_agent_login_epochs)\s*\(/.test(clusterMaintenance)) {
@@ -3163,7 +3175,6 @@ for (const task of serviceTaskNames) {
 const stateServiceAccessors = [
   'api_query_service',
   'metrics_snapshot_service',
-  'readiness_service',
   'api_session_service',
   'challenge_issue_service',
   'challenge_cleanup_service',

@@ -1085,6 +1085,44 @@ pub(crate) struct ClusterReadinessAuthority {
     pub(crate) signing_key_epoch: i64,
 }
 
+/// Read-only health and exact identity view. This has no Redis, signing,
+/// publication, or instance-claim authority.
+#[derive(Clone)]
+pub(crate) struct ClusterReadinessProbe {
+    health: Arc<ClusterHealth>,
+    authority: Option<ClusterReadinessAuthority>,
+    instance_epoch: Arc<AtomicI64>,
+}
+
+impl ClusterReadinessProbe {
+    pub(crate) fn readiness_error(&self) -> Option<String> {
+        cluster_readiness_error(&self.health)
+    }
+
+    pub(crate) fn authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+        self.authority.clone().map(|mut authority| {
+            authority.instance_epoch = self.instance_epoch.load(Ordering::Acquire);
+            authority
+        })
+    }
+}
+
+fn cluster_readiness_error(health: &ClusterHealth) -> Option<String> {
+    if !health.peer_versions_compatible.load(Ordering::Acquire) {
+        return Some("a live cluster peer uses an incompatible application protocol".into());
+    }
+    match health.state.load(Ordering::Acquire) {
+        CLUSTER_DISABLED | CLUSTER_HEALTHY => None,
+        CLUSTER_RECONCILING => Some("cluster ownership reconciliation is incomplete".into()),
+        CLUSTER_DURABLE_DIRECT_ONLY => {
+            Some("cluster is degraded to PostgreSQL-spooled direct messages".into())
+        }
+        CLUSTER_FAIL_CLOSED => Some("cluster control plane is fail-closed".into()),
+        CLUSTER_SHUTDOWN_REQUIRED => Some("cluster safety lease expired".into()),
+        _ => Some("cluster control plane has an invalid state".into()),
+    }
+}
+
 #[derive(Clone)]
 struct PendingClusterAck {
     source_node: String,
@@ -1578,6 +1616,14 @@ impl ClusterManager {
         })
     }
 
+    pub(crate) fn readiness_probe(&self) -> ClusterReadinessProbe {
+        ClusterReadinessProbe {
+            health: Arc::clone(&self.health),
+            authority: self.readiness_authority_snapshot(),
+            instance_epoch: Arc::clone(&self.instance_epoch),
+        }
+    }
+
     pub fn peer_key_authority_identities(&self) -> Vec<crate::db::ClusterKeyDeploymentIdentity> {
         self.security
             .as_ref()
@@ -1804,19 +1850,7 @@ impl ClusterManager {
     }
 
     pub fn readiness_error(&self) -> Option<String> {
-        if !self.health.peer_versions_compatible.load(Ordering::Acquire) {
-            return Some("a live cluster peer uses an incompatible application protocol".into());
-        }
-        match self.health.state.load(Ordering::Acquire) {
-            CLUSTER_DISABLED | CLUSTER_HEALTHY => None,
-            CLUSTER_RECONCILING => Some("cluster ownership reconciliation is incomplete".into()),
-            CLUSTER_DURABLE_DIRECT_ONLY => {
-                Some("cluster is degraded to PostgreSQL-spooled direct messages".into())
-            }
-            CLUSTER_FAIL_CLOSED => Some("cluster control plane is fail-closed".into()),
-            CLUSTER_SHUTDOWN_REQUIRED => Some("cluster safety lease expired".into()),
-            _ => Some("cluster control plane has an invalid state".into()),
-        }
+        cluster_readiness_error(&self.health)
     }
 
     pub fn metrics_snapshot(&self) -> ClusterMetricsSnapshot {
@@ -8154,6 +8188,50 @@ mod tests {
             .await
             .unwrap();
         assert!(cluster.readiness_authority_snapshot().is_none());
+        let probe = cluster.readiness_probe();
+        assert!(probe.authority_snapshot().is_none());
+        assert_eq!(probe.readiness_error(), cluster.readiness_error());
+        cluster
+            .health
+            .peer_versions_compatible
+            .store(false, Ordering::Release);
+        assert_eq!(probe.readiness_error(), cluster.readiness_error());
+        assert!(probe.readiness_error().is_some());
+    }
+
+    #[test]
+    fn readiness_probe_keeps_configured_identity_and_reads_current_epoch() {
+        let epoch = Arc::new(AtomicI64::new(7));
+        let probe = ClusterReadinessProbe {
+            health: Arc::new(ClusterHealth::disabled()),
+            authority: Some(ClusterReadinessAuthority {
+                key_identity: crate::db::ClusterKeyDeploymentIdentity {
+                    xmpp_domain: "example.test".into(),
+                    node_id: "node-a".into(),
+                    epoch: 3,
+                    current_key_id: "key-a".into(),
+                    current_public_key_sha256: "digest-a".into(),
+                    previous_key_id: None,
+                    previous_public_key_sha256: None,
+                    staged_next_key_id: None,
+                    staged_next_public_key_sha256: None,
+                },
+                instance_node_id: "node-a".into(),
+                instance_uuid: uuid::Uuid::from_u128(9),
+                instance_epoch: 0,
+                signing_key_id: "key-a".into(),
+                signing_key_epoch: 3,
+            }),
+            instance_epoch: Arc::clone(&epoch),
+        };
+        let first = probe.authority_snapshot().unwrap();
+        assert_eq!(first.instance_epoch, 7);
+        epoch.store(8, Ordering::Release);
+        let second = probe.authority_snapshot().unwrap();
+        assert_eq!(second.instance_epoch, 8);
+        assert_eq!(first.key_identity, second.key_identity);
+        assert_eq!(first.instance_uuid, second.instance_uuid);
+        assert_eq!(first.signing_key_id, second.signing_key_id);
     }
 
     #[tokio::test]

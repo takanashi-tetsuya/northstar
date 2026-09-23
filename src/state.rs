@@ -143,6 +143,7 @@ mod passkey_login_finish;
 pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
 pub(crate) mod upload_http_delete;
 mod upload_http_read;
+pub(crate) mod upload_http_write;
 pub(crate) use upload_http_read::UploadHttpReadContext;
 pub(crate) use upload_http_read::UploadHttpReplayReadContext;
 mod metrics_context;
@@ -150,6 +151,8 @@ pub(crate) use metrics_context::MetricsContext;
 mod account_generation_teardown;
 mod admin_cluster_queries;
 pub(crate) mod cluster_failure_supervisor;
+mod cluster_listener;
+pub(crate) mod cluster_listener_dispatch;
 pub(crate) mod cluster_maintenance;
 pub(crate) mod cluster_muc_outbox_worker;
 pub(crate) mod cluster_muc_projection;
@@ -167,6 +170,7 @@ pub(crate) mod password_change_http;
 mod presence_cluster_routing;
 mod s2s_cluster_routing;
 mod session_cluster_route;
+mod sm_teardown_local;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;
@@ -3065,10 +3069,6 @@ pub struct AppState {
         crate::services::session_authority_sweep::SessionAuthoritySweepService<
             db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
-    session_termination_authority_service:
-        crate::services::session_termination_authority::SessionTerminationAuthorityService<
-            db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
-        >,
     bosh: Option<crate::bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,
     muc_occupants: Arc<DashMap<String, MucOccupant>>,
@@ -3190,9 +3190,11 @@ pub struct AppState {
     sasl_login_abuse_service: crate::services::login_abuse::SaslLoginAbuseService<
         db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
     >,
-    passkey_login_abuse_service: Arc<crate::services::login_abuse::PasskeyLoginAbuseService<
-        db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
-    >>,
+    passkey_login_abuse_service: Arc<
+        crate::services::login_abuse::PasskeyLoginAbuseService<
+            db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
+        >,
+    >,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
     abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
@@ -3286,10 +3288,6 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
-    pub(crate) fn start_upload_operation_timer(&self) -> crate::metrics::DurationTimer<'_> {
-        self.metrics.upload_operation_duration_seconds.start_timer()
-    }
-
     pub(crate) fn record_bosh_session_opened(&self) {
         self.metrics
             .bosh_sessions_total
@@ -5316,12 +5314,6 @@ impl AppState {
                     pool.clone(),
                 ),
             );
-        let session_termination_authority_service =
-            crate::services::session_termination_authority::SessionTerminationAuthorityService::new(
-                db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository::new(
-                    pool.clone(),
-                ),
-            );
         let state = Arc::new(Self {
             config,
             api_query_context,
@@ -5386,7 +5378,6 @@ impl AppState {
             cluster,
             account_revocation_consumer_service,
             session_authority_sweep_service,
-            session_termination_authority_service,
             bosh,
             sessions,
             muc_occupants,
@@ -5621,10 +5612,6 @@ impl AppState {
             .expect("upload routes and workers require an enabled or draining runtime")
     }
 
-    pub(crate) fn upload_retention_seconds(&self) -> u64 {
-        self.config.upload_retention_seconds
-    }
-
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
         self.web_admin_gateway_token.is_some()
     }
@@ -5698,10 +5685,6 @@ impl AppState {
                     .any(|allowed| allowed == &domain)
             })
             .cloned()
-    }
-
-    pub(crate) fn upload_safety_gate(&self) -> &Arc<UploadSafetyGate> {
-        &self.upload_safety_gate
     }
 
     pub(crate) fn upload_maintenance_context(
@@ -5904,14 +5887,6 @@ impl AppState {
         db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
     > {
         &self.session_authority_sweep_service
-    }
-
-    pub(crate) fn session_termination_authority_service(
-        &self,
-    ) -> &crate::services::session_termination_authority::SessionTerminationAuthorityService<
-        db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
-    > {
-        &self.session_termination_authority_service
     }
 
     pub(crate) fn s2s_outbox_dispatch_service(
@@ -6356,19 +6331,6 @@ impl AppState {
         connection_id: uuid::Uuid,
     ) -> bool {
         cancel_local_session_if_connection_in(&self.sessions, full_jid, connection_id)
-    }
-
-    /// Called only after the durable cluster-instance authority check.
-    pub(crate) fn fence_local_session_instance(
-        &self,
-        full_jid: &str,
-        connection_id: uuid::Uuid,
-    ) -> bool {
-        fence_local_session_in(
-            &self.sessions,
-            full_jid,
-            LocalSessionFence::Instance(connection_id),
-        )
     }
 
     pub(crate) fn fence_local_sm_session(&self, full_jid: &str, sm_session_id: uuid::Uuid) -> bool {
@@ -7089,18 +7051,18 @@ impl AppState {
         if !accepted {
             return Ok(false);
         }
+        let claim = crate::services::cluster_muc_receipt_claim::ClusterMucReceiptClaimService::new(
+            db::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository::new(
+                self.pool.clone(),
+            ),
+        );
         let mut renew = tokio::time::interval(Duration::from_secs(10));
         renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 result = received.recv() => return Ok(result.is_some()),
                 _ = renew.tick() => {
-                    anyhow::ensure!(
-                        db::renew_cluster_muc_outbox_claim(
-                            &self.pool, delivery, Duration::from_secs(30)
-                        ).await?,
-                        "cluster MUC transport receipt lost its exact outbox claim"
-                    );
+                    claim.renew_exact(delivery, Duration::from_secs(30)).await?;
                 }
             }
         }
@@ -7619,31 +7581,6 @@ impl AppState {
         })
     }
 
-    pub fn acquire_upload_request(
-        self: &Arc<Self>,
-        ip: std::net::IpAddr,
-    ) -> Option<UploadRequestGuard> {
-        let admission = self.upload_runtime.request_admission()?;
-        let permit = Arc::clone(&admission.semaphore).try_acquire_owned().ok()?;
-        {
-            let mut count = admission.by_ip.entry(ip).or_insert(0);
-            if *count >= admission.max_per_ip {
-                let remove_zero = *count == 0;
-                drop(count);
-                if remove_zero {
-                    admission.by_ip.remove(&ip);
-                }
-                return None;
-            }
-            *count += 1;
-        }
-        Some(UploadRequestGuard {
-            counts: Arc::clone(&admission.by_ip),
-            ip,
-            _permit: permit,
-        })
-    }
-
     pub(crate) fn omemo_recovery_service(
         &self,
     ) -> &crate::services::omemo_recovery::OmemoRecoveryService<
@@ -7844,24 +7781,26 @@ impl AppState {
         .await
     }
 
+    fn sm_teardown_presence_service(
+        &self,
+    ) -> crate::services::sm_teardown_presence::SmTeardownPresenceService<
+        db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
+    > {
+        crate::services::sm_teardown_presence::SmTeardownPresenceService::new(
+            db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
+                self.pool.clone(),
+            ),
+        )
+    }
+
     async fn teardown_sm_snapshot(&self, snapshot: &db::SmTeardownSnapshot) -> anyhow::Result<()> {
         let Ok(full_jid) = crate::jid::canonical_session_key(&snapshot.full_jid) else {
             tracing::warn!(sm_session_id = %snapshot.session_id, "discarded invalid durable SM teardown JID");
             anyhow::bail!("invalid durable SM teardown JID");
         };
         let actor_bare = bare_jid(&full_jid).to_owned();
-
-        if let Some(session) = self.sessions.get_mut(&full_jid) {
-            let matches = *session
-                .sm_session_id
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                == Some(snapshot.session_id);
-            if matches {
-                session.routable.store(false, Ordering::Release);
-                session.disconnect.cancel();
-            }
-        }
+        let local = self.sm_teardown_local_effects();
+        local.fence_exact_session(&full_jid, snapshot.session_id);
         self.cluster
             .send_sm_session_teardown(&full_jid, snapshot.session_id)
             .await?;
@@ -7874,9 +7813,12 @@ impl AppState {
                 attr_escape(&full_jid)
             );
             let mut routed = HashSet::new();
-            let roster = db::roster(&self.pool, snapshot.user_id).await?;
-            for (jid, _, subscription, _) in roster {
-                if matches!(subscription.as_str(), "from" | "both") && routed.insert(jid.clone()) {
+            let roster = self
+                .sm_teardown_presence_service()
+                .roster_subscribers(snapshot.user_id)
+                .await?;
+            for jid in roster {
+                if routed.insert(jid.clone()) {
                     if let Err(error) = self
                         .route_unavailable_with_policy(
                             snapshot.user_id,
@@ -7932,6 +7874,7 @@ impl AppState {
             }
             let occupant = self
                 .sm_teardown_muc_occupant(
+                    &local,
                     snapshot.session_id,
                     snapshot.user_id,
                     &full_jid,
@@ -7957,7 +7900,7 @@ impl AppState {
         if let Some(error) = first_error {
             return Err(error);
         }
-        self.suspended_muc_sessions.remove(&snapshot.session_id);
+        local.finish_suspended_session(snapshot.session_id);
         Ok(())
     }
 
@@ -7969,41 +7912,19 @@ impl AppState {
         unavailable: &str,
         target: &str,
     ) -> anyhow::Result<()> {
-        if db::is_blocked_for_account(&self.pool, owner_id, bare_jid(from), target).await? {
-            return Ok(());
-        }
-        if db::privacy_denies(
-            &self.pool,
-            owner_id,
-            active_privacy_list,
-            target,
-            db::PrivacyStanzaKind::PresenceOut,
-        )
-        .await?
+        if !self
+            .sm_teardown_presence_service()
+            .allows_unavailable(crate::services::sm_teardown_presence::UnavailablePolicy {
+                owner_id,
+                owner_bare_jid: bare_jid(from),
+                active_privacy_list,
+                from,
+                target,
+                local_domain: &self.config.domain,
+            })
+            .await?
         {
             return Ok(());
-        }
-        let Ok(target_jid) = crate::jid::CanonicalJid::parse(target) else {
-            anyhow::bail!("invalid SM teardown presence target");
-        };
-        if target_jid.domainpart() == self.config.domain {
-            if let Some(username) = target_jid.localpart() {
-                match db::find_enabled_user(&self.pool, username).await? {
-                    Some(recipient) => {
-                        if db::is_blocked_for_account(
-                            &self.pool,
-                            recipient.id,
-                            &target_jid.bare(),
-                            from,
-                        )
-                        .await?
-                        {
-                            return Ok(());
-                        }
-                    }
-                    None => return Ok(()),
-                }
-            }
         }
         self.route_sm_unavailable_unchecked(from, unavailable, target, true)
             .await
@@ -8079,26 +8000,17 @@ impl AppState {
 
     async fn sm_teardown_muc_occupant(
         &self,
+        local: &sm_teardown_local::SmTeardownLocalEffects,
         sm_session_id: uuid::Uuid,
         user_id: uuid::Uuid,
         full_jid: &str,
         room_jid: &str,
         nick: &str,
     ) -> anyhow::Result<SerializableMucOccupant> {
-        let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, nick);
-        if let Some(occupant) = self.muc_occupants.get(&key).filter(|occupant| {
-            occupant.full_jid == full_jid
-                && occupant.room_jid == room_jid
-                && occupant.nick == nick
-                && !occupant.cluster_epoch.is_nil()
-                && !occupant.connection_id.is_nil()
-                && matches!(
-                    &occupant.endpoint,
-                    MucOccupantEndpoint::Suspended(endpoint)
-                        if endpoint.sm_session_id == sm_session_id
-                )
-        }) {
-            return Ok(SerializableMucOccupant::from(&*occupant));
+        if let Some(occupant) =
+            local.cached_suspended_occupant(sm_session_id, full_jid, room_jid, nick)
+        {
+            return Ok(occupant);
         }
         let room = db::muc_room(&self.pool, localpart(room_jid)).await?;
         let affiliation = if let Some(room) = &room {
@@ -8145,11 +8057,8 @@ impl AppState {
         sm_session_id: uuid::Uuid,
         occupant: &SerializableMucOccupant,
     ) -> anyhow::Result<usize> {
-        let key = crate::xmpp::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
-        let removed = self.muc_occupants.remove_if(&key, |_, current| {
-            muc_suspended_teardown_identity_matches(current, sm_session_id, occupant)
-        });
-        if removed.is_some() {
+        let local = self.sm_teardown_local_effects();
+        if local.remove_exact_suspended_occupant(sm_session_id, occupant) {
             self.cluster
                 .unregister_muc_occupant_epoch(
                     &occupant.room_jid,
@@ -8159,7 +8068,7 @@ impl AppState {
                 )
                 .await?;
         }
-        let remaining = self.muc_occupants_for(&occupant.room_jid);
+        let remaining = local.room_occupants(&occupant.room_jid);
         let occupant_jids = remaining
             .iter()
             .map(|(_, target)| target.full_jid.clone())

@@ -344,6 +344,7 @@ fn deferred_response_revalidates_expiry_source_authority_without_readmitting_rep
         crate::cluster_security::test_configuration_pair(namespace);
     let sender = super::tests::verification_manager(namespace, sender_security);
     let receiver = super::tests::verification_manager(namespace, receiver_security);
+    let admission = receiver.listener_admission();
     let signing = sender.security.as_ref().unwrap();
     let now = Instant::now();
     receiver.authorized_instances.insert(
@@ -410,14 +411,14 @@ fn deferred_response_revalidates_expiry_source_authority_without_readmitting_rep
             }
         };
     let fresh = authority_at(chrono::Utc::now().timestamp(), false);
-    fresh.validate(&receiver).unwrap();
-    fresh.validate(&receiver).unwrap();
+    fresh.validate(&admission, &receiver).unwrap();
+    fresh.validate(&admission, &receiver).unwrap();
     assert!(
         receiver.replay_cache.is_empty(),
         "deferred revalidation must not consume replay twice"
     );
     assert!(authority_at(chrono::Utc::now().timestamp() - 60, true)
-        .validate(&receiver)
+        .validate(&admission, &receiver)
         .is_err());
     receiver
         .authorized_peer_keys
@@ -425,7 +426,7 @@ fn deferred_response_revalidates_expiry_source_authority_without_readmitting_rep
         .unwrap()
         .refresh_until = Instant::now();
     assert!(
-        fresh.validate(&receiver).is_err(),
+        fresh.validate(&admission, &receiver).is_err(),
         "expired source-key authority cannot authorize deferred work"
     );
     receiver
@@ -439,7 +440,7 @@ fn deferred_response_revalidates_expiry_source_authority_without_readmitting_rep
         .unwrap()
         .refresh_until = Instant::now();
     assert!(
-        fresh.validate(&receiver).is_err(),
+        fresh.validate(&admission, &receiver).is_err(),
         "expired source-instance authority cannot authorize deferred work"
     );
 }

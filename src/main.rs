@@ -704,6 +704,7 @@ async fn run() -> Result<()> {
 
     if state.cluster_workers_enabled() {
         let pubsub_transport = Arc::new(state.cluster_pubsub_listener_transport());
+        let listener_admission = Arc::new(state.cluster_listener_admission());
         let state_pubsub = state.clone();
         let pubsub_cancel = cancel.clone();
         worker_registry.supervise(
@@ -715,6 +716,7 @@ async fn run() -> Result<()> {
             move |heartbeat| {
                 cluster::run_pubsub_listener(
                     Arc::clone(&pubsub_transport),
+                    Arc::clone(&listener_admission),
                     Arc::clone(&state_pubsub),
                     pubsub_cancel.clone(),
                     heartbeat,

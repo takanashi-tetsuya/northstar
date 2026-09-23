@@ -1027,6 +1027,33 @@ impl ClusterPubsubListenerTransport {
     }
 }
 
+/// Listener-only admission after a signed envelope has passed durable replay
+/// verification. This can check the current generation and match a pending
+/// ACK, but cannot sign, publish or admit an envelope into PostgreSQL.
+#[derive(Clone)]
+pub(crate) struct ClusterListenerAdmission {
+    health: Arc<ClusterHealth>,
+    pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
+}
+
+impl ClusterListenerAdmission {
+    fn validate_generation(&self, generation: u64, rotation_epoch: u64) -> Result<()> {
+        validate_listener_generation_health(&self.health, generation, rotation_epoch)
+    }
+
+    fn dispatch_pending_ack(&self, source_node: &str, payload: serde_json::Value) -> bool {
+        dispatch_pending_ack(&self.pending_acks, source_node, payload)
+    }
+
+    fn note_authentication_failure(&self, error: &anyhow::Error) {
+        note_cluster_authentication_failure(&self.health, error);
+    }
+
+    fn note_incompatible_peer_version(&self, node_id: &str, observed: Option<&str>) {
+        note_incompatible_peer_version(&self.health, node_id, observed);
+    }
+}
+
 /// Immutable identity used by the readiness persistence probe. Capturing the
 /// local lease epoch alongside the configured key avoids passing live cluster
 /// control-plane authority into the service or repository.
@@ -1547,9 +1574,40 @@ pub(crate) struct ClusterMucOutboxSignal {
     wake: Arc<tokio::sync::Notify>,
 }
 
+/// Identity needed to authorize a signed session-termination command against
+/// the PostgreSQL route. The epoch is read after the authority query, so a
+/// listener never uses a stale process-instance snapshot.
+#[derive(Clone)]
+pub(crate) struct ClusterSessionTerminationIdentity {
+    namespace: String,
+    node_id: String,
+    instance_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+}
+
+impl ClusterSessionTerminationIdentity {
+    pub(crate) fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub(crate) fn local_instance(
+        &self,
+    ) -> crate::services::session_termination_authority::LocalClusterInstance {
+        crate::services::session_termination_authority::LocalClusterInstance {
+            node_id: self.node_id.clone(),
+            instance_uuid: self.instance_uuid,
+            instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+        }
+    }
+}
+
 impl ClusterMucOutboxSignal {
     async fn wait(&self) {
         self.wake.notified().await;
+    }
+
+    pub(crate) fn notify(&self) {
+        self.wake.notify_one();
     }
 }
 
@@ -1724,6 +1782,33 @@ fn note_incompatible_peer_version(health: &ClusterHealth, node_id: &str, observe
         required_version = NODE_PROTOCOL_VERSION,
         "live cluster peer uses an incompatible application protocol; readiness is fail-closed"
     );
+}
+
+fn note_cluster_authentication_failure(health: &ClusterHealth, error: &anyhow::Error) {
+    health
+        .authentication_failures
+        .fetch_add(1, Ordering::Relaxed);
+    tracing::warn!(?error, "rejected unauthenticated cluster protocol envelope");
+}
+
+fn dispatch_pending_ack(
+    pending_acks: &dashmap::DashMap<String, PendingClusterAck>,
+    source_node: &str,
+    payload: serde_json::Value,
+) -> bool {
+    let Ok(ack) = serde_json::from_value::<NodeDeliveryAck>(payload) else {
+        return false;
+    };
+    let Some(pending) = pending_acks.get(&ack.request_id) else {
+        return false;
+    };
+    if pending.source_node != source_node
+        || pending.nonce != ack.nonce
+        || pending.source_node != ack.node_id
+    {
+        return false;
+    }
+    pending.sender.try_send(ack).is_ok()
 }
 
 fn begin_cluster_reconciliation(health: &ClusterHealth, enabled: bool) -> Result<u64> {
@@ -2377,6 +2462,15 @@ impl ClusterManager {
         }
     }
 
+    pub(crate) fn session_termination_identity(&self) -> ClusterSessionTerminationIdentity {
+        ClusterSessionTerminationIdentity {
+            namespace: self.namespace.clone(),
+            node_id: self.node_id.clone(),
+            instance_uuid: self.connection_uuid,
+            instance_epoch: Arc::clone(&self.instance_epoch),
+        }
+    }
+
     pub(crate) fn pubsub_listener_transport(&self) -> ClusterPubsubListenerTransport {
         ClusterPubsubListenerTransport {
             client: self.client.clone(),
@@ -2388,6 +2482,13 @@ impl ClusterManager {
             health: Arc::clone(&self.health),
             listener_rotation: Arc::clone(&self.listener_rotation),
             failure_policy: self.failure_policy(),
+        }
+    }
+
+    pub(crate) fn listener_admission(&self) -> ClusterListenerAdmission {
+        ClusterListenerAdmission {
+            health: Arc::clone(&self.health),
+            pending_acks: Arc::clone(&self.pending_acks),
         }
     }
 
@@ -2482,20 +2583,9 @@ impl ClusterManager {
         })
     }
 
+    #[cfg(test)]
     fn dispatch_pending_ack(&self, source_node: &str, payload: serde_json::Value) -> bool {
-        let Ok(ack) = serde_json::from_value::<NodeDeliveryAck>(payload) else {
-            return false;
-        };
-        let Some(pending) = self.pending_acks.get(&ack.request_id) else {
-            return false;
-        };
-        if pending.source_node != source_node
-            || pending.nonce != ack.nonce
-            || pending.source_node != ack.node_id
-        {
-            return false;
-        }
-        pending.sender.try_send(ack).is_ok()
+        dispatch_pending_ack(&self.pending_acks, source_node, payload)
     }
 
     pub fn key_authority_identity(&self) -> Option<crate::db::ClusterKeyDeploymentIdentity> {
@@ -3006,13 +3096,6 @@ impl ClusterManager {
             }
         }
         Ok(())
-    }
-
-    fn note_authentication_failure(&self, error: &anyhow::Error) {
-        self.health
-            .authentication_failures
-            .fetch_add(1, Ordering::Relaxed);
-        tracing::warn!(?error, "rejected unauthenticated cluster protocol envelope");
     }
 
     fn note_incompatible_peer_version(&self, node_id: &str, observed: Option<&str>) {
@@ -5342,10 +5425,6 @@ impl ClusterManager {
         Ok(())
     }
 
-    fn notify_muc_outbox_worker(&self) {
-        self.muc_outbox_notify.notify_one();
-    }
-
     pub async fn send_to_muc_from(
         &self,
         room_jid: &str,
@@ -6000,6 +6079,7 @@ async fn maintenance_once(
 
 pub(crate) async fn run_pubsub_listener(
     transport: Arc<ClusterPubsubListenerTransport>,
+    admission: Arc<ClusterListenerAdmission>,
     state: Arc<AppState>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
@@ -6009,6 +6089,7 @@ pub(crate) async fn run_pubsub_listener(
     }
     let result = listen_once(
         Arc::clone(&transport),
+        Arc::clone(&admission),
         Arc::clone(&state),
         cancel.clone(),
         heartbeat,
@@ -6768,8 +6849,12 @@ struct ListenerCommandAuthority {
 }
 
 impl ListenerCommandAuthority {
-    fn validate(&self, cluster: &ClusterManager) -> Result<()> {
-        validate_listener_generation(cluster, self.generation, self.rotation_epoch)?;
+    fn validate(
+        &self,
+        admission: &ClusterListenerAdmission,
+        cluster: &ClusterManager,
+    ) -> Result<()> {
+        admission.validate_generation(self.generation, self.rotation_epoch)?;
         // Recheck expiry and current source key/process authority after deferred
         // work. Replay admission already happened once in the reader.
         cluster.validate_verified_envelope(&self.envelope)?;
@@ -6777,31 +6862,36 @@ impl ListenerCommandAuthority {
     }
 }
 
+#[cfg(test)]
 fn validate_listener_generation(
     cluster: &ClusterManager,
     generation: u64,
     rotation_epoch: u64,
 ) -> Result<()> {
-    let _transition = cluster
-        .health
+    validate_listener_generation_health(&cluster.health, generation, rotation_epoch)
+}
+
+fn validate_listener_generation_health(
+    health: &ClusterHealth,
+    generation: u64,
+    rotation_epoch: u64,
+) -> Result<()> {
+    let _transition = health
         .failure_since
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     anyhow::ensure!(
-        cluster.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
-            && cluster
-                .health
-                .listener_rotation_epoch
-                .load(Ordering::Acquire)
-                == rotation_epoch
-            && cluster.health.listener_generation.load(Ordering::Acquire) == generation
-            && !cluster.health.listener_requires_rotation(generation),
+        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+            && health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
+            && health.listener_generation.load(Ordering::Acquire) == generation
+            && !health.listener_requires_rotation(generation),
         "Redis listener response belongs to a retired listener generation"
     );
     Ok(())
 }
 
 async fn publish_listener_ack(
+    admission: &ClusterListenerAdmission,
     cluster: &ClusterManager,
     source_node: &str,
     ack: NodeDeliveryAck,
@@ -6809,7 +6899,7 @@ async fn publish_listener_ack(
 ) -> Result<()> {
     if let Some(pool) = &cluster.pool {
         let mut conn = pool.get().await?;
-        authority.validate(cluster)?;
+        authority.validate(admission, cluster)?;
         let ack_channel = cluster.key(format!("node:{source_node}"));
         cluster
             .publish_signed(
@@ -6824,6 +6914,7 @@ async fn publish_listener_ack(
 }
 
 async fn complete_listener_responses(
+    admission: Arc<ClusterListenerAdmission>,
     state: Arc<AppState>,
     authority: ListenerCommandAuthority,
     responses: ListenerResponses,
@@ -6831,7 +6922,7 @@ async fn complete_listener_responses(
     mut ack: Option<NodeDeliveryAck>,
 ) -> Result<()> {
     for response in responses.items {
-        authority.validate(&state.cluster)?;
+        authority.validate(&admission, &state.cluster)?;
         let result = if let Some(presence_authority) = response.presence_authority {
             state
                 .cluster
@@ -6866,15 +6957,16 @@ async fn complete_listener_responses(
             }
         }
     }
-    authority.validate(&state.cluster)?;
+    authority.validate(&admission, &state.cluster)?;
     if let Some(ack) = ack {
-        publish_listener_ack(&state.cluster, &source_node, ack, &authority).await?;
+        publish_listener_ack(&admission, &state.cluster, &source_node, ack, &authority).await?;
     }
     Ok(())
 }
 
 async fn listen_once(
     transport: Arc<ClusterPubsubListenerTransport>,
+    admission: Arc<ClusterListenerAdmission>,
     state: Arc<AppState>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
@@ -6917,6 +7009,7 @@ async fn listen_once(
     // No spawned tasks: dropping this listener synchronously drops every
     // outstanding receipt registration before a replacement listener starts.
     let mut continuations = ListenerContinuations::default();
+    let dispatch = state.cluster_listener_dispatch();
 
     enum ListenerInput {
         ProbeDue,
@@ -7017,20 +7110,17 @@ async fn listen_once(
         {
             Ok(envelope) => envelope,
             Err(error) => {
-                state.cluster.note_authentication_failure(&error);
+                admission.note_authentication_failure(&error);
                 continue;
             }
         };
         let protocol_version = envelope.version;
         let envelope_kind = envelope.kind;
         let source_node = envelope.source_node.clone();
-        validate_listener_generation(&state.cluster, candidate_generation, rotation_epoch)?;
+        admission.validate_generation(candidate_generation, rotation_epoch)?;
         if envelope_kind == crate::cluster_security::ClusterCommandKind::Ack {
-            if !state
-                .cluster
-                .dispatch_pending_ack(&source_node, envelope.payload)
-            {
-                state.cluster.note_authentication_failure(&anyhow::anyhow!(
+            if !admission.dispatch_pending_ack(&source_node, envelope.payload) {
+                admission.note_authentication_failure(&anyhow::anyhow!(
                     "cluster acknowledgement had no exact pending request"
                 ));
             }
@@ -7075,7 +7165,7 @@ async fn listen_once(
             // Protocol-v9 MUC controls are wake-only. A signed Redis payload
             // is authenticated transport data, not authorization to execute
             // a mutation; peers must commit/pull the PG operation instead.
-            state.cluster.note_authentication_failure(&anyhow::anyhow!(
+            admission.note_authentication_failure(&anyhow::anyhow!(
                 "protocol-v9 executable MUC control rejected"
             ));
             continue;
@@ -7098,7 +7188,7 @@ async fn listen_once(
                 // This is deliberately the only side effect of the Redis
                 // command. The worker re-reads the operation, exact audience
                 // and payload digest from PostgreSQL before delivery.
-                state.cluster.notify_muc_outbox_worker();
+                dispatch.wake_muc_outbox();
                 control_processed = Some(true);
             }
         } else if is_session_termination {
@@ -7108,34 +7198,19 @@ async fn listen_once(
             if let (Ok(target), Some(instance)) =
                 (crate::jid::canonical_session_key(target), instance)
             {
-                let authority = state
-                    .session_termination_authority_service()
-                    .authorize(&state.cluster.namespace, &target, instance, || {
-                        crate::services::session_termination_authority::LocalClusterInstance {
-                            node_id: state.cluster.node_id.clone(),
-                            instance_uuid: state.cluster.connection_uuid,
-                            instance_epoch: state.cluster.instance_epoch.load(Ordering::Acquire),
-                        }
-                    })
-                    .await?;
-                match authority {
-                    crate::services::session_termination_authority::SessionTerminationAuthority::Absent => {
+                match dispatch.terminate_exact_session(&target, instance).await? {
+                    crate::state::cluster_listener_dispatch::SessionTerminationEffect::Absent => {
                         control_processed = Some(true);
                         control_outcome = Some(ClusterControlOutcome::AuthoritativelyAbsent);
                     }
-                    crate::services::session_termination_authority::SessionTerminationAuthority::WrongOwner => {
+                    crate::state::cluster_listener_dispatch::SessionTerminationEffect::WrongOwner => {
                         control_processed = Some(false);
                         control_outcome = Some(ClusterControlOutcome::WrongOwner);
                     }
-                    crate::services::session_termination_authority::SessionTerminationAuthority::Authorized => {
-                        let matched = state.fence_local_session_instance(&target, instance);
-                        control_processed = Some(matched);
-                        control_outcome = Some(if matched {
-                            delivered = 1;
-                            ClusterControlOutcome::Matched
-                        } else {
-                            ClusterControlOutcome::WrongOwner
-                        });
+                    crate::state::cluster_listener_dispatch::SessionTerminationEffect::Matched => {
+                        delivered = 1;
+                        control_processed = Some(true);
+                        control_outcome = Some(ClusterControlOutcome::Matched);
                     }
                 }
             }
@@ -7179,7 +7254,8 @@ async fn listen_once(
                 .as_i64()
                 .filter(|value| *value >= 0);
             if let (Some((account, user_id)), Some(generation)) = (parsed, generation) {
-                delivered += state.revoke_local_account_routes(user_id, &account, Some(generation));
+                delivered +=
+                    dispatch.revoke_account_before_generation(user_id, &account, generation);
                 control_processed = Some(true);
             }
         } else if is_sm_session_teardown {
@@ -7196,7 +7272,7 @@ async fn listen_once(
             }
         } else if is_presence_probe {
             if json["protocol_version"].as_str() != Some(NODE_PROTOCOL_VERSION) {
-                state.cluster.note_incompatible_peer_version(
+                admission.note_incompatible_peer_version(
                     &source_node,
                     json["protocol_version"].as_str(),
                 );
@@ -7210,13 +7286,13 @@ async fn listen_once(
             let authority = match presence_authority(json) {
                 Ok(Some(authority)) => Some(authority),
                 Ok(None) => {
-                    state.cluster.note_authentication_failure(&anyhow::anyhow!(
+                    admission.note_authentication_failure(&anyhow::anyhow!(
                         "cluster presence probe omitted versioned account authority"
                     ));
                     continue;
                 }
                 Err(error) => {
-                    state.cluster.note_authentication_failure(&error);
+                    admission.note_authentication_failure(&error);
                     continue;
                 }
             };
@@ -7235,7 +7311,7 @@ async fn listen_once(
                     .await
                     .unwrap_or(false)
                 {
-                    state.cluster.note_authentication_failure(&anyhow::anyhow!(
+                    admission.note_authentication_failure(&anyhow::anyhow!(
                         "cluster presence probe account authority is stale or mismatched"
                     ));
                     continue;
@@ -7644,7 +7720,7 @@ async fn listen_once(
                 .is_some_and(is_presence_subscription_stanza)
                 && !presence_subscription
             {
-                state.cluster.note_incompatible_peer_version(
+                admission.note_incompatible_peer_version(
                     &source_node,
                     json["protocol_version"].as_str(),
                 );
@@ -7653,7 +7729,7 @@ async fn listen_once(
             if (current_presence_replay || presence_subscription)
                 && json["protocol_version"].as_str() != Some(NODE_PROTOCOL_VERSION)
             {
-                state.cluster.note_incompatible_peer_version(
+                admission.note_incompatible_peer_version(
                     &source_node,
                     json["protocol_version"].as_str(),
                 );
@@ -7662,13 +7738,13 @@ async fn listen_once(
             let parsed_presence_authority = match presence_authority(json) {
                 Ok(authority) => authority,
                 Err(error) => {
-                    state.cluster.note_authentication_failure(&error);
+                    admission.note_authentication_failure(&error);
                     continue;
                 }
             };
             if current_presence_replay || presence_subscription {
                 let Some(authority) = parsed_presence_authority else {
-                    state.cluster.note_authentication_failure(&anyhow::anyhow!(
+                    admission.note_authentication_failure(&anyhow::anyhow!(
                         "cluster presence delivery omitted versioned account authority"
                     ));
                     continue;
@@ -7709,13 +7785,13 @@ async fn listen_once(
                         .await
                         .unwrap_or(false)
                 {
-                    state.cluster.note_authentication_failure(&anyhow::anyhow!(
+                    admission.note_authentication_failure(&anyhow::anyhow!(
                         "cluster presence delivery account authority is stale or mismatched"
                     ));
                     continue;
                 }
             } else if parsed_presence_authority.is_some() {
-                state.cluster.note_authentication_failure(&anyhow::anyhow!(
+                admission.note_authentication_failure(&anyhow::anyhow!(
                     "ordinary cluster delivery carried executable presence authority"
                 ));
                 continue;
@@ -8313,13 +8389,15 @@ async fn listen_once(
         };
         if responses.items.is_empty() {
             if let Some(ack) = ack {
-                publish_listener_ack(&state.cluster, &source_node, ack, &authority).await?;
+                publish_listener_ack(&admission, &state.cluster, &source_node, ack, &authority)
+                    .await?;
             }
         } else {
             // Only remote receipt waits leave the sequential command turn.
             // Both peers can therefore execute each other's leaf deliveries
             // even when they simultaneously handle presence probes.
             continuations.push(complete_listener_responses(
+                Arc::clone(&admission),
                 state.clone(),
                 authority,
                 responses,
@@ -8409,6 +8487,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_termination_identity_reads_epoch_after_projection() {
+        let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
+            .await
+            .unwrap();
+        let identity = cluster.session_termination_identity();
+        cluster.instance_epoch.store(17, Ordering::Release);
+        assert_eq!(identity.local_instance().instance_epoch, 17);
+        cluster.instance_epoch.store(18, Ordering::Release);
+        assert_eq!(identity.local_instance().instance_epoch, 18);
+        assert_eq!(identity.namespace(), cluster.namespace);
+    }
+
+    #[tokio::test]
     async fn account_revocation_identity_snapshots_instance_epoch() {
         let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
             .await
@@ -8491,6 +8582,31 @@ mod tests {
             .is_err());
         drop(registrations);
         assert!(cluster.pending_acks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn listener_admission_dispatches_only_the_exact_pending_ack() {
+        let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
+            .await
+            .unwrap();
+        let admission = cluster.listener_admission();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let mut pending = cluster
+            .register_pending_ack(&request_id, "node-b", "exact-nonce")
+            .unwrap();
+        let ack = serde_json::json!({
+            "request_id": request_id,
+            "nonce": "exact-nonce",
+            "node_id": "node-b",
+            "delivered": 1,
+            "accepted_full_jid": null,
+        });
+        assert!(!admission.dispatch_pending_ack("node-c", ack.clone()));
+        let mut wrong_nonce = ack.clone();
+        wrong_nonce["nonce"] = serde_json::json!("wrong-nonce");
+        assert!(!admission.dispatch_pending_ack("node-b", wrong_nonce));
+        assert!(admission.dispatch_pending_ack("node-b", ack));
+        assert_eq!(pending.recv().await.unwrap().delivered, 1);
     }
 
     #[test]

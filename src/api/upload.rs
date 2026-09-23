@@ -10,7 +10,6 @@ use bytes::Bytes;
 use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
@@ -22,10 +21,9 @@ use crate::services::upload::{
     UploadClaimOutcome, UploadRenewOutcome, UploadSlot, UploadStageProjection,
     UserUploadDeleteOutcome,
 };
-use crate::services::upload_safety::UploadIoClass;
 use crate::state::{
-    upload_http_delete::UploadHttpDeleteContext, AppState, UploadHttpReadContext,
-    UploadHttpReplayReadContext,
+    upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
+    UploadHttpReadContext, UploadHttpReplayReadContext,
 };
 
 const UPLOAD_LEASE_SECONDS: i64 = 90;
@@ -45,24 +43,24 @@ async fn write_with_lease<T>(
 }
 
 pub async fn upload_put(
-    State(state): State<Arc<AppState>>,
+    State(state): State<UploadHttpWriteContext>,
     State(replay_read): State<UploadHttpReplayReadContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, AppError> {
-    let _operation_timer = state.start_upload_operation_timer();
-    let client_ip = crate::api::client_ip(peer.ip(), &headers, &state);
-    let _request_permit = state.acquire_upload_request(client_ip).ok_or_else(|| {
+    let _operation_timer = state.operation_timer();
+    let client_ip =
+        crate::api::client_ip_with_trusted_proxies(peer.ip(), &headers, state.trusted_proxies());
+    let _request_permit = state.acquire_request(client_ip).ok_or_else(|| {
         AppError::RateLimited(serde_json::json!({
             "message":"too many concurrent upload requests",
             "retry_after_seconds":1
         }))
     })?;
     state
-        .upload_safety_gate()
-        .permit(UploadIoClass::NewWrite)
+        .permit_new_write()
         .map_err(|_| AppError::Unavailable("upload storage authority is not ready".into()))?;
     let token = crate::api::bearer_token(&headers)?;
     let token_hash = auth::token_hash(token);
@@ -79,7 +77,7 @@ pub async fn upload_put(
     };
     validate_upload_framing_headers(&headers)?;
     let claim = state
-        .upload_service()
+        .service()
         .claim_slot(id, &token_hash, UPLOAD_LEASE_SECONDS)
         .await?;
     let (slot, lease) = match claim {
@@ -110,7 +108,7 @@ pub async fn upload_put(
                 )));
             }
             if !state
-                .upload_service()
+                .service()
                 .record_replay(slot.id, &token_hash, &digest)
                 .await?
             {
@@ -130,7 +128,7 @@ pub async fn upload_put(
     let object_key = slot.id.to_string();
     let attempt_key = lease.claim_token.to_string();
     let renewer = {
-        let upload_service = state.upload_service();
+        let upload_service = state.service();
         async move {
             let jitter_millis = (lease.claim_token.as_u128() % 41) as u64;
             loop {
@@ -164,7 +162,7 @@ pub async fn upload_put(
     };
     let attempt_deadline =
         Duration::from_secs(lease.remaining_seconds.clamp(1, UPLOAD_ATTEMPT_MAX_SECONDS));
-    let put = state.upload_store().put(
+    let put = state.store().put(
         &object_key,
         &attempt_key,
         Box::new(async_read),
@@ -202,7 +200,7 @@ pub async fn upload_put(
         ))
     })?;
     let stage_is_final_object = staged.stage_key() == staged.object_key();
-    if state.upload_store().backend() != slot.storage_backend {
+    if state.store().backend() != slot.storage_backend {
         release_claim_best_effort(&state, slot.id, lease.claim_token).await;
         return Err(AppError::Internal(anyhow::anyhow!(
             "upload slot storage backend differs from this node"
@@ -216,11 +214,11 @@ pub async fn upload_put(
     // stage that a committed promotion job may now own.
     staged.durably_recorded();
     if !state
-        .upload_service()
+        .service()
         .record_stage(UploadStageProjection {
             id: slot.id,
             claim_token: lease.claim_token,
-            storage_backend: state.upload_store().backend(),
+            storage_backend: state.store().backend(),
             stage_key: staged.stage_key(),
             stage_version: staged.stage_version(),
             object_key: staged.object_key(),
@@ -241,7 +239,7 @@ pub async fn upload_put(
         return upload_in_progress(1);
     }
     let promotion_claim_token = match state
-        .upload_service()
+        .service()
         .acquire_promotion(slot.id, lease.claim_token, lease.storage_fence)
         .await?
     {
@@ -260,7 +258,7 @@ pub async fn upload_put(
     // readback only; local storage performs a create-only hard-link promotion.
     let promoted_result = tokio::time::timeout(
         Duration::from_secs(UPLOAD_PROMOTION_MAX_SECONDS),
-        state.upload_store().commit(
+        state.store().commit(
             &object_key,
             &attempt_key,
             staged.stage_version(),
@@ -274,7 +272,7 @@ pub async fn upload_put(
         Ok(promoted) => promoted,
         Err(error) if crate::storage::is_upload_safety_error(&error) => {
             state
-                .upload_service()
+                .service()
                 .defer_promotion(PromotionClaim {
                     id: slot.id,
                     storage_attempt: lease.claim_token,
@@ -289,7 +287,7 @@ pub async fn upload_put(
         Err(error) => return Err(AppError::Internal(error)),
     };
     let completion = state
-        .upload_service()
+        .service()
         .finalize_promotion(PromotedUploadProjection {
             id: slot.id,
             claim_token: lease.claim_token,
@@ -299,7 +297,7 @@ pub async fn upload_put(
             object_version: promoted.object_version.as_deref(),
             content_sha256: &content_sha256,
             size: promoted.size,
-            retention_seconds: state.upload_retention_seconds(),
+            retention_seconds: state.retention_seconds(),
             storage_fence: lease.storage_fence,
         })
         .await?;
@@ -659,25 +657,25 @@ pub async fn upload_delete(
     }
 }
 
-async fn release_claim(state: &AppState, id: Uuid, claim_token: Uuid) -> Result<(), AppError> {
-    if !state
-        .upload_service()
-        .release_claim(id, claim_token)
-        .await?
-    {
+async fn release_claim(
+    state: &UploadHttpWriteContext,
+    id: Uuid,
+    claim_token: Uuid,
+) -> Result<(), AppError> {
+    if !state.service().release_claim(id, claim_token).await? {
         tracing::warn!(upload_id = %id, "upload claim was already absent while releasing it");
     }
     Ok(())
 }
 
-async fn release_claim_best_effort(state: &AppState, id: Uuid, claim_token: Uuid) {
+async fn release_claim_best_effort(state: &UploadHttpWriteContext, id: Uuid, claim_token: Uuid) {
     if let Err(error) = release_claim(state, id, claim_token).await {
         tracing::error!(upload_id = %id, ?error, "failed to release upload claim");
     }
 }
 
 async fn abort_stage_best_effort(
-    state: &AppState,
+    state: &UploadHttpWriteContext,
     id: Uuid,
     claim_token: Uuid,
     stage_version: Option<&str>,
@@ -685,7 +683,7 @@ async fn abort_stage_best_effort(
     if let Err(error) = tokio::time::timeout(
         Duration::from_secs(UPLOAD_PROMOTION_MAX_SECONDS),
         state
-            .upload_store()
+            .store()
             .abort(&id.to_string(), &claim_token.to_string(), stage_version),
     )
     .await

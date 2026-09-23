@@ -342,7 +342,6 @@ for (const field of [
   'extdisco_service',
   'session_authority_sweep_service',
   'locked_muc_expiry_service',
-  'session_termination_authority_service',
   'operation_journal_worker_service',
   'component_credentials',
   'components',
@@ -2252,9 +2251,15 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
   throw new Error('upload deletion must use scoped lifecycle and bearer authority');
 }
 const uploadReplayReadContext = structBody(read('src/state/upload_http_read.rs'), 'pub(crate) struct UploadHttpReplayReadContext');
+const uploadWriteContext = structBody(read('src/state/upload_http_write.rs'), 'pub(crate) struct UploadHttpWriteContext');
+const uploadApiSource = read('src/api/upload.rs');
 if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
-    || !/pub async fn upload_put\(\s*State\(state\): State<Arc<AppState>>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(read('src/api/upload.rs'))) {
-  throw new Error('upload replay readback must use exact guarded object-read authority');
+    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadWriteContext)
+    || !/pub async fn upload_put\(\s*State\(state\): State<UploadHttpWriteContext>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(uploadApiSource)
+    || /State<Arc<AppState>>/.test(uploadApiSource)
+    || !/stored_object_digest\(&replay_read,\s*&slot\)\.await\?/.test(uploadApiSource)
+    || !/state\.get\(object_key,\s*slot\.storage_object_version\.as_deref\(\)\)/.test(uploadApiSource)) {
+  throw new Error('upload PUT and replay readback must use scoped, exact guarded authority');
 }
 const passwordChangeContext = structBody(read('src/state/password_change_http.rs'), 'pub(crate) struct PasswordChangeHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
@@ -3468,8 +3473,11 @@ if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterL
     || !clusterListener.includes('publish_listener_probe(&transport,')) {
   throw new Error('PubSub listener setup and generation must use scoped transport authority');
 }
+const listenerDispatch = read('src/state/cluster_listener_dispatch.rs');
 if (clusterListener.includes('db::cluster_session_route_authority(')
-    || !clusterListener.includes('.session_termination_authority_service()')) {
+    || !clusterListener.includes('dispatch.terminate_exact_session(')
+    || !listenerDispatch.includes('SessionTerminationAuthorityService::new(')
+    || !listenerDispatch.includes('fence_local_session_in(')) {
   throw new Error('signed session termination must re-read exact route authority through its service');
 }
 if (!clusterMaintenance.includes('.session_authority_sweep_service()')
@@ -3652,7 +3660,6 @@ const stateServiceAccessors = [
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
   'session_authority_sweep_service',
-  'session_termination_authority_service',
   'operation_journal_worker_service',
   's2s_roster_authorization_service',
   's2s_outbox_dispatch_service',

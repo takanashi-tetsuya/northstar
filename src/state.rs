@@ -2425,6 +2425,40 @@ impl AppState {
         )
     }
 
+    pub(crate) fn cluster_muc_outbox_housekeeping_service(
+        &self,
+    ) -> crate::services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
+        db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
+    >{
+        crate::services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService::new(
+            db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository::new(self.pool.clone()),
+        )
+    }
+
+    pub(crate) fn cluster_muc_delivery_item_service(
+        &self,
+    ) -> crate::services::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
+        db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
+    > {
+        crate::services::cluster_muc_delivery_item::ClusterMucDeliveryItemService::new(
+            db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository::new(
+                self.pool.clone(),
+            ),
+        )
+    }
+
+    pub(crate) fn cluster_instance_release_service(
+        &self,
+    ) -> crate::services::cluster_instance_release::ClusterInstanceReleaseService<
+        db::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository,
+    > {
+        crate::services::cluster_instance_release::ClusterInstanceReleaseService::new(
+            db::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(
+                self.pool.clone(),
+            ),
+        )
+    }
+
     pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
         &self.tls_context
     }
@@ -2752,6 +2786,27 @@ impl AppState {
             self.config.moderation_retention_days,
             self.config.retention_cleanup_batch_size,
             counters,
+        )
+    }
+
+    pub(crate) fn retention_context(
+        &self,
+    ) -> crate::retention::RetentionContext<db::retention::PostgresMaintenanceRepository> {
+        crate::retention::RetentionContext::new(
+            db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
+            crate::retention::RetentionPolicy::from_config(&self.config),
+            crate::retention::RetentionCounters::from_metrics(&self.metrics),
+        )
+    }
+
+    pub(crate) fn subscription_cleanup_context(
+        &self,
+    ) -> crate::subscription_cleanup::SubscriptionCleanupContext<
+        db::retention::PostgresMaintenanceRepository,
+    > {
+        crate::subscription_cleanup::SubscriptionCleanupContext::new(
+            db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
+            Arc::clone(&self.metrics.subscription_cleanup),
         )
     }
 

@@ -1,4 +1,7 @@
 use crate::services::cluster_authority::{ClusterAuthorityRepository, ClusterAuthorityService};
+use crate::services::cluster_instance_release::{
+    ClusterInstanceReleaseIdentity, ClusterInstanceReleaseRepository, ClusterInstanceReleaseService,
+};
 use crate::services::cluster_muc_outbox_settlement::AckOutcome;
 use crate::state::AppState;
 use anyhow::{Context, Result};
@@ -1911,7 +1914,10 @@ impl ClusterManager {
             .await
     }
 
-    pub async fn release_instance_authority(&self, pool: &sqlx::PgPool) -> Result<bool> {
+    pub(crate) async fn release_instance_authority_with<R: ClusterInstanceReleaseRepository>(
+        &self,
+        service: &ClusterInstanceReleaseService<R>,
+    ) -> Result<bool> {
         if !self.is_enabled() {
             return Ok(false);
         }
@@ -1919,16 +1925,16 @@ impl ClusterManager {
             .security
             .as_ref()
             .context("cluster signing identity is missing")?;
-        crate::db::release_cluster_node_instance(
-            pool,
-            &self.namespace,
-            &self.node_id,
-            self.connection_uuid,
-            self.instance_epoch.load(Ordering::Acquire),
-            &security.current_key_id,
-            security.key_epoch,
-        )
-        .await
+        service
+            .release(&ClusterInstanceReleaseIdentity {
+                xmpp_domain: self.namespace.clone(),
+                node_id: self.node_id.clone(),
+                instance_uuid: self.connection_uuid,
+                instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+                signing_key_id: security.current_key_id.clone(),
+                signing_key_epoch: security.key_epoch,
+            })
+            .await
     }
 
     pub fn begin_shutdown(&self) {
@@ -6022,9 +6028,10 @@ async fn run_muc_outbox_delivery(
                 heartbeat.ok();
             }
         }
+        let housekeeping = state.cluster_muc_outbox_housekeeping_service();
         {
             let _database_turn = state.durable_outbox_database_turn().await;
-            crate::db::cleanup_cluster_muc_dead_letters(&state.pool, 256).await?;
+            housekeeping.purge_expired_dead_letters().await?;
         }
         if Instant::now() >= next_history_cleanup {
             // Ninety days is the bounded online idempotency/recovery horizon
@@ -6033,13 +6040,13 @@ async fn run_muc_outbox_delivery(
             // cleanup fail closed or skip the protected incarnation.
             {
                 let _database_turn = state.durable_outbox_database_turn().await;
-                crate::db::cleanup_cluster_muc_history(&state.pool, 90, 256).await?;
+                housekeeping.purge_history().await?;
             }
             next_history_cleanup = Instant::now() + Duration::from_secs(60);
         }
         let snapshot = {
             let _database_turn = state.durable_outbox_database_turn().await;
-            crate::db::cluster_muc_outbox_snapshot(&state.pool).await?
+            housekeeping.snapshot().await?
         };
         state.metrics.cluster_muc_outbox_queued.store(
             snapshot.queued_rows.max(0) as u64,
@@ -6532,13 +6539,10 @@ async fn deliver_cluster_muc_event(
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
         let completed = {
             let _database_turn = state.durable_outbox_database_turn().await;
-            crate::db::cluster_muc_delivery_item_completed(
-                &state.pool,
-                delivery.delivery_id,
-                ordinal,
-                &stable_item_id,
-            )
-            .await?
+            state
+                .cluster_muc_delivery_item_service()
+                .completed(delivery.delivery_id, ordinal, &stable_item_id)
+                .await?
         };
         if completed {
             continue;
@@ -6551,13 +6555,10 @@ async fn deliver_cluster_muc_event(
         );
         let completed = {
             let _database_turn = state.durable_outbox_database_turn().await;
-            crate::db::complete_cluster_muc_delivery_item(
-                &state.pool,
-                delivery,
-                ordinal,
-                &stable_item_id,
-            )
-            .await?
+            state
+                .cluster_muc_delivery_item_service()
+                .complete_exact(delivery, ordinal, &stable_item_id)
+                .await?
         };
         anyhow::ensure!(
             completed,

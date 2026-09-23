@@ -579,11 +579,7 @@ async fn run() -> Result<()> {
     }
 
     if process_role.embeds_retention() {
-        let retention_context = Arc::new(retention::RetentionContext::new(
-            db::retention::PostgresMaintenanceRepository::new(state.pool.clone()),
-            retention::RetentionPolicy::from_config(&state.config),
-            retention::RetentionCounters::from_metrics(&state.metrics),
-        ));
+        let retention_context = Arc::new(state.retention_context());
         let retention_cancel = cancel.clone();
         let retention_max_silence = std::time::Duration::from_secs(
             state
@@ -604,10 +600,7 @@ async fn run() -> Result<()> {
                 async move { retention::serve_context(context, retention_cancel, heartbeat).await }
             },
         );
-        let subscriptions = Arc::new(subscription_cleanup::SubscriptionCleanupContext::new(
-            db::retention::PostgresMaintenanceRepository::new(state.pool.clone()),
-            Arc::clone(&state.metrics.subscription_cleanup),
-        ));
+        let subscriptions = Arc::new(state.subscription_cleanup_context());
         let subscription_cancel = cancel.clone();
         worker_registry.supervise(
             "pubsub-subscription-cleanup",
@@ -866,7 +859,7 @@ async fn run() -> Result<()> {
         Ok(_publication_fence) => {
             if let Err(error) = shutdown_state
                 .cluster
-                .release_instance_authority(&shutdown_state.pool)
+                .release_instance_authority_with(&shutdown_state.cluster_instance_release_service())
                 .await
             {
                 tracing::warn!(

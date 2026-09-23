@@ -471,6 +471,18 @@ if (!runtimeMain.includes('let authority_probe = state.abuse_key_authority_probe
     || /let authority_pool = state\.pool\.clone\(\)/.test(runtimeMain)) {
   throw new Error('critical key guard and housekeeping must use narrow repository-backed capabilities');
 }
+if (!runtimeMain.includes('state.retention_context()')
+    || !runtimeMain.includes('state.subscription_cleanup_context()')
+    || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(runtimeMain)) {
+  throw new Error('retention workers must receive separate state-owned repository contexts');
+}
+const shutdownFence = runtimeMain.indexOf('Ok(_publication_fence) =>');
+const releaseInstance = runtimeMain.indexOf('.release_instance_authority_with(&shutdown_state.cluster_instance_release_service())', shutdownFence);
+const shutdownTimeout = runtimeMain.indexOf('Err(_) => tracing::error!(', shutdownFence);
+if (shutdownFence < 0 || releaseInstance < shutdownFence || shutdownTimeout < releaseInstance
+    || /release_instance_authority\(&shutdown_state\.pool\)/.test(runtimeMain)) {
+  throw new Error('cluster node-instance release must remain inside the signed-publication fence');
+}
 const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
 const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
 if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
@@ -3116,6 +3128,10 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const clusterMucOutboxWorker = structBody(read('src/cluster.rs'), 'async fn run_muc_outbox_delivery(');
+if (!clusterMucOutboxWorker.includes('state.cluster_muc_outbox_housekeeping_service()')
+    || /crate::db::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
+  throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
+}
 const mucPreclaimService = read('src/services/cluster_muc_outbox_preclaim.rs');
 const mucPreclaimRepository = read('src/db/cluster_muc_outbox_preclaim_repository.rs');
 if (!mucPreclaimService.includes('self.repository.expire_occupancies(room_limit).await?;')
@@ -3137,6 +3153,16 @@ if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimLease, mucClaimCommit, mucDeli
   throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
 }
 const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
+const clusterMucDelivery = structBody(read('src/cluster.rs'), 'async fn deliver_cluster_muc_event(');
+const itemReadTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', clusterMucDelivery.indexOf('let stable_item_id ='));
+const itemCompleted = clusterMucDelivery.indexOf('.completed(delivery.delivery_id, ordinal, &stable_item_id)', itemReadTurn);
+const itemTransport = clusterMucDelivery.indexOf('.deliver_to_muc_occupant_with_receipt(', itemCompleted);
+const itemWriteTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', itemTransport);
+const itemCompleteExact = clusterMucDelivery.indexOf('.complete_exact(delivery, ordinal, &stable_item_id)', itemWriteTurn);
+if ([itemReadTurn, itemCompleted, itemTransport, itemWriteTurn, itemCompleteExact].some((offset) => offset < 0)
+    || /crate::db::(?:cluster_muc_delivery_item_completed|complete_cluster_muc_delivery_item)\s*\(/.test(clusterMucDelivery)) {
+  throw new Error('MUC delivery-item completion must follow the durable receipt across independent database turns');
+}
 const clusterMucOutboxSettlementRepository = read('src/db/cluster_muc_outbox_settlement_repository.rs');
 const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::timeout(');
 const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucOutcome);
@@ -3419,6 +3445,9 @@ const stateServiceAccessors = [
   'api_query_service',
   'api_session_service',
   'cluster_authority_service',
+  'cluster_instance_release_service',
+  'cluster_muc_delivery_item_service',
+  'cluster_muc_outbox_housekeeping_service',
   'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
   'challenge_cleanup_service',

@@ -491,6 +491,11 @@ snapshot and renews each exact actor with the same 90-second lease before
 refreshing Redis soft state. Room destruction validates the local domain held
 by its service before committing the operation; post-commit wake and occupant
 cleanup remain in the worker.
+MUC outbox dead-letter cleanup, history cleanup and snapshot remain three
+separate database turns behind a housekeeping port. Each stable delivery item
+checks completion before transport and commits completion only after its
+receipt. Shutdown releases the exact node-instance lease through a separate
+command service while the signed-publication fence is held.
 Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before
@@ -508,6 +513,9 @@ retention holds ten shared counter cells rather than the metrics registry.
 The periodic anti-abuse key guard calls a single validation probe under its
 existing timeout. Background housekeeping receives its repository and policy
 through a state-owned factory instead of taking the shared pool from main.
+Archive retention and subscription cleanup each receive their own repository
+context from the same private pool owner, preserving separate workers and
+readiness checks.
 S2S ingress/egress, C2S stream/authentication and SM resume,
 roster/privacy/blocking side-effect reporting, registration/account abuse,
 Push, component transport, and PEP/PubSub delivery use borrowed counters and

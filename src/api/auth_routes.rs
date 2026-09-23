@@ -149,44 +149,33 @@ pub async fn register(
     // abuse step before they can multiply password work.
     let mut guard_verified = lease.guard_verified;
     if !guard_verified {
-        let mut guard_tx = state.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(&mut guard_tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS)
-            .await?
-        {
-            guard_tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-        }
         match state
-            .abuse
-            .verify_or_allow_in_tx_v2(
-                &mut guard_tx,
-                AbuseAction::Registration,
-                &principal_scope,
-                &actors,
-                body.pow.as_ref(),
-                &pow_intent,
-            )
+            .account_service()
+            .verify_registration_guard(crate::services::account::RegistrationGuardRequest {
+                lease: crate::services::account::RegistrationGuardLease {
+                    record_id: lease.record_id,
+                    lease_token: lease.lease_token(),
+                },
+                lease_seconds: API_IDEMPOTENCY_LEASE_SECONDS,
+                subject: &principal_scope,
+                actors: &actors,
+                proof: body.pow.as_ref(),
+                intent: &pow_intent,
+            })
             .await?
         {
-            crate::abuse::TransactionalGuardOutcome::Allowed(_) => {
-                if !db::mark_idempotency_guard_verified_in_tx(&mut guard_tx, &lease).await? {
-                    guard_tx.rollback().await?;
-                    return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-                }
-                guard_tx.commit().await?;
+            crate::services::account::RegistrationGuardOutcome::Verified => {
                 guard_verified = true;
             }
-            crate::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                if !db::abandon_idempotency_lease_in_tx(&mut guard_tx, &lease).await? {
-                    guard_tx.rollback().await?;
-                    return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-                }
-                guard_tx.commit().await?;
+            crate::services::account::RegistrationGuardOutcome::Denied(error) => {
                 state
                     .metrics
                     .rate_limited_total
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Err(rate_limited(error));
+            }
+            crate::services::account::RegistrationGuardOutcome::LeaseLost => {
+                return Err(AppError::IdempotencyInProgress { retry_after: 1 });
             }
         }
     }

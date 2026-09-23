@@ -412,6 +412,9 @@ The database-backed metrics collector now calls a snapshot service; one
 repository transaction reads all gauges, while the endpoint retains its
 existing deadline and failure response. Its remaining process gauges still
 use broader state.
+HTTP registration now commits its pre-hash PoW and idempotency guard through
+`AccountService`; account publication and replay remain in the endpoint's
+transaction and require a separate use-case move.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 TLS now sits behind a private context with immutable handshake snapshots and

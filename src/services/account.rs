@@ -4,7 +4,7 @@
 //! requesting persistence. Each repository mutation owns its complete PoW,
 //! invitation, credential or deletion transaction.
 
-use crate::abuse::{PowIntent, PowProof, WorkRequirement};
+use crate::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
 use anyhow::Result;
 use uuid::Uuid;
 
@@ -85,6 +85,29 @@ impl DeletionRecoveryJob {
     }
 }
 
+/// Opaque ownership fence for the HTTP registration guard stage. The
+/// application service does not receive a SQLx transaction or DB lease type.
+#[derive(Clone, Copy)]
+pub(crate) struct RegistrationGuardLease {
+    pub(crate) record_id: Uuid,
+    pub(crate) lease_token: Uuid,
+}
+
+pub(crate) struct RegistrationGuardRequest<'a> {
+    pub(crate) lease: RegistrationGuardLease,
+    pub(crate) lease_seconds: i64,
+    pub(crate) subject: &'a str,
+    pub(crate) actors: &'a [String],
+    pub(crate) proof: Option<&'a PowProof>,
+    pub(crate) intent: &'a PowIntent,
+}
+
+pub(crate) enum RegistrationGuardOutcome {
+    Verified,
+    Denied(GuardError),
+    LeaseLost,
+}
+
 pub(crate) struct RegistrationRequest<'a> {
     pub(crate) username: &'a str,
     pub(crate) password: &'a str,
@@ -115,6 +138,10 @@ pub(crate) struct DeletionQuiesceRequest<'a> {
 }
 
 pub(crate) trait AccountRepository: Send + Sync {
+    fn verify_registration_guard(
+        &self,
+        request: RegistrationGuardRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<RegistrationGuardOutcome>> + Send;
     fn register(
         &self,
         request: RegistrationRequest<'_>,
@@ -152,6 +179,13 @@ pub(crate) struct AccountService<R> {
     policy: AccountPolicy,
 }
 impl<R: AccountRepository> AccountService<R> {
+    pub(crate) async fn verify_registration_guard(
+        &self,
+        request: RegistrationGuardRequest<'_>,
+    ) -> Result<RegistrationGuardOutcome> {
+        self.repository.verify_registration_guard(request).await
+    }
+
     pub(crate) fn new(
         repository: R,
         invitation_required: bool,

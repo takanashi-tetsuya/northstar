@@ -2293,6 +2293,16 @@ for (const accessor of ['account_service', 'push_service']) {
   }
 }
 
+const registrationHandler = structBody(read('src/api/auth_routes.rs'), 'pub async fn register(');
+const guardCall = registrationHandler.indexOf('.verify_registration_guard(');
+const passwordWork = registrationHandler.indexOf('db::prepare_registration(');
+if (guardCall < 0 || passwordWork < 0 || guardCall > passwordWork) {
+  throw new Error('HTTP registration must commit the account-service guard before password work');
+}
+if (/state\s*\.\s*abuse\s*\.\s*verify_or_allow_in_tx_v2\s*\(/.test(registrationHandler.slice(0, passwordWork))) {
+  throw new Error('HTTP registration regained a direct pre-hash abuse transaction');
+}
+
 // ARCH-SVC two-phase bind/resume boundary: protocol code may stage Redis and
 // in-memory routes only while no PostgreSQL authorization transaction exists.
 // Exact auth-generation, capacity/claim, FAST and privacy authority belongs to

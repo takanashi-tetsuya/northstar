@@ -740,6 +740,16 @@ pub async fn resume_idempotency_lease_in_tx(
     lease: &IdempotencyLease,
     lease_seconds: i64,
 ) -> Result<bool> {
+    resume_idempotency_lease_fence_in_tx(tx, lease.record_id, lease.lease_token, lease_seconds)
+        .await
+}
+
+pub(crate) async fn resume_idempotency_lease_fence_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    record_id: Uuid,
+    lease_token: Uuid,
+    lease_seconds: i64,
+) -> Result<bool> {
     anyhow::ensure!((5..=300).contains(&lease_seconds), "invalid lease duration");
     Ok(sqlx::query(
         "UPDATE api_idempotency_records
@@ -748,8 +758,8 @@ pub async fn resume_idempotency_lease_in_tx(
          WHERE id=$1 AND state='started' AND lease_token=$2
            AND lease_expires_at > clock_timestamp()",
     )
-    .bind(lease.record_id)
-    .bind(lease.lease_token)
+    .bind(record_id)
+    .bind(lease_token)
     .bind(lease_seconds)
     .execute(&mut **tx)
     .await?
@@ -764,6 +774,14 @@ pub async fn mark_idempotency_guard_verified_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     lease: &IdempotencyLease,
 ) -> Result<bool> {
+    mark_idempotency_guard_verified_fence_in_tx(tx, lease.record_id, lease.lease_token).await
+}
+
+pub(crate) async fn mark_idempotency_guard_verified_fence_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    record_id: Uuid,
+    lease_token: Uuid,
+) -> Result<bool> {
     Ok(sqlx::query(
         "UPDATE api_idempotency_records
          SET guard_verified_at=COALESCE(guard_verified_at,clock_timestamp()),
@@ -771,8 +789,8 @@ pub async fn mark_idempotency_guard_verified_in_tx(
          WHERE id=$1 AND state='started' AND lease_token=$2
            AND lease_expires_at > clock_timestamp()",
     )
-    .bind(lease.record_id)
-    .bind(lease.lease_token)
+    .bind(record_id)
+    .bind(lease_token)
     .execute(&mut **tx)
     .await?
     .rows_affected()
@@ -828,12 +846,20 @@ pub async fn abandon_idempotency_lease_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     lease: &IdempotencyLease,
 ) -> Result<bool> {
+    abandon_idempotency_lease_fence_in_tx(tx, lease.record_id, lease.lease_token).await
+}
+
+pub(crate) async fn abandon_idempotency_lease_fence_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    record_id: Uuid,
+    lease_token: Uuid,
+) -> Result<bool> {
     Ok(sqlx::query(
         "DELETE FROM api_idempotency_records
          WHERE id=$1 AND state='started' AND lease_token=$2",
     )
-    .bind(lease.record_id)
-    .bind(lease.lease_token)
+    .bind(record_id)
+    .bind(lease_token)
     .execute(&mut **tx)
     .await?
     .rows_affected()

@@ -1048,6 +1048,417 @@ struct ClusterMaintenanceControl {
     failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
 }
 
+/// PostgreSQL-fenced maintenance of disposable Redis projections. This handle
+/// has no signer, publication gate, PubSub client, or delivery route.
+#[derive(Clone)]
+struct ClusterMaintenanceRedis {
+    pool: Option<Pool<RedisConnectionManager>>,
+    authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    namespace: String,
+    key_prefix: String,
+    node_id: String,
+    connection_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+    peer_nodes: Vec<String>,
+    health: Arc<ClusterHealth>,
+}
+
+impl ClusterMaintenanceRedis {
+    fn key(&self, suffix: String) -> String {
+        format!("{}:{suffix}", self.key_prefix)
+    }
+
+    fn process_instance_token(&self) -> Result<String> {
+        let epoch = self.instance_epoch.load(Ordering::Acquire);
+        anyhow::ensure!(epoch >= 1, "cluster process instance is not authoritative");
+        Ok(format!("{}.{}", self.connection_uuid.simple(), epoch))
+    }
+
+    fn process_alive_key(&self) -> Result<String> {
+        Ok(self.key(format!(
+            "node_instance:{}:{}:alive",
+            self.node_id,
+            self.process_instance_token()?
+        )))
+    }
+
+    fn note_incompatible_peer_version(&self, node_id: &str, observed: Option<&str>) {
+        note_incompatible_peer_version(&self.health, node_id, observed);
+    }
+}
+
+impl ClusterMaintenanceRedis {
+    async fn touch_node(&self) -> Result<()> {
+        let Some(pool) = &self.pool else {
+            return Ok(());
+        };
+        let mut conn = pool.get().await?;
+        let key = self.key(format!("node:{}:alive", self.node_id));
+        let process_key = self.process_alive_key()?;
+        // Version 2 peers require nonce-correlated delivery acknowledgements.
+        // Keeping this in the existing liveness key makes the change safe for
+        // rolling upgrades: version 1 peers still publish the legacy value.
+        let script = redis::Script::new(
+            r#"
+            redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2])
+            redis.call('set', KEYS[2], ARGV[1], 'EX', ARGV[2])
+            return 1
+            "#,
+        );
+        let _: i32 = script
+            .key(key)
+            .key(process_key)
+            .arg(NODE_PROTOCOL_VERSION)
+            .arg(NODE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        let mut compatible = true;
+        for node_id in &self.peer_nodes {
+            let observed: Option<String> =
+                conn.get(self.key(format!("node:{node_id}:alive"))).await?;
+            if observed
+                .as_deref()
+                .is_some_and(|version| version != NODE_PROTOCOL_VERSION)
+            {
+                compatible = false;
+                self.note_incompatible_peer_version(node_id, observed.as_deref());
+            }
+        }
+        if compatible {
+            self.health
+                .peer_versions_compatible
+                .store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    async fn refresh_session(
+        &self,
+        full_jid: &str,
+        activity_age_seconds: u64,
+        connection_id: uuid::Uuid,
+    ) -> Result<bool> {
+        let (full_jid, bare) = session_route_keys(full_jid)?;
+        let Some(pool) = &self.pool else {
+            return Ok(true);
+        };
+        let authority_pool = self
+            .authority_pool
+            .get()
+            .context("cluster session authority pool is unavailable")?;
+        let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
+        if !crate::db::refresh_cluster_session_route(
+            authority_pool,
+            &self.namespace,
+            &full_jid,
+            &self.node_id,
+            self.connection_uuid,
+            owner_instance_epoch,
+            connection_id,
+            Duration::from_secs(SESSION_TTL_SECONDS),
+        )
+        .await?
+        {
+            return Ok(false);
+        }
+        let mut conn = pool.get().await?;
+        let full_key = self.key(format!("session:{full_jid}"));
+        let bare_key = self.key(format!("user_sessions:{bare}"));
+        let activity_key = self.key("session_activity".to_owned());
+        let instance_key = self.key(format!("session_instance:{full_jid}"));
+        let script = redis::Script::new(
+            r#"
+            if redis.call('get', KEYS[1]) ~= ARGV[1] or redis.call('get', KEYS[4]) ~= ARGV[6] then return 0 end
+            redis.call('expire', KEYS[1], ARGV[3])
+            redis.call('expire', KEYS[4], ARGV[3])
+            redis.call('sadd', KEYS[2], ARGV[2])
+            redis.call('expire', KEYS[2], ARGV[4])
+            local now = redis.call('time')
+            redis.call('zadd', KEYS[3], tonumber(now[1])-tonumber(ARGV[5]), ARGV[2])
+            redis.call('zremrangebyscore', KEYS[3], '-inf', tonumber(now[1])-tonumber(ARGV[3])-1)
+            return 1
+            "#,
+        );
+        let refreshed = script
+            .key(full_key)
+            .key(bare_key)
+            .key(activity_key)
+            .key(instance_key)
+            .arg(&self.node_id)
+            .arg(&full_jid)
+            .arg(SESSION_TTL_SECONDS)
+            .arg(USER_SET_TTL_SECONDS)
+            .arg(activity_age_seconds.min(SESSION_TTL_SECONDS))
+            .arg(connection_id.to_string())
+            .invoke_async::<i32>(&mut *conn)
+            .await;
+        match refreshed {
+            Ok(1) => Ok(true),
+            Ok(_) => {
+                let _ = crate::db::release_cluster_session_route(
+                    authority_pool,
+                    &self.namespace,
+                    &full_jid,
+                    &self.node_id,
+                    self.connection_uuid,
+                    owner_instance_epoch,
+                    connection_id,
+                )
+                .await;
+                Ok(false)
+            }
+            Err(error) => {
+                let _ = crate::db::release_cluster_session_route(
+                    authority_pool,
+                    &self.namespace,
+                    &full_jid,
+                    &self.node_id,
+                    self.connection_uuid,
+                    owner_instance_epoch,
+                    connection_id,
+                )
+                .await;
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn reconcile_muc_soft_state(&self, room_jid: &str) -> Result<()> {
+        let Some(pool) = &self.pool else {
+            return Ok(());
+        };
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let occupants_key = self.key(format!("muc_occupants:{room}"));
+        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
+        let nodes_key = self.key(format!("muc_nodes:{room}"));
+        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
+        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
+        let alive_prefix = self.key("node:".to_owned());
+        let instance_alive_prefix = self.key("node_instance:".to_owned());
+        let mut conn = pool.get().await?;
+        let script = redis::Script::new(
+            r#"
+            local alive_cache = {}
+            local function node_is_alive(node)
+                local cached = alive_cache[node]
+                if cached == nil then
+                    cached = redis.call('exists', ARGV[1] .. node .. ':alive')
+                    alive_cache[node] = cached
+                end
+                return cached == 1
+            end
+
+            local function instance_is_alive(node, instance)
+                if not instance then return false end
+                local cache_key = node .. '|' .. instance
+                local cached = alive_cache[cache_key]
+                if cached == nil then
+                    cached = redis.call(
+                        'exists', ARGV[2] .. node .. ':' .. instance .. ':alive'
+                    )
+                    alive_cache[cache_key] = cached
+                end
+                return cached == 1
+            end
+
+            local owners = redis.call('hgetall', KEYS[2])
+            for index = 1, #owners, 2 do
+                local nick = owners[index]
+                local owner = owners[index + 1]
+                local instance = redis.call('hget', KEYS[4], nick)
+                if redis.call('hexists', KEYS[1], nick) == 0
+                    or not node_is_alive(owner)
+                    or not instance_is_alive(owner, instance)
+                then
+                    redis.call('hdel', KEYS[1], nick)
+                    redis.call('hdel', KEYS[2], nick)
+                    redis.call('hdel', KEYS[4], nick)
+                end
+            end
+
+            local occupants = redis.call('hgetall', KEYS[1])
+            for index = 1, #occupants, 2 do
+                local nick = occupants[index]
+                if redis.call('hexists', KEYS[2], nick) == 0
+                    or redis.call('hexists', KEYS[4], nick) == 0
+                then
+                    redis.call('hdel', KEYS[1], nick)
+                    redis.call('hdel', KEYS[2], nick)
+                    redis.call('hdel', KEYS[4], nick)
+                end
+            end
+
+            for _, nick in ipairs(redis.call('hkeys', KEYS[4])) do
+                if redis.call('hexists', KEYS[1], nick) == 0
+                    or redis.call('hexists', KEYS[2], nick) == 0
+                then
+                    redis.call('hdel', KEYS[4], nick)
+                end
+            end
+
+            local live_owner_nodes = {}
+            redis.call('del', KEYS[5])
+            owners = redis.call('hgetall', KEYS[2])
+            for index = 1, #owners, 2 do
+                local owner = owners[index + 1]
+                live_owner_nodes[owner] = true
+                redis.call('hincrby', KEYS[5], owner, 1)
+                redis.call('sadd', KEYS[3], owner)
+            end
+            for _, node in ipairs(redis.call('smembers', KEYS[3])) do
+                if not live_owner_nodes[node] or not node_is_alive(node) then
+                    redis.call('srem', KEYS[3], node)
+                end
+            end
+
+            if redis.call('hlen', KEYS[1]) == 0
+                and redis.call('hlen', KEYS[2]) == 0
+                and redis.call('hlen', KEYS[4]) == 0
+            then
+                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+                return 0
+            end
+            redis.call('expire', KEYS[1], ARGV[3])
+            redis.call('expire', KEYS[2], ARGV[3])
+            redis.call('expire', KEYS[3], ARGV[3])
+            redis.call('expire', KEYS[4], ARGV[3])
+            redis.call('expire', KEYS[5], ARGV[3])
+            return redis.call('hlen', KEYS[1])
+            "#,
+        );
+        let _: usize = script
+            .key(occupants_key)
+            .key(owners_key)
+            .key(nodes_key)
+            .key(instances_key)
+            .key(node_counts_key)
+            .arg(alive_prefix)
+            .arg(instance_alive_prefix)
+            .arg(MUC_SOFT_STATE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn register_muc_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        json: &str,
+    ) -> Result<bool> {
+        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
+        anyhow::ensure!(
+            !incoming.cluster_epoch.is_nil()
+                && !incoming.connection_id.is_nil()
+                && incoming.room_jid == crate::jid::canonicalize_bare(room_jid)?
+                && incoming.nick == crate::xmpp::xml_util::prepare_muc_nick(nick)?,
+            "MUC refresh requires the exact non-nil occupancy identity"
+        );
+        let Some(pool) = &self.pool else {
+            return Ok(true);
+        };
+        let mut conn = pool.get().await?;
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let process_instance = self.process_instance_token()?;
+        let occupants_key = self.key(format!("muc_occupants:{room}"));
+        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
+        let nodes_key = self.key(format!("muc_nodes:{room}"));
+        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
+        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
+        let alive_key = self.key(format!("node:{}:alive", self.node_id));
+        let process_alive_key = self.process_alive_key()?;
+        let script = redis::Script::new(
+            r#"
+            local raw = redis.call('hget', KEYS[1], ARGV[1])
+            local owner = redis.call('hget', KEYS[2], ARGV[1])
+            local instance = redis.call('hget', KEYS[4], ARGV[1])
+            local created = not raw and not owner and not instance
+            if raw and owner and instance then
+                if owner ~= ARGV[2] or instance ~= ARGV[3] then return 0 end
+                local ok, current = pcall(cjson.decode, raw)
+                if not ok then return 0 end
+                if current['cluster_epoch'] ~= ARGV[5]
+                    or current['connection_id'] ~= ARGV[6] then return 0 end
+            elseif raw or owner or instance then
+                -- Incomplete soft-state cannot authorize anything. The
+                -- caller has just revalidated this exact identity against
+                -- PostgreSQL, so repair only this internally inconsistent nick
+                -- while keeping the O(1) owner-count index balanced.
+                redis.call('hdel', KEYS[1], ARGV[1])
+                redis.call('hdel', KEYS[2], ARGV[1])
+                redis.call('hdel', KEYS[4], ARGV[1])
+                if owner then
+                    local remaining = redis.call('hincrby', KEYS[5], owner, -1)
+                    if remaining <= 0 then
+                        redis.call('hdel', KEYS[5], owner)
+                        redis.call('srem', KEYS[3], owner)
+                    end
+                end
+                created = true
+            end
+            redis.call('hset', KEYS[1], ARGV[1], ARGV[4])
+            redis.call('hset', KEYS[2], ARGV[1], ARGV[2])
+            redis.call('hset', KEYS[4], ARGV[1], ARGV[3])
+            if created then redis.call('hincrby', KEYS[5], ARGV[2], 1) end
+            redis.call('sadd', KEYS[3], ARGV[2])
+            redis.call('set', KEYS[6], ARGV[8], 'EX', ARGV[7])
+            redis.call('set', KEYS[7], ARGV[8], 'EX', ARGV[7])
+            redis.call('expire', KEYS[1], ARGV[9])
+            redis.call('expire', KEYS[2], ARGV[9])
+            redis.call('expire', KEYS[3], ARGV[9])
+            redis.call('expire', KEYS[4], ARGV[9])
+            redis.call('expire', KEYS[5], ARGV[9])
+            return 1
+            "#,
+        );
+        let refreshed: i32 = script
+            .key(occupants_key)
+            .key(owners_key)
+            .key(nodes_key)
+            .key(instances_key)
+            .key(node_counts_key)
+            .key(alive_key)
+            .key(process_alive_key)
+            .arg(&nick)
+            .arg(&self.node_id)
+            .arg(process_instance)
+            .arg(json)
+            .arg(incoming.cluster_epoch.to_string())
+            .arg(incoming.connection_id.to_string())
+            .arg(NODE_TTL_SECONDS)
+            .arg(NODE_PROTOCOL_VERSION)
+            .arg(MUC_SOFT_STATE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(refreshed == 1)
+    }
+
+    pub async fn join_muc(&self, room_jid: &str) -> Result<()> {
+        let Some(pool) = &self.pool else {
+            return Ok(());
+        };
+        self.touch_node().await?;
+        let mut conn = pool.get().await?;
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let key = self.key(format!("muc_nodes:{room}"));
+        let script = redis::Script::new(
+            r#"
+            redis.call('sadd', KEYS[1], ARGV[1])
+            redis.call('expire', KEYS[1], ARGV[2])
+            return 1
+            "#,
+        );
+        let _: i32 = script
+            .key(key)
+            .arg(&self.node_id)
+            .arg(MUC_SOFT_STATE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(())
+    }
+}
+
 impl ClusterMaintenanceControl {
     async fn refresh_peers_with<R: ClusterAuthorityRepository>(
         &self,
@@ -1248,6 +1659,23 @@ fn require_cluster_shutdown(health: &ClusterHealth, enabled: bool) {
             .state
             .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
     }
+}
+
+fn note_incompatible_peer_version(health: &ClusterHealth, node_id: &str, observed: Option<&str>) {
+    if health
+        .peer_versions_compatible
+        .swap(false, Ordering::AcqRel)
+    {
+        health
+            .incompatible_peer_versions
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    tracing::error!(
+        %node_id,
+        observed_version = observed.unwrap_or("missing"),
+        required_version = NODE_PROTOCOL_VERSION,
+        "live cluster peer uses an incompatible application protocol; readiness is fail-closed"
+    );
 }
 
 fn begin_cluster_reconciliation(health: &ClusterHealth, enabled: bool) -> Result<u64> {
@@ -1841,6 +2269,23 @@ impl ClusterManager {
             health: Arc::clone(&self.health),
             listener_rotation: Arc::clone(&self.listener_rotation),
             failure_policy: self.failure_policy(),
+        }
+    }
+
+    fn maintenance_redis(&self) -> ClusterMaintenanceRedis {
+        ClusterMaintenanceRedis {
+            pool: self.pool.clone(),
+            authority_pool: Arc::clone(&self.authority_pool),
+            namespace: self.namespace.clone(),
+            key_prefix: self.key_prefix.clone(),
+            node_id: self.node_id.clone(),
+            connection_uuid: self.connection_uuid,
+            instance_epoch: Arc::clone(&self.instance_epoch),
+            peer_nodes: self
+                .security
+                .as_ref()
+                .map_or_else(Vec::new, |security| security.peer_node_ids()),
+            health: Arc::clone(&self.health),
         }
     }
 
@@ -2502,67 +2947,11 @@ impl ClusterManager {
     }
 
     fn note_incompatible_peer_version(&self, node_id: &str, observed: Option<&str>) {
-        if self
-            .health
-            .peer_versions_compatible
-            .swap(false, Ordering::AcqRel)
-        {
-            self.health
-                .incompatible_peer_versions
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        tracing::error!(
-            %node_id,
-            observed_version = observed.unwrap_or("missing"),
-            required_version = NODE_PROTOCOL_VERSION,
-            "live cluster peer uses an incompatible application protocol; readiness is fail-closed"
-        );
+        note_incompatible_peer_version(&self.health, node_id, observed);
     }
 
     async fn touch_node(&self) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let mut conn = pool.get().await?;
-        let key = self.key(format!("node:{}:alive", self.node_id));
-        let process_key = self.process_alive_key()?;
-        // Version 2 peers require nonce-correlated delivery acknowledgements.
-        // Keeping this in the existing liveness key makes the change safe for
-        // rolling upgrades: version 1 peers still publish the legacy value.
-        let script = redis::Script::new(
-            r#"
-            redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2])
-            redis.call('set', KEYS[2], ARGV[1], 'EX', ARGV[2])
-            return 1
-            "#,
-        );
-        let _: i32 = script
-            .key(key)
-            .key(process_key)
-            .arg(NODE_PROTOCOL_VERSION)
-            .arg(NODE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        let mut compatible = true;
-        if let Some(security) = self.security.as_ref() {
-            for node_id in security.peer_node_ids() {
-                let observed: Option<String> =
-                    conn.get(self.key(format!("node:{node_id}:alive"))).await?;
-                if observed
-                    .as_deref()
-                    .is_some_and(|version| version != NODE_PROTOCOL_VERSION)
-                {
-                    compatible = false;
-                    self.note_incompatible_peer_version(&node_id, observed.as_deref());
-                }
-            }
-        }
-        if compatible {
-            self.health
-                .peer_versions_compatible
-                .store(true, Ordering::Release);
-        }
-        Ok(())
+        self.maintenance_redis().touch_node().await
     }
 
     pub async fn try_register_session(
@@ -2633,97 +3022,6 @@ impl ClusterManager {
             .invoke_async::<i32>(&mut *conn)
             .await;
         match reserved {
-            Ok(1) => Ok(true),
-            Ok(_) => {
-                let _ = crate::db::release_cluster_session_route(
-                    authority_pool,
-                    &self.namespace,
-                    &full_jid,
-                    &self.node_id,
-                    self.connection_uuid,
-                    owner_instance_epoch,
-                    connection_id,
-                )
-                .await;
-                Ok(false)
-            }
-            Err(error) => {
-                let _ = crate::db::release_cluster_session_route(
-                    authority_pool,
-                    &self.namespace,
-                    &full_jid,
-                    &self.node_id,
-                    self.connection_uuid,
-                    owner_instance_epoch,
-                    connection_id,
-                )
-                .await;
-                Err(error.into())
-            }
-        }
-    }
-
-    async fn refresh_session(
-        &self,
-        full_jid: &str,
-        activity_age_seconds: u64,
-        connection_id: uuid::Uuid,
-    ) -> Result<bool> {
-        let (full_jid, bare) = session_route_keys(full_jid)?;
-        let Some(pool) = &self.pool else {
-            return Ok(true);
-        };
-        let authority_pool = self
-            .authority_pool
-            .get()
-            .context("cluster session authority pool is unavailable")?;
-        let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        if !crate::db::refresh_cluster_session_route(
-            authority_pool,
-            &self.namespace,
-            &full_jid,
-            &self.node_id,
-            self.connection_uuid,
-            owner_instance_epoch,
-            connection_id,
-            Duration::from_secs(SESSION_TTL_SECONDS),
-        )
-        .await?
-        {
-            return Ok(false);
-        }
-        let mut conn = pool.get().await?;
-        let full_key = self.key(format!("session:{full_jid}"));
-        let bare_key = self.key(format!("user_sessions:{bare}"));
-        let activity_key = self.key("session_activity".to_owned());
-        let instance_key = self.key(format!("session_instance:{full_jid}"));
-        let script = redis::Script::new(
-            r#"
-            if redis.call('get', KEYS[1]) ~= ARGV[1] or redis.call('get', KEYS[4]) ~= ARGV[6] then return 0 end
-            redis.call('expire', KEYS[1], ARGV[3])
-            redis.call('expire', KEYS[4], ARGV[3])
-            redis.call('sadd', KEYS[2], ARGV[2])
-            redis.call('expire', KEYS[2], ARGV[4])
-            local now = redis.call('time')
-            redis.call('zadd', KEYS[3], tonumber(now[1])-tonumber(ARGV[5]), ARGV[2])
-            redis.call('zremrangebyscore', KEYS[3], '-inf', tonumber(now[1])-tonumber(ARGV[3])-1)
-            return 1
-            "#,
-        );
-        let refreshed = script
-            .key(full_key)
-            .key(bare_key)
-            .key(activity_key)
-            .key(instance_key)
-            .arg(&self.node_id)
-            .arg(&full_jid)
-            .arg(SESSION_TTL_SECONDS)
-            .arg(USER_SET_TTL_SECONDS)
-            .arg(activity_age_seconds.min(SESSION_TTL_SECONDS))
-            .arg(connection_id.to_string())
-            .invoke_async::<i32>(&mut *conn)
-            .await;
-        match refreshed {
             Ok(1) => Ok(true),
             Ok(_) => {
                 let _ = crate::db::release_cluster_session_route(
@@ -3995,120 +4293,9 @@ impl ClusterManager {
     /// node ID. The O(room-size) sweep is maintenance/read-only work; stanza
     /// fan-out never invokes it.
     async fn reconcile_muc_soft_state(&self, room_jid: &str) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
-        let nodes_key = self.key(format!("muc_nodes:{room}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
-        let alive_prefix = self.key("node:".to_owned());
-        let instance_alive_prefix = self.key("node_instance:".to_owned());
-        let mut conn = pool.get().await?;
-        let script = redis::Script::new(
-            r#"
-            local alive_cache = {}
-            local function node_is_alive(node)
-                local cached = alive_cache[node]
-                if cached == nil then
-                    cached = redis.call('exists', ARGV[1] .. node .. ':alive')
-                    alive_cache[node] = cached
-                end
-                return cached == 1
-            end
-
-            local function instance_is_alive(node, instance)
-                if not instance then return false end
-                local cache_key = node .. '|' .. instance
-                local cached = alive_cache[cache_key]
-                if cached == nil then
-                    cached = redis.call(
-                        'exists', ARGV[2] .. node .. ':' .. instance .. ':alive'
-                    )
-                    alive_cache[cache_key] = cached
-                end
-                return cached == 1
-            end
-
-            local owners = redis.call('hgetall', KEYS[2])
-            for index = 1, #owners, 2 do
-                local nick = owners[index]
-                local owner = owners[index + 1]
-                local instance = redis.call('hget', KEYS[4], nick)
-                if redis.call('hexists', KEYS[1], nick) == 0
-                    or not node_is_alive(owner)
-                    or not instance_is_alive(owner, instance)
-                then
-                    redis.call('hdel', KEYS[1], nick)
-                    redis.call('hdel', KEYS[2], nick)
-                    redis.call('hdel', KEYS[4], nick)
-                end
-            end
-
-            local occupants = redis.call('hgetall', KEYS[1])
-            for index = 1, #occupants, 2 do
-                local nick = occupants[index]
-                if redis.call('hexists', KEYS[2], nick) == 0
-                    or redis.call('hexists', KEYS[4], nick) == 0
-                then
-                    redis.call('hdel', KEYS[1], nick)
-                    redis.call('hdel', KEYS[2], nick)
-                    redis.call('hdel', KEYS[4], nick)
-                end
-            end
-
-            for _, nick in ipairs(redis.call('hkeys', KEYS[4])) do
-                if redis.call('hexists', KEYS[1], nick) == 0
-                    or redis.call('hexists', KEYS[2], nick) == 0
-                then
-                    redis.call('hdel', KEYS[4], nick)
-                end
-            end
-
-            local live_owner_nodes = {}
-            redis.call('del', KEYS[5])
-            owners = redis.call('hgetall', KEYS[2])
-            for index = 1, #owners, 2 do
-                local owner = owners[index + 1]
-                live_owner_nodes[owner] = true
-                redis.call('hincrby', KEYS[5], owner, 1)
-                redis.call('sadd', KEYS[3], owner)
-            end
-            for _, node in ipairs(redis.call('smembers', KEYS[3])) do
-                if not live_owner_nodes[node] or not node_is_alive(node) then
-                    redis.call('srem', KEYS[3], node)
-                end
-            end
-
-            if redis.call('hlen', KEYS[1]) == 0
-                and redis.call('hlen', KEYS[2]) == 0
-                and redis.call('hlen', KEYS[4]) == 0
-            then
-                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
-                return 0
-            end
-            redis.call('expire', KEYS[1], ARGV[3])
-            redis.call('expire', KEYS[2], ARGV[3])
-            redis.call('expire', KEYS[3], ARGV[3])
-            redis.call('expire', KEYS[4], ARGV[3])
-            redis.call('expire', KEYS[5], ARGV[3])
-            return redis.call('hlen', KEYS[1])
-            "#,
-        );
-        let _: usize = script
-            .key(occupants_key)
-            .key(owners_key)
-            .key(nodes_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .arg(alive_prefix)
-            .arg(instance_alive_prefix)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(())
+        self.maintenance_redis()
+            .reconcile_muc_soft_state(room_jid)
+            .await
     }
 
     pub async fn try_register_muc_occupant(
@@ -4540,92 +4727,9 @@ impl ClusterManager {
         nick: &str,
         json: &str,
     ) -> Result<bool> {
-        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
-        anyhow::ensure!(
-            !incoming.cluster_epoch.is_nil()
-                && !incoming.connection_id.is_nil()
-                && incoming.room_jid == crate::jid::canonicalize_bare(room_jid)?
-                && incoming.nick == crate::xmpp::xml_util::prepare_muc_nick(nick)?,
-            "MUC refresh requires the exact non-nil occupancy identity"
-        );
-        let Some(pool) = &self.pool else {
-            return Ok(true);
-        };
-        let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
-        let process_instance = self.process_instance_token()?;
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
-        let nodes_key = self.key(format!("muc_nodes:{room}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
-        let alive_key = self.key(format!("node:{}:alive", self.node_id));
-        let process_alive_key = self.process_alive_key()?;
-        let script = redis::Script::new(
-            r#"
-            local raw = redis.call('hget', KEYS[1], ARGV[1])
-            local owner = redis.call('hget', KEYS[2], ARGV[1])
-            local instance = redis.call('hget', KEYS[4], ARGV[1])
-            local created = not raw and not owner and not instance
-            if raw and owner and instance then
-                if owner ~= ARGV[2] or instance ~= ARGV[3] then return 0 end
-                local ok, current = pcall(cjson.decode, raw)
-                if not ok then return 0 end
-                if current['cluster_epoch'] ~= ARGV[5]
-                    or current['connection_id'] ~= ARGV[6] then return 0 end
-            elseif raw or owner or instance then
-                -- Incomplete soft-state cannot authorize anything. The
-                -- caller has just revalidated this exact identity against
-                -- PostgreSQL, so repair only this internally inconsistent nick
-                -- while keeping the O(1) owner-count index balanced.
-                redis.call('hdel', KEYS[1], ARGV[1])
-                redis.call('hdel', KEYS[2], ARGV[1])
-                redis.call('hdel', KEYS[4], ARGV[1])
-                if owner then
-                    local remaining = redis.call('hincrby', KEYS[5], owner, -1)
-                    if remaining <= 0 then
-                        redis.call('hdel', KEYS[5], owner)
-                        redis.call('srem', KEYS[3], owner)
-                    end
-                end
-                created = true
-            end
-            redis.call('hset', KEYS[1], ARGV[1], ARGV[4])
-            redis.call('hset', KEYS[2], ARGV[1], ARGV[2])
-            redis.call('hset', KEYS[4], ARGV[1], ARGV[3])
-            if created then redis.call('hincrby', KEYS[5], ARGV[2], 1) end
-            redis.call('sadd', KEYS[3], ARGV[2])
-            redis.call('set', KEYS[6], ARGV[8], 'EX', ARGV[7])
-            redis.call('set', KEYS[7], ARGV[8], 'EX', ARGV[7])
-            redis.call('expire', KEYS[1], ARGV[9])
-            redis.call('expire', KEYS[2], ARGV[9])
-            redis.call('expire', KEYS[3], ARGV[9])
-            redis.call('expire', KEYS[4], ARGV[9])
-            redis.call('expire', KEYS[5], ARGV[9])
-            return 1
-            "#,
-        );
-        let refreshed: i32 = script
-            .key(occupants_key)
-            .key(owners_key)
-            .key(nodes_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .key(alive_key)
-            .key(process_alive_key)
-            .arg(&nick)
-            .arg(&self.node_id)
-            .arg(process_instance)
-            .arg(json)
-            .arg(incoming.cluster_epoch.to_string())
-            .arg(incoming.connection_id.to_string())
-            .arg(NODE_TTL_SECONDS)
-            .arg(NODE_PROTOCOL_VERSION)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(refreshed == 1)
+        self.maintenance_redis()
+            .register_muc_occupant(room_jid, nick, json)
+            .await
     }
 
     /// Replace the transport owner of an XEP-0198-resumed occupancy.  The
@@ -5037,27 +5141,7 @@ impl ClusterManager {
     }
 
     pub async fn join_muc(&self, room_jid: &str) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        self.touch_node().await?;
-        let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let key = self.key(format!("muc_nodes:{room}"));
-        let script = redis::Script::new(
-            r#"
-            redis.call('sadd', KEYS[1], ARGV[1])
-            redis.call('expire', KEYS[1], ARGV[2])
-            return 1
-            "#,
-        );
-        let _: i32 = script
-            .key(key)
-            .arg(&self.node_id)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(())
+        self.maintenance_redis().join_muc(room_jid).await
     }
 
     pub async fn leave_muc(&self, room_jid: &str) -> Result<()> {
@@ -5645,6 +5729,7 @@ pub async fn run_maintenance(
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let control = state.cluster.maintenance_control();
+    let redis = state.cluster.maintenance_redis();
     let locals = state.cluster_maintenance_locals();
     let mut interval =
         tokio::time::interval(Duration::from_secs(CLUSTER_MAINTENANCE_INTERVAL_SECONDS));
@@ -5656,7 +5741,7 @@ pub async fn run_maintenance(
                     _ = cancel.cancelled() => return Ok(()),
                     result = tokio::time::timeout(
                         CLUSTER_MAINTENANCE_BUDGET,
-                        maintenance_once(&state, &control, &locals),
+                        maintenance_once(&state, &control, &redis, &locals),
                     ) => result
                         .context("cluster maintenance pass exceeded its time budget")
                         .and_then(std::convert::identity),
@@ -5677,6 +5762,7 @@ pub async fn run_maintenance(
 async fn maintenance_once(
     state: &AppState,
     control: &ClusterMaintenanceControl,
+    redis: &ClusterMaintenanceRedis,
     locals: &crate::state::cluster_maintenance::ClusterMaintenanceLocals,
 ) -> Result<()> {
     // PostgreSQL is authoritative for credential generations.  One bounded
@@ -5733,13 +5819,12 @@ async fn maintenance_once(
         .refresh_peers_with(&state.cluster_authority_service())
         .await?;
     let _redis_timer = locals.redis_operation_timer();
-    state.cluster.touch_node().await?;
+    redis.touch_node().await?;
     let sessions = locals.session_lease_snapshots();
     for snapshot in sessions {
         let full_jid = &snapshot.full_jid;
         let connection_id = snapshot.connection_id;
-        if !state
-            .cluster
+        if !redis
             .refresh_session(full_jid, snapshot.activity_age_seconds, connection_id)
             .await?
         {
@@ -5800,10 +5885,9 @@ async fn maintenance_once(
         }
         let json = serde_json::to_string(&serializable)?;
         if let Err(error) = async {
-            state.cluster.join_muc(&occupant.room_jid).await?;
+            redis.join_muc(&occupant.room_jid).await?;
             anyhow::ensure!(
-                state
-                    .cluster
+                redis
                     .register_muc_occupant(&occupant.room_jid, &occupant.nick, &json)
                     .await?,
                 "Redis MUC soft-state rejected the exact PostgreSQL occupant"
@@ -5824,7 +5908,7 @@ async fn maintenance_once(
     // removes crashed-node members while another live node keeps renewing the
     // room lease, without imposing O(occupants²) maintenance work.
     for room in active_muc_rooms {
-        if let Err(error) = state.cluster.reconcile_muc_soft_state(&room).await {
+        if let Err(error) = redis.reconcile_muc_soft_state(&room).await {
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
             control.record_control_plane_failure(&error);
             tracing::warn!(?error, %room, "could not reconcile Redis MUC room soft-state");

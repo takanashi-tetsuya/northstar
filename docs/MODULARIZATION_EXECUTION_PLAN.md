@@ -343,9 +343,12 @@ next stage changes runtime behavior. The issue ledger remains
 Stage 1 remains open. Application services now keep SQL and transactions in
 database adapters, and startup metadata queries follow the same boundary.
 Local and federated MUC protocol handlers use scoped state operations; the
-cluster failure supervisor has a separate authority context. `AppState` still
-exposes the cluster capability, and the listener, maintenance renderer and
-some HTTP handlers still receive broader state than they need. Database role
+cluster failure supervisor has a separate authority context. Cluster lease
+maintenance now passes a Redis-only handle after its PostgreSQL authority
+checks. Authenticated Passkey listing/registration completion and OMEMO
+recovery read/write routes use scoped HTTP contexts. `AppState` still exposes
+the cluster capability, and the listener, MUC outbox renderer and some HTTP
+handlers still receive broader state than they need. Database role
 separation, MUC batch commands and storage/restore tooling follow after these
 Stage 1 boundaries pass CI.
 

@@ -2219,6 +2219,29 @@ for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\
 if (!passkeyApiSource.includes('.passkey_service()')) {
   throw new Error('Passkeys HTTP must use its application service');
 }
+const passkeyAccountContext = structBody(
+  read('src/state/passkey_http.rs'),
+  'pub(crate) struct PasskeyAccountHttpContext',
+);
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
+    || !/pub\(super\) async fn list\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)
+    || !/pub\(super\) async fn register_finish\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)) {
+  throw new Error('account Passkeys reads and registration completion must use scoped HTTP authority');
+}
+const omemoRecoveryApi = read('src/api/omemo_recovery.rs');
+const omemoRecoveryContext = structBody(
+  read('src/state/omemo_recovery_http.rs'),
+  'pub(crate) struct OmemoRecoveryHttpContext',
+);
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(omemoRecoveryContext)) {
+  throw new Error('authenticated OMEMO recovery context gained broad application authority');
+}
+for (const handler of ['prepare_omemo_recovery', 'seal_omemo_recovery', 'get_omemo_recovery',
+  'get_omemo_recovery_authority', 'revoke_omemo_recovery']) {
+  if (!new RegExp(`pub async fn ${handler}\\(\\s*State\\(context\\): State<OmemoRecoveryHttpContext>`, 's').test(omemoRecoveryApi)) {
+    throw new Error(`authenticated OMEMO recovery handler ${handler} regained broad state`);
+  }
+}
 // ARCH-SVC local XEP-0045 boundary: protocol code owns XML/session routing,
 // while all PostgreSQL reads, mutations and committed-outbox wake authority
 // pass through MucService. Inline DB fixtures are structurally masked rather
@@ -3365,6 +3388,13 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
 const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
+const clusterRedisMaintenance = structBody(read('src/cluster.rs'), 'struct ClusterMaintenanceRedis');
+if (/\bstate\.cluster\b/.test(clusterMaintenance)
+    || /\b(?:signer|pubsub|publisher|delivery_route)\s*:/.test(clusterRedisMaintenance)
+    || !/\bredis\s*\.\s*refresh_session\s*\(/.test(clusterMaintenance)
+    || !/\bredis\s*\.\s*reconcile_muc_soft_state\s*\(/.test(clusterMaintenance)) {
+  throw new Error('cluster lease maintenance must use scoped Redis projection authority');
+}
 if (!clusterMaintenance.includes('state.cluster_muc_occupancy_maintenance_service()')
     || !clusterMaintenance.includes('.renew_exact(authority, &control.node_id)')
     || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {

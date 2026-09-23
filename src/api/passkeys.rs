@@ -1,6 +1,6 @@
 use super::*;
 use crate::services::passkeys::{PasskeyActor, PasskeyError};
-use crate::state::PasskeyLoginFinishContext;
+use crate::state::{passkey_http::PasskeyAccountHttpContext, PasskeyLoginFinishContext};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -70,11 +70,12 @@ async fn guard_start(
 }
 
 pub(super) async fn list(
-    State(state): State<Arc<AppState>>,
+    State(state): State<PasskeyAccountHttpContext>,
+    State(queries): State<crate::state::ApiQueryContext>,
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
-    let user = current_user(&state, &headers).await?;
-    let credentials = state.passkey_service().list(actor(&user)).await?;
+    let user = current_user_with_queries(&queries, &headers).await?;
+    let credentials = state.list(actor(&user)).await?;
     Ok(Json(json!({"passkeys":credentials})))
 }
 
@@ -122,14 +123,14 @@ pub(super) struct RegisterFinish {
 }
 
 pub(super) async fn register_finish(
-    State(state): State<Arc<AppState>>,
+    State(state): State<PasskeyAccountHttpContext>,
+    State(queries): State<crate::state::ApiQueryContext>,
     headers: HeaderMap,
     Json(body): Json<RegisterFinish>,
 ) -> Result<Json<Value>> {
-    check_origin(&state, &headers)?;
-    let user = current_user(&state, &headers).await?;
+    check_expected_origin(&state.allowed_origin()?, &headers)?;
+    let user = current_user_with_queries(&queries, &headers).await?;
     let id = state
-        .passkey_service()
         .register_finish(actor(&user), body.challenge_id, body.credential)
         .await?;
     Ok(Json(json!({"id":id})))

@@ -155,6 +155,8 @@ pub(crate) mod mix_cluster_routing;
 pub(crate) mod muc_cluster_effects;
 pub(crate) mod muc_cluster_routing;
 mod notification_routing;
+pub(crate) mod omemo_recovery_http;
+pub(crate) mod passkey_http;
 mod presence_cluster_routing;
 mod s2s_cluster_routing;
 mod session_cluster_route;

@@ -19,16 +19,8 @@ use crate::{
     },
     error::AppError,
     services::omemo_recovery::*,
-    state::AppState,
+    state::{omemo_recovery_http::OmemoRecoveryHttpContext, AppState},
 };
-
-fn recovery_actor(user: &crate::api::ApiUser) -> OmemoRecoveryActor<'_> {
-    OmemoRecoveryActor {
-        user_id: user.id,
-        auth_generation: user.auth_generation,
-        session_token: user.session_token(),
-    }
-}
 
 fn parse_sha256(value: &str) -> Result<[u8; 32], AppError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -108,11 +100,11 @@ fn transfer_response(
 }
 
 pub async fn prepare_omemo_recovery(
-    State(state): State<Arc<AppState>>,
+    State(context): State<OmemoRecoveryHttpContext>,
     headers: HeaderMap,
     mut request: ApiJson<OmemoRecoveryPrepareRequest>,
 ) -> Result<Response, AppError> {
-    let user = current_user(&state, &headers).await?;
+    let user = context.current_user(&headers).await?;
     if request.transfer_id.is_nil() {
         return Err(AppError::BadRequest(
             "transfer_id must be a non-zero UUID".into(),
@@ -126,13 +118,9 @@ pub async fn prepare_omemo_recovery(
     let source_device_id = i64::from(request.source_device_id);
     let poll_secret = Zeroizing::new(parse_transfer_secret(&request.poll_secret, "poll_secret")?);
     request.value.poll_secret.zeroize();
-    let canonical_account = format!(
-        "{}@{}",
-        user.username,
-        state.public_discovery_context().policy().domain
-    );
-    match state
-        .omemo_recovery_service()
+    let canonical_account = context.canonical_account(&user);
+    match context
+        .service()
         .prepare(PrepareOmemoRecoveryRequest {
             user_id: user.id,
             canonical_account: &canonical_account,
@@ -158,16 +146,16 @@ pub async fn prepare_omemo_recovery(
 }
 
 pub async fn seal_omemo_recovery(
-    State(state): State<Arc<AppState>>,
+    State(context): State<OmemoRecoveryHttpContext>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
     request: ApiJson<OmemoRecoverySealRequest>,
 ) -> Result<Response, AppError> {
-    let user = current_user(&state, &headers).await?;
+    let user = context.current_user(&headers).await?;
     let digest = parse_sha256(&request.package_sha256)?;
-    match state
-        .omemo_recovery_service()
-        .seal(recovery_actor(&user), transfer_id, &digest)
+    match context
+        .service()
+        .seal(user.actor(), transfer_id, &digest)
         .await?
     {
         SealOmemoRecovery::Sealed(transfer) => transfer_response(StatusCode::OK, &transfer, false),
@@ -186,14 +174,14 @@ pub async fn seal_omemo_recovery(
 }
 
 pub async fn get_omemo_recovery(
-    State(state): State<Arc<AppState>>,
+    State(context): State<OmemoRecoveryHttpContext>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    let user = current_user(&state, &headers).await?;
-    let transfer = match state
-        .omemo_recovery_service()
-        .transfer(recovery_actor(&user), transfer_id)
+    let user = context.current_user(&headers).await?;
+    let transfer = match context
+        .service()
+        .transfer(user.actor(), transfer_id)
         .await?
     {
         OmemoRecoveryRead::Authorized(value) => value
@@ -204,15 +192,11 @@ pub async fn get_omemo_recovery(
 }
 
 pub async fn get_omemo_recovery_authority(
-    State(state): State<Arc<AppState>>,
+    State(context): State<OmemoRecoveryHttpContext>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let user = current_user(&state, &headers).await?;
-    let authority = match state
-        .omemo_recovery_service()
-        .authority(recovery_actor(&user))
-        .await?
-    {
+    let user = context.current_user(&headers).await?;
+    let authority = match context.service().authority(user.actor()).await? {
         OmemoRecoveryRead::Authorized(value) => value,
         OmemoRecoveryRead::Unauthorized => return Err(AppError::Unauthorized),
     };
@@ -351,16 +335,12 @@ pub async fn poll_omemo_recovery(
 }
 
 pub async fn revoke_omemo_recovery(
-    State(state): State<Arc<AppState>>,
+    State(context): State<OmemoRecoveryHttpContext>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    let user = current_user(&state, &headers).await?;
-    match state
-        .omemo_recovery_service()
-        .revoke(recovery_actor(&user), transfer_id)
-        .await?
-    {
+    let user = context.current_user(&headers).await?;
+    match context.service().revoke(user.actor(), transfer_id).await? {
         RevokeOmemoRecovery::Revoked | RevokeOmemoRecovery::Replay => Ok(StatusCode::NO_CONTENT),
         RevokeOmemoRecovery::Missing => Err(AppError::NotFound(
             "OMEMO recovery transfer does not exist".into(),

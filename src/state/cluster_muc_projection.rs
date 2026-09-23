@@ -7,13 +7,6 @@ use super::{
 use dashmap::DashMap;
 
 impl AppState {
-    /// Take a reconciliation snapshot without holding map guards across the
-    /// PostgreSQL authority check. Subsequent removals still compare the
-    /// exact occupancy and connection incarnations.
-    pub(crate) fn local_cluster_muc_projection_snapshot(&self) -> Vec<MucOccupant> {
-        local_cluster_muc_projection_snapshot_in(&self.muc_occupants)
-    }
-
     /// Identify only federated occupants owned by the closing authenticated
     /// transport. The caller later removes each exact incarnation, so a
     /// rebind that happens after this snapshot cannot be removed by cleanup.
@@ -48,7 +41,7 @@ impl AppState {
     }
 }
 
-fn local_cluster_muc_projection_snapshot_in(
+pub(super) fn local_cluster_muc_projection_snapshot_in(
     occupants: &DashMap<String, MucOccupant>,
 ) -> Vec<MucOccupant> {
     occupants

@@ -341,9 +341,6 @@ for (const field of [
   'push_service',
   'extdisco_service',
   'session_authority_sweep_service',
-  'cluster_muc_outbox_settlement_service',
-  'cluster_muc_outbox_claim_service',
-  'cluster_muc_outbox_preclaim_service',
   'locked_muc_expiry_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
@@ -1990,6 +1987,9 @@ if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswor
 // cursor validation or archive page may be composed directly in the protocol
 // handler.
 const federatedMucSource = read('src/xmpp/protocol/federated_muc.rs');
+if (/\bstate\s*\.\s*cluster\b/.test(federatedMucSource)) {
+  throw new Error('federated MUC handlers must use purpose-specific state operations, not cluster authority');
+}
 for (const authority of [
   'authorize_mam_room',
   'authorize_federated_mam_room',
@@ -2228,6 +2228,9 @@ const mucProductionSource = productionWithoutCfgTestModules(
   mucProtocolSource,
   'muc.rs production',
 );
+if (/\b(?:self\.)?state\s*\.\s*cluster\b/.test(mucProductionSource)) {
+  throw new Error('MUC protocol handlers must use purpose-specific state operations, not cluster authority');
+}
 const mucProductionDependencies = classifyDbDependencies(
   mucProductionSource,
   'muc.rs production',
@@ -3171,7 +3174,14 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const clusterMucOutboxWorker = structBody(read('src/cluster.rs'), 'async fn run_muc_outbox_delivery(');
-if (!clusterMucOutboxWorker.includes('state.cluster_muc_outbox_housekeeping_service()')
+const clusterMucOutboxContextSource = read('src/state/cluster_muc_outbox_worker.rs');
+const clusterMucOutboxContext = structBody(
+  clusterMucOutboxContextSource,
+  'pub(crate) struct ClusterMucOutboxWorkerContext',
+);
+if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;')
+    || !read('src/cluster.rs').includes('state.cluster_muc_outbox_worker_context()')
+    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(clusterMucOutboxContext)
     || /crate::db::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
 }
@@ -3183,14 +3193,16 @@ if (!mucPreclaimService.includes('self.repository.expire_occupancies(room_limit)
     || !mucPreclaimRepository.includes('db::dead_letter_expired_cluster_muc_outbox(&self.pool, limit).await')) {
   throw new Error('cluster MUC preclaim maintenance must preserve ordered independent database operations');
 }
-const mucClaimTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;');
-const mucPreclaim = clusterMucOutboxWorker.indexOf('.cluster_muc_outbox_preclaim_service()', mucClaimTurn);
-const mucClaim = clusterMucOutboxWorker.indexOf('.cluster_muc_outbox_claim_service()', mucClaimTurn);
-const mucClaimLease = clusterMucOutboxWorker.indexOf('Duration::from_secs(30)', mucClaim);
+const mucClaimTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;');
+const mucPreclaim = clusterMucOutboxWorker.indexOf('context.preclaim.prepare_pass(32, 256).await?', mucClaimTurn);
+const mucClaim = clusterMucOutboxWorker.indexOf('let deliveries = {', mucPreclaim);
+const mucClaimDatabaseTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucClaim);
+const mucClaimCall = clusterMucOutboxWorker.indexOf('.claim_batch(', mucClaimDatabaseTurn);
+const mucClaimLease = clusterMucOutboxWorker.indexOf('Duration::from_secs(30)', mucClaimCall);
 const mucClaimCommit = clusterMucOutboxWorker.indexOf('if deliveries.is_empty()', mucClaimLease);
 const mucDeliveryStart = clusterMucOutboxWorker.indexOf('for delivery in deliveries', mucClaimCommit);
-if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
-    || mucPreclaim >= mucClaim
+if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
+    || mucPreclaim >= mucClaim || mucClaim >= mucClaimDatabaseTurn || mucClaimDatabaseTurn >= mucClaimCall
     || /crate::db::(?:expire_cluster_muc_occupancies|dead_letter_expired_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
     || /crate::db::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
@@ -3224,22 +3236,22 @@ if ([itemReadTurn, itemCompleted, itemTransport, itemWriteTurn, itemCompleteExac
 }
 const clusterMucOutboxSettlementRepository = read('src/db/cluster_muc_outbox_settlement_repository.rs');
 const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::timeout(');
-const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucOutcome);
+const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucOutcome);
 const mucAck = clusterMucOutboxWorker.indexOf('.acknowledge(&delivery)', mucAckTurn);
 const mucAckFence = clusterMucOutboxWorker.indexOf('cluster MUC outbox ACK lost its exact claim lease', mucAck);
-const mucDeliveryMetric = clusterMucOutboxWorker.indexOf('state.record_cluster_muc_outbox_delivery()', mucAckFence);
+const mucDeliveryMetric = clusterMucOutboxWorker.indexOf('context.record_delivery()', mucAckFence);
 const mucRetryWarning = clusterMucOutboxWorker.indexOf('cluster MUC audience delivery will retry with the same stable event ID', mucDeliveryMetric);
-const mucRetryTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucRetryWarning);
+const mucRetryTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucRetryWarning);
 const mucRetry = clusterMucOutboxWorker.indexOf('.retry(&delivery, &error.to_string())', mucRetryTurn);
-const mucRetryMetric = clusterMucOutboxWorker.indexOf('state.record_cluster_muc_outbox_retry()', mucRetry);
+const mucRetryMetric = clusterMucOutboxWorker.indexOf('context.record_retry()', mucRetry);
 const mucHeartbeat = clusterMucOutboxWorker.indexOf('heartbeat.ok();', mucRetryMetric);
 if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
      mucRetryWarning, mucRetryTurn, mucRetry, mucRetryMetric, mucHeartbeat].some((offset) => offset < 0)
     || /crate::db::(?:ack_cluster_muc_outbox|retry_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
     || !clusterMucOutboxWorker.includes('acknowledged == AckOutcome::Acknowledged')
     || !clusterMucOutboxSettlementService.includes('let _ = self.repository.record_retry(delivery, error).await?;')
-    || !/self\.metrics\s*\.cluster_muc_outbox_deliveries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(state)
-    || !/self\.metrics\s*\.cluster_muc_outbox_retries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(state)
+    || !/self\.metrics\s*\.cluster_muc_outbox_deliveries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(clusterMucOutboxContextSource)
+    || !/self\.metrics\s*\.cluster_muc_outbox_retries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(clusterMucOutboxContextSource)
     || !clusterMucOutboxSettlementRepository.includes('db::ack_cluster_muc_outbox(&self.pool, delivery.delivery_id, delivery.claim_token)')
     || !clusterMucOutboxSettlementRepository.includes('db::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
@@ -3354,7 +3366,7 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
 }
 const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
 if (!clusterMaintenance.includes('state.cluster_muc_occupancy_maintenance_service()')
-    || !clusterMaintenance.includes('.renew_exact(authority, &state.cluster.node_id)')
+    || !clusterMaintenance.includes('.renew_exact(authority, &control.node_id)')
     || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
@@ -3536,7 +3548,6 @@ const stateServiceAccessors = [
   'cluster_instance_release_service',
   'cluster_muc_delivery_item_service',
   'cluster_muc_delivery_read_service',
-  'cluster_muc_outbox_housekeeping_service',
   'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
   'challenge_cleanup_service',
@@ -3548,9 +3559,6 @@ const stateServiceAccessors = [
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
   'session_authority_sweep_service',
-  'cluster_muc_outbox_settlement_service',
-  'cluster_muc_outbox_claim_service',
-  'cluster_muc_outbox_preclaim_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
   's2s_roster_authorization_service',

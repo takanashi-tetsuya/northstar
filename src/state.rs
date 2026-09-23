@@ -144,6 +144,8 @@ mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 mod admin_cluster_queries;
 pub(crate) mod cluster_failure_supervisor;
+pub(crate) mod cluster_maintenance;
+pub(crate) mod cluster_muc_outbox_worker;
 pub(crate) mod cluster_muc_projection;
 pub(crate) mod cluster_routing;
 mod cluster_shutdown;
@@ -3054,18 +3056,6 @@ pub struct AppState {
         crate::services::session_authority_sweep::SessionAuthoritySweepService<
             db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
-    cluster_muc_outbox_settlement_service:
-        crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
-            db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
-        >,
-    cluster_muc_outbox_claim_service:
-        crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
-            db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
-        >,
-    cluster_muc_outbox_preclaim_service:
-        crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
-            db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
-        >,
     session_termination_authority_service:
         crate::services::session_termination_authority::SessionTerminationAuthorityService<
             db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
@@ -3354,30 +3344,6 @@ impl AppState {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_cluster_background_maintenance_failure(&self) {
-        self.metrics
-            .background_maintenance_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_cluster_muc_reconciliation(&self) {
-        self.metrics
-            .cluster_muc_pg_reconciliations_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_cluster_muc_outbox_delivery(&self) {
-        self.metrics
-            .cluster_muc_outbox_deliveries_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_cluster_muc_outbox_retry(&self) {
-        self.metrics
-            .cluster_muc_outbox_retries_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_cluster_presence_probe_failure(&self) {
         self.metrics
             .cluster_presence_probe_failures_total
@@ -3427,21 +3393,6 @@ impl AppState {
         self.metrics.redis_operation_duration_seconds.start_timer()
     }
 
-    pub(crate) fn record_cluster_muc_outbox_gauges(
-        &self,
-        snapshot: crate::services::cluster_muc_outbox_housekeeping::ClusterMucOutboxGaugeSnapshot,
-    ) {
-        self.metrics
-            .cluster_muc_outbox_queued
-            .store(snapshot.queued_rows.max(0) as u64, Ordering::Relaxed);
-        self.metrics
-            .cluster_muc_outbox_dead_letters
-            .store(snapshot.dead_letter_rows.max(0) as u64, Ordering::Relaxed);
-        self.metrics
-            .cluster_muc_outbox_oldest_age_seconds
-            .store(snapshot.oldest_age_seconds.max(0) as u64, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_cluster_online_queue_acceptance(&self, durable: bool) {
         let counter = if durable {
             &self.metrics.online_queue_durable_acceptances_total
@@ -3474,16 +3425,6 @@ impl AppState {
     > {
         crate::services::muc::ClusterMucOccupancyMaintenanceService::new(
             db::room::PostgresClusterMucOccupancyMaintenanceRepository::new(self.pool.clone()),
-        )
-    }
-
-    pub(crate) fn cluster_muc_outbox_housekeeping_service(
-        &self,
-    ) -> crate::services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
-        db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
-    >{
-        crate::services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService::new(
-            db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository::new(self.pool.clone()),
         )
     }
 
@@ -5414,24 +5355,6 @@ impl AppState {
                     pool.clone(),
                 ),
             );
-        let cluster_muc_outbox_settlement_service =
-            crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService::new(
-                db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository::new(
-                    pool.clone(),
-                ),
-            );
-        let cluster_muc_outbox_claim_service =
-            crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService::new(
-                db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository::new(
-                    pool.clone(),
-                ),
-            );
-        let cluster_muc_outbox_preclaim_service =
-            crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService::new(
-                db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository::new(
-                    pool.clone(),
-                ),
-            );
         let session_termination_authority_service =
             crate::services::session_termination_authority::SessionTerminationAuthorityService::new(
                 db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository::new(
@@ -5502,9 +5425,6 @@ impl AppState {
             cluster,
             account_revocation_consumer_service,
             session_authority_sweep_service,
-            cluster_muc_outbox_settlement_service,
-            cluster_muc_outbox_claim_service,
-            cluster_muc_outbox_preclaim_service,
             session_termination_authority_service,
             bosh,
             sessions,
@@ -6048,30 +5968,6 @@ impl AppState {
         &self.session_authority_sweep_service
     }
 
-    pub(crate) fn cluster_muc_outbox_settlement_service(
-        &self,
-    ) -> &crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
-        db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
-    > {
-        &self.cluster_muc_outbox_settlement_service
-    }
-
-    pub(crate) fn cluster_muc_outbox_claim_service(
-        &self,
-    ) -> &crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
-        db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
-    > {
-        &self.cluster_muc_outbox_claim_service
-    }
-
-    pub(crate) fn cluster_muc_outbox_preclaim_service(
-        &self,
-    ) -> &crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
-        db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
-    > {
-        &self.cluster_muc_outbox_preclaim_service
-    }
-
     pub(crate) fn session_termination_authority_service(
         &self,
     ) -> &crate::services::session_termination_authority::SessionTerminationAuthorityService<
@@ -6520,14 +6416,6 @@ impl AppState {
 
     pub fn service_control_available(&self) -> bool {
         self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
-    }
-
-    pub(crate) fn local_session_authority_snapshots(&self) -> Vec<LocalSessionAuthoritySnapshot> {
-        local_session_authority_snapshots_in(&self.sessions)
-    }
-
-    pub(crate) fn local_session_lease_snapshots(&self) -> Vec<LocalSessionLeaseSnapshot> {
-        local_session_lease_snapshots_in(&self.sessions)
     }
 
     /// Cancel only the local route incarnation whose PostgreSQL MUC occupancy

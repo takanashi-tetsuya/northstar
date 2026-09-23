@@ -1036,6 +1036,64 @@ pub(crate) struct ClusterFailureSupervisorAuthority {
     safety_lease_seconds: Option<u64>,
 }
 
+/// The maintenance worker may observe readiness and record a failed Redis
+/// projection without receiving signing or publication authority.
+#[derive(Clone)]
+struct ClusterMaintenanceControl {
+    node_id: String,
+    enabled: bool,
+    peer_authority: ClusterFailureSupervisorAuthority,
+    health: Arc<ClusterHealth>,
+    listener_rotation: Arc<tokio::sync::Notify>,
+    failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+}
+
+impl ClusterMaintenanceControl {
+    async fn refresh_peers_with<R: ClusterAuthorityRepository>(
+        &self,
+        service: &ClusterAuthorityService<R>,
+    ) -> Result<()> {
+        self.peer_authority.refresh_peers_with(service).await
+    }
+
+    fn readiness_error(&self) -> Option<String> {
+        cluster_readiness_error(&self.health)
+    }
+
+    fn begin_reconciliation(&self) -> Result<u64> {
+        begin_cluster_reconciliation(&self.health, self.enabled)
+    }
+
+    fn complete_reconciliation(&self, rotation_epoch: u64) -> Result<ReconciliationOutcome> {
+        complete_cluster_reconciliation(&self.health, rotation_epoch)
+    }
+
+    fn record_control_plane_failure(&self, error: &anyhow::Error) {
+        record_cluster_failure(
+            &self.health,
+            &self.listener_rotation,
+            self.enabled,
+            self.failure_policy,
+            ClusterFailureClass::RedisCommand,
+            error,
+        );
+    }
+}
+
+/// A MUC outbox worker needs only its node identity and committed wake signal
+/// from the cluster control plane. Neither capability can publish a packet.
+#[derive(Clone)]
+pub(crate) struct ClusterMucOutboxSignal {
+    node_id: String,
+    wake: Arc<tokio::sync::Notify>,
+}
+
+impl ClusterMucOutboxSignal {
+    async fn wait(&self) {
+        self.wake.notified().await;
+    }
+}
+
 impl ClusterFailureSupervisorAuthority {
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
@@ -1190,6 +1248,65 @@ fn require_cluster_shutdown(health: &ClusterHealth, enabled: bool) {
             .state
             .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
     }
+}
+
+fn begin_cluster_reconciliation(health: &ClusterHealth, enabled: bool) -> Result<u64> {
+    let _transition = health
+        .failure_since
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    anyhow::ensure!(
+        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+        "cluster shutdown is required; reconciliation cannot begin"
+    );
+    if enabled {
+        health.state.store(CLUSTER_RECONCILING, Ordering::Release);
+    }
+    Ok(health.listener_rotation_epoch.load(Ordering::Acquire))
+}
+
+fn complete_cluster_reconciliation(
+    health: &ClusterHealth,
+    rotation_epoch: u64,
+) -> Result<ReconciliationOutcome> {
+    let mut since = health
+        .failure_since
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    complete_cluster_reconciliation_locked(health, &mut since, rotation_epoch)
+}
+
+fn complete_cluster_reconciliation_locked(
+    health: &ClusterHealth,
+    since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
+    rotation_epoch: u64,
+) -> Result<ReconciliationOutcome> {
+    anyhow::ensure!(
+        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+        "cluster shutdown is required; reconciliation cannot restore readiness"
+    );
+    anyhow::ensure!(
+        health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch,
+        "cluster control-plane failure invalidated this reconciliation attempt"
+    );
+    // The first maintenance pass can finish authority I/O before the initial
+    // listener self-loop. Keep the original failure timer until that proof.
+    if health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
+        && health.listener_generation.load(Ordering::Acquire) == 0
+        && health.required_listener_generation.load(Ordering::Acquire) == 1
+        && rotation_epoch == 0
+        && health.degraded_transitions.load(Ordering::Acquire) == 0
+    {
+        return Ok(ReconciliationOutcome::WaitingForInitialListener);
+    }
+    anyhow::ensure!(
+        health.listener_generation.load(Ordering::Acquire)
+            >= health.required_listener_generation.load(Ordering::Acquire),
+        "cluster PubSub listener generation has not been re-established"
+    );
+    health.state.store(CLUSTER_HEALTHY, Ordering::Release);
+    **since = None;
+    Ok(ReconciliationOutcome::Complete)
 }
 
 pub(crate) struct AccountRevocationWorkerContext<R> {
@@ -1716,6 +1833,24 @@ impl ClusterManager {
         }
     }
 
+    fn maintenance_control(&self) -> ClusterMaintenanceControl {
+        ClusterMaintenanceControl {
+            node_id: self.node_id.clone(),
+            enabled: self.is_enabled(),
+            peer_authority: self.failure_supervisor_authority(),
+            health: Arc::clone(&self.health),
+            listener_rotation: Arc::clone(&self.listener_rotation),
+            failure_policy: self.failure_policy(),
+        }
+    }
+
+    pub(crate) fn muc_outbox_signal(&self) -> ClusterMucOutboxSignal {
+        ClusterMucOutboxSignal {
+            node_id: self.node_id.clone(),
+            wake: Arc::clone(&self.muc_outbox_notify),
+        }
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.pool.is_some()
     }
@@ -2007,6 +2142,7 @@ impl ClusterManager {
         admit_health(&self.health, operation)
     }
 
+    #[cfg(test)]
     pub fn readiness_error(&self) -> Option<String> {
         cluster_readiness_error(&self.health)
     }
@@ -2080,31 +2216,14 @@ impl ClusterManager {
             .unwrap();
     }
 
+    #[cfg(test)]
     fn begin_reconciliation(&self) -> Result<u64> {
-        let _transition = self
-            .health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        anyhow::ensure!(
-            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
-            "cluster shutdown is required; reconciliation cannot begin"
-        );
-        if self.is_enabled() {
-            self.health
-                .state
-                .store(CLUSTER_RECONCILING, Ordering::Release);
-        }
-        Ok(self.health.listener_rotation_epoch.load(Ordering::Acquire))
+        begin_cluster_reconciliation(&self.health, self.is_enabled())
     }
 
+    #[cfg(test)]
     fn complete_reconciliation(&self, rotation_epoch: u64) -> Result<ReconciliationOutcome> {
-        let mut since = self
-            .health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.complete_reconciliation_locked(&mut since, rotation_epoch)
+        complete_cluster_reconciliation(&self.health, rotation_epoch)
     }
 
     fn complete_reconciliation_locked(
@@ -2112,42 +2231,7 @@ impl ClusterManager {
         since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
         rotation_epoch: u64,
     ) -> Result<ReconciliationOutcome> {
-        anyhow::ensure!(
-            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
-            "cluster shutdown is required; reconciliation cannot restore readiness"
-        );
-        anyhow::ensure!(
-            self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch,
-            "cluster control-plane failure invalidated this reconciliation attempt"
-        );
-        // The first maintenance pass can finish its successful authority I/O
-        // before the listener receives its initial self-loop. This is still
-        // startup, not a Redis failure: forcing rotation here invalidates that
-        // pending proof and prevents its normal empty-state readiness commit.
-        // Keep the original failure timer and not-ready state until proof.
-        if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
-            && self.health.listener_generation.load(Ordering::Acquire) == 0
-            && self
-                .health
-                .required_listener_generation
-                .load(Ordering::Acquire)
-                == 1
-            && rotation_epoch == 0
-            && self.health.degraded_transitions.load(Ordering::Acquire) == 0
-        {
-            return Ok(ReconciliationOutcome::WaitingForInitialListener);
-        }
-        anyhow::ensure!(
-            self.health.listener_generation.load(Ordering::Acquire)
-                >= self
-                    .health
-                    .required_listener_generation
-                    .load(Ordering::Acquire),
-            "cluster PubSub listener generation has not been re-established"
-        );
-        self.health.state.store(CLUSTER_HEALTHY, Ordering::Release);
-        **since = None;
-        Ok(ReconciliationOutcome::Complete)
+        complete_cluster_reconciliation_locked(&self.health, since, rotation_epoch)
     }
 
     fn require_shutdown(&self) {
@@ -5105,10 +5189,6 @@ impl ClusterManager {
         Ok(())
     }
 
-    async fn wait_for_muc_outbox_wake(&self) {
-        self.muc_outbox_notify.notified().await;
-    }
-
     fn notify_muc_outbox_worker(&self) {
         self.muc_outbox_notify.notify_one();
     }
@@ -5564,6 +5644,8 @@ pub async fn run_maintenance(
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
+    let control = state.cluster.maintenance_control();
+    let locals = state.cluster_maintenance_locals();
     let mut interval =
         tokio::time::interval(Duration::from_secs(CLUSTER_MAINTENANCE_INTERVAL_SECONDS));
     loop {
@@ -5574,15 +5656,15 @@ pub async fn run_maintenance(
                     _ = cancel.cancelled() => return Ok(()),
                     result = tokio::time::timeout(
                         CLUSTER_MAINTENANCE_BUDGET,
-                        maintenance_once(&state),
+                        maintenance_once(&state, &control, &locals),
                     ) => result
                         .context("cluster maintenance pass exceeded its time budget")
                         .and_then(std::convert::identity),
                 };
                 if let Err(error) = maintenance {
-                    state.cluster.record_control_plane_failure(&error);
+                    control.record_control_plane_failure(&error);
                     heartbeat.error(&error);
-                    state.record_cluster_background_maintenance_failure();
+                    locals.record_background_failure();
                     tracing::warn!(?error, "session authorization/cluster lease maintenance failed; it will be retried");
                 } else {
                     heartbeat.ok();
@@ -5592,11 +5674,15 @@ pub async fn run_maintenance(
     }
 }
 
-async fn maintenance_once(state: &AppState) -> Result<()> {
+async fn maintenance_once(
+    state: &AppState,
+    control: &ClusterMaintenanceControl,
+    locals: &crate::state::cluster_maintenance::ClusterMaintenanceLocals,
+) -> Result<()> {
     // PostgreSQL is authoritative for credential generations.  One bounded
     // batch query provides a Redis-independent safety net for lost controls,
     // node restarts and rolling upgrades.
-    let snapshots = state.local_session_authority_snapshots();
+    let snapshots = locals.session_authority_snapshots();
     let authority_snapshots = snapshots
         .iter()
         .map(|snapshot| snapshot.authority)
@@ -5632,24 +5718,23 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             }
         }
     }
-    if !state.cluster.is_enabled() {
+    if !control.enabled {
         return Ok(());
     }
-    let reconciliation_epoch = if state.cluster.readiness_error().is_some() {
-        Some(state.cluster.begin_reconciliation()?)
+    let reconciliation_epoch = if control.readiness_error().is_some() {
+        Some(control.begin_reconciliation()?)
     } else {
         None
     };
     // PostgreSQL instance authority is refreshed before Redis ownership. A
     // recovered listener cannot make this node ready while its view of peer
     // process epochs is stale.
-    state
-        .cluster
-        .refresh_instance_authority_with(&state.cluster_authority_service())
+    control
+        .refresh_peers_with(&state.cluster_authority_service())
         .await?;
-    let _redis_timer = state.start_cluster_redis_operation_timer();
+    let _redis_timer = locals.redis_operation_timer();
     state.cluster.touch_node().await?;
-    let sessions = state.local_session_lease_snapshots();
+    let sessions = locals.session_lease_snapshots();
     for snapshot in sessions {
         let full_jid = &snapshot.full_jid;
         let connection_id = snapshot.connection_id;
@@ -5672,9 +5757,9 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     // disposable fan-out cache after the authoritative check succeeds.
     let occupancy_maintenance = state.cluster_muc_occupancy_maintenance_service();
     let authoritative_muc = occupancy_maintenance
-        .authoritative_for_node(&state.cluster.node_id)
+        .authoritative_for_node(&control.node_id)
         .await?;
-    state.record_cluster_muc_reconciliation();
+    locals.record_muc_reconciliation();
     let authoritative_muc = authoritative_muc
         .into_iter()
         .map(|occupancy| {
@@ -5684,7 +5769,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
-    let occupants = state.local_cluster_muc_projection_snapshot();
+    let occupants = locals.muc_occupant_snapshots();
     let mut muc_soft_state_errors = 0_u64;
     let mut active_muc_rooms = HashSet::new();
     for occupant in occupants {
@@ -5696,7 +5781,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
         });
         let renewed = if let Some(authority) = authoritative.filter(|_| exact) {
             occupancy_maintenance
-                .renew_exact(authority, &state.cluster.node_id)
+                .renew_exact(authority, &control.node_id)
                 .await?
         } else {
             false
@@ -5728,7 +5813,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
         .await
         {
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
-            state.cluster.record_control_plane_failure(&error);
+            control.record_control_plane_failure(&error);
             tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
                 "could not refresh disposable Redis MUC soft-state");
         } else {
@@ -5741,7 +5826,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     for room in active_muc_rooms {
         if let Err(error) = state.cluster.reconcile_muc_soft_state(&room).await {
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
-            state.cluster.record_control_plane_failure(&error);
+            control.record_control_plane_failure(&error);
             tracing::warn!(?error, %room, "could not reconcile Redis MUC room soft-state");
         }
     }
@@ -5750,7 +5835,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             muc_soft_state_errors == 0,
             "Redis MUC soft-state reconciliation failed for {muc_soft_state_errors} authoritative occupancies"
         );
-        if state.cluster.complete_reconciliation(rotation_epoch)?
+        if control.complete_reconciliation(rotation_epoch)?
             == ReconciliationOutcome::WaitingForInitialListener
         {
             // Every database/Redis operation above succeeded. The independent
@@ -5885,6 +5970,7 @@ pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken
     // must obey the same bounded retention. With clustering disabled there
     // are no cross-node audience rows and no signing key is required.
     let worker_registry = Arc::clone(state.worker_registry());
+    let context = Arc::new(state.cluster_muc_outbox_worker_context());
     worker_registry.supervise(
         "cluster-muc-outbox",
         crate::workers::WorkerCriticality::Restartable,
@@ -5893,14 +5979,16 @@ pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken
         cancel.clone(),
         move |heartbeat| {
             let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let cancel = cancel.clone();
-            async move { run_muc_outbox_delivery(state, cancel, heartbeat).await }
+            async move { run_muc_outbox_delivery(state, context, cancel, heartbeat).await }
         },
     );
 }
 
 async fn run_muc_outbox_delivery(
     state: Arc<AppState>,
+    context: Arc<crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -5911,14 +5999,11 @@ async fn run_muc_outbox_delivery(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = poll.tick() => {},
-            _ = state.cluster.wait_for_muc_outbox_wake() => {},
+            _ = context.signal.wait() => {},
         }
         {
-            let _database_turn = state.durable_outbox_database_turn().await;
-            state
-                .cluster_muc_outbox_preclaim_service()
-                .prepare_pass(32, 256)
-                .await?;
+            let _database_turn = context.database_turn().await;
+            context.preclaim.prepare_pass(32, 256).await?;
         }
         let pass_started = Instant::now();
         'batches: for _ in 0..MUC_OUTBOX_MAX_BATCHES_PER_PASS {
@@ -5926,11 +6011,11 @@ async fn run_muc_outbox_delivery(
                 break;
             }
             let deliveries = {
-                let _database_turn = state.durable_outbox_database_turn().await;
-                state
-                    .cluster_muc_outbox_claim_service()
+                let _database_turn = context.database_turn().await;
+                context
+                    .claim
                     .claim_batch(
-                        &state.cluster.node_id,
+                        &context.signal.node_id,
                         MUC_OUTBOX_BATCH_SIZE,
                         Duration::from_secs(30),
                     )
@@ -5956,17 +6041,14 @@ async fn run_muc_outbox_delivery(
                 match outcome {
                     Ok(()) => {
                         let acknowledged = {
-                            let _database_turn = state.durable_outbox_database_turn().await;
-                            state
-                                .cluster_muc_outbox_settlement_service()
-                                .acknowledge(&delivery)
-                                .await?
+                            let _database_turn = context.database_turn().await;
+                            context.settlement.acknowledge(&delivery).await?
                         };
                         anyhow::ensure!(
                             acknowledged == AckOutcome::Acknowledged,
                             "cluster MUC outbox ACK lost its exact claim lease"
                         );
-                        state.record_cluster_muc_outbox_delivery();
+                        context.record_delivery();
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -5977,21 +6059,21 @@ async fn run_muc_outbox_delivery(
                             "cluster MUC audience delivery will retry with the same stable event ID"
                         );
                         {
-                            let _database_turn = state.durable_outbox_database_turn().await;
-                            state
-                                .cluster_muc_outbox_settlement_service()
+                            let _database_turn = context.database_turn().await;
+                            context
+                                .settlement
                                 .retry(&delivery, &error.to_string())
                                 .await?;
                         }
-                        state.record_cluster_muc_outbox_retry();
+                        context.record_retry();
                     }
                 }
                 heartbeat.ok();
             }
         }
-        let housekeeping = state.cluster_muc_outbox_housekeeping_service();
+        let housekeeping = &context.housekeeping;
         {
-            let _database_turn = state.durable_outbox_database_turn().await;
+            let _database_turn = context.database_turn().await;
             housekeeping.purge_expired_dead_letters().await?;
         }
         if Instant::now() >= next_history_cleanup {
@@ -6000,16 +6082,16 @@ async fn run_muc_outbox_delivery(
             // holds and outstanding delivery projections make the database
             // cleanup fail closed or skip the protected incarnation.
             {
-                let _database_turn = state.durable_outbox_database_turn().await;
+                let _database_turn = context.database_turn().await;
                 housekeeping.purge_history().await?;
             }
             next_history_cleanup = Instant::now() + Duration::from_secs(60);
         }
         let snapshot = {
-            let _database_turn = state.durable_outbox_database_turn().await;
+            let _database_turn = context.database_turn().await;
             housekeeping.snapshot().await?
         };
-        state.record_cluster_muc_outbox_gauges(snapshot);
+        context.record_gauges(snapshot);
         heartbeat.ok();
     }
 }

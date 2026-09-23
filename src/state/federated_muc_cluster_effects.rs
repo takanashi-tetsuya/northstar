@@ -1,7 +1,7 @@
-//! Cluster effects for federated MUC messages addressed to local accounts.
+//! Cluster operations used by federated MUC handlers.
 
-use super::AppState;
-use crate::cluster::NodeDeliveryReceipt;
+use super::{AppState, SerializableMucOccupant};
+use crate::cluster::{ClusterOperation, MucRename, MucRoleChange, NodeDeliveryReceipt};
 use crate::outbound::DurableDelivery;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -17,6 +17,10 @@ fn accepted_primary_route(receipt: NodeDeliveryReceipt) -> Option<FederatedMucAc
 }
 
 impl AppState {
+    pub(crate) fn federated_muc_admit_mutation(&self) -> Result<()> {
+        self.cluster.admit(ClusterOperation::MucMutation)
+    }
+
     pub(crate) fn federated_muc_uses_cluster_occupancy(&self) -> bool {
         self.cluster.is_enabled()
     }
@@ -38,6 +42,153 @@ impl AppState {
 
     pub(crate) async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
         self.cluster.leave_muc(room_jid).await
+    }
+
+    pub(crate) async fn federated_muc_rename_occupant(
+        &self,
+        room_jid: &str,
+        old_nick: &str,
+        new_nick: &str,
+        expected_epoch: uuid::Uuid,
+        old_json: &str,
+        new_json: &str,
+    ) -> Result<MucRename> {
+        self.cluster
+            .rename_muc_occupant(
+                room_jid,
+                old_nick,
+                new_nick,
+                expected_epoch,
+                old_json,
+                new_json,
+            )
+            .await
+    }
+
+    pub(crate) async fn federated_muc_register_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        json: &str,
+    ) -> Result<bool> {
+        self.cluster
+            .register_muc_occupant(room_jid, nick, json)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_evict_occupant(
+        &self,
+        occupant: &SerializableMucOccupant,
+        status: u16,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<bool> {
+        self.cluster
+            .evict_muc_occupant(occupant, status, actor_nick, reason)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_change_occupant_role(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        role: &str,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .change_muc_occupant_role(room_jid, occupant, role)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_change_occupant_affiliation(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        affiliation: &str,
+        role: &str,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .change_muc_occupant_affiliation(room_jid, occupant, affiliation, role)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_change_occupant_policy(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        role: &str,
+        room_non_anonymous: bool,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .change_muc_occupant_policy(room_jid, occupant, role, room_non_anonymous)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_publish_presence(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        unavailable: bool,
+        created: bool,
+        id: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .send_muc_presence(room_jid, occupant, unavailable, created, id)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_publish_removal_presence(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        status: Option<u16>,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .send_muc_presence_with_status(
+                room_jid, occupant, true, false, None, status, actor_nick, reason,
+            )
+            .await
+    }
+
+    pub(crate) async fn federated_muc_publish_nickname_change(
+        &self,
+        room_jid: &str,
+        old_occupant: &SerializableMucOccupant,
+        new_occupant: &SerializableMucOccupant,
+        id: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .send_muc_nickname_change(room_jid, old_occupant, new_occupant, id)
+            .await
+    }
+
+    pub(crate) async fn federated_muc_publish_room_message(
+        &self,
+        room_jid: &str,
+        stanza: &str,
+        real_sender: Option<&str>,
+    ) -> Result<()> {
+        match real_sender {
+            Some(sender) => {
+                self.cluster
+                    .send_to_muc_from(room_jid, stanza, sender)
+                    .await
+            }
+            None => self.cluster.send_to_muc(room_jid, stanza).await,
+        }
+    }
+
+    pub(crate) async fn federated_muc_publish_private_message(
+        &self,
+        room_jid: &str,
+        target_nick: &str,
+        stanza: &str,
+        real_sender: &str,
+    ) -> Result<()> {
+        self.cluster
+            .send_muc_private_from(room_jid, target_nick, stanza, real_sender)
+            .await
     }
 
     /// Forward a mediated invitation or decline to the first remote primary

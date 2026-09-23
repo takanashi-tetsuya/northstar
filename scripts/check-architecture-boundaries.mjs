@@ -264,14 +264,13 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 6;
+const MAX_APP_STATE_PUBLIC_FIELDS = 5;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
   'cluster',
   'config',
   'metrics',
   'muc_occupants',
-  'pool',
   'sessions',
 ];
 
@@ -296,6 +295,16 @@ if (
     'AppState public capability identity changed; extract a typed port or update the reviewed ' +
       `responsibility model instead of swapping fields under the count budget: ${actualPublicCapabilities.join(', ')}`,
   );
+}
+if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + read('src/cluster.rs'))
+    || !appState.includes('pool: PgPool,')) {
+  throw new Error('process and cluster workers must use narrow state-owned database capabilities');
+}
+const clusterMessageResolver = structBody(read('src/cluster.rs'), 'async fn resolve_node_message_delivery<');
+if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
+    || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
+    || !read('src/cluster.rs').includes('state.node_message_contract_verifier()')) {
+  throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
 
 // The loaded configuration transiently contains database, cluster,
@@ -3154,6 +3163,22 @@ if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimLease, mucClaimCommit, mucDeli
 }
 const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
 const clusterMucDelivery = structBody(read('src/cluster.rs'), 'async fn deliver_cluster_muc_event(');
+const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;');
+const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);
+const mucCacheBranch = clusterMucDelivery.indexOf('let recipient = if exact_cached', mucContextRead);
+const mucSnapshotTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucCacheBranch);
+const mucSnapshotRead = clusterMucDelivery.indexOf('.recipient_snapshot(delivery)', mucSnapshotTurn);
+const mucCurrentTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucSnapshotRead);
+const mucCurrentRead = clusterMucDelivery.indexOf('.audience_is_current(delivery)', mucCurrentTurn);
+const mucAbsentCheck = clusterMucDelivery.indexOf('let Some(snapshot) = snapshot else', mucSnapshotRead);
+if ([mucContextTurn, mucContextRead, mucCacheBranch, mucSnapshotTurn, mucSnapshotRead,
+     mucCurrentTurn, mucCurrentRead, mucAbsentCheck].some((offset) => offset < 0)
+    || mucContextRead >= mucCacheBranch
+    || mucSnapshotRead >= mucAbsentCheck
+    || mucAbsentCheck >= mucCurrentRead
+    || /crate::db::(?:cluster_muc_event_context|cluster_muc_delivery_recipient_snapshot|cluster_muc_delivery_audience_is_current)\s*\(/.test(clusterMucDelivery)) {
+  throw new Error('cluster MUC event and audience reads must keep independent database turns and the cached-recipient fast path');
+}
 const itemReadTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', clusterMucDelivery.indexOf('let stable_item_id ='));
 const itemCompleted = clusterMucDelivery.indexOf('.completed(delivery.delivery_id, ordinal, &stable_item_id)', itemReadTurn);
 const itemTransport = clusterMucDelivery.indexOf('.deliver_to_muc_occupant_with_receipt(', itemCompleted);
@@ -3256,6 +3281,18 @@ if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
 if (/\bstate\s*\.metrics\b/.test(mixProtocol)
     || !mixProtocol.includes('state.mix_post_commit_telemetry().delivery_failed()')) {
   throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
+}
+const accountRecoverySource = read('src/account_recovery.rs');
+const accountRecoveryTelemetry = structBody(accountRecoverySource, 'pub(crate) struct AccountDeletionRecoveryTelemetry');
+if (/\.metrics\b/.test(accountRecoverySource)
+    || /Arc<(?:crate::metrics::)?Metrics>/.test(accountRecoveryTelemetry)
+    || !accountRecoveryTelemetry.includes("success: &'a AtomicU64")
+    || !accountRecoveryTelemetry.includes("failure: &'a AtomicU64")
+    || !accountRecoveryTelemetry.includes("lease_loss: &'a AtomicU64")
+    || countMatches(accountRecoverySource, /account_deletion_recovery_telemetry\(\)\.succeeded\(\)/g) !== 1
+    || countMatches(accountRecoverySource, /account_deletion_recovery_telemetry\(\)\.failed\(\)/g) !== 1
+    || countMatches(accountRecoverySource, /account_deletion_recovery_telemetry\(\)\.lease_lost\(\)/g) !== 1) {
+  throw new Error('account deletion recovery must use its three shared telemetry cells');
 }
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
@@ -3447,6 +3484,7 @@ const stateServiceAccessors = [
   'cluster_authority_service',
   'cluster_instance_release_service',
   'cluster_muc_delivery_item_service',
+  'cluster_muc_delivery_read_service',
   'cluster_muc_outbox_housekeeping_service',
   'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',

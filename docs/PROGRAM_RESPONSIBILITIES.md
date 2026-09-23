@@ -455,6 +455,8 @@ copy that coupling.
 | `cluster_muc_occupancy_maintenance_service()` | node-local MUC occupancy reconciliation | one authoritative snapshot and exact 90-second lease renewals before Redis soft-state refresh | room mutation or a general PostgreSQL pool in cluster maintenance |
 | `cluster_muc_outbox_housekeeping_service()` | bounded MUC outbox cleanup and gauge reads | independent dead-letter purge, 60-second history purge and current snapshot under separate database turns | merging the cleanup steps into one transaction or changing gauge update order |
 | `cluster_muc_delivery_item_service()` | stable audience item progress | exact completed check before transport and fenced completion after durable receipt | a transaction spanning network I/O or ACK before the receipt |
+| `cluster_muc_delivery_read_service()` | committed MUC event and audience projections | event context for every row; immutable recipient snapshot only on cache miss; current-audience check only when the snapshot is absent, each in its own database turn | querying on the exact cached path, reviving a stale audience or merging the independent reads |
+| `node_message_contract_verifier()` | inbound clustered message source verification | exact C2S spool or MIX lease and payload reads; volatile and identity-free legacy paths skip SQL | accepting an unverified Redis payload or passing a pool into cluster transport |
 | `cluster_instance_release_service()` | final node-instance lease release | one exact PostgreSQL release after signed publication has quiesced | release on publication-fence timeout or the failure supervisor inheriting release authority |
 | `abuse_key_authority_probe()` | periodic anti-abuse key deployment check | one repository validation under the worker's unchanged timeout | general readiness probes or direct pool access in the guard |
 | `background_housekeeping_context()` | independent expired-state cleanup steps | state-owned repository and retention policy with the same two shared counters | direct pool access or a cross-step transaction in main |
@@ -802,7 +804,7 @@ Use these rules before adding a module, dependency or public field:
 
 Every public feature also updates the smallest applicable set of tests,
 metrics, logs, README/operations, OpenAPI and `XEP_MATRIX.md`. The current
-exception classes—six public `AppState` capabilities, direct REST persistence
+exception classes—five public `AppState` capabilities, direct REST persistence
 and embedded service/runtime repository work—must decrease over time and may
 not be copied into new work.
 
@@ -810,7 +812,7 @@ not be copied into new work.
 
 Remaining architecture work:
 
-1. The six public `AppState` fields still form a broad same-process authority.
+1. The five public `AppState` fields still form a broad same-process authority.
 2. Operation/background paths still hold `Arc<AppState>` where narrower ports
    would make transaction and failure ownership clearer.
 3. Some REST routes still own direct pool/transaction access instead of a

@@ -119,16 +119,16 @@ impl PostgresAuthenticationRepository {
         F: FnOnce(AuthenticationFence) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let mut transaction = match self.pool.begin().await {
+        // Declare the isolation level in the BEGIN statement so the preflight
+        // cannot run a separate statement before PostgreSQL applies it.
+        let mut transaction = match self
+            .pool
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ")
+            .await
+        {
             Ok(transaction) => transaction,
             Err(error) => return AuthenticationResult::BackendFailure(error.into()),
         };
-        if let Err(error) = sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *transaction)
-            .await
-        {
-            return AuthenticationResult::BackendFailure(error.into());
-        }
         let state =
             sqlx::query("SELECT auth_generation,is_disabled FROM users WHERE id=$1 FOR SHARE")
                 .bind(user_id)

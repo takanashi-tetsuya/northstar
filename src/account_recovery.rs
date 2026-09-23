@@ -10,7 +10,13 @@ use crate::{
     xmpp::{protocol::roster::deliver_roster_change, xml_builder::XmlElement},
 };
 use anyhow::{Context, Result};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -18,6 +24,40 @@ use uuid::Uuid;
 pub(crate) enum FinalizeAccountDeletion {
     Deleted,
     Missing,
+}
+
+/// Recovery outcomes share the process counters without granting the worker
+/// access to unrelated observability state.
+pub(crate) struct AccountDeletionRecoveryTelemetry<'a> {
+    success: &'a AtomicU64,
+    failure: &'a AtomicU64,
+    lease_loss: &'a AtomicU64,
+}
+
+impl<'a> AccountDeletionRecoveryTelemetry<'a> {
+    pub(crate) fn new(
+        success: &'a AtomicU64,
+        failure: &'a AtomicU64,
+        lease_loss: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            success,
+            failure,
+            lease_loss,
+        }
+    }
+
+    pub(crate) fn succeeded(&self) {
+        self.success.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn failed(&self) {
+        self.failure.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn lease_lost(&self) {
+        self.lease_loss.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub(crate) async fn finalize(
@@ -118,10 +158,7 @@ pub(crate) async fn serve(
                     heartbeat.pulse();
                     match finalize(&state, job.user_id, &job.username).await {
                         Ok(FinalizeAccountDeletion::Deleted) => {
-                            state
-                                .metrics
-                                .account_deletion_recovery_success_total
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            state.account_deletion_recovery_telemetry().succeeded();
                             tracing::info!(user_id = %job.user_id, "recovered interrupted account deletion");
                         }
                         Ok(FinalizeAccountDeletion::Missing) => {
@@ -131,10 +168,7 @@ pub(crate) async fn serve(
                         }
                         Err(error) => {
                             failed = true;
-                            state
-                                .metrics
-                                .account_deletion_recovery_failures_total
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            state.account_deletion_recovery_telemetry().failed();
                             tracing::error!(user_id = %job.user_id, ?error, "account deletion recovery failed");
                             if !state.account_service().release_deletion_recovery(
                                 &job,
@@ -142,10 +176,7 @@ pub(crate) async fn serve(
                             )
                             .await?
                             {
-                                state
-                                    .metrics
-                                    .account_deletion_recovery_lease_losses_total
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                state.account_deletion_recovery_telemetry().lease_lost();
                                 tracing::warn!(user_id = %job.user_id, "account deletion recovery lease was lost before release");
                             }
                         }

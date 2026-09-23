@@ -3,6 +3,10 @@ use crate::services::cluster_instance_release::{
     ClusterInstanceReleaseIdentity, ClusterInstanceReleaseRepository, ClusterInstanceReleaseService,
 };
 use crate::services::cluster_muc_outbox_settlement::AckOutcome;
+use crate::services::node_message_contract_verifier::{
+    NodeMessageContractVerifier, NodeMessageProjectionRepository, RequestedNodeMessageProjection,
+    VerifiedNodeMessageProjection,
+};
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use bb8::Pool;
@@ -562,136 +566,41 @@ fn requested_node_message_delivery(
     Ok(Some(RequestedNodeMessageDelivery::LegacyInference))
 }
 
-async fn resolve_node_message_delivery(
-    pool: &sqlx::PgPool,
+async fn resolve_node_message_delivery<R: NodeMessageProjectionRepository>(
+    verifier: &NodeMessageContractVerifier<R>,
     request: RequestedNodeMessageDelivery,
     stanza: &str,
     target_jid: &str,
 ) -> Result<ResolvedNodeMessageDelivery> {
-    match request {
+    let request = match request {
+        RequestedNodeMessageDelivery::LegacyInference => {
+            RequestedNodeMessageProjection::LegacyInference
+        }
         RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::Volatile {}) => {
-            Ok(ResolvedNodeMessageDelivery::Volatile)
+            RequestedNodeMessageProjection::Volatile
         }
         RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::DurableC2s {
             recipient_id,
             message_id,
-        }) => {
-            anyhow::ensure!(
-                !matches!(
-                    crate::outbound::recipient_delivery_identity(stanza, target_jid),
-                    crate::outbound::RecipientDeliveryIdentity::Missing
-                        | crate::outbound::RecipientDeliveryIdentity::Invalid
-                ),
-                "durable cluster message lacks an unambiguous recipient stanza-id"
-            );
-            let stored_stanza: Option<String> = sqlx::query_scalar(
-                "SELECT stanza FROM offline_messages WHERE recipient_id=$1 AND id=$2",
-            )
-            .bind(recipient_id)
-            .bind(message_id)
-            .fetch_optional(pool)
-            .await
-            .context("failed to verify clustered durable C2S projection")?;
-            let stored_stanza =
-                stored_stanza.context("cluster durable delivery projection is missing")?;
-            anyhow::ensure!(
-                durable_projection_matches(&stored_stanza, stanza),
-                "cluster durable delivery payload does not match its PostgreSQL projection"
-            );
-            Ok(ResolvedNodeMessageDelivery::Durable(
-                crate::outbound::DurableDelivery {
-                    recipient_id,
-                    message_id,
-                    claim_id: None,
-                },
-            ))
-        }
+        }) => RequestedNodeMessageProjection::DurableC2s {
+            recipient_id,
+            message_id,
+        },
         RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::DurableMix {
             delivery_id,
             lease_token,
-        }) => {
-            anyhow::ensure!(
-                crate::jid::CanonicalJid::parse(target_jid)?
-                    .resourcepart()
-                    .is_none(),
-                "durable cluster MIX delivery requires a bare target"
-            );
-            let projection: Option<(String, String, bool, bool)> = sqlx::query_as(
-                "SELECT recipient.recipient_jid,event.stanza_template,
-                        recipient.lease_until>clock_timestamp() AS lease_active,
-                        event.expires_at>clock_timestamp() AS event_active
-                   FROM mix_delivery_recipients recipient
-                   JOIN mix_delivery_events event ON event.event_id=recipient.event_id
-                  WHERE recipient.delivery_id=$1 AND recipient.lease_token=$2",
-            )
-            .bind(delivery_id)
-            .bind(lease_token)
-            .fetch_optional(pool)
-            .await
-            .context("failed to verify clustered durable MIX projection")?;
-            let (recipient, template, lease_active, event_active) =
-                projection.context("cluster durable MIX delivery projection is missing")?;
-            anyhow::ensure!(
-                lease_active && event_active,
-                "cluster durable MIX delivery source is no longer active"
-            );
-            anyhow::ensure!(
-                crate::jid::canonicalize_bare(&recipient)?
-                    == crate::jid::canonicalize_bare(target_jid)?,
-                "cluster durable MIX recipient does not match the target"
-            );
-            anyhow::ensure!(
-                crate::xmpp::xml_util::set_to(&template, target_jid) == stanza,
-                "cluster durable MIX payload does not match its PostgreSQL projection"
-            );
-            Ok(ResolvedNodeMessageDelivery::Mix(
-                crate::outbound::MixDelivery {
-                    delivery_id,
-                    lease_token,
-                },
-            ))
+        }) => RequestedNodeMessageProjection::DurableMix {
+            delivery_id,
+            lease_token,
+        },
+    };
+    Ok(match verifier.resolve(request, stanza, target_jid).await? {
+        VerifiedNodeMessageProjection::Volatile => ResolvedNodeMessageDelivery::Volatile,
+        VerifiedNodeMessageProjection::Durable(delivery) => {
+            ResolvedNodeMessageDelivery::Durable(delivery)
         }
-        RequestedNodeMessageDelivery::LegacyInference => {
-            let message_id = match crate::outbound::recipient_delivery_identity(stanza, target_jid)
-            {
-                crate::outbound::RecipientDeliveryIdentity::Missing => {
-                    return Ok(ResolvedNodeMessageDelivery::Volatile);
-                }
-                crate::outbound::RecipientDeliveryIdentity::Exact(message_id) => message_id,
-                crate::outbound::RecipientDeliveryIdentity::Invalid => {
-                    anyhow::bail!("legacy cluster delivery identity is ambiguous")
-                }
-            };
-            let projection: Option<(uuid::Uuid, String)> =
-                sqlx::query_as("SELECT recipient_id, stanza FROM offline_messages WHERE id=$1")
-                    .bind(message_id)
-                    .fetch_optional(pool)
-                    .await
-                    .context("failed to verify legacy clustered C2S projection")?;
-            let (recipient_id, stored_stanza) =
-                projection.context("legacy cluster durable delivery projection is missing")?;
-            anyhow::ensure!(
-                durable_projection_matches(&stored_stanza, stanza),
-                "legacy cluster durable delivery payload does not match its PostgreSQL projection"
-            );
-            Ok(ResolvedNodeMessageDelivery::Durable(
-                crate::outbound::DurableDelivery {
-                    recipient_id,
-                    message_id,
-                    claim_id: None,
-                },
-            ))
-        }
-    }
-}
-
-fn durable_projection_matches(stored_stanza: &str, routed_stanza: &str) -> bool {
-    // Durable rows add one direct server delay marker before routing. Remove
-    // only direct delays and require the remaining XML bytes to match the
-    // proposed cluster payload exactly. Merely proving that a row ID exists
-    // would let a compromised Redis writer consume an unrelated spool fence
-    // while injecting different content.
-    crate::xmpp::xml_util::strip_untrusted_direct_delays(stored_stanza, None) == routed_stanza
+        VerifiedNodeMessageProjection::Mix(delivery) => ResolvedNodeMessageDelivery::Mix(delivery),
+    })
 }
 
 fn outbound_delivery_contract(
@@ -6220,7 +6129,9 @@ async fn deliver_cluster_muc_event(
     );
     let context = {
         let _database_turn = state.durable_outbox_database_turn().await;
-        crate::db::cluster_muc_event_context(&state.pool, delivery.operation_id)
+        state
+            .cluster_muc_delivery_read_service()
+            .event_context(delivery.operation_id)
             .await?
             .context("cluster MUC outbox operation is missing")?
     };
@@ -6264,12 +6175,18 @@ async fn deliver_cluster_muc_event(
         // Redis nickname cache. The stable event ID remains the retry key.
         let snapshot = {
             let _database_turn = state.durable_outbox_database_turn().await;
-            crate::db::cluster_muc_delivery_recipient_snapshot(&state.pool, delivery).await?
+            state
+                .cluster_muc_delivery_read_service()
+                .recipient_snapshot(delivery)
+                .await?
         };
         let Some(snapshot) = snapshot else {
             let audience_is_current = {
                 let _database_turn = state.durable_outbox_database_turn().await;
-                crate::db::cluster_muc_delivery_audience_is_current(&state.pool, delivery).await?
+                state
+                    .cluster_muc_delivery_read_service()
+                    .audience_is_current(delivery)
+                    .await?
             };
             if audience_is_current {
                 anyhow::bail!("authoritative MUC audience snapshot disappeared");
@@ -7624,41 +7541,45 @@ async fn listen_once(
             let is_message_stanza = parsed_stanza
                 .as_ref()
                 .is_some_and(|document| document.root_element().tag_name().name() == "message");
-            let (resolved_message_delivery, direct_delivery_contract_valid) = if !is_muc
-                && !is_muc_private
-            {
-                match requested_node_message_delivery(json, is_message_stanza) {
-                    Ok(Some(request)) => {
-                        match resolve_node_message_delivery(&state.pool, request, stanza, target)
+            let (resolved_message_delivery, direct_delivery_contract_valid) =
+                if !is_muc && !is_muc_private {
+                    match requested_node_message_delivery(json, is_message_stanza) {
+                        Ok(Some(request)) => {
+                            match resolve_node_message_delivery(
+                                &state.node_message_contract_verifier(),
+                                request,
+                                stanza,
+                                target,
+                            )
                             .await
-                        {
-                            Ok(resolved) => {
-                                acknowledged_delivery = Some(resolved.contract());
-                                (Some(resolved), true)
-                            }
-                            Err(error) => {
-                                tracing::warn!(
+                            {
+                                Ok(resolved) => {
+                                    acknowledged_delivery = Some(resolved.contract());
+                                    (Some(resolved), true)
+                                }
+                                Err(error) => {
+                                    tracing::warn!(
                                     ?error,
                                     target,
                                     "rejected an unverified clustered message delivery contract"
                                 );
-                                (None, false)
+                                    (None, false)
+                                }
                             }
                         }
+                        Ok(None) => (None, true),
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                target,
+                                "rejected an invalid clustered message delivery contract"
+                            );
+                            (None, false)
+                        }
                     }
-                    Ok(None) => (None, true),
-                    Err(error) => {
-                        tracing::warn!(
-                            ?error,
-                            target,
-                            "rejected an invalid clustered message delivery contract"
-                        );
-                        (None, false)
-                    }
-                }
-            } else {
-                (None, true)
-            };
+                } else {
+                    (None, true)
+                };
             let carbons_only = json["carbons_only"].as_bool().unwrap_or(false);
             let privacy_peer_kind = parsed_stanza
                 .as_ref()
@@ -10071,12 +9992,16 @@ mod tests {
         let routed = "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>hello</body></message>";
         let stored =
             crate::xmpp::xml_util::add_delay_from(routed, chrono::Utc::now(), Some("example.test"));
-        assert!(durable_projection_matches(&stored, routed));
-        assert!(!durable_projection_matches(
+        assert!(
+            crate::services::node_message_contract_verifier::durable_projection_matches(
+                &stored, routed
+            )
+        );
+        assert!(!crate::services::node_message_contract_verifier::durable_projection_matches(
             &stored,
             "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>changed</body></message>"
         ));
-        assert!(!durable_projection_matches(
+        assert!(!crate::services::node_message_contract_verifier::durable_projection_matches(
             &stored,
             "<message from='alice@example.test/Phone' to='mallory@example.test' type='chat' id='m1'><body>hello</body></message>"
         ));

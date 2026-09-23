@@ -111,7 +111,7 @@ in large root orchestration modules and infrastructure ownership:
   traits;
 - transport actors still reach a broad protocol session object.
 
-`AppState` has been reduced to six public fields and protocol modules have no
+`AppState` has been reduced to five public fields and protocol modules have no
 direct `db::`, `PgPool`, SQLx or `state.pool` authority according to the
 architecture gate. This is an intermediate boundary, not the final service
 graph.
@@ -343,7 +343,7 @@ next stage changes runtime behavior. The issue ledger remains
 Stage 1 remains open. The current service boundaries cover HTTP account flows,
 personal-message storage, federation outbox work, administrator cleanup,
 operation-journal target transitions and read-only credential maintenance.
-`AppState` still exposes six capabilities; the largest remaining migrations are
+`AppState` still exposes five capabilities; the largest remaining migrations are
 cluster routing and the runtime policy read by protocol adapters. Database
 role separation, MUC batch commands and storage/restore tooling follow only
 after the Stage 1 exit checks pass.
@@ -496,6 +496,9 @@ separate database turns behind a housekeeping port. Each stable delivery item
 checks completion before transport and commits completion only after its
 receipt. Shutdown releases the exact node-instance lease through a separate
 command service while the signed-publication fence is held.
+Cluster message contracts now verify their C2S or MIX source through a
+repository port; volatile and identity-free legacy messages avoid database
+reads. The shared PostgreSQL pool is private to `AppState`.
 Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before
@@ -526,14 +529,19 @@ MUC-specific set of counters; MIX post-commit delivery reports its two counters
 through a separate port.
 Passkey login completion receives its service without the broader HTTP state;
 it checks the live allowed origin before consuming the challenge.
+Account-deletion recovery reports successful completion, failure and lost
+leases through three borrowed counters.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a
-copied policy and post-commit wake capability. AppState still has six public
+copied policy and post-commit wake capability. AppState still has five public
 fields, so stage 1 remains open. Changing field visibility alone does not
 demonstrate reduced authority.
+Clustered-MUC delivery now obtains its committed event and audience projections
+through a read port while keeping the cached-recipient fast path and three
+independently admitted database reads in the transport worker.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

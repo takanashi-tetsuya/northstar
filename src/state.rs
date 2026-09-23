@@ -2066,7 +2066,7 @@ impl ReadinessContext {
 
 pub struct AppState {
     pub config: Config,
-    pub pool: PgPool,
+    pool: PgPool,
     api_query_context: ApiQueryContext,
     metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
@@ -2447,6 +2447,30 @@ impl AppState {
         )
     }
 
+    pub(crate) fn cluster_muc_delivery_read_service(
+        &self,
+    ) -> crate::services::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
+        db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
+    > {
+        crate::services::cluster_muc_delivery_read::ClusterMucDeliveryReadService::new(
+            db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository::new(
+                self.pool.clone(),
+            ),
+        )
+    }
+
+    pub(crate) fn node_message_contract_verifier(
+        &self,
+    ) -> crate::services::node_message_contract_verifier::NodeMessageContractVerifier<
+        db::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
+    > {
+        crate::services::node_message_contract_verifier::NodeMessageContractVerifier::new(
+            db::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(
+                self.pool.clone(),
+            ),
+        )
+    }
+
     pub(crate) fn cluster_instance_release_service(
         &self,
     ) -> crate::services::cluster_instance_release::ClusterInstanceReleaseService<
@@ -2465,6 +2489,16 @@ impl AppState {
 
     pub(crate) fn metrics_context(&self) -> MetricsContext {
         MetricsContext::from_state(self)
+    }
+
+    pub(crate) fn account_deletion_recovery_telemetry(
+        &self,
+    ) -> crate::account_recovery::AccountDeletionRecoveryTelemetry<'_> {
+        crate::account_recovery::AccountDeletionRecoveryTelemetry::new(
+            &self.metrics.account_deletion_recovery_success_total,
+            &self.metrics.account_deletion_recovery_failures_total,
+            &self.metrics.account_deletion_recovery_lease_losses_total,
+        )
     }
 
     pub(crate) fn broadcast_routes(&self) -> crate::operation_runtime::LocalBroadcastRoutes {

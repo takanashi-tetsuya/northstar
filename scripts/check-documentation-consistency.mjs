@@ -340,12 +340,12 @@ for (const relativePath of [
 
 const architecture = read('docs/ARCHITECTURE.md').replace(/\s+/g, ' ');
 const architectureBudget =
-  '`AppState=7` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
+  '`AppState=5` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
   '`0 db authority references / 0 db domain-model references / 0 state.pool / 0 sqlx:: / 0 PgPool`';
 if (!architecture.includes(architectureBudget)) {
-  throw new Error('docs/ARCHITECTURE.md does not state the current 7/0/0/0/0/0 architecture budget');
+  throw new Error('docs/ARCHITECTURE.md does not state the current 5/0/0/0/0/0 architecture budget');
 }
-if (!knownIssues.replace(/\s+/g, ' ').includes('`AppState=7 public fields`')) {
+if (!knownIssues.replace(/\s+/g, ' ').includes('`AppState=5 public fields`')) {
   throw new Error('KNOWN_ISSUES.md does not state the current AppState public-field count');
 }
 const responsibilityModel = read('docs/PROGRAM_RESPONSIBILITIES.md');

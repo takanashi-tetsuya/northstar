@@ -1828,7 +1828,7 @@ SQL
   # This marker is committed with the replacement itself. Recovery can prove
   # the exact restored generation after pg_xact_status is no longer retained.
   if [[ "$stream_ok" == true ]] \
-    && { ! printf "INSERT INTO northstar_restore_outcome_markers (restore_id, manifest_sha256, target_database_oid, outcome, transaction_xid) VALUES ('%s', decode('%s','hex'), %s::oid, '%s', %s::pg_catalog.xid8);\n" \
+    && { ! printf "INSERT INTO northstar_restore_outcome_markers (restore_id, manifest_sha256, target_database_oid, outcome, transaction_xid) VALUES ('%s', decode('%s','hex'), %s::oid, '%s', '%s'::pg_catalog.xid8);\n" \
            "$restore_id" "$manifest_sha256" "$target_database_oid" "$transaction_kind" "$xid_line" >&"$worker_in"; }; then
     stream_ok=false
   fi

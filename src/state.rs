@@ -143,12 +143,14 @@ pub(crate) use upload_http_read::UploadHttpReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 mod admin_cluster_queries;
+pub(crate) mod cluster_failure_supervisor;
 pub(crate) mod cluster_muc_projection;
 pub(crate) mod cluster_routing;
 mod cluster_shutdown;
 pub(crate) mod federated_muc_cluster_effects;
 mod message_cluster_routing;
 pub(crate) mod mix_cluster_routing;
+pub(crate) mod muc_cluster_effects;
 pub(crate) mod muc_cluster_routing;
 mod notification_routing;
 mod presence_cluster_routing;
@@ -3052,14 +3054,6 @@ pub struct AppState {
         crate::services::session_authority_sweep::SessionAuthoritySweepService<
             db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
-    cluster_session_route_maintenance_service:
-        crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService<
-            db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository,
-        >,
-    cluster_replay_maintenance_service:
-        crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceService<
-            db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository,
-        >,
     cluster_muc_outbox_settlement_service:
         crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
             db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
@@ -4674,14 +4668,9 @@ impl AppState {
                     Some(upload_store),
                 )
             } else {
-                let durable_upload_state_exists: bool = sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM upload_slots LIMIT 1)
-                         OR EXISTS(SELECT 1 FROM upload_storage_jobs LIMIT 1)
-                         OR EXISTS(SELECT 1 FROM upload_cleanup_queue LIMIT 1)",
-                )
-                .fetch_one(&pool)
-                .await
-                .context("could not verify that disabled upload storage is empty")?;
+                let durable_upload_state_exists = db::durable_upload_state_exists(&pool)
+                    .await
+                    .context("could not verify that disabled upload storage is empty")?;
                 anyhow::ensure!(
                     !durable_upload_state_exists,
                     "UPLOAD_MODE=disabled requires empty durable upload state; use drain_read_only until historical downloads and cleanup jobs have drained"
@@ -4952,10 +4941,7 @@ impl AppState {
         .await?;
         let (island_mode, registration_closed) = db::admin_runtime_settings(&pool).await?;
         let registration_closed = Arc::new(AtomicBool::new(registration_closed));
-        let process_started_at: chrono::DateTime<chrono::Utc> =
-            sqlx::query_scalar("SELECT clock_timestamp()")
-                .fetch_one(&pool)
-                .await?;
+        let process_started_at = db::admin_service_control_startup_time(&pool).await?;
         let (runtime_blacklist, runtime_whitelist) = db::federation_runtime_rules(&pool).await?;
 
         db::recover_remote_pam_after_restart(&pool)
@@ -5172,8 +5158,7 @@ impl AppState {
             },
         )
         .await?;
-        let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
-            .fetch_one(&pool)
+        let sm_authority_schema = db::current_application_schema(&pool)
             .await
             .context("could not determine the SM authority schema")?;
         let mut sm_authority_connect_options = config
@@ -5429,18 +5414,6 @@ impl AppState {
                     pool.clone(),
                 ),
             );
-        let cluster_session_route_maintenance_service =
-            crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService::new(
-                db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository::new(
-                    pool.clone(),
-                ),
-            );
-        let cluster_replay_maintenance_service =
-            crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceService::new(
-                db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository::new(
-                    pool.clone(),
-                ),
-            );
         let cluster_muc_outbox_settlement_service =
             crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService::new(
                 db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository::new(
@@ -5529,8 +5502,6 @@ impl AppState {
             cluster,
             account_revocation_consumer_service,
             session_authority_sweep_service,
-            cluster_session_route_maintenance_service,
-            cluster_replay_maintenance_service,
             cluster_muc_outbox_settlement_service,
             cluster_muc_outbox_claim_service,
             cluster_muc_outbox_preclaim_service,
@@ -6075,22 +6046,6 @@ impl AppState {
         db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
     > {
         &self.session_authority_sweep_service
-    }
-
-    pub(crate) fn cluster_session_route_maintenance_service(
-        &self,
-    ) -> &crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService<
-        db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository,
-    >{
-        &self.cluster_session_route_maintenance_service
-    }
-
-    pub(crate) fn cluster_replay_maintenance_service(
-        &self,
-    ) -> &crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceService<
-        db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository,
-    > {
-        &self.cluster_replay_maintenance_service
     }
 
     pub(crate) fn cluster_muc_outbox_settlement_service(

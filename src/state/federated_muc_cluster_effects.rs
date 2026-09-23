@@ -3,6 +3,8 @@
 use super::AppState;
 use crate::cluster::NodeDeliveryReceipt;
 use crate::outbound::DurableDelivery;
+use anyhow::Result;
+use std::collections::HashMap;
 
 pub(crate) struct FederatedMucAccountRoute {
     pub(crate) accepted_full_jid: Option<String>,
@@ -15,6 +17,29 @@ fn accepted_primary_route(receipt: NodeDeliveryReceipt) -> Option<FederatedMucAc
 }
 
 impl AppState {
+    pub(crate) fn federated_muc_uses_cluster_occupancy(&self) -> bool {
+        self.cluster.is_enabled()
+    }
+
+    pub(crate) fn federated_muc_owner_node_id(&self) -> &str {
+        &self.cluster.node_id
+    }
+
+    pub(crate) async fn federated_muc_global_occupants(
+        &self,
+        room_jid: &str,
+    ) -> Result<HashMap<String, String>> {
+        self.cluster.get_muc_occupants(room_jid).await
+    }
+
+    pub(crate) async fn federated_muc_join_room(&self, room_jid: &str) -> Result<()> {
+        self.cluster.join_muc(room_jid).await
+    }
+
+    pub(crate) async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
+        self.cluster.leave_muc(room_jid).await
+    }
+
     /// Forward a mediated invitation or decline to the first remote primary
     /// resource that acknowledges delivery. A durable invitation keeps its
     /// exact spool-row fence across this hand-off. Lookup and send failures

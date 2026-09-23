@@ -942,14 +942,14 @@ fn admit_health(health: &ClusterHealth, operation: ClusterOperation) -> Result<(
         return Ok(());
     }
     match state {
-            CLUSTER_RECONCILING => anyhow::bail!("cluster control plane is reconciling"),
-            CLUSTER_DURABLE_DIRECT_ONLY => anyhow::bail!(
-                "cluster control plane is degraded; only PostgreSQL-spooled direct messages are accepted"
-            ),
-            CLUSTER_FAIL_CLOSED => anyhow::bail!("cluster control plane is unavailable"),
-            CLUSTER_SHUTDOWN_REQUIRED => anyhow::bail!("cluster safety lease expired"),
-            _ => anyhow::bail!("cluster control plane is in an invalid state"),
-        }
+        CLUSTER_RECONCILING => anyhow::bail!("cluster control plane is reconciling"),
+        CLUSTER_DURABLE_DIRECT_ONLY => anyhow::bail!(
+            "cluster control plane is degraded; only PostgreSQL-spooled direct messages are accepted"
+        ),
+        CLUSTER_FAIL_CLOSED => anyhow::bail!("cluster control plane is unavailable"),
+        CLUSTER_SHUTDOWN_REQUIRED => anyhow::bail!("cluster safety lease expired"),
+        _ => anyhow::bail!("cluster control plane is in an invalid state"),
+    }
 }
 
 #[derive(Clone)]
@@ -1015,6 +1015,92 @@ pub(crate) struct ClusterRevocationAuthority {
     failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
     health: Arc<ClusterHealth>,
     listener_rotation: Arc<tokio::sync::Notify>,
+}
+
+/// The failure supervisor can validate PostgreSQL identity, refresh peer
+/// caches and fence cluster admission. It cannot publish, sign or issue Redis
+/// commands.
+#[derive(Clone)]
+pub(crate) struct ClusterFailureSupervisorAuthority {
+    enabled: bool,
+    readiness: Option<ClusterReadinessAuthority>,
+    instance_epoch: Arc<AtomicI64>,
+    domain: String,
+    peer_nodes: Vec<String>,
+    expected_peer_keys: Vec<crate::db::ExpectedClusterPeerKey>,
+    authorized_peer_keys: Arc<dashmap::DashMap<String, AuthorizedPeerKeys>>,
+    authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
+    health: Arc<ClusterHealth>,
+    listener_rotation: Arc<tokio::sync::Notify>,
+    failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    safety_lease_seconds: Option<u64>,
+}
+
+impl ClusterFailureSupervisorAuthority {
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub(crate) fn key_identity(&self) -> Option<&crate::db::ClusterKeyDeploymentIdentity> {
+        self.readiness
+            .as_ref()
+            .map(|readiness| &readiness.key_identity)
+    }
+
+    pub(crate) fn readiness_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+        let mut readiness = self.readiness.clone()?;
+        readiness.instance_epoch = self.instance_epoch.load(Ordering::Acquire);
+        Some(readiness)
+    }
+
+    pub(crate) async fn refresh_peers_with<R: ClusterAuthorityRepository>(
+        &self,
+        service: &ClusterAuthorityService<R>,
+    ) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        refresh_peer_authority_with(
+            service,
+            &self.domain,
+            &self.expected_peer_keys,
+            &self.peer_nodes,
+            &self.authorized_peer_keys,
+            &self.authorized_instances,
+        )
+        .await
+    }
+
+    pub(crate) fn record_authority_failure(&self, error: &anyhow::Error) {
+        record_cluster_failure(
+            &self.health,
+            &self.listener_rotation,
+            self.enabled,
+            self.failure_policy,
+            ClusterFailureClass::PostgreSqlAuthority,
+            error,
+        );
+    }
+
+    pub(crate) fn failure_policy(&self) -> crate::cluster_security::ClusterFailurePolicy {
+        self.failure_policy
+            .unwrap_or(crate::cluster_security::ClusterFailurePolicy::FailClosed)
+    }
+
+    pub(crate) fn safety_lease_expired(&self) -> bool {
+        let Some(seconds) = self.safety_lease_seconds else {
+            return false;
+        };
+        self.health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some_and(|since| since.elapsed() >= Duration::from_secs(seconds))
+    }
+
+    pub(crate) fn require_shutdown(&self) {
+        require_cluster_shutdown(&self.health, self.enabled);
+    }
 }
 
 impl ClusterRevocationAuthority {
@@ -1092,6 +1178,18 @@ fn record_cluster_failure(
         ?policy,
         "cluster control plane entered a degraded state"
     );
+}
+
+fn require_cluster_shutdown(health: &ClusterHealth, enabled: bool) {
+    if enabled {
+        let _transition = health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        health
+            .state
+            .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
+    }
 }
 
 pub(crate) struct AccountRevocationWorkerContext<R> {
@@ -1394,6 +1492,68 @@ impl crate::services::muc::MucWakePort for ClusterManager {
     }
 }
 
+async fn refresh_peer_authority_with<R: ClusterAuthorityRepository>(
+    service: &ClusterAuthorityService<R>,
+    domain: &str,
+    expected: &[crate::db::ExpectedClusterPeerKey],
+    nodes: &[String],
+    authorized_peer_keys: &dashmap::DashMap<String, AuthorizedPeerKeys>,
+    authorized_instances: &dashmap::DashMap<String, AuthorizedClusterInstance>,
+) -> Result<()> {
+    service
+        .refresh_peers(
+            domain,
+            expected,
+            nodes,
+            |key_authorities| {
+                let replacements = key_authorities
+                    .into_iter()
+                    .map(|authority| {
+                        (
+                            authority.node_id,
+                            AuthorizedPeerKeys {
+                                epoch: authority.epoch,
+                                current_key_id: authority.current_key_id,
+                                previous_key_id: authority.previous_key_id,
+                                refresh_until: Instant::now() + Duration::from_secs(10),
+                            },
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                authorized_peer_keys.retain(|node, _| replacements.contains_key(node));
+                for (node, authority) in replacements {
+                    authorized_peer_keys.insert(node, authority);
+                }
+            },
+            |active| {
+                let replacements = active
+                    .into_iter()
+                    .map(|instance| {
+                        (
+                            instance.node_id,
+                            AuthorizedClusterInstance {
+                                instance_uuid: instance.instance_uuid,
+                                instance_epoch: instance.instance_epoch,
+                                signing_key_id: instance.signing_key_id,
+                                signing_key_epoch: instance.signing_key_epoch,
+                                valid_until: Instant::now()
+                                    + instance
+                                        .lease_remaining
+                                        .saturating_sub(Duration::from_secs(1)),
+                                refresh_until: Instant::now() + Duration::from_secs(10),
+                            },
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                authorized_instances.retain(|node, _| replacements.contains_key(node));
+                for (node, instance) in replacements {
+                    authorized_instances.insert(node, instance);
+                }
+            },
+        )
+        .await
+}
+
 impl ClusterManager {
     pub async fn new(
         redis_url: Option<&str>,
@@ -1527,6 +1687,32 @@ impl ClusterManager {
             failure_policy: self.failure_policy(),
             health: Arc::clone(&self.health),
             listener_rotation: Arc::clone(&self.listener_rotation),
+        }
+    }
+
+    pub(crate) fn failure_supervisor_authority(&self) -> ClusterFailureSupervisorAuthority {
+        ClusterFailureSupervisorAuthority {
+            enabled: self.is_enabled(),
+            readiness: self.readiness_authority_snapshot(),
+            instance_epoch: Arc::clone(&self.instance_epoch),
+            domain: self.namespace.clone(),
+            peer_nodes: self
+                .security
+                .as_ref()
+                .map_or_else(Vec::new, |security| security.peer_node_ids()),
+            expected_peer_keys: self
+                .security
+                .as_ref()
+                .map_or_else(Vec::new, |security| security.peer_key_authorities()),
+            authorized_peer_keys: Arc::clone(&self.authorized_peer_keys),
+            authorized_instances: Arc::clone(&self.authorized_instances),
+            health: Arc::clone(&self.health),
+            listener_rotation: Arc::clone(&self.listener_rotation),
+            failure_policy: self.failure_policy(),
+            safety_lease_seconds: self
+                .security
+                .as_ref()
+                .map(|security| security.safety_lease_seconds),
         }
     }
 
@@ -1760,60 +1946,15 @@ impl ClusterManager {
         };
         let nodes = security.peer_node_ids();
         let expected = security.peer_key_authorities();
-        service
-            .refresh_peers(
-                &self.namespace,
-                &expected,
-                &nodes,
-                |key_authorities| {
-                    let key_replacements = key_authorities
-                        .into_iter()
-                        .map(|authority| {
-                            (
-                                authority.node_id,
-                                AuthorizedPeerKeys {
-                                    epoch: authority.epoch,
-                                    current_key_id: authority.current_key_id,
-                                    previous_key_id: authority.previous_key_id,
-                                    refresh_until: Instant::now() + Duration::from_secs(10),
-                                },
-                            )
-                        })
-                        .collect::<HashMap<_, _>>();
-                    self.authorized_peer_keys
-                        .retain(|node, _| key_replacements.contains_key(node));
-                    for (node, authority) in key_replacements {
-                        self.authorized_peer_keys.insert(node, authority);
-                    }
-                },
-                |active| {
-                    let replacements = active
-                        .into_iter()
-                        .map(|instance| {
-                            (
-                                instance.node_id,
-                                AuthorizedClusterInstance {
-                                    instance_uuid: instance.instance_uuid,
-                                    instance_epoch: instance.instance_epoch,
-                                    signing_key_id: instance.signing_key_id,
-                                    signing_key_epoch: instance.signing_key_epoch,
-                                    valid_until: Instant::now()
-                                        + instance
-                                            .lease_remaining
-                                            .saturating_sub(Duration::from_secs(1)),
-                                    refresh_until: Instant::now() + Duration::from_secs(10),
-                                },
-                            )
-                        })
-                        .collect::<HashMap<_, _>>();
-                    self.authorized_instances
-                        .retain(|node, _| replacements.contains_key(node));
-                    for (node, instance) in replacements {
-                        self.authorized_instances.insert(node, instance);
-                    }
-                },
-            )
-            .await
+        refresh_peer_authority_with(
+            service,
+            &self.namespace,
+            &expected,
+            &nodes,
+            &self.authorized_peer_keys,
+            &self.authorized_instances,
+        )
+        .await
     }
 
     pub(crate) async fn release_instance_authority_with<R: ClusterInstanceReleaseRepository>(
@@ -2009,30 +2150,8 @@ impl ClusterManager {
         Ok(ReconciliationOutcome::Complete)
     }
 
-    fn safety_lease_expired(&self) -> bool {
-        let Some(security) = self.security.as_ref() else {
-            return false;
-        };
-        self.health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .is_some_and(|since| {
-                since.elapsed() >= Duration::from_secs(security.safety_lease_seconds)
-            })
-    }
-
     fn require_shutdown(&self) {
-        if self.is_enabled() {
-            let _transition = self
-                .health
-                .failure_since
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            self.health
-                .state
-                .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
-        }
+        require_cluster_shutdown(&self.health, self.is_enabled());
     }
 
     fn key(&self, suffix: String) -> String {
@@ -5678,18 +5797,18 @@ pub async fn run_pubsub_listener(
 /// degraded-mode shutdown deadline. This worker never makes Redis healthy;
 /// only full lease/occupant/listener reconciliation in maintenance can do so.
 pub async fn run_failure_supervisor(
-    state: Arc<AppState>,
+    context: Arc<crate::state::cluster_failure_supervisor::ClusterFailureSupervisorContext>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
-    if !state.cluster.is_enabled() {
+    let authority = &context.authority;
+    if !authority.is_enabled() {
         return Ok(());
     }
-    let identity = state
-        .cluster
-        .key_authority_identity()
+    let identity = authority
+        .key_identity()
         .context("cluster signing-key authority is missing")?;
-    let authority_service = state.cluster_authority_service();
+    let authority_service = &context.authority_service;
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut heartbeat_tick = 0_u8;
@@ -5699,40 +5818,38 @@ pub async fn run_failure_supervisor(
             _ = interval.tick() => {
                 heartbeat_tick = heartbeat_tick.wrapping_add(1);
                 let validation = async {
-                    authority_service.validate_cluster_key(&identity).await?;
-                    let instance = state.cluster.readiness_authority_snapshot()
+                    authority_service.validate_cluster_key(identity).await?;
+                    let instance = authority.readiness_snapshot()
                         .context("cluster signing identity is missing")?;
                     authority_service.validate_local_instance(&instance).await?;
                     if heartbeat_tick % 6 == 1 {
-                        let instance = state.cluster.readiness_authority_snapshot()
+                        let instance = authority.readiness_snapshot()
                             .context("cluster signing identity is missing")?;
                         authority_service.heartbeat_local_instance(
                             &instance,
                             Duration::from_secs(NODE_TTL_SECONDS),
                         ).await?;
-                        state.cluster_replay_maintenance_service()
+                        context.replay_maintenance
                             .cleanup_and_validate(4096)
                             .await?;
-                        state.cluster_session_route_maintenance_service()
+                        context.route_maintenance
                             .cleanup_and_validate(4096)
                             .await?;
                     }
-                    state.cluster.refresh_instance_authority_with(&authority_service).await?;
+                    authority.refresh_peers_with(authority_service).await?;
                     Ok::<_, anyhow::Error>(())
                 }.await;
                 match validation {
                     Ok(()) => heartbeat.ok(),
                     Err(error) => {
                         heartbeat.error(&error);
-                        state.cluster.record_authority_failure(&error);
+                        authority.record_authority_failure(&error);
                         if degraded_shutdown_required(
-                            state.cluster.failure_policy().unwrap_or(
-                                crate::cluster_security::ClusterFailurePolicy::FailClosed,
-                            ),
+                            authority.failure_policy(),
                             false,
                             false,
                         ) {
-                            state.cluster.require_shutdown();
+                            authority.require_shutdown();
                             // The critical-worker supervisor owns process-wide
                             // cancellation. Return the authority error first so
                             // it can persist the terminal cause before waking
@@ -5745,11 +5862,9 @@ pub async fn run_failure_supervisor(
                         }
                     }
                 }
-                let policy = state.cluster.failure_policy().unwrap_or(
-                    crate::cluster_security::ClusterFailurePolicy::FailClosed,
-                );
-                if degraded_shutdown_required(policy, true, state.cluster.safety_lease_expired()) {
-                    state.cluster.require_shutdown();
+                let policy = authority.failure_policy();
+                if degraded_shutdown_required(policy, true, authority.safety_lease_expired()) {
+                    authority.require_shutdown();
                     tracing::error!(
                         ?policy,
                         "cluster safety lease expired; requesting supervised shutdown"
@@ -7407,10 +7522,10 @@ async fn listen_once(
                                 }
                                 Err(error) => {
                                     tracing::warn!(
-                                    ?error,
-                                    target,
-                                    "rejected an unverified clustered message delivery contract"
-                                );
+                                        ?error,
+                                        target,
+                                        "rejected an unverified clustered message delivery contract"
+                                    );
                                     (None, false)
                                 }
                             }
@@ -9819,14 +9934,18 @@ mod tests {
                 &stored, routed
             )
         );
-        assert!(!crate::services::node_message_contract_verifier::durable_projection_matches(
-            &stored,
-            "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>changed</body></message>"
-        ));
-        assert!(!crate::services::node_message_contract_verifier::durable_projection_matches(
-            &stored,
-            "<message from='alice@example.test/Phone' to='mallory@example.test' type='chat' id='m1'><body>hello</body></message>"
-        ));
+        assert!(
+            !crate::services::node_message_contract_verifier::durable_projection_matches(
+                &stored,
+                "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>changed</body></message>"
+            )
+        );
+        assert!(
+            !crate::services::node_message_contract_verifier::durable_projection_matches(
+                &stored,
+                "<message from='alice@example.test/Phone' to='mallory@example.test' type='chat' id='m1'><body>hello</body></message>"
+            )
+        );
     }
 
     #[test]

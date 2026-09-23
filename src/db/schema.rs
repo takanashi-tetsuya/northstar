@@ -16,6 +16,14 @@ const SESSION_AUTHORITY_DIAGNOSTIC_QUERY_LIMIT: i64 =
 const SESSION_AUTHORITY_PRIMARY_FAILURE: &str =
     "session capability ownership, search_path, or runtime ACL attestation failed";
 
+/// The listener and SM/MIX services must use the same effective schema as
+/// the already-attested runtime pool.
+pub async fn current_application_schema(pool: &PgPool) -> Result<String> {
+    Ok(sqlx::query_scalar("SELECT current_schema()")
+        .fetch_one(pool)
+        .await?)
+}
+
 const SESSION_AUTHORITY_FIXED_DIAGNOSTIC_CODES: &[&str] = &[
     "session_schema:missing_or_ambiguous",
     "session_relation:deployment_session_leases:missing_or_owner_mismatch",

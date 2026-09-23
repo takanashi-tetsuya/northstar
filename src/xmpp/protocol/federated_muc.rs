@@ -564,7 +564,7 @@ async fn unregister_remote_occupant(
 ) -> Result<()> {
     let room_jid = departed.room_jid.clone();
     let mut local_departure_room = None;
-    let local_departure_guard = if state.cluster.is_enabled() {
+    let local_departure_guard = if state.federated_muc_uses_cluster_occupancy() {
         None
     } else {
         let Some(initial_room) = state
@@ -600,7 +600,7 @@ async fn unregister_remote_occupant(
     };
     departed.role = "none".to_owned();
     let mut clustered_leave = false;
-    if state.cluster.is_enabled() {
+    if state.federated_muc_uses_cluster_occupancy() {
         state
             .cluster
             .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -621,7 +621,7 @@ async fn unregister_remote_occupant(
                 operation_id,
                 &target,
                 "leave",
-                &state.cluster.node_id,
+                state.federated_muc_owner_node_id(),
                 None,
                 None,
                 departed.sm_session_id,
@@ -639,7 +639,7 @@ async fn unregister_remote_occupant(
         }
     }
     let removed_locally = state.remove_local_muc_occupant_exact((&departed).into());
-    if removed_locally.is_none() && !state.cluster.is_enabled() {
+    if removed_locally.is_none() && !state.federated_muc_uses_cluster_occupancy() {
         return Ok(());
     }
     if let Some(mut removed) = removed_locally {
@@ -671,10 +671,13 @@ async fn unregister_remote_occupant(
             .evict_muc_occupant(&serializable, removal_status.unwrap_or(307), None, None)
             .await?
     };
-    let globally_empty =
-        removed_globally && state.cluster.get_muc_occupants(&room_jid).await?.is_empty();
+    let globally_empty = removed_globally
+        && state
+            .federated_muc_global_occupants(&room_jid)
+            .await?
+            .is_empty();
     if locally_empty && globally_empty {
-        state.cluster.leave_muc(&room_jid).await?;
+        state.federated_muc_leave_room(&room_jid).await?;
     }
     if !clustered_leave {
         state
@@ -825,7 +828,7 @@ async fn federated_muc_presence_owned(
     }
     if let Some((_, mut occupant)) = existing {
         let mut guarded_room = None;
-        let local_actor_guard = if state.cluster.is_enabled() {
+        let local_actor_guard = if state.federated_muc_uses_cluster_occupancy() {
             None
         } else {
             let Some(initial_room) = state
@@ -956,7 +959,7 @@ async fn federated_muc_presence_owned(
             let old_json = serde_json::to_string(&old_serializable)?;
             let new_json = serde_json::to_string(&new_serializable)?;
             let mut cluster_operation = None;
-            if state.cluster.is_enabled() {
+            if state.federated_muc_uses_cluster_occupancy() {
                 state
                     .cluster
                     .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -975,7 +978,7 @@ async fn federated_muc_presence_owned(
                     .rename_local_cluster_occupancy(
                         operation_id,
                         &target,
-                        &state.cluster.node_id,
+                        state.federated_muc_owner_node_id(),
                         nick,
                     )
                     .await?
@@ -1098,11 +1101,7 @@ async fn federated_muc_presence_owned(
             }
             drop(local_actor_guard);
             if let Some(operation_id) = cluster_operation {
-                if let Err(error) = state
-                    .muc_service()
-                    .wake_committed_operation(&state.cluster, operation_id)
-                    .await
-                {
+                if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                     tracing::warn!(?error, %operation_id, room=%room_jid,
                         "federated MUC rename committed; signed wake will be recovered by polling");
                 }
@@ -1175,7 +1174,7 @@ async fn federated_muc_presence_owned(
             connection_id,
         };
         occupant.payload = request.payload.clone();
-        if state.cluster.is_enabled() {
+        if state.federated_muc_uses_cluster_occupancy() {
             let room = state
                 .muc_service()
                 .federated_room_snapshot(localpart(&room_jid))
@@ -1194,7 +1193,7 @@ async fn federated_muc_presence_owned(
                 .muc_service()
                 .refresh_local_cluster_presence(
                     &target,
-                    &state.cluster.node_id,
+                    state.federated_muc_owner_node_id(),
                     &occupant.payload,
                     std::time::Duration::from_secs(90),
                 )
@@ -1211,7 +1210,7 @@ async fn federated_muc_presence_owned(
         let refreshed = state.refresh_local_muc_presence_exact(&occupant, guarded_room.is_some());
         occupant = if let Some(refreshed) = refreshed {
             refreshed
-        } else if state.cluster.is_enabled() {
+        } else if state.federated_muc_uses_cluster_occupancy() {
             tracing::warn!(room=%room_jid, %nick,
                 "PG-authoritative MUC presence refresh lost its exact local incarnation; reconciliation will repair the cache");
             return Ok(None);
@@ -1228,7 +1227,7 @@ async fn federated_muc_presence_owned(
         drop(local_actor_guard);
         let serializable = SerializableMucOccupant::from(&occupant);
         let json = serde_json::to_string(&serializable)?;
-        if state.cluster.is_enabled() {
+        if state.federated_muc_uses_cluster_occupancy() {
             if let Err(error) = state
                 .cluster
                 .register_muc_occupant(&room_jid, nick, &json)
@@ -1470,7 +1469,7 @@ async fn federated_muc_presence_owned(
             ));
         }
     }
-    let local_join_guard = if state.cluster.is_enabled() {
+    let local_join_guard = if state.federated_muc_uses_cluster_occupancy() {
         None
     } else {
         Some(state.muc_service().lock_local_room_mutation(room.id).await)
@@ -1544,14 +1543,14 @@ async fn federated_muc_presence_owned(
     {
         return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
     }
-    let local_occupant_count = if state.cluster.is_enabled() {
+    let local_occupant_count = if state.federated_muc_uses_cluster_occupancy() {
         0
     } else {
         state.muc_occupants_for(&room_jid).len()
     };
     let privileged_join = matches!(affiliation.as_deref(), Some("owner" | "admin"));
     let effective_capacity = room.max_occupants as usize + usize::from(privileged_join) * 10;
-    if !state.cluster.is_enabled() && local_occupant_count >= effective_capacity {
+    if !state.federated_muc_uses_cluster_occupancy() && local_occupant_count >= effective_capacity {
         return Ok(federated_error(
             &request.stanza,
             from,
@@ -1559,7 +1558,9 @@ async fn federated_muc_presence_owned(
             "service-unavailable",
         ));
     }
-    if !state.cluster.is_enabled() && state.local_muc_occupant_by_nick(&room_jid, nick).is_some() {
+    if !state.federated_muc_uses_cluster_occupancy()
+        && state.local_muc_occupant_by_nick(&room_jid, nick).is_some()
+    {
         return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
     }
     let history_request = match request.history_request {
@@ -1601,7 +1602,7 @@ async fn federated_muc_presence_owned(
     };
     let serializable = SerializableMucOccupant::from(&occupant);
     let mut cluster_event_id = None;
-    if state.cluster.is_enabled() {
+    if state.federated_muc_uses_cluster_occupancy() {
         state
             .cluster
             .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -1620,7 +1621,7 @@ async fn federated_muc_presence_owned(
                 principal,
                 full_jid: &actor_full_jid,
                 nick,
-                owner_node_id: &state.cluster.node_id,
+                owner_node_id: state.federated_muc_owner_node_id(),
                 connection_uuid: connection_id,
                 connection_epoch: 1,
                 sm_session_id: None,
@@ -1702,7 +1703,7 @@ async fn federated_muc_presence_owned(
     let local_existing = state.muc_occupants_for(&room_jid);
     let publication = state.publish_local_muc_join_if_vacant(&occupant);
     if publication != crate::state::LocalMucJoinPublication::Published {
-        if !state.cluster.is_enabled() {
+        if !state.federated_muc_uses_cluster_occupancy() {
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         }
         if publication == crate::state::LocalMucJoinPublication::Occupied {
@@ -1714,7 +1715,7 @@ async fn federated_muc_presence_owned(
         }
     }
     drop(local_join_guard);
-    state.cluster.join_muc(&room_jid).await?;
+    state.federated_muc_join_room(&room_jid).await?;
     state
         .cluster
         .register_muc_occupant(&room_jid, nick, &serde_json::to_string(&serializable)?)
@@ -2222,7 +2223,7 @@ async fn federated_muc_message_owned(
                 if !allow {
                     return Ok(None);
                 }
-                if !state.cluster.is_enabled() {
+                if !state.federated_muc_uses_cluster_occupancy() {
                     // A single-node room deliberately keeps live occupancy
                     // authority in this process. Cluster occupancy rows do
                     // not exist in that deployment mode, so requiring one
@@ -2355,11 +2356,7 @@ async fn federated_muc_message_owned(
                         ));
                     }
                 }
-                if let Err(error) = state
-                    .muc_service()
-                    .wake_committed_operation(&state.cluster, operation_id)
-                    .await
-                {
+                if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                     tracing::warn!(?error, %operation_id, "committed federated MUC voice approval wake failed; PostgreSQL outbox will catch up");
                 }
                 return Ok(None);
@@ -2393,7 +2390,7 @@ async fn federated_muc_message_owned(
         let (target_full_jid, route_via_cluster) = if let Some(target) = &local_target {
             (target.full_jid.clone(), false)
         } else {
-            let global = state.cluster.get_muc_occupants(&room_jid).await?;
+            let global = state.federated_muc_global_occupants(&room_jid).await?;
             let Some(target) = global
                 .get(target_nick)
                 .and_then(|json| serde_json::from_str::<SerializableMucOccupant>(json).ok())
@@ -2555,7 +2552,7 @@ async fn federated_muc_message_owned(
                 }
                 let durable_invite = if room.members_only {
                     let delayed = add_delay_from(&invitation, chrono::Utc::now(), Some(&room_jid));
-                    let cluster_authority = if state.cluster.is_enabled() {
+                    let cluster_authority = if state.federated_muc_uses_cluster_occupancy() {
                         state
                             .cluster
                             .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -2608,11 +2605,7 @@ async fn federated_muc_message_owned(
                         DurableMucInviteOutcome::Stored { id, .. } => {
                             if let Some(authority) = &cluster_authority {
                                 state
-                                    .muc_service()
-                                    .wake_committed_operation(
-                                        &state.cluster,
-                                        authority.operation_id,
-                                    )
+                                    .wake_committed_muc_operation(authority.operation_id)
                                     .await?;
                             }
                             Some(id)
@@ -2620,11 +2613,7 @@ async fn federated_muc_message_owned(
                         DurableMucInviteOutcome::Replay { .. } => {
                             if let Some(authority) = &cluster_authority {
                                 state
-                                    .muc_service()
-                                    .wake_committed_operation(
-                                        &state.cluster,
-                                        authority.operation_id,
-                                    )
+                                    .wake_committed_muc_operation(authority.operation_id)
                                     .await?;
                             }
                             return Ok(None);
@@ -2762,7 +2751,7 @@ async fn federated_muc_message_owned(
                     "stanza_id":request.stanza.id,"room":room_jid,
                     "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
                 }))?;
-                let cluster_authority = if state.cluster.is_enabled() {
+                let cluster_authority = if state.federated_muc_uses_cluster_occupancy() {
                     state
                         .cluster
                         .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -2811,10 +2800,7 @@ async fn federated_muc_message_owned(
                     Ok(true) => {
                         state.federation_outbox().wake_outbox();
                         if cluster_authority.is_some() {
-                            state
-                                .muc_service()
-                                .wake_committed_operation(&state.cluster, operation_id)
-                                .await?;
+                            state.wake_committed_muc_operation(operation_id).await?;
                         }
                     }
                     Ok(false) => {
@@ -2859,7 +2845,7 @@ async fn federated_muc_message_owned(
     // the final remote endpoint/incarnation check, durable admission and live
     // fan-out with the same room gate used by kick/ban/leave. Cluster mode
     // instead presents the exact PostgreSQL occupancy tuple below.
-    let local_authority_guard = if state.cluster.is_enabled() {
+    let local_authority_guard = if state.federated_muc_uses_cluster_occupancy() {
         None
     } else {
         Some(state.muc_service().lock_local_room_mutation(room.id).await)
@@ -2918,7 +2904,7 @@ async fn federated_muc_message_owned(
     {
         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
     }
-    let cluster_target = if state.cluster.is_enabled() {
+    let cluster_target = if state.federated_muc_uses_cluster_occupancy() {
         let Some(target) = state
             .muc_service()
             .local_cluster_occupancy_target(room.id, own.cluster_epoch, own.connection_id)
@@ -3009,7 +2995,7 @@ async fn federated_muc_message_owned(
     };
     let actor_scope = crate::jid::canonical_bare_key(&actor_full_jid)?;
     let actor_authority = MucActorAuthority {
-        clustered: state.cluster.is_enabled(),
+        clustered: state.federated_muc_uses_cluster_occupancy(),
         expected_room_epoch: room.room_epoch,
         principal: MucActorPrincipal::Federated {
             bare_jid: actor_bare_jid.clone(),
@@ -3113,7 +3099,7 @@ async fn federated_muc_message_owned(
         }
     } else if let Some(subject) = subject_command {
         let service = state.muc_service();
-        if state.cluster.is_enabled() {
+        if state.federated_muc_uses_cluster_occupancy() {
             let Some(actor_target) = service
                 .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)
                 .await?
@@ -3155,11 +3141,7 @@ async fn federated_muc_message_owned(
                 }
                 _ => return Ok(federated_error(&request.stanza, from, "cancel", "conflict")),
             }
-            if let Err(error) = state
-                .muc_service()
-                .wake_committed_operation(&state.cluster, operation_id)
-                .await
-            {
+            if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                 tracing::warn!(?error, %operation_id, "committed federated MUC subject wake failed; PostgreSQL outbox will catch up");
             }
             return Ok(None);
@@ -3688,7 +3670,7 @@ async fn federated_muc_iq_owned(
                 return Ok(federated_error(&request.stanza, from, "modify", condition));
             }
         };
-        let local_registration_guard = if state.cluster.is_enabled() {
+        let local_registration_guard = if state.federated_muc_uses_cluster_occupancy() {
             None
         } else {
             Some(state.muc_service().lock_local_room_mutation(room.id).await)
@@ -3728,7 +3710,7 @@ async fn federated_muc_iq_owned(
         };
         let (affiliation_changed, previous_affiliation, affiliation, notice_nick) = match action {
             FederatedRegistrationAction::Remove => {
-                if state.cluster.is_enabled() {
+                if state.federated_muc_uses_cluster_occupancy() {
                     state
                         .cluster
                         .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -3751,10 +3733,7 @@ async fn federated_muc_iq_owned(
                     return match outcome {
                         ClusterMucRegistrationOutcome::Applied { .. }
                         | ClusterMucRegistrationOutcome::Replay { .. } => {
-                            state
-                                .muc_service()
-                                .wake_committed_operation(&state.cluster, operation_id)
-                                .await?;
+                            state.wake_committed_muc_operation(operation_id).await?;
                             Ok(Some(federated_iq_result(
                                 &request.stanza,
                                 &room_jid,
@@ -3785,7 +3764,7 @@ async fn federated_muc_iq_owned(
                 (changed, "member", "none", None)
             }
             FederatedRegistrationAction::Register(nick) => {
-                if state.cluster.is_enabled() {
+                if state.federated_muc_uses_cluster_occupancy() {
                     state
                         .cluster
                         .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -3808,10 +3787,7 @@ async fn federated_muc_iq_owned(
                     return match outcome {
                         ClusterMucRegistrationOutcome::Applied { .. }
                         | ClusterMucRegistrationOutcome::Replay { .. } => {
-                            state
-                                .muc_service()
-                                .wake_committed_operation(&state.cluster, operation_id)
-                                .await?;
+                            state.wake_committed_muc_operation(operation_id).await?;
                             Ok(Some(federated_iq_result(
                                 &request.stanza,
                                 &room_jid,
@@ -3835,7 +3811,7 @@ async fn federated_muc_iq_owned(
                         )),
                     };
                 }
-                let mut occupants = state.cluster.get_muc_occupants(&room_jid).await?;
+                let mut occupants = state.federated_muc_global_occupants(&room_jid).await?;
                 for (_, occupant) in state.muc_occupants_for(&room_jid) {
                     occupants.insert(
                         occupant.nick.clone(),
@@ -4573,7 +4549,7 @@ async fn federated_muc_owner(
 ) -> Result<Option<String>> {
     let mut guarded_room = None;
     let mut guarded_requester = None;
-    let _local_room_guard = if set && !state.cluster.is_enabled() {
+    let _local_room_guard = if set && !state.federated_muc_uses_cluster_occupancy() {
         let guard = state.muc_service().lock_local_room_mutation(room.id).await;
         let Some(refreshed_room) = state
             .muc_service()
@@ -4667,7 +4643,7 @@ async fn federated_muc_owner(
                     };
                     let serializable = SerializableMucOccupant::from(&occupant);
                     state.remove_live_muc_membership(&serializable);
-                    if !state.cluster.is_enabled() {
+                    if !state.federated_muc_uses_cluster_occupancy() {
                         let unavailable = muc_destroy_presence(&serializable, None, None);
                         let _ = state.deliver_to_muc_occupant(&occupant, unavailable).await;
                     }
@@ -4676,7 +4652,7 @@ async fn federated_muc_owner(
         }
         FederatedOwnerAction::Destroy { alternate, reason } => {
             let mut cluster_operation = None;
-            if state.cluster.is_enabled() {
+            if state.federated_muc_uses_cluster_occupancy() {
                 state
                     .cluster
                     .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -4738,11 +4714,7 @@ async fn federated_muc_owner(
                 }
             }
             if let Some(operation_id) = cluster_operation {
-                if let Err(error) = state
-                    .muc_service()
-                    .wake_committed_operation(&state.cluster, operation_id)
-                    .await
-                {
+                if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                     tracing::warn!(?error, %operation_id, room=%requester.room_jid,
                         "federated MUC destroy committed; signed wake will be recovered by polling");
                 }
@@ -4775,7 +4747,7 @@ async fn federated_muc_owner(
                 None
             };
             let mut cluster_operation = None;
-            let outcome = if state.cluster.is_enabled() {
+            let outcome = if state.federated_muc_uses_cluster_occupancy() {
                 state
                     .cluster
                     .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -4884,11 +4856,7 @@ async fn federated_muc_owner(
                 ));
             }
             if let Some(operation_id) = cluster_operation {
-                if let Err(error) = state
-                    .muc_service()
-                    .wake_committed_operation(&state.cluster, operation_id)
-                    .await
-                {
+                if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                     tracing::warn!(?error, %operation_id, room=%requester.room_jid,
                         "federated MUC config committed; signed wake will be recovered by polling");
                 }
@@ -4904,12 +4872,14 @@ async fn federated_muc_owner(
                 .federated_room_snapshot(&room.localpart)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("configured MUC room disappeared"))?;
-            if state.cluster.is_enabled()
+            if state.federated_muc_uses_cluster_occupancy()
                 && ((updated_room.members_only && !room.members_only)
                     || updated_room.moderated != room.moderated
                     || updated_room.non_anonymous != room.non_anonymous)
             {
-                let global = state.cluster.get_muc_occupants(&requester.room_jid).await?;
+                let global = state
+                    .federated_muc_global_occupants(&requester.room_jid)
+                    .await?;
                 for (nick, raw) in global {
                     let Ok(mut occupant) =
                         serde_json::from_str::<crate::state::SerializableMucOccupant>(&raw)
@@ -5209,7 +5179,7 @@ async fn publish_occupant_change(
             .evict_muc_occupant(&serializable, status, Some(actor_nick), change.reason)
             .await?;
         if state.muc_occupants_for(&target.room_jid).is_empty() {
-            state.cluster.leave_muc(&target.room_jid).await?;
+            state.federated_muc_leave_room(&target.room_jid).await?;
         }
         state
             .cluster
@@ -5308,7 +5278,7 @@ async fn federated_muc_admin_set(
 ) -> Result<Option<String>> {
     let mut guarded_room = None;
     let mut guarded_requester = None;
-    let _local_room_guard = if state.cluster.is_enabled() {
+    let _local_room_guard = if state.federated_muc_uses_cluster_occupancy() {
         None
     } else {
         let guard = state.muc_service().lock_local_room_mutation(room.id).await;
@@ -5398,7 +5368,7 @@ async fn federated_muc_admin_set(
     // would revoke the final owner.
     let mut durable_changes = Vec::new();
     let mut previous_affiliations = std::collections::HashMap::new();
-    let global_occupants = if state.cluster.is_enabled() {
+    let global_occupants = if state.federated_muc_uses_cluster_occupancy() {
         std::collections::HashMap::new()
     } else {
         state
@@ -5517,7 +5487,7 @@ async fn federated_muc_admin_set(
                     "jid-malformed",
                 ));
             };
-            let target = if state.cluster.is_enabled() {
+            let target = if state.federated_muc_uses_cluster_occupancy() {
                 let authoritative = state
                     .muc_service()
                     .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &target_nick)
@@ -5572,57 +5542,58 @@ async fn federated_muc_admin_set(
         }
     }
     let mut cluster_affiliation_operation = None;
-    let affiliation_outcome = if state.cluster.is_enabled() && !durable_changes.is_empty() {
-        state
-            .cluster
-            .admit(crate::cluster::ClusterOperation::MucMutation)?;
-        let authenticated_domain = match &requester.endpoint {
-            crate::state::MucOccupantEndpoint::Federated {
-                authenticated_domain,
-                ..
-            } => authenticated_domain.clone(),
-            _ => anyhow::bail!("federated MUC admin lost its S2S domain proof"),
-        };
-        let Some(actor_target) = state
-            .muc_service()
-            .local_cluster_occupancy_target(
-                room.id,
-                requester.cluster_epoch,
-                requester.connection_id,
-            )
-            .await?
-        else {
-            return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
-        };
-        let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-            "kind":"admin_affiliation_batch","stream":requester.connection_id,
-            "iq_id":stanza.id,"room":requester.room_jid,"actor":requester.full_jid,
-            "changes":durable_changes,
-        }))?;
-        let outcome = state
-            .muc_service()
-            .apply_local_cluster_affiliations_batch(
-                operation_id,
-                room.id,
-                room.room_epoch,
-                room.config_version,
-                &actor_target,
-                &ClusterMucPrincipal::Federated {
-                    bare_jid: bare_jid(&requester.full_jid).to_owned(),
+    let affiliation_outcome =
+        if state.federated_muc_uses_cluster_occupancy() && !durable_changes.is_empty() {
+            state
+                .cluster
+                .admit(crate::cluster::ClusterOperation::MucMutation)?;
+            let authenticated_domain = match &requester.endpoint {
+                crate::state::MucOccupantEndpoint::Federated {
                     authenticated_domain,
-                },
-                &requester.full_jid,
-                &durable_changes,
-            )
-            .await?;
-        cluster_affiliation_operation = Some(operation_id);
-        outcome
-    } else {
-        state
-            .muc_service()
-            .set_local_legacy_affiliations_batch(room.id, &durable_changes)
-            .await?
-    };
+                    ..
+                } => authenticated_domain.clone(),
+                _ => anyhow::bail!("federated MUC admin lost its S2S domain proof"),
+            };
+            let Some(actor_target) = state
+                .muc_service()
+                .local_cluster_occupancy_target(
+                    room.id,
+                    requester.cluster_epoch,
+                    requester.connection_id,
+                )
+                .await?
+            else {
+                return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
+            };
+            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                "kind":"admin_affiliation_batch","stream":requester.connection_id,
+                "iq_id":stanza.id,"room":requester.room_jid,"actor":requester.full_jid,
+                "changes":durable_changes,
+            }))?;
+            let outcome = state
+                .muc_service()
+                .apply_local_cluster_affiliations_batch(
+                    operation_id,
+                    room.id,
+                    room.room_epoch,
+                    room.config_version,
+                    &actor_target,
+                    &ClusterMucPrincipal::Federated {
+                        bare_jid: bare_jid(&requester.full_jid).to_owned(),
+                        authenticated_domain,
+                    },
+                    &requester.full_jid,
+                    &durable_changes,
+                )
+                .await?;
+            cluster_affiliation_operation = Some(operation_id);
+            outcome
+        } else {
+            state
+                .muc_service()
+                .set_local_legacy_affiliations_batch(room.id, &durable_changes)
+                .await?
+        };
     match affiliation_outcome {
         MucAffiliationBatchOutcome::Applied => {}
         MucAffiliationBatchOutcome::DuplicateTarget => {
@@ -5652,16 +5623,12 @@ async fn federated_muc_admin_set(
         }
     }
     if let Some(operation_id) = cluster_affiliation_operation {
-        if let Err(error) = state
-            .muc_service()
-            .wake_committed_operation(&state.cluster, operation_id)
-            .await
-        {
+        if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
             tracing::warn!(?error, %operation_id, room=%requester.room_jid,
                 "federated MUC affiliation batch committed; signed wake will be recovered by polling");
         }
     }
-    if state.cluster.is_enabled() {
+    if state.federated_muc_uses_cluster_occupancy() {
         let Some(actor_target) = state
             .muc_service()
             .local_cluster_occupancy_target(
@@ -5734,11 +5701,7 @@ async fn federated_muc_admin_set(
                     return Ok(federated_error(stanza, &stanza.from, "cancel", "conflict"));
                 }
             }
-            if let Err(error) = state
-                .muc_service()
-                .wake_committed_operation(&state.cluster, operation_id)
-                .await
-            {
+            if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                 tracing::warn!(?error, %operation_id, room=%requester.room_jid,
                     "federated MUC role operation committed; signed wake will be recovered by polling");
             }
@@ -6147,7 +6110,7 @@ async fn federated_muc_moderate(
         } => authenticated_domain.clone(),
         _ => return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden")),
     };
-    let local_authority_guard = if state.cluster.is_enabled() {
+    let local_authority_guard = if state.federated_muc_uses_cluster_occupancy() {
         None
     } else {
         Some(state.muc_service().lock_local_room_mutation(room.id).await)
@@ -6198,7 +6161,7 @@ async fn federated_muc_moderate(
     if current_affiliation != moderator.affiliation || current_affiliation == "outcast" {
         return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
     }
-    let cluster_target = if state.cluster.is_enabled() {
+    let cluster_target = if state.federated_muc_uses_cluster_occupancy() {
         let Some(target) = state
             .muc_service()
             .local_cluster_occupancy_target(
@@ -6357,7 +6320,7 @@ async fn federated_muc_moderate(
             reason,
             kind: MucRetractionKind::Moderator,
             authority: MucActorAuthority {
-                clustered: state.cluster.is_enabled(),
+                clustered: state.federated_muc_uses_cluster_occupancy(),
                 expected_room_epoch: room.room_epoch,
                 principal: MucActorPrincipal::Federated {
                     bare_jid: actor_scope.clone(),

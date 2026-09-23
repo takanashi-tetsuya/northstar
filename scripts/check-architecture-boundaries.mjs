@@ -341,8 +341,6 @@ for (const field of [
   'push_service',
   'extdisco_service',
   'session_authority_sweep_service',
-  'cluster_session_route_maintenance_service',
-  'cluster_replay_maintenance_service',
   'cluster_muc_outbox_settlement_service',
   'cluster_muc_outbox_claim_service',
   'cluster_muc_outbox_preclaim_service',
@@ -3392,12 +3390,26 @@ const clusterFailureSupervisor = structBody(
   read('src/cluster.rs'),
   'pub async fn run_failure_supervisor(',
 );
-if (!clusterFailureSupervisor.includes('.cluster_replay_maintenance_service()')
-    || !clusterFailureSupervisor.includes('.cluster_session_route_maintenance_service()')
+const clusterFailureContext = structBody(
+  read('src/state/cluster_failure_supervisor.rs'),
+  'pub(crate) struct ClusterFailureSupervisorContext',
+);
+const clusterFailureAuthority = structBody(
+  read('src/cluster.rs'),
+  'pub(crate) struct ClusterFailureSupervisorAuthority',
+);
+if (!clusterFailureSupervisor.includes('context.replay_maintenance')
+    || !clusterFailureSupervisor.includes('context.route_maintenance')
+    || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
+    || !mainSource.includes('state.cluster_failure_supervisor_context()')
+    || /ClusterManager|\bPgPool\b|\bAppState\b/.test(clusterFailureContext)
+    || /ClusterManager|\bPgPool\b/.test(clusterFailureAuthority)
+    || /cluster_(?:session_route|replay)_maintenance_service\s*:/.test(appState)
+    || /Arc<AppState>/.test(clusterFailureSupervisor)
     || /(?:crate::)?db::(?:cleanup_cluster_envelope_replays|validate_cluster_replay_capacity_authority)\s*\(/.test(clusterFailureSupervisor)) {
-  throw new Error('cluster failure supervisor must clean and validate replay capacity through its bounded maintenance service');
+  throw new Error('cluster failure supervisor must own narrow authority and bounded maintenance services');
 }
-if (!clusterFailureSupervisor.includes('.cluster_session_route_maintenance_service()')
+if (!clusterFailureSupervisor.includes('context.route_maintenance')
     || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
     || /(?:crate::)?db::(?:cleanup_cluster_session_routes|validate_cluster_session_route_authority)\s*\(/.test(clusterFailureSupervisor)) {
   throw new Error('cluster failure supervisor must clean and validate session routes through its bounded maintenance service');
@@ -3407,7 +3419,7 @@ if (clusterFailureSupervisor.includes('cancel.cancel()')) {
     'cluster failure policy must return its terminal error before WorkerRegistry cancels the service',
   );
 }
-for (const invariant of ['state.cluster.require_shutdown()', 'anyhow::bail!']) {
+for (const invariant of ['authority.require_shutdown()', 'anyhow::bail!']) {
   if (!clusterFailureSupervisor.includes(invariant)) {
     throw new Error(`cluster failure policy lost fail-closed transition: ${invariant}`);
   }
@@ -3536,8 +3548,6 @@ const stateServiceAccessors = [
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
   'session_authority_sweep_service',
-  'cluster_session_route_maintenance_service',
-  'cluster_replay_maintenance_service',
   'cluster_muc_outbox_settlement_service',
   'cluster_muc_outbox_claim_service',
   'cluster_muc_outbox_preclaim_service',

@@ -305,6 +305,18 @@ pub async fn validate_upload_storage_backend(
     .map_err(Into::into)
 }
 
+/// Refuse to disable uploads while any durable slot or recovery obligation
+/// remains. One statement observes all three tables in the same snapshot.
+pub async fn durable_upload_state_exists(pool: &PgPool) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM upload_slots LIMIT 1)
+                OR EXISTS(SELECT 1 FROM upload_storage_jobs LIMIT 1)
+                OR EXISTS(SELECT 1 FROM upload_cleanup_queue LIMIT 1)",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
 pub async fn validate_upload_capacity_policy(
     pool: &PgPool,
     pending_limit: i64,

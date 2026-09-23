@@ -754,7 +754,7 @@ async fn run() -> Result<()> {
             },
         );
 
-        let state_policy = state.clone();
+        let state_policy = Arc::new(state.cluster_failure_supervisor_context());
         let policy_cancel = cancel.clone();
         worker_registry.supervise(
             "cluster-failure-policy",

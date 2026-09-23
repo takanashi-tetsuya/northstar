@@ -11,6 +11,7 @@ use crate::services::muc::{
     MucRetractionOutcome, MucRoom, MucSubjectCommand, MucSubjectMutation, MucSubjectOutcome,
     OfflineStoreOutcome, OfflineStorePolicy,
 };
+use crate::state::muc_cluster_effects::MucPresencePublication;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use crate::{
@@ -208,17 +209,12 @@ impl MucClusterEffect {
                 stanza,
                 real_sender,
                 stage,
-            } => {
-                let result = if let Some(real_sender) = real_sender {
-                    state
-                        .cluster
-                        .send_to_muc_from(&room, &stanza, &real_sender)
-                        .await
-                } else {
-                    state.cluster.send_to_muc(&room, &stanza).await
-                };
-                (stage, result)
-            }
+            } => (
+                stage,
+                state
+                    .publish_muc_cluster_stanza(&room, &stanza, real_sender.as_deref())
+                    .await,
+            ),
             Self::Evict {
                 occupant,
                 status,
@@ -228,12 +224,15 @@ impl MucClusterEffect {
             } => (
                 stage,
                 state
-                    .cluster
-                    .evict_muc_occupant(&occupant, status, actor_nick.as_deref(), reason.as_deref())
-                    .await
-                    .map(|_| ()),
+                    .evict_cluster_muc_occupant(
+                        &occupant,
+                        status,
+                        actor_nick.as_deref(),
+                        reason.as_deref(),
+                    )
+                    .await,
             ),
-            Self::Leave { room, stage } => (stage, state.cluster.leave_muc(&room).await),
+            Self::Leave { room, stage } => (stage, state.leave_cluster_muc_room(&room).await),
             Self::Register {
                 room,
                 nick,
@@ -242,10 +241,8 @@ impl MucClusterEffect {
             } => (
                 stage,
                 state
-                    .cluster
-                    .register_muc_occupant(&room, &nick, &json)
-                    .await
-                    .map(|_| ()),
+                    .register_cluster_muc_occupant(&room, &nick, &json)
+                    .await,
             ),
             Self::Presence {
                 room,
@@ -259,17 +256,15 @@ impl MucClusterEffect {
             } => (
                 stage,
                 state
-                    .cluster
-                    .send_muc_presence_with_status(
-                        &room,
-                        &occupant,
+                    .publish_muc_cluster_presence(MucPresencePublication {
+                        room: &room,
+                        occupant: &occupant,
                         unavailable,
                         created,
-                        None,
                         removal_status,
-                        actor_nick.as_deref(),
-                        reason.as_deref(),
-                    )
+                        actor_nick: actor_nick.as_deref(),
+                        reason: reason.as_deref(),
+                    })
                     .await,
             ),
         };
@@ -587,7 +582,10 @@ pub(super) async fn deliver_muc_offline_affiliation_change_notice(
             );
         }
     }
-    if let Err(error) = state.cluster.send_to_muc(room_jid, &notice).await {
+    if let Err(error) = state
+        .publish_muc_cluster_stanza(room_jid, &notice, None)
+        .await
+    {
         state.muc_telemetry().post_commit_failure();
         tracing::warn!(
             room = %room_jid,

@@ -1601,6 +1601,16 @@ pub async fn replace_federation_runtime_rules_command(
     Ok(row.map(|row| (row.get("blacklist"), row.get("whitelist"))))
 }
 
+/// PostgreSQL's clock anchors this process against future durable service
+/// controls, independently of the host's wall clock.
+pub async fn admin_service_control_startup_time(
+    pool: &PgPool,
+) -> Result<chrono::DateTime<chrono::Utc>> {
+    Ok(sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await?)
+}
+
 pub async fn initialize_admin_runtime_settings(
     pool: &PgPool,
     island_mode: bool,

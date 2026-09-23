@@ -264,7 +264,7 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 9;
+const MAX_APP_STATE_PUBLIC_FIELDS = 8;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
   'abuse',
@@ -275,7 +275,6 @@ const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
   'muc_occupants',
   'pool',
   'sessions',
-  'tls',
 ];
 
 if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {
@@ -347,6 +346,7 @@ for (const field of [
   'started_at',
   'registration_closed',
   'federation_write_policy',
+  'tls_context',
   's2s_connection_registry',
 ]) {
   if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(appState)) {
@@ -2079,6 +2079,7 @@ for (const [name, source] of [
   ['GovernanceService', read('src/services/governance.rs')],
   ['GovernanceContext', read('src/state/governance.rs')],
   ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
+  ['TlsContext', read('src/tls.rs')],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],

@@ -111,7 +111,7 @@ in large root orchestration modules and infrastructure ownership:
   traits;
 - transport actors still reach a broad protocol session object.
 
-`AppState` has been reduced to nine public fields and protocol modules have no
+`AppState` has been reduced to eight public fields and protocol modules have no
 direct `db::`, `PgPool`, SQLx or `state.pool` authority according to the
 architecture gate. This is an intermediate boundary, not the final service
 graph.
@@ -414,7 +414,9 @@ existing deadline and failure response. Its remaining process gauges still
 use broader state.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
-AppState still has nine public fields, so stage 1 remains open. Changing field
+TLS now sits behind a private context with immutable handshake snapshots and
+the existing current-CRL registration check. AppState still has eight public
+fields, so stage 1 remains open. Changing field
 visibility alone does not demonstrate reduced authority.
 
 Role names follow this map after the transaction boundaries are stable. Each

@@ -177,7 +177,7 @@ pub(crate) fn s2s_client_config(
     public_key_pins: &[[u8; 32]],
     dane_policy: Option<&DanePolicy>,
 ) -> Result<(Arc<tokio_rustls::rustls::ClientConfig>, u64)> {
-    let material = state.tls.current();
+    let material = state.tls_context().federation_snapshot();
     let mut config = if direct_tls {
         material.s2s_client_direct.as_ref().clone()
     } else {
@@ -190,10 +190,10 @@ pub(crate) fn s2s_client_config(
     config
         .dangerous()
         .set_certificate_verifier(Arc::new(XmppPkixServerVerifier::new(
-            Arc::clone(&material.federation_roots),
+            Arc::clone(&material.roots),
             public_key_pins,
             dane_policy,
-            material.federation_crls.clone(),
+            material.crls.clone(),
         )));
     Ok((Arc::new(config), material.generation))
 }
@@ -230,7 +230,7 @@ pub(crate) fn s2s_server_config(
     state: &AppState,
     direct_tls: bool,
 ) -> Result<(Arc<tokio_rustls::rustls::ServerConfig>, u64)> {
-    let material = state.tls.current();
+    let material = state.tls_context().federation_snapshot();
     let config = if direct_tls {
         Arc::clone(&material.s2s_direct)
     } else {
@@ -245,13 +245,13 @@ pub(crate) fn s2s_server_config(
 pub(crate) fn host_meta_https_client_config(
     state: &AppState,
 ) -> Result<Arc<tokio_rustls::rustls::ClientConfig>> {
-    let material = state.tls.current();
+    let material = state.tls_context().federation_snapshot();
     let provider = Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
     let mut verifier = tokio_rustls::rustls::client::WebPkiServerVerifier::builder_with_provider(
-        Arc::clone(&material.federation_roots),
+        Arc::clone(&material.roots),
         Arc::clone(&provider),
     );
-    if let Some(crls) = &material.federation_crls {
+    if let Some(crls) = &material.crls {
         verifier = verifier
             .with_crls(crls.encoded())
             .enforce_revocation_expiration();
@@ -278,15 +278,15 @@ pub(crate) fn verify_peer_certificate_chain(
     let Some(end_entity) = certificates.first() else {
         return Ok(false);
     };
-    let material = state.tls.current();
+    let material = state.tls_context().federation_snapshot();
     let algorithms = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
         .signature_verification_algorithms;
-    if let Some(crls) = &material.federation_crls {
+    if let Some(crls) = &material.crls {
         return Ok(crls
             .verify_client_chain(
                 end_entity,
                 &certificates[1..],
-                &material.federation_roots,
+                &material.roots,
                 UnixTime::now(),
                 algorithms.all,
             )
@@ -297,7 +297,7 @@ pub(crate) fn verify_peer_certificate_chain(
     Ok(end_entity
         .verify_for_usage(
             algorithms.all,
-            &material.federation_roots.roots,
+            &material.roots.roots,
             &certificates[1..],
             UnixTime::now(),
             webpki::KeyUsage::client_auth(),

@@ -1987,7 +1987,7 @@ pub struct AppState {
     abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
-    pub tls: std::sync::Arc<crate::tls::ReloadableTlsConfig>,
+    tls_context: crate::tls::TlsContext,
     /// Linearization gate for the federation kill switch. Application
     /// stanza writes hold a read guard only across the socket write; island
     /// mode transitions take the exclusive guard.
@@ -2075,6 +2075,10 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
+    pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
+        &self.tls_context
+    }
+
     pub(crate) fn metrics_snapshot_service(
         &self,
     ) -> &crate::services::metrics_snapshot::MetricsSnapshotService<
@@ -3310,7 +3314,7 @@ impl AppState {
             abuse_key_deployment,
             started_at,
             process_started_at,
-            tls,
+            tls_context: crate::tls::TlsContext::new(tls),
             federation_write_policy,
             registration_closed,
             federation_runtime_policy: arc_swap::ArcSwap::from_pointee(RuntimeFederationPolicy {

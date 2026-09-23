@@ -782,7 +782,7 @@ impl ProtocolSession {
     }
 
     fn external_certificate_session(&self) -> Result<crate::tls::CertificateSessionGuard> {
-        self.state.tls.register_certificate_session(
+        self.state.tls_context().register_certificate_session(
             self.connection_id,
             crate::tls::CertificateSessionKind::C2s,
             self.client_certificate_chain.clone(),

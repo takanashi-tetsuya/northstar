@@ -102,8 +102,8 @@ pub async fn serve_tcp(
                     .metrics
                     .tcp_connections_total
                     .fetch_add(1, Ordering::Relaxed);
-                let material = state.tls.current();
-                let tls = TlsAcceptor::from(material.c2s_starttls.clone());
+                let material = state.tls_context().c2s_snapshot(false);
+                let tls = TlsAcceptor::from(material.server_config.clone());
                 if let Err(error) = tcp_connection(
                     stream,
                     peer,
@@ -156,8 +156,8 @@ pub async fn serve_xmpps_tcp(
                     .metrics
                     .tcp_connections_total
                     .fetch_add(1, Ordering::Relaxed);
-                let material = state.tls.current();
-                let tls = TlsAcceptor::from(material.c2s_direct.clone());
+                let material = state.tls_context().c2s_snapshot(true);
+                let tls = TlsAcceptor::from(material.server_config.clone());
                 if let Err(error) = xmpps_tcp_connection(
                     stream,
                     peer,

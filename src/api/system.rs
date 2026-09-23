@@ -400,10 +400,8 @@ async fn collect_metrics(state: &AppState) -> String {
             None
         }
     };
-    let tls_material = state.tls.current();
-    let tls_not_after = tls_material.leaf_not_after_unix;
-    let tls_generation = tls_material.generation;
-    let certificate_sessions = state.tls.certificate_session_metrics();
+    let (tls_not_after, tls_generation) = state.tls_context().leaf_status();
+    let certificate_sessions = state.tls_context().certificate_session_metrics();
     let now_unix = chrono::Utc::now().timestamp();
     let tls_seconds_remaining = tls_not_after.saturating_sub(now_unix).max(0);
     let cluster = state.cluster.metrics_snapshot();

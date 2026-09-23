@@ -788,8 +788,8 @@ async fn modern_connection(
         &XmlElement::namespaced("proceed", "urn:ietf:params:xml:ns:xmpp-tls").finish(),
     )
     .await?;
-    let material = state.tls.current();
-    let acceptor = TlsAcceptor::from(material.c2s_starttls.clone());
+    let material = state.tls_context().c2s_snapshot(false);
+    let acceptor = TlsAcceptor::from(material.server_config.clone());
     let mut secure = tokio::time::timeout(
         Duration::from_secs(state.config.component_handshake_timeout_seconds),
         acceptor.accept(stream),

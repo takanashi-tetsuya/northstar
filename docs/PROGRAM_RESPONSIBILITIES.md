@@ -154,7 +154,7 @@ closes the listener and joins/aborts every accepted connection.
 ### Reviewed public `AppState` capabilities
 
 The architecture gate now checks the names, not only the count. Replacing one
-field with a different public capability fails CI even if the total stays nine.
+field with a different public capability fails CI even if the total stays eight.
 
 | Public field | Why it remains public | Target direction |
 | --- | --- | --- |
@@ -166,11 +166,13 @@ field with a different public capability fails CI even if the total stays nine.
 | `metrics` | fixed-cardinality counters are updated across hot paths | pass narrow metric handles or event sinks |
 | `federation` | authenticated domain routing and durable outbox coordination | separate connection routing from durable federation admission |
 | `abuse` | pre-pool admission and action policy spans multiple ingress paths | expose action-specific admission ports |
-| `tls` | listeners and reload control need the current certificate set | provide listener snapshot and reload-admin ports |
 
 Private `AppState` fields include database keyrings, FAST/Dialback material,
 stores, component credentials, service objects and worker registry. Protocol
 handlers access them through purpose-specific methods rather than field access.
+TLS is held in a private context. C2S and S2S handshakes receive one immutable
+configuration snapshot; certificate-session registration checks the current
+revocation state, and the operation worker retains the existing atomic reload.
 
 ## Runtime process topology and failure ownership
 
@@ -440,6 +442,7 @@ copy that coupling.
 | `PublicDiscoveryContext` | public configuration and host metadata | startup policy with live registration and island-mode flags | database access, session maps and administrator secrets |
 | `HttpTransportPolicy` / `AdminGatewayVerifier` | trusted-proxy transport admission and administrator gateway authentication | rejection counter and exact gateway credential comparison | general application state or passing the gateway credential to handlers |
 | `metrics_snapshot_service()` | coherent database-backed `/metrics` gauges | one read-only repeatable-read transaction in its repository | rendering HTTP, opening a second pool connection or publishing partial gauges after failure |
+| `tls_context()` | serving/federation TLS snapshots, certificate-session registration and reload | one shared reload manager, activation lock and certificate-session registry | exposing the full mutable TLS manager or mixing handshake generations |
 | `omemo_recovery_service()` | one-time device-state transfer lifecycle and authorized recovery reads | complete preparation, sealing, consumption and revocation transactions | HTTP database access; public completion polling uses a separate service and admission context |
 | `authentication_service()` | SCRAM/SASL2/FAST credential-family selection, account status and authentication-generation checks | authentication repository calls and token lifecycle | stream framing, TLS establishment and resource binding |
 | `passkey_service()` | WebAuthn ceremonies, credential generations and session-bound registration/removal | injected repository; credential revision acceptance, FAST issuance and API-session creation share one commit | HTTP headers, raw pools, SQLx transactions and global application state |
@@ -758,7 +761,7 @@ Use these rules before adding a module, dependency or public field:
 
 Every public feature also updates the smallest applicable set of tests,
 metrics, logs, README/operations, OpenAPI and `XEP_MATRIX.md`. The current
-exception classes—nine public `AppState` capabilities, direct REST persistence
+exception classes—eight public `AppState` capabilities, direct REST persistence
 and embedded service/runtime repository work—must decrease over time and may
 not be copied into new work.
 
@@ -766,7 +769,7 @@ not be copied into new work.
 
 Remaining architecture work:
 
-1. The nine public `AppState` fields still form a broad same-process authority.
+1. The eight public `AppState` fields still form a broad same-process authority.
 2. Operation/background paths still hold `Arc<AppState>` where narrower ports
    would make transaction and failure ownership clearer.
 3. Some REST routes still own direct pool/transaction access instead of a

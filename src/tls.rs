@@ -1061,6 +1061,92 @@ impl TlsMaterial {
     }
 }
 
+/// TLS-only authority shared by serving, federation and the reload worker.
+/// Callers receive one immutable snapshot per handshake, never the mutable
+/// reload manager or unrelated application state.
+#[derive(Clone)]
+pub(crate) struct TlsContext {
+    reloadable: Arc<ReloadableTlsConfig>,
+}
+
+pub(crate) struct C2sTlsSnapshot {
+    pub server_config: Arc<ServerConfig>,
+    pub tls_server_end_point: Option<Vec<u8>>,
+    pub generation: u64,
+}
+
+pub(crate) struct FederationTlsSnapshot {
+    pub s2s_starttls: Arc<ServerConfig>,
+    pub s2s_direct: Arc<ServerConfig>,
+    pub s2s_client_starttls: Arc<ClientConfig>,
+    pub s2s_client_direct: Arc<ClientConfig>,
+    pub roots: Arc<RootCertStore>,
+    pub crls: Option<Arc<crate::crl::CrlSet>>,
+    pub generation: u64,
+}
+
+impl TlsContext {
+    pub(crate) fn new(reloadable: Arc<ReloadableTlsConfig>) -> Self {
+        Self { reloadable }
+    }
+
+    pub(crate) fn c2s_snapshot(&self, direct_tls: bool) -> C2sTlsSnapshot {
+        let material = self.reloadable.current();
+        C2sTlsSnapshot {
+            server_config: if direct_tls {
+                Arc::clone(&material.c2s_direct)
+            } else {
+                Arc::clone(&material.c2s_starttls)
+            },
+            tls_server_end_point: material.tls_server_end_point.clone(),
+            generation: material.generation,
+        }
+    }
+
+    pub(crate) fn federation_snapshot(&self) -> FederationTlsSnapshot {
+        let material = self.reloadable.current();
+        FederationTlsSnapshot {
+            s2s_starttls: Arc::clone(&material.s2s_starttls),
+            s2s_direct: Arc::clone(&material.s2s_direct),
+            s2s_client_starttls: Arc::clone(&material.s2s_client_starttls),
+            s2s_client_direct: Arc::clone(&material.s2s_client_direct),
+            roots: Arc::clone(&material.federation_roots),
+            crls: material.federation_crls.clone(),
+            generation: material.generation,
+        }
+    }
+
+    pub(crate) fn leaf_status(&self) -> (i64, u64) {
+        let material = self.reloadable.current();
+        (material.leaf_not_after_unix, material.generation)
+    }
+
+    pub(crate) fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
+        self.reloadable.certificate_session_metrics()
+    }
+
+    pub(crate) fn register_certificate_session(
+        &self,
+        connection_id: uuid::Uuid,
+        kind: CertificateSessionKind,
+        peer_chain: Vec<CertificateDer<'static>>,
+        handshake_tls_generation: u64,
+        disconnect: tokio_util::sync::CancellationToken,
+    ) -> Result<CertificateSessionGuard> {
+        self.reloadable.register_certificate_session(
+            connection_id,
+            kind,
+            peer_chain,
+            handshake_tls_generation,
+            disconnect,
+        )
+    }
+
+    pub(crate) fn reload(&self) -> Result<TlsReloadOutcome> {
+        self.reloadable.reload()
+    }
+}
+
 pub struct ReloadableTlsConfig {
     material: ArcSwap<TlsMaterial>,
     cert_path: PathBuf,
@@ -1621,6 +1707,23 @@ mod tests {
             ReloadableTlsConfig::new(&certificate, &key, "localhost", None, None, None, None)
                 .unwrap();
         let initial = reloadable.current();
+        let context = TlsContext::new(Arc::clone(&reloadable));
+        let c2s_snapshot = context.c2s_snapshot(false);
+        let federation_snapshot = context.federation_snapshot();
+        assert_eq!(c2s_snapshot.generation, initial.generation);
+        assert_eq!(federation_snapshot.generation, initial.generation);
+        assert!(Arc::ptr_eq(
+            &c2s_snapshot.server_config,
+            &initial.c2s_starttls
+        ));
+        assert!(Arc::ptr_eq(
+            &federation_snapshot.roots,
+            &initial.federation_roots
+        ));
+        assert_eq!(
+            context.leaf_status(),
+            (initial.leaf_not_after_unix, initial.generation)
+        );
         for config in [
             &initial.c2s_starttls,
             &initial.c2s_direct,
@@ -1669,8 +1772,13 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
         }
-        reloadable.reload().unwrap();
+        let reloaded = context.reload().unwrap();
         assert!(!Arc::ptr_eq(&initial, &reloadable.current()));
+        assert_eq!(context.c2s_snapshot(true).generation, reloaded.generation);
+        assert_eq!(
+            context.federation_snapshot().generation,
+            reloaded.generation
+        );
 
         fs::remove_dir_all(directory).unwrap();
     }

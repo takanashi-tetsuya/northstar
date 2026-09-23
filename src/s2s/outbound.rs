@@ -589,7 +589,7 @@ async fn authenticate_transport(
     }
 
     let certificate_session = if external {
-        Some(state.tls.register_certificate_session(
+        Some(state.tls_context().register_certificate_session(
             uuid::Uuid::new_v4(),
             crate::tls::CertificateSessionKind::OutboundS2s,
             peer_certificates,

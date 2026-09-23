@@ -459,7 +459,7 @@ async fn execute_effect(
 ) -> Result<Value> {
     match operation.kind.as_str() {
         "admin.tls_reload" => {
-            let tls = Arc::clone(&state.tls);
+            let tls = state.tls_context().clone();
             let outcome = match tokio::task::spawn_blocking(move || tls.reload()).await {
                 Ok(Ok(outcome)) => outcome,
                 Ok(Err(error)) => {

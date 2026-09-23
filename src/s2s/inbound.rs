@@ -996,7 +996,7 @@ async fn drive_authenticated_inbound(
     let connection_id = uuid::Uuid::new_v4();
     let disconnect = tokio_util::sync::CancellationToken::new();
     let certificate_session = if via_external {
-        Some(state.tls.register_certificate_session(
+        Some(state.tls_context().register_certificate_session(
             connection_id,
             crate::tls::CertificateSessionKind::InboundS2s,
             peer_certificates,

@@ -1780,7 +1780,7 @@ async fn federated_muc_presence_owned(
         false,
         true,
         created,
-        cluster_event_id.as_deref().or(request.stanza.id.as_deref()),
+        request.stanza.id.as_deref().or(cluster_event_id.as_deref()),
         true,
     );
     let _ = state

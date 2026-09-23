@@ -68,9 +68,9 @@ def run_test():
     
     # 1. Alice creates the room
     print(f"Alice creating room {room_jid}...")
-    alice.send(f"<presence to='{room_jid}/Alice'><x xmlns='http://jabber.org/protocol/muc'/></presence>")
-    reply, _ = alice.receive_until("code='110'")
-    check("affiliation='owner'" in reply, "Alice should be owner")
+    alice.send(f"<presence id='muc-phase7-owner-join' to='{room_jid}/Alice'><x xmlns='http://jabber.org/protocol/muc'/></presence>")
+    reply, _ = alice.receive_until("muc-phase7-owner-join")
+    check("code='110'" in reply and "affiliation='owner'" in reply, "Alice should receive the owner self-presence with her request ID")
     
     # Alice configures the room
     alice.send(
@@ -232,8 +232,9 @@ def run_test():
     
     print("Bob rejoins as visitor...")
     # Bob leaves and rejoins
-    bob.send(f"<presence to='{room_jid}/Bob' type='unavailable'/>")
-    bob.receive_until("type='unavailable'")
+    bob.send(f"<presence id='muc-phase7-bob-leave' to='{room_jid}/Bob' type='unavailable'/>")
+    bob_leave, _ = bob.receive_until("muc-phase7-bob-leave")
+    check("type='unavailable'" in bob_leave, "Bob should receive the leave self-presence with his request ID")
     alice.receive_until("type='unavailable'") # Alice sees Bob leave
     
     bob.send(f"<presence to='{room_jid}/Bob'><x xmlns='http://jabber.org/protocol/muc'/></presence>")

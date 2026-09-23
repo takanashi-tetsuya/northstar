@@ -4724,7 +4724,7 @@ impl ProtocolSession {
                 true,
                 true,
                 false,
-                clustered_event_id.as_deref().or(root.attribute("id")),
+                root.attribute("id").or(clustered_event_id.as_deref()),
                 true,
             );
             let globally_empty = if let Some(room_id) = clustered_room_id {
@@ -6029,7 +6029,7 @@ impl ProtocolSession {
             false,
             true,
             created,
-            cluster_event_id.as_deref().or(root.attribute("id")),
+            root.attribute("id").or(cluster_event_id.as_deref()),
             true,
         );
         if room.logging_enabled {

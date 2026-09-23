@@ -34,10 +34,10 @@ fn hosted_s2s_domain(state: &AppState, target: &str) -> bool {
         return false;
     };
     [
-        state.config.domain.clone(),
-        format!("pubsub.{}", state.config.domain),
-        format!("conference.{}", state.config.domain),
-        format!("mix.{}", state.config.domain),
+        state.local_domain().to_owned(),
+        format!("pubsub.{}", state.local_domain()),
+        format!("conference.{}", state.local_domain()),
+        format!("mix.{}", state.local_domain()),
     ]
     .into_iter()
     .filter_map(|domain| prepare_domainpart(&domain).ok())
@@ -405,16 +405,16 @@ pub(crate) async fn inbound_xmpps_connection(
 
     let mut input = S2sInputState::default();
 
-    let Some(opening) = read_s2s_opening(&mut secure, &state.config.domain, &mut input).await?
+    let Some(opening) = read_s2s_opening(&mut secure, state.local_domain(), &mut input).await?
     else {
         return Ok(());
     };
     let asserted_domain = opening.from;
     let target = opening.to;
-    if locally_hosted_identity_domain(&state.config.domain, &asserted_domain) {
+    if locally_hosted_identity_domain(state.local_domain(), &asserted_domain) {
         send_initial_stream_error(
             &mut secure,
-            &state.config.domain,
+            state.local_domain(),
             Some(&asserted_domain),
             "invalid-from",
         )
@@ -424,7 +424,7 @@ pub(crate) async fn inbound_xmpps_connection(
     if !crate::tls::direct_tls_sni_matches(direct_tls_sni.as_deref(), &target) {
         send_initial_stream_error(
             &mut secure,
-            &state.config.domain,
+            state.local_domain(),
             Some(&asserted_domain),
             "host-unknown",
         )
@@ -437,7 +437,7 @@ pub(crate) async fn inbound_xmpps_connection(
     {
         send_initial_stream_error(
             &mut secure,
-            &state.config.domain,
+            state.local_domain(),
             Some(&asserted_domain),
             "host-unknown",
         )
@@ -488,16 +488,16 @@ pub(crate) async fn inbound_connection(
 ) -> Result<()> {
     stream.set_nodelay(true)?;
     let mut input = S2sInputState::default();
-    let Some(opening) = read_s2s_opening(&mut stream, &state.config.domain, &mut input).await?
+    let Some(opening) = read_s2s_opening(&mut stream, state.local_domain(), &mut input).await?
     else {
         return Ok(());
     };
     let claimed_domain = opening.from;
     let target = opening.to;
-    if locally_hosted_identity_domain(&state.config.domain, &claimed_domain) {
+    if locally_hosted_identity_domain(state.local_domain(), &claimed_domain) {
         send_initial_stream_error(
             &mut stream,
-            &state.config.domain,
+            state.local_domain(),
             Some(&claimed_domain),
             "invalid-from",
         )
@@ -510,7 +510,7 @@ pub(crate) async fn inbound_connection(
     {
         send_initial_stream_error(
             &mut stream,
-            &state.config.domain,
+            state.local_domain(),
             Some(&claimed_domain),
             "host-unknown",
         )
@@ -553,16 +553,16 @@ pub(crate) async fn inbound_connection(
     // TLS to be discarded.  This includes an incomplete UTF-8 prefix and the
     // pre-TLS asserted domain; only the fresh encrypted stream is authoritative.
     input.reset_entity();
-    let Some(opening) = read_s2s_opening(&mut secure, &state.config.domain, &mut input).await?
+    let Some(opening) = read_s2s_opening(&mut secure, state.local_domain(), &mut input).await?
     else {
         return Ok(());
     };
     let asserted_domain = opening.from;
     let target = opening.to;
-    if locally_hosted_identity_domain(&state.config.domain, &asserted_domain) {
+    if locally_hosted_identity_domain(state.local_domain(), &asserted_domain) {
         send_initial_stream_error(
             &mut secure,
-            &state.config.domain,
+            state.local_domain(),
             Some(&asserted_domain),
             "invalid-from",
         )
@@ -576,7 +576,7 @@ pub(crate) async fn inbound_connection(
     {
         send_initial_stream_error(
             &mut secure,
-            &state.config.domain,
+            state.local_domain(),
             Some(&asserted_domain),
             "host-unknown",
         )
@@ -1534,7 +1534,7 @@ async fn route_inbound_mix(
         ))));
     }
     let target_is_mix = CanonicalJid::parse(to).is_ok_and(|jid| {
-        same_s2s_domain(jid.domainpart(), &format!("mix.{}", state.config.domain))
+        same_s2s_domain(jid.domainpart(), &format!("mix.{}", state.local_domain()))
     });
     let source_is_mix = prepare_domainpart(authenticated_domain).is_ok_and(|domain| {
         domain.strip_prefix("mix.").is_some()
@@ -1653,7 +1653,7 @@ async fn route_inbound_scoped(
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }
     let to_is_muc_service =
-        same_s2s_domain(to_domain, &format!("conference.{}", state.config.domain));
+        same_s2s_domain(to_domain, &format!("conference.{}", state.local_domain()));
     if to_is_muc_service {
         if !from_is_authenticated {
             return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
@@ -1702,7 +1702,7 @@ async fn route_inbound_scoped(
     }
     let to_is_upload_service = to_jid.localpart().is_none()
         && to_jid.resourcepart().is_none()
-        && same_s2s_domain(to_domain, &format!("upload.{}", state.config.domain));
+        && same_s2s_domain(to_domain, &format!("upload.{}", state.local_domain()));
     if matches!(authority, InboundRouteAuthority::Component { .. }) && to_is_upload_service {
         // Upload reservations are owned and quota-accounted by a local user
         // row. An external component domain is authenticated, but is not a
@@ -1724,10 +1724,10 @@ async fn route_inbound_scoped(
             )))
         };
     }
-    let to_is_local_domain = same_s2s_domain(to_domain, &state.config.domain);
+    let to_is_local_domain = same_s2s_domain(to_domain, state.local_domain());
     let to_is_pubsub_service = matches!(root.tag_name().name(), "iq" | "message")
         && to_jid.localpart().is_none()
-        && same_s2s_domain(to_domain, &format!("pubsub.{}", state.config.domain));
+        && same_s2s_domain(to_domain, &format!("pubsub.{}", state.local_domain()));
     if !from_is_authenticated || (!to_is_local_domain && !to_is_pubsub_service) {
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }
@@ -1757,7 +1757,7 @@ async fn route_inbound_scoped(
 }
 
 fn component_local_target(state: &AppState, domain: &str) -> bool {
-    locally_hosted_identity_domain(&state.config.domain, domain)
+    locally_hosted_identity_domain(state.local_domain(), domain)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1847,7 +1847,7 @@ pub(crate) async fn route_inbound_presence(
     else {
         return Ok(None);
     };
-    let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
+    let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
     let kind = root.attribute("type").unwrap_or("available");
     // Multiple authenticated streams for one remote domain can concurrently
     // carry presence for the same full JID. Choose one server-side order and
@@ -1894,7 +1894,7 @@ pub(crate) async fn route_inbound_presence(
         .transpose()
         .context("validated federated sender became malformed")?
         .map(|jid| jid.bare());
-    let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
+    let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
     let canonical_subscription = subscription_from
         .as_deref()
         .map(|contact| canonical_subscription_stanza(raw, contact, to));
@@ -1922,7 +1922,7 @@ pub(crate) async fn route_inbound_presence(
         let persisted = canonical_subscription.as_deref().expect("guarded above");
         let transition = match state
             .presence_service()
-            .transition_inbound(recipient.id, &state.config.domain, contact, kind, persisted)
+            .transition_inbound(recipient.id, state.local_domain(), contact, kind, persisted)
             .await?
         {
             crate::services::presence::PresenceMutation::Transition(transition) => transition,
@@ -1937,7 +1937,7 @@ pub(crate) async fn route_inbound_presence(
             }
         };
         let recipient = transition.recipient.clone();
-        let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
+        let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
 
         // Subscription notifications precede the corresponding roster push
         // (RFC 6121 sections 3.2/3.3). Incoming subscribe requests are sent to
@@ -2129,7 +2129,7 @@ async fn route_inbound_presence_probe(
     recipient: &crate::services::presence::PresenceAccount,
 ) -> Result<Option<String>> {
     let requester_bare = crate::jid::canonical_bare_key(requester)?;
-    let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
+    let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
     let roster_authorized = state
         .s2s_roster_authorization_service()
         .allows_presence(recipient.id, &requester_bare)
@@ -2303,7 +2303,7 @@ pub(crate) async fn route_inbound_iq(
         None => None,
     };
     if let Some(recipient) = recipient.as_ref() {
-        let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
+        let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
         if state
             .presence_service()
             .is_blocked_for_account(recipient.id, &recipient_bare, from)
@@ -2486,7 +2486,7 @@ pub(crate) async fn route_inbound_iq(
     if to_jid.localpart().is_none()
         && same_s2s_domain(
             to_jid.domainpart(),
-            &format!("pubsub.{}", state.config.domain),
+            &format!("pubsub.{}", state.local_domain()),
         )
     {
         let reply =
@@ -2585,7 +2585,7 @@ pub(crate) async fn route_inbound_iq(
             if !crate::xmpp::protocol::pep::pep_access_allowed(
                 state.pubsub_service(),
                 &owner,
-                &state.config.domain,
+                state.local_domain(),
                 node,
                 from,
             )
@@ -2798,7 +2798,7 @@ pub(crate) async fn route_inbound_iq(
             if to_jid.localpart().is_none()
                 && same_s2s_domain(
                     to_jid.domainpart(),
-                    &format!("pubsub.{}", state.config.domain),
+                    &format!("pubsub.{}", state.local_domain()),
                 )
             {
                 let reply = crate::xmpp::protocol::pubsub::federated_disco_info(
@@ -2864,7 +2864,7 @@ pub(crate) async fn route_inbound_iq(
             if to_jid.localpart().is_none()
                 && same_s2s_domain(
                     to_jid.domainpart(),
-                    &format!("pubsub.{}", state.config.domain),
+                    &format!("pubsub.{}", state.local_domain()),
                 ) =>
         {
             let reply =
@@ -3013,7 +3013,7 @@ pub(crate) async fn route_inbound_message(
     };
     let recipient = match state
         .message_service()
-        .resolve_local_recipient(recipient_name, &state.config.domain, from)
+        .resolve_local_recipient(recipient_name, state.local_domain(), from)
         .await?
     {
         LocalRecipientDecision::Missing => {
@@ -3032,7 +3032,7 @@ pub(crate) async fn route_inbound_message(
         }
         LocalRecipientDecision::Deliver(recipient) => recipient,
     };
-    let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
+    let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
     let message_type = root.attribute("type").unwrap_or("normal");
     if personal_retraction && !matches!(message_type, "normal" | "chat") {
         return Ok(inbound_message_error(root, "modify", "bad-request"));
@@ -3100,10 +3100,10 @@ pub(crate) async fn route_inbound_message(
         }
     }
     let stable_id = uuid::Uuid::new_v4();
-    let recipient_by = format!("{}@{}", recipient.username, state.config.domain);
+    let recipient_by = format!("{}@{}", recipient.username, state.local_domain());
     let authoritative_raw = strip_stanza_ids_by_domain(
         &strip_untrusted_direct_delays(raw, Some(authenticated_domain)),
-        &state.config.domain,
+        state.local_domain(),
     );
     let annotated = add_stanza_id(&authoritative_raw, &recipient_by, stable_id);
     let encrypted = is_encrypted(root);
@@ -3175,7 +3175,7 @@ pub(crate) async fn route_inbound_message(
                         payload: &authoritative_raw,
                     },
                 );
-        let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(&state.config.domain));
+        let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(state.local_domain()));
         let delivery = ValidatedPersonalMessage {
             local_actor_id: None,
             identity,
@@ -3263,7 +3263,7 @@ pub(crate) async fn route_inbound_message(
             })
             .into_iter()
             .collect::<Vec<_>>();
-        let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(&state.config.domain));
+        let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(state.local_domain()));
         let delivery = DeliveryProjection {
             id: stable_id,
             recipient_id: recipient.id,
@@ -3576,7 +3576,7 @@ pub(crate) async fn route_inbound_message(
         )
         && durable_content_allowed
     {
-        let delayed = add_delay_from(&archive, chrono::Utc::now(), Some(&state.config.domain));
+        let delayed = add_delay_from(&archive, chrono::Utc::now(), Some(state.local_domain()));
         let offline_outcome = state
             .message_service()
             .store_offline(OfflineMessageAdmission {

@@ -1870,6 +1870,134 @@ type PasskeyService =
 type RosterService = crate::services::roster::RosterService<db::roster::PostgresRosterRepository>;
 type UploadService = crate::services::upload::UploadService<db::upload::PostgresUploadRepository>;
 
+/// A detached view of a local route for PostgreSQL credential maintenance.
+/// Pending bind and resume routes are included so they can be cancelled before
+/// their final activation check; no map guard survives the database read.
+pub(crate) struct LocalSessionAuthoritySnapshot {
+    pub(crate) full_jid: String,
+    pub(crate) authority: crate::services::session_authority_sweep::SessionAuthoritySnapshot,
+    pub(crate) disconnect: CancellationToken,
+}
+
+/// Captured only after instance authority is refreshed, immediately before
+/// Redis route leases are renewed. This is deliberately a second snapshot.
+pub(crate) struct LocalSessionLeaseSnapshot {
+    pub(crate) full_jid: String,
+    pub(crate) activity_age_seconds: u64,
+    pub(crate) connection_id: uuid::Uuid,
+    pub(crate) disconnect: CancellationToken,
+}
+
+fn local_session_authority_snapshots_in(
+    sessions: &DashMap<String, OnlineSession>,
+) -> Vec<LocalSessionAuthoritySnapshot> {
+    sessions
+        .iter()
+        .map(|entry| LocalSessionAuthoritySnapshot {
+            full_jid: entry.key().clone(),
+            authority: crate::services::session_authority_sweep::SessionAuthoritySnapshot {
+                user_id: entry.user_id,
+                auth_generation: entry.auth_generation,
+                device_id: entry.user_agent_id,
+                device_epoch: entry.user_agent_epoch,
+            },
+            disconnect: entry.disconnect.clone(),
+        })
+        .collect()
+}
+
+fn local_session_lease_snapshots_in(
+    sessions: &DashMap<String, OnlineSession>,
+) -> Vec<LocalSessionLeaseSnapshot> {
+    sessions
+        .iter()
+        .map(|entry| {
+            let activity_age_seconds = entry
+                .last_activity
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .elapsed()
+                .as_secs();
+            LocalSessionLeaseSnapshot {
+                full_jid: entry.key().clone(),
+                activity_age_seconds,
+                connection_id: entry.connection_id,
+                disconnect: entry.disconnect.clone(),
+            }
+        })
+        .collect()
+}
+
+enum LocalSessionFence {
+    Instance(uuid::Uuid),
+    Sm(uuid::Uuid),
+    Admin {
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        connection_id: uuid::Uuid,
+    },
+}
+
+fn fence_local_session_in(
+    sessions: &DashMap<String, OnlineSession>,
+    full_jid: &str,
+    fence: LocalSessionFence,
+) -> bool {
+    fence_local_session_if(sessions, full_jid, |session| match fence {
+        LocalSessionFence::Instance(connection_id) => {
+            !connection_id.is_nil() && session.connection_id == connection_id
+        }
+        LocalSessionFence::Sm(sm_session_id) => {
+            *session
+                .sm_session_id
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                == Some(sm_session_id)
+        }
+        LocalSessionFence::Admin {
+            user_id,
+            auth_generation,
+            connection_id,
+        } => {
+            session.user_id == user_id
+                && session.auth_generation == auth_generation
+                && session.connection_id == connection_id
+        }
+    })
+}
+
+fn fence_local_session_if(
+    sessions: &DashMap<String, OnlineSession>,
+    full_jid: &str,
+    matches: impl FnOnce(&OnlineSession) -> bool,
+) -> bool {
+    let Some(session) = sessions.get_mut(full_jid) else {
+        return false;
+    };
+    if !matches(&session) {
+        return false;
+    }
+    // Serialize the fence with two-phase route activation and revocation.
+    session.routable.store(false, Ordering::Release);
+    session.disconnect.cancel();
+    true
+}
+
+fn cancel_local_session_if_connection_in(
+    sessions: &DashMap<String, OnlineSession>,
+    full_jid: &str,
+    connection_id: uuid::Uuid,
+) -> bool {
+    let Some(session) = sessions.get(full_jid) else {
+        return false;
+    };
+    if session.connection_id != connection_id {
+        return false;
+    }
+    session.disconnect.cancel();
+    true
+}
+
 /// The revocation worker can only fence local routes. It cannot admit,
 /// replace, remove, or deliver through a session.
 #[derive(Clone)]
@@ -2009,6 +2137,142 @@ mod account_revocation_route_tests {
         assert!(sessions.iter().all(|entry| {
             !entry.routable.load(Ordering::Acquire) && entry.disconnect.is_cancelled()
         }));
+    }
+
+    #[test]
+    fn maintenance_snapshots_include_pending_routes_and_do_not_follow_replacements() {
+        let sessions = DashMap::new();
+        let key = "alice@example.test/phone";
+        let user_id = uuid::Uuid::new_v4();
+        let device_id = uuid::Uuid::new_v4();
+        let mut old = session(user_id, 4, false);
+        old.user_agent_id = Some(device_id);
+        old.user_agent_epoch = Some(2);
+        let old_connection_id = old.connection_id;
+        sessions.insert(key.into(), old);
+
+        let authority = local_session_authority_snapshots_in(&sessions);
+        assert_eq!(authority.len(), 1);
+        assert_eq!(authority[0].full_jid, key);
+        assert_eq!(authority[0].authority.user_id, user_id);
+        assert_eq!(authority[0].authority.auth_generation, 4);
+        assert_eq!(authority[0].authority.device_id, Some(device_id));
+        assert_eq!(authority[0].authority.device_epoch, Some(2));
+
+        let replacement = session(user_id, 5, true);
+        let replacement_connection_id = replacement.connection_id;
+        sessions.insert(key.into(), replacement);
+        let lease = local_session_lease_snapshots_in(&sessions);
+        assert_eq!(lease.len(), 1);
+        assert_eq!(lease[0].connection_id, replacement_connection_id);
+        assert_ne!(lease[0].connection_id, old_connection_id);
+        authority[0].disconnect.cancel();
+        assert!(!sessions.get(key).unwrap().disconnect.is_cancelled());
+    }
+
+    #[test]
+    fn instance_and_occupancy_controls_cannot_cancel_rebound_routes() {
+        let sessions = DashMap::new();
+        let key = "alice@example.test/phone";
+        let owner = uuid::Uuid::new_v4();
+        let old = session(owner, 4, false);
+        let old_connection_id = old.connection_id;
+        sessions.insert(key.into(), old);
+
+        assert!(!fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Instance(uuid::Uuid::nil()),
+        ));
+        assert!(!fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Instance(uuid::Uuid::new_v4()),
+        ));
+        assert!(!sessions.get(key).unwrap().disconnect.is_cancelled());
+        assert!(fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Instance(old_connection_id),
+        ));
+        assert!(sessions.get(key).unwrap().disconnect.is_cancelled());
+
+        let rebound = session(owner, 5, true);
+        sessions.insert(key.into(), rebound);
+        assert!(!fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Instance(old_connection_id),
+        ));
+        assert!(!cancel_local_session_if_connection_in(
+            &sessions,
+            key,
+            old_connection_id,
+        ));
+        let current = sessions.get(key).unwrap();
+        assert!(current.routable.load(Ordering::Acquire));
+        assert!(!current.disconnect.is_cancelled());
+    }
+
+    #[test]
+    fn sm_and_admin_controls_require_exact_route_identity() {
+        let sessions = DashMap::new();
+        let key = "alice@example.test/phone";
+        let owner = uuid::Uuid::new_v4();
+        let sm_session_id = uuid::Uuid::new_v4();
+        let live = session(owner, 4, true);
+        let connection_id = live.connection_id;
+        *live.sm_session_id.write().unwrap() = Some(sm_session_id);
+        sessions.insert(key.into(), live);
+
+        assert!(!fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Sm(uuid::Uuid::new_v4()),
+        ));
+        for (user_id, generation, connection) in [
+            (uuid::Uuid::new_v4(), 4, connection_id),
+            (owner, 5, connection_id),
+            (owner, 4, uuid::Uuid::new_v4()),
+        ] {
+            assert!(!fence_local_session_in(
+                &sessions,
+                key,
+                LocalSessionFence::Admin {
+                    user_id,
+                    auth_generation: generation,
+                    connection_id: connection,
+                },
+            ));
+        }
+        assert!(sessions.get(key).unwrap().routable.load(Ordering::Acquire));
+        assert!(!sessions.get(key).unwrap().disconnect.is_cancelled());
+        assert!(fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Admin {
+                user_id: owner,
+                auth_generation: 4,
+                connection_id,
+            },
+        ));
+        assert!(!sessions.get(key).unwrap().routable.load(Ordering::Acquire));
+
+        let rebound = session(owner, 5, true);
+        sessions.insert(key.into(), rebound);
+        assert!(!fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Sm(sm_session_id),
+        ));
+        assert!(!sessions.get(key).unwrap().disconnect.is_cancelled());
+        *sessions.get(key).unwrap().sm_session_id.write().unwrap() = Some(sm_session_id);
+        assert!(fence_local_session_in(
+            &sessions,
+            key,
+            LocalSessionFence::Sm(sm_session_id),
+        ));
+        assert!(!sessions.get(key).unwrap().routable.load(Ordering::Acquire));
     }
 }
 
@@ -2485,6 +2749,11 @@ impl AppState {
 
     pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
         &self.tls_context
+    }
+
+    /// Validated local identity for protocol routing without exposing Config.
+    pub(crate) fn local_domain(&self) -> &str {
+        &self.config.domain
     }
 
     pub(crate) fn metrics_context(&self) -> MetricsContext {
@@ -4064,6 +4333,7 @@ impl AppState {
             crate::services::message_admission::MessageAdmissionService::new(
                 db::message_admission_repository::PostgresMessageAdmissionRepository::new(
                     Arc::clone(&abuse),
+                    pool.clone(),
                 ),
             );
         let account_revocation_consumer_service =
@@ -5133,6 +5403,63 @@ impl AppState {
 
     pub fn service_control_available(&self) -> bool {
         self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
+    }
+
+    pub(crate) fn local_session_authority_snapshots(&self) -> Vec<LocalSessionAuthoritySnapshot> {
+        local_session_authority_snapshots_in(&self.sessions)
+    }
+
+    pub(crate) fn local_session_lease_snapshots(&self) -> Vec<LocalSessionLeaseSnapshot> {
+        local_session_lease_snapshots_in(&self.sessions)
+    }
+
+    /// Cancel only the local route incarnation whose PostgreSQL MUC occupancy
+    /// has been found stale. A replacement under the same JID remains intact.
+    pub(crate) fn cancel_local_session_if_connection(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> bool {
+        cancel_local_session_if_connection_in(&self.sessions, full_jid, connection_id)
+    }
+
+    /// Called only after the durable cluster-instance authority check.
+    pub(crate) fn fence_local_session_instance(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> bool {
+        fence_local_session_in(
+            &self.sessions,
+            full_jid,
+            LocalSessionFence::Instance(connection_id),
+        )
+    }
+
+    pub(crate) fn fence_local_sm_session(&self, full_jid: &str, sm_session_id: uuid::Uuid) -> bool {
+        fence_local_session_in(
+            &self.sessions,
+            full_jid,
+            LocalSessionFence::Sm(sm_session_id),
+        )
+    }
+
+    pub(crate) fn fence_local_admin_session(
+        &self,
+        full_jid: &str,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        connection_id: uuid::Uuid,
+    ) -> bool {
+        fence_local_session_in(
+            &self.sessions,
+            full_jid,
+            LocalSessionFence::Admin {
+                user_id,
+                auth_generation,
+                connection_id,
+            },
+        )
     }
 
     pub fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {

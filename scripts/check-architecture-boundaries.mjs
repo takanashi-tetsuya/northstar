@@ -300,6 +300,10 @@ if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + read('src/cluster.rs'
     || !appState.includes('pool: PgPool,')) {
   throw new Error('process and cluster workers must use narrow state-owned database capabilities');
 }
+if (!state.includes('fn local_domain(&self) -> &str')
+    || /\bstate\.config\.domain\b/.test(read('src/s2s/inbound.rs'))) {
+  throw new Error('S2S ingress must receive only the validated local domain');
+}
 const clusterMessageResolver = structBody(read('src/cluster.rs'), 'async fn resolve_node_message_delivery<');
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
@@ -2654,6 +2658,35 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
 }
 
 const abuseSource = read('src/abuse.rs');
+const abuseProductionSource = abuseSource.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0];
+const messageAdmissionServiceSource = read('src/services/message_admission.rs');
+const messageAdmissionRepositorySource = read('src/db/message_admission_repository.rs');
+if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)
+    || !messageAdmissionServiceSource.includes('self.repository.accept(&lease.acceptance()).await')
+    || !messageAdmissionRepositorySource.includes('accept_message_admission(&self.pool, acceptance).await')) {
+  throw new Error('message admission acceptance must use the issued fence and repository transaction');
+}
+const admissionAcceptanceStart = messageAdmissionRepositorySource.indexOf('pub(crate) async fn accept_message_admission(');
+const admissionAcceptanceEnd = messageAdmissionRepositorySource.indexOf('\nimpl MessageAdmissionRepository', admissionAcceptanceStart);
+const admissionAcceptanceBody = messageAdmissionRepositorySource.slice(admissionAcceptanceStart, admissionAcceptanceEnd);
+const admissionAcceptanceSteps = [
+  'pool.begin().await?',
+  'pg_advisory_xact_lock',
+  'FOR UPDATE',
+  'ct_eq(acceptance.payload_mac())',
+  'row.get::<String, _>("state") == "accepted"',
+  'row.get::<Uuid, _>("lease_token") == acceptance.lease_token()',
+  "SET state='accepted'",
+  'tx.commit().await?',
+];
+let previousAdmissionStep = -1;
+for (const step of admissionAcceptanceSteps) {
+  const position = admissionAcceptanceBody.indexOf(step, previousAdmissionStep + 1);
+  if (position < 0) {
+    throw new Error(`message admission acceptance lost ordered fence step: ${step}`);
+  }
+  previousAdmissionStep = position;
+}
 for (const typeName of [
   'PersonalMessageContentKeyring',
   'PersonalRetractionContentKeyring',

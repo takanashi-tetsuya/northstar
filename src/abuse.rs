@@ -876,6 +876,38 @@ pub struct MessageAdmissionLease {
     pub(crate) offline_dedupe: MessageDedupeIdentity,
 }
 
+/// The exact admission fence handed to the database after message delivery.
+/// Only a lease issued by the guard can construct this view.
+pub(crate) struct MessageAdmissionAcceptance<'a> {
+    admission_key: &'a [u8],
+    payload_mac: &'a [u8],
+    lease_token: Uuid,
+}
+
+impl MessageAdmissionLease {
+    pub(crate) fn acceptance(&self) -> MessageAdmissionAcceptance<'_> {
+        MessageAdmissionAcceptance {
+            admission_key: &self.admission_key,
+            payload_mac: &self.payload_mac,
+            lease_token: self.lease_token,
+        }
+    }
+}
+
+impl MessageAdmissionAcceptance<'_> {
+    pub(crate) fn admission_key(&self) -> &[u8] {
+        self.admission_key
+    }
+
+    pub(crate) fn payload_mac(&self) -> &[u8] {
+        self.payload_mac
+    }
+
+    pub(crate) fn lease_token(&self) -> Uuid {
+        self.lease_token
+    }
+}
+
 #[derive(Debug)]
 pub enum MessageAdmissionStart {
     Proceed {
@@ -1937,62 +1969,6 @@ impl AbuseGuard {
             }),
             requirement,
         })
-    }
-
-    /// Fence and finalize a message admission after a durable outbox/offline
-    /// write or an online queue accepted the stanza. A failure here happens
-    /// after message acceptance and must be logged, never reflected as a
-    /// retryable stanza error to the sender.
-    pub async fn accept_message_admission(
-        &self,
-        lease: &MessageAdmissionLease,
-    ) -> anyhow::Result<()> {
-        let Some(pool) = self.pool.as_ref() else {
-            return Ok(());
-        };
-        let mut tx = pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(message_admission_lock_id(&lease.admission_key))
-            .execute(&mut *tx)
-            .await?;
-        let row = sqlx::query(
-            "SELECT payload_mac,state,lease_token FROM abuse_message_admissions
-             WHERE admission_key=$1 FOR UPDATE",
-        )
-        .bind(&lease.admission_key)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some(row) = row else {
-            anyhow::bail!("message admission disappeared before acceptance");
-        };
-        let stored_mac: Vec<u8> = row.get("payload_mac");
-        anyhow::ensure!(
-            bool::from(stored_mac.as_slice().ct_eq(lease.payload_mac.as_slice())),
-            "message admission payload changed before acceptance"
-        );
-        if row.get::<String, _>("state") == "accepted" {
-            tx.commit().await?;
-            return Ok(());
-        }
-        anyhow::ensure!(
-            row.get::<Uuid, _>("lease_token") == lease.lease_token,
-            "message admission fencing lease was lost before acceptance"
-        );
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
-        sqlx::query(
-            "UPDATE abuse_message_admissions
-             SET state='accepted',accepted_at=$2,updated_at=$2,expires_at=$3
-             WHERE admission_key=$1",
-        )
-        .bind(&lease.admission_key)
-        .bind(now)
-        .bind(now + chrono_duration(MESSAGE_ADMISSION_ACCEPTED_TTL))
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(())
     }
 
     /// Verify and advance a persistent anti-abuse step inside the caller's
@@ -5132,14 +5108,20 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(resumed_sequences, sequences);
-        assert!(restarted
-            .accept_message_admission(&first_lease)
+        assert!(
+            crate::db::message_admission_repository::accept_message_admission(
+                &pool,
+                &first_lease.acceptance(),
+            )
             .await
-            .is_err());
-        restarted
-            .accept_message_admission(&takeover_lease)
-            .await
-            .unwrap();
+            .is_err()
+        );
+        crate::db::message_admission_repository::accept_message_admission(
+            &pool,
+            &takeover_lease.acceptance(),
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             restarted
                 .begin_message_admission(&MessageAdmissionRequest {
@@ -5470,10 +5452,12 @@ mod tests {
             .unwrap(),
             crate::db::OfflineStoreOutcome::Replay
         );
-        rotated
-            .accept_message_admission(&rotation_lease)
-            .await
-            .unwrap();
+        crate::db::message_admission_repository::accept_message_admission(
+            &pool,
+            &rotation_lease.acceptance(),
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             restarted
                 .begin_message_admission(&rotation_request)

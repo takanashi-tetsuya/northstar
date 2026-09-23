@@ -1,7 +1,10 @@
 //! The only rated-message admission authority exposed to XMPP routing.
 //! Beginning consumes proof and reserves a durable lease before routing;
 //! accepting fences that lease only after a route has accepted the message.
-use crate::abuse::{MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart};
+use crate::abuse::{
+    MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
+    MessageAdmissionStart,
+};
 use anyhow::Result;
 
 pub(crate) trait MessageAdmissionRepository: Send + Sync {
@@ -12,7 +15,7 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
 
     fn accept(
         &self,
-        lease: &MessageAdmissionLease,
+        acceptance: &MessageAdmissionAcceptance<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
@@ -37,6 +40,6 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         &self,
         lease: &MessageAdmissionLease,
     ) -> Result<()> {
-        self.repository.accept(lease).await
+        self.repository.accept(&lease.acceptance()).await
     }
 }

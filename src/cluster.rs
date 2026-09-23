@@ -229,13 +229,6 @@ fn user_agent_control_revokes(
         && session_epoch.is_some_and(|epoch| epoch < minimum_epoch)
 }
 
-fn session_instance_control_revokes(
-    current_connection_id: uuid::Uuid,
-    expected_connection_id: uuid::Uuid,
-) -> bool {
-    !expected_connection_id.is_nil() && current_connection_id == expected_connection_id
-}
-
 fn delivery_user_identity_matches(
     expected_user_id: Option<uuid::Uuid>,
     expected_auth_generation: Option<i64>,
@@ -5487,55 +5480,39 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     // PostgreSQL is authoritative for credential generations.  One bounded
     // batch query provides a Redis-independent safety net for lost controls,
     // node restarts and rolling upgrades.
-    let snapshots: Vec<_> = state
-        .sessions
-        .iter()
-        .map(|entry| {
-            (
-                entry.key().clone(),
-                entry.user_id,
-                entry.auth_generation,
-                entry.user_agent_id,
-                entry.user_agent_epoch,
-                Arc::clone(&entry.last_activity),
-                entry.disconnect.clone(),
-            )
-        })
-        .collect();
+    let snapshots = state.local_session_authority_snapshots();
     let authority_snapshots = snapshots
         .iter()
-        .map(|(_, user_id, generation, device_id, epoch, _, _)| {
-            crate::services::session_authority_sweep::SessionAuthoritySnapshot {
-                user_id: *user_id,
-                auth_generation: *generation,
-                device_id: *device_id,
-                device_epoch: *epoch,
-            }
-        })
+        .map(|snapshot| snapshot.authority)
         .collect::<Vec<_>>();
     let stale_generations = state
         .session_authority_sweep_service()
         .stale_generations(&authority_snapshots)
         .await?;
-    for ((full_jid, user_id, generation, _, _, _, disconnect), stale) in
-        snapshots.iter().zip(stale_generations)
-    {
+    for (snapshot, stale) in snapshots.iter().zip(stale_generations) {
         if stale {
+            let full_jid = &snapshot.full_jid;
+            let user_id = snapshot.authority.user_id;
+            let generation = snapshot.authority.auth_generation;
             tracing::warn!(%full_jid, %user_id, auth_generation = generation, "disconnecting credential-stale live session");
-            disconnect.cancel();
+            snapshot.disconnect.cancel();
         }
     }
     let stale_device_epochs = state
         .session_authority_sweep_service()
         .stale_device_epochs(&authority_snapshots)
         .await?;
-    for ((full_jid, user_id, _, device_id, epoch, _, disconnect), stale) in
-        snapshots.iter().zip(stale_device_epochs)
-    {
-        if let Some((device_id, epoch)) = device_id.zip(*epoch) {
+    for (snapshot, stale) in snapshots.iter().zip(stale_device_epochs) {
+        if let Some((device_id, epoch)) = snapshot
+            .authority
+            .device_id
+            .zip(snapshot.authority.device_epoch)
+        {
             if stale {
+                let full_jid = &snapshot.full_jid;
+                let user_id = snapshot.authority.user_id;
                 tracing::warn!(%full_jid, %user_id, %device_id, epoch, "disconnecting replaced user-agent session");
-                disconnect.cancel();
+                snapshot.disconnect.cancel();
             }
         }
     }
@@ -5556,28 +5533,13 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
         .await?;
     let _redis_timer = state.metrics.redis_operation_duration_seconds.start_timer();
     state.cluster.touch_node().await?;
-    let sessions = state
-        .sessions
-        .iter()
-        .map(|entry| {
-            let age = entry
-                .last_activity
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .elapsed()
-                .as_secs();
-            (
-                entry.key().clone(),
-                age,
-                entry.connection_id,
-                entry.disconnect.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    for (full_jid, activity_age, connection_id, disconnect) in sessions {
+    let sessions = state.local_session_lease_snapshots();
+    for snapshot in sessions {
+        let full_jid = &snapshot.full_jid;
+        let connection_id = snapshot.connection_id;
         if !state
             .cluster
-            .refresh_session(&full_jid, activity_age, connection_id)
+            .refresh_session(full_jid, snapshot.activity_age_seconds, connection_id)
             .await?
         {
             // Redis compares both node and immutable connection UUID. If a
@@ -5585,7 +5547,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             // stream routable creates split brain. Disconnect it; its exact
             // UUID-guarded unregister/Drop cannot erase the replacement.
             tracing::warn!(%full_jid, %connection_id, "disconnecting local session that lost its Redis routing lease");
-            disconnect.cancel();
+            snapshot.disconnect.cancel();
         }
     }
     // PostgreSQL, not Redis, owns clustered MUC occupancy. Refresh the
@@ -5638,11 +5600,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
                     && current.connection_id == occupant.connection_id
                     && current.cluster_epoch == occupant.cluster_epoch
             });
-            if let Some(session) = state.sessions.get(&occupant.full_jid) {
-                if session.connection_id == occupant.connection_id {
-                    session.disconnect.cancel();
-                }
-            }
+            state.cancel_local_session_if_connection(&occupant.full_jid, occupant.connection_id);
             tracing::warn!(
                 room = %occupant.room_jid,
                 nick = %occupant.nick,
@@ -6915,15 +6873,7 @@ async fn listen_once(
                         control_outcome = Some(ClusterControlOutcome::WrongOwner);
                     }
                     crate::services::session_termination_authority::SessionTerminationAuthority::Authorized => {
-                        let matched = state.sessions.get_mut(&target).is_some_and(|session| {
-                            if session_instance_control_revokes(session.connection_id, instance) {
-                                session.routable.store(false, Ordering::Release);
-                                session.disconnect.cancel();
-                                true
-                            } else {
-                                false
-                            }
-                        });
+                        let matched = state.fence_local_session_instance(&target, instance);
                         control_processed = Some(matched);
                         control_outcome = Some(if matched {
                             delivered = 1;
@@ -6983,17 +6933,8 @@ async fn listen_once(
                 .and_then(|value| uuid::Uuid::parse_str(value).ok())
             {
                 if let Ok(target) = crate::jid::canonical_session_key(target) {
-                    if let Some(session) = state.sessions.get_mut(&target) {
-                        let matches = *session
-                            .sm_session_id
-                            .read()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            == Some(sm_session_id);
-                        if matches {
-                            session.routable.store(false, Ordering::Release);
-                            session.disconnect.cancel();
-                            delivered = 1;
-                        }
+                    if state.fence_local_sm_session(&target, sm_session_id) {
+                        delivered = 1;
                     }
                     control_processed = Some(true);
                 }
@@ -8331,24 +8272,6 @@ mod tests {
                 "room cleanup must not race a single missed node-heartbeat window"
             );
         }
-    }
-
-    #[test]
-    fn delayed_session_instance_termination_does_not_revoke_a_new_bind() {
-        let old_connection = uuid::Uuid::new_v4();
-        let rebound_connection = uuid::Uuid::new_v4();
-        assert!(session_instance_control_revokes(
-            old_connection,
-            old_connection
-        ));
-        assert!(!session_instance_control_revokes(
-            rebound_connection,
-            old_connection
-        ));
-        assert!(!session_instance_control_revokes(
-            rebound_connection,
-            uuid::Uuid::nil()
-        ));
     }
 
     pub(super) fn verification_manager(

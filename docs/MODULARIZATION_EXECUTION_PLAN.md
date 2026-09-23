@@ -499,6 +499,12 @@ command service while the signed-publication fence is held.
 Cluster message contracts now verify their C2S or MIX source through a
 repository port; volatile and identity-free legacy messages avoid database
 reads. The shared PostgreSQL pool is private to `AppState`.
+Message admission finalization now passes only the issued lease's acceptance
+fence to its repository. The repository owns the advisory lock, row lock,
+constant-time payload check and commit after delivery; the anti-abuse guard
+still owns the larger admission and challenge transactions.
+S2S ingress now reads the validated local domain through a narrow state method
+rather than the application configuration.
 Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before

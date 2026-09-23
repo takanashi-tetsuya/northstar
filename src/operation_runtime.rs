@@ -246,15 +246,12 @@ async fn execute_admin_session_cleanup(
             let connection_id = lease
                 .connection_id
                 .context("exact cleanup has no connection identity")?;
-            if let Some(session) = state.sessions.get_mut(&full_jid) {
-                if session.user_id == lease.user_id
-                    && session.auth_generation == lease.auth_generation
-                    && session.connection_id == connection_id
-                {
-                    session.routable.store(false, Ordering::Release);
-                    session.disconnect.cancel();
-                }
-            }
+            state.fence_local_admin_session(
+                &full_jid,
+                lease.user_id,
+                lease.auth_generation,
+                connection_id,
+            );
             state
                 .cluster
                 .send_session_instance_termination(&full_jid, connection_id)

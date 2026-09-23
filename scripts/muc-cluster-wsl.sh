@@ -57,7 +57,11 @@ require_literal "$project_dir/src/db/muc.rs" \
 require_literal "$project_dir/src/cluster.rs" \
   "executable MUC control rejected" "untrusted executable MUC control rejection"
 require_literal "$project_dir/src/cluster.rs" \
-  "cluster_muc_delivery_recipient_snapshot" "recipient snapshot authority"
+  "cluster_muc_delivery_read_service()" "recipient snapshot service boundary"
+require_literal "$project_dir/src/services/cluster_muc_delivery_read.rs" \
+  "self.repository.recipient_snapshot(delivery).await" "recipient snapshot repository delegation"
+require_literal "$project_dir/src/db/cluster_muc_delivery_read_repository.rs" \
+  "db::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await" "recipient snapshot authority"
 require_literal "$project_dir/src/db/cluster_muc.rs" \
   "mutate_cluster_muc_registration" "membership mutation authority"
 require_literal "$project_dir/src/db/cluster_muc.rs" \

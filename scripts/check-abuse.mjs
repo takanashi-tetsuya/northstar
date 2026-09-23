@@ -142,11 +142,28 @@ const httpRegistration = authRoutes.slice(
   authRoutes.indexOf('fn registration_rejection_body('),
 );
 assert.ok(
-  httpRegistration.indexOf('verify_or_allow_in_tx_v2(') >= 0
-    && httpRegistration.indexOf('verify_or_allow_in_tx_v2(')
+  httpRegistration.indexOf('.verify_registration_guard(') >= 0
+    && httpRegistration.indexOf('.verify_registration_guard(')
       < httpRegistration.indexOf('prepare_registration('),
   'HTTP registration must commit its proof marker before password derivation',
 );
+assert.doesNotMatch(
+  httpRegistration.slice(0, httpRegistration.indexOf('prepare_registration(')),
+  /verify_or_allow_in_tx_v2\(/,
+  'HTTP registration must not reclaim the pre-hash abuse transaction from its account service',
+);
+assert.match(accountService, /async fn verify_registration_guard\([\s\S]+self\.repository\.verify_registration_guard\(request\)\.await/,
+  'the account service must delegate registration guard authority through its repository port');
+const repositoryRegistrationGuard = accountRepository.slice(
+  accountRepository.indexOf('async fn verify_registration_guard('),
+  accountRepository.indexOf('async fn register('),
+);
+assert.match(repositoryRegistrationGuard,
+  /\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_fence_in_tx[\s\S]+verify_or_allow_in_tx_v2[\s\S]+mark_idempotency_guard_verified_fence_in_tx[\s\S]+transaction\.commit\(\)/,
+  'the repository must commit proof consumption and the guard marker together');
+assert.match(repositoryRegistrationGuard,
+  /DeniedNeedsCommit[\s\S]+abandon_idempotency_lease_fence_in_tx[\s\S]+transaction\.commit\(\)/,
+  'a registration denial must commit its penalty and abandon only the fenced lease');
 assert.match(httpRegistration, /yield_idempotency_lease/,
   'temporary password-worker overload must preserve the committed proof marker while fencing the old worker');
 assert.match(dbUsers, /change_password_guarded_v2[\s\S]+verify_or_allow_in_tx_v2[\s\S]+apply_password_credentials_in_tx/,

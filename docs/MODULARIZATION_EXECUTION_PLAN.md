@@ -377,6 +377,17 @@ negative privilege probes, and backup/restore rehearsal passed locally. All 30
 jobs in [CI run #320](https://github.com/takanashi-tetsuya/northstar/actions/runs/35906755288)
 passed for the storage-role fixture fix at `a49b846`.
 
+Stage 3 routes local and federated MUC administration through one ordered,
+bounded PostgreSQL batch. Its transaction checks actor and occupant generations,
+permissions and the final owner before writing every change with one immutable
+event and audience. Both standalone and clustered servers use PostgreSQL room
+authority; Redis remains a cross-node transport cache. Standalone occupancy
+renewal uses exact batches of at most 128 local actors and removes their local
+authority if a full verification cannot complete within the 90-second lease.
+Exact disconnect cleanup leaves the PostgreSQL occupancy without duplicating
+the committed outbox presence. Five isolated PostgreSQL fixtures and the
+standalone and two-node protocol suites passed locally.
+
 ### Transaction and authority map
 
 A repository operation represents a complete use case rather than one table.

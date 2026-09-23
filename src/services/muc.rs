@@ -27,6 +27,83 @@ use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
+/// One ordered item in an XEP-0045 administrative IQ. Target names have
+/// already been canonicalized by the protocol parser; the repository checks
+/// them again before taking any lock or applying any change.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) enum MucAdminBatchChange {
+    Affiliation {
+        target: MucAffiliationTarget,
+        affiliation: String,
+        reason: Option<String>,
+    },
+    Role {
+        target_nick: String,
+        role: String,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MucAdminBatchOutcome {
+    Applied,
+    Replay,
+    DuplicateTarget,
+    LastOwner,
+    MissingTarget,
+    Unauthorized,
+    Stale,
+    Destroyed,
+    Conflict,
+    TooManyProjections,
+}
+
+pub(crate) struct MucAdminBatchResult {
+    pub operation_id: Uuid,
+    pub outcome: MucAdminBatchOutcome,
+}
+
+pub(crate) const MAX_MUC_OCCUPANCY_RENEW_BATCH: usize = 128;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MucOccupancyLookup {
+    pub room_localpart: String,
+    pub full_jid: String,
+    pub nick: String,
+    pub occupant_incarnation: Uuid,
+    pub connection_uuid: Uuid,
+}
+
+impl MucOccupancyLookup {
+    pub(crate) fn new(
+        room_jid: &str,
+        full_jid: &str,
+        nick: &str,
+        occupant_incarnation: Uuid,
+        connection_uuid: Uuid,
+    ) -> Result<Self> {
+        let room = crate::jid::CanonicalJid::parse_bare(room_jid)?;
+        anyhow::ensure!(room.to_string() == room_jid, "noncanonical MUC room JID");
+        let room_localpart = room
+            .localpart()
+            .ok_or_else(|| anyhow::anyhow!("MUC room JID has no localpart"))?
+            .to_owned();
+        Ok(Self {
+            room_localpart,
+            full_jid: full_jid.to_owned(),
+            nick: nick.to_owned(),
+            occupant_incarnation,
+            connection_uuid,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MucResolvedOccupancy {
+    pub room_localpart: String,
+    pub target: ClusterMucOccupancyTarget,
+}
+
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
@@ -40,12 +117,25 @@ pub(crate) trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
         node_id: &str,
     ) -> impl std::future::Future<Output = Result<Vec<ClusterMucOccupancyTarget>>> + Send;
 
+    fn resolve_exact_batch(
+        &self,
+        candidates: &[MucOccupancyLookup],
+        owner_node_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<MucResolvedOccupancy>>> + Send;
+
     fn renew_exact(
         &self,
         target: &ClusterMucOccupancyTarget,
         owner_node_id: &str,
         lease: Duration,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
+
+    fn renew_exact_batch(
+        &self,
+        targets: &[ClusterMucOccupancyTarget],
+        owner_node_id: &str,
+        lease: Duration,
+    ) -> impl std::future::Future<Output = Result<Vec<ClusterMucOccupancyTarget>>> + Send;
 }
 
 pub(crate) struct ClusterMucOccupancyMaintenanceService<R> {
@@ -64,6 +154,50 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
         self.repository.authoritative_for_node(node_id).await
     }
 
+    pub(crate) async fn resolve_exact_batch(
+        &self,
+        candidates: &[MucOccupancyLookup],
+        owner_node_id: &str,
+    ) -> Result<Vec<MucResolvedOccupancy>> {
+        anyhow::ensure!(
+            candidates.len() <= MAX_MUC_OCCUPANCY_RENEW_BATCH,
+            "MUC occupancy lookup batch exceeds its limit"
+        );
+        let mut requested = std::collections::HashSet::with_capacity(candidates.len());
+        anyhow::ensure!(
+            candidates.iter().all(|candidate| {
+                requested.insert((
+                    candidate.room_localpart.as_str(),
+                    candidate.occupant_incarnation,
+                    candidate.connection_uuid,
+                ))
+            }),
+            "MUC occupancy lookup batch contains a duplicate incarnation"
+        );
+        let resolved = self
+            .repository
+            .resolve_exact_batch(candidates, owner_node_id)
+            .await?;
+        let mut returned = std::collections::HashSet::with_capacity(resolved.len());
+        anyhow::ensure!(
+            resolved.iter().all(|item| {
+                returned.insert((
+                    item.room_localpart.as_str(),
+                    item.target.occupant_incarnation,
+                    item.target.connection_uuid,
+                )) && candidates.iter().any(|candidate| {
+                    candidate.room_localpart == item.room_localpart
+                        && candidate.full_jid == item.target.full_jid
+                        && candidate.nick == item.target.nick
+                        && candidate.occupant_incarnation == item.target.occupant_incarnation
+                        && candidate.connection_uuid == item.target.connection_uuid
+                })
+            }),
+            "MUC occupancy lookup returned an unrequested or duplicate target"
+        );
+        Ok(resolved)
+    }
+
     pub(crate) async fn renew_exact(
         &self,
         target: &ClusterMucOccupancyTarget,
@@ -72,6 +206,128 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
         self.repository
             .renew_exact(target, owner_node_id, Duration::from_secs(90))
             .await
+    }
+
+    pub(crate) async fn renew_exact_batch(
+        &self,
+        targets: &[ClusterMucOccupancyTarget],
+        owner_node_id: &str,
+    ) -> Result<Vec<ClusterMucOccupancyTarget>> {
+        anyhow::ensure!(
+            targets.len() <= MAX_MUC_OCCUPANCY_RENEW_BATCH,
+            "MUC occupancy renewal batch exceeds its limit"
+        );
+        let mut requested = std::collections::HashSet::with_capacity(targets.len());
+        anyhow::ensure!(
+            targets
+                .iter()
+                .all(|target| requested.insert((target.room_id, target.occupant_incarnation))),
+            "MUC occupancy renewal batch contains a duplicate incarnation"
+        );
+        let renewed = self
+            .repository
+            .renew_exact_batch(targets, owner_node_id, Duration::from_secs(90))
+            .await?;
+        let mut returned = std::collections::HashSet::with_capacity(renewed.len());
+        anyhow::ensure!(
+            renewed.iter().all(|target| {
+                returned.insert((target.room_id, target.occupant_incarnation))
+                    && targets.iter().any(|requested| requested == target)
+            }),
+            "MUC occupancy renewal returned an unrequested or duplicate target"
+        );
+        Ok(renewed)
+    }
+}
+
+/// The disconnect path can only resolve and retire the precise local stream
+/// incarnation it just quiesced. Resumable SM suspension uses its own path.
+pub(crate) trait ClusterMucOccupancyDepartureRepository: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    fn find_exact_for_disconnect(
+        &self,
+        room_localpart: &str,
+        full_jid: &str,
+        nick: &str,
+        occupant_incarnation: Uuid,
+        connection_uuid: Uuid,
+        owner_node_id: &str,
+    ) -> impl std::future::Future<Output = Result<Option<ClusterMucOccupancyTarget>>> + Send;
+
+    fn leave_exact(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        lease: Duration,
+    ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MucDisconnectLeaveResult {
+    pub operation_id: Uuid,
+    pub outcome: ClusterMucTransitionOutcome,
+}
+
+#[derive(Clone)]
+pub(crate) struct ClusterMucOccupancyDepartureService<R> {
+    repository: R,
+}
+
+impl<R: ClusterMucOccupancyDepartureRepository> ClusterMucOccupancyDepartureService<R> {
+    pub(crate) fn new(repository: R) -> Self {
+        Self { repository }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn find_exact_for_disconnect(
+        &self,
+        room_jid: &str,
+        full_jid: &str,
+        nick: &str,
+        occupant_incarnation: Uuid,
+        connection_uuid: Uuid,
+        owner_node_id: &str,
+    ) -> Result<Option<ClusterMucOccupancyTarget>> {
+        let room = crate::jid::CanonicalJid::parse_bare(room_jid)?;
+        anyhow::ensure!(room.to_string() == room_jid, "noncanonical MUC room JID");
+        let localpart = room
+            .localpart()
+            .ok_or_else(|| anyhow::anyhow!("MUC room JID has no localpart"))?;
+        self.repository
+            .find_exact_for_disconnect(
+                localpart,
+                full_jid,
+                nick,
+                occupant_incarnation,
+                connection_uuid,
+                owner_node_id,
+            )
+            .await
+    }
+
+    pub(crate) async fn leave_exact_for_disconnect(
+        &self,
+        connection_uuid: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+    ) -> Result<MucDisconnectLeaveResult> {
+        anyhow::ensure!(
+            !connection_uuid.is_nil() && target.connection_uuid == connection_uuid,
+            "MUC disconnect cannot retire another connection's occupancy"
+        );
+        let operation_id = operation_id(&serde_json::json!({
+            "kind":"muc_disconnect_leave",
+            "target":target,
+        }))?;
+        let outcome = self
+            .repository
+            .leave_exact(operation_id, target, owner_node_id, Duration::from_secs(90))
+            .await?;
+        Ok(MucDisconnectLeaveResult {
+            operation_id,
+            outcome,
+        })
     }
 }
 
@@ -94,6 +350,27 @@ mod cluster_muc_occupancy_maintenance_tests {
             Ok(vec![self.target.clone()])
         }
 
+        async fn resolve_exact_batch(
+            &self,
+            candidates: &[MucOccupancyLookup],
+            owner_node_id: &str,
+        ) -> Result<Vec<MucResolvedOccupancy>> {
+            assert_eq!(owner_node_id, "node-1");
+            Ok(candidates
+                .iter()
+                .filter(|candidate| {
+                    candidate.full_jid == self.target.full_jid
+                        && candidate.nick == self.target.nick
+                        && candidate.occupant_incarnation == self.target.occupant_incarnation
+                        && candidate.connection_uuid == self.target.connection_uuid
+                })
+                .map(|candidate| MucResolvedOccupancy {
+                    room_localpart: candidate.room_localpart.clone(),
+                    target: self.target.clone(),
+                })
+                .collect())
+        }
+
         async fn renew_exact(
             &self,
             target: &ClusterMucOccupancyTarget,
@@ -102,6 +379,18 @@ mod cluster_muc_occupancy_maintenance_tests {
         ) -> Result<bool> {
             *self.renewal.lock().unwrap() = Some((target.clone(), owner_node_id.to_owned(), lease));
             Ok(true)
+        }
+
+        async fn renew_exact_batch(
+            &self,
+            targets: &[ClusterMucOccupancyTarget],
+            owner_node_id: &str,
+            lease: Duration,
+        ) -> Result<Vec<ClusterMucOccupancyTarget>> {
+            assert_eq!(targets, std::slice::from_ref(&self.target));
+            *self.renewal.lock().unwrap() =
+                Some((targets[0].clone(), owner_node_id.to_owned(), lease));
+            Ok(targets.to_vec())
         }
     }
 
@@ -123,7 +412,25 @@ mod cluster_muc_occupancy_maintenance_tests {
         };
         let service = ClusterMucOccupancyMaintenanceService::new(&repository);
         let snapshot = service.authoritative_for_node("node-1").await.unwrap();
-        assert_eq!(snapshot, vec![target]);
+        assert_eq!(snapshot, vec![target.clone()]);
+        let lookup = MucOccupancyLookup::new(
+            "room@muc.example.test",
+            &target.full_jid,
+            &target.nick,
+            target.occupant_incarnation,
+            target.connection_uuid,
+        )
+        .unwrap();
+        assert_eq!(
+            service
+                .resolve_exact_batch(std::slice::from_ref(&lookup), "node-1")
+                .await
+                .unwrap(),
+            vec![MucResolvedOccupancy {
+                room_localpart: "room".to_owned(),
+                target: target.clone(),
+            }]
+        );
         assert!(service.renew_exact(&snapshot[0], "node-1").await.unwrap());
         assert_eq!(
             *repository.renewal.lock().unwrap(),
@@ -132,6 +439,114 @@ mod cluster_muc_occupancy_maintenance_tests {
                 "node-1".to_owned(),
                 Duration::from_secs(90)
             ))
+        );
+        assert_eq!(
+            service
+                .renew_exact_batch(std::slice::from_ref(&target), "node-1")
+                .await
+                .unwrap(),
+            vec![target.clone()]
+        );
+        assert!(service
+            .renew_exact_batch(&[target.clone(), target.clone()], "node-1")
+            .await
+            .is_err());
+        assert!(service
+            .renew_exact_batch(&vec![target; MAX_MUC_OCCUPANCY_RENEW_BATCH + 1], "node-1")
+            .await
+            .is_err());
+    }
+}
+
+#[cfg(test)]
+mod cluster_muc_occupancy_departure_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct StubRepository {
+        target: ClusterMucOccupancyTarget,
+        leaves: Mutex<Vec<Uuid>>,
+    }
+
+    impl ClusterMucOccupancyDepartureRepository for &StubRepository {
+        async fn find_exact_for_disconnect(
+            &self,
+            room_localpart: &str,
+            full_jid: &str,
+            nick: &str,
+            occupant_incarnation: Uuid,
+            connection_uuid: Uuid,
+            owner_node_id: &str,
+        ) -> Result<Option<ClusterMucOccupancyTarget>> {
+            assert_eq!(room_localpart, "room");
+            assert_eq!(owner_node_id, "node-1");
+            Ok((full_jid == self.target.full_jid
+                && nick == self.target.nick
+                && occupant_incarnation == self.target.occupant_incarnation
+                && connection_uuid == self.target.connection_uuid)
+                .then(|| self.target.clone()))
+        }
+
+        async fn leave_exact(
+            &self,
+            operation_id: Uuid,
+            target: &ClusterMucOccupancyTarget,
+            owner_node_id: &str,
+            lease: Duration,
+        ) -> Result<ClusterMucTransitionOutcome> {
+            assert_eq!(target, &self.target);
+            assert_eq!(owner_node_id, "node-1");
+            assert_eq!(lease, Duration::from_secs(90));
+            self.leaves.lock().unwrap().push(operation_id);
+            Ok(ClusterMucTransitionOutcome::Applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnect_leave_is_bound_to_one_stream_and_one_stable_operation() {
+        let target = ClusterMucOccupancyTarget {
+            room_id: Uuid::new_v4(),
+            room_epoch: Uuid::new_v4(),
+            occupant_incarnation: Uuid::new_v4(),
+            occupancy_epoch: 1,
+            full_jid: "alice@example.test/Phone".to_owned(),
+            nick: "Alice".to_owned(),
+            connection_uuid: Uuid::new_v4(),
+            connection_epoch: 1,
+        };
+        let repository = StubRepository {
+            target: target.clone(),
+            leaves: Mutex::new(Vec::new()),
+        };
+        let service = ClusterMucOccupancyDepartureService::new(&repository);
+        let resolved = service
+            .find_exact_for_disconnect(
+                "room@muc.example.test",
+                &target.full_jid,
+                &target.nick,
+                target.occupant_incarnation,
+                target.connection_uuid,
+                "node-1",
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved, Some(target.clone()));
+        assert!(service
+            .leave_exact_for_disconnect(Uuid::new_v4(), &target, "node-1")
+            .await
+            .is_err());
+        let first = service
+            .leave_exact_for_disconnect(target.connection_uuid, &target, "node-1")
+            .await
+            .unwrap();
+        let replay = service
+            .leave_exact_for_disconnect(target.connection_uuid, &target, "node-1")
+            .await
+            .unwrap();
+        assert_eq!(first.operation_id, replay.operation_id);
+        assert_eq!(
+            repository.leaves.lock().unwrap().as_slice(),
+            &[first.operation_id; 2]
         );
     }
 }
@@ -428,6 +843,19 @@ pub(crate) trait MucRepository:
         actor_full_jid: &str,
         changes: &[MucAffiliationChange],
     ) -> impl std::future::Future<Output = Result<MucAffiliationBatchOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn apply_local_cluster_admin_batch(
+        &self,
+        operation_id: Uuid,
+        room_id: Uuid,
+        expected_room_epoch: Uuid,
+        expected_config_version: i64,
+        actor_target: Option<&ClusterMucOccupancyTarget>,
+        actor: &ClusterMucPrincipal,
+        actor_full_jid: &str,
+        local_domain: &str,
+        changes: &[MucAdminBatchChange],
+    ) -> impl std::future::Future<Output = Result<MucAdminBatchOutcome>> + Send;
     fn kick_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
@@ -1231,6 +1659,52 @@ impl<R: MucRepository> MucService<R> {
                 changes,
             )
             .await
+    }
+
+    /// The IQ identity intentionally excludes its items. A changed retry on
+    /// the same authenticated stream and IQ id must hit the stored digest and
+    /// fail as a conflict, even if a target nick no longer exists.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn apply_local_cluster_admin_batch(
+        &self,
+        stream_id: Uuid,
+        iq_id: &str,
+        room_jid: &str,
+        room_id: Uuid,
+        expected_room_epoch: Uuid,
+        expected_config_version: i64,
+        actor_target: Option<&ClusterMucOccupancyTarget>,
+        actor: &ClusterMucPrincipal,
+        actor_full_jid: &str,
+        changes: &[MucAdminBatchChange],
+    ) -> Result<MucAdminBatchResult> {
+        anyhow::ensure!(!iq_id.is_empty() && iq_id.len() <= 256, "invalid MUC IQ id");
+        let canonical_room = crate::jid::CanonicalJid::parse_bare(room_jid)?;
+        anyhow::ensure!(
+            canonical_room.to_string() == room_jid,
+            "noncanonical MUC room JID"
+        );
+        let operation_id = operation_id(&serde_json::json!({
+            "kind":"admin_batch","stream":stream_id,"iq_id":iq_id,"room":room_jid,
+        }))?;
+        let outcome = self
+            .repository
+            .apply_local_cluster_admin_batch(
+                operation_id,
+                room_id,
+                expected_room_epoch,
+                expected_config_version,
+                actor_target,
+                actor,
+                actor_full_jid,
+                &self.configured_domain,
+                changes,
+            )
+            .await?;
+        Ok(MucAdminBatchResult {
+            operation_id,
+            outcome,
+        })
     }
 
     pub(crate) async fn kick_local_cluster_occupancy(

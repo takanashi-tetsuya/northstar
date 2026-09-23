@@ -3,13 +3,13 @@ use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucPrincipal, ClusterMucRegistrationOutcome,
     ClusterMucTransitionOutcome, DurableMucInviteOutcome, MucActorAuthority, MucActorPrincipal,
-    MucAdminSnapshot, MucAffiliationBatchCommand, MucAffiliationBatchOutcome,
-    MucAffiliationBatchWrite, MucAffiliationChange, MucAffiliationTarget, MucConfigUpdate,
-    MucConfigurationCommand, MucConfigurationOutcome, MucConfigurationWrite, MucDiscussion,
-    MucDiscussionAdmission, MucRegistrationCommand, MucRegistrationOutcome, MucRegistrationTarget,
-    MucRegistrationWrite, MucRetractionCommand, MucRetractionKind, MucRetractionMutation,
-    MucRetractionOutcome, MucRoom, MucSubjectCommand, MucSubjectMutation, MucSubjectOutcome,
-    OfflineStoreOutcome, OfflineStorePolicy,
+    MucAdminBatchChange, MucAdminBatchOutcome, MucAdminSnapshot, MucAffiliationBatchCommand,
+    MucAffiliationBatchOutcome, MucAffiliationBatchWrite, MucAffiliationChange,
+    MucAffiliationTarget, MucConfigUpdate, MucConfigurationCommand, MucConfigurationOutcome,
+    MucConfigurationWrite, MucDiscussion, MucDiscussionAdmission, MucRegistrationCommand,
+    MucRegistrationOutcome, MucRegistrationTarget, MucRegistrationWrite, MucRetractionCommand,
+    MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectCommand,
+    MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
 use crate::state::muc_cluster_effects::MucPresencePublication;
 use crate::xmpp::xml_builder::XmlElement;
@@ -152,8 +152,195 @@ impl MucAdminMutationKind {
     }
 }
 
+// Each committed projection needs one receipt ordinal. The transaction writer
+// also bounds the expanded audience, which can be larger than the IQ itself.
+pub(super) const MAX_MUC_ADMIN_BATCH_ITEMS: usize = 63;
+const MUC_ADMIN_NS: &str = "http://jabber.org/protocol/muc#admin";
+
+#[derive(Debug, Eq, PartialEq)]
+enum MucAdminChange {
+    Affiliation {
+        target_bare_jid: String,
+        affiliation: String,
+    },
+    Role {
+        target_nick: String,
+        role: String,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct MucAdminItem {
+    change: MucAdminChange,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct MucAdminBatch {
+    items: Vec<MucAdminItem>,
+}
+
+impl MucAdminBatch {
+    pub(super) fn service_changes(
+        &self,
+        local_domain: &str,
+    ) -> std::result::Result<Vec<MucAdminBatchChange>, MucAdminParseError> {
+        self.items
+            .iter()
+            .map(|item| match &item.change {
+                MucAdminChange::Affiliation {
+                    target_bare_jid,
+                    affiliation,
+                } => {
+                    let (localpart, domain) = target_bare_jid
+                        .split_once('@')
+                        .ok_or(MucAdminParseError::JidMalformed)?;
+                    let target = if domain == local_domain {
+                        MucAffiliationTarget::LocalUsername(localpart.to_owned())
+                    } else {
+                        MucAffiliationTarget::FederatedBareJid(target_bare_jid.clone())
+                    };
+                    Ok(MucAdminBatchChange::Affiliation {
+                        target,
+                        affiliation: affiliation.clone(),
+                        reason: item.reason.clone(),
+                    })
+                }
+                MucAdminChange::Role { target_nick, role } => Ok(MucAdminBatchChange::Role {
+                    target_nick: target_nick.clone(),
+                    role: role.clone(),
+                    reason: item.reason.clone(),
+                }),
+            })
+            .collect()
+    }
+}
+
+pub(super) fn muc_admin_batch_error(outcome: MucAdminBatchOutcome) -> Option<&'static str> {
+    match outcome {
+        MucAdminBatchOutcome::Applied | MucAdminBatchOutcome::Replay => None,
+        MucAdminBatchOutcome::DuplicateTarget => Some("bad-request"),
+        MucAdminBatchOutcome::TooManyProjections => Some("resource-constraint"),
+        MucAdminBatchOutcome::LastOwner
+        | MucAdminBatchOutcome::Stale
+        | MucAdminBatchOutcome::Destroyed
+        | MucAdminBatchOutcome::Conflict => Some("conflict"),
+        MucAdminBatchOutcome::MissingTarget => Some("item-not-found"),
+        MucAdminBatchOutcome::Unauthorized => Some("forbidden"),
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum MucAdminParseError {
+    BadRequest,
+    JidMalformed,
+    NotAcceptable,
+}
+
+pub(super) struct MucAdminRawItem<'a> {
+    pub jid: Option<&'a str>,
+    pub nick: Option<&'a str>,
+    pub affiliation: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub reason: Option<&'a str>,
+}
+
+/// Normalize targets before a batch reaches either the local or clustered
+/// writer. A full JID and its bare form address the same affiliation target;
+/// duplicate normalized targets must not acquire order-dependent semantics.
+pub(super) fn parse_muc_admin_batch(
+    items: &[Node<'_, '_>],
+) -> std::result::Result<MucAdminBatch, MucAdminParseError> {
+    if items.iter().any(|item| {
+        item.tag_name().name() != "item"
+            || item.tag_name().namespace() != Some(MUC_ADMIN_NS)
+            || item.children().any(|child| {
+                child.is_element()
+                    && child.tag_name().name() == "reason"
+                    && child.tag_name().namespace() != Some(MUC_ADMIN_NS)
+            })
+    }) {
+        return Err(MucAdminParseError::BadRequest);
+    }
+    let raw = items
+        .iter()
+        .map(|item| MucAdminRawItem {
+            jid: item.attribute("jid"),
+            nick: item.attribute("nick"),
+            affiliation: item.attribute("affiliation"),
+            role: item.attribute("role"),
+            reason: child_text(*item, "reason"),
+        })
+        .collect::<Vec<_>>();
+    parse_muc_admin_raw_items(&raw)
+}
+
+pub(super) fn parse_muc_admin_raw_items(
+    items: &[MucAdminRawItem<'_>],
+) -> std::result::Result<MucAdminBatch, MucAdminParseError> {
+    if items.is_empty() || items.len() > MAX_MUC_ADMIN_BATCH_ITEMS {
+        return Err(MucAdminParseError::BadRequest);
+    }
+    let mut parsed = Vec::with_capacity(items.len());
+    let mut affiliation_targets = std::collections::HashSet::new();
+    let mut role_targets = std::collections::HashSet::new();
+    for item in items {
+        if item.reason.is_some_and(|reason| reason.len() > 4096) {
+            return Err(MucAdminParseError::NotAcceptable);
+        }
+        let change = match (item.affiliation, item.role) {
+            (Some(affiliation), None) => {
+                if !matches!(
+                    affiliation,
+                    "owner" | "admin" | "member" | "outcast" | "none"
+                ) {
+                    return Err(MucAdminParseError::BadRequest);
+                }
+                let target = item.jid.ok_or(MucAdminParseError::BadRequest)?;
+                let target =
+                    CanonicalJid::parse(target).map_err(|_| MucAdminParseError::JidMalformed)?;
+                if target.localpart().is_none() {
+                    return Err(MucAdminParseError::JidMalformed);
+                }
+                let target_bare_jid = target.bare();
+                if !affiliation_targets.insert(target_bare_jid.clone()) {
+                    return Err(MucAdminParseError::BadRequest);
+                }
+                MucAdminChange::Affiliation {
+                    target_bare_jid,
+                    affiliation: affiliation.to_owned(),
+                }
+            }
+            (None, Some(role)) => {
+                if !matches!(role, "moderator" | "participant" | "visitor" | "none") {
+                    return Err(MucAdminParseError::BadRequest);
+                }
+                let nick = item.nick.ok_or(MucAdminParseError::BadRequest)?;
+                let target_nick =
+                    prepare_muc_nick(nick).map_err(|_| MucAdminParseError::JidMalformed)?;
+                if !role_targets.insert(target_nick.clone()) {
+                    return Err(MucAdminParseError::BadRequest);
+                }
+                MucAdminChange::Role {
+                    target_nick,
+                    role: role.to_owned(),
+                }
+            }
+            _ => return Err(MucAdminParseError::BadRequest),
+        };
+        parsed.push(MucAdminItem {
+            change,
+            reason: item.reason.map(str::to_owned),
+        });
+    }
+    Ok(MucAdminBatch { items: parsed })
+}
+
 fn classify_muc_admin_items(items: &[Node<'_, '_>]) -> Result<MucAdminMutationKind, ()> {
-    if items.is_empty() || items.iter().any(|node| node.tag_name().name() != "item") {
+    if items.is_empty()
+        || items.len() > MAX_MUC_ADMIN_BATCH_ITEMS
+        || items.iter().any(|node| node.tag_name().name() != "item")
+    {
         return Err(());
     }
     if items.iter().any(|item| {
@@ -1132,11 +1319,8 @@ impl ProtocolSession {
             .validated_local_muc_occupant(full_jid, self.connection_id, room_jid, &membership)
     }
 
-    /// In clustered mode, the local identity proof is necessary but not
-    /// sufficient: the exact PostgreSQL occupancy incarnation is the
-    /// cross-node authority. Redis is deliberately not consulted here; a
-    /// cached nickname must never authorize a room mutation after its lease,
-    /// room epoch, connection UUID or occupancy incarnation changed.
+    /// A local session marker alone does not authorize a room mutation. The
+    /// exact PostgreSQL occupancy must still be live; Redis only caches it.
     pub(crate) async fn authorized_muc_occupant(
         &self,
         room_jid: &str,
@@ -1144,7 +1328,7 @@ impl ProtocolSession {
         let Some(occupant) = self.validated_muc_occupant(room_jid) else {
             return Ok(None);
         };
-        if !self.state.muc_cluster_enabled() {
+        if !self.state.muc_pg_authority_enabled() {
             return Ok(Some(occupant));
         }
         let Some((_, room_localpart)) = canonical_local_muc_room(room_jid, &self.muc_domain())
@@ -1277,7 +1461,7 @@ impl ProtocolSession {
         };
         let gated_room_id = initial_room.id;
         let gated_room_epoch = initial_room.room_epoch;
-        let _local_room_guard = if self.state.muc_cluster_enabled() {
+        let _local_room_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -1315,8 +1499,8 @@ impl ProtocolSession {
             && elements[0].tag_name().namespace() == Some("jabber:iq:register")
             && !elements[0].children().any(|node| node.is_element())
         {
-            if self.state.muc_cluster_enabled() {
-                self.state.admit_muc_cluster_mutation()?;
+            if self.state.muc_pg_authority_enabled() {
+                self.state.admit_muc_pg_mutation()?;
                 let Some(full_jid) = self.full_jid.as_deref() else {
                     return Ok(Action::Send(iq_error_from(id, &room_jid, "not-authorized")));
                 };
@@ -1450,8 +1634,8 @@ impl ProtocolSession {
         let Ok(nick) = prepare_muc_nick(nick) else {
             return Ok(Action::Send(iq_error_from(id, &room_jid, "not-acceptable")));
         };
-        if self.state.muc_cluster_enabled() {
-            self.state.admit_muc_cluster_mutation()?;
+        if self.state.muc_pg_authority_enabled() {
+            self.state.admit_muc_pg_mutation()?;
             let Some(full_jid) = self.full_jid.as_deref() else {
                 return Ok(Action::Send(iq_error_from(id, &room_jid, "not-authorized")));
             };
@@ -2020,14 +2204,10 @@ impl ProtocolSession {
                     if !allow {
                         return Ok(Action::None);
                     }
-                    if !self.state.muc_cluster_enabled() {
-                        // Single-node rooms intentionally keep live occupancy
-                        // authority in memory.  Requiring the clustered
-                        // PostgreSQL tuple here made every valid voice grant
-                        // fail with <forbidden/> because no cluster occupancy
-                        // row exists in this supported deployment mode.
-                        // Serialize with room mutations, then recheck both
-                        // actors before applying the target's exact role change.
+                    if !self.state.muc_pg_authority_enabled() {
+                        // The legacy in-memory path still serializes with
+                        // other room mutations when PostgreSQL occupancy is
+                        // unavailable.
                         let service = self.state.muc_service();
                         let _guard = service.lock_local_room_mutation(room.id).await;
                         let Some(current_room) =
@@ -2451,8 +2631,9 @@ impl ProtocolSession {
                                         chrono::Utc::now(),
                                         Some(&room_jid),
                                     );
-                                    let cluster_authority = if self.state.muc_cluster_enabled() {
-                                        self.state.admit_muc_cluster_mutation()?;
+                                    let cluster_authority = if self.state.muc_pg_authority_enabled()
+                                    {
+                                        self.state.admit_muc_pg_mutation()?;
                                         let Some(actor_target) = self
                                             .state
                                             .muc_service()
@@ -2574,7 +2755,7 @@ impl ProtocolSession {
                                 } else {
                                     (None, false)
                                 };
-                                if affiliation_changed && !self.state.muc_cluster_enabled() {
+                                if affiliation_changed && !self.state.muc_pg_authority_enabled() {
                                     let locally_present =
                                         self.state.muc_occupants_for(&room_jid).iter().any(
                                             |(_, occupant)| {
@@ -2741,8 +2922,8 @@ impl ProtocolSession {
                                         "stanza_id":root.attribute("id"),"room":room_jid,
                                         "actor":from,"invitee":invitee_bare,"reason":reason,
                                     }))?;
-                                let cluster_authority = if self.state.muc_cluster_enabled() {
-                                    self.state.admit_muc_cluster_mutation()?;
+                                let cluster_authority = if self.state.muc_pg_authority_enabled() {
+                                    self.state.admit_muc_pg_mutation()?;
                                     let Some(actor_target) = self
                                         .state
                                         .muc_service()
@@ -2868,7 +3049,7 @@ impl ProtocolSession {
         // room mutation gate from the final incarnation/affiliation check
         // through database admission and live fan-out. Clustered rooms use
         // the exact PostgreSQL occupancy tuple in the admission transaction.
-        let local_authority_guard = if self.state.muc_cluster_enabled() {
+        let local_authority_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -2924,7 +3105,7 @@ impl ProtocolSession {
                 "forbidden",
             )));
         }
-        let cluster_target = if self.state.muc_cluster_enabled() {
+        let cluster_target = if self.state.muc_pg_authority_enabled() {
             let target = self
                 .state
                 .muc_service()
@@ -3025,7 +3206,7 @@ impl ProtocolSession {
         };
         let actor_scope = canonical_bare_key(from)?;
         let actor_authority = MucActorAuthority {
-            clustered: self.state.muc_cluster_enabled(),
+            clustered: self.state.muc_pg_authority_enabled(),
             expected_room_epoch: room.room_epoch,
             principal: MucActorPrincipal::Local {
                 user_id: user.id,
@@ -3149,7 +3330,7 @@ impl ProtocolSession {
             }
         } else if let Some(subject) = subject_command.as_deref() {
             let service = self.state.muc_service();
-            if self.state.muc_cluster_enabled() {
+            if self.state.muc_pg_authority_enabled() {
                 let Some(actor_target) = service
                     .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)
                     .await?
@@ -3374,7 +3555,7 @@ impl ProtocolSession {
         else {
             return Ok(Action::Send(iq_error_from(id, &room_jid, "item-not-found")));
         };
-        let local_authority_guard = if self.state.muc_cluster_enabled() {
+        let local_authority_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -3414,7 +3595,7 @@ impl ProtocolSession {
         if current_affiliation != moderator.affiliation || current_affiliation == "outcast" {
             return Ok(Action::Send(iq_error_from(id, &room_jid, "forbidden")));
         }
-        let cluster_target = if self.state.muc_cluster_enabled() {
+        let cluster_target = if self.state.muc_pg_authority_enabled() {
             let Some(target) = self
                 .state
                 .muc_service()
@@ -3531,7 +3712,7 @@ impl ProtocolSession {
                     reason,
                     kind: MucRetractionKind::Moderator,
                     authority: MucActorAuthority {
-                        clustered: self.state.muc_cluster_enabled(),
+                        clustered: self.state.muc_pg_authority_enabled(),
                         expected_room_epoch: room.room_epoch,
                         principal: MucActorPrincipal::Local {
                             user_id: user.id,
@@ -3670,7 +3851,7 @@ impl ProtocolSession {
         };
         let gated_room_id = room.id;
         let gated_room_epoch = room.room_epoch;
-        let mut local_room_guard = if self.state.muc_cluster_enabled() {
+        let mut local_room_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -3733,8 +3914,8 @@ impl ProtocolSession {
             }
             let occupants = self.state.muc_occupants_for(room_jid);
             let mut cluster_destroy_operation = None;
-            if self.state.muc_cluster_enabled() {
-                self.state.admit_muc_cluster_mutation()?;
+            if self.state.muc_pg_authority_enabled() {
+                self.state.admit_muc_pg_mutation()?;
                 let Some(actor) = self.authorized_muc_occupant(room_jid).await? else {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
                 };
@@ -3839,7 +4020,7 @@ impl ProtocolSession {
                     self.joined_rooms.remove_if(room_jid, |_, membership| {
                         membership.cluster_epoch == occupant.cluster_epoch
                     });
-                    if !self.state.muc_cluster_enabled() {
+                    if !self.state.muc_pg_authority_enabled() {
                         let unavailable = muc_destroy_presence(&serializable, None, None);
                         direct_cancel_deliveries.push((occupant, unavailable));
                     }
@@ -3962,7 +4143,7 @@ impl ProtocolSession {
                             ));
                         }
                     };
-                    if !self.state.muc_cluster_enabled() {
+                    if !self.state.muc_pg_authority_enabled() {
                         local_room_guard = Some(
                             self.state
                                 .muc_service()
@@ -4002,8 +4183,8 @@ impl ProtocolSession {
             } else {
                 None
             };
-            let configuration_outcome = if self.state.muc_cluster_enabled() {
-                self.state.admit_muc_cluster_mutation()?;
+            let configuration_outcome = if self.state.muc_pg_authority_enabled() {
+                self.state.admit_muc_pg_mutation()?;
                 let Some(actor) = self.authorized_muc_occupant(room_jid).await? else {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
                 };
@@ -4114,7 +4295,7 @@ impl ProtocolSession {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
                 }
             }
-            if self.state.muc_cluster_enabled() {
+            if self.state.muc_pg_authority_enabled() {
                 // The immutable PostgreSQL audience/outbox owns every
                 // clustered consequence, including members-only eviction and
                 // role/privacy refresh. Returning here prevents the legacy
@@ -4212,15 +4393,17 @@ impl ProtocolSession {
             }
             for occupant in refreshed {
                 let serializable = crate::state::SerializableMucOccupant::from(&occupant);
-                if let Ok(json) = serde_json::to_string(&serializable) {
-                    run_muc_cluster_occupant_refresh(
-                        &self.state,
-                        room_jid,
-                        &occupant.nick,
-                        json,
-                        serializable.clone(),
-                    )
-                    .await;
+                if self.state.muc_redis_transport_enabled() {
+                    if let Ok(json) = serde_json::to_string(&serializable) {
+                        run_muc_cluster_occupant_refresh(
+                            &self.state,
+                            room_jid,
+                            &occupant.nick,
+                            json,
+                            serializable.clone(),
+                        )
+                        .await;
+                    }
                 }
                 for (_, recipient) in self.state.muc_occupants_for(room_jid) {
                     let self_presence = occupant.full_jid == recipient.full_jid;
@@ -4351,7 +4534,7 @@ impl ProtocolSession {
                 return Ok(Action::None);
             };
             let mut local_departure_room = None;
-            let local_departure_guard = if self.state.muc_cluster_enabled() {
+            let local_departure_guard = if self.state.muc_pg_authority_enabled() {
                 None
             } else {
                 let Some(initial_room) = self
@@ -4411,7 +4594,7 @@ impl ProtocolSession {
             let mut clustered_leave = false;
             let mut clustered_event_id = None;
             let mut clustered_room_id = None;
-            if self.state.muc_cluster_enabled() {
+            if self.state.muc_pg_authority_enabled() {
                 if let Some(room) = self
                     .state
                     .muc_service()
@@ -4557,7 +4740,7 @@ impl ProtocolSession {
                         .await?
                         .is_empty()
             };
-            if self.state.muc_cluster_enabled() && remaining.is_empty() && globally_empty {
+            if self.state.muc_pg_authority_enabled() && remaining.is_empty() && globally_empty {
                 if let Some(room) = self
                     .state
                     .muc_service()
@@ -4616,7 +4799,7 @@ impl ProtocolSession {
             };
             occupant.payload = muc_presence_payload(root, raw);
             if joined_nick == nick {
-                let local_refresh_guard = if self.state.muc_cluster_enabled() {
+                let local_refresh_guard = if self.state.muc_pg_authority_enabled() {
                     None
                 } else {
                     let Some(initial_room) = self
@@ -4710,7 +4893,7 @@ impl ProtocolSession {
                     occupant.room_non_anonymous = refreshed_room.non_anonymous;
                     Some(guard)
                 };
-                if self.state.muc_cluster_enabled() {
+                if self.state.muc_pg_authority_enabled() {
                     let Some(room) = self
                         .state
                         .muc_service()
@@ -4765,7 +4948,7 @@ impl ProtocolSession {
                     .refresh_local_muc_presence_exact(&occupant, local_refresh_guard.is_some())
                 {
                     updated
-                } else if self.state.muc_cluster_enabled() {
+                } else if self.state.muc_pg_authority_enabled() {
                     tracing::warn!(room=%room_jid, %nick,
                         "PG-authoritative MUC presence refresh lost its exact local incarnation; reconciliation will repair the cache");
                     return Ok(Action::None);
@@ -4779,33 +4962,35 @@ impl ProtocolSession {
                 };
                 drop(local_refresh_guard);
                 let serializable = crate::state::SerializableMucOccupant::from(&occupant);
-                if let Ok(json) = serde_json::to_string(&serializable) {
-                    let cache_result = self
-                        .state
-                        .register_cluster_muc_occupant(&room_jid, nick, &json)
-                        .await;
-                    if self.state.muc_cluster_enabled() {
-                        if let Err(error) = cache_result {
-                            tracing::warn!(?error, room=%room_jid, nick=%nick,
+                if self.state.muc_redis_transport_enabled() {
+                    if let Ok(json) = serde_json::to_string(&serializable) {
+                        let cache_result = self
+                            .state
+                            .register_cluster_muc_occupant(&room_jid, nick, &json)
+                            .await;
+                        if self.state.muc_pg_authority_enabled() {
+                            if let Err(error) = cache_result {
+                                tracing::warn!(?error, room=%room_jid, nick=%nick,
                                 "could not refresh Redis MUC presence soft-state");
+                            }
+                        } else if !cache_result? {
+                            return Ok(Action::Send(muc_stanza_error(
+                                root,
+                                &full_jid,
+                                "cancel",
+                                "not-acceptable",
+                            )));
                         }
-                    } else if !cache_result? {
-                        return Ok(Action::Send(muc_stanza_error(
-                            root,
-                            &full_jid,
-                            "cancel",
-                            "not-acceptable",
-                        )));
+                        self.state
+                            .publish_muc_cluster_presence_with_id(
+                                &room_jid,
+                                &serializable,
+                                false,
+                                false,
+                                root.attribute("id"),
+                            )
+                            .await?;
                     }
-                    self.state
-                        .publish_muc_cluster_presence_with_id(
-                            &room_jid,
-                            &serializable,
-                            false,
-                            false,
-                            root.attribute("id"),
-                        )
-                        .await?;
                 }
                 let resync = has_muc_join_extension(root);
                 for (_, recipient) in self.state.muc_occupants_for(&room_jid) {
@@ -4996,7 +5181,7 @@ impl ProtocolSession {
                 )));
             }
 
-            let local_rename_guard = if self.state.muc_cluster_enabled() {
+            let local_rename_guard = if self.state.muc_pg_authority_enabled() {
                 None
             } else {
                 Some(
@@ -5086,7 +5271,7 @@ impl ProtocolSession {
                 }
             }
 
-            if !self.state.muc_cluster_enabled()
+            if !self.state.muc_pg_authority_enabled()
                 && self
                     .state
                     .local_muc_occupant_by_nick(&room_jid, nick)
@@ -5103,8 +5288,8 @@ impl ProtocolSession {
             let old_json = serde_json::to_string(&old_serializable)?;
             let new_json = serde_json::to_string(&new_serializable)?;
             let mut cluster_operation = None;
-            if self.state.muc_cluster_enabled() {
-                self.state.admit_muc_cluster_mutation()?;
+            if self.state.muc_pg_authority_enabled() {
+                self.state.admit_muc_pg_mutation()?;
                 let Some(target) = self
                     .state
                     .muc_service()
@@ -5328,7 +5513,7 @@ impl ProtocolSession {
                 )));
             }
         };
-        if !self.state.muc_cluster_enabled()
+        if !self.state.muc_pg_authority_enabled()
             && self
                 .state
                 .local_muc_occupant_by_nick(&room_jid, nick)
@@ -5468,7 +5653,7 @@ impl ProtocolSession {
                 root, &full_jid, "cancel", "conflict",
             )));
         }
-        let local_join_guard = if self.state.muc_cluster_enabled() {
+        let local_join_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -5555,7 +5740,7 @@ impl ProtocolSession {
         // The early check above is only a fast path. In single-node mode the
         // exact nickname and room capacity must be rechecked while holding the
         // room gate because independent client sessions join concurrently.
-        if !self.state.muc_cluster_enabled()
+        if !self.state.muc_pg_authority_enabled()
             && self
                 .state
                 .local_muc_occupant_by_nick(&room_jid, nick)
@@ -5565,7 +5750,7 @@ impl ProtocolSession {
                 root, &full_jid, "cancel", "conflict",
             )));
         }
-        let local_occupant_count = if self.state.muc_cluster_enabled() {
+        let local_occupant_count = if self.state.muc_pg_authority_enabled() {
             0
         } else {
             self.state.muc_occupants_for(&room_jid).len()
@@ -5574,7 +5759,7 @@ impl ProtocolSession {
         // cannot be permanently locked by filling every public slot.
         let privileged_join = matches!(affiliation.as_deref(), Some("owner" | "admin"));
         let effective_capacity = room.max_occupants as usize + usize::from(privileged_join) * 10;
-        if !self.state.muc_cluster_enabled() && local_occupant_count >= effective_capacity {
+        if !self.state.muc_pg_authority_enabled() && local_occupant_count >= effective_capacity {
             return Ok(Action::Send(muc_stanza_error(
                 root,
                 &full_jid,
@@ -5611,11 +5796,10 @@ impl ProtocolSession {
         };
         let serializable = crate::state::SerializableMucOccupant::from(&occupant);
         let mut cluster_event_id = None;
-        if self.state.muc_cluster_enabled() {
-            self.state.admit_muc_cluster_mutation()?;
-            // PostgreSQL is the only clustered occupancy authority.  The
-            // following Redis reservation is retained as a soft cache for
-            // presence fan-out, but it can no longer authorize the join.
+        if self.state.muc_pg_authority_enabled() {
+            self.state.admit_muc_pg_mutation()?;
+            // PostgreSQL authorizes the join in both runtime modes. Redis is
+            // only a routing cache when multiple nodes are configured.
             let principal = ClusterMucPrincipal::Local {
                 user_id: user.id,
                 bare_jid: bare_jid(&full_jid).to_owned(),
@@ -5699,36 +5883,34 @@ impl ProtocolSession {
                 tracing::warn!(?error, %room_jid, operation_id=%cluster_operation_id,
                     "MUC join committed; signed wake failed and PostgreSQL polling will catch up");
             }
-            // Lazily remove occupants whose node lease has expired before the
-            // atomic nickname/capacity reservation.
-            let cache = self
-                .state
-                .cache_committed_muc_join(&serializable, effective_capacity)
-                .await?;
-            if let Err(error) = cache.refresh {
-                tracing::warn!(?error, %room_jid,
-                    "PostgreSQL committed MUC join; Redis occupancy cache refresh failed");
-            }
-            match cache.registration {
-                Ok(crate::cluster::MucRegistration::Joined) => {}
-                Ok(crate::cluster::MucRegistration::Conflict)
-                | Ok(crate::cluster::MucRegistration::Full) => {
-                    tracing::warn!(%room_jid, %nick,
-                        "Redis MUC cache disagreed with committed PostgreSQL occupancy; cache will reconcile");
+            if self.state.muc_redis_transport_enabled() {
+                // The cache cannot authorize a join; PostgreSQL already did.
+                let cache = self
+                    .state
+                    .cache_committed_muc_join(&serializable, effective_capacity)
+                    .await?;
+                if let Err(error) = cache.refresh {
+                    tracing::warn!(?error, %room_jid,
+                        "PostgreSQL committed MUC join; Redis occupancy cache refresh failed");
                 }
-                Err(error) => tracing::warn!(?error, %room_jid,
-                    "PostgreSQL committed MUC join; Redis cache update failed"),
+                match cache.registration {
+                    Ok(crate::cluster::MucRegistration::Joined) => {}
+                    Ok(crate::cluster::MucRegistration::Conflict)
+                    | Ok(crate::cluster::MucRegistration::Full) => {
+                        tracing::warn!(%room_jid, %nick,
+                            "Redis MUC cache disagreed with committed PostgreSQL occupancy; cache will reconcile");
+                    }
+                    Err(error) => tracing::warn!(?error, %room_jid,
+                        "PostgreSQL committed MUC join; Redis cache update failed"),
+                }
             }
         }
-        // Snapshot the already-published local audience before publishing the
-        // joining occupant. In single-node mode the room mutation guard keeps
-        // this set stable through publication; in clustered mode PostgreSQL
-        // has already admitted the join and this remains only a local fan-out
-        // snapshot (the durable cluster event covers other nodes).
+        // Snapshot local occupants for the joining client's initial roster.
+        // The committed PostgreSQL event handles durable audience delivery.
         let local_existing = self.state.muc_occupants_for(&room_jid);
         let publication = self.state.publish_local_muc_join_if_vacant(&occupant);
         if publication != crate::state::LocalMucJoinPublication::Published {
-            if !self.state.muc_cluster_enabled() {
+            if !self.state.muc_pg_authority_enabled() {
                 return Ok(Action::Send(muc_stanza_error(
                     root, &full_jid, "cancel", "conflict",
                 )));
@@ -5751,31 +5933,36 @@ impl ProtocolSession {
             },
         );
         drop(local_join_guard);
-        if let Ok(json) = serde_json::to_string(&serializable) {
-            let _ = self.state.join_cluster_muc_room(&room_jid).await;
-            let _ = self
-                .state
-                .register_cluster_muc_occupant(&room_jid, nick, &json)
-                .await;
-            if cluster_event_id.is_none() {
+        if self.state.muc_redis_transport_enabled() {
+            if let Ok(json) = serde_json::to_string(&serializable) {
+                let _ = self.state.join_cluster_muc_room(&room_jid).await;
                 let _ = self
                     .state
-                    .publish_muc_cluster_presence_with_id(
-                        &room_jid,
-                        &serializable,
-                        false,
-                        created,
-                        root.attribute("id"),
-                    )
+                    .register_cluster_muc_occupant(&room_jid, nick, &json)
                     .await;
+                if cluster_event_id.is_none() {
+                    let _ = self
+                        .state
+                        .publish_muc_cluster_presence_with_id(
+                            &room_jid,
+                            &serializable,
+                            false,
+                            created,
+                            root.attribute("id"),
+                        )
+                        .await;
+                }
             }
         }
 
-        let global_map = self
-            .state
-            .cached_muc_cluster_occupants(&room_jid)
-            .await
-            .unwrap_or_default();
+        let global_map = if self.state.muc_redis_transport_enabled() {
+            self.state
+                .cached_muc_cluster_occupants(&room_jid)
+                .await
+                .unwrap_or_default()
+        } else {
+            std::collections::HashMap::new()
+        };
         let owner_bare = bare_jid(&full_jid);
         let blocked_patterns = self.state.muc_service().blocked_jids(user.id).await?;
         let mut replies = Vec::with_capacity(global_map.len() + 24);
@@ -5923,7 +6110,7 @@ impl ProtocolSession {
         else {
             return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
         };
-        let _local_authority_guard = if self.state.muc_cluster_enabled() {
+        let _local_authority_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -5965,7 +6152,7 @@ impl ProtocolSession {
                 .as_ref()
                 .map(|occupant| occupant.role.as_str())
                 .unwrap_or("none");
-            let actor_target = if self.state.muc_cluster_enabled() {
+            let actor_target = if self.state.muc_pg_authority_enabled() {
                 if let Some(actor) = actor.as_ref() {
                     self.state
                         .muc_service()
@@ -5998,7 +6185,7 @@ impl ProtocolSession {
                     &actor_scope,
                     asserted_local_role,
                     actor_target.as_ref(),
-                    self.state.muc_cluster_enabled(),
+                    self.state.muc_pg_authority_enabled(),
                     requested_role,
                 )
                 .await?
@@ -6013,7 +6200,7 @@ impl ProtocolSession {
             };
             let reveal_real_jids =
                 role_list.non_anonymous || role_list.requester_role == "moderator";
-            let mut occupants = if self.state.muc_cluster_enabled() {
+            let mut occupants = if self.state.muc_pg_authority_enabled() {
                 role_list
                     .entries
                     .into_iter()
@@ -6116,7 +6303,7 @@ impl ProtocolSession {
         };
         let gated_room_id = room.id;
         let gated_room_epoch = room.room_epoch;
-        let _local_room_guard = if self.state.muc_cluster_enabled() {
+        let _local_room_guard = if self.state.muc_pg_authority_enabled() {
             None
         } else {
             Some(
@@ -6149,13 +6336,91 @@ impl ProtocolSession {
             .as_ref()
             .map(|occupant| occupant.role.clone())
             .unwrap_or_else(|| "none".to_owned());
-        if !matches!(my_affiliation.as_str(), "owner" | "admin") && my_role != "moderator" {
-            return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
-        }
         let items = query
             .children()
             .filter(|node| node.is_element())
             .collect::<Vec<_>>();
+        if id.is_empty() || id.len() > 256 {
+            return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
+        }
+        if !self.state.muc_pg_authority_enabled() && classify_muc_admin_items(&items).is_err() {
+            return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
+        }
+        let parsed_batch = match parse_muc_admin_batch(&items) {
+            Ok(batch) => batch,
+            Err(MucAdminParseError::BadRequest) => {
+                return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
+            }
+            Err(MucAdminParseError::JidMalformed) => {
+                return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
+            }
+            Err(MucAdminParseError::NotAcceptable) => {
+                return Ok(Action::Send(iq_error_from(id, room_jid, "not-acceptable")));
+            }
+        };
+        if self.state.muc_pg_authority_enabled() {
+            self.state.admit_muc_pg_mutation()?;
+            let actor_target = if let Some(actor) = actor.as_ref() {
+                self.state
+                    .muc_service()
+                    .local_cluster_occupancy_target(
+                        room.id,
+                        actor.cluster_epoch,
+                        actor.connection_id,
+                    )
+                    .await?
+            } else {
+                None
+            };
+            let changes = match parsed_batch.service_changes(self.state.local_domain()) {
+                Ok(changes) => changes,
+                Err(MucAdminParseError::BadRequest) => {
+                    return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
+                }
+                Err(MucAdminParseError::JidMalformed) => {
+                    return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
+                }
+                Err(MucAdminParseError::NotAcceptable) => {
+                    return Ok(Action::Send(iq_error_from(id, room_jid, "not-acceptable")));
+                }
+            };
+            let result = self
+                .state
+                .muc_service()
+                .apply_local_cluster_admin_batch(
+                    self.connection_id,
+                    id,
+                    room_jid,
+                    room.id,
+                    room.room_epoch,
+                    room.config_version,
+                    actor_target.as_ref(),
+                    &ClusterMucPrincipal::Local {
+                        user_id: user.id,
+                        bare_jid: bare_jid(full_jid).to_owned(),
+                    },
+                    full_jid,
+                    &changes,
+                )
+                .await?;
+            if let Some(condition) = muc_admin_batch_error(result.outcome) {
+                return Ok(Action::Send(iq_error_from(id, room_jid, condition)));
+            }
+            if result.outcome == MucAdminBatchOutcome::Applied {
+                if let Err(error) = self
+                    .state
+                    .wake_committed_muc_operation(result.operation_id)
+                    .await
+                {
+                    tracing::warn!(?error, operation_id=%result.operation_id, room=%room_jid,
+                        "MUC admin batch committed; event wake will be recovered by polling");
+                }
+            }
+            return Ok(Action::Send(iq_result_from(id, room_jid, "")));
+        }
+        if !matches!(my_affiliation.as_str(), "owner" | "admin") && my_role != "moderator" {
+            return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
+        }
         let Ok(mutation_kind) = classify_muc_admin_items(&items) else {
             return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
         };
@@ -6166,7 +6431,7 @@ impl ProtocolSession {
         // request/response semantics and can strand a room without its owner.
         let mut durable_changes = Vec::new();
         let mut previous_affiliations = std::collections::HashMap::new();
-        let global_occupants = if self.state.muc_cluster_enabled() {
+        let global_occupants = if self.state.muc_pg_authority_enabled() {
             std::collections::HashMap::new()
         } else {
             self.state
@@ -6179,28 +6444,24 @@ impl ProtocolSession {
                 .map(|occupant| (occupant.nick.clone(), occupant))
                 .collect::<std::collections::HashMap<_, _>>()
         };
-        for item in &items {
-            if let (Some(target_raw), Some(new_affil)) =
-                (item.attribute("jid"), item.attribute("affiliation"))
+        for item in &parsed_batch.items {
+            if let MucAdminChange::Affiliation {
+                target_bare_jid: target_bare,
+                affiliation: new_affil,
+            } = &item.change
             {
                 if !matches!(my_affiliation.as_str(), "owner" | "admin") {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
                 }
-                if !matches!(new_affil, "owner" | "admin" | "member" | "outcast" | "none") {
-                    return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
-                }
                 if (new_affil == "owner" && my_affiliation != "owner")
-                    || (my_affiliation == "admin" && matches!(new_affil, "owner" | "admin"))
+                    || (my_affiliation == "admin"
+                        && matches!(new_affil.as_str(), "owner" | "admin"))
                 {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "not-allowed")));
                 }
-                let Ok(target) = CanonicalJid::parse(target_raw) else {
+                let Some((target_localpart, target_domain)) = target_bare.split_once('@') else {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
                 };
-                let Some(target_localpart) = target.localpart() else {
-                    return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
-                };
-                let target_bare = target.bare();
                 if new_affil == "outcast"
                     && self
                         .full_jid
@@ -6211,7 +6472,7 @@ impl ProtocolSession {
                 {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "conflict")));
                 }
-                let (target, current) = if target.domainpart() == self.state.local_domain() {
+                let (target, current) = if target_domain == self.state.local_domain() {
                     let Some(target_user) = self
                         .state
                         .muc_service()
@@ -6232,7 +6493,7 @@ impl ProtocolSession {
                         MucAffiliationTarget::FederatedBareJid(target_bare.clone()),
                         self.state
                             .muc_service()
-                            .federated_affiliation(room.id, &target_bare)
+                            .federated_affiliation(room.id, target_bare)
                             .await?,
                     )
                 };
@@ -6241,32 +6502,30 @@ impl ProtocolSession {
                 {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "not-allowed")));
                 }
-                previous_affiliations
-                    .insert(target_bare, current.unwrap_or_else(|| "none".to_owned()));
+                previous_affiliations.insert(
+                    target_bare.clone(),
+                    current.unwrap_or_else(|| "none".to_owned()),
+                );
                 durable_changes.push(MucAffiliationChange {
                     target,
-                    affiliation: new_affil.to_owned(),
+                    affiliation: new_affil.clone(),
                 });
-            } else if let (Some(target_nick), Some(new_role)) =
-                (item.attribute("nick"), item.attribute("role"))
+            } else if let MucAdminChange::Role {
+                target_nick,
+                role: new_role,
+            } = &item.change
             {
                 if my_role != "moderator" {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
                 }
-                if !matches!(new_role, "moderator" | "participant" | "visitor" | "none") {
-                    return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
-                }
-                let Ok(target_nick) = prepare_muc_nick(target_nick) else {
-                    return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
-                };
-                let target = if self.state.muc_cluster_enabled() {
+                let target = if self.state.muc_pg_authority_enabled() {
                     let authoritative = self
                         .state
                         .muc_service()
                         .local_cluster_occupancy_target_by_nick(
                             room.id,
                             room.room_epoch,
-                            &target_nick,
+                            target_nick,
                         )
                         .await?;
                     if let Some(authoritative) = authoritative {
@@ -6293,10 +6552,10 @@ impl ProtocolSession {
                     }
                 } else {
                     self.state
-                        .local_muc_occupant_by_nick(room_jid, &target_nick)
+                        .local_muc_occupant_by_nick(room_jid, target_nick)
                         .as_ref()
                         .map(crate::state::SerializableMucOccupant::from)
-                        .or_else(|| global_occupants.get(&target_nick).cloned())
+                        .or_else(|| global_occupants.get(target_nick).cloned())
                 };
                 let Some(target) = target else {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
@@ -6323,8 +6582,8 @@ impl ProtocolSession {
             // owns no affiliation write. Never convert it into an invalid
             // empty affiliation command; continue below into the role path.
             MucAffiliationBatchOutcome::Applied
-        } else if self.state.muc_cluster_enabled() {
-            self.state.admit_muc_cluster_mutation()?;
+        } else if self.state.muc_pg_authority_enabled() {
+            self.state.admit_muc_pg_mutation()?;
             let Some(actor) = self.authorized_muc_occupant(room_jid).await? else {
                 return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
             };
@@ -6403,10 +6662,11 @@ impl ProtocolSession {
             }
         }
 
-        if self.state.muc_cluster_enabled() {
-            let role_items = items
+        if self.state.muc_pg_authority_enabled() {
+            let role_items = parsed_batch
+                .items
                 .iter()
-                .filter(|item| item.attribute("role").is_some())
+                .filter(|item| matches!(item.change, MucAdminChange::Role { .. }))
                 .collect::<Vec<_>>();
             if !role_items.is_empty() {
                 let Some(actor_occupant) = actor.as_ref() else {
@@ -6425,24 +6685,23 @@ impl ProtocolSession {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
                 };
                 for item in role_items {
-                    let target_nick = prepare_muc_nick(
-                        item.attribute("nick").expect("role item validated above"),
-                    )
-                    .expect("role nickname validated above");
+                    let MucAdminChange::Role { target_nick, role } = &item.change else {
+                        unreachable!("role items were selected above");
+                    };
                     let Some(target) = self
                         .state
                         .muc_service()
                         .local_cluster_occupancy_target_by_nick(
                             room.id,
                             room.room_epoch,
-                            &target_nick,
+                            target_nick,
                         )
                         .await?
                     else {
                         return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
                     };
-                    let new_role = item.attribute("role").expect("role item validated above");
-                    let reason = child_text(*item, "reason");
+                    let new_role = role.as_str();
+                    let reason = item.reason.as_deref();
                     let operation_id = crate::services::muc::operation_id(&serde_json::json!({
                         "kind":"admin_role","stream":self.connection_id,"iq_id":id,
                         "room":room_jid,"actor":actor_target,"target":target,
@@ -7019,12 +7278,14 @@ impl ProtocolSession {
 mod tests {
     use super::{
         apply_muc_history_bounds, can_retrieve_muc_affiliation_list, canonical_local_muc_room,
-        classify_muc_admin_items, is_exact_muc_removal_target,
+        classify_muc_admin_items, is_exact_muc_removal_target, muc_admin_batch_error,
         muc_offline_affiliation_change_notice, muc_presence_payload, muc_sender_is_blocked,
-        parse_moderation_request, parse_muc_author_retraction, parse_muc_history_request,
-        parse_muc_invitation_decline, parse_muc_origin_id, parse_muc_subject_command,
-        parse_muc_voice_form, should_broadcast_offline_affiliation_change, ModerationRequest,
-        MucAdminMutationKind, MucHistoryRequest, MucPostCommitAdmissionError, MucPostCommitPlan,
+        parse_moderation_request, parse_muc_admin_batch, parse_muc_admin_raw_items,
+        parse_muc_author_retraction, parse_muc_history_request, parse_muc_invitation_decline,
+        parse_muc_origin_id, parse_muc_subject_command, parse_muc_voice_form,
+        should_broadcast_offline_affiliation_change, ModerationRequest, MucAdminBatchChange,
+        MucAdminBatchOutcome, MucAdminChange, MucAdminMutationKind, MucAdminParseError,
+        MucAdminRawItem, MucHistoryRequest, MucPostCommitAdmissionError, MucPostCommitPlan,
         MucVoiceForm,
     };
 
@@ -7056,6 +7317,218 @@ mod tests {
         let mutation = classify_muc_admin_items(&items).expect("standard role kick is valid");
         assert_eq!(mutation, MucAdminMutationKind::Role);
         assert!(!mutation.requires_affiliation_batch());
+    }
+
+    #[test]
+    fn admin_batch_parser_preserves_order_and_normalizes_targets() {
+        let document = roxmltree::Document::parse(
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item jid='BOB@Example.Test/phone' affiliation='member'><reason>Invite</reason></item><item nick='A\u{30a}' role='visitor'/><item jid='carol@example.test' affiliation='outcast'/></query>",
+        )
+        .unwrap();
+        let items = document
+            .root_element()
+            .children()
+            .filter(|node| node.is_element())
+            .collect::<Vec<_>>();
+        let batch = parse_muc_admin_batch(&items).unwrap();
+        let raw_items = [
+            MucAdminRawItem {
+                jid: Some("BOB@Example.Test/phone"),
+                nick: None,
+                affiliation: Some("member"),
+                role: None,
+                reason: Some("Invite"),
+            },
+            MucAdminRawItem {
+                jid: None,
+                nick: Some("A\u{30a}"),
+                affiliation: None,
+                role: Some("visitor"),
+                reason: None,
+            },
+            MucAdminRawItem {
+                jid: Some("carol@example.test"),
+                nick: None,
+                affiliation: Some("outcast"),
+                role: None,
+                reason: None,
+            },
+        ];
+        assert_eq!(parse_muc_admin_raw_items(&raw_items).unwrap(), batch);
+        assert_eq!(
+            batch.service_changes("example.test").unwrap(),
+            vec![
+                MucAdminBatchChange::Affiliation {
+                    target: super::MucAffiliationTarget::LocalUsername("bob".to_owned()),
+                    affiliation: "member".to_owned(),
+                    reason: Some("Invite".to_owned()),
+                },
+                MucAdminBatchChange::Role {
+                    target_nick: "Å".to_owned(),
+                    role: "visitor".to_owned(),
+                    reason: None,
+                },
+                MucAdminBatchChange::Affiliation {
+                    target: super::MucAffiliationTarget::LocalUsername("carol".to_owned()),
+                    affiliation: "outcast".to_owned(),
+                    reason: None,
+                },
+            ]
+        );
+        assert_eq!(batch.items.len(), 3);
+        assert_eq!(batch.items[0].reason.as_deref(), Some("Invite"));
+        assert_eq!(
+            batch.items[0].change,
+            MucAdminChange::Affiliation {
+                target_bare_jid: "bob@example.test".to_owned(),
+                affiliation: "member".to_owned(),
+            }
+        );
+        assert_eq!(
+            batch.items[1].change,
+            MucAdminChange::Role {
+                target_nick: "Å".to_owned(),
+                role: "visitor".to_owned(),
+            }
+        );
+        assert_eq!(
+            batch.items[2].change,
+            MucAdminChange::Affiliation {
+                target_bare_jid: "carol@example.test".to_owned(),
+                affiliation: "outcast".to_owned(),
+            }
+        );
+        // The new shape is parsed, but no non-atomic writer is allowed to run it.
+        assert_eq!(classify_muc_admin_items(&items), Err(()));
+    }
+
+    #[test]
+    fn admin_batch_parser_rejects_canonical_duplicates_and_combined_item() {
+        for xml in [
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item jid='BOB@Example.Test/phone' affiliation='member'/><item jid='bob@example.test' affiliation='none'/></query>",
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item nick='A\u{30a}' role='visitor'/><item nick='Å' role='participant'/></query>",
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item jid='bob@example.test' affiliation='member' role='visitor' nick='Bob'/></query>",
+        ] {
+            let document = roxmltree::Document::parse(xml).unwrap();
+            let items = document
+                .root_element()
+                .children()
+                .filter(|node| node.is_element())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                parse_muc_admin_batch(&items),
+                Err(MucAdminParseError::BadRequest)
+            );
+        }
+    }
+
+    #[test]
+    fn admin_batch_parser_rejects_foreign_item_and_reason_namespaces() {
+        for xml in [
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item xmlns='urn:example:other' nick='Bob' role='visitor'/></query>",
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item nick='Bob' role='visitor'><reason xmlns='urn:example:other'>Ignored</reason></item></query>",
+        ] {
+            let document = roxmltree::Document::parse(xml).unwrap();
+            let items = document
+                .root_element()
+                .children()
+                .filter(|node| node.is_element())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                parse_muc_admin_batch(&items),
+                Err(MucAdminParseError::BadRequest)
+            );
+        }
+    }
+
+    #[test]
+    fn admin_batch_parser_bounds_items_and_preserves_malformed_target_error() {
+        let items = (0..63)
+            .map(|index| format!("<item nick='Nick{index}' role='participant'/>"))
+            .collect::<String>();
+        let xml = format!("<query xmlns='http://jabber.org/protocol/muc#admin'>{items}</query>");
+        let document = roxmltree::Document::parse(&xml).unwrap();
+        let nodes = document
+            .root_element()
+            .children()
+            .filter(|node| node.is_element())
+            .collect::<Vec<_>>();
+        assert_eq!(parse_muc_admin_batch(&nodes).unwrap().items.len(), 63);
+        assert_eq!(classify_muc_admin_items(&nodes), Err(()));
+
+        let xml = format!("<query xmlns='http://jabber.org/protocol/muc#admin'>{items}<item nick='Extra' role='none'/></query>");
+        let document = roxmltree::Document::parse(&xml).unwrap();
+        let nodes = document
+            .root_element()
+            .children()
+            .filter(|node| node.is_element())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parse_muc_admin_batch(&nodes),
+            Err(MucAdminParseError::BadRequest)
+        );
+
+        let document = roxmltree::Document::parse(
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item jid='@example.test' affiliation='member'/></query>",
+        )
+        .unwrap();
+        let nodes = document
+            .root_element()
+            .children()
+            .filter(|node| node.is_element())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parse_muc_admin_batch(&nodes),
+            Err(MucAdminParseError::JidMalformed)
+        );
+
+        let oversized_reason = "x".repeat(4097);
+        let xml = format!(
+            "<query xmlns='http://jabber.org/protocol/muc#admin'><item nick='Bob' role='none'><reason>{oversized_reason}</reason></item></query>"
+        );
+        let document = roxmltree::Document::parse(&xml).unwrap();
+        let nodes = document
+            .root_element()
+            .children()
+            .filter(|node| node.is_element())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parse_muc_admin_batch(&nodes),
+            Err(MucAdminParseError::NotAcceptable)
+        );
+    }
+
+    #[test]
+    fn admin_batch_outcomes_have_stable_iq_error_mapping() {
+        assert_eq!(muc_admin_batch_error(MucAdminBatchOutcome::Applied), None);
+        assert_eq!(muc_admin_batch_error(MucAdminBatchOutcome::Replay), None);
+        assert_eq!(
+            muc_admin_batch_error(MucAdminBatchOutcome::DuplicateTarget),
+            Some("bad-request")
+        );
+        assert_eq!(
+            muc_admin_batch_error(MucAdminBatchOutcome::TooManyProjections),
+            Some("resource-constraint")
+        );
+        assert_eq!(
+            muc_admin_batch_error(MucAdminBatchOutcome::LastOwner),
+            Some("conflict")
+        );
+        assert_eq!(
+            muc_admin_batch_error(MucAdminBatchOutcome::MissingTarget),
+            Some("item-not-found")
+        );
+        assert_eq!(
+            muc_admin_batch_error(MucAdminBatchOutcome::Unauthorized),
+            Some("forbidden")
+        );
+        for outcome in [
+            MucAdminBatchOutcome::Stale,
+            MucAdminBatchOutcome::Destroyed,
+            MucAdminBatchOutcome::Conflict,
+        ] {
+            assert_eq!(muc_admin_batch_error(outcome), Some("conflict"));
+        }
     }
 
     #[test]

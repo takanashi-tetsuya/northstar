@@ -745,6 +745,28 @@ async fn run() -> Result<()> {
                 )
             },
         );
+    } else if state.muc_pg_authority_enabled() {
+        let maintenance_context = Arc::new(state.standalone_muc_maintenance_context());
+        let maintenance_cancel = cancel.clone();
+        worker_registry.supervise(
+            "standalone-muc-occupancy",
+            WorkerCriticality::Restartable,
+            WorkerMode::Continuous,
+            Some(std::time::Duration::from_secs(45)),
+            cancel.clone(),
+            move |heartbeat| {
+                let maintenance_context = Arc::clone(&maintenance_context);
+                let maintenance_cancel = maintenance_cancel.clone();
+                async move {
+                    services::standalone_muc_maintenance::run(
+                        maintenance_context,
+                        maintenance_cancel,
+                        heartbeat,
+                    )
+                    .await
+                }
+            },
+        );
     }
 
     let shutdown_state = state.clone();

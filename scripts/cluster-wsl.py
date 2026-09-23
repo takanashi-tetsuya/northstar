@@ -38,6 +38,7 @@ DOMAIN = "cluster.localhost"
 PASSWORD = "cluster-password-123"
 ALICE = "alice_cluster"
 BOB = "bob_cluster"
+CAROL = "carol_cluster"
 HTTP_A = int(os.environ.get("NORTHSTAR_CLUSTER_HTTP_A", "18581"))
 HTTP_B = int(os.environ.get("NORTHSTAR_CLUSTER_HTTP_B", "18582"))
 XMPP_A = int(os.environ.get("NORTHSTAR_CLUSTER_XMPP_A", "16522"))
@@ -889,6 +890,7 @@ def run() -> None:
     fixture.wait_ready()
     register(ALICE)
     register(BOB)
+    register(CAROL)
     alice_a = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-node-a")
 
     endpoint(HTTP_B, XMPP_B)
@@ -1289,6 +1291,67 @@ def run() -> None:
     fixture.check(
         f"from='{room}/Bob'" in alice_group and "cross-node group message" in alice_group,
         "cross-node MUC message was not broadcast",
+    )
+
+    # Both items must use one room transaction. A missing second nickname
+    # cannot leave the first affiliation behind.
+    alice_a.send(
+        f"<iq xmlns='jabber:client' to='{room}' type='set' id='cluster-admin-failed'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        f"<item jid='{CAROL}@{DOMAIN}' affiliation='member'/>"
+        "<item nick='Missing' role='visitor'/>"
+        "</query></iq>"
+    )
+    failed_batch, _ = alice_a.receive_until("cluster-admin-failed")
+    fixture.check(
+        "type='error'" in failed_batch and "item-not-found" in failed_batch,
+        "MUC admin batch accepted a missing second role target",
+    )
+    alice_a.send(
+        f"<iq xmlns='jabber:client' to='{room}' type='get' id='cluster-admin-rollback-read'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        "<item affiliation='member'/></query></iq>"
+    )
+    rolled_back, _ = alice_a.receive_until("cluster-admin-rollback-read")
+    fixture.check(
+        "type='result'" in rolled_back and f"{CAROL}@{DOMAIN}" not in rolled_back,
+        "failed MUC admin batch retained its first affiliation change",
+    )
+    alice_a.send(
+        f"<iq xmlns='jabber:client' to='{room}' type='set' id='cluster-admin-mixed'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        f"<item jid='{CAROL}@{DOMAIN}' affiliation='member'/>"
+        "<item nick='Bob' role='visitor'/>"
+        "</query></iq>"
+    )
+    mixed_result, _ = alice_a.receive_until("cluster-admin-mixed")
+    fixture.check("type='result'" in mixed_result, "mixed MUC admin batch was rejected")
+    role_notice, _ = bob_b.receive_until("role='visitor'")
+    fixture.check(
+        f"from='{room}/Bob'" in role_notice and "type='unavailable'" not in role_notice,
+        "mixed MUC admin batch did not deliver Bob's new role across nodes",
+    )
+    alice_a.send(
+        f"<iq xmlns='jabber:client' to='{room}' type='get' id='cluster-admin-commit-read'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        "<item affiliation='member'/></query></iq>"
+    )
+    committed, _ = alice_a.receive_until("cluster-admin-commit-read")
+    fixture.check(
+        "type='result'" in committed and f"{CAROL}@{DOMAIN}" in committed,
+        "mixed MUC admin batch did not commit Carol's affiliation",
+    )
+    alice_a.send(
+        f"<iq xmlns='jabber:client' to='{room}' type='set' id='cluster-admin-mixed'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        f"<item jid='{CAROL}@{DOMAIN}' affiliation='outcast'/>"
+        "<item nick='Bob' role='none'/>"
+        "</query></iq>"
+    )
+    changed_retry, _ = alice_a.receive_until("cluster-admin-mixed")
+    fixture.check(
+        "type='error'" in changed_retry and "conflict" in changed_retry,
+        "changed payload reused a committed MUC admin IQ identity",
     )
 
     alice_a.send(

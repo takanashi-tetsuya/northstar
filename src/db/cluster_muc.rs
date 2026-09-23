@@ -19,6 +19,7 @@ const MAX_PAYLOAD_BYTES: usize = 1_048_576;
 const MAX_OPERATION_SNAPSHOT_BYTES: usize = 16 * 1_048_576;
 const MAX_OPERATION_AUDIENCE: usize = 10_000;
 const MAX_CLAIM_BATCH: i64 = 256;
+pub const MAX_MUC_OCCUPANCY_RENEW_BATCH: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -237,6 +238,21 @@ pub struct ClusterMucOccupancyTarget {
     pub nick: String,
     pub connection_uuid: Uuid,
     pub connection_epoch: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ClusterMucOccupancyLookup {
+    pub room_localpart: String,
+    pub full_jid: String,
+    pub nick: String,
+    pub occupant_incarnation: Uuid,
+    pub connection_uuid: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClusterMucResolvedOccupancy {
+    pub room_localpart: String,
+    pub target: ClusterMucOccupancyTarget,
 }
 
 /// Compact, immutable result of a policy mutation. This deliberately omits
@@ -825,12 +841,7 @@ async fn insert_operation_and_outbox(
         "event_id": record.event_id,
         "event_sequence": record.event_sequence,
     });
-    let payload = serde_json::to_string(&immutable)?;
-    anyhow::ensure!(
-        payload.len() <= MAX_PAYLOAD_BYTES,
-        "MUC outbox payload is oversized"
-    );
-    let digest = payload_digest(&payload);
+    let common_payload = serde_json::to_string(&immutable)?;
     let mut deliveries = record
         .audience
         .iter()
@@ -844,6 +855,18 @@ async fn insert_operation_and_outbox(
     // then the same capacity shard, then the dead-letter shard.
     deliveries.sort_by_key(|(shard, delivery_id, _)| (*shard, *delivery_id));
     for (shard, delivery_id, recipient) in deliveries {
+        let payload = if record.kind == "admin_batch" {
+            let mut recipient_payload = immutable.clone();
+            recipient_payload["original_audience"] = serde_json::to_value(recipient)?;
+            serde_json::to_string(&recipient_payload)?
+        } else {
+            common_payload.clone()
+        };
+        anyhow::ensure!(
+            payload.len() <= MAX_PAYLOAD_BYTES,
+            "MUC outbox payload is oversized"
+        );
+        let digest = payload_digest(&payload);
         sqlx::query(
             "INSERT INTO cluster_muc_event_outbox(
                  delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
@@ -1227,6 +1250,83 @@ pub async fn renew_cluster_muc_occupancy(
     .await?
     .rows_affected()
         == 1)
+}
+
+/// Refresh a bounded set of exact leases in one database round trip. Only
+/// rows returned by PostgreSQL still belong to this node; callers must fence
+/// every omitted local actor before using its room authority again.
+pub async fn renew_cluster_muc_occupancies_batch(
+    pool: &PgPool,
+    targets: &[ClusterMucOccupancyTarget],
+    owner_node_id: &str,
+    lease: Duration,
+) -> Result<Vec<ClusterMucOccupancyTarget>> {
+    validate_node_id(owner_node_id)?;
+    let seconds = validate_lease(lease)?;
+    anyhow::ensure!(
+        targets.len() <= MAX_MUC_OCCUPANCY_RENEW_BATCH,
+        "MUC occupancy renewal batch exceeds its limit"
+    );
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut seen = std::collections::HashSet::with_capacity(targets.len());
+    anyhow::ensure!(
+        targets
+            .iter()
+            .all(|target| seen.insert((target.room_id, target.occupant_incarnation))),
+        "MUC occupancy renewal batch contains a duplicate incarnation"
+    );
+    let input = serde_json::to_value(targets)?;
+    let rows = sqlx::query(
+        "WITH input AS MATERIALIZED (
+             SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
+                 room_id uuid,room_epoch uuid,occupant_incarnation uuid,
+                 occupancy_epoch bigint,full_jid text,nick text,
+                 connection_uuid uuid,connection_epoch bigint)
+         ), locked AS MATERIALIZED (
+             SELECT o.room_id,o.occupant_incarnation
+               FROM cluster_muc_occupancies o
+               JOIN input ON o.room_id=input.room_id
+                    AND o.room_epoch=input.room_epoch
+                    AND o.occupant_incarnation=input.occupant_incarnation
+                    AND o.occupancy_epoch=input.occupancy_epoch
+                    AND o.full_jid=input.full_jid AND o.nick=input.nick
+                    AND o.connection_uuid=input.connection_uuid
+                    AND o.connection_epoch=input.connection_epoch
+              WHERE o.owner_node_id=$2 AND o.state IN ('active','suspended')
+                AND o.lease_until>clock_timestamp()
+              ORDER BY o.room_id,o.occupant_incarnation
+              FOR UPDATE OF o
+         )
+         UPDATE cluster_muc_occupancies AS o
+            SET lease_until=clock_timestamp()+make_interval(secs=>$3),
+                updated_at=clock_timestamp()
+           FROM locked
+          WHERE o.room_id=locked.room_id
+            AND o.occupant_incarnation=locked.occupant_incarnation
+      RETURNING o.room_id,o.room_epoch,o.occupant_incarnation,
+                o.occupancy_epoch,o.full_jid,o.nick,
+                o.connection_uuid,o.connection_epoch",
+    )
+    .bind(input)
+    .bind(owner_node_id)
+    .bind(seconds as f64)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ClusterMucOccupancyTarget {
+            room_id: row.get("room_id"),
+            room_epoch: row.get("room_epoch"),
+            occupant_incarnation: row.get("occupant_incarnation"),
+            occupancy_epoch: row.get("occupancy_epoch"),
+            full_jid: row.get("full_jid"),
+            nick: row.get("nick"),
+            connection_uuid: row.get("connection_uuid"),
+            connection_epoch: row.get("connection_epoch"),
+        })
+        .collect())
 }
 
 /// Refresh bounded ordinary presence soft-state while extending the exact PG
@@ -2765,6 +2865,47 @@ pub struct ClusterMucAffiliationBatch<'a> {
     pub changes: &'a [super::muc::MucAffiliationChange],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub enum ClusterMucAdminChange {
+    Affiliation {
+        target: super::muc::MucAffiliationTarget,
+        affiliation: String,
+        reason: Option<String>,
+    },
+    Role {
+        target_nick: String,
+        role: String,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClusterMucAdminBatchOutcome {
+    Applied,
+    Replay,
+    DuplicateTarget,
+    LastOwner,
+    MissingTarget,
+    Unauthorized,
+    Stale,
+    Destroyed,
+    Conflict,
+    TooManyProjections,
+}
+
+#[derive(Clone, Copy)]
+pub struct ClusterMucAdminBatch<'a> {
+    pub operation_id: Uuid,
+    pub room_id: Uuid,
+    pub expected_room_epoch: Uuid,
+    pub expected_config_version: i64,
+    pub actor_target: Option<&'a ClusterMucOccupancyTarget>,
+    pub actor: &'a ClusterMucPrincipal,
+    pub actor_full_jid: &'a str,
+    pub local_domain: &'a str,
+    pub changes: &'a [ClusterMucAdminChange],
+}
+
 pub async fn apply_cluster_muc_affiliations_batch(
     pool: &PgPool,
     batch: ClusterMucAffiliationBatch<'_>,
@@ -3147,6 +3288,618 @@ pub async fn apply_cluster_muc_affiliations_batch(
     .await?;
     tx.commit().await?;
     Ok(super::muc::MucAffiliationBatchOutcome::Applied)
+}
+
+/// Apply the complete ordered administrative IQ while the room is locked.
+/// Every read used for authorization, every target fence, the final-owner
+/// check, all writes, and the immutable delivery record share one transaction.
+pub async fn apply_cluster_muc_admin_batch(
+    pool: &PgPool,
+    batch: ClusterMucAdminBatch<'_>,
+) -> Result<ClusterMucAdminBatchOutcome> {
+    for attempt in 0..3 {
+        match apply_cluster_muc_admin_batch_once(pool, batch).await {
+            Err(error) if attempt < 2 && is_cluster_muc_serialization_failure(&error) => {
+                continue;
+            }
+            outcome => return outcome,
+        }
+    }
+    unreachable!("the bounded MUC transaction retry always returns")
+}
+
+fn is_cluster_muc_serialization_failure(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .and_then(sqlx::Error::as_database_error)
+            .and_then(|database| database.code())
+            .is_some_and(|code| matches!(code.as_ref(), "40001" | "40P01"))
+    })
+}
+
+async fn apply_cluster_muc_admin_batch_once(
+    pool: &PgPool,
+    batch: ClusterMucAdminBatch<'_>,
+) -> Result<ClusterMucAdminBatchOutcome> {
+    use std::collections::{BTreeMap, HashSet};
+    use ClusterMucAdminBatchOutcome as Outcome;
+
+    enum Subject {
+        Local(Uuid),
+        Federated(String),
+    }
+    enum Prepared {
+        Affiliation {
+            key: String,
+            subject: Subject,
+            bare_jid: String,
+            affiliation: String,
+            previous: Option<String>,
+            reason: Option<String>,
+            affected: Vec<ClusterMucOccupancyTarget>,
+        },
+        Role {
+            target: ClusterMucOccupancyTarget,
+            role: String,
+            reason: Option<String>,
+        },
+    }
+
+    anyhow::ensure!(
+        !batch.changes.is_empty() && batch.changes.len() <= 63,
+        "MUC admin batch must contain 1 to 63 items"
+    );
+    batch.actor.validate()?;
+    let actor_full_jid = crate::jid::canonicalize(batch.actor_full_jid)?;
+    anyhow::ensure!(
+        actor_full_jid == batch.actor_full_jid
+            && muc_principal_owns_address(&actor_full_jid, batch.actor)?,
+        "MUC admin actor does not own the canonical authenticated full JID"
+    );
+    let local_domain = crate::jid::prepare_domainpart(batch.local_domain)?;
+    anyhow::ensure!(
+        local_domain == batch.local_domain,
+        "noncanonical local domain"
+    );
+    for change in batch.changes {
+        let reason = match change {
+            ClusterMucAdminChange::Affiliation { reason, .. }
+            | ClusterMucAdminChange::Role { reason, .. } => reason,
+        };
+        anyhow::ensure!(
+            reason.as_ref().is_none_or(|value| value.len() <= 4096),
+            "MUC admin reason is oversized"
+        );
+    }
+    let digest = request_digest(&json!({
+        "actor":batch.actor,"actor_full_jid":actor_full_jid,
+        "changes":batch.changes,
+    }))?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await?;
+    // Replay is checked before resolving any nick: a successful kick leaves
+    // no live nick to resolve. The IQ identity is independent of its payload.
+    let prior = sqlx::query(
+        "SELECT room_id,operation_kind,request_digest
+           FROM cluster_muc_operations WHERE operation_id=$1",
+    )
+    .bind(batch.operation_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(prior) = prior {
+        let identical = prior.get::<Uuid, _>("room_id") == batch.room_id
+            && prior.get::<String, _>("operation_kind") == "admin_batch"
+            && prior.get::<Vec<u8>, _>("request_digest") == digest;
+        tx.rollback().await?;
+        return Ok(if identical {
+            Outcome::Replay
+        } else {
+            Outcome::Conflict
+        });
+    }
+    let Some(actor_target) = batch.actor_target else {
+        tx.rollback().await?;
+        return Ok(Outcome::Unauthorized);
+    };
+    let Some(room) = lock_room(&mut tx, batch.room_id).await? else {
+        tx.rollback().await?;
+        return Ok(Outcome::MissingTarget);
+    };
+    if room.destroyed {
+        tx.rollback().await?;
+        return Ok(Outcome::Destroyed);
+    }
+    if room.room_epoch != batch.expected_room_epoch
+        || room.config_version != batch.expected_config_version
+        || actor_target.room_id != batch.room_id
+        || actor_target.room_epoch != room.room_epoch
+    {
+        tx.rollback().await?;
+        return Ok(Outcome::Stale);
+    }
+    // The room lock serializes all conforming room mutations. Lock the exact
+    // occupancies in a stable order before reading affiliation rows, so a
+    // mixed request cannot reverse the lock order of its individual items.
+    let rows = sqlx::query(
+        "SELECT * FROM cluster_muc_occupancies
+          WHERE room_id=$1 AND room_epoch=$2
+            AND state IN ('active','suspended') AND lease_until>clock_timestamp()
+          ORDER BY occupant_incarnation LIMIT $3 FOR UPDATE",
+    )
+    .bind(batch.room_id)
+    .bind(room.room_epoch)
+    .bind(i64::try_from(MAX_OPERATION_AUDIENCE + 1).unwrap_or(10_001))
+    .fetch_all(&mut *tx)
+    .await?;
+    anyhow::ensure!(
+        rows.len() <= MAX_OPERATION_AUDIENCE,
+        "MUC admin batch occupancy snapshot exceeds configured operation bound"
+    );
+    let occupancies = rows.iter().map(occupancy_from_row).collect::<Vec<_>>();
+    let Some(actor_current) = occupancies.iter().find(|occupancy| {
+        occupancy.state == "active"
+            && exact_target_matches_row(actor_target, occupancy)
+            && occupancy.full_jid == actor_full_jid
+            && principal_matches_occupancy(batch.actor, occupancy)
+    }) else {
+        tx.rollback().await?;
+        return Ok(Outcome::Unauthorized);
+    };
+    let actor_affiliation = affiliation_in_tx(&mut tx, batch.room_id, batch.actor)
+        .await?
+        .unwrap_or_else(|| "none".to_owned());
+    if actor_affiliation == "outcast" {
+        tx.rollback().await?;
+        return Ok(Outcome::Unauthorized);
+    }
+
+    let mut prepared = Vec::with_capacity(batch.changes.len());
+    let mut keys = HashSet::new();
+    let mut touched = HashSet::new();
+    for change in batch.changes {
+        match change {
+            ClusterMucAdminChange::Affiliation {
+                target,
+                affiliation,
+                reason,
+            } => {
+                if !matches!(actor_affiliation.as_str(), "owner" | "admin") {
+                    tx.rollback().await?;
+                    return Ok(Outcome::Unauthorized);
+                }
+                anyhow::ensure!(
+                    matches!(
+                        affiliation.as_str(),
+                        "owner" | "admin" | "member" | "outcast" | "none"
+                    ),
+                    "invalid MUC affiliation"
+                );
+                let (key, subject, bare_jid) = match target {
+                    super::muc::MucAffiliationTarget::LocalUsername(username) => {
+                        anyhow::ensure!(
+                            crate::jid::prepare_localpart(username)? == *username,
+                            "noncanonical MUC local affiliation target"
+                        );
+                        let Some(user_id) =
+                            sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE username=$1")
+                                .bind(username)
+                                .fetch_optional(&mut *tx)
+                                .await?
+                        else {
+                            tx.rollback().await?;
+                            return Ok(Outcome::MissingTarget);
+                        };
+                        (
+                            format!("local:{user_id}"),
+                            Subject::Local(user_id),
+                            format!("{username}@{local_domain}"),
+                        )
+                    }
+                    super::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
+                        let canonical = crate::jid::CanonicalJid::parse_bare(jid)?;
+                        anyhow::ensure!(
+                            canonical.localpart().is_some()
+                                && canonical.to_string() == *jid
+                                && canonical.domainpart() != local_domain,
+                            "noncanonical or local federated MUC affiliation target"
+                        );
+                        (
+                            format!("federated:{jid}"),
+                            Subject::Federated(jid.clone()),
+                            jid.clone(),
+                        )
+                    }
+                };
+                if !keys.insert(key.clone()) {
+                    tx.rollback().await?;
+                    return Ok(Outcome::DuplicateTarget);
+                }
+                let affected = occupancies
+                    .iter()
+                    .filter(|occupancy| match &subject {
+                        Subject::Local(user_id) => occupancy.local_user_id == Some(*user_id),
+                        Subject::Federated(jid) => {
+                            occupancy.identity_kind == "federated" && occupancy.bare_jid == *jid
+                        }
+                    })
+                    .map(ClusterMucOccupancyTarget::from)
+                    .collect::<Vec<_>>();
+                for occupant in &affected {
+                    if !touched.insert(occupant.occupant_incarnation) {
+                        tx.rollback().await?;
+                        return Ok(Outcome::DuplicateTarget);
+                    }
+                }
+                prepared.push(Prepared::Affiliation {
+                    key,
+                    subject,
+                    bare_jid,
+                    affiliation: affiliation.clone(),
+                    previous: None,
+                    reason: reason.clone(),
+                    affected,
+                });
+            }
+            ClusterMucAdminChange::Role {
+                target_nick,
+                role,
+                reason,
+            } => {
+                anyhow::ensure!(
+                    matches!(
+                        role.as_str(),
+                        "moderator" | "participant" | "visitor" | "none"
+                    ),
+                    "invalid MUC role"
+                );
+                anyhow::ensure!(
+                    crate::xmpp::xml_util::prepare_muc_nick(target_nick)? == *target_nick,
+                    "noncanonical MUC role target nick"
+                );
+                if !keys.insert(format!("nick:{target_nick}")) {
+                    tx.rollback().await?;
+                    return Ok(Outcome::DuplicateTarget);
+                }
+                let Some(occupancy) = occupancies.iter().find(|row| row.nick == *target_nick)
+                else {
+                    tx.rollback().await?;
+                    return Ok(Outcome::MissingTarget);
+                };
+                if !touched.insert(occupancy.occupant_incarnation) {
+                    tx.rollback().await?;
+                    return Ok(Outcome::DuplicateTarget);
+                }
+                prepared.push(Prepared::Role {
+                    target: ClusterMucOccupancyTarget::from(occupancy),
+                    role: role.clone(),
+                    reason: reason.clone(),
+                });
+            }
+        }
+    }
+
+    // Sort affiliation keys independently of IQ order; row locks are then
+    // acquired in one canonical order, while effects retain IQ order below.
+    let mut affiliations = BTreeMap::<String, Option<String>>::new();
+    for item in &prepared {
+        if let Prepared::Affiliation { key, .. } = item {
+            affiliations.insert(key.clone(), None);
+        }
+    }
+    for (key, previous) in &mut affiliations {
+        let value = if let Some(user_id) = key.strip_prefix("local:") {
+            sqlx::query_scalar::<_, String>(
+                "SELECT affiliation FROM muc_affiliations
+                  WHERE room_id=$1 AND user_id=$2 FOR SHARE",
+            )
+            .bind(batch.room_id)
+            .bind(Uuid::parse_str(user_id)?)
+            .fetch_optional(&mut *tx)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, String>(
+                "SELECT affiliation FROM muc_external_affiliations
+                  WHERE room_id=$1 AND jid=$2 FOR SHARE",
+            )
+            .bind(batch.room_id)
+            .bind(
+                key.strip_prefix("federated:")
+                    .context("invalid MUC target key")?,
+            )
+            .fetch_optional(&mut *tx)
+            .await?
+        };
+        *previous = value;
+    }
+    let mut owner_delta = 0_i64;
+    let mut projection_count = 0_usize;
+    for item in &mut prepared {
+        match item {
+            Prepared::Affiliation {
+                key,
+                affiliation,
+                previous,
+                affected,
+                ..
+            } => {
+                *previous = affiliations.get(key).cloned().flatten();
+                if actor_affiliation == "admin"
+                    && (matches!(previous.as_deref(), Some("owner" | "admin"))
+                        || matches!(affiliation.as_str(), "owner" | "admin"))
+                {
+                    tx.rollback().await?;
+                    return Ok(Outcome::Unauthorized);
+                }
+                if previous.as_deref() == Some("owner") && affiliation != "owner" {
+                    owner_delta -= 1;
+                } else if previous.as_deref() != Some("owner") && affiliation == "owner" {
+                    owner_delta += 1;
+                }
+                projection_count += if affected.is_empty() {
+                    usize::from(room.non_anonymous)
+                } else {
+                    affected.len()
+                };
+            }
+            Prepared::Role { target, role, .. } => {
+                let occupancy = occupancies
+                    .iter()
+                    .find(|row| exact_target_matches_row(target, row))
+                    .context("locked MUC role target disappeared")?;
+                let target_principal = if let Some(user_id) = occupancy.local_user_id {
+                    ClusterMucPrincipal::Local {
+                        user_id,
+                        bare_jid: occupancy.bare_jid.clone(),
+                    }
+                } else {
+                    ClusterMucPrincipal::Federated {
+                        bare_jid: occupancy.bare_jid.clone(),
+                        authenticated_domain: occupancy
+                            .authenticated_domain
+                            .clone()
+                            .context("federated MUC occupant lacks authenticated domain")?,
+                    }
+                };
+                let target_affiliation =
+                    affiliation_in_tx(&mut tx, batch.room_id, &target_principal).await?;
+                if !(matches!(actor_affiliation.as_str(), "owner" | "admin")
+                    || actor_current.role == "moderator")
+                    || (actor_affiliation == "admin"
+                        && matches!(target_affiliation.as_deref(), Some("owner" | "admin")))
+                    || (!matches!(actor_affiliation.as_str(), "owner" | "admin")
+                        && (role == "moderator"
+                            || occupancy.role == "moderator"
+                            || matches!(target_affiliation.as_deref(), Some("owner" | "admin"))))
+                {
+                    tx.rollback().await?;
+                    return Ok(Outcome::Unauthorized);
+                }
+                projection_count += 1;
+            }
+        }
+    }
+    if projection_count > 63 {
+        tx.rollback().await?;
+        return Ok(Outcome::TooManyProjections);
+    }
+    let existing_owners: i64 = sqlx::query_scalar(
+        "SELECT
+             (SELECT COUNT(*) FROM muc_affiliations WHERE room_id=$1 AND affiliation='owner') +
+             (SELECT COUNT(*) FROM muc_external_affiliations WHERE room_id=$1 AND affiliation='owner')",
+    )
+    .bind(batch.room_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if existing_owners + owner_delta < 1 {
+        tx.rollback().await?;
+        return Ok(Outcome::LastOwner);
+    }
+    let audience = active_audience(&mut tx, batch.room_id).await?;
+    let mut effects = Vec::<Value>::with_capacity(projection_count);
+    for item in &prepared {
+        match item {
+            Prepared::Affiliation {
+                subject,
+                bare_jid,
+                affiliation,
+                reason,
+                affected,
+                ..
+            } => {
+                match subject {
+                    Subject::Local(user_id) => {
+                        if affiliation == "none" {
+                            sqlx::query(
+                                "DELETE FROM muc_affiliations WHERE room_id=$1 AND user_id=$2",
+                            )
+                            .bind(batch.room_id)
+                            .bind(user_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        } else {
+                            sqlx::query(
+                                "INSERT INTO muc_affiliations(room_id,user_id,affiliation)
+                                 VALUES($1,$2,$3) ON CONFLICT(room_id,user_id)
+                                 DO UPDATE SET affiliation=EXCLUDED.affiliation",
+                            )
+                            .bind(batch.room_id)
+                            .bind(user_id)
+                            .bind(affiliation)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                    Subject::Federated(jid) => {
+                        if affiliation == "none" {
+                            sqlx::query(
+                                "DELETE FROM muc_external_affiliations WHERE room_id=$1 AND jid=$2",
+                            )
+                            .bind(batch.room_id)
+                            .bind(jid)
+                            .execute(&mut *tx)
+                            .await?;
+                        } else {
+                            sqlx::query(
+                                "INSERT INTO muc_external_affiliations(room_id,jid,affiliation)
+                                 VALUES($1,$2,$3) ON CONFLICT(room_id,jid)
+                                 DO UPDATE SET affiliation=EXCLUDED.affiliation",
+                            )
+                            .bind(batch.room_id)
+                            .bind(jid)
+                            .bind(affiliation)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                }
+                if affected.is_empty() && room.non_anonymous {
+                    effects.push(json!({
+                        "kind":"offline_affiliation","bare_jid":bare_jid,
+                        "affiliation":affiliation,"nick":Value::Null,"reason":reason,
+                    }));
+                }
+                for target in affected {
+                    let terminal =
+                        affiliation == "outcast" || (affiliation == "none" && room.members_only);
+                    let status = if affiliation == "outcast" {
+                        Some(301_u16)
+                    } else if terminal {
+                        Some(321_u16)
+                    } else {
+                        None
+                    };
+                    let changed = sqlx::query(
+                        "UPDATE cluster_muc_occupancies SET affiliation=$9,
+                           role=CASE WHEN $9='outcast' OR ($10 AND $9='none') THEN 'none'
+                                     WHEN $9 IN ('owner','admin') THEN 'moderator'
+                                     WHEN $11 AND $9='none' THEN 'visitor' ELSE 'participant' END,
+                           state=CASE WHEN $9='outcast' OR ($10 AND $9='none') THEN 'revoked' ELSE state END,
+                           lease_until=CASE WHEN $9='outcast' OR ($10 AND $9='none') THEN clock_timestamp() ELSE lease_until END,
+                           ended_at=CASE WHEN $9='outcast' OR ($10 AND $9='none') THEN clock_timestamp() ELSE ended_at END,
+                           updated_at=clock_timestamp()
+                          WHERE room_id=$1 AND room_epoch=$2 AND occupant_incarnation=$3
+                            AND occupancy_epoch=$4 AND full_jid=$5 AND nick=$6
+                            AND connection_uuid=$7 AND connection_epoch=$8
+                            AND state IN ('active','suspended')",
+                    )
+                    .bind(target.room_id).bind(target.room_epoch)
+                    .bind(target.occupant_incarnation).bind(target.occupancy_epoch)
+                    .bind(&target.full_jid).bind(&target.nick)
+                    .bind(target.connection_uuid).bind(target.connection_epoch)
+                    .bind(affiliation).bind(room.members_only).bind(room.moderated)
+                    .execute(&mut *tx).await?.rows_affected();
+                    anyhow::ensure!(
+                        changed == 1,
+                        "exact MUC affiliation target changed concurrently"
+                    );
+                    let row = sqlx::query(
+                        "SELECT * FROM cluster_muc_occupancies
+                          WHERE room_id=$1 AND occupant_incarnation=$2 AND occupancy_epoch=$3",
+                    )
+                    .bind(target.room_id)
+                    .bind(target.occupant_incarnation)
+                    .bind(target.occupancy_epoch)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    effects.push(json!({
+                        "kind":"presence","target":target,
+                        "snapshot":ClusterMucPolicySnapshot::from(&occupancy_from_row(&row)),
+                        "status":status,"reason":reason,
+                    }));
+                }
+            }
+            Prepared::Role {
+                target,
+                role,
+                reason,
+            } => {
+                let terminal = role == "none";
+                let changed = sqlx::query(
+                    "UPDATE cluster_muc_occupancies SET role=$9,
+                       state=CASE WHEN $9='none' THEN 'revoked' ELSE state END,
+                       lease_until=CASE WHEN $9='none' THEN clock_timestamp() ELSE lease_until END,
+                       ended_at=CASE WHEN $9='none' THEN clock_timestamp() ELSE ended_at END,
+                       updated_at=clock_timestamp()
+                      WHERE room_id=$1 AND room_epoch=$2 AND occupant_incarnation=$3
+                        AND occupancy_epoch=$4 AND full_jid=$5 AND nick=$6
+                        AND connection_uuid=$7 AND connection_epoch=$8
+                        AND state IN ('active','suspended')",
+                )
+                .bind(target.room_id)
+                .bind(target.room_epoch)
+                .bind(target.occupant_incarnation)
+                .bind(target.occupancy_epoch)
+                .bind(&target.full_jid)
+                .bind(&target.nick)
+                .bind(target.connection_uuid)
+                .bind(target.connection_epoch)
+                .bind(role)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+                anyhow::ensure!(changed == 1, "exact MUC role target changed concurrently");
+                let row = sqlx::query(
+                    "SELECT * FROM cluster_muc_occupancies
+                      WHERE room_id=$1 AND occupant_incarnation=$2 AND occupancy_epoch=$3",
+                )
+                .bind(target.room_id)
+                .bind(target.occupant_incarnation)
+                .bind(target.occupancy_epoch)
+                .fetch_one(&mut *tx)
+                .await?;
+                effects.push(json!({
+                    "kind":"presence","target":target,
+                    "snapshot":ClusterMucPolicySnapshot::from(&occupancy_from_row(&row)),
+                    "status":if terminal { Some(307_u16) } else { None },
+                    "reason":reason,
+                }));
+            }
+        }
+    }
+    let (_unused, event_sequence) = allocate_room_epochs(&mut tx, batch.room_id, false).await?;
+    let authorization = json!({
+        "actor":batch.actor,"actor_full_jid":actor_full_jid,
+        "actor_target":actor_target,"durable_affiliation":actor_affiliation,
+        "live_role":actor_current.role,"room_epoch":room.room_epoch,
+        "config_version":room.config_version,
+    });
+    let details = json!({
+        "non_anonymous":room.non_anonymous,
+        "request_change_count":batch.changes.len(),
+        "changes":effects,
+    });
+    insert_operation_and_outbox(
+        &mut tx,
+        OperationRecord {
+            operation_id: batch.operation_id,
+            room_id: batch.room_id,
+            room_epoch: room.room_epoch,
+            kind: "admin_batch",
+            digest: &digest,
+            actor_bare_jid: Some(batch.actor.bare_jid()),
+            actor_full_jid: Some(&actor_full_jid),
+            actor_affiliation: Some(&actor_affiliation),
+            authorization_source: if matches!(batch.actor, ClusterMucPrincipal::Local { .. }) {
+                "local_database"
+            } else {
+                "federated_verified"
+            },
+            authorization_snapshot: &authorization,
+            target: None,
+            config_version_before: room.config_version,
+            config_version_after: room.config_version,
+            event_sequence,
+            event_id: batch.operation_id,
+            audience: &audience,
+            details: &details,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Outcome::Applied)
 }
 
 /// Apply a moderator kick only after re-reading both actor authorization and
@@ -4777,6 +5530,119 @@ pub async fn authoritative_cluster_muc_occupancies_for_node(
     Ok(rows.iter().map(occupancy_from_row).collect())
 }
 
+/// Resolve only locally observed actors, avoiding a node-wide occupancy scan
+/// on every lease tick. A changed room, connection, nickname or owner node
+/// simply omits that candidate from the result.
+pub async fn resolve_cluster_muc_occupancies_batch(
+    pool: &PgPool,
+    candidates: &[ClusterMucOccupancyLookup],
+    owner_node_id: &str,
+) -> Result<Vec<ClusterMucResolvedOccupancy>> {
+    validate_node_id(owner_node_id)?;
+    anyhow::ensure!(
+        candidates.len() <= MAX_MUC_OCCUPANCY_RENEW_BATCH,
+        "MUC occupancy lookup batch exceeds its limit"
+    );
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut seen = std::collections::HashSet::with_capacity(candidates.len());
+    anyhow::ensure!(
+        candidates.iter().all(|candidate| {
+            seen.insert((
+                candidate.room_localpart.as_str(),
+                candidate.occupant_incarnation,
+                candidate.connection_uuid,
+            ))
+        }),
+        "MUC occupancy lookup batch contains a duplicate incarnation"
+    );
+    let input = serde_json::to_value(candidates)?;
+    let rows = sqlx::query(
+        "SELECT input.room_localpart,o.room_id,o.room_epoch,
+                o.occupant_incarnation,o.occupancy_epoch,o.full_jid,o.nick,
+                o.connection_uuid,o.connection_epoch
+           FROM jsonb_to_recordset($1::jsonb) AS input(
+                room_localpart text,full_jid text,nick text,
+                occupant_incarnation uuid,connection_uuid uuid)
+           JOIN muc_rooms r ON r.localpart=input.room_localpart
+                AND r.destroyed_at IS NULL
+           JOIN cluster_muc_occupancies o ON o.room_id=r.id
+                AND o.room_epoch=r.room_epoch
+                AND o.occupant_incarnation=input.occupant_incarnation
+                AND o.full_jid=input.full_jid AND o.nick=input.nick
+                AND o.connection_uuid=input.connection_uuid
+          WHERE o.owner_node_id=$2 AND o.state IN ('active','suspended')
+            AND o.lease_until>clock_timestamp()
+          ORDER BY input.room_localpart,o.occupant_incarnation",
+    )
+    .bind(input)
+    .bind(owner_node_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ClusterMucResolvedOccupancy {
+            room_localpart: row.get("room_localpart"),
+            target: ClusterMucOccupancyTarget {
+                room_id: row.get("room_id"),
+                room_epoch: row.get("room_epoch"),
+                occupant_incarnation: row.get("occupant_incarnation"),
+                occupancy_epoch: row.get("occupancy_epoch"),
+                full_jid: row.get("full_jid"),
+                nick: row.get("nick"),
+                connection_uuid: row.get("connection_uuid"),
+                connection_epoch: row.get("connection_epoch"),
+            },
+        })
+        .collect())
+}
+
+/// Resolve a departing local actor without trusting a nickname or a room
+/// address alone. The returned tuple is still rechecked by the leave writer.
+#[allow(clippy::too_many_arguments)]
+pub async fn cluster_muc_occupancy_target_for_disconnect(
+    pool: &PgPool,
+    room_localpart: &str,
+    full_jid: &str,
+    nick: &str,
+    occupant_incarnation: Uuid,
+    connection_uuid: Uuid,
+    owner_node_id: &str,
+) -> Result<Option<ClusterMucOccupancyTarget>> {
+    validate_node_id(owner_node_id)?;
+    let row = sqlx::query(
+        "SELECT o.room_id,o.room_epoch,o.occupant_incarnation,
+                o.occupancy_epoch,o.full_jid,o.nick,
+                o.connection_uuid,o.connection_epoch
+           FROM cluster_muc_occupancies o
+           JOIN muc_rooms r ON r.id=o.room_id AND r.room_epoch=o.room_epoch
+          WHERE r.localpart=$1 AND r.destroyed_at IS NULL
+            AND o.full_jid=$2 AND o.nick=$3
+            AND o.occupant_incarnation=$4 AND o.connection_uuid=$5
+            AND o.owner_node_id=$6 AND o.state='active'
+            AND o.lease_until>clock_timestamp()",
+    )
+    .bind(room_localpart)
+    .bind(full_jid)
+    .bind(nick)
+    .bind(occupant_incarnation)
+    .bind(connection_uuid)
+    .bind(owner_node_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| ClusterMucOccupancyTarget {
+        room_id: row.get("room_id"),
+        room_epoch: row.get("room_epoch"),
+        occupant_incarnation: row.get("occupant_incarnation"),
+        occupancy_epoch: row.get("occupancy_epoch"),
+        full_jid: row.get("full_jid"),
+        nick: row.get("nick"),
+        connection_uuid: row.get("connection_uuid"),
+        connection_epoch: row.get("connection_epoch"),
+    }))
+}
+
 pub async fn cluster_muc_occupancy_target(
     pool: &PgPool,
     room_id: Uuid,
@@ -5281,5 +6147,581 @@ mod tests {
         // The runtime fixture is intentionally ignored in the static gate.
         // scripts/cluster-wsl.sh runs the cross-node counterpart with Redis
         // loss after the root serial production-validation phase authorizes it.
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires the disposable schema created by scripts/muc-db-wsl.sh"]
+    async fn postgres_admin_batch_is_atomic_under_replay_and_failure() {
+        use super::super::muc::{get_or_create_muc_room, MucAffiliationTarget};
+        use ClusterMucAdminBatchOutcome as Outcome;
+
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("run this ignored test through scripts/muc-db-wsl.sh");
+        assert!(std::env::var_os("XMPP_TEST_CREATED_SCHEMA_LOG").is_some());
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let alice_id = Uuid::new_v4();
+        let bob_id = Uuid::new_v4();
+        let carol_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users(id,username,password_hash) VALUES
+              ($1,'batch-alice','test'),($2,'batch-bob','test'),($3,'batch-carol','test')",
+        )
+        .bind(alice_id)
+        .bind(bob_id)
+        .bind(carol_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (room, created) = get_or_create_muc_room(
+            &pool,
+            "admin-batch",
+            alice_id,
+            "batch-alice@local.test/Phone",
+        )
+        .await
+        .unwrap();
+        assert!(created);
+        sqlx::query(
+            "UPDATE muc_rooms SET configuration_state='active',
+                    configuration_owner_jid=NULL,configuration_expires_at=NULL
+              WHERE id=$1",
+        )
+        .bind(room.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let config_version: i64 =
+            sqlx::query_scalar("SELECT config_version FROM muc_rooms WHERE id=$1")
+                .bind(room.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let alice = ClusterMucPrincipal::Local {
+            user_id: alice_id,
+            bare_jid: "batch-alice@local.test".to_owned(),
+        };
+        let bob = ClusterMucPrincipal::Local {
+            user_id: bob_id,
+            bare_jid: "batch-bob@local.test".to_owned(),
+        };
+        let carol = ClusterMucPrincipal::Local {
+            user_id: carol_id,
+            bare_jid: "batch-carol@local.test".to_owned(),
+        };
+        let join = |principal: ClusterMucPrincipal, full_jid: &'static str, nick: &'static str| {
+            ClusterMucJoin {
+                operation_id: Uuid::new_v4(),
+                room_id: room.id,
+                expected_room_epoch: room.room_epoch,
+                expected_config_version: config_version,
+                principal,
+                full_jid,
+                nick,
+                owner_node_id: "batch-node",
+                connection_uuid: Uuid::new_v4(),
+                connection_epoch: 1,
+                sm_session_id: None,
+                occupant_incarnation: Uuid::new_v4(),
+                presence_payload: "<presence/>",
+                lease: Duration::from_secs(90),
+            }
+        };
+        let joined = |outcome| match outcome {
+            ClusterMucJoinOutcome::Joined(occupancy) => ClusterMucOccupancyTarget::from(&occupancy),
+            other => panic!("unexpected cluster MUC join outcome: {other:?}"),
+        };
+        let alice_target = joined(
+            claim_cluster_muc_occupancy(
+                &pool,
+                join(alice.clone(), "batch-alice@local.test/Phone", "Alice"),
+            )
+            .await
+            .unwrap(),
+        );
+        let bob_target = joined(
+            claim_cluster_muc_occupancy(
+                &pool,
+                join(bob.clone(), "batch-bob@local.test/Phone", "Bob"),
+            )
+            .await
+            .unwrap(),
+        );
+        let carol_target = joined(
+            claim_cluster_muc_occupancy(
+                &pool,
+                join(carol.clone(), "batch-carol@local.test/Phone", "Carol"),
+            )
+            .await
+            .unwrap(),
+        );
+        let renewed = renew_cluster_muc_occupancies_batch(
+            &pool,
+            &[alice_target.clone(), bob_target.clone()],
+            "batch-node",
+            Duration::from_secs(90),
+        )
+        .await
+        .unwrap();
+        assert_eq!(renewed.len(), 2);
+        assert!(renewed.contains(&alice_target));
+        assert!(renewed.contains(&bob_target));
+        let lookups = [
+            ClusterMucOccupancyLookup {
+                room_localpart: "admin-batch".to_owned(),
+                full_jid: alice_target.full_jid.clone(),
+                nick: alice_target.nick.clone(),
+                occupant_incarnation: alice_target.occupant_incarnation,
+                connection_uuid: alice_target.connection_uuid,
+            },
+            ClusterMucOccupancyLookup {
+                room_localpart: "admin-batch".to_owned(),
+                full_jid: bob_target.full_jid.clone(),
+                nick: bob_target.nick.clone(),
+                occupant_incarnation: bob_target.occupant_incarnation,
+                connection_uuid: bob_target.connection_uuid,
+            },
+        ];
+        let resolved = resolve_cluster_muc_occupancies_batch(&pool, &lookups, "batch-node")
+            .await
+            .unwrap();
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.iter().any(|item| item.target == alice_target));
+        assert!(resolved.iter().any(|item| item.target == bob_target));
+        let mut stale_lookup = lookups[1].clone();
+        stale_lookup.connection_uuid = Uuid::new_v4();
+        assert_eq!(
+            resolve_cluster_muc_occupancies_batch(
+                &pool,
+                &[lookups[0].clone(), stale_lookup],
+                "batch-node"
+            )
+            .await
+            .unwrap(),
+            vec![ClusterMucResolvedOccupancy {
+                room_localpart: "admin-batch".to_owned(),
+                target: alice_target.clone(),
+            }]
+        );
+        let mut wrong_epoch = bob_target.clone();
+        wrong_epoch.connection_epoch += 1;
+        assert_eq!(
+            renew_cluster_muc_occupancies_batch(
+                &pool,
+                &[alice_target.clone(), wrong_epoch],
+                "batch-node",
+                Duration::from_secs(90),
+            )
+            .await
+            .unwrap(),
+            vec![alice_target.clone()],
+            "the omitted exact target must lose local authority"
+        );
+        assert!(renew_cluster_muc_occupancies_batch(
+            &pool,
+            &[alice_target.clone(), alice_target.clone()],
+            "batch-node",
+            Duration::from_secs(90),
+        )
+        .await
+        .is_err());
+        let mut command = ClusterMucAdminBatch {
+            operation_id: Uuid::new_v4(),
+            room_id: room.id,
+            expected_room_epoch: room.room_epoch,
+            expected_config_version: config_version,
+            actor_target: Some(&alice_target),
+            actor: &alice,
+            actor_full_jid: "batch-alice@local.test/Phone",
+            local_domain: "local.test",
+            changes: &[],
+        };
+        let demote_last_owner = [ClusterMucAdminChange::Affiliation {
+            target: MucAffiliationTarget::LocalUsername("batch-alice".to_owned()),
+            affiliation: "member".to_owned(),
+            reason: None,
+        }];
+        command.changes = &demote_last_owner;
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::LastOwner
+        );
+        let overlap = [
+            ClusterMucAdminChange::Affiliation {
+                target: MucAffiliationTarget::LocalUsername("batch-bob".to_owned()),
+                affiliation: "member".to_owned(),
+                reason: None,
+            },
+            ClusterMucAdminChange::Role {
+                target_nick: "Bob".to_owned(),
+                role: "visitor".to_owned(),
+                reason: None,
+            },
+        ];
+        command.operation_id = Uuid::new_v4();
+        command.changes = &overlap;
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::DuplicateTarget
+        );
+        let mixed = [
+            ClusterMucAdminChange::Affiliation {
+                target: MucAffiliationTarget::LocalUsername("batch-carol".to_owned()),
+                affiliation: "member".to_owned(),
+                reason: Some("invited".to_owned()),
+            },
+            ClusterMucAdminChange::Role {
+                target_nick: "Bob".to_owned(),
+                role: "visitor".to_owned(),
+                reason: Some("quiet".to_owned()),
+            },
+        ];
+        command.operation_id = Uuid::new_v4();
+        command.changes = &mixed;
+
+        // Fail on the second item after the first affiliation and occupancy
+        // updates have executed; no partial state or outbox row may survive.
+        sqlx::raw_sql(
+            "CREATE FUNCTION reject_bob_batch_update() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN IF NEW.nick='Bob' THEN RAISE EXCEPTION 'injected second item failure'; END IF;
+                   RETURN NEW; END $$;
+             CREATE TRIGGER reject_bob_batch_update BEFORE UPDATE ON cluster_muc_occupancies
+               FOR EACH ROW EXECUTE FUNCTION reject_bob_batch_update()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(apply_cluster_muc_admin_batch(&pool, command)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("injected second item failure"));
+        sqlx::raw_sql(
+            "DROP TRIGGER reject_bob_batch_update ON cluster_muc_occupancies;
+             DROP FUNCTION reject_bob_batch_update()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let carol_affiliation: Option<String> = sqlx::query_scalar(
+            "SELECT affiliation FROM muc_affiliations WHERE room_id=$1 AND user_id=$2",
+        )
+        .bind(room.id)
+        .bind(carol_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(carol_affiliation.is_none());
+        let failed_operation: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM cluster_muc_operations WHERE operation_id=$1)",
+        )
+        .bind(command.operation_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!failed_operation);
+
+        // Force the operation's final outbox insert to fail and check that
+        // earlier item writes and its event sequence are also rolled back.
+        let outbox_failure_id = Uuid::new_v4();
+        let trigger = format!(
+            "CREATE FUNCTION reject_batch_outbox() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN IF NEW.operation_id='{outbox_failure_id}'::uuid THEN
+                     RAISE EXCEPTION 'injected batch outbox failure'; END IF;
+                   RETURN NEW; END $$;
+             CREATE TRIGGER reject_batch_outbox BEFORE INSERT ON cluster_muc_event_outbox
+               FOR EACH ROW EXECUTE FUNCTION reject_batch_outbox()"
+        );
+        sqlx::raw_sql(&trigger).execute(&pool).await.unwrap();
+        command.operation_id = outbox_failure_id;
+        assert!(apply_cluster_muc_admin_batch(&pool, command)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("injected batch outbox failure"));
+        sqlx::raw_sql(
+            "DROP TRIGGER reject_batch_outbox ON cluster_muc_event_outbox;
+             DROP FUNCTION reject_batch_outbox()",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let carol_affiliation: Option<String> = sqlx::query_scalar(
+            "SELECT affiliation FROM muc_affiliations WHERE room_id=$1 AND user_id=$2",
+        )
+        .bind(room.id)
+        .bind(carol_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(carol_affiliation.is_none());
+
+        command.operation_id = Uuid::new_v4();
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::Applied
+        );
+        let details: Value =
+            sqlx::query_scalar("SELECT details FROM cluster_muc_operations WHERE operation_id=$1")
+                .bind(command.operation_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(details["request_change_count"], 2);
+        assert_eq!(details["changes"].as_array().unwrap().len(), 2);
+        assert_eq!(details["changes"][0]["snapshot"]["nick"], "Carol");
+        assert_eq!(details["changes"][1]["snapshot"]["nick"], "Bob");
+        let delivery_row = sqlx::query(
+            "SELECT payload,payload_digest FROM cluster_muc_event_outbox
+              WHERE operation_id=$1 AND recipient_occupant_incarnation=$2",
+        )
+        .bind(command.operation_id)
+        .bind(bob_target.occupant_incarnation)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let payload: String = delivery_row.get("payload");
+        let digest: Vec<u8> = delivery_row.get("payload_digest");
+        let projection: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(projection["original_audience"]["nick"], "Bob");
+        assert_eq!(projection["original_audience"]["role"], "participant");
+        assert!(!payload.contains("presence_payload"));
+        assert_eq!(digest, payload_digest(&payload));
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::Replay
+        );
+        sqlx::query("UPDATE muc_rooms SET description='later configuration' WHERE id=$1")
+            .bind(room.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        command.expected_config_version =
+            sqlx::query_scalar("SELECT config_version FROM muc_rooms WHERE id=$1")
+                .bind(room.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::Replay,
+            "a room configuration change cannot alter the digest of the same IQ body"
+        );
+
+        let kick = [ClusterMucAdminChange::Role {
+            target_nick: "Bob".to_owned(),
+            role: "none".to_owned(),
+            reason: Some("removed".to_owned()),
+        }];
+        command.operation_id = Uuid::new_v4();
+        command.changes = &kick;
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::Applied
+        );
+        assert_eq!(
+            apply_cluster_muc_admin_batch(
+                &pool,
+                ClusterMucAdminBatch {
+                    actor_target: None,
+                    ..command
+                },
+            )
+            .await
+            .unwrap(),
+            Outcome::Replay,
+            "kick replay must precede actor and target occupancy lookups"
+        );
+        let changed_retry = [ClusterMucAdminChange::Role {
+            target_nick: "Bob".to_owned(),
+            role: "participant".to_owned(),
+            reason: None,
+        }];
+        command.changes = &changed_retry;
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::Conflict
+        );
+
+        let owner_transfer = [
+            ClusterMucAdminChange::Affiliation {
+                target: MucAffiliationTarget::LocalUsername("batch-alice".to_owned()),
+                affiliation: "member".to_owned(),
+                reason: None,
+            },
+            ClusterMucAdminChange::Affiliation {
+                target: MucAffiliationTarget::LocalUsername("batch-carol".to_owned()),
+                affiliation: "owner".to_owned(),
+                reason: None,
+            },
+        ];
+        command.operation_id = Uuid::new_v4();
+        command.changes = &owner_transfer;
+        assert_eq!(
+            apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
+            Outcome::Applied
+        );
+        assert_eq!(
+            apply_cluster_muc_admin_batch(
+                &pool,
+                ClusterMucAdminBatch {
+                    operation_id: Uuid::new_v4(),
+                    changes: &demote_last_owner,
+                    ..command
+                }
+            )
+            .await
+            .unwrap(),
+            Outcome::Unauthorized,
+            "former owner cannot use authority from before the committed transfer"
+        );
+        let owner_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM muc_affiliations WHERE room_id=$1 AND affiliation='owner'",
+        )
+        .bind(room.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(owner_count, 1);
+
+        // Same stream/IQ identity with two different bodies is serialized by
+        // the room row; after the bounded retry one caller must see a digest
+        // conflict rather than committing a second operation.
+        let role_participant = [ClusterMucAdminChange::Role {
+            target_nick: "Alice".to_owned(),
+            role: "participant".to_owned(),
+            reason: None,
+        }];
+        let role_visitor = [ClusterMucAdminChange::Role {
+            target_nick: "Alice".to_owned(),
+            role: "visitor".to_owned(),
+            reason: None,
+        }];
+        let same_id = Uuid::new_v4();
+        let current = ClusterMucAdminBatch {
+            operation_id: same_id,
+            actor_target: Some(&carol_target),
+            actor: &carol,
+            actor_full_jid: "batch-carol@local.test/Phone",
+            changes: &role_participant,
+            ..command
+        };
+        let changed = ClusterMucAdminBatch {
+            changes: &role_visitor,
+            ..current
+        };
+        let (one, two) = tokio::join!(
+            apply_cluster_muc_admin_batch(&pool, current),
+            apply_cluster_muc_admin_batch(&pool, changed),
+        );
+        assert!(matches!(
+            (one.unwrap(), two.unwrap()),
+            (Outcome::Applied, Outcome::Conflict) | (Outcome::Conflict, Outcome::Applied)
+        ));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cluster_muc_operations WHERE operation_id=$1")
+                .bind(same_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+
+        let identical_id = Uuid::new_v4();
+        let identical = ClusterMucAdminBatch {
+            operation_id: identical_id,
+            ..current
+        };
+        let (one, two) = tokio::join!(
+            apply_cluster_muc_admin_batch(&pool, identical),
+            apply_cluster_muc_admin_batch(&pool, identical),
+        );
+        assert!(matches!(
+            (one.unwrap(), two.unwrap()),
+            (Outcome::Applied, Outcome::Replay) | (Outcome::Replay, Outcome::Applied)
+        ));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cluster_muc_operations WHERE operation_id=$1")
+                .bind(identical_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+
+        assert!(cluster_muc_occupancy_target_for_disconnect(
+            &pool,
+            "admin-batch",
+            "batch-carol@local.test/Phone",
+            "Carol",
+            carol_target.occupant_incarnation,
+            Uuid::new_v4(),
+            "batch-node",
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let departing = cluster_muc_occupancy_target_for_disconnect(
+            &pool,
+            "admin-batch",
+            "batch-carol@local.test/Phone",
+            "Carol",
+            carol_target.occupant_incarnation,
+            carol_target.connection_uuid,
+            "batch-node",
+        )
+        .await
+        .unwrap()
+        .expect("exact local actor remains active");
+        assert_eq!(departing, carol_target);
+        let leave_id = Uuid::new_v4();
+        assert_eq!(
+            transition_cluster_muc_occupancy(
+                &pool,
+                leave_id,
+                &departing,
+                "leave",
+                "batch-node",
+                None,
+                None,
+                None,
+                Duration::from_secs(90),
+            )
+            .await
+            .unwrap(),
+            ClusterMucTransitionOutcome::Applied
+        );
+        assert_eq!(
+            transition_cluster_muc_occupancy(
+                &pool,
+                leave_id,
+                &departing,
+                "leave",
+                "batch-node",
+                None,
+                None,
+                None,
+                Duration::from_secs(90),
+            )
+            .await
+            .unwrap(),
+            ClusterMucTransitionOutcome::Replay
+        );
+        assert!(cluster_muc_occupancy_target_for_disconnect(
+            &pool,
+            "admin-batch",
+            "batch-carol@local.test/Phone",
+            "Carol",
+            carol_target.occupant_incarnation,
+            carol_target.connection_uuid,
+            "batch-node",
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let _ = bob_target;
+        pool.close().await;
     }
 }

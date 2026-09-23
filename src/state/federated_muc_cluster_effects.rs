@@ -1,7 +1,7 @@
 //! Cluster operations used by federated MUC handlers.
 
 use super::{AppState, SerializableMucOccupant};
-use crate::cluster::{ClusterOperation, MucRename, MucRoleChange, NodeDeliveryReceipt};
+use crate::cluster::{MucRename, MucRoleChange, NodeDeliveryReceipt};
 use crate::outbound::DurableDelivery;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -18,11 +18,15 @@ fn accepted_primary_route(receipt: NodeDeliveryReceipt) -> Option<FederatedMucAc
 
 impl AppState {
     pub(crate) fn federated_muc_admit_mutation(&self) -> Result<()> {
-        self.cluster.admit(ClusterOperation::MucMutation)
+        self.admit_muc_pg_mutation()
     }
 
-    pub(crate) fn federated_muc_uses_cluster_occupancy(&self) -> bool {
-        self.cluster.is_enabled()
+    pub(crate) fn federated_muc_pg_authority_enabled(&self) -> bool {
+        self.muc_pg_authority_enabled()
+    }
+
+    pub(crate) fn federated_muc_redis_transport_enabled(&self) -> bool {
+        self.muc_redis_transport_enabled()
     }
 
     pub(crate) fn federated_muc_owner_node_id(&self) -> &str {
@@ -33,14 +37,23 @@ impl AppState {
         &self,
         room_jid: &str,
     ) -> Result<HashMap<String, String>> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(HashMap::new());
+        }
         self.cluster.get_muc_occupants(room_jid).await
     }
 
     pub(crate) async fn federated_muc_join_room(&self, room_jid: &str) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         self.cluster.join_muc(room_jid).await
     }
 
     pub(crate) async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         self.cluster.leave_muc(room_jid).await
     }
 
@@ -53,6 +66,9 @@ impl AppState {
         old_json: &str,
         new_json: &str,
     ) -> Result<MucRename> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(MucRename::Renamed);
+        }
         self.cluster
             .rename_muc_occupant(
                 room_jid,
@@ -71,6 +87,9 @@ impl AppState {
         nick: &str,
         json: &str,
     ) -> Result<bool> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(true);
+        }
         self.cluster
             .register_muc_occupant(room_jid, nick, json)
             .await
@@ -83,6 +102,9 @@ impl AppState {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<bool> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(true);
+        }
         self.cluster
             .evict_muc_occupant(occupant, status, actor_nick, reason)
             .await
@@ -131,6 +153,9 @@ impl AppState {
         created: bool,
         id: Option<&str>,
     ) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         self.cluster
             .send_muc_presence(room_jid, occupant, unavailable, created, id)
             .await
@@ -144,6 +169,9 @@ impl AppState {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         self.cluster
             .send_muc_presence_with_status(
                 room_jid, occupant, true, false, None, status, actor_nick, reason,
@@ -158,6 +186,9 @@ impl AppState {
         new_occupant: &SerializableMucOccupant,
         id: Option<&str>,
     ) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         self.cluster
             .send_muc_nickname_change(room_jid, old_occupant, new_occupant, id)
             .await
@@ -169,6 +200,9 @@ impl AppState {
         stanza: &str,
         real_sender: Option<&str>,
     ) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         match real_sender {
             Some(sender) => {
                 self.cluster
@@ -186,6 +220,9 @@ impl AppState {
         stanza: &str,
         real_sender: &str,
     ) -> Result<()> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return Ok(());
+        }
         self.cluster
             .send_muc_private_from(room_jid, target_nick, stanza, real_sender)
             .await
@@ -201,6 +238,9 @@ impl AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> Option<FederatedMucAccountRoute> {
+        if !self.federated_muc_redis_transport_enabled() {
+            return None;
+        }
         for node_id in self
             .cluster
             .lookup_nodes(target_jid)

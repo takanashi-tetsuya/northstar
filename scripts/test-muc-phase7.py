@@ -40,12 +40,13 @@ check = integration.check
 PASSWORD = integration.PASSWORD
 ALICE = "muc_alice_it"
 BOB = "muc_bob_it"
+CAROL = "muc_carol_it"
 
 def run_test():
     print("Waiting for Northstar XMPP Server to be ready...")
     wait_ready()
 
-    for username in (ALICE, BOB):
+    for username in (ALICE, BOB, CAROL):
         status, result = integration.register_account(username, PASSWORD)
         check(status == 201, f"registration failed for {username}: {status} {result}")
     status, alice_login = integration.api(
@@ -178,6 +179,44 @@ def run_test():
         "<query xmlns='jabber:iq:register'><remove/></query></iq>"
     )
     bob.receive_until("id='reg-remove'")
+
+    alice.send(
+        f"<iq type='set' id='admin-batch-failed' to='{room_jid}'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        f"<item jid='{CAROL}@{DOMAIN}' affiliation='member'/>"
+        "<item nick='Missing' role='visitor'/>"
+        "</query></iq>"
+    )
+    failed_batch, _ = alice.receive_until("id='admin-batch-failed'")
+    check("type='error'" in failed_batch and "item-not-found" in failed_batch,
+          "MUC batch accepted a missing second role target")
+    alice.send(
+        f"<iq type='get' id='admin-batch-rollback-read' to='{room_jid}'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        "<item affiliation='member'/></query></iq>"
+    )
+    rollback_read, _ = alice.receive_until("id='admin-batch-rollback-read'")
+    check("type='result'" in rollback_read and f"{CAROL}@{DOMAIN}" not in rollback_read,
+          "failed MUC batch retained its first affiliation change")
+    alice.send(
+        f"<iq type='set' id='admin-batch-mixed' to='{room_jid}'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        f"<item jid='{CAROL}@{DOMAIN}' affiliation='member'/>"
+        "<item nick='Bob' role='visitor'/>"
+        "</query></iq>"
+    )
+    mixed_result, _ = alice.receive_until("id='admin-batch-mixed'")
+    check("type='result'" in mixed_result, "mixed MUC batch was rejected")
+    bob_role, _ = bob.receive_until("role='visitor'")
+    check(f"from='{room_jid}/Bob'" in bob_role, "mixed MUC batch did not update Bob's role")
+    alice.send(
+        f"<iq type='get' id='admin-batch-commit-read' to='{room_jid}'>"
+        "<query xmlns='http://jabber.org/protocol/muc#admin'>"
+        "<item affiliation='member'/></query></iq>"
+    )
+    commit_read, _ = alice.receive_until("id='admin-batch-commit-read'")
+    check("type='result'" in commit_read and f"{CAROL}@{DOMAIN}" in commit_read,
+          "mixed MUC batch did not commit Carol's affiliation")
     
     # 4. Moderated Room Test
     print("Alice sets room to moderated...")

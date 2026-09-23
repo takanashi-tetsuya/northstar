@@ -197,3 +197,6 @@ cargo test --locked --offline \
 cargo test --locked --offline \
   db::cluster_muc::tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
   -- --ignored --exact --nocapture
+cargo test --locked --offline \
+  db::cluster_muc::tests::postgres_admin_batch_is_atomic_under_replay_and_failure \
+  -- --ignored --exact --nocapture

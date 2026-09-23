@@ -28,6 +28,64 @@ impl PostgresClusterMucOccupancyMaintenanceRepository {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct PostgresClusterMucOccupancyDepartureRepository {
+    pool: PgPool,
+}
+
+impl PostgresClusterMucOccupancyDepartureRepository {
+    pub(crate) fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl ClusterMucOccupancyDepartureRepository for PostgresClusterMucOccupancyDepartureRepository {
+    #[allow(clippy::too_many_arguments)]
+    async fn find_exact_for_disconnect(
+        &self,
+        room_localpart: &str,
+        full_jid: &str,
+        nick: &str,
+        occupant_incarnation: Uuid,
+        connection_uuid: Uuid,
+        owner_node_id: &str,
+    ) -> Result<Option<ClusterMucOccupancyTarget>> {
+        Ok(db::cluster_muc_occupancy_target_for_disconnect(
+            &self.pool,
+            room_localpart,
+            full_jid,
+            nick,
+            occupant_incarnation,
+            connection_uuid,
+            owner_node_id,
+        )
+        .await?
+        .map(occupancy_target_from_db))
+    }
+
+    async fn leave_exact(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        lease: Duration,
+    ) -> Result<ClusterMucTransitionOutcome> {
+        Ok(db::transition_cluster_muc_occupancy(
+            &self.pool,
+            operation_id,
+            &target.into(),
+            "leave",
+            owner_node_id,
+            None,
+            None,
+            None,
+            lease,
+        )
+        .await?
+        .into())
+    }
+}
+
 impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMaintenanceRepository {
     async fn authoritative_for_node(
         &self,
@@ -42,6 +100,33 @@ impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMai
         )
     }
 
+    async fn resolve_exact_batch(
+        &self,
+        candidates: &[MucOccupancyLookup],
+        owner_node_id: &str,
+    ) -> Result<Vec<MucResolvedOccupancy>> {
+        let candidates = candidates
+            .iter()
+            .map(|candidate| db::ClusterMucOccupancyLookup {
+                room_localpart: candidate.room_localpart.clone(),
+                full_jid: candidate.full_jid.clone(),
+                nick: candidate.nick.clone(),
+                occupant_incarnation: candidate.occupant_incarnation,
+                connection_uuid: candidate.connection_uuid,
+            })
+            .collect::<Vec<_>>();
+        Ok(
+            db::resolve_cluster_muc_occupancies_batch(&self.pool, &candidates, owner_node_id)
+                .await?
+                .into_iter()
+                .map(|resolved| MucResolvedOccupancy {
+                    room_localpart: resolved.room_localpart,
+                    target: occupancy_target_from_db(resolved.target),
+                })
+                .collect(),
+        )
+    }
+
     async fn renew_exact(
         &self,
         target: &ClusterMucOccupancyTarget,
@@ -50,6 +135,22 @@ impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMai
     ) -> Result<bool> {
         let target = target.into();
         db::renew_cluster_muc_occupancy(&self.pool, &target, owner_node_id, lease).await
+    }
+
+    async fn renew_exact_batch(
+        &self,
+        targets: &[ClusterMucOccupancyTarget],
+        owner_node_id: &str,
+        lease: Duration,
+    ) -> Result<Vec<ClusterMucOccupancyTarget>> {
+        let targets = targets.iter().map(Into::into).collect::<Vec<_>>();
+        Ok(
+            db::renew_cluster_muc_occupancies_batch(&self.pool, &targets, owner_node_id, lease)
+                .await?
+                .into_iter()
+                .map(occupancy_target_from_db)
+                .collect(),
+        )
     }
 }
 
@@ -396,6 +497,48 @@ impl From<&MucAffiliationChange> for db::MucAffiliationChange {
         Self {
             target: (&change.target).into(),
             affiliation: change.affiliation.clone(),
+        }
+    }
+}
+
+impl From<&MucAdminBatchChange> for db::ClusterMucAdminChange {
+    fn from(change: &MucAdminBatchChange) -> Self {
+        match change {
+            MucAdminBatchChange::Affiliation {
+                target,
+                affiliation,
+                reason,
+            } => Self::Affiliation {
+                target: target.into(),
+                affiliation: affiliation.clone(),
+                reason: reason.clone(),
+            },
+            MucAdminBatchChange::Role {
+                target_nick,
+                role,
+                reason,
+            } => Self::Role {
+                target_nick: target_nick.clone(),
+                role: role.clone(),
+                reason: reason.clone(),
+            },
+        }
+    }
+}
+
+impl From<db::ClusterMucAdminBatchOutcome> for MucAdminBatchOutcome {
+    fn from(outcome: db::ClusterMucAdminBatchOutcome) -> Self {
+        match outcome {
+            db::ClusterMucAdminBatchOutcome::Applied => Self::Applied,
+            db::ClusterMucAdminBatchOutcome::Replay => Self::Replay,
+            db::ClusterMucAdminBatchOutcome::DuplicateTarget => Self::DuplicateTarget,
+            db::ClusterMucAdminBatchOutcome::LastOwner => Self::LastOwner,
+            db::ClusterMucAdminBatchOutcome::MissingTarget => Self::MissingTarget,
+            db::ClusterMucAdminBatchOutcome::Unauthorized => Self::Unauthorized,
+            db::ClusterMucAdminBatchOutcome::Stale => Self::Stale,
+            db::ClusterMucAdminBatchOutcome::Destroyed => Self::Destroyed,
+            db::ClusterMucAdminBatchOutcome::Conflict => Self::Conflict,
+            db::ClusterMucAdminBatchOutcome::TooManyProjections => Self::TooManyProjections,
         }
     }
 }
@@ -1161,6 +1304,40 @@ impl MucRepository for PostgresMucRepository {
                 actor_target: &actor_target,
                 actor: &actor,
                 actor_full_jid,
+                changes: &changes,
+            },
+        )
+        .await?
+        .into())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_local_cluster_admin_batch(
+        &self,
+        operation_id: Uuid,
+        room_id: Uuid,
+        expected_room_epoch: Uuid,
+        expected_config_version: i64,
+        actor_target: Option<&ClusterMucOccupancyTarget>,
+        actor: &ClusterMucPrincipal,
+        actor_full_jid: &str,
+        local_domain: &str,
+        changes: &[MucAdminBatchChange],
+    ) -> Result<MucAdminBatchOutcome> {
+        let actor_target = actor_target.map(Into::into);
+        let actor = actor.into();
+        let changes = changes.iter().map(Into::into).collect::<Vec<_>>();
+        Ok(db::apply_cluster_muc_admin_batch(
+            &self.pool,
+            db::ClusterMucAdminBatch {
+                operation_id,
+                room_id,
+                expected_room_epoch,
+                expected_config_version,
+                actor_target: actor_target.as_ref(),
+                actor: &actor,
+                actor_full_jid,
+                local_domain,
                 changes: &changes,
             },
         )

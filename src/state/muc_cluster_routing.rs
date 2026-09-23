@@ -36,6 +36,9 @@ impl AppState {
     /// A delayed departure or unpublished join must not erase a newer actor
     /// that reused the same nickname.
     pub(crate) async fn remove_exact_muc_soft_state(&self, occupant: &MucOccupant) -> Result<bool> {
+        if !self.muc_redis_transport_enabled() {
+            return Ok(false);
+        }
         self.cluster
             .unregister_muc_occupant_epoch(
                 &occupant.room_jid,

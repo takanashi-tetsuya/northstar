@@ -8,10 +8,12 @@
 //! cleanup can therefore never remove a replacement session.
 
 use crate::cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
+use crate::services::muc::ClusterMucTransitionOutcome;
 use crate::state::AppState;
 use crate::state::{
     muc_delivery::MucDeliveryContext, session_cleanup_bookkeeping::SessionCleanupBookkeeping,
     session_cleanup_local::SessionCleanupLocal, session_cleanup_mix::SessionCleanupMix,
+    session_cleanup_muc_departure::SessionCleanupPgMucDeparture,
     session_cleanup_presence::SessionCleanupPresence, session_cleanup_rooms::SessionCleanupRooms,
     session_cleanup_sm::SessionCleanupSm, session_cleanup_sm_revoker::SessionCleanupSmRevoker,
     session_cleanup_unavailable::SessionCleanupUnavailable,
@@ -537,6 +539,7 @@ pub(crate) struct SessionCleanupService {
     rooms: SessionCleanupRooms,
     muc_delivery: MucDeliveryContext,
     muc_departure: ClusterMucDeparture,
+    pg_muc_departure: Option<SessionCleanupPgMucDeparture>,
     unavailable: SessionCleanupUnavailable,
     mix: SessionCleanupMix,
     route_release: ClusterSessionRouteRelease,
@@ -652,6 +655,7 @@ impl SessionCleanupService {
         let rooms = state.session_cleanup_rooms();
         let muc_delivery = state.muc_delivery_context();
         let muc_departure = state.session_cleanup_muc_departure();
+        let pg_muc_departure = state.session_cleanup_pg_muc_departure();
         let unavailable = state.session_cleanup_unavailable();
         let mix = state.session_cleanup_mix();
         let route_release = state.session_cleanup_route_release();
@@ -664,6 +668,7 @@ impl SessionCleanupService {
             rooms,
             muc_delivery,
             muc_departure,
+            pg_muc_departure,
             unavailable,
             mix,
             route_release,
@@ -1104,47 +1109,86 @@ impl SessionCleanupService {
     ) {
         for departure in departures {
             let was_last = departure.remaining.is_empty();
-            let _ = self
-                .step(
+            let pg_authoritative = self.pg_muc_departure.is_some();
+            let departed_in_authority = if let Some(pg_departure) = &self.pg_muc_departure {
+                self.step(
                     deadline,
-                    "unregister-muc-occupant",
-                    CleanupRecovery::ClusterReconciliation,
-                    self.muc_departure
-                        .publish_local_departure(&departure.departed, was_last),
+                    "leave-pg-muc-occupancy",
+                    CleanupRecovery::LeaseOrEpoch,
+                    async {
+                        let Some(outcome) = pg_departure
+                            .leave_exact(&departure.room_jid, &departure.departed)
+                            .await?
+                        else {
+                            // A concurrent exact transition or lease expiry
+                            // already removed this incarnation.
+                            return Ok(());
+                        };
+                        anyhow::ensure!(
+                            matches!(
+                                outcome,
+                                ClusterMucTransitionOutcome::Applied
+                                    | ClusterMucTransitionOutcome::Replay
+                                    | ClusterMucTransitionOutcome::Stale
+                                    | ClusterMucTransitionOutcome::Destroyed
+                            ),
+                            "exact PostgreSQL MUC departure was rejected: {:?}",
+                            outcome
+                        );
+                        Ok(())
+                    },
                     report,
                 )
-                .await;
-
-            for (_, target) in &departure.remaining {
-                let presence = crate::xmpp::xml_util::muc_presence_stanza(
-                    &crate::state::SerializableMucOccupant::from(&departure.departed),
-                    &target.full_jid,
-                    true,
-                    false,
-                    false,
-                    None,
-                    departure.departed.room_non_anonymous || target.role == "moderator",
-                );
+                .await
+                .is_some()
+            } else {
                 let _ = self
                     .step(
                         deadline,
-                        "deliver-muc-unavailable",
-                        CleanupRecovery::PresenceRefresh,
-                        async {
-                            anyhow::ensure!(
-                                self.muc_delivery
-                                    .deliver_to_muc_occupant(target, presence)
-                                    .await,
-                                "MUC departure target was unavailable"
-                            );
-                            Ok(())
-                        },
+                        "unregister-muc-occupant",
+                        CleanupRecovery::ClusterReconciliation,
+                        self.muc_departure
+                            .publish_local_departure(&departure.departed, was_last),
                         report,
                     )
                     .await;
+                false
+            };
+
+            // A PostgreSQL leave commits one immutable audience/outbox event;
+            // sending these local presences as well would duplicate delivery.
+            if !pg_authoritative {
+                for (_, target) in &departure.remaining {
+                    let presence = crate::xmpp::xml_util::muc_presence_stanza(
+                        &crate::state::SerializableMucOccupant::from(&departure.departed),
+                        &target.full_jid,
+                        true,
+                        false,
+                        false,
+                        None,
+                        departure.departed.room_non_anonymous || target.role == "moderator",
+                    );
+                    let _ = self
+                        .step(
+                            deadline,
+                            "deliver-muc-unavailable",
+                            CleanupRecovery::PresenceRefresh,
+                            async {
+                                anyhow::ensure!(
+                                    self.muc_delivery
+                                        .deliver_to_muc_occupant(target, presence)
+                                        .await,
+                                    "MUC departure target was unavailable"
+                                );
+                                Ok(())
+                            },
+                            report,
+                        )
+                        .await;
+                }
             }
 
-            if departure.remaining.is_empty() {
+            if departure.remaining.is_empty() && (!pg_authoritative || departed_in_authority) {
                 let _ = self
                     .step(
                         deadline,

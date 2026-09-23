@@ -5487,39 +5487,38 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             )
         })
         .collect();
-    let mut user_ids = snapshots
+    let authority_snapshots = snapshots
         .iter()
-        .map(|(_, user_id, _, _, _, _, _)| *user_id)
+        .map(|(_, user_id, generation, device_id, epoch, _, _)| {
+            crate::services::session_authority_sweep::SessionAuthoritySnapshot {
+                user_id: *user_id,
+                auth_generation: *generation,
+                device_id: *device_id,
+                device_epoch: *epoch,
+            }
+        })
         .collect::<Vec<_>>();
-    user_ids.sort_unstable();
-    user_ids.dedup();
-    let auth_states = crate::db::auth_states_for_users(&state.pool, &user_ids).await?;
-    for (full_jid, user_id, generation, _, _, _, disconnect) in &snapshots {
-        if auth_states
-            .get(user_id)
-            .is_none_or(|current| current.is_disabled || current.auth_generation != *generation)
-        {
+    let stale_generations = state
+        .session_authority_sweep_service()
+        .stale_generations(&authority_snapshots)
+        .await?;
+    for ((full_jid, user_id, generation, _, _, _, disconnect), stale) in
+        snapshots.iter().zip(stale_generations)
+    {
+        if stale {
             tracing::warn!(%full_jid, %user_id, auth_generation = generation, "disconnecting credential-stale live session");
             disconnect.cancel();
         }
     }
-    let mut agents = snapshots
-        .iter()
-        .filter_map(|(_, user_id, _, device_id, epoch, _, _)| {
-            device_id
-                .zip(*epoch)
-                .map(|(device_id, _)| (*user_id, device_id))
-        })
-        .collect::<Vec<_>>();
-    agents.sort_unstable();
-    agents.dedup();
-    let current_epochs = crate::db::user_agent_login_epochs(&state.pool, &agents).await?;
-    for (full_jid, user_id, _, device_id, epoch, _, disconnect) in &snapshots {
+    let stale_device_epochs = state
+        .session_authority_sweep_service()
+        .stale_device_epochs(&authority_snapshots)
+        .await?;
+    for ((full_jid, user_id, _, device_id, epoch, _, disconnect), stale) in
+        snapshots.iter().zip(stale_device_epochs)
+    {
         if let Some((device_id, epoch)) = device_id.zip(*epoch) {
-            if current_epochs
-                .get(&(*user_id, device_id))
-                .is_none_or(|current| epoch < *current)
-            {
+            if stale {
                 tracing::warn!(%full_jid, %user_id, %device_id, epoch, "disconnecting replaced user-agent session");
                 disconnect.cancel();
             }

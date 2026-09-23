@@ -340,6 +340,14 @@ next stage changes runtime behavior. The issue ledger remains
 | 3 — ARCH-CLU-MUC | Atomic legal batches of role and affiliation operations | Consistent single-node/cluster authorization, exact occupant generations, final-owner protection, stable events/audiences and whole-batch rollback/retry tests |
 | 4 — storage and restore | Resumable offline Local/S3 migration and independently restartable restore diagnosis/recovery | Full manifest verification, fenced cutover, retained rollback data, and interruption tests at every durable transition |
 
+Stage 1 remains open. The current service boundaries cover HTTP account flows,
+personal-message storage, federation outbox work, administrator cleanup,
+operation-journal target transitions and read-only credential maintenance.
+`AppState` still exposes six capabilities; the largest remaining migrations are
+cluster routing and the runtime policy read by protocol adapters. Database
+role separation, MUC batch commands and storage/restore tooling follow only
+after the Stage 1 exit checks pass.
+
 ### Transaction and authority map
 
 A repository operation represents a complete use case rather than one table.

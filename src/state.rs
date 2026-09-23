@@ -1912,6 +1912,10 @@ pub struct AppState {
         crate::services::account_revocation_consumer::AccountRevocationConsumerService<
             db::account_revocation_repository::PostgresAccountRevocationRepository,
         >,
+    session_authority_sweep_service:
+        crate::services::session_authority_sweep::SessionAuthoritySweepService<
+            db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
+        >,
     bosh: Option<crate::bosh::BoshManager>,
     pub sessions: Arc<DashMap<String, OnlineSession>>,
     pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
@@ -1953,6 +1957,10 @@ pub struct AppState {
     operation_effect_fence_service:
         crate::services::operation_effect_fence::OperationEffectFenceService<
             db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
+        >,
+    operation_journal_worker_service:
+        crate::services::operation_journal_worker::OperationJournalWorkerService<
+            db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
         >,
     admin_session_cleanup_worker_service:
         crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
@@ -3260,6 +3268,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let operation_journal_worker_service =
+            crate::services::operation_journal_worker::OperationJournalWorkerService::new(
+                db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository::new(
+                    pool.clone(),
+                ),
+            );
         let s2s_outbox_dispatch_service =
             crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService::new(
                 db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
@@ -3347,6 +3361,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let session_authority_sweep_service =
+            crate::services::session_authority_sweep::SessionAuthoritySweepService::new(
+                db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository::new(
+                    pool.clone(),
+                ),
+            );
         let state = Arc::new(Self {
             config,
             api_query_context,
@@ -3410,6 +3430,7 @@ impl AppState {
             pool,
             cluster,
             account_revocation_consumer_service,
+            session_authority_sweep_service,
             bosh,
             sessions,
             muc_occupants,
@@ -3434,6 +3455,7 @@ impl AppState {
             operation_admin_service,
             operation_muc_destroy_service,
             operation_effect_fence_service,
+            operation_journal_worker_service,
             admin_session_cleanup_worker_service,
             admin_dispatch_service,
             upload_admin_service,
@@ -3923,6 +3945,14 @@ impl AppState {
         &self.account_revocation_consumer_service
     }
 
+    pub(crate) fn session_authority_sweep_service(
+        &self,
+    ) -> &crate::services::session_authority_sweep::SessionAuthoritySweepService<
+        db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
+    > {
+        &self.session_authority_sweep_service
+    }
+
     pub(crate) fn s2s_outbox_dispatch_service(
         &self,
     ) -> &crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
@@ -3990,6 +4020,14 @@ impl AppState {
         db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
     > {
         &self.operation_effect_fence_service
+    }
+
+    pub(crate) fn operation_journal_worker_service(
+        &self,
+    ) -> &crate::services::operation_journal_worker::OperationJournalWorkerService<
+        db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
+    > {
+        &self.operation_journal_worker_service
     }
 
     pub(crate) fn admin_session_cleanup_worker_service(

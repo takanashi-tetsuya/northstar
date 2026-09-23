@@ -331,6 +331,8 @@ for (const field of [
   'admin_command_service',
   'push_service',
   'extdisco_service',
+  'session_authority_sweep_service',
+  'operation_journal_worker_service',
   'component_credentials',
   'components',
   'bosh',
@@ -2808,6 +2810,11 @@ const capsProtocolSource =
   read('crates/northstar-protocol-runtime/src/caps.rs') +
   read('src/xmpp/protocol/caps.rs');
 const s2sInboundSource = read('src/s2s/inbound.rs');
+if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
+    || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')
+    || !s2sInboundSource.includes('.admit_history(&writes)')) {
+  throw new Error('inbound S2S personal storage must use the message service');
+}
 const s2sOutboundSource = read('src/s2s/outbound.rs');
 const componentsSource = read('src/components.rs');
 for (const invariant of [
@@ -3092,6 +3099,11 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
+const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
+if (!clusterMaintenance.includes('.session_authority_sweep_service()')
+    || /(?:crate::)?db::(?:auth_states_for_users|user_agent_login_epochs)\s*\(/.test(clusterMaintenance)) {
+  throw new Error('cluster credential maintenance must use the read-only session authority service');
+}
 if (/tokio::spawn\s*\(\s*admin_session_cleanup_heartbeat/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator cleanup lease renewal must not be a detached Tokio task');
 }
@@ -3163,6 +3175,8 @@ const stateServiceAccessors = [
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
   'account_revocation_consumer_service',
+  'session_authority_sweep_service',
+  'operation_journal_worker_service',
   's2s_roster_authorization_service',
   's2s_outbox_dispatch_service',
   's2s_sm_outbox_service',

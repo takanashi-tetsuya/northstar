@@ -38,6 +38,7 @@ pub(crate) mod roster;
 pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod s2s_roster_authorization;
 pub(crate) mod s2s_sm_outbox;
+pub(crate) mod session_authority_sweep;
 pub(crate) mod session_cleanup;
 pub(crate) mod sm;
 pub(crate) mod sm_capacity;
@@ -54,6 +55,7 @@ pub(crate) mod api_queries;
 pub(crate) mod omemo_recovery;
 
 pub(crate) mod operation_effect_fence;
+pub(crate) mod operation_journal_worker;
 pub(crate) mod operation_muc_destroy;
 pub(crate) mod operations;
 

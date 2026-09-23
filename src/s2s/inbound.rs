@@ -4,8 +4,8 @@ use crate::{
     services::{
         messaging::{
             DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, LocalRecipientDecision,
-            MessageIdentity, MessagePostCommit, PersonalMessageDestination,
-            ValidatedPersonalMessage,
+            MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OfflineMessageAdmission,
+            PersonalMessageDestination, ValidatedPersonalMessage,
         },
         retractions::{
             ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
@@ -3565,7 +3565,7 @@ pub(crate) async fn route_inbound_message(
     if delivered {
         if !history_committed {
             finalize_accepted_inbound_history(
-                &state.pool,
+                state,
                 root,
                 AcceptedInboundHistory {
                     metrics: &state.metrics,
@@ -3627,25 +3627,22 @@ pub(crate) async fn route_inbound_message(
         && durable_content_allowed
     {
         let delayed = add_delay_from(&archive, chrono::Utc::now(), Some(&state.config.domain));
-        let offline_outcome = db::store_offline_for_recipient(
-            &state.pool,
-            recipient.id,
-            &recipient_by,
-            from,
-            &delayed,
-            encrypted,
-            db::OfflineStorePolicy {
-                max_messages: state.config.offline_max_messages_per_account,
-                max_bytes: state.config.offline_max_bytes_per_account,
-                ttl_days: state.config.offline_message_ttl_days,
+        let offline_outcome = state
+            .message_service()
+            .store_offline(OfflineMessageAdmission {
+                recipient_id: recipient.id,
+                recipient_bare_jid: &recipient_by,
+                sender_jid: from,
+                stanza: &delayed,
+                encrypted,
                 mam_backed: archive_allowed,
-            },
-        )
-        .await?;
-        if offline_outcome == db::OfflineStoreOutcome::RecipientUnavailable {
+                identity: None,
+            })
+            .await?;
+        if offline_outcome == OfflineAdmissionOutcome::RecipientUnavailable {
             return Ok(None);
         }
-        if offline_outcome == db::OfflineStoreOutcome::QuotaExceeded {
+        if offline_outcome == OfflineAdmissionOutcome::QuotaExceeded {
             if history_committed {
                 if let Err(error) =
                     crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
@@ -3662,7 +3659,7 @@ pub(crate) async fn route_inbound_message(
         }
         if !history_committed {
             finalize_accepted_inbound_history(
-                &state.pool,
+                state,
                 root,
                 AcceptedInboundHistory {
                     metrics: &state.metrics,
@@ -3706,7 +3703,7 @@ struct AcceptedInboundHistory<'a> {
 }
 
 async fn finalize_accepted_inbound_history(
-    pool: &sqlx::PgPool,
+    state: &AppState,
     root: roxmltree::Node<'_, '_>,
     history: AcceptedInboundHistory<'_>,
 ) {
@@ -3738,24 +3735,7 @@ async fn finalize_accepted_inbound_history(
             .is_none(),
         "personal retraction reached post-delivery history finalization"
     );
-    let history_result = if writes.is_empty() {
-        Ok(())
-    } else {
-        let writes = writes
-            .iter()
-            .map(|write| db::PersonalArchiveWrite {
-                id: write.id,
-                owner_id: write.owner_id,
-                peer_jid: write.peer_jid,
-                stanza: write.stanza,
-                encrypted: write.encrypted,
-                stanza_id: write.stanza_id,
-            })
-            .collect::<Vec<_>>();
-        db::admit_personal_history(pool, None, &writes)
-            .await
-            .map(|_| ())
-    };
+    let history_result = state.message_service().admit_history(&writes).await;
     if let Err(error) = history_result {
         metrics
             .post_accept_side_effect_failures_total

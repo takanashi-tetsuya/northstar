@@ -14,6 +14,7 @@ use crate::services::admin_session_cleanup_worker::{
     AdminSessionCleanupWorkerService,
 };
 use crate::services::operation_effect_fence::FencedEffect;
+use crate::services::operation_journal_worker::{LeaseRenewal, NextTarget, TargetSettlement};
 use crate::{db, state::AppState};
 
 const LEASE_SECONDS: i64 = 60;
@@ -277,27 +278,14 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
     tx.commit().await?;
 
     loop {
-        let mut claim = state.pool.begin().await?;
-        if !db::renew_operation_lease_in_tx(&mut claim, &lease, LEASE_SECONDS).await? {
-            claim.rollback().await?;
-            return Ok(true);
-        }
-        let target = db::claim_operation_target_in_tx(
-            &mut claim,
-            lease.operation.id,
-            worker_id,
-            LEASE_SECONDS,
-        )
-        .await?;
-        claim.commit().await?;
-        let Some(target) = target else {
-            let mut cancel_tx = state.pool.begin().await?;
-            if db::acknowledge_operation_cancel_in_tx(&mut cancel_tx, &lease).await? {
-                cancel_tx.commit().await?;
-                return Ok(true);
-            }
-            cancel_tx.rollback().await?;
-            break;
+        let target = match state
+            .operation_journal_worker_service()
+            .next_target(&lease, worker_id, LEASE_SECONDS)
+            .await?
+        {
+            NextTarget::LeaseLost | NextTarget::Cancelled => return Ok(true),
+            NextTarget::Exhausted => break,
+            NextTarget::Claimed(target) => target,
         };
 
         let fenced = state
@@ -321,46 +309,26 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
         let FencedEffect::Executed(effect) = fenced else {
             return Ok(true);
         };
-        let mut finish = state.pool.begin().await?;
-        match effect {
-            Ok(result) => {
-                if !db::succeed_operation_target_in_tx(&mut finish, &target, &result).await? {
-                    finish.rollback().await?;
-                    return Ok(true);
-                }
-            }
-            Err(error) => {
-                tracing::warn!(operation_id=%lease.operation.id, target_id=%target.target.id, ?error, "durable operation effect failed after PONR");
-                let details = json!({"message": error.to_string()});
-                if !db::mark_operation_target_indeterminate_in_tx(
-                    &mut finish,
-                    &lease,
-                    &target,
-                    "effect_outcome_unprovable",
-                    Some(&details),
-                )
-                .await?
-                {
-                    finish.rollback().await?;
-                    return Ok(true);
-                }
-                finish.commit().await?;
-                return Ok(true);
-            }
+        match state
+            .operation_journal_worker_service()
+            .settle_target(
+                &lease,
+                &target,
+                lease.operation.id,
+                target.target.id,
+                effect,
+            )
+            .await?
+        {
+            TargetSettlement::Succeeded => {}
+            TargetSettlement::Indeterminate | TargetSettlement::NotApplied => return Ok(true),
         }
-        finish.commit().await?;
     }
 
-    let mut finish = state.pool.begin().await?;
-    if !db::succeed_operation_in_tx(&mut finish, &lease, &json!({"completed":true})).await? {
-        if db::fail_operation_in_tx(&mut finish, &lease, "target_incomplete", None).await? {
-            finish.commit().await?;
-        } else {
-            finish.rollback().await?;
-        }
-        return Ok(true);
-    }
-    finish.commit().await?;
+    let _ = state
+        .operation_journal_worker_service()
+        .terminalize_parent(&lease)
+        .await?;
     Ok(true)
 }
 
@@ -374,14 +342,12 @@ async fn lease_heartbeat(
         tokio::select! {
             _ = stop.cancelled() => return Ok(()),
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                let mut tx = state.pool.begin().await?;
-                let parent_ok = db::renew_operation_lease_in_tx(&mut tx, &parent, LEASE_SECONDS).await?;
-                let target_ok = db::renew_operation_target_lease_in_tx(&mut tx, &target, LEASE_SECONDS).await?;
-                if !parent_ok || !target_ok {
-                    tx.rollback().await?;
+                if state.operation_journal_worker_service()
+                    .renew_effect_leases(&parent, &target, LEASE_SECONDS)
+                    .await? == LeaseRenewal::Lost
+                {
                     anyhow::bail!("operation lease fencing was lost");
                 }
-                tx.commit().await?;
             }
         }
     }

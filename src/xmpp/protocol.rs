@@ -27,6 +27,7 @@ pub(crate) mod sm;
 pub(crate) mod upload;
 pub(crate) mod vcard;
 
+use super::capabilities::PostActionTelemetry;
 use super::xml_builder::XmlElement;
 use super::xml_util::*;
 use crate::state::AppState;
@@ -88,18 +89,16 @@ impl PostActionSupervisor {
         &mut self,
         name: &'static str,
         task: F,
-        metrics: &crate::metrics::Metrics,
+        telemetry: &PostActionTelemetry<'_>,
     ) -> Result<()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.reap(metrics);
+        self.reap(telemetry);
         if self.pending.len().saturating_add(self.running.len())
             >= MAX_POST_ACTION_TASKS_PER_SESSION
         {
-            metrics
-                .post_action_capacity_rejections_total
-                .fetch_add(1, Ordering::Relaxed);
+            telemetry.capacity_rejected();
             anyhow::bail!("per-session post-action task capacity was exhausted");
         }
         self.pending.push_back(PendingPostAction {
@@ -109,12 +108,10 @@ impl PostActionSupervisor {
         Ok(())
     }
 
-    fn start(&mut self, metrics: &crate::metrics::Metrics) {
-        self.reap(metrics);
+    fn start(&mut self, telemetry: &PostActionTelemetry<'_>) {
+        self.reap(telemetry);
         while let Some(task) = self.pending.pop_front() {
-            metrics
-                .post_action_tasks_started_total
-                .fetch_add(1, Ordering::Relaxed);
+            telemetry.started();
             self.running.spawn(async move {
                 task.future.await;
                 task.name
@@ -122,23 +119,21 @@ impl PostActionSupervisor {
         }
     }
 
-    fn reap(&mut self, metrics: &crate::metrics::Metrics) {
+    fn reap(&mut self, telemetry: &PostActionTelemetry<'_>) {
         while let Some(result) = self.running.try_join_next() {
-            observe_post_action_join(result, metrics);
+            observe_post_action_join(result, telemetry);
         }
     }
 
-    async fn abort_and_drain(&mut self, metrics: &crate::metrics::Metrics) {
-        self.reap(metrics);
+    async fn abort_and_drain(&mut self, telemetry: &PostActionTelemetry<'_>) {
+        self.reap(telemetry);
         let aborted = self.pending.len().saturating_add(self.running.len());
         self.pending.clear();
         self.running.abort_all();
-        metrics
-            .post_action_tasks_aborted_total
-            .fetch_add(aborted as u64, Ordering::Relaxed);
+        telemetry.aborted(aborted);
         let drain = async {
             while let Some(result) = self.running.join_next().await {
-                observe_post_action_join(result, metrics);
+                observe_post_action_join(result, telemetry);
             }
         };
         if tokio::time::timeout(POST_ACTION_DRAIN_TIMEOUT, drain)
@@ -152,33 +147,27 @@ impl PostActionSupervisor {
         }
     }
 
-    fn abort_now(&mut self, metrics: &crate::metrics::Metrics) {
-        self.reap(metrics);
+    fn abort_now(&mut self, telemetry: &PostActionTelemetry<'_>) {
+        self.reap(telemetry);
         let aborted = self.pending.len().saturating_add(self.running.len());
         self.pending.clear();
         self.running.abort_all();
-        metrics
-            .post_action_tasks_aborted_total
-            .fetch_add(aborted as u64, Ordering::Relaxed);
+        telemetry.aborted(aborted);
     }
 }
 
 fn observe_post_action_join(
     result: std::result::Result<&'static str, tokio::task::JoinError>,
-    metrics: &crate::metrics::Metrics,
+    telemetry: &PostActionTelemetry<'_>,
 ) {
     match result {
         Ok(name) => {
-            metrics
-                .post_action_tasks_completed_total
-                .fetch_add(1, Ordering::Relaxed);
+            telemetry.completed();
             tracing::trace!(task = name, "C2S post-action task completed");
         }
         Err(error) if error.is_cancelled() => {}
         Err(error) => {
-            metrics
-                .post_action_tasks_panicked_total
-                .fetch_add(1, Ordering::Relaxed);
+            telemetry.panicked();
             tracing::error!(?error, "C2S post-action task panicked");
         }
     }
@@ -630,14 +619,14 @@ impl ProtocolSession {
         self.post_actions
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .defer(name, task, &self.state.metrics)
+            .defer(name, task, &self.state.c2s_post_action_telemetry())
     }
 
     pub(crate) fn start_post_action_tasks(&mut self) {
         self.post_actions
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start(&self.state.metrics);
+            .start(&self.state.c2s_post_action_telemetry());
     }
 
     pub(crate) fn activate_committed_route(&self) -> bool {
@@ -1877,10 +1866,11 @@ impl ProtocolSession {
                 self.sm_capacity = None;
                 self._certificate_session = None;
                 self.local_quiesced = true;
+                let telemetry = self.state.c2s_post_action_telemetry();
                 self.post_actions
                     .get_mut()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .abort_and_drain(&self.state.metrics)
+                    .abort_and_drain(&telemetry)
                     .await;
                 let report = service
                     .clear_transferred_privacy(account.as_ref(), self.connection_id)
@@ -1948,10 +1938,11 @@ impl ProtocolSession {
         // There must be no cancellation point between the lifecycle claim and
         // this marker. Drop can now safely avoid repeating local quiescing.
         self.local_quiesced = true;
+        let telemetry = self.state.c2s_post_action_telemetry();
         self.post_actions
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .abort_and_drain(&self.state.metrics)
+            .abort_and_drain(&telemetry)
             .await;
         self._certificate_session = None;
         SessionFinalizationOutcome::Completed(service.finish(work).await).observed()
@@ -1974,7 +1965,7 @@ impl ProtocolSession {
         self.post_actions
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .abort_now(&self.state.metrics);
+            .abort_now(&self.state.c2s_post_action_telemetry());
         if let Some(key) = self.registered_key.take() {
             let _ = self
                 .state
@@ -2024,7 +2015,7 @@ impl Drop for ProtocolSession {
             self.post_actions
                 .get_mut()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .abort_now(&self.state.metrics);
+                .abort_now(&self.state.c2s_post_action_telemetry());
             return;
         }
         match claim_session_cleanup(&self.route_lifecycle) {
@@ -2037,7 +2028,7 @@ impl Drop for ProtocolSession {
                 self.post_actions
                     .get_mut()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .abort_now(&self.state.metrics);
+                    .abort_now(&self.state.c2s_post_action_telemetry());
                 self.joined_rooms.clear();
                 self.registered_key = None;
                 self.full_jid = None;
@@ -2060,7 +2051,7 @@ mod legacy_sasl_wire_tests {
     use super::{
         client_stream_limits_feature, drop_requires_local_quiesce, durable_delivery_managed_by_sm,
         legacy_sasl_auth, legacy_sasl_payload, resource_bind_deadline_for, Action, ClientTransport,
-        PostActionSupervisor, ResumePayload,
+        PostActionSupervisor, PostActionTelemetry, ResumePayload,
     };
     use roxmltree::Document;
 
@@ -2338,6 +2329,13 @@ mod legacy_sasl_wire_tests {
     #[tokio::test]
     async fn post_transport_resume_publication_cannot_run_while_replay_is_pending() {
         let metrics = crate::metrics::Metrics::default();
+        let telemetry = PostActionTelemetry::new(
+            &metrics.post_action_tasks_started_total,
+            &metrics.post_action_tasks_completed_total,
+            &metrics.post_action_tasks_panicked_total,
+            &metrics.post_action_tasks_aborted_total,
+            &metrics.post_action_capacity_rejections_total,
+        );
         let published = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let task_published = std::sync::Arc::clone(&published);
         let mut supervisor = PostActionSupervisor::default();
@@ -2347,13 +2345,19 @@ mod legacy_sasl_wire_tests {
                 async move {
                     task_published.store(true, std::sync::atomic::Ordering::Release);
                 },
-                &metrics,
+                &telemetry,
             )
             .unwrap();
 
         tokio::task::yield_now().await;
         assert!(!published.load(std::sync::atomic::Ordering::Acquire));
-        supervisor.start(&metrics);
+        supervisor.start(&telemetry);
+        assert_eq!(
+            metrics
+                .post_action_tasks_started_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while !published.load(std::sync::atomic::Ordering::Acquire) {
                 tokio::task::yield_now().await;
@@ -2361,6 +2365,6 @@ mod legacy_sasl_wire_tests {
         })
         .await
         .unwrap();
-        supervisor.reap(&metrics);
+        supervisor.reap(&telemetry);
     }
 }

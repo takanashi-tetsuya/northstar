@@ -465,6 +465,13 @@ the live-session snapshot is taken only after a successful claim.
 The signed cluster session-termination listener reads durable route authority
 through a dedicated service and repository. It checks the live local instance
 after that read, then retains connection fencing and acknowledgement ownership.
+The failure supervisor runs bounded session-route cleanup and authority
+validation through one ordered maintenance port. C2S post-action supervision
+receives only its five counters, including the abort and drop paths; the
+unused broad C2S runtime wrapper has been removed.
+Clustered-MUC audience delivery keeps its network timeout, database admission
+turn and result counters in the worker, while exact ACK and retry/dead-letter
+settlement pass through a dedicated repository port.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

@@ -1,3 +1,4 @@
+use crate::services::cluster_muc_outbox_settlement::AckOutcome;
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use bb8::Pool;
@@ -5786,8 +5787,9 @@ pub async fn run_failure_supervisor(
                         state.cluster.heartbeat_instance_authority(&state.pool).await?;
                         crate::db::cleanup_cluster_envelope_replays(&state.pool, 4096).await?;
                         crate::db::validate_cluster_replay_capacity_authority(&state.pool).await?;
-                        crate::db::cleanup_cluster_session_routes(&state.pool, 4096).await?;
-                        crate::db::validate_cluster_session_route_authority(&state.pool).await?;
+                        state.cluster_session_route_maintenance_service()
+                            .cleanup_and_validate(4096)
+                            .await?;
                     }
                     state.cluster.refresh_instance_authority(&state.pool).await?;
                     Ok::<_, anyhow::Error>(())
@@ -5911,15 +5913,13 @@ async fn run_muc_outbox_delivery(
                     Ok(()) => {
                         let acknowledged = {
                             let _database_turn = state.durable_outbox_database_turn().await;
-                            crate::db::ack_cluster_muc_outbox(
-                                &state.pool,
-                                delivery.delivery_id,
-                                delivery.claim_token,
-                            )
-                            .await?
+                            state
+                                .cluster_muc_outbox_settlement_service()
+                                .acknowledge(&delivery)
+                                .await?
                         };
                         anyhow::ensure!(
-                            acknowledged,
+                            acknowledged == AckOutcome::Acknowledged,
                             "cluster MUC outbox ACK lost its exact claim lease"
                         );
                         state
@@ -5937,12 +5937,10 @@ async fn run_muc_outbox_delivery(
                         );
                         {
                             let _database_turn = state.durable_outbox_database_turn().await;
-                            crate::db::retry_cluster_muc_outbox(
-                                &state.pool,
-                                &delivery,
-                                &error.to_string(),
-                            )
-                            .await?;
+                            state
+                                .cluster_muc_outbox_settlement_service()
+                                .retry(&delivery, &error.to_string())
+                                .await?;
                         }
                         state
                             .metrics

@@ -28,9 +28,8 @@ use crate::services::readiness::{
     ADMIN_CLEANUP_MAX_READY_ATTEMPTS,
 };
 
-/// Minimal capability set for the private observability listener. Keeping
-/// authentication, concurrency control and caching outside `AppState` avoids
-/// giving the public API router authority to expose database-backed metrics.
+/// Cache and single-flight gate for the private observability listener.
+/// The remaining `AppState` dependency is tracked by the Stage 1 service split.
 pub struct MetricsEndpointState {
     app: Arc<AppState>,
     gate: Semaphore,

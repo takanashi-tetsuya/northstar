@@ -1,3 +1,4 @@
+pub(crate) mod capabilities;
 pub(crate) mod extensions;
 pub(crate) mod framing;
 pub(crate) mod protocol;

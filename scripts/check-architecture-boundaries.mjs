@@ -332,6 +332,8 @@ for (const field of [
   'push_service',
   'extdisco_service',
   'session_authority_sweep_service',
+  'cluster_session_route_maintenance_service',
+  'cluster_muc_outbox_settlement_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
   'component_credentials',
@@ -3103,6 +3105,28 @@ if (
 ) {
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
+const clusterMucOutboxWorker = structBody(read('src/cluster.rs'), 'async fn run_muc_outbox_delivery(');
+const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
+const clusterMucOutboxSettlementRepository = read('src/db/cluster_muc_outbox_settlement_repository.rs');
+const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::timeout(');
+const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucOutcome);
+const mucAck = clusterMucOutboxWorker.indexOf('.acknowledge(&delivery)', mucAckTurn);
+const mucAckFence = clusterMucOutboxWorker.indexOf('cluster MUC outbox ACK lost its exact claim lease', mucAck);
+const mucDeliveryMetric = clusterMucOutboxWorker.indexOf('cluster_muc_outbox_deliveries_total', mucAckFence);
+const mucRetryWarning = clusterMucOutboxWorker.indexOf('cluster MUC audience delivery will retry with the same stable event ID', mucDeliveryMetric);
+const mucRetryTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucRetryWarning);
+const mucRetry = clusterMucOutboxWorker.indexOf('.retry(&delivery, &error.to_string())', mucRetryTurn);
+const mucRetryMetric = clusterMucOutboxWorker.indexOf('cluster_muc_outbox_retries_total', mucRetry);
+const mucHeartbeat = clusterMucOutboxWorker.indexOf('heartbeat.ok();', mucRetryMetric);
+if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
+     mucRetryWarning, mucRetryTurn, mucRetry, mucRetryMetric, mucHeartbeat].some((offset) => offset < 0)
+    || /crate::db::(?:ack_cluster_muc_outbox|retry_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
+    || !clusterMucOutboxWorker.includes('acknowledged == AckOutcome::Acknowledged')
+    || !clusterMucOutboxSettlementService.includes('let _ = self.repository.record_retry(delivery, error).await?;')
+    || !clusterMucOutboxSettlementRepository.includes('db::ack_cluster_muc_outbox(&self.pool, delivery.delivery_id, delivery.claim_token)')
+    || !clusterMucOutboxSettlementRepository.includes('db::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
+  throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
+}
 const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
 const readinessEndpointSource = read('src/api/system.rs');
 const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
@@ -3145,6 +3169,11 @@ const clusterFailureSupervisor = structBody(
   read('src/cluster.rs'),
   'pub async fn run_failure_supervisor(',
 );
+if (!clusterFailureSupervisor.includes('.cluster_session_route_maintenance_service()')
+    || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
+    || /(?:crate::)?db::(?:cleanup_cluster_session_routes|validate_cluster_session_route_authority)\s*\(/.test(clusterFailureSupervisor)) {
+  throw new Error('cluster failure supervisor must clean and validate session routes through its bounded maintenance service');
+}
 if (clusterFailureSupervisor.includes('cancel.cancel()')) {
   throw new Error(
     'cluster failure policy must return its terminal error before WorkerRegistry cancels the service',
@@ -3154,6 +3183,14 @@ for (const invariant of ['state.cluster.require_shutdown()', 'anyhow::bail!']) {
   if (!clusterFailureSupervisor.includes(invariant)) {
     throw new Error(`cluster failure policy lost fail-closed transition: ${invariant}`);
   }
+}
+const c2sTelemetry = read('src/xmpp/capabilities.rs');
+const c2sProtocol = read('src/xmpp/protocol.rs');
+if (!c2sTelemetry.includes('struct PostActionTelemetry')
+    || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
+    || !c2sProtocol.includes('c2s_post_action_telemetry()')
+    || /(?:self\.)?state\.metrics\.post_action_/.test(c2sProtocol)) {
+  throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
 const serviceTaskNames = [
   'XMPP',
@@ -3193,6 +3230,8 @@ const stateServiceAccessors = [
   'admin_session_cleanup_worker_service',
   'account_revocation_consumer_service',
   'session_authority_sweep_service',
+  'cluster_session_route_maintenance_service',
+  'cluster_muc_outbox_settlement_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
   's2s_roster_authorization_service',

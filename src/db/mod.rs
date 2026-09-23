@@ -45,6 +45,8 @@ pub(crate) mod capacity_maintenance_repository;
 pub(crate) mod challenge_issuance_repository;
 pub mod cluster_keys;
 pub mod cluster_muc;
+pub(crate) mod cluster_muc_outbox_settlement_repository;
+pub(crate) mod cluster_session_route_maintenance_repository;
 pub mod data_lifecycle;
 pub mod fast;
 pub(crate) mod federation_outbox_repository;

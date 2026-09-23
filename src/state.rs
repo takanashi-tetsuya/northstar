@@ -1968,6 +1968,14 @@ pub struct AppState {
         crate::services::session_authority_sweep::SessionAuthoritySweepService<
             db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
+    cluster_session_route_maintenance_service:
+        crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService<
+            db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository,
+        >,
+    cluster_muc_outbox_settlement_service:
+        crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
+            db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
+        >,
     session_termination_authority_service:
         crate::services::session_termination_authority::SessionTerminationAuthorityService<
             db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
@@ -2206,6 +2214,18 @@ impl AppState {
         self.metrics
             .database_operation_duration_seconds
             .observe(duration);
+    }
+
+    pub(crate) fn c2s_post_action_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PostActionTelemetry<'_> {
+        crate::xmpp::capabilities::PostActionTelemetry::new(
+            &self.metrics.post_action_tasks_started_total,
+            &self.metrics.post_action_tasks_completed_total,
+            &self.metrics.post_action_tasks_panicked_total,
+            &self.metrics.post_action_tasks_aborted_total,
+            &self.metrics.post_action_capacity_rejections_total,
+        )
     }
 
     pub(crate) fn process_gauge_snapshot(
@@ -3479,6 +3499,18 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let cluster_session_route_maintenance_service =
+            crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService::new(
+                db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository::new(
+                    pool.clone(),
+                ),
+            );
+        let cluster_muc_outbox_settlement_service =
+            crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService::new(
+                db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository::new(
+                    pool.clone(),
+                ),
+            );
         let session_termination_authority_service =
             crate::services::session_termination_authority::SessionTerminationAuthorityService::new(
                 db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository::new(
@@ -3549,6 +3581,8 @@ impl AppState {
             cluster,
             account_revocation_consumer_service,
             session_authority_sweep_service,
+            cluster_session_route_maintenance_service,
+            cluster_muc_outbox_settlement_service,
             session_termination_authority_service,
             bosh,
             sessions,
@@ -4070,6 +4104,22 @@ impl AppState {
         db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
     > {
         &self.session_authority_sweep_service
+    }
+
+    pub(crate) fn cluster_session_route_maintenance_service(
+        &self,
+    ) -> &crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService<
+        db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository,
+    >{
+        &self.cluster_session_route_maintenance_service
+    }
+
+    pub(crate) fn cluster_muc_outbox_settlement_service(
+        &self,
+    ) -> &crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
+        db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
+    > {
+        &self.cluster_muc_outbox_settlement_service
     }
 
     pub(crate) fn session_termination_authority_service(

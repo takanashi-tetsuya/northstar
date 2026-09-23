@@ -1,44 +1,51 @@
-//! C2s runtime capability ports bundling.
-//!
-//! Bundles capability access for protocol sessions to provide typed, explicit
-//! runtime boundaries instead of unconstrained access to `AppState`.
+//! Narrow telemetry granted to the C2S post-transport task supervisor.
+//! The five counters are borrowed from the metrics owner; this module never
+//! exposes the complete process metric registry or application state.
 
-use crate::state::AppState;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Capability bundle representing the runtime ports needed by a C2S protocol session.
-#[derive(Clone)]
-pub struct C2sRuntimePorts {
-    state: Arc<AppState>,
+pub(crate) struct PostActionTelemetry<'a> {
+    started: &'a AtomicU64,
+    completed: &'a AtomicU64,
+    panicked: &'a AtomicU64,
+    aborted: &'a AtomicU64,
+    capacity_rejected: &'a AtomicU64,
 }
 
-impl C2sRuntimePorts {
-    pub fn new(state: Arc<AppState>) -> Self {
-        Self { state }
+impl<'a> PostActionTelemetry<'a> {
+    pub(crate) fn new(
+        started: &'a AtomicU64,
+        completed: &'a AtomicU64,
+        panicked: &'a AtomicU64,
+        aborted: &'a AtomicU64,
+        capacity_rejected: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            started,
+            completed,
+            panicked,
+            aborted,
+            capacity_rejected,
+        }
     }
 
-    #[inline]
-    pub fn state(&self) -> &Arc<AppState> {
-        &self.state
+    pub(crate) fn started(&self) {
+        self.started.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[inline]
-    pub fn config(&self) -> &crate::config::Config {
-        &self.state.config
+    pub(crate) fn completed(&self) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[inline]
-    pub fn metrics(&self) -> &crate::metrics::Metrics {
-        &self.state.metrics
+    pub(crate) fn panicked(&self) {
+        self.panicked.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[inline]
-    pub fn sessions(&self) -> &dashmap::DashMap<String, crate::state::OnlineSession> {
-        &self.state.sessions
+    pub(crate) fn aborted(&self, count: usize) {
+        self.aborted.fetch_add(count as u64, Ordering::Relaxed);
     }
 
-    #[inline]
-    pub fn muc_occupants(&self) -> &dashmap::DashMap<String, crate::state::MucOccupant> {
-        &self.state.muc_occupants
+    pub(crate) fn capacity_rejected(&self) {
+        self.capacity_rejected.fetch_add(1, Ordering::Relaxed);
     }
 }

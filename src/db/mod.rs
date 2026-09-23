@@ -1,3 +1,4 @@
+pub(crate) mod account_admin_repository;
 pub(crate) mod admin_dispatch_repository;
 pub(crate) mod admin_mutations;
 pub(crate) mod governance_repository;

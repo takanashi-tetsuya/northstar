@@ -317,7 +317,6 @@ for (const typeName of ['RawConfig', 'Config']) {
 
 for (const field of [
   'api_control',
-  'api_cursor',
   'upload_service',
   'upload_store',
   'message_service',
@@ -2073,6 +2072,8 @@ for (const [name, source] of [
   ['API mutation values', read('src/services/api_mutations.rs')],
   ['ReportService', read('src/services/reports.rs')],
   ['ReportContext', read('src/state/reports.rs')],
+  ['AccountAdminServices', read('src/services/account_admin.rs')],
+  ['AccountAdminRuntime', read('src/state/account_admin.rs')],
   ['OperationAdminService', read('src/services/operations.rs')],
   ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
   ['GovernanceService', read('src/services/governance.rs')],
@@ -2131,6 +2132,9 @@ if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\
 for (const [path, names, context] of [
   ['src/api/operations.rs', ['cancel_operation', 'reconcile_operation', 'reconcile_target'], 'OperationAdminContext'],
   ['src/api/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'ReportModerationContext'],
+  ['src/api/admin.rs', ['admin_update_user', 'admin_clear_offline_messages'], 'AccountAdminContext'],
+  ['src/api/admin.rs', ['admin_toggle_registration'], 'RegistrationAdminContext'],
+  ['src/api/admin.rs', ['admin_kick_session'], 'SessionAdminContext'],
   ['src/api/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'UploadAdminContext'],
   ['src/api/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'InvitationAdminContext'],
   ['src/api/admin.rs', ['admin_tls_reload', 'admin_panic_disconnect', 'admin_toggle_island_mode', 'admin_destroy_muc_room', 'admin_broadcast'], 'AdminDispatchContext'],

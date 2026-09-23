@@ -1019,9 +1019,6 @@ pub struct ApiAdmin {
 }
 
 impl ApiAdmin {
-    pub fn session_token(&self) -> &str {
-        self.user.session_token()
-    }
     pub(crate) fn read_authority(&self) -> crate::services::api_queries::ApiReadAuthority<'_> {
         self.user.read_authority()
     }

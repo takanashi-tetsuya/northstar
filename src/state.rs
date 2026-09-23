@@ -1,3 +1,31 @@
+pub(crate) mod account_admin;
+pub(crate) type AccountAdminContext = crate::services::account_admin::AccountAdminService<
+    db::account_admin_repository::PostgresAccountAdminRepository,
+>;
+pub(crate) type RegistrationAdminContext = crate::services::account_admin::RegistrationAdminService<
+    db::account_admin_repository::PostgresRegistrationAdminRepository,
+    account_admin::LocalRegistrationCache,
+>;
+pub(crate) type SessionAdminContext = crate::services::account_admin::SessionAdminService<
+    db::account_admin_repository::PostgresSessionAdminRepository,
+    account_admin::LocalAdminSessions,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.account_admin_service.clone()
+    }
+}
+impl axum::extract::FromRef<Arc<AppState>> for RegistrationAdminContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.registration_admin_service.clone()
+    }
+}
+impl axum::extract::FromRef<Arc<AppState>> for SessionAdminContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.session_admin_service.clone()
+    }
+}
+
 pub(crate) mod http_policy;
 pub(crate) use http_policy::{AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext};
 pub(crate) type AdminDispatchContext = crate::services::admin_dispatch::AdminDispatchService<
@@ -1887,6 +1915,9 @@ pub struct AppState {
     durable_outbox_database_admission:
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     api_control: Arc<db::ApiControlKeyring>,
+    account_admin_service: AccountAdminContext,
+    registration_admin_service: RegistrationAdminContext,
+    session_admin_service: SessionAdminContext,
     operation_admin_service: OperationAdminContext,
     admin_dispatch_service: AdminDispatchContext,
     upload_admin_service: UploadAdminContext,
@@ -2196,10 +2227,6 @@ impl AppState {
             closed || self.config.registration_dependency_locked(),
             Ordering::Release,
         );
-    }
-
-    pub(crate) fn registration_opening_is_dependency_locked(&self) -> bool {
-        self.config.registration_dependency_locked()
     }
 
     /// Evaluate one resource's session-local XEP-0016 selection (or the
@@ -3081,6 +3108,28 @@ impl AppState {
             Arc::clone(&api_control),
             cluster.admission(),
         );
+        let account_admin_service = crate::services::account_admin::AccountAdminService::new(
+            db::account_admin_repository::PostgresAccountAdminRepository::new(
+                admin_mutations.clone(),
+            ),
+        );
+        let registration_admin_service =
+            crate::services::account_admin::RegistrationAdminService::new(
+                db::account_admin_repository::PostgresRegistrationAdminRepository::new(
+                    admin_mutations.clone(),
+                    pool.clone(),
+                ),
+                account_admin::LocalRegistrationCache::new(
+                    config.registration_dependency_locked(),
+                    Arc::clone(&registration_closed),
+                ),
+            );
+        let session_admin_service = crate::services::account_admin::SessionAdminService::new(
+            db::account_admin_repository::PostgresSessionAdminRepository::new(
+                admin_mutations.clone(),
+            ),
+            account_admin::LocalAdminSessions::new(Arc::clone(&sessions)),
+        );
         let operation_admin_service = crate::services::operations::OperationAdminService::new(
             db::operation_admin_repository::PostgresOperationAdminRepository::new(
                 admin_mutations.clone(),
@@ -3203,6 +3252,9 @@ impl AppState {
             durable_outbox_database_admission,
             api_control,
             report_service,
+            account_admin_service,
+            registration_admin_service,
+            session_admin_service,
             operation_admin_service,
             admin_dispatch_service,
             upload_admin_service,

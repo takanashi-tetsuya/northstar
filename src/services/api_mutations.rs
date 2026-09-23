@@ -91,6 +91,7 @@ pub(crate) enum ApiMutationRejection {
     Unauthorized,
     Forbidden,
     BadRequest(&'static str),
+    Conflict(String),
     Unavailable(String),
     IdempotencyConflict,
     ReplayInvalidated,

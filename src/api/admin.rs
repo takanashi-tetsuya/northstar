@@ -1,162 +1,16 @@
 use crate::api::*;
 use axum::http::HeaderMap;
-use axum::{extract::State, http::StatusCode, response::Response, Json};
+use axum::{extract::State, response::Response, Json};
 use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::api::idempotency::StoredHttpResponse;
 use crate::api::models::{
     BooleanToggle, BroadcastRequest, MucRoomView, OfflineMessagesStats, SessionView,
 };
-use crate::db;
 use crate::error::{AppError, Result};
 use crate::state::AppState;
-
-pub(crate) enum AdminMutationAcquire {
-    Acquired(db::IdempotencyLease),
-    Replay(db::IdempotentResponse),
-    Busy { retry_after_seconds: u64 },
-}
-
-pub(crate) async fn acquire_admin_mutation_in_tx(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    actor: &ApiAdmin,
-    request: &db::IdempotencyRequest<'_>,
-) -> Result<AdminMutationAcquire, AppError> {
-    state
-        .cluster
-        .admit(crate::cluster::ClusterOperation::AdminMutation)
-        .map_err(|error| AppError::Unavailable(error.to_string()))?;
-    if !db::authorize_admin_in_tx(tx, actor.id, actor.auth_generation, actor.session_token())
-        .await?
-    {
-        return Err(AppError::Forbidden);
-    }
-    match db::acquire_idempotency_in_tx(state.api_control(), tx, request).await? {
-        db::IdempotencyAcquire::Acquired(lease) => Ok(AdminMutationAcquire::Acquired(lease)),
-        db::IdempotencyAcquire::Replay(replay) => Ok(AdminMutationAcquire::Replay(replay)),
-        db::IdempotencyAcquire::FingerprintConflict | db::IdempotencyAcquire::RotationConflict => {
-            Err(AppError::IdempotencyConflict)
-        }
-        db::IdempotencyAcquire::ReplayInvalidated => Err(AppError::IdempotencyReplayInvalidated),
-        db::IdempotencyAcquire::Busy {
-            retry_after_seconds,
-        } => Ok(AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        }),
-        db::IdempotencyAcquire::CapacityLimited {
-            retry_after_seconds,
-        } => Err(AppError::TooManyRequests {
-            message: "too many retained requests; try again later".into(),
-            retry_after: retry_after_seconds,
-        }),
-        db::IdempotencyAcquire::InProgress {
-            retry_after_seconds,
-        } => Err(AppError::IdempotencyInProgress {
-            retry_after: retry_after_seconds,
-        }),
-    }
-}
-
-pub(crate) async fn complete_admin_response(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    lease: &db::IdempotencyLease,
-    status: StatusCode,
-    body: Value,
-    replay_resource_id: Option<Uuid>,
-) -> Result<Response, AppError> {
-    let stored_response = StoredHttpResponse::json(status, body)?
-        .with_optional_replay_resource_id(replay_resource_id);
-    if !stored_response
-        .persist_in_tx(state.api_control(), tx, lease)
-        .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "administrator idempotency lease changed"
-        )));
-    }
-    stored_response.build_response()
-}
-
-struct AdminOperationRequest<'a> {
-    kind: &'a str,
-    target: Option<&'a str>,
-    policy: db::AuthorizationPolicy,
-    payload: &'a Value,
-}
-
-async fn enqueue_admin_operation(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    actor: &ApiAdmin,
-    lease: &db::IdempotencyLease,
-    request: AdminOperationRequest<'_>,
-) -> Result<(Response, Uuid), AppError> {
-    let operation = db::enqueue_operation_in_tx(
-        tx,
-        &db::EnqueueOperation {
-            request_id: lease.request_id,
-            idempotency_id: lease.record_id,
-            idempotency_lease_token: lease.lease_token(),
-            actor_id: actor.id,
-            actor_auth_generation: actor.auth_generation,
-            authorization_policy: request.policy,
-            kind: request.kind,
-            target: request.target,
-            payload_version: 1,
-            payload: request.payload,
-            max_attempts: 8,
-            deadline_seconds: 24 * 60 * 60,
-        },
-    )
-    .await?;
-    let location = format!("/api/v1/admin/operations/{}", operation.id);
-    let stored_response = StoredHttpResponse::json(
-        StatusCode::ACCEPTED,
-        json!({"operation_id":operation.id,"status":"pending"}),
-    )?
-    .with_header("location", location);
-    // The operation identifier is already protected inside the encrypted
-    // response body and Location header, while the journal is linked to this
-    // idempotency record. `replay_resource_id` is intentionally reserved for
-    // secret-bearing invitation responses whose current resource state must
-    // be revalidated before disclosure; treating an ordinary operation as
-    // that polymorphic resource violates the database route constraint.
-    if !stored_response
-        .persist_in_tx(state.api_control(), tx, lease)
-        .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "administrator idempotency lease changed"
-        )));
-    }
-    let response = stored_response.build_response()?;
-    Ok((response, operation.id))
-}
-
-async fn refresh_registration_cache(state: &AppState) -> Result<(), AppError> {
-    let (_, registration_closed) = db::admin_runtime_settings(&state.pool).await?;
-    state.apply_registration_closed(registration_closed);
-    Ok(())
-}
-
-async fn refresh_registration_cache_best_effort(state: &AppState, committed_action: &'static str) {
-    if let Err(error) = refresh_registration_cache(state).await {
-        // The PostgreSQL transaction and its idempotent response are already
-        // committed.  The periodic runtime-settings refresher will reconcile
-        // this process-local cache, so a cache read failure must not turn the
-        // durable success into a contradictory HTTP error.
-        tracing::error!(
-            ?error,
-            committed_action,
-            "failed to refresh registration cache after committed administrator mutation"
-        );
-    }
-}
 
 pub async fn admin_stats(
     State(state): State<crate::state::ApiQueryContext>,
@@ -226,85 +80,33 @@ pub async fn admin_users(
 }
 
 pub async fn admin_update_user(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AccountAdminContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<UserPatch>,
 ) -> Result<Response, AppError> {
-    if request.disabled.is_none() && request.admin.is_none() {
-        return Err(AppError::BadRequest("user patch is empty".into()));
-    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "PATCH",
         "/api/v1/admin/users/{id}",
     );
     idempotency.target_scope = id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let previous_auth_generation = db::set_user_status_admin_in_tx(
-        &mut tx,
-        actor.id,
-        actor.auth_generation,
-        actor.session_token(),
-        id,
-        request.disabled,
-        request.admin,
-    )
-    .await
-    .map_err(|error| match error {
-        db::UserStatusError::NotFound => AppError::BadRequest("user does not exist".into()),
-        db::UserStatusError::LastAdministrator => AppError::Conflict(error.to_string()),
-        db::UserStatusError::SelfMutation => AppError::BadRequest(error.to_string()),
-        db::UserStatusError::Unauthorized => AppError::Forbidden,
-        db::UserStatusError::Internal(error) => AppError::Internal(error),
-    })?;
-    if request.disabled == Some(true) {
-        let target_key = format!("user:{id}:generation:{previous_auth_generation}");
-        let (response, _operation_id) = enqueue_admin_operation(
-            &state,
-            &mut tx,
-            &actor,
-            &lease,
-            AdminOperationRequest {
-                kind: "admin.user_session_cleanup",
-                target: Some(&target_key),
-                policy: db::AuthorizationPolicy::CommittedConsequence,
-                payload: &json!({"user_id":id,"auth_generation":previous_auth_generation}),
+    let outcome = state
+        .update_user(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            id,
+            crate::services::account_admin::UserStatusPatch {
+                disabled: request.disabled,
+                admin: request.admin,
             },
         )
         .await?;
-        tx.commit().await?;
-        Ok(response)
-    } else {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::OK,
-            json!({"updated":true}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(response)
-    }
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_reports(
@@ -556,64 +358,28 @@ pub async fn admin_toggle_island_mode(
 }
 
 pub async fn admin_toggle_registration(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::RegistrationAdminContext>,
     actor: ApiAdmin,
     request: ApiJson<BooleanToggle>,
 ) -> Result<Response, AppError> {
-    if request.enabled && state.registration_opening_is_dependency_locked() {
-        return Err(AppError::Conflict(
-            "registration cannot be opened while invitation-only mode is dependency-locked by WEB_CLIENT_ENABLED=false".into(),
-        ));
-    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/registration",
     );
     idempotency.target_scope = b"registration_closed";
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            // A replay may be older than a later toggle made with another
-            // key. Refresh from durable state rather than re-applying the
-            // historical request body to this process-local discovery cache.
-            refresh_registration_cache_best_effort(&state, "idempotency_replay").await;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    db::set_admin_runtime_setting_in_tx(
-        &mut tx,
-        actor.id,
-        "registration_closed",
-        !request.enabled,
-        Some(lease.request_id),
-    )
-    .await?;
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"open_registration": request.enabled}),
-        None,
-    )
-    .await?;
-    tx.commit().await?;
-    refresh_registration_cache_best_effort(&state, "registration_toggle").await;
-
-    Ok(response)
+    let outcome = state
+        .set_registration(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            request.enabled,
+        )
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_sessions(
@@ -667,74 +433,30 @@ fn finish_session_page(
 }
 
 pub async fn admin_kick_session(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::SessionAdminContext>,
     actor: ApiAdmin,
     ApiPath(connection_id): ApiPath<Uuid>,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
-    if connection_id.is_nil() {
-        return Err(AppError::BadRequest("connection id must not be nil".into()));
-    }
     let target = format!("connection:{connection_id}");
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/sessions/{connection_id}",
     );
     idempotency.target_scope = target.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let session = state
-        .sessions
-        .iter()
-        .find(|entry| entry.connection_id == connection_id);
-    let Some(session) = session else {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::BAD_REQUEST,
-            json!({"error":{"code":"bad_request","message":"session does not exist"}}),
-            None,
+    let outcome = state
+        .kick_session(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            connection_id,
         )
         .await?;
-        tx.commit().await?;
-        return Ok(response);
-    };
-    let payload = json!({"user_id":session.user_id,"auth_generation":session.auth_generation,
-        "connection_id":connection_id.to_string()});
-    drop(session);
-    let (response, _operation_id) = enqueue_admin_operation(
-        &state,
-        &mut tx,
-        &actor,
-        &lease,
-        AdminOperationRequest {
-            kind: "admin.session_kick",
-            target: Some(&target),
-            policy: db::AuthorizationPolicy::ReauthorizeUntilEffect,
-            payload: &payload,
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_offline_messages_stats(
@@ -750,57 +472,25 @@ pub async fn admin_offline_messages_stats(
 }
 
 pub async fn admin_clear_offline_messages(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AccountAdminContext>,
     actor: ApiAdmin,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/offline_messages",
     );
     idempotency.target_scope = b"offline_messages";
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let removed =
-        match db::clear_offline_messages_in_tx(&mut tx, actor.id, Some(lease.request_id)).await {
-            Ok(removed) => removed,
-            Err(error)
-                if error
-                    .downcast_ref::<db::OfflineMessagesTransportOwned>()
-                    .is_some() =>
-            {
-                return Err(AppError::Conflict(error.to_string()));
-            }
-            Err(error) => return Err(error.into()),
-        };
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"cleared":true,"removed":removed}),
-        None,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .clear_offline_messages(crate::services::api_mutations::AdminMutationAdmission {
+            authority: actor.read_authority(),
+            idempotency,
+        })
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_muc_rooms(
@@ -904,23 +594,6 @@ mod tests {
     use axum::http::{HeaderValue, Request};
 
     use crate::api::{ApiEmpty, SessionView};
-
-    #[test]
-    fn registration_dependency_lock_is_checked_before_database_mutation() {
-        let source = include_str!("admin.rs");
-        let body = source
-            .split_once("pub async fn admin_toggle_registration")
-            .unwrap()
-            .1
-            .split_once("pub async fn admin_sessions")
-            .unwrap()
-            .0;
-        let guard = body
-            .find("registration_opening_is_dependency_locked")
-            .unwrap();
-        let transaction = body.find("state.pool.begin()").unwrap();
-        assert!(guard < transaction);
-    }
 
     fn session(connection_id: u128) -> SessionView {
         SessionView {

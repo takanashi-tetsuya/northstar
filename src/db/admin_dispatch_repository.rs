@@ -2,24 +2,19 @@
 use crate::{
     db::{
         self,
-        admin_mutations::{AdminMutationStart, AdminMutationStore},
+        admin_mutations::{
+            enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore,
+            AdminOperationIntent,
+        },
     },
     services::{admin_dispatch::*, api_mutations::*, operations::AuthorizationPolicy},
 };
 use anyhow::Result;
-use serde_json::{json, Value};
-use sqlx::{Postgres, Transaction};
-use uuid::Uuid;
+use serde_json::json;
 
 #[derive(Clone)]
 pub(crate) struct PostgresAdminDispatchRepository {
     mutations: AdminMutationStore,
-}
-struct OperationIntent<'a> {
-    kind: &'a str,
-    target: Option<&'a str>,
-    policy: AuthorizationPolicy,
-    payload: &'a Value,
 }
 
 impl PostgresAdminDispatchRepository {
@@ -30,48 +25,16 @@ impl PostgresAdminDispatchRepository {
     async fn dispatch(
         &self,
         admission: AdminMutationAdmission<'_>,
-        intent: OperationIntent<'_>,
+        intent: AdminOperationIntent<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         let (mut tx, lease) = match self.mutations.start(&admission).await? {
             AdminMutationStart::Ready(tx, lease) => (tx, lease),
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
-        let (response, _) = enqueue(&mut tx, &admission, &lease, intent).await?;
+        let (response, _) =
+            enqueue_operation_response_in_tx(&mut tx, &admission, &lease, intent).await?;
         self.mutations.finish(tx, &lease, response).await
     }
-}
-
-async fn enqueue(
-    tx: &mut Transaction<'_, Postgres>,
-    admission: &AdminMutationAdmission<'_>,
-    lease: &db::IdempotencyLease,
-    intent: OperationIntent<'_>,
-) -> Result<(StoredApiResponse, Uuid)> {
-    let operation = db::enqueue_operation_in_tx(
-        tx,
-        &db::EnqueueOperation {
-            request_id: lease.request_id,
-            idempotency_id: lease.record_id,
-            idempotency_lease_token: lease.lease_token(),
-            actor_id: admission.authority.user_id,
-            actor_auth_generation: admission.authority.auth_generation,
-            authorization_policy: intent.policy,
-            kind: intent.kind,
-            target: intent.target,
-            payload_version: 1,
-            payload: intent.payload,
-            max_attempts: 8,
-            deadline_seconds: 24 * 60 * 60,
-        },
-    )
-    .await?;
-    let response =
-        StoredApiResponse::json(202, json!({"operation_id":operation.id,"status":"pending"}))?
-            .with_header(
-                "location",
-                format!("/api/v1/admin/operations/{}", operation.id),
-            );
-    Ok((response, operation.id))
 }
 
 impl AdminDispatchRepository for PostgresAdminDispatchRepository {
@@ -81,7 +44,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         self.dispatch(
             admission,
-            OperationIntent {
+            AdminOperationIntent {
                 kind: "admin.tls_reload",
                 target: None,
                 policy: AuthorizationPolicy::ReauthorizeUntilEffect,
@@ -96,7 +59,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         self.dispatch(
             admission,
-            OperationIntent {
+            AdminOperationIntent {
                 kind: "admin.panic_disconnect",
                 target: None,
                 policy: AuthorizationPolicy::ReauthorizeUntilEffect,
@@ -123,11 +86,11 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
         )
         .await?;
         let payload = json!({"mode":if enabled {"enabled"} else {"disabled"},"epoch":lease.request_id.as_u128().min(i64::MAX as u128) as i64});
-        let (response, _) = enqueue(
+        let (response, _) = enqueue_operation_response_in_tx(
             &mut tx,
             &admission,
             &lease,
-            OperationIntent {
+            AdminOperationIntent {
                 kind: "admin.island_converge",
                 target: Some("island_mode"),
                 policy: AuthorizationPolicy::CommittedConsequence,
@@ -165,11 +128,11 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
                 ApiMutationRejection::BadRequest("room does not exist"),
             ));
         }
-        let (response, operation_id) = enqueue(
+        let (response, operation_id) = enqueue_operation_response_in_tx(
             &mut tx,
             &admission,
             &lease,
-            OperationIntent {
+            AdminOperationIntent {
                 kind: "admin.muc_destroy",
                 target: Some(room.room_jid()),
                 policy: AuthorizationPolicy::CommittedConsequence,
@@ -194,7 +157,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         self.dispatch(
             admission,
-            OperationIntent {
+            AdminOperationIntent {
                 kind: "admin.broadcast",
                 target: None,
                 policy: AuthorizationPolicy::ReauthorizeUntilEffect,

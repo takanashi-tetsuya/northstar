@@ -95,6 +95,9 @@ fi
 
 for port_test in \
   db::governance_repository::tests::governance_ports_replay_before_cursor_validation_and_bound_exports_before_commit \
+  db::account_admin_repository::tests::account_disable_commits_exact_old_generation_and_rolls_back_failed_cleanup_enqueue \
+  db::account_admin_repository::tests::session_kick_snapshots_after_replay_and_retains_missing_session_response \
+  db::account_admin_repository::tests::offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_back_key \
   db::report_moderation_repository::tests::moderation_ports_commit_decisions_and_replay_terminal_errors_once \
   db::invitation_admin_repository::tests::invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once \
   db::retention_policy_repository::tests::policy_ports_preserve_ceilings_room_ownership_and_response_replay \

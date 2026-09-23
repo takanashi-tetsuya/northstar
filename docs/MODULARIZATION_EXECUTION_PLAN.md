@@ -394,9 +394,11 @@ without Redis publication authority. User/MUC retention policy endpoints use
 a dedicated policy context; policy reads now hold exact bearer/account locks
 through the snapshot. TLS reload, panic disconnect, island mode, room
 destruction and broadcast use an administrative dispatch service and a single
-repository transaction for their operation and side records. Deployment
-capacity lease renewal and expiry cleanup now
-use a typed maintenance service and PostgreSQL repository. The renewal context
+repository transaction for their operation and side records. User status,
+registration, session kick and offline clearing now use narrow command ports;
+the repositories retain cleanup intents and transport-owned queue checks in
+their transactions. Deployment capacity renewal and expiry cleanup use a typed
+maintenance service and PostgreSQL repository. The renewal context
 keeps only the shared route map needed to snapshot exact cancellation tokens;
 the reaper has no session-map authority. Legal holds and governance exports
 now use complete repository operations, including cursor validation on the

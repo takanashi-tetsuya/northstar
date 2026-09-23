@@ -167,6 +167,11 @@ Key ownership:
   broadcast requests now enter a separate administrative dispatch service.
   Its repository commits the operation, audit, replay response and any room
   intent or runtime setting together before a worker performs the effect.
+- User status, registration, session kick and offline-message clearing each
+  use narrow administrative capabilities. The repositories own authorization,
+  idempotency and all database changes. Registration refreshes the shared
+  discovery flag from durable state after a successful commit or replay;
+  session kick snapshots only the requested live connection after admission.
 - User and room retention policies have a separate context containing the
   service, policy ceilings and read timers. Reads hold bearer/account locks
   through the policy snapshot; writes preserve policy, audit and replay in one

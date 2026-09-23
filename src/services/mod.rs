@@ -1,4 +1,5 @@
 pub(crate) mod account;
+pub(crate) mod account_admin;
 pub(crate) mod admin_commands;
 pub(crate) mod admin_dispatch;
 pub(crate) mod authentication;

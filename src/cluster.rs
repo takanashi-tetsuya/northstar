@@ -6769,10 +6769,9 @@ async fn maintenance_once(
         })
         .collect::<std::collections::HashMap<_, _>>();
     let occupants = locals.muc_occupant_snapshots();
-    let mut muc_soft_state_errors = 0_u64;
-    let mut active_muc_rooms = HashSet::new();
+    let mut unrenewed_muc = Vec::new();
+    let mut renewed_muc = Vec::new();
     for occupant in occupants {
-        let serializable = crate::state::SerializableMucOccupant::from(&occupant);
         let authoritative =
             authoritative_muc.get(&(occupant.cluster_epoch, occupant.connection_id));
         let exact = authoritative.is_some_and(|authority| {
@@ -6786,15 +6785,61 @@ async fn maintenance_once(
             false
         };
         if !renewed {
-            locals.remove_stale_muc_actor(&occupant);
-            tracing::warn!(
-                room = %occupant.room_jid,
-                nick = %occupant.nick,
-                epoch = %occupant.cluster_epoch,
-                "removed local MUC actor that lost its PostgreSQL occupancy authority"
-            );
+            unrenewed_muc.push(occupant);
             continue;
         }
+        renewed_muc.push(occupant);
+    }
+    for chunk in unrenewed_muc.chunks(crate::services::muc::MAX_MUC_OCCUPANCY_RENEW_BATCH) {
+        let mut candidates = Vec::with_capacity(chunk.len());
+        for occupant in chunk {
+            match crate::services::muc::MucOccupancyLookup::new(
+                &occupant.room_jid,
+                &occupant.full_jid,
+                &occupant.nick,
+                occupant.cluster_epoch,
+                occupant.connection_id,
+            ) {
+                Ok(lookup) => candidates.push((occupant, lookup)),
+                Err(_) => locals.remove_stale_muc_actor(occupant),
+            }
+        }
+        let lookups = candidates
+            .iter()
+            .map(|(_, lookup)| lookup.clone())
+            .collect::<Vec<_>>();
+        let terminal = match occupancy_maintenance
+            .committed_terminal_exact_batch(&lookups, &control.node_id)
+            .await
+        {
+            Ok(terminal) => terminal.into_iter().collect::<HashSet<_>>(),
+            Err(error) => {
+                for (occupant, _) in candidates {
+                    locals.remove_stale_muc_actor(occupant);
+                }
+                return Err(error);
+            }
+        };
+        for (occupant, lookup) in candidates {
+            if terminal.contains(&lookup) {
+                locals.remove_committed_terminal_muc_actor(occupant);
+            } else {
+                locals.remove_stale_muc_actor(occupant);
+                tracing::warn!(
+                    room = %occupant.room_jid,
+                    nick = %occupant.nick,
+                    epoch = %occupant.cluster_epoch,
+                    "removed local MUC actor that lost its PostgreSQL occupancy authority"
+                );
+            }
+        }
+    }
+    // Clear lost authority before any Redis network wait can postpone its
+    // route fence. Redis remains a disposable projection of renewed actors.
+    let mut muc_soft_state_errors = 0_u64;
+    let mut active_muc_rooms = HashSet::new();
+    for occupant in renewed_muc {
+        let serializable = crate::state::SerializableMucOccupant::from(&occupant);
         let json = serde_json::to_string(&serializable)?;
         if let Err(error) = async {
             redis.join_muc(&occupant.room_jid).await?;

@@ -5661,6 +5661,65 @@ pub async fn resolve_cluster_muc_occupancies_batch(
         .collect())
 }
 
+/// Distinguish a committed room departure from a lost lease or ownership
+/// fence. The room's current epoch is deliberately not part of this lookup:
+/// the old occupant remains terminal after that room is recreated.
+pub async fn committed_terminal_cluster_muc_occupancies_batch(
+    pool: &PgPool,
+    candidates: &[ClusterMucOccupancyLookup],
+    owner_node_id: &str,
+) -> Result<Vec<ClusterMucOccupancyLookup>> {
+    validate_node_id(owner_node_id)?;
+    anyhow::ensure!(
+        candidates.len() <= MAX_MUC_OCCUPANCY_RENEW_BATCH,
+        "MUC terminal lookup batch exceeds its limit"
+    );
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut seen = std::collections::HashSet::with_capacity(candidates.len());
+    anyhow::ensure!(
+        candidates.iter().all(|candidate| seen.insert((
+            candidate.room_localpart.as_str(),
+            candidate.full_jid.as_str(),
+            candidate.nick.as_str(),
+            candidate.occupant_incarnation,
+            candidate.connection_uuid,
+        ))),
+        "MUC terminal lookup batch contains a duplicate identity"
+    );
+    let input = serde_json::to_value(candidates)?;
+    let rows = sqlx::query(
+        "SELECT input.room_localpart,input.full_jid,input.nick,
+                input.occupant_incarnation,input.connection_uuid
+           FROM jsonb_to_recordset($1::jsonb) AS input(
+                room_localpart text,full_jid text,nick text,
+                occupant_incarnation uuid,connection_uuid uuid)
+           JOIN muc_rooms r ON r.localpart=input.room_localpart
+           JOIN cluster_muc_occupancies o ON o.room_id=r.id
+                AND o.occupant_incarnation=input.occupant_incarnation
+                AND o.full_jid=input.full_jid AND o.nick=input.nick
+                AND o.connection_uuid=input.connection_uuid
+          WHERE o.owner_node_id=$2 AND o.state='revoked'
+            AND o.ended_at IS NOT NULL
+          ORDER BY input.room_localpart,input.occupant_incarnation",
+    )
+    .bind(input)
+    .bind(owner_node_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ClusterMucOccupancyLookup {
+            room_localpart: row.get("room_localpart"),
+            full_jid: row.get("full_jid"),
+            nick: row.get("nick"),
+            occupant_incarnation: row.get("occupant_incarnation"),
+            connection_uuid: row.get("connection_uuid"),
+        })
+        .collect())
+}
+
 /// Resolve a departing local actor without trusting a nickname or a room
 /// address alone. The returned tuple is still rechecked by the leave writer.
 #[allow(clippy::too_many_arguments)]
@@ -6355,6 +6414,12 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert!(resolved.iter().any(|item| item.target == alice_target));
         assert!(resolved.iter().any(|item| item.target == bob_target));
+        assert!(
+            committed_terminal_cluster_muc_occupancies_batch(&pool, &lookups, "batch-node",)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let mut stale_lookup = lookups[1].clone();
         stale_lookup.connection_uuid = Uuid::new_v4();
         assert_eq!(
@@ -6609,6 +6674,38 @@ mod tests {
             apply_cluster_muc_admin_batch(&pool, command).await.unwrap(),
             Outcome::Conflict
         );
+        let mut wrong_nick = lookups[1].clone();
+        wrong_nick.nick = "AnotherBob".to_owned();
+        let mut wrong_connection = lookups[1].clone();
+        wrong_connection.connection_uuid = Uuid::new_v4();
+        let mut wrong_incarnation = lookups[1].clone();
+        wrong_incarnation.occupant_incarnation = Uuid::new_v4();
+        let mut wrong_room = lookups[1].clone();
+        wrong_room.room_localpart = "another-room".to_owned();
+        assert_eq!(
+            committed_terminal_cluster_muc_occupancies_batch(
+                &pool,
+                &[
+                    lookups[0].clone(),
+                    lookups[1].clone(),
+                    wrong_nick,
+                    wrong_connection,
+                    wrong_incarnation,
+                    wrong_room,
+                ],
+                "batch-node",
+            )
+            .await
+            .unwrap(),
+            vec![lookups[1].clone()],
+            "only Bob's committed revoked occupancy is a safe room-only cleanup"
+        );
+        assert!(
+            committed_terminal_cluster_muc_occupancies_batch(&pool, &lookups, "another-node",)
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         let owner_transfer = [
             ClusterMucAdminChange::Affiliation {
@@ -6787,6 +6884,29 @@ mod tests {
         .await
         .unwrap()
         .is_none());
+        assert_eq!(
+            destroy_cluster_muc_room(
+                &pool,
+                Uuid::new_v4(),
+                room.id,
+                room.room_epoch,
+                None,
+                "system",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
+            ClusterMucTransitionOutcome::Applied
+        );
+        let terminal =
+            committed_terminal_cluster_muc_occupancies_batch(&pool, &lookups, "batch-node")
+                .await
+                .unwrap();
+        assert_eq!(terminal.len(), 2);
+        assert!(terminal.contains(&lookups[0]));
+        assert!(terminal.contains(&lookups[1]));
         let _ = bob_target;
         pool.close().await;
     }

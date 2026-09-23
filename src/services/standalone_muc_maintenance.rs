@@ -160,11 +160,51 @@ async fn renew_once(context: &StandaloneMucMaintenanceContext) -> Result<()> {
                 stale.push(occupant);
             }
         }
+        let terminal_candidates = stale
+            .iter()
+            .filter(|occupant| room_in_configured_domain(&occupant.room_jid, &context.muc_domain))
+            .filter_map(|occupant| {
+                MucOccupancyLookup::new(
+                    &occupant.room_jid,
+                    &occupant.full_jid,
+                    &occupant.nick,
+                    occupant.cluster_epoch,
+                    occupant.connection_id,
+                )
+                .ok()
+            })
+            .collect::<Vec<_>>();
+        let terminal = match context
+            .occupancy
+            .committed_terminal_exact_batch(&terminal_candidates, &context.node_id)
+            .await
+        {
+            Ok(terminal) => terminal.into_iter().collect::<HashSet<_>>(),
+            Err(error) => {
+                // Failure to prove an intentional termination cannot keep a
+                // stale C2S route alive.
+                for occupant in stale {
+                    context.locals.remove_stale_muc_actor(occupant);
+                }
+                return Err(error);
+            }
+        };
         for occupant in stale {
-            context.locals.remove_stale_muc_actor(occupant);
-            tracing::warn!(room=%occupant.room_jid, nick=%occupant.nick,
-                incarnation=%occupant.cluster_epoch,
-                "removed local MUC actor that lost PostgreSQL occupancy authority");
+            let lookup = MucOccupancyLookup::new(
+                &occupant.room_jid,
+                &occupant.full_jid,
+                &occupant.nick,
+                occupant.cluster_epoch,
+                occupant.connection_id,
+            );
+            if lookup.is_ok_and(|lookup| terminal.contains(&lookup)) {
+                context.locals.remove_committed_terminal_muc_actor(occupant);
+            } else {
+                context.locals.remove_stale_muc_actor(occupant);
+                tracing::warn!(room=%occupant.room_jid, nick=%occupant.nick,
+                    incarnation=%occupant.cluster_epoch,
+                    "removed local MUC actor that lost PostgreSQL occupancy authority");
+            }
         }
     }
     context.locals.record_muc_reconciliation();

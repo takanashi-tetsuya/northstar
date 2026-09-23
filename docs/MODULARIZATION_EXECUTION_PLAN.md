@@ -384,6 +384,8 @@ event and audience. Both standalone and clustered servers use PostgreSQL room
 authority; Redis remains a cross-node transport cache. Standalone occupancy
 renewal uses exact batches of at most 128 local actors and removes their local
 authority if a full verification cannot complete within the 90-second lease.
+Maintenance removes only the MUC projection after a committed room departure;
+an expired lease or ownership mismatch still disconnects the C2S session.
 Exact disconnect cleanup leaves the PostgreSQL occupancy without duplicating
 the committed outbox presence. Five isolated PostgreSQL fixtures and the
 standalone and two-node protocol suites passed locally. All 31 jobs in

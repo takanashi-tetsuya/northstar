@@ -65,7 +65,7 @@ pub(crate) struct MucAdminBatchResult {
 
 pub(crate) const MAX_MUC_OCCUPANCY_RENEW_BATCH: usize = 128;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct MucOccupancyLookup {
     pub room_localpart: String,
     pub full_jid: String,
@@ -122,6 +122,12 @@ pub(crate) trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
         candidates: &[MucOccupancyLookup],
         owner_node_id: &str,
     ) -> impl std::future::Future<Output = Result<Vec<MucResolvedOccupancy>>> + Send;
+
+    fn committed_terminal_exact_batch(
+        &self,
+        candidates: &[MucOccupancyLookup],
+        owner_node_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<MucOccupancyLookup>>> + Send;
 
     fn renew_exact(
         &self,
@@ -206,6 +212,34 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
         self.repository
             .renew_exact(target, owner_node_id, Duration::from_secs(90))
             .await
+    }
+
+    /// A committed revocation ends only the room membership. An absent,
+    /// expired or transferred occupancy still fences its C2S connection.
+    pub(crate) async fn committed_terminal_exact_batch(
+        &self,
+        candidates: &[MucOccupancyLookup],
+        owner_node_id: &str,
+    ) -> Result<Vec<MucOccupancyLookup>> {
+        anyhow::ensure!(
+            candidates.len() <= MAX_MUC_OCCUPANCY_RENEW_BATCH,
+            "MUC terminal lookup batch exceeds its limit"
+        );
+        let requested = candidates.iter().collect::<std::collections::HashSet<_>>();
+        anyhow::ensure!(
+            requested.len() == candidates.len(),
+            "MUC terminal lookup batch contains a duplicate identity"
+        );
+        let terminal = self
+            .repository
+            .committed_terminal_exact_batch(candidates, owner_node_id)
+            .await?;
+        let returned = terminal.iter().collect::<std::collections::HashSet<_>>();
+        anyhow::ensure!(
+            returned.len() == terminal.len() && returned.is_subset(&requested),
+            "MUC terminal lookup returned an unrequested or duplicate identity"
+        );
+        Ok(terminal)
     }
 
     pub(crate) async fn renew_exact_batch(
@@ -369,6 +403,15 @@ mod cluster_muc_occupancy_maintenance_tests {
                     target: self.target.clone(),
                 })
                 .collect())
+        }
+
+        async fn committed_terminal_exact_batch(
+            &self,
+            _candidates: &[MucOccupancyLookup],
+            owner_node_id: &str,
+        ) -> Result<Vec<MucOccupancyLookup>> {
+            assert_eq!(owner_node_id, "node-1");
+            Ok(Vec::new())
         }
 
         async fn renew_exact(

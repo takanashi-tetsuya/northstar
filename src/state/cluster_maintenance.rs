@@ -34,14 +34,24 @@ impl ClusterMaintenanceLocals {
     }
 
     pub(crate) fn remove_stale_muc_actor(&self, occupant: &MucOccupant) {
-        let serializable = SerializableMucOccupant::from(occupant);
-        remove_live_muc_membership_in(&self.sessions, &serializable);
-        remove_local_muc_occupant_exact_from(&self.occupants, occupant.into());
+        self.remove_muc_actor_projection(occupant);
         cancel_local_session_if_connection_in(
             &self.sessions,
             &occupant.full_jid,
             occupant.connection_id,
         );
+    }
+
+    /// A committed room transition has already removed this membership's
+    /// authority. It must not revoke the unrelated C2S route.
+    pub(crate) fn remove_committed_terminal_muc_actor(&self, occupant: &MucOccupant) {
+        self.remove_muc_actor_projection(occupant);
+    }
+
+    fn remove_muc_actor_projection(&self, occupant: &MucOccupant) {
+        let serializable = SerializableMucOccupant::from(occupant);
+        remove_live_muc_membership_in(&self.sessions, &serializable);
+        remove_local_muc_occupant_exact_from(&self.occupants, occupant.into());
     }
 
     pub(crate) fn record_background_failure(&self) {

@@ -127,6 +127,38 @@ impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMai
         )
     }
 
+    async fn committed_terminal_exact_batch(
+        &self,
+        candidates: &[MucOccupancyLookup],
+        owner_node_id: &str,
+    ) -> Result<Vec<MucOccupancyLookup>> {
+        let candidates = candidates
+            .iter()
+            .map(|candidate| db::ClusterMucOccupancyLookup {
+                room_localpart: candidate.room_localpart.clone(),
+                full_jid: candidate.full_jid.clone(),
+                nick: candidate.nick.clone(),
+                occupant_incarnation: candidate.occupant_incarnation,
+                connection_uuid: candidate.connection_uuid,
+            })
+            .collect::<Vec<_>>();
+        Ok(db::committed_terminal_cluster_muc_occupancies_batch(
+            &self.pool,
+            &candidates,
+            owner_node_id,
+        )
+        .await?
+        .into_iter()
+        .map(|candidate| MucOccupancyLookup {
+            room_localpart: candidate.room_localpart,
+            full_jid: candidate.full_jid,
+            nick: candidate.nick,
+            occupant_incarnation: candidate.occupant_incarnation,
+            connection_uuid: candidate.connection_uuid,
+        })
+        .collect())
+    }
+
     async fn renew_exact(
         &self,
         target: &ClusterMucOccupancyTarget,

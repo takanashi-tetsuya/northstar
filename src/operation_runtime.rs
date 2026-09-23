@@ -697,7 +697,6 @@ async fn execute_effect(
                     request_id: operation.request_id,
                     actor_id: operation.actor_id,
                     payload,
-                    local_domain: &state.config.domain,
                 })
                 .await?;
             if let Err(error) = state

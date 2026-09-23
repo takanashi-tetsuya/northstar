@@ -465,6 +465,12 @@ if (terminalMain.replace(/\s+/g, '') !== 'logging::report_result(run().await)') 
   throw new Error('main must report its final result through the bounded console owner');
 }
 const runtimeMain = structBody(mainSource, 'async fn run()');
+if (!runtimeMain.includes('let authority_probe = state.abuse_key_authority_probe();')
+    || !/tokio::time::timeout\(\s*ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,\s*authority_probe\.validate\(&authority_identity\)/s.test(runtimeMain)
+    || !runtimeMain.includes('let bg_housekeeping = Arc::new(state.background_housekeeping_context(bg_counters.clone()));')
+    || /let authority_pool = state\.pool\.clone\(\)/.test(runtimeMain)) {
+  throw new Error('critical key guard and housekeeping must use narrow repository-backed capabilities');
+}
 const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
 const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
 if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
@@ -3152,6 +3158,13 @@ if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
 }
 const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
+const mucDestroyServiceSource = read('src/services/operation_muc_destroy.rs');
+const mucDestroyEffect = structBody(mucDestroyServiceSource, 'pub(crate) struct MucDestroyEffect');
+if (/\blocal_domain\b/.test(mucDestroyEffect)
+    || !mucDestroyServiceSource.includes('jid.domainpart() == format!("conference.{}", self.local_domain)')
+    || !state.includes('config.domain.clone(),')) {
+  throw new Error('MUC destruction must validate the immutable service-owned local domain');
+}
 if (!operationRuntimeOwnershipSource.includes('state.broadcast_routes().target_seeds(operation)')
     || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => state.broadcast_routes().send_exact(payload)')
     || /fn local_target_seeds\(\s*state:\s*&AppState/.test(operationRuntimeOwnershipSource)) {
@@ -3214,6 +3227,10 @@ if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
     || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');
 }
+if (/\bstate\s*\.metrics\b/.test(mixProtocol)
+    || !mixProtocol.includes('state.mix_post_commit_telemetry().delivery_failed()')) {
+  throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
+}
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
 const metricsContext = structBody(read('src/state/metrics_context.rs'), 'pub(crate) struct MetricsContext');
@@ -3236,6 +3253,11 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
 const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
+if (!clusterMaintenance.includes('state.cluster_muc_occupancy_maintenance_service()')
+    || !clusterMaintenance.includes('.renew_exact(authority, &state.cluster.node_id)')
+    || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
+  throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
+}
 const clusterListener = structBody(read('src/cluster.rs'), 'async fn listen_once(');
 if (clusterListener.includes('db::cluster_session_route_authority(')
     || !clusterListener.includes('.session_termination_authority_service()')) {
@@ -3397,6 +3419,7 @@ const stateServiceAccessors = [
   'api_query_service',
   'api_session_service',
   'cluster_authority_service',
+  'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
   'challenge_cleanup_service',
   'sasl_login_abuse_service',

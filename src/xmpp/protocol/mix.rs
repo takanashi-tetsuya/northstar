@@ -3143,14 +3143,7 @@ fn record_mix_post_commit_failure(
     stage: &str,
     error: &dyn std::fmt::Display,
 ) {
-    state
-        .metrics
-        .mix_post_commit_delivery_failures_total
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    state
-        .metrics
-        .post_accept_side_effect_failures_total
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state.mix_post_commit_telemetry().delivery_failed();
     tracing::warn!(
         channel = channel_jid,
         recipient,

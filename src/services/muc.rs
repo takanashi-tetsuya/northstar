@@ -32,6 +32,110 @@ use argon2::{
     Argon2,
 };
 
+/// Node-local MUC lease maintenance has no room mutation or outbox authority.
+/// The snapshot contains only the exact target columns needed to fence renewals.
+pub(crate) trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
+    fn authoritative_for_node(
+        &self,
+        node_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<ClusterMucOccupancyTarget>>> + Send;
+
+    fn renew_exact(
+        &self,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        lease: Duration,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+
+pub(crate) struct ClusterMucOccupancyMaintenanceService<R> {
+    repository: R,
+}
+
+impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenanceService<R> {
+    pub(crate) fn new(repository: R) -> Self {
+        Self { repository }
+    }
+
+    pub(crate) async fn authoritative_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<ClusterMucOccupancyTarget>> {
+        self.repository.authoritative_for_node(node_id).await
+    }
+
+    pub(crate) async fn renew_exact(
+        &self,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+    ) -> Result<bool> {
+        self.repository
+            .renew_exact(target, owner_node_id, Duration::from_secs(90))
+            .await
+    }
+}
+
+#[cfg(test)]
+mod cluster_muc_occupancy_maintenance_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct StubRepository {
+        target: ClusterMucOccupancyTarget,
+        renewal: Mutex<Option<(ClusterMucOccupancyTarget, String, Duration)>>,
+    }
+
+    impl ClusterMucOccupancyMaintenanceRepository for &StubRepository {
+        async fn authoritative_for_node(
+            &self,
+            node_id: &str,
+        ) -> Result<Vec<ClusterMucOccupancyTarget>> {
+            assert_eq!(node_id, "node-1");
+            Ok(vec![self.target.clone()])
+        }
+
+        async fn renew_exact(
+            &self,
+            target: &ClusterMucOccupancyTarget,
+            owner_node_id: &str,
+            lease: Duration,
+        ) -> Result<bool> {
+            *self.renewal.lock().unwrap() = Some((target.clone(), owner_node_id.to_owned(), lease));
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn maintenance_renews_the_snapshot_target_with_the_fixed_lease() {
+        let target = ClusterMucOccupancyTarget {
+            room_id: Uuid::new_v4(),
+            room_epoch: Uuid::new_v4(),
+            occupant_incarnation: Uuid::new_v4(),
+            occupancy_epoch: 7,
+            full_jid: "alice@example.test/Phone".to_owned(),
+            nick: "Alice".to_owned(),
+            connection_uuid: Uuid::new_v4(),
+            connection_epoch: 9,
+        };
+        let repository = StubRepository {
+            target: target.clone(),
+            renewal: Mutex::new(None),
+        };
+        let service = ClusterMucOccupancyMaintenanceService::new(&repository);
+        let snapshot = service.authoritative_for_node("node-1").await.unwrap();
+        assert_eq!(snapshot, vec![target]);
+        assert!(service.renew_exact(&snapshot[0], "node-1").await.unwrap());
+        assert_eq!(
+            *repository.renewal.lock().unwrap(),
+            Some((
+                snapshot[0].clone(),
+                "node-1".to_owned(),
+                Duration::from_secs(90)
+            ))
+        );
+    }
+}
+
 /// Each mutation retains its account/room/occupant fences and its complete
 /// outbox projection. The port never exposes a connection or an open transaction.
 pub(crate) trait MucRepository:

@@ -2415,6 +2415,16 @@ impl AppState {
         )
     }
 
+    pub(crate) fn cluster_muc_occupancy_maintenance_service(
+        &self,
+    ) -> crate::services::muc::ClusterMucOccupancyMaintenanceService<
+        db::room::PostgresClusterMucOccupancyMaintenanceRepository,
+    > {
+        crate::services::muc::ClusterMucOccupancyMaintenanceService::new(
+            db::room::PostgresClusterMucOccupancyMaintenanceRepository::new(self.pool.clone()),
+        )
+    }
+
     pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
         &self.tls_context
     }
@@ -2456,6 +2466,15 @@ impl AppState {
             &self.metrics.online_queue_volatile_acceptances_total,
             &self.metrics.messages_routed_total,
             &self.metrics.capacity_reservations_rejected_total,
+        )
+    }
+
+    pub(crate) fn mix_post_commit_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::MixPostCommitTelemetry<'_> {
+        crate::xmpp::capabilities::MixPostCommitTelemetry::new(
+            &self.metrics.mix_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
         )
     }
 
@@ -2718,6 +2737,30 @@ impl AppState {
             Arc::clone(&self.metrics.retention_moderation_cases_deleted_total),
             Arc::clone(&self.metrics.background_maintenance_failures_total),
         )
+    }
+
+    pub(crate) fn background_housekeeping_context(
+        &self,
+        counters: crate::services::background_housekeeping::BackgroundHousekeepingCounters,
+    ) -> crate::services::background_housekeeping::BackgroundHousekeepingContext<
+        db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
+    > {
+        crate::services::background_housekeeping::BackgroundHousekeepingContext::new(
+            db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
+                self.pool.clone(),
+            ),
+            self.config.moderation_retention_days,
+            self.config.retention_cleanup_batch_size,
+            counters,
+        )
+    }
+
+    pub(crate) fn abuse_key_authority_probe(
+        &self,
+    ) -> crate::services::readiness::AbuseKeyAuthorityProbe<
+        db::readiness_repository::PostgresReadinessRepository,
+    > {
+        self.readiness_service.abuse_key_authority_probe()
     }
 
     pub(crate) fn readiness_context(&self) -> ReadinessContext {
@@ -3833,6 +3876,7 @@ impl AppState {
                 db::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
                     pool.clone(),
                 ),
+                config.domain.clone(),
             );
         let locked_muc_expiry_service =
             crate::services::locked_muc_expiry::LockedMucExpiryService::new(

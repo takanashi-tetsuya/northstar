@@ -122,6 +122,29 @@ impl<'a> MucTelemetry<'a> {
     }
 }
 
+/// MIX delivery failures are observed after their durable commit.
+pub(crate) struct MixPostCommitTelemetry<'a> {
+    delivery_failures: &'a AtomicU64,
+    post_accept_failures: &'a AtomicU64,
+}
+
+impl<'a> MixPostCommitTelemetry<'a> {
+    pub(crate) fn new(
+        delivery_failures: &'a AtomicU64,
+        post_accept_failures: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            delivery_failures,
+            post_accept_failures,
+        }
+    }
+
+    pub(crate) fn delivery_failed(&self) {
+        self.delivery_failures.fetch_add(1, Ordering::Relaxed);
+        self.post_accept_failures.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// One counter for every client frame entering the protocol dispatcher,
 /// including stream framing and malformed XML.
 pub(crate) struct InboundStanzaTelemetry<'a> {

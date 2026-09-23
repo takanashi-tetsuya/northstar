@@ -18,6 +18,41 @@ impl PostgresMucRepository {
     }
 }
 
+pub(crate) struct PostgresClusterMucOccupancyMaintenanceRepository {
+    pool: PgPool,
+}
+
+impl PostgresClusterMucOccupancyMaintenanceRepository {
+    pub(crate) fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMaintenanceRepository {
+    async fn authoritative_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<ClusterMucOccupancyTarget>> {
+        Ok(
+            db::authoritative_cluster_muc_occupancies_for_node(&self.pool, node_id)
+                .await?
+                .into_iter()
+                .map(|occupancy| occupancy_target_from_db((&occupancy).into()))
+                .collect(),
+        )
+    }
+
+    async fn renew_exact(
+        &self,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        lease: Duration,
+    ) -> Result<bool> {
+        let target = target.into();
+        db::renew_cluster_muc_occupancy(&self.pool, &target, owner_node_id, lease).await
+    }
+}
+
 impl From<db::MucRoom> for MucRoom {
     fn from(room: db::MucRoom) -> Self {
         Self {

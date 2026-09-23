@@ -5677,11 +5677,10 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     // complete node snapshot once, then require each local actor to match its
     // exact incarnation and connection fence. Redis is repopulated only as a
     // disposable fan-out cache after the authoritative check succeeds.
-    let authoritative_muc = crate::db::authoritative_cluster_muc_occupancies_for_node(
-        &state.pool,
-        &state.cluster.node_id,
-    )
-    .await?;
+    let occupancy_maintenance = state.cluster_muc_occupancy_maintenance_service();
+    let authoritative_muc = occupancy_maintenance
+        .authoritative_for_node(&state.cluster.node_id)
+        .await?;
     state
         .metrics
         .cluster_muc_pg_reconciliations_total
@@ -5710,14 +5709,9 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             authority.full_jid == occupant.full_jid && authority.nick == occupant.nick
         });
         let renewed = if let Some(authority) = authoritative.filter(|_| exact) {
-            let target = crate::db::ClusterMucOccupancyTarget::from(authority);
-            crate::db::renew_cluster_muc_occupancy(
-                &state.pool,
-                &target,
-                &state.cluster.node_id,
-                Duration::from_secs(90),
-            )
-            .await?
+            occupancy_maintenance
+                .renew_exact(authority, &state.cluster.node_id)
+                .await?
         } else {
             false
         };

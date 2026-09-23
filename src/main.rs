@@ -388,7 +388,7 @@ async fn run() -> Result<()> {
             query_timeout_seconds = ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT.as_secs(),
             "enabled fail-closed PostgreSQL anti-abuse key authority guard"
         );
-        let authority_pool = state.pool.clone();
+        let authority_probe = state.abuse_key_authority_probe();
         let authority_cancel = cancel.clone();
         worker_registry.supervise(
             "abuse-key-deployment-authority",
@@ -397,7 +397,7 @@ async fn run() -> Result<()> {
             Some(ABUSE_KEY_AUTHORITY_POLL_INTERVAL.saturating_mul(2)),
             cancel.clone(),
             move |heartbeat| {
-                let authority_pool = authority_pool.clone();
+                let authority_probe = authority_probe.clone();
                 let authority_identity = authority_identity.clone();
                 let authority_cancel = authority_cancel.clone();
                 async move {
@@ -409,10 +409,7 @@ async fn run() -> Result<()> {
                             _ = interval.tick() => {
                                 let validation = tokio::time::timeout(
                                     ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,
-                                    db::validate_abuse_key_deployment(
-                                        &authority_pool,
-                                        &authority_identity,
-                                    ),
+                                    authority_probe.validate(&authority_identity),
                                 ).await;
                                 match validation {
                                     Ok(Ok(())) => heartbeat.ok(),
@@ -481,16 +478,7 @@ async fn run() -> Result<()> {
         },
     );
     let bg_counters = state.background_housekeeping_counters();
-    let bg_housekeeping = Arc::new(
-        services::background_housekeeping::BackgroundHousekeepingContext::new(
-            db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
-                state.pool.clone(),
-            ),
-            state.config.moderation_retention_days,
-            state.config.retention_cleanup_batch_size,
-            bg_counters.clone(),
-        ),
-    );
+    let bg_housekeeping = Arc::new(state.background_housekeeping_context(bg_counters.clone()));
     let bg_state = state.clone();
     let bg_cancel = cancel.clone();
     worker_registry.supervise(

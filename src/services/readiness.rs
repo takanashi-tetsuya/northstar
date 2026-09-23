@@ -40,9 +40,31 @@ pub(crate) struct ReadinessService<R> {
     repository: R,
 }
 
+/// The critical periodic key guard can only request its one deployment check.
+/// Its timeout and fail-closed worker policy remain with the worker.
+#[derive(Clone)]
+pub(crate) struct AbuseKeyAuthorityProbe<R> {
+    repository: R,
+}
+
+impl<R: ReadinessRepository> AbuseKeyAuthorityProbe<R> {
+    pub(crate) async fn validate(&self, identity: &AbuseKeyDeploymentIdentity) -> Result<()> {
+        self.repository.validate_abuse_key(identity).await
+    }
+}
+
 impl<R: ReadinessRepository> ReadinessService<R> {
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
+    }
+
+    pub(crate) fn abuse_key_authority_probe(&self) -> AbuseKeyAuthorityProbe<R>
+    where
+        R: Clone,
+    {
+        AbuseKeyAuthorityProbe {
+            repository: self.repository.clone(),
+        }
     }
 
     /// Keep the original probe order and unconditional final database query.
@@ -82,4 +104,72 @@ pub(crate) fn admin_session_cleanup_ready(cleanup: &AdminSessionCleanupSnapshot)
         && (cleanup.queued == 0
             || (cleanup.oldest_age_seconds <= ADMIN_CLEANUP_MAX_READY_AGE_SECONDS
                 && cleanup.maximum_attempts < ADMIN_CLEANUP_MAX_READY_ATTEMPTS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct RecordingRepository {
+        key_checks: Arc<AtomicUsize>,
+        fail: bool,
+    }
+
+    impl ReadinessRepository for RecordingRepository {
+        async fn validate_abuse_key(&self, identity: &AbuseKeyDeploymentIdentity) -> Result<()> {
+            assert_eq!(identity.xmpp_domain, "example.test");
+            self.key_checks.fetch_add(1, Ordering::Relaxed);
+            if self.fail {
+                anyhow::bail!("key generation diverged");
+            }
+            Ok(())
+        }
+
+        async fn validate_cluster_key(&self, _: &ClusterKeyDeploymentIdentity) -> Result<()> {
+            panic!("the periodic guard must not validate cluster keys")
+        }
+
+        async fn validate_cluster_instance(&self, _: &ClusterReadinessAuthority) -> Result<()> {
+            panic!("the periodic guard must not validate cluster instances")
+        }
+
+        async fn admin_session_cleanup_snapshot(&self) -> Result<AdminSessionCleanupSnapshot> {
+            panic!("the periodic guard must not run the readiness cleanup probe")
+        }
+    }
+
+    #[tokio::test]
+    async fn periodic_key_probe_runs_only_the_key_query_and_preserves_failure() {
+        let identity = AbuseKeyDeploymentIdentity {
+            xmpp_domain: "example.test".into(),
+            epoch: 3,
+            current_key_id: "current".into(),
+            previous_key_id: None,
+            retire_previous: false,
+            minimum_overlap: Duration::from_secs(30),
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        for fail in [false, true] {
+            let service = ReadinessService::new(RecordingRepository {
+                key_checks: Arc::clone(&calls),
+                fail,
+            });
+            let probe = service.abuse_key_authority_probe();
+            let result = probe.validate(&identity).await;
+            assert_eq!(result.is_err(), fail);
+            if fail {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("key generation diverged"));
+            }
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
 }

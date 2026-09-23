@@ -9,7 +9,6 @@ pub(crate) struct MucDestroyEffect<'a> {
     pub(crate) request_id: Uuid,
     pub(crate) actor_id: Option<Uuid>,
     pub(crate) payload: &'a Value,
-    pub(crate) local_domain: &'a str,
 }
 
 pub(crate) struct ValidatedMucDestroy<'a> {
@@ -37,11 +36,15 @@ pub(crate) trait MucDestroyRepository: Send + Sync {
 #[derive(Clone)]
 pub(crate) struct MucDestroyService<R> {
     repository: R,
+    local_domain: String,
 }
 
 impl<R: MucDestroyRepository> MucDestroyService<R> {
-    pub(crate) fn new(repository: R) -> Self {
-        Self { repository }
+    pub(crate) fn new(repository: R, local_domain: String) -> Self {
+        Self {
+            repository,
+            local_domain,
+        }
     }
 
     pub(crate) async fn execute(&self, effect: MucDestroyEffect<'_>) -> Result<MucDestroyCommit> {
@@ -54,7 +57,7 @@ impl<R: MucDestroyRepository> MucDestroyService<R> {
         anyhow::ensure!(jid.resourcepart().is_none(), "room JID must be bare");
         let localpart = jid.localpart().context("room JID has no localpart")?;
         anyhow::ensure!(
-            jid.domainpart() == format!("conference.{}", effect.local_domain),
+            jid.domainpart() == format!("conference.{}", self.local_domain),
             "room JID is outside this MUC service"
         );
         let actor_id = effect
@@ -95,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_foreign_or_resource_room_before_reaching_repository() {
         let repository = RecordingRepository::default();
-        let service = MucDestroyService::new(repository.clone());
+        let service = MucDestroyService::new(repository.clone(), "example.test".into());
         let operation_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         for room_jid in [
@@ -108,8 +111,10 @@ mod tests {
                     operation_id,
                     request_id,
                     actor_id: Some(Uuid::new_v4()),
-                    payload: &serde_json::json!({"room_jid":room_jid}),
-                    local_domain: "example.test",
+                    payload: &serde_json::json!({
+                        "room_jid":room_jid,
+                        "local_domain":"other.test"
+                    }),
                 })
                 .await
                 .is_err());
@@ -120,8 +125,10 @@ mod tests {
                 operation_id,
                 request_id,
                 actor_id: Some(Uuid::new_v4()),
-                payload: &serde_json::json!({"room_jid":"room@conference.example.test"}),
-                local_domain: "example.test",
+                payload: &serde_json::json!({
+                    "room_jid":"room@conference.example.test",
+                    "local_domain":"other.test"
+                }),
             })
             .await
             .unwrap();

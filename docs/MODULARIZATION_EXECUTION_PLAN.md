@@ -486,6 +486,11 @@ atomic node-scoped claims and exact ACK/retry settlement use dedicated
 repository ports. Locked-room expiry
 also commits tombstones and terminal outbox records through one service port;
 the worker cleans up local occupants only after that transaction succeeds.
+Node-local MUC occupancy reconciliation reads one purpose-specific PostgreSQL
+snapshot and renews each exact actor with the same 90-second lease before
+refreshing Redis soft state. Room destruction validates the local domain held
+by its service before committing the operation; post-commit wake and occupant
+cleanup remain in the worker.
 Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before
@@ -500,13 +505,17 @@ separate durable SM teardown. The operation worker still needs broader state
 for its other effects.
 Background housekeeping receives only its two shared counters. Archive
 retention holds ten shared counter cells rather than the metrics registry.
+The periodic anti-abuse key guard calls a single validation probe under its
+existing timeout. Background housekeeping receives its repository and policy
+through a state-owned factory instead of taking the shared pool from main.
 S2S ingress/egress, C2S stream/authentication and SM resume,
 roster/privacy/blocking side-effect reporting, registration/account abuse,
 Push, component transport, and PEP/PubSub delivery use borrowed counters and
 timers instead of the complete registry. Caps effect admission and completion
 also receive only their four counters/timer; cross-node presence replay failures
 receive one counter. MUC authority and post-commit delivery reporting use a
-MUC-specific set of counters.
+MUC-specific set of counters; MIX post-commit delivery reports its two counters
+through a separate port.
 Passkey login completion receives its service without the broader HTTP state;
 it checks the live allowed origin before consuming the challenge.
 Remaining work includes live-session and account-recovery workers and the six

@@ -470,8 +470,14 @@ validation through one ordered maintenance port. C2S post-action supervision
 receives only its five counters, including the abort and drop paths; the
 unused broad C2S runtime wrapper has been removed.
 Clustered-MUC audience delivery keeps its network timeout, database admission
-turn and result counters in the worker, while exact ACK and retry/dead-letter
-settlement pass through a dedicated repository port.
+turn and result counters in the worker, while atomic node-scoped claims and
+exact ACK/retry settlement use dedicated repository ports. Locked-room expiry
+also commits tombstones and terminal outbox records through one service port;
+the worker cleans up local occupants only after that transaction succeeds.
+Component transports receive only active-connection and outbox-duration metric
+cells. Session presence and binding paths release map guards before awaiting
+privacy checks or lease cleanup, then recheck the exact connection before
+delivery.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

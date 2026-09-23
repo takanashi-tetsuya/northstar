@@ -334,6 +334,8 @@ for (const field of [
   'session_authority_sweep_service',
   'cluster_session_route_maintenance_service',
   'cluster_muc_outbox_settlement_service',
+  'cluster_muc_outbox_claim_service',
+  'locked_muc_expiry_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
   'component_credentials',
@@ -3106,6 +3108,15 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const clusterMucOutboxWorker = structBody(read('src/cluster.rs'), 'async fn run_muc_outbox_delivery(');
+const mucClaimTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;');
+const mucClaim = clusterMucOutboxWorker.indexOf('.cluster_muc_outbox_claim_service()', mucClaimTurn);
+const mucClaimLease = clusterMucOutboxWorker.indexOf('Duration::from_secs(30)', mucClaim);
+const mucClaimCommit = clusterMucOutboxWorker.indexOf('if deliveries.is_empty()', mucClaimLease);
+const mucDeliveryStart = clusterMucOutboxWorker.indexOf('for delivery in deliveries', mucClaimCommit);
+if ([mucClaimTurn, mucClaim, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
+    || /crate::db::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
+  throw new Error('cluster MUC outbox claim must commit under the bounded database turn before delivery');
+}
 const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
 const clusterMucOutboxSettlementRepository = read('src/db/cluster_muc_outbox_settlement_repository.rs');
 const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::timeout(');
@@ -3192,6 +3203,16 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || /(?:self\.)?state\.metrics\.post_action_/.test(c2sProtocol)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
+const componentTransport = read('src/components.rs');
+if (!componentTransport.includes('struct ComponentTelemetry')
+    || /state\.metrics\.(?:component_connections_active|outbox_delivery_duration_seconds)/.test(componentTransport)) {
+  throw new Error('component transport must use its two-cell telemetry capability');
+}
+const lockedMucExpiryWorker = structBody(state, 'fn start_locked_muc_expiry(');
+if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_service()')
+    || /db::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
+  throw new Error('locked MUC expiry worker must commit through its repository service');
+}
 const serviceTaskNames = [
   'XMPP',
   'XMPPS',
@@ -3226,12 +3247,14 @@ const stateServiceAccessors = [
   'password_change_service',
   'login_service',
   'operation_muc_destroy_service',
+  'locked_muc_expiry_service',
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
   'account_revocation_consumer_service',
   'session_authority_sweep_service',
   'cluster_session_route_maintenance_service',
   'cluster_muc_outbox_settlement_service',
+  'cluster_muc_outbox_claim_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
   's2s_roster_authorization_service',

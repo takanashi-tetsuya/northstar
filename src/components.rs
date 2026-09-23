@@ -1,5 +1,6 @@
 use crate::{
     config::{ComponentConnectionMode, ComponentCredential},
+    metrics::{DurationHistogram, DurationTimer},
     s2s,
     state::AppState,
     xmpp::xml_builder::XmlElement,
@@ -47,6 +48,32 @@ const COMPONENT_OUTBOX_CLAIM_BATCH: i64 = 1;
 // Bound one poll/wake turn so an always-busy outbox cannot starve frames sent
 // by the component. Claims remain just-in-time within this drain budget.
 const COMPONENT_OUTBOX_DRAIN_LIMIT: usize = 32;
+
+/// The two metric cells needed by component transport tasks.
+pub(crate) struct ComponentTelemetry<'a> {
+    connections_active: &'a AtomicU64,
+    delivery_duration: &'a DurationHistogram,
+}
+
+impl<'a> ComponentTelemetry<'a> {
+    pub(crate) fn new(
+        connections_active: &'a AtomicU64,
+        delivery_duration: &'a DurationHistogram,
+    ) -> Self {
+        Self {
+            connections_active,
+            delivery_duration,
+        }
+    }
+
+    fn active_connection(&self) -> ActiveComponentConnection<'a> {
+        ActiveComponentConnection::new(self.connections_active)
+    }
+
+    fn outbox_delivery_timer(&self) -> DurationTimer<'a> {
+        self.delivery_duration.start_timer()
+    }
+}
 
 struct ActiveComponentConnection<'a>(&'a AtomicU64);
 
@@ -463,8 +490,7 @@ async fn outbound_component_connection(
         .component_registry()
         .register_domain(&domain, connection_id, sender.clone())?;
     tracing::info!(%domain, "outbound XEP-0114 component authenticated");
-    let _active_connection =
-        ActiveComponentConnection::new(&state.metrics.component_connections_active);
+    let _active_connection = state.component_telemetry().active_connection();
     let result = drive_component(
         stream,
         Arc::clone(&state),
@@ -670,8 +696,7 @@ async fn legacy_connection(
         return Err(error);
     }
     tracing::info!(domain = %component_domain, "XEP-0114 external component authenticated");
-    let _active_connection =
-        ActiveComponentConnection::new(&state.metrics.component_connections_active);
+    let _active_connection = state.component_telemetry().active_connection();
     let mut bound = HashSet::new();
     bound.insert(component_domain);
     let result = drive_component(
@@ -917,8 +942,7 @@ async fn modern_connection(
     let connection_id = Uuid::new_v4();
     let (sender, receiver) = mpsc::channel(state.config.component_queue_capacity);
     tracing::info!(domain = %credential.primary_domain, "XEP-0225 component authenticated; hostname binding required");
-    let _active_connection =
-        ActiveComponentConnection::new(&state.metrics.component_connections_active);
+    let _active_connection = state.component_telemetry().active_connection();
     let result = drive_component(
         secure,
         Arc::clone(&state),
@@ -1076,7 +1100,7 @@ async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
         let Some(item) = items.into_iter().next() else {
             break;
         };
-        let _delivery_timer = state.metrics.outbox_delivery_duration_seconds.start_timer();
+        let _delivery_timer = state.component_telemetry().outbox_delivery_timer();
         let envelope = s2s::FederationEnvelope::from(item);
         let serialized = client_to_component(&envelope.stanza, protocol);
         match write_component_outbox_with_lease(

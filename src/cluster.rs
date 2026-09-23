@@ -5884,13 +5884,14 @@ async fn run_muc_outbox_delivery(
             }
             let deliveries = {
                 let _database_turn = state.durable_outbox_database_turn().await;
-                crate::db::claim_cluster_muc_outbox(
-                    &state.pool,
-                    &state.cluster.node_id,
-                    MUC_OUTBOX_BATCH_SIZE,
-                    Duration::from_secs(30),
-                )
-                .await?
+                state
+                    .cluster_muc_outbox_claim_service()
+                    .claim_batch(
+                        &state.cluster.node_id,
+                        MUC_OUTBOX_BATCH_SIZE,
+                        Duration::from_secs(30),
+                    )
+                    .await?
             };
             if deliveries.is_empty() {
                 break;

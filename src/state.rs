@@ -1976,6 +1976,10 @@ pub struct AppState {
         crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
             db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
         >,
+    cluster_muc_outbox_claim_service:
+        crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
+            db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
+        >,
     session_termination_authority_service:
         crate::services::session_termination_authority::SessionTerminationAuthorityService<
             db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
@@ -2017,6 +2021,9 @@ pub struct AppState {
     operation_admin_service: OperationAdminContext,
     operation_muc_destroy_service: crate::services::operation_muc_destroy::MucDestroyService<
         db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
+    >,
+    locked_muc_expiry_service: crate::services::locked_muc_expiry::LockedMucExpiryService<
+        db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     >,
     operation_effect_fence_service:
         crate::services::operation_effect_fence::OperationEffectFenceService<
@@ -2225,6 +2232,13 @@ impl AppState {
             &self.metrics.post_action_tasks_panicked_total,
             &self.metrics.post_action_tasks_aborted_total,
             &self.metrics.post_action_capacity_rejections_total,
+        )
+    }
+
+    pub(crate) fn component_telemetry(&self) -> crate::components::ComponentTelemetry<'_> {
+        crate::components::ComponentTelemetry::new(
+            &self.metrics.component_connections_active,
+            &self.metrics.outbox_delivery_duration_seconds,
         )
     }
 
@@ -3394,6 +3408,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let locked_muc_expiry_service =
+            crate::services::locked_muc_expiry::LockedMucExpiryService::new(
+                db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
+                    pool.clone(),
+                ),
+            );
         let operation_effect_fence_service =
             crate::services::operation_effect_fence::OperationEffectFenceService::new(
                 db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository::new(
@@ -3511,6 +3531,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let cluster_muc_outbox_claim_service =
+            crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService::new(
+                db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository::new(
+                    pool.clone(),
+                ),
+            );
         let session_termination_authority_service =
             crate::services::session_termination_authority::SessionTerminationAuthorityService::new(
                 db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository::new(
@@ -3583,6 +3609,7 @@ impl AppState {
             session_authority_sweep_service,
             cluster_session_route_maintenance_service,
             cluster_muc_outbox_settlement_service,
+            cluster_muc_outbox_claim_service,
             session_termination_authority_service,
             bosh,
             sessions,
@@ -3607,6 +3634,7 @@ impl AppState {
             session_admin_service,
             operation_admin_service,
             operation_muc_destroy_service,
+            locked_muc_expiry_service,
             operation_effect_fence_service,
             operation_journal_worker_service,
             admin_session_cleanup_worker_service,
@@ -4122,6 +4150,14 @@ impl AppState {
         &self.cluster_muc_outbox_settlement_service
     }
 
+    pub(crate) fn cluster_muc_outbox_claim_service(
+        &self,
+    ) -> &crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
+        db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
+    > {
+        &self.cluster_muc_outbox_claim_service
+    }
+
     pub(crate) fn session_termination_authority_service(
         &self,
     ) -> &crate::services::session_termination_authority::SessionTerminationAuthorityService<
@@ -4189,6 +4225,14 @@ impl AppState {
         db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
     > {
         &self.operation_muc_destroy_service
+    }
+
+    pub(crate) fn locked_muc_expiry_service(
+        &self,
+    ) -> &crate::services::locked_muc_expiry::LockedMucExpiryService<
+        db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
+    > {
+        &self.locked_muc_expiry_service
     }
 
     pub(crate) fn operation_effect_fence_service(
@@ -4299,18 +4343,21 @@ impl AppState {
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
-                        let expired =
-                            match db::delete_expired_locked_muc_rooms(&state.pool, 100).await {
-                                Ok(expired) => expired,
-                                Err(error) => {
-                                    heartbeat.error(&error);
-                                    tracing::error!(
-                                        ?error,
-                                        "could not expire abandoned locked MUC rooms"
-                                    );
-                                    continue;
-                                }
-                            };
+                        let expired = match state
+                            .locked_muc_expiry_service()
+                            .expire_locked_rooms(100)
+                            .await
+                        {
+                            Ok(expired) => expired,
+                            Err(error) => {
+                                heartbeat.error(&error);
+                                tracing::error!(
+                                    ?error,
+                                    "could not expire abandoned locked MUC rooms"
+                                );
+                                continue;
+                            }
+                        };
                         heartbeat.ok();
                         for localpart in expired {
                             let room_jid =
@@ -4332,8 +4379,8 @@ impl AppState {
                                         state.deliver_to_muc_occupant(&occupant, unavailable).await;
                                 }
                             }
-                            // delete_expired_locked_muc_rooms committed the
-                            // tombstone plus terminal outbox. Cluster nodes
+                            // The expiry transaction committed the tombstone
+                            // and terminal outbox. Cluster nodes
                             // catch it up from PostgreSQL; emitting the legacy
                             // Redis destroy command would reintroduce a second
                             // executable authority.

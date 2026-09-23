@@ -653,14 +653,8 @@ impl ProtocolSession {
             }
         }
         let available = Arc::new(AtomicBool::new(false));
-        match self.state.sessions.entry(key.clone()) {
-            Entry::Occupied(_) => {
-                self.state
-                    .sm_service()
-                    .release_live_session(self.connection_id)
-                    .await?;
-                return Ok(Err(ResourceBindingFailure::Conflict));
-            }
+        let locally_reserved = match self.state.sessions.entry(key.clone()) {
+            Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
                 entry.insert(crate::state::OnlineSession {
                     user_id: user.id,
@@ -700,7 +694,16 @@ impl ProtocolSession {
                     last_activity: Arc::clone(&self.last_activity),
                     disconnect: self.disconnect.clone(),
                 });
+                true
             }
+        };
+        // Release the entry guard before touching PostgreSQL on a collision.
+        if !locally_reserved {
+            self.state
+                .sm_service()
+                .release_live_session(self.connection_id)
+                .await?;
+            return Ok(Err(ResourceBindingFailure::Conflict));
         }
         self.registered_key = Some(key.clone());
         self.full_jid = Some(jid.clone());

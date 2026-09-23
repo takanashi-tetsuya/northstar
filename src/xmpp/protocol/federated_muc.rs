@@ -2006,23 +2006,10 @@ async fn federated_muc_message_owned(
                 .into_iter()
                 .any(|(_, session)| session.sender.try_send(forwarded.clone()).is_ok());
             if !delivered {
-                for node_id in state
-                    .cluster
-                    .lookup_nodes(&target_raw)
+                delivered = state
+                    .route_federated_muc_account_message_remote(&target_raw, &forwarded, None)
                     .await
-                    .unwrap_or_default()
-                {
-                    if node_id != state.cluster.node_id
-                        && state
-                            .cluster
-                            .send_to_node_primary(&node_id, &target_raw, &forwarded)
-                            .await
-                            .is_ok_and(|receipt| receipt.delivered && receipt.acknowledged)
-                    {
-                        delivered = true;
-                        break;
-                    }
-                }
+                    .is_some();
             }
             if !delivered && request.temporary_storage {
                 let delayed = add_delay_from(&forwarded, chrono::Utc::now(), Some(&room_jid));
@@ -2716,37 +2703,16 @@ async fn federated_muc_message_owned(
                     }
                 }
                 if !delivered {
-                    for node_id in state
-                        .cluster
-                        .lookup_nodes(&invitee_jid)
+                    if let Some(route) = state
+                        .route_federated_muc_account_message_remote(
+                            &invitee_jid,
+                            &invitation,
+                            live_delivery,
+                        )
                         .await
-                        .unwrap_or_default()
                     {
-                        if node_id != state.cluster.node_id {
-                            let receipt = if let Some(delivery) = live_delivery {
-                                state
-                                    .cluster
-                                    .send_to_node_primary_durable(
-                                        &node_id,
-                                        &invitee_jid,
-                                        &invitation,
-                                        delivery,
-                                    )
-                                    .await
-                                    .unwrap_or_default()
-                            } else {
-                                state
-                                    .cluster
-                                    .send_to_node_primary(&node_id, &invitee_jid, &invitation)
-                                    .await
-                                    .unwrap_or_default()
-                            };
-                            if receipt.delivered && receipt.acknowledged {
-                                delivered = true;
-                                delivered_full_jid = receipt.accepted_full_jid;
-                                break;
-                            }
-                        }
+                        delivered = true;
+                        delivered_full_jid = route.accepted_full_jid;
                     }
                 }
                 if delivered {

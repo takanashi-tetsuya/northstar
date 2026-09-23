@@ -843,28 +843,19 @@ async fn run() -> Result<()> {
             shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
         }
     }
-    shutdown_state.cluster.begin_shutdown();
+    shutdown_state.begin_cluster_shutdown();
     shutdown_state.connection_actors().begin_shutdown();
     cancel.cancel();
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        shutdown_state.cluster.quiesce_publication(),
-    )
-    .await
+    match shutdown_state
+        .release_cluster_instance_after_publication_quiescence(std::time::Duration::from_secs(15))
+        .await
     {
-        Ok(_publication_fence) => {
-            if let Err(error) = shutdown_state
-                .cluster
-                .release_instance_authority_with(&shutdown_state.cluster_instance_release_service())
-                .await
-            {
-                tracing::warn!(
-                    ?error,
-                    "could not audit the final cluster node-instance lease release"
-                );
-            }
-        }
-        Err(_) => tracing::error!(
+        Some(Ok(())) => {}
+        Some(Err(error)) => tracing::warn!(
+            ?error,
+            "could not audit the final cluster node-instance lease release"
+        ),
+        None => tracing::error!(
             "signed cluster publications did not drain; leaving the instance fenced until its database lease expires"
         ),
     }

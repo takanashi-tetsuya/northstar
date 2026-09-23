@@ -485,10 +485,15 @@ if (!runtimeMain.includes('state.retention_context()')
     || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(runtimeMain)) {
   throw new Error('retention workers must receive separate state-owned repository contexts');
 }
-const shutdownFence = runtimeMain.indexOf('Ok(_publication_fence) =>');
-const releaseInstance = runtimeMain.indexOf('.release_instance_authority_with(&shutdown_state.cluster_instance_release_service())', shutdownFence);
-const shutdownTimeout = runtimeMain.indexOf('Err(_) => tracing::error!(', shutdownFence);
-if (shutdownFence < 0 || releaseInstance < shutdownFence || shutdownTimeout < releaseInstance
+const clusterShutdown = read('src/state/cluster_shutdown.rs');
+const shutdownFence = clusterShutdown.indexOf('let _publication_fence =');
+const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.cluster.quiesce_publication())', shutdownFence);
+const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(&release_service)', publicationTimeout);
+if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance < publicationTimeout
+    || !/\.release_cluster_instance_after_publication_quiescence\(std::time::Duration::from_secs\(15\)\)/.test(runtimeMain)
+    || !runtimeMain.includes('shutdown_state.begin_cluster_shutdown();')
+    || !runtimeMain.includes('Some(Err(error)) => tracing::warn!(')
+    || !runtimeMain.includes('None => tracing::error!(')
     || /release_instance_authority\(&shutdown_state\.pool\)/.test(runtimeMain)) {
   throw new Error('cluster node-instance release must remain inside the signed-publication fence');
 }

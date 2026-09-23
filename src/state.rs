@@ -145,6 +145,8 @@ pub(crate) use metrics_context::MetricsContext;
 mod admin_cluster_queries;
 pub(crate) mod cluster_muc_projection;
 pub(crate) mod cluster_routing;
+mod cluster_shutdown;
+pub(crate) mod federated_muc_cluster_effects;
 mod message_cluster_routing;
 pub(crate) mod mix_cluster_routing;
 pub(crate) mod muc_cluster_routing;

@@ -1344,8 +1344,7 @@ impl ProtocolSession {
                     ClusterMucRegistrationOutcome::Applied { .. }
                     | ClusterMucRegistrationOutcome::Replay { .. } => {
                         self.state
-                            .muc_service()
-                            .wake_committed_operation(&self.state.cluster, operation_id)
+                            .wake_committed_muc_operation(operation_id)
                             .await?;
                         Ok(Action::Send(iq_result_from(id, &room_jid, "")))
                     }
@@ -1483,8 +1482,7 @@ impl ProtocolSession {
                 ClusterMucRegistrationOutcome::Applied { .. }
                 | ClusterMucRegistrationOutcome::Replay { .. } => {
                     self.state
-                        .muc_service()
-                        .wake_committed_operation(&self.state.cluster, operation_id)
+                        .wake_committed_muc_operation(operation_id)
                         .await?;
                     Ok(Action::Send(iq_result_from(id, &room_jid, "")))
                 }
@@ -2208,11 +2206,7 @@ impl ProtocolSession {
                             )));
                         }
                     }
-                    if let Err(error) = self
-                        .state
-                        .muc_service()
-                        .wake_committed_operation(&self.state.cluster, operation_id)
-                        .await
+                    if let Err(error) = self.state.wake_committed_muc_operation(operation_id).await
                     {
                         tracing::warn!(?error, %operation_id, "committed MUC voice approval wake failed; PostgreSQL outbox will catch up");
                     }
@@ -2553,9 +2547,7 @@ impl ProtocolSession {
                                         } => {
                                             if let Some(authority) = &cluster_authority {
                                                 self.state
-                                                    .muc_service()
-                                                    .wake_committed_operation(
-                                                        &self.state.cluster,
+                                                    .wake_committed_muc_operation(
                                                         authority.operation_id,
                                                     )
                                                     .await?;
@@ -2565,9 +2557,7 @@ impl ProtocolSession {
                                         DurableMucInviteOutcome::Replay { id: _ } => {
                                             if let Some(authority) = &cluster_authority {
                                                 self.state
-                                                    .muc_service()
-                                                    .wake_committed_operation(
-                                                        &self.state.cluster,
+                                                    .wake_committed_muc_operation(
                                                         authority.operation_id,
                                                     )
                                                     .await?;
@@ -2866,11 +2856,7 @@ impl ProtocolSession {
                                         self.state.federation_outbox().wake_outbox();
                                         if cluster_authority.is_some() {
                                             self.state
-                                                .muc_service()
-                                                .wake_committed_operation(
-                                                    &self.state.cluster,
-                                                    operation_id,
-                                                )
+                                                .wake_committed_muc_operation(operation_id)
                                                 .await?;
                                         }
                                     }
@@ -3280,12 +3266,7 @@ impl ProtocolSession {
                         )));
                     }
                 }
-                if let Err(error) = self
-                    .state
-                    .muc_service()
-                    .wake_committed_operation(&self.state.cluster, operation_id)
-                    .await
-                {
+                if let Err(error) = self.state.wake_committed_muc_operation(operation_id).await {
                     tracing::warn!(?error, %operation_id, "committed MUC subject wake failed; PostgreSQL outbox will catch up");
                 }
                 return Ok(Action::None);
@@ -3882,12 +3863,7 @@ impl ProtocolSession {
                     .await;
             }
             if let Some(operation_id) = cluster_destroy_operation {
-                if let Err(error) = self
-                    .state
-                    .muc_service()
-                    .wake_committed_operation(&self.state.cluster, operation_id)
-                    .await
-                {
+                if let Err(error) = self.state.wake_committed_muc_operation(operation_id).await {
                     tracing::warn!(?error, room=%room_jid, %operation_id,
                         "room destruction committed; signed wake will be recovered by polling");
                 }
@@ -4139,11 +4115,8 @@ impl ProtocolSession {
                 match outcome {
                     ClusterMucConfigurationOutcome::Applied
                     | ClusterMucConfigurationOutcome::Replay => {
-                        if let Err(error) = self
-                            .state
-                            .muc_service()
-                            .wake_committed_operation(&self.state.cluster, operation_id)
-                            .await
+                        if let Err(error) =
+                            self.state.wake_committed_muc_operation(operation_id).await
                         {
                             tracing::warn!(?error, %operation_id, room=%room_jid,
                                 "durable MUC config committed; signed wake will be recovered by polling");
@@ -5243,8 +5216,7 @@ impl ProtocolSession {
                 }
                 if let Err(error) = self
                     .state
-                    .muc_service()
-                    .wake_committed_operation(&self.state.cluster, cluster_operation_id)
+                    .wake_committed_muc_operation(cluster_operation_id)
                     .await
                 {
                     tracing::warn!(?error, %room_jid, operation_id=%cluster_operation_id,
@@ -6491,12 +6463,7 @@ impl ProtocolSession {
         }
 
         if let Some(operation_id) = cluster_affiliation_operation {
-            if let Err(error) = self
-                .state
-                .muc_service()
-                .wake_committed_operation(&self.state.cluster, operation_id)
-                .await
-            {
+            if let Err(error) = self.state.wake_committed_muc_operation(operation_id).await {
                 tracing::warn!(?error, %operation_id, room=%room_jid,
                     "durable MUC affiliation batch committed; signed wake will be recovered by polling");
             }
@@ -6589,11 +6556,7 @@ impl ProtocolSession {
                             return Ok(Action::Send(iq_error_from(id, room_jid, "conflict")));
                         }
                     }
-                    if let Err(error) = self
-                        .state
-                        .muc_service()
-                        .wake_committed_operation(&self.state.cluster, operation_id)
-                        .await
+                    if let Err(error) = self.state.wake_committed_muc_operation(operation_id).await
                     {
                         tracing::warn!(?error, %operation_id, room=%room_jid,
                             "durable MUC role operation committed; signed wake will be recovered by polling");

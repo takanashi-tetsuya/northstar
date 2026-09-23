@@ -3364,12 +3364,9 @@ pub(crate) async fn route_inbound_message(
             target.sender.try_send(annotated.clone()).is_ok()
         };
         if accepted {
-            let counter = if live_delivery.is_some() {
-                &state.metrics.online_queue_durable_acceptances_total
-            } else {
-                &state.metrics.online_queue_volatile_acceptances_total
-            };
-            counter.fetch_add(1, Ordering::Relaxed);
+            state
+                .s2s_online_queue_telemetry()
+                .accepted(live_delivery.is_some());
             if delivered_key.is_none() {
                 delivered_key = Some(key.clone());
             }
@@ -3507,12 +3504,9 @@ pub(crate) async fn route_inbound_message(
                     target.sender.try_send(annotated.clone()).is_ok()
                 };
                 if accepted {
-                    let counter = if live_delivery.is_some() {
-                        &state.metrics.online_queue_durable_acceptances_total
-                    } else {
-                        &state.metrics.online_queue_volatile_acceptances_total
-                    };
-                    counter.fetch_add(1, Ordering::Relaxed);
+                    state
+                        .s2s_online_queue_telemetry()
+                        .accepted(live_delivery.is_some());
                     delivered_key = Some(key);
                     delivered = true;
                     break;
@@ -3568,7 +3562,7 @@ pub(crate) async fn route_inbound_message(
                 state,
                 root,
                 AcceptedInboundHistory {
-                    metrics: &state.metrics,
+                    telemetry: state.s2s_accepted_history_telemetry(),
                     recipient_id: recipient.id,
                     canonical_from: &canonical_from,
                     stable_id,
@@ -3662,7 +3656,7 @@ pub(crate) async fn route_inbound_message(
                 state,
                 root,
                 AcceptedInboundHistory {
-                    metrics: &state.metrics,
+                    telemetry: state.s2s_accepted_history_telemetry(),
                     recipient_id: recipient.id,
                     canonical_from: &canonical_from,
                     stable_id,
@@ -3692,7 +3686,7 @@ pub(crate) async fn route_inbound_message(
 /// Personal retractions are deliberately excluded: their authorization,
 /// tombstones, action MAM, and delivery outbox commit before fanout.
 struct AcceptedInboundHistory<'a> {
-    metrics: &'a crate::metrics::Metrics,
+    telemetry: super::telemetry::AcceptedHistoryTelemetry<'a>,
     recipient_id: uuid::Uuid,
     canonical_from: &'a str,
     stable_id: uuid::Uuid,
@@ -3708,7 +3702,7 @@ async fn finalize_accepted_inbound_history(
     history: AcceptedInboundHistory<'_>,
 ) {
     let AcceptedInboundHistory {
-        metrics,
+        telemetry,
         recipient_id,
         canonical_from,
         stable_id,
@@ -3737,9 +3731,7 @@ async fn finalize_accepted_inbound_history(
     );
     let history_result = state.message_service().admit_history(&writes).await;
     if let Err(error) = history_result {
-        metrics
-            .post_accept_side_effect_failures_total
-            .fetch_add(1, Ordering::Relaxed);
+        telemetry.failed();
         tracing::warn!(?error, %stable_id, %route, %recipient_id, "accepted inbound message history transaction failed");
     }
 }

@@ -1,8 +1,10 @@
-//! Narrow telemetry granted to the C2S post-transport task supervisor.
-//! The five counters are borrowed from the metrics owner; this module never
-//! exposes the complete process metric registry or application state.
+//! Narrow telemetry borrowed from the metrics owner for XMPP runtime tasks.
+//! Protocol handlers receive only the counters and timer they actually use;
+//! this module never exposes the complete process registry or application state.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::metrics::{DurationHistogram, DurationTimer};
 
 pub(crate) struct PostActionTelemetry<'a> {
     started: &'a AtomicU64,
@@ -47,5 +49,196 @@ impl<'a> PostActionTelemetry<'a> {
 
     pub(crate) fn capacity_rejected(&self) {
         self.capacity_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Counters granted to personal-message routing. A rejected queue write must
+/// not become an accepted delivery, including after durable admission.
+pub(crate) struct PersonalMessageTelemetry<'a> {
+    routing_duration: &'a DurationHistogram,
+    rate_limited: &'a AtomicU64,
+    abuse_backend_failures: &'a AtomicU64,
+    messages_routed: &'a AtomicU64,
+    post_accept_failures: &'a AtomicU64,
+    durable_queue_acceptances: &'a AtomicU64,
+    volatile_queue_acceptances: &'a AtomicU64,
+    carbon_delivery_failures: &'a AtomicU64,
+    carbon_target_timeouts: &'a AtomicU64,
+    cluster_legacy_acceptances: &'a AtomicU64,
+}
+
+pub(crate) struct PersonalMessageTelemetryCells<'a> {
+    pub(crate) routing_duration: &'a DurationHistogram,
+    pub(crate) rate_limited: &'a AtomicU64,
+    pub(crate) abuse_backend_failures: &'a AtomicU64,
+    pub(crate) messages_routed: &'a AtomicU64,
+    pub(crate) post_accept_failures: &'a AtomicU64,
+    pub(crate) durable_queue_acceptances: &'a AtomicU64,
+    pub(crate) volatile_queue_acceptances: &'a AtomicU64,
+    pub(crate) carbon_delivery_failures: &'a AtomicU64,
+    pub(crate) carbon_target_timeouts: &'a AtomicU64,
+    pub(crate) cluster_legacy_acceptances: &'a AtomicU64,
+}
+
+impl<'a> PersonalMessageTelemetry<'a> {
+    pub(crate) fn new(cells: PersonalMessageTelemetryCells<'a>) -> Self {
+        Self {
+            routing_duration: cells.routing_duration,
+            rate_limited: cells.rate_limited,
+            abuse_backend_failures: cells.abuse_backend_failures,
+            messages_routed: cells.messages_routed,
+            post_accept_failures: cells.post_accept_failures,
+            durable_queue_acceptances: cells.durable_queue_acceptances,
+            volatile_queue_acceptances: cells.volatile_queue_acceptances,
+            carbon_delivery_failures: cells.carbon_delivery_failures,
+            carbon_target_timeouts: cells.carbon_target_timeouts,
+            cluster_legacy_acceptances: cells.cluster_legacy_acceptances,
+        }
+    }
+
+    pub(crate) fn start_routing_timer(&self) -> DurationTimer<'_> {
+        self.routing_duration.start_timer()
+    }
+
+    pub(crate) fn rate_limited(&self) {
+        self.rate_limited.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn abuse_backend_failed(&self) {
+        self.abuse_backend_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn message_routed(&self) {
+        self.messages_routed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn post_accept_failed(&self) {
+        self.post_accept_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn online_queue_result(&self, accepted: bool, durable: bool) {
+        if accepted {
+            let counter = if durable {
+                self.durable_queue_acceptances
+            } else {
+                self.volatile_queue_acceptances
+            };
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn carbon_delivery_failed(&self) {
+        self.carbon_delivery_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn carbon_target_timed_out(&self) {
+        self.carbon_target_timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn cluster_legacy_accepted(&self) {
+        self.cluster_legacy_acceptances
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Only the counters touched by federated MUC room/invite delivery.
+pub(crate) struct FederatedMucTelemetry<'a> {
+    post_commit_delivery_failures: &'a AtomicU64,
+    post_accept_failures: &'a AtomicU64,
+    capacity_rejections: &'a AtomicU64,
+    durable_queue_acceptances: &'a AtomicU64,
+    volatile_queue_acceptances: &'a AtomicU64,
+    messages_routed: &'a AtomicU64,
+}
+
+impl<'a> FederatedMucTelemetry<'a> {
+    pub(crate) fn new(
+        post_commit_delivery_failures: &'a AtomicU64,
+        post_accept_failures: &'a AtomicU64,
+        capacity_rejections: &'a AtomicU64,
+        durable_queue_acceptances: &'a AtomicU64,
+        volatile_queue_acceptances: &'a AtomicU64,
+        messages_routed: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            post_commit_delivery_failures,
+            post_accept_failures,
+            capacity_rejections,
+            durable_queue_acceptances,
+            volatile_queue_acceptances,
+            messages_routed,
+        }
+    }
+
+    pub(crate) fn post_commit_delivery_failed(&self) {
+        self.post_commit_delivery_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn post_accept_failed(&self) {
+        self.post_accept_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn capacity_rejected(&self) {
+        self.capacity_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn online_queue_result(&self, accepted: bool, durable: bool) {
+        if accepted {
+            let counter = if durable {
+                self.durable_queue_acceptances
+            } else {
+                self.volatile_queue_acceptances
+            };
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn message_routed(&self) {
+        self.messages_routed.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FederatedMucTelemetry, PersonalMessageTelemetry, PersonalMessageTelemetryCells};
+    use crate::metrics::DurationHistogram;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn queue_acceptance_counts_only_success_and_selects_delivery_class() {
+        let histogram = DurationHistogram::default();
+        let counters: [AtomicU64; 11] = std::array::from_fn(|_| AtomicU64::new(0));
+        let personal = PersonalMessageTelemetry::new(PersonalMessageTelemetryCells {
+            routing_duration: &histogram,
+            rate_limited: &counters[0],
+            abuse_backend_failures: &counters[1],
+            messages_routed: &counters[2],
+            post_accept_failures: &counters[3],
+            durable_queue_acceptances: &counters[4],
+            volatile_queue_acceptances: &counters[5],
+            carbon_delivery_failures: &counters[6],
+            carbon_target_timeouts: &counters[7],
+            cluster_legacy_acceptances: &counters[8],
+        });
+        let federated = FederatedMucTelemetry::new(
+            &counters[9],
+            &counters[3],
+            &counters[10],
+            &counters[4],
+            &counters[5],
+            &counters[2],
+        );
+
+        personal.online_queue_result(false, true);
+        federated.online_queue_result(false, false);
+        assert_eq!(counters[4].load(Ordering::Relaxed), 0);
+        assert_eq!(counters[5].load(Ordering::Relaxed), 0);
+
+        personal.online_queue_result(true, true);
+        federated.online_queue_result(true, false);
+        assert_eq!(counters[4].load(Ordering::Relaxed), 1);
+        assert_eq!(counters[5].load(Ordering::Relaxed), 1);
     }
 }

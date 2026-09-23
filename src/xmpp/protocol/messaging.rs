@@ -115,7 +115,8 @@ impl ProtocolSession {
         raw: &str,
         client_raw: &str,
     ) -> Result<Action> {
-        let _routing_timer = self.state.metrics.routing_duration_seconds.start_timer();
+        let telemetry = self.state.personal_message_telemetry();
+        let _routing_timer = telemetry.start_routing_timer();
         let Some(user) = &self.authenticated else {
             return Ok(message_error(root, "auth", "not-authorized"));
         };
@@ -226,27 +227,18 @@ impl ProtocolSession {
                 }
                 Ok(MessageAdmissionStart::ReplayAccepted) => return Ok(Action::None),
                 Ok(MessageAdmissionStart::InProgress { requirement }) => {
-                    self.state
-                        .metrics
-                        .rate_limited_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.personal_message_telemetry().rate_limited();
                     return Ok(Action::Send(abuse_stanza_error(root, &requirement)));
                 }
                 Ok(MessageAdmissionStart::Denied(error)) => {
-                    self.state
-                        .metrics
-                        .rate_limited_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.personal_message_telemetry().rate_limited();
                     return Ok(Action::Send(abuse_stanza_error(root, error.requirement())));
                 }
                 Ok(MessageAdmissionStart::Conflict) => {
                     return Ok(message_error(root, "cancel", "conflict"));
                 }
                 Ok(MessageAdmissionStart::CapacityLimited) => {
-                    self.state
-                        .metrics
-                        .rate_limited_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.personal_message_telemetry().rate_limited();
                     return Ok(message_error(root, "wait", "resource-constraint"));
                 }
                 Err(error) => {
@@ -255,17 +247,13 @@ impl ProtocolSession {
                     // any routing/archive side effect.
                     if crate::abuse::is_abuse_state_busy(&error) {
                         tracing::warn!(user_id = %user.id, "message anti-abuse actor state was busy; rejected without waiting on a database connection lock");
-                        self.state
-                            .metrics
-                            .rate_limited_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.state.personal_message_telemetry().rate_limited();
                         return Ok(message_error(root, "wait", "resource-constraint"));
                     }
                     tracing::error!(?error, user_id = %user.id, "message anti-abuse backend failed before acceptance");
                     self.state
-                        .metrics
-                        .anti_abuse_backend_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                        .personal_message_telemetry()
+                        .abuse_backend_failed();
                     return Ok(message_error(root, "wait", "resource-constraint"));
                 }
             }
@@ -387,10 +375,7 @@ impl ProtocolSession {
                     self.send_sent_carbons(from, &sender_archive, None, None)
                         .await;
                 }
-                self.state
-                    .metrics
-                    .messages_routed_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.personal_message_telemetry().message_routed();
                 return Ok(Action::None);
             }
             let encrypted = is_encrypted(root);
@@ -492,10 +477,7 @@ impl ProtocolSession {
                                 .wake_committed_operation(&self.state.cluster, stable_id)
                                 .await
                             {
-                                self.state
-                                    .metrics
-                                    .post_accept_side_effect_failures_total
-                                    .fetch_add(1, Ordering::Relaxed);
+                                self.state.personal_message_telemetry().post_accept_failed();
                                 tracing::warn!(?error, %stable_id, "accepted federated direct MUC invite cluster wake failed");
                             }
                         }
@@ -632,10 +614,7 @@ impl ProtocolSession {
                 self.send_sent_carbons(from, &sender_archive, None, None)
                     .await;
             }
-            self.state
-                .metrics
-                .messages_routed_total
-                .fetch_add(1, Ordering::Relaxed);
+            self.state.personal_message_telemetry().message_routed();
             return Ok(Action::None);
         }
         let Some(recipient_local) = target_jid.localpart() else {
@@ -1161,10 +1140,7 @@ impl ProtocolSession {
                             .wake_committed_operation(&self.state.cluster, recipient_stable_id)
                             .await
                         {
-                            self.state
-                                .metrics
-                                .post_accept_side_effect_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                            self.state.personal_message_telemetry().post_accept_failed();
                             tracing::warn!(?error, %recipient_stable_id, "accepted local direct MUC invite cluster wake failed");
                         }
                     }
@@ -1227,12 +1203,9 @@ impl ProtocolSession {
                 target.sender.try_send(recipient_delivery.clone()).is_ok()
             };
             if accepted {
-                let counter = if live_delivery.is_some() {
-                    &self.state.metrics.online_queue_durable_acceptances_total
-                } else {
-                    &self.state.metrics.online_queue_volatile_acceptances_total
-                };
-                counter.fetch_add(1, Ordering::Relaxed);
+                self.state
+                    .personal_message_telemetry()
+                    .online_queue_result(true, live_delivery.is_some());
                 delivered_keys.push(key.clone());
                 if !deliver_all {
                     break;
@@ -1320,10 +1293,7 @@ impl ProtocolSession {
                 FullNoMatchRoute::Reject
                     if durable_full_no_match_recovers(message_type, live_delivery.is_some()) =>
                 {
-                    self.state
-                        .metrics
-                        .post_accept_side_effect_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.personal_message_telemetry().post_accept_failed();
                     tracing::warn!(
                         recipient_id = %recipient.id,
                         target = %to,
@@ -1367,10 +1337,7 @@ impl ProtocolSession {
                             // resource, but it must not turn the already accepted
                             // message into a client-visible failure and invite a
                             // duplicate retry.
-                            self.state
-                                .metrics
-                                .post_accept_side_effect_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                            self.state.personal_message_telemetry().post_accept_failed();
                             tracing::warn!(
                                 ?error,
                                 target = %target.0,
@@ -1391,12 +1358,9 @@ impl ProtocolSession {
                         target.sender.try_send(recipient_delivery.clone()).is_ok()
                     };
                     if accepted {
-                        let counter = if live_delivery.is_some() {
-                            &self.state.metrics.online_queue_durable_acceptances_total
-                        } else {
-                            &self.state.metrics.online_queue_volatile_acceptances_total
-                        };
-                        counter.fetch_add(1, Ordering::Relaxed);
+                        self.state
+                            .personal_message_telemetry()
+                            .online_queue_result(true, live_delivery.is_some());
                         delivered_key = Some(key);
                         delivered = true;
                         break;
@@ -1458,10 +1422,7 @@ impl ProtocolSession {
             if live_delivery_id.is_some() {
                 stored_offline = true;
                 if let Err(error) = self.notify_push(recipient.id).await {
-                    self.state
-                        .metrics
-                        .post_accept_side_effect_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.personal_message_telemetry().post_accept_failed();
                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "durable direct MUC invite was accepted but push notification failed");
                 }
             } else {
@@ -1512,10 +1473,7 @@ impl ProtocolSession {
                                 // duplicate retry after the server already
                                 // accepted the origin-id.
                                 if let Err(error) = self.notify_push(recipient.id).await {
-                                    self.state
-                                        .metrics
-                                        .post_accept_side_effect_failures_total
-                                        .fetch_add(1, Ordering::Relaxed);
+                                    self.state.personal_message_telemetry().post_accept_failed();
                                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "MAM-backed message was accepted but offline quota and push delivery both failed");
                                 }
                                 stored_offline = true;
@@ -1526,10 +1484,7 @@ impl ProtocolSession {
                             OfflineAdmissionOutcome::Stored => {
                                 stored_offline = true;
                                 if let Err(error) = self.notify_push(recipient.id).await {
-                                    self.state
-                                        .metrics
-                                        .post_accept_side_effect_failures_total
-                                        .fetch_add(1, Ordering::Relaxed);
+                                    self.state.personal_message_telemetry().post_accept_failed();
                                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "offline message was accepted but push notification failed");
                                 }
                             }
@@ -1592,10 +1547,7 @@ impl ProtocolSession {
                 self.state.message_service().admit_history(&writes).await
             };
             if let Err(error) = history_result {
-                self.state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.personal_message_telemetry().post_accept_failed();
                 tracing::warn!(?error, %sender_stable_id, route = accepted_route, "accepted message history transaction failed atomically");
             }
         }
@@ -1606,10 +1558,7 @@ impl ProtocolSession {
             self.send_sent_carbons(from, &sender_archive, delivered_self, None)
                 .await;
         }
-        self.state
-            .metrics
-            .messages_routed_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.personal_message_telemetry().message_routed();
         Ok(Action::None)
     }
 
@@ -1630,10 +1579,7 @@ impl ProtocolSession {
             // The route has already accepted the stanza. Returning an error
             // would encourage a duplicate retry, so expose the remaining
             // at-least-once recovery window only through logs and metrics.
-            self.state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            self.state.personal_message_telemetry().post_accept_failed();
             tracing::warn!(
                 ?error,
                 route,
@@ -1760,18 +1706,12 @@ impl ProtocolSession {
                     }
                 }
                 let Some(carbon) = carbon_message("sent", bare, &target_jid, forwarded) else {
-                    state
-                        .metrics
-                        .carbon_post_accept_delivery_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.personal_message_telemetry().carbon_delivery_failed();
                     tracing::error!(%target_jid, direction = "sent", "suppressed an invalid XEP-0280 Carbon payload");
                     return CarbonFanoutAttempt::Failed;
                 };
                 if session.sender.send(carbon).await.is_err() {
-                    state
-                        .metrics
-                        .carbon_post_accept_delivery_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.personal_message_telemetry().carbon_delivery_failed();
                     tracing::warn!(%target_jid, direction = "sent", "post-accept Carbon could not be admitted to the local session queue");
                     CarbonFanoutAttempt::Failed
                 } else {
@@ -1784,14 +1724,8 @@ impl ProtocolSession {
         let summary =
             bounded_carbon_fanout(attempts, CARBON_FANOUT_CONCURRENCY, CARBON_TARGET_TIMEOUT).await;
         for target_jid in &summary.timed_out_targets {
-            state
-                .metrics
-                .carbon_post_accept_delivery_failures_total
-                .fetch_add(1, Ordering::Relaxed);
-            state
-                .metrics
-                .carbon_fanout_target_timeouts_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.personal_message_telemetry().carbon_delivery_failed();
+            state.personal_message_telemetry().carbon_target_timed_out();
             tracing::warn!(%target_jid, direction = "sent", "post-accept Carbon target exceeded its independent fanout deadline");
         }
         let delivered_resources = summary.delivered;
@@ -1812,9 +1746,8 @@ impl ProtocolSession {
                     if node_id != self.state.cluster.node_id {
                         let Some(carbon) = carbon_message("sent", bare, bare, forwarded) else {
                             self.state
-                                .metrics
-                                .carbon_post_accept_delivery_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                                .personal_message_telemetry()
+                                .carbon_delivery_failed();
                             tracing::error!(%node_id, %bare, direction = "sent", "suppressed an invalid cluster XEP-0280 Carbon payload");
                             continue;
                         };
@@ -1843,9 +1776,8 @@ impl ProtocolSession {
                         };
                         if let Err(error) = routed {
                             self.state
-                                .metrics
-                                .carbon_post_accept_delivery_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                                .personal_message_telemetry()
+                                .carbon_delivery_failed();
                             tracing::warn!(%node_id, %bare, ?error, direction = "sent", "post-accept Carbon could not be routed to a cluster peer");
                         }
                     }
@@ -1853,9 +1785,8 @@ impl ProtocolSession {
             }
             Err(error) => {
                 self.state
-                    .metrics
-                    .carbon_post_accept_delivery_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                    .personal_message_telemetry()
+                    .carbon_delivery_failed();
                 tracing::warn!(%bare, ?error, direction = "sent", "cluster Carbon recipient lookup failed after primary acceptance");
             }
         }
@@ -1945,10 +1876,7 @@ pub(crate) fn accepted_cluster_message_delivery(
     receipt: &crate::cluster::NodeDeliveryReceipt,
 ) -> bool {
     if receipt.delivered && !receipt.acknowledged {
-        state
-            .metrics
-            .cluster_legacy_delivery_acceptances_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.personal_message_telemetry().cluster_legacy_accepted();
         tracing::warn!(%node_id, %target, "accepted legacy uncorrelated cluster message delivery acknowledgement");
     }
     receipt.delivered
@@ -2010,18 +1938,12 @@ pub(crate) async fn send_received_carbons_for_state(
             }
             let Some(carbon) = carbon_message("received", recipient, &target_jid, forwarded)
             else {
-                state
-                    .metrics
-                    .carbon_post_accept_delivery_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.personal_message_telemetry().carbon_delivery_failed();
                 tracing::error!(%target_jid, direction = "received", "suppressed an invalid XEP-0280 Carbon payload");
                 return CarbonFanoutAttempt::Failed;
             };
             if session.sender.send(carbon).await.is_err() {
-                state
-                    .metrics
-                    .carbon_post_accept_delivery_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.personal_message_telemetry().carbon_delivery_failed();
                 tracing::warn!(%target_jid, direction = "received", "post-accept Carbon could not be admitted to the local session queue");
                 CarbonFanoutAttempt::Failed
             } else {
@@ -2034,14 +1956,8 @@ pub(crate) async fn send_received_carbons_for_state(
     let summary =
         bounded_carbon_fanout(attempts, CARBON_FANOUT_CONCURRENCY, CARBON_TARGET_TIMEOUT).await;
     for target_jid in &summary.timed_out_targets {
-        state
-            .metrics
-            .carbon_post_accept_delivery_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-        state
-            .metrics
-            .carbon_fanout_target_timeouts_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.personal_message_telemetry().carbon_delivery_failed();
+        state.personal_message_telemetry().carbon_target_timed_out();
         tracing::warn!(%target_jid, direction = "received", "post-accept Carbon target exceeded its independent fanout deadline");
     }
     let delivered_resources = summary.delivered;
@@ -2062,10 +1978,7 @@ pub(crate) async fn send_received_carbons_for_state(
                 if node_id != state.cluster.node_id {
                     let Some(carbon) = carbon_message("received", recipient, recipient, forwarded)
                     else {
-                        state
-                            .metrics
-                            .carbon_post_accept_delivery_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        state.personal_message_telemetry().carbon_delivery_failed();
                         tracing::error!(%node_id, %recipient, direction = "received", "suppressed an invalid cluster XEP-0280 Carbon payload");
                         continue;
                     };
@@ -2074,20 +1987,14 @@ pub(crate) async fn send_received_carbons_for_state(
                         .send_to_node(&node_id, recipient, &carbon, true, delivered)
                         .await
                     {
-                        state
-                            .metrics
-                            .carbon_post_accept_delivery_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        state.personal_message_telemetry().carbon_delivery_failed();
                         tracing::warn!(%node_id, %recipient, ?error, direction = "received", "post-accept Carbon could not be routed to a cluster peer");
                     }
                 }
             }
         }
         Err(error) => {
-            state
-                .metrics
-                .carbon_post_accept_delivery_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.personal_message_telemetry().carbon_delivery_failed();
             tracing::warn!(%recipient, ?error, direction = "received", "cluster Carbon recipient lookup failed after primary acceptance");
         }
     }

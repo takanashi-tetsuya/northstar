@@ -904,7 +904,7 @@ async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
 ) -> Result<()> {
     let _delivery_timer = envelope
         .is_durable()
-        .then(|| state.metrics.outbox_delivery_duration_seconds.start_timer());
+        .then(|| state.s2s_outbox_delivery_telemetry().start_timer());
     let serialized = serialize_for_peer(&envelope.stanza, peer_max_bytes)?;
     let managed = sm.as_ref().is_some_and(|sm| sm.is_enabled());
     if envelope

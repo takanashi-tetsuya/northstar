@@ -5785,8 +5785,9 @@ pub async fn run_failure_supervisor(
                     state.cluster.validate_instance_authority(&state.pool).await?;
                     if heartbeat_tick % 6 == 1 {
                         state.cluster.heartbeat_instance_authority(&state.pool).await?;
-                        crate::db::cleanup_cluster_envelope_replays(&state.pool, 4096).await?;
-                        crate::db::validate_cluster_replay_capacity_authority(&state.pool).await?;
+                        state.cluster_replay_maintenance_service()
+                            .cleanup_and_validate(4096)
+                            .await?;
                         state.cluster_session_route_maintenance_service()
                             .cleanup_and_validate(4096)
                             .await?;

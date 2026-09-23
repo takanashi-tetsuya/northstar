@@ -333,6 +333,7 @@ for (const field of [
   'extdisco_service',
   'session_authority_sweep_service',
   'cluster_session_route_maintenance_service',
+  'cluster_replay_maintenance_service',
   'cluster_muc_outbox_settlement_service',
   'cluster_muc_outbox_claim_service',
   'locked_muc_expiry_service',
@@ -3180,6 +3181,11 @@ const clusterFailureSupervisor = structBody(
   read('src/cluster.rs'),
   'pub async fn run_failure_supervisor(',
 );
+if (!clusterFailureSupervisor.includes('.cluster_replay_maintenance_service()')
+    || !clusterFailureSupervisor.includes('.cluster_session_route_maintenance_service()')
+    || /(?:crate::)?db::(?:cleanup_cluster_envelope_replays|validate_cluster_replay_capacity_authority)\s*\(/.test(clusterFailureSupervisor)) {
+  throw new Error('cluster failure supervisor must clean and validate replay capacity through its bounded maintenance service');
+}
 if (!clusterFailureSupervisor.includes('.cluster_session_route_maintenance_service()')
     || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
     || /(?:crate::)?db::(?:cleanup_cluster_session_routes|validate_cluster_session_route_authority)\s*\(/.test(clusterFailureSupervisor)) {
@@ -3198,15 +3204,30 @@ for (const invariant of ['state.cluster.require_shutdown()', 'anyhow::bail!']) {
 const c2sTelemetry = read('src/xmpp/capabilities.rs');
 const c2sProtocol = read('src/xmpp/protocol.rs');
 if (!c2sTelemetry.includes('struct PostActionTelemetry')
+    || !c2sTelemetry.includes('struct PersonalMessageTelemetry')
+    || !c2sTelemetry.includes('struct FederatedMucTelemetry')
     || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
     || !c2sProtocol.includes('c2s_post_action_telemetry()')
-    || /(?:self\.)?state\.metrics\.post_action_/.test(c2sProtocol)) {
+    || /(?:self\.)?state\.metrics\.post_action_/.test(c2sProtocol)
+    || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/messaging.rs'))
+    || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/federated_muc.rs'))) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
 const componentTransport = read('src/components.rs');
 if (!componentTransport.includes('struct ComponentTelemetry')
     || /state\.metrics\.(?:component_connections_active|outbox_delivery_duration_seconds)/.test(componentTransport)) {
   throw new Error('component transport must use its two-cell telemetry capability');
+}
+const s2sTelemetry = read('src/s2s/telemetry.rs');
+if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
+    || /\b(?:AppState|Metrics|PgPool)\b/.test(s2sTelemetry)) {
+  throw new Error('S2S ingress and egress must use narrow telemetry cells');
+}
+const housekeepingContext = structBody(read('src/services/background_housekeeping.rs'), 'pub(crate) struct BackgroundHousekeepingContext');
+if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
+    || housekeepingContext.includes('Arc<Metrics>')
+    || /bg_state\.metrics\b/.test(mainSource)) {
+  throw new Error('background housekeeping must not retain the complete metrics registry');
 }
 const lockedMucExpiryWorker = structBody(state, 'fn start_locked_muc_expiry(');
 if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_service()')
@@ -3253,6 +3274,7 @@ const stateServiceAccessors = [
   'account_revocation_consumer_service',
   'session_authority_sweep_service',
   'cluster_session_route_maintenance_service',
+  'cluster_replay_maintenance_service',
   'cluster_muc_outbox_settlement_service',
   'cluster_muc_outbox_claim_service',
   'session_termination_authority_service',

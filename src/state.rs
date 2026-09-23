@@ -1972,6 +1972,10 @@ pub struct AppState {
         crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceService<
             db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository,
         >,
+    cluster_replay_maintenance_service:
+        crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceService<
+            db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository,
+        >,
     cluster_muc_outbox_settlement_service:
         crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
             db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
@@ -2235,10 +2239,76 @@ impl AppState {
         )
     }
 
+    pub(crate) fn personal_message_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PersonalMessageTelemetry<'_> {
+        crate::xmpp::capabilities::PersonalMessageTelemetry::new(
+            crate::xmpp::capabilities::PersonalMessageTelemetryCells {
+                routing_duration: &self.metrics.routing_duration_seconds,
+                rate_limited: &self.metrics.rate_limited_total,
+                abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                messages_routed: &self.metrics.messages_routed_total,
+                post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                durable_queue_acceptances: &self.metrics.online_queue_durable_acceptances_total,
+                volatile_queue_acceptances: &self.metrics.online_queue_volatile_acceptances_total,
+                carbon_delivery_failures: &self.metrics.carbon_post_accept_delivery_failures_total,
+                carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                cluster_legacy_acceptances: &self.metrics.cluster_legacy_delivery_acceptances_total,
+            },
+        )
+    }
+
+    pub(crate) fn federated_muc_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::FederatedMucTelemetry<'_> {
+        crate::xmpp::capabilities::FederatedMucTelemetry::new(
+            &self.metrics.muc_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+            &self.metrics.messages_routed_total,
+        )
+    }
+
     pub(crate) fn component_telemetry(&self) -> crate::components::ComponentTelemetry<'_> {
         crate::components::ComponentTelemetry::new(
             &self.metrics.component_connections_active,
             &self.metrics.outbox_delivery_duration_seconds,
+        )
+    }
+
+    pub(crate) fn s2s_online_queue_telemetry(
+        &self,
+    ) -> crate::s2s::telemetry::OnlineQueueAcceptanceTelemetry<'_> {
+        crate::s2s::telemetry::OnlineQueueAcceptanceTelemetry::new(
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+        )
+    }
+
+    pub(crate) fn s2s_accepted_history_telemetry(
+        &self,
+    ) -> crate::s2s::telemetry::AcceptedHistoryTelemetry<'_> {
+        crate::s2s::telemetry::AcceptedHistoryTelemetry::new(
+            &self.metrics.post_accept_side_effect_failures_total,
+        )
+    }
+
+    pub(crate) fn s2s_outbox_delivery_telemetry(
+        &self,
+    ) -> crate::s2s::telemetry::OutboxDeliveryTelemetry<'_> {
+        crate::s2s::telemetry::OutboxDeliveryTelemetry::new(
+            &self.metrics.outbox_delivery_duration_seconds,
+        )
+    }
+
+    pub(crate) fn background_housekeeping_counters(
+        &self,
+    ) -> crate::services::background_housekeeping::BackgroundHousekeepingCounters {
+        crate::services::background_housekeeping::BackgroundHousekeepingCounters::new(
+            Arc::clone(&self.metrics.retention_moderation_cases_deleted_total),
+            Arc::clone(&self.metrics.background_maintenance_failures_total),
         )
     }
 
@@ -3525,6 +3595,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let cluster_replay_maintenance_service =
+            crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceService::new(
+                db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository::new(
+                    pool.clone(),
+                ),
+            );
         let cluster_muc_outbox_settlement_service =
             crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService::new(
                 db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository::new(
@@ -3608,6 +3684,7 @@ impl AppState {
             account_revocation_consumer_service,
             session_authority_sweep_service,
             cluster_session_route_maintenance_service,
+            cluster_replay_maintenance_service,
             cluster_muc_outbox_settlement_service,
             cluster_muc_outbox_claim_service,
             session_termination_authority_service,
@@ -4140,6 +4217,14 @@ impl AppState {
         db::cluster_session_route_maintenance_repository::PostgresClusterSessionRouteMaintenanceRepository,
     >{
         &self.cluster_session_route_maintenance_service
+    }
+
+    pub(crate) fn cluster_replay_maintenance_service(
+        &self,
+    ) -> &crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceService<
+        db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository,
+    > {
+        &self.cluster_replay_maintenance_service
     }
 
     pub(crate) fn cluster_muc_outbox_settlement_service(

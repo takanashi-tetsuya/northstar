@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Independently shared metrics for physical subscription cleanup.
@@ -238,12 +239,12 @@ pub struct Metrics {
     /// Queue admission through completion, including bounded queue wait.
     pub caps_effect_latency_seconds: DurationHistogram,
     pub federation_inbound_active: AtomicU64,
-    pub background_maintenance_failures_total: AtomicU64,
+    pub background_maintenance_failures_total: Arc<AtomicU64>,
     pub retention_personal_mam_deleted_total: AtomicU64,
     pub retention_muc_mam_deleted_total: AtomicU64,
     pub retention_offline_messages_deleted_total: AtomicU64,
     pub retention_personal_delivery_admissions_deleted_total: AtomicU64,
-    pub retention_moderation_cases_deleted_total: AtomicU64,
+    pub retention_moderation_cases_deleted_total: Arc<AtomicU64>,
     pub retention_legal_hold_snapshots_deleted_total: AtomicU64,
     pub retention_audit_log_deleted_total: AtomicU64,
     pub retention_governance_export_leases_deleted_total: AtomicU64,

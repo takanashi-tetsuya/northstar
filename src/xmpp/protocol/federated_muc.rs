@@ -29,13 +29,9 @@ fn record_federated_muc_post_commit_failure(
     stage: &str,
 ) {
     state
-        .metrics
-        .muc_post_commit_delivery_failures_total
-        .fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .post_accept_side_effect_failures_total
-        .fetch_add(1, Ordering::Relaxed);
+        .federated_muc_telemetry()
+        .post_commit_delivery_failed();
+    state.federated_muc_telemetry().post_accept_failed();
     tracing::warn!(
         room,
         recipient,
@@ -1457,10 +1453,7 @@ async fn federated_muc_presence_owned(
     {
         Ok(result) => result,
         Err(error) if crate::services::muc::is_capacity_exhausted(&error) => {
-            state
-                .metrics
-                .capacity_reservations_rejected_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.federated_muc_telemetry().capacity_rejected();
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -2823,12 +2816,9 @@ async fn federated_muc_message_owned(
                         session.sender.try_send(invitation.clone()).is_ok()
                     };
                     if accepted {
-                        let counter = if live_delivery.is_some() {
-                            &state.metrics.online_queue_durable_acceptances_total
-                        } else {
-                            &state.metrics.online_queue_volatile_acceptances_total
-                        };
-                        counter.fetch_add(1, Ordering::Relaxed);
+                        state
+                            .federated_muc_telemetry()
+                            .online_queue_result(true, live_delivery.is_some());
                         delivered = true;
                         delivered_full_jid = Some(full_jid);
                         break;
@@ -3419,10 +3409,7 @@ async fn federated_muc_message_owned(
         }
     }
     drop(local_authority_guard);
-    state
-        .metrics
-        .messages_routed_total
-        .fetch_add(1, Ordering::Relaxed);
+    state.federated_muc_telemetry().message_routed();
     Ok(None)
 }
 

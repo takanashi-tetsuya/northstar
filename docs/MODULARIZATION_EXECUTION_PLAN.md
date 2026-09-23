@@ -466,7 +466,8 @@ The signed cluster session-termination listener reads durable route authority
 through a dedicated service and repository. It checks the live local instance
 after that read, then retains connection fencing and acknowledgement ownership.
 The failure supervisor runs bounded session-route cleanup and authority
-validation through one ordered maintenance port. C2S post-action supervision
+validation through one ordered maintenance port. Replay cleanup and capacity
+validation use a separate ordered port before the route check. C2S post-action supervision
 receives only its five counters, including the abort and drop paths; the
 unused broad C2S runtime wrapper has been removed.
 Clustered-MUC audience delivery keeps its network timeout, database admission
@@ -478,6 +479,9 @@ Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before
 delivery.
+Background housekeeping receives only its two shared counters; S2S ingress
+and outbox delivery use borrowed counters and timers instead of the complete
+metrics registry.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

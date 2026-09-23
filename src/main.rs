@@ -480,6 +480,7 @@ async fn run() -> Result<()> {
             )
         },
     );
+    let bg_counters = state.background_housekeeping_counters();
     let bg_housekeeping = Arc::new(
         services::background_housekeeping::BackgroundHousekeepingContext::new(
             db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
@@ -487,7 +488,7 @@ async fn run() -> Result<()> {
             ),
             state.config.moderation_retention_days,
             state.config.retention_cleanup_batch_size,
-            Arc::clone(&state.metrics),
+            bg_counters.clone(),
         ),
     );
     let bg_state = state.clone();
@@ -502,6 +503,7 @@ async fn run() -> Result<()> {
             let bg_housekeeping = Arc::clone(&bg_housekeeping);
             let bg_state = Arc::clone(&bg_state);
             let bg_cancel = bg_cancel.clone();
+            let bg_counters = bg_counters.clone();
             async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -509,21 +511,15 @@ async fn run() -> Result<()> {
                     tokio::select! {
                 _ = bg_cancel.cancelled() => return Ok(()),
                 _ = interval.tick() => {
-                    let failures_before = bg_state
-                        .metrics
-                        .background_maintenance_failures_total
-                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let failures_before = bg_counters.failures_total();
                     if let Err(error) = bg_state.challenge_cleanup_service().cleanup().await {
                         tracing::warn!(?error, "anti-abuse cleanup failed");
-                        bg_state.metrics.background_maintenance_failures_total.fetch_add(
-                            1,
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
+                        bg_counters.record_failure();
                     }
                     bg_housekeeping.sweep_database().await;
                     if let Err(e) = bg_state.admin_command_service().cleanup_sessions().await {
                         tracing::error!("failed to cleanup expired admin command sessions: {e}");
-                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        bg_counters.record_failure();
                     }
                     match bg_state.cleanup_expired_sm_sessions().await {
                         Ok(expired) => {
@@ -533,15 +529,12 @@ async fn run() -> Result<()> {
                         }
                         Err(e) => {
                             tracing::error!("failed to cleanup expired SM resume sessions: {e}");
-                            bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            bg_counters.record_failure();
                         }
                     }
                     let now = std::time::Instant::now();
                     bg_state.caps_cache().sweep(now);
-                    let failures_after = bg_state
-                        .metrics
-                        .background_maintenance_failures_total
-                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let failures_after = bg_counters.failures_total();
                     if failures_after == failures_before {
                         heartbeat.ok();
                     } else {

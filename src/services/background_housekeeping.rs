@@ -2,9 +2,14 @@
 //! Each purge is an independent committed operation. A failed step is counted
 //! and logged without preventing later cleanup work from running.
 
-use crate::metrics::Metrics;
 use anyhow::Result;
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 const CLEANUP_BATCH_SIZE: i64 = 1_000;
 
@@ -26,11 +31,38 @@ pub(crate) trait BackgroundHousekeepingRepository: Send + Sync {
     ) -> impl Future<Output = Result<u64>> + Send;
 }
 
+#[derive(Clone)]
+pub(crate) struct BackgroundHousekeepingCounters {
+    moderation_deleted: Arc<AtomicU64>,
+    failures: Arc<AtomicU64>,
+}
+
+impl BackgroundHousekeepingCounters {
+    pub(crate) fn new(moderation_deleted: Arc<AtomicU64>, failures: Arc<AtomicU64>) -> Self {
+        Self {
+            moderation_deleted,
+            failures,
+        }
+    }
+
+    pub(crate) fn failures_total(&self) -> u64 {
+        self.failures.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record_failure(&self) {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_moderation_deleted(&self, count: u64) {
+        self.moderation_deleted.fetch_add(count, Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct BackgroundHousekeepingContext<R> {
     repository: R,
     moderation_retention_days: i64,
     moderation_batch_size: i64,
-    metrics: Arc<Metrics>,
+    counters: BackgroundHousekeepingCounters,
 }
 
 impl<R: BackgroundHousekeepingRepository> BackgroundHousekeepingContext<R> {
@@ -38,28 +70,24 @@ impl<R: BackgroundHousekeepingRepository> BackgroundHousekeepingContext<R> {
         repository: R,
         moderation_retention_days: i64,
         moderation_batch_size: i64,
-        metrics: Arc<Metrics>,
+        counters: BackgroundHousekeepingCounters,
     ) -> Self {
         Self {
             repository,
             moderation_retention_days,
             moderation_batch_size,
-            metrics,
+            counters,
         }
     }
 
     pub(crate) async fn sweep_database(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
-
         match self
             .repository
             .purge_resolved_moderation(self.moderation_retention_days, self.moderation_batch_size)
             .await
         {
             Ok(deleted) if deleted > 0 => {
-                self.metrics
-                    .retention_moderation_cases_deleted_total
-                    .fetch_add(deleted, Relaxed);
+                self.counters.record_moderation_deleted(deleted);
                 tracing::info!(
                     deleted,
                     retention_days = self.moderation_retention_days,
@@ -99,15 +127,14 @@ impl<R: BackgroundHousekeepingRepository> BackgroundHousekeepingContext<R> {
     }
 
     fn record_failure(&self) {
-        self.metrics
-            .background_maintenance_failures_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.counters.record_failure();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::Metrics;
     use std::{collections::BTreeSet, sync::Mutex};
 
     struct RecordingRepository {
@@ -167,7 +194,15 @@ mod tests {
             failures: BTreeSet::from(["sessions", "fast"]),
             moderation_deleted: 3,
         };
-        let context = BackgroundHousekeepingContext::new(repository, 30, 25, Arc::clone(&metrics));
+        let context = BackgroundHousekeepingContext::new(
+            repository,
+            30,
+            25,
+            BackgroundHousekeepingCounters::new(
+                Arc::clone(&metrics.retention_moderation_cases_deleted_total),
+                Arc::clone(&metrics.background_maintenance_failures_total),
+            ),
+        );
         context.sweep_database().await;
         assert_eq!(
             *context.repository.calls.lock().unwrap(),

@@ -458,6 +458,31 @@ impl LocalSessionKickRoutes {
     }
 }
 
+/// Committed account cleanup can disconnect every resource of one exact
+/// credential generation, without gaining route admission or removal access.
+pub(crate) struct LocalGenerationCleanupRoutes {
+    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+}
+
+impl LocalGenerationCleanupRoutes {
+    pub(crate) fn new(
+        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    ) -> Self {
+        Self { sessions }
+    }
+
+    pub(crate) fn cancel_exact_generation(&self, user_id: Uuid, auth_generation: i64) -> u64 {
+        let mut disconnected = 0_u64;
+        for session in self.sessions.iter() {
+            if session.user_id == user_id && session.auth_generation == auth_generation {
+                session.disconnect.cancel();
+                disconnected += 1;
+            }
+        }
+        disconnected
+    }
+}
+
 struct BroadcastRoute {
     session_key: String,
     user_id: Uuid,
@@ -625,18 +650,10 @@ async fn execute_effect(
             Ok(json!({"island_mode":enabled}))
         }
         "admin.user_session_cleanup" => {
-            let user_id = uuid_field(payload, "user_id")?;
-            let generation = payload
-                .get("auth_generation")
-                .and_then(Value::as_i64)
-                .context("auth generation is missing")?;
-            let mut disconnected = 0_u64;
-            for session in state.sessions.iter() {
-                if session.user_id == user_id && session.auth_generation == generation {
-                    session.disconnect.cancel();
-                    disconnected += 1;
-                }
-            }
+            let (user_id, generation) = generation_cleanup_identity(payload)?;
+            let disconnected = state
+                .generation_cleanup_routes()
+                .cancel_exact_generation(user_id, generation);
             Ok(json!({"sessions_disconnected":disconnected,"user_id":user_id}))
         }
         "admin.muc_destroy" => {
@@ -685,6 +702,15 @@ fn session_kick_identity(payload: &Value) -> Result<(Uuid, Uuid, i64)> {
         .and_then(Value::as_i64)
         .context("auth generation is missing")?;
     Ok((user_id, connection_id, generation))
+}
+
+fn generation_cleanup_identity(payload: &Value) -> Result<(Uuid, i64)> {
+    let user_id = uuid_field(payload, "user_id")?;
+    let generation = payload
+        .get("auth_generation")
+        .and_then(Value::as_i64)
+        .context("auth generation is missing")?;
+    Ok((user_id, generation))
 }
 
 #[cfg(test)]
@@ -808,6 +834,70 @@ mod tests {
             }))
             .unwrap(),
             (user_id, connection_id, 7)
+        );
+    }
+
+    #[test]
+    fn generation_cleanup_counts_all_exact_resources_including_pending_on_retry() {
+        let sessions = Arc::new(dashmap::DashMap::new());
+        let routes = LocalGenerationCleanupRoutes::new(Arc::clone(&sessions));
+        let user_id = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let add = |key: &str, owner: Uuid, generation: i64, routable: bool| {
+            let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+            let session = session(owner, generation, Uuid::new_v4(), sender);
+            session.routable.store(routable, Ordering::Release);
+            let cancelled = session.disconnect.clone();
+            sessions.insert(key.to_owned(), session);
+            cancelled
+        };
+        let phone = add("alice@example.test/phone", user_id, 3, true);
+        let pending = add("alice@example.test/pending", user_id, 3, false);
+        let older = add("alice@example.test/older", user_id, 2, true);
+        let newer = add("alice@example.test/newer", user_id, 4, true);
+        let recreated = add("alice@example.test/recreated", other_user, 3, true);
+
+        assert_eq!(routes.cancel_exact_generation(user_id, 3), 2);
+        assert!(phone.is_cancelled());
+        assert!(pending.is_cancelled());
+        assert!(!older.is_cancelled());
+        assert!(!newer.is_cancelled());
+        assert!(!recreated.is_cancelled());
+        assert!(!sessions
+            .get("alice@example.test/pending")
+            .unwrap()
+            .routable
+            .load(Ordering::Acquire));
+        assert!(sessions
+            .get("alice@example.test/phone")
+            .unwrap()
+            .routable
+            .load(Ordering::Acquire));
+        assert_eq!(routes.cancel_exact_generation(user_id, 3), 2);
+        assert!(!older.is_cancelled());
+        assert!(!newer.is_cancelled());
+        assert!(!recreated.is_cancelled());
+    }
+
+    #[test]
+    fn generation_cleanup_payload_errors_match_effect_decoding() {
+        let user_id = Uuid::new_v4();
+        for (payload, expected) in [
+            (json!({}), "user_id is missing"),
+            (json!({"user_id":"not-a-uuid"}), "user_id is invalid"),
+            (json!({"user_id":Uuid::nil()}), "user_id must not be nil"),
+            (json!({"user_id":user_id}), "auth generation is missing"),
+        ] {
+            assert_eq!(
+                generation_cleanup_identity(&payload)
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+        }
+        assert_eq!(
+            generation_cleanup_identity(&json!({"user_id":user_id,"auth_generation":3})).unwrap(),
+            (user_id, 3)
         );
     }
 

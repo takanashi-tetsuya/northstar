@@ -1,5 +1,6 @@
 use super::*;
 use crate::services::passkeys::{PasskeyActor, PasskeyError};
+use crate::state::PasskeyLoginFinishContext;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -26,8 +27,12 @@ impl From<PasskeyError> for AppError {
 
 fn check_origin(state: &AppState, headers: &HeaderMap) -> Result<()> {
     let expected = state.passkey_service().allowed_origin()?;
+    check_expected_origin(&expected, headers)
+}
+
+fn check_expected_origin(expected: &str, headers: &HeaderMap) -> Result<()> {
     let mut origins = headers.get_all(header::ORIGIN).iter();
-    if origins.next().and_then(|origin| origin.to_str().ok()) != Some(expected.as_str())
+    if origins.next().and_then(|origin| origin.to_str().ok()) != Some(expected)
         || origins.next().is_some()
     {
         return Err(AppError::Forbidden);
@@ -172,15 +177,12 @@ pub(super) struct LoginFinish {
 }
 
 pub(super) async fn login_finish(
-    State(state): State<Arc<AppState>>,
+    State(state): State<PasskeyLoginFinishContext>,
     headers: HeaderMap,
     Json(body): Json<LoginFinish>,
 ) -> Result<Json<Value>> {
-    check_origin(&state, &headers)?;
-    let login = state
-        .passkey_service()
-        .login_finish(body.challenge_id, body.credential)
-        .await?;
+    check_expected_origin(&state.allowed_origin()?, &headers)?;
+    let login = state.finish(body.challenge_id, body.credential).await?;
     Ok(Json(
         json!({"token":login.session.token.as_str(),"jid":login.jid,
         "is_admin":login.session.is_admin,"device_id":login.device_id,
@@ -241,5 +243,35 @@ impl Drop for RegisterStart {
 impl Drop for Remove {
     fn drop(&mut self) {
         self.password.zeroize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_finish_origin_requires_one_exact_header() {
+        let expected = "https://xmpp.example";
+        let mut headers = HeaderMap::new();
+        assert!(matches!(
+            check_expected_origin(expected, &headers),
+            Err(AppError::Forbidden)
+        ));
+
+        headers.insert(header::ORIGIN, "https://other.example".parse().unwrap());
+        assert!(matches!(
+            check_expected_origin(expected, &headers),
+            Err(AppError::Forbidden)
+        ));
+
+        headers.insert(header::ORIGIN, expected.parse().unwrap());
+        assert!(check_expected_origin(expected, &headers).is_ok());
+
+        headers.append(header::ORIGIN, expected.parse().unwrap());
+        assert!(matches!(
+            check_expected_origin(expected, &headers),
+            Err(AppError::Forbidden)
+        ));
     }
 }

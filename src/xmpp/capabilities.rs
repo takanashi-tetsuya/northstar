@@ -47,6 +47,21 @@ impl<'a> CapsEffectTelemetry<'a> {
     }
 }
 
+/// Failure to replay current presence across a cluster route.
+pub(crate) struct PresenceProbeTelemetry<'a> {
+    failures: &'a AtomicU64,
+}
+
+impl<'a> PresenceProbeTelemetry<'a> {
+    pub(crate) fn new(failures: &'a AtomicU64) -> Self {
+        Self { failures }
+    }
+
+    pub(crate) fn failed(&self) {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// One counter for every client frame entering the protocol dispatcher,
 /// including stream framing and malformed XML.
 pub(crate) struct InboundStanzaTelemetry<'a> {

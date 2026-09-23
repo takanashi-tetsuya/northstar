@@ -1679,19 +1679,13 @@ impl ProtocolSession {
                         )
                         .await
                     {
-                        self.state
-                            .metrics
-                            .cluster_presence_probe_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.state.presence_probe_telemetry().failed();
                         tracing::warn!(?error, owner = %owner_lookup, %recipient, %node_id, "cross-node current-presence replay failed");
                     }
                 }
             }
             Err(error) => {
-                self.state
-                    .metrics
-                    .cluster_presence_probe_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.presence_probe_telemetry().failed();
                 tracing::warn!(?error, owner = %owner_lookup, %recipient, "could not resolve current-presence owner nodes");
             }
         }

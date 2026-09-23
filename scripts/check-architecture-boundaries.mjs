@@ -3163,6 +3163,11 @@ if (!operationRuntimeOwnershipSource.includes('.session_kick_routes()')
     || !operationRuntimeOwnershipSource.includes('session.auth_generation == auth_generation')) {
   throw new Error('administrator session kick must cancel only the exact committed route incarnation');
 }
+if (!operationRuntimeOwnershipSource.includes('.generation_cleanup_routes()')
+    || !operationRuntimeOwnershipSource.includes('.cancel_exact_generation(user_id, generation)')
+    || !operationRuntimeOwnershipSource.includes('session.user_id == user_id && session.auth_generation == auth_generation')) {
+  throw new Error('administrator account cleanup must cancel only the exact account generation');
+}
 const loginEndpointSource = read('src/api/auth_routes.rs');
 const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login(');
 const loginContext = structBody(read('src/state/http_login_endpoint.rs'), 'pub(crate) struct HttpLoginEndpointContext');
@@ -3175,6 +3180,19 @@ const capsEffectSource = read('src/xmpp/protocol/caps.rs');
 if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:crate::metrics::)?Metrics\b/.test(capsEffectSource)
     || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
+}
+const passkeyFinishSource = read('src/api/passkeys.rs');
+const passkeyFinish = structBody(passkeyFinishSource, 'pub(super) async fn login_finish(');
+const passkeyFinishContext = structBody(read('src/state/passkey_login_finish.rs'), 'pub(crate) struct PasskeyLoginFinishContext');
+if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext>')
+    || !/check_expected_origin\(&state\.allowed_origin\(\)\?, &headers\)\?;[\s\S]*?state\.finish\(/.test(passkeyFinish)
+    || /\b(?:AppState|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
+  throw new Error('Passkey login completion must check the live origin before using its narrow service');
+}
+const presenceProtocol = read('src/xmpp/protocol/presence.rs');
+if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
+    || countMatches(presenceProtocol, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
+  throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');

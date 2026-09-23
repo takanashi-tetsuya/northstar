@@ -136,6 +136,8 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
 pub(crate) mod api_queries;
 mod http_login_endpoint;
 pub(crate) use http_login_endpoint::HttpLoginEndpointContext;
+mod passkey_login_finish;
+pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 pub(crate) mod suspension;
@@ -151,6 +153,12 @@ impl axum::extract::FromRef<Arc<AppState>> for ApiQueryContext {
 impl axum::extract::FromRef<Arc<AppState>> for HttpLoginEndpointContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         HttpLoginEndpointContext::from_state(state)
+    }
+}
+
+impl axum::extract::FromRef<Arc<AppState>> for PasskeyLoginFinishContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        Self::new(Arc::clone(&state.passkey_service))
     }
 }
 
@@ -2036,7 +2044,7 @@ pub struct AppState {
         db::readiness_repository::PostgresReadinessRepository,
     >,
     public_discovery_context: PublicDiscoveryContext,
-    passkey_service: PasskeyService,
+    passkey_service: Arc<PasskeyService>,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
     pubsub_service:
@@ -2384,6 +2392,12 @@ impl AppState {
         crate::operation_runtime::LocalSessionKickRoutes::new(Arc::clone(&self.sessions))
     }
 
+    pub(crate) fn generation_cleanup_routes(
+        &self,
+    ) -> crate::operation_runtime::LocalGenerationCleanupRoutes {
+        crate::operation_runtime::LocalGenerationCleanupRoutes::new(Arc::clone(&self.sessions))
+    }
+
     pub(crate) fn caps_effect_telemetry(
         &self,
     ) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_> {
@@ -2392,6 +2406,14 @@ impl AppState {
             &self.metrics.caps_effect_queue_saturated_total,
             &self.metrics.caps_effect_failures_total,
             &self.metrics.caps_effect_latency_seconds,
+        )
+    }
+
+    pub(crate) fn presence_probe_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PresenceProbeTelemetry<'_> {
+        crate::xmpp::capabilities::PresenceProbeTelemetry::new(
+            &self.metrics.cluster_presence_probe_failures_total,
         )
     }
 
@@ -3533,7 +3555,7 @@ impl AppState {
             &config.domain,
             config.offline_message_ttl_days,
         );
-        let passkey_service = PasskeyService::new(
+        let passkey_service = Arc::new(PasskeyService::new(
             db::passkeys::PostgresPasskeyRepository::new(pool.clone(), fast_token_secret.clone()),
             crate::services::passkeys::PasskeyConfig {
                 enabled: config.web_client_enabled && config.fast_token_enabled,
@@ -3545,7 +3567,7 @@ impl AppState {
                 fast_strong_reauth_max_days: config.fast_strong_reauth_max_days,
                 session_ttl_hours: config.session_ttl_hours,
             },
-        );
+        ));
         let roster_service =
             RosterService::new(db::roster::PostgresRosterRepository::new(pool.clone()));
         let private_storage_service = crate::services::private_storage::PrivateStorageService::new(

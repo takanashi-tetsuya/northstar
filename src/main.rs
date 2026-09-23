@@ -581,13 +581,7 @@ async fn run() -> Result<()> {
     if process_role.embeds_retention() {
         let retention_context = Arc::new(state.retention_context());
         let retention_cancel = cancel.clone();
-        let retention_max_silence = std::time::Duration::from_secs(
-            state
-                .config
-                .retention_cleanup_interval_seconds
-                .saturating_mul(2)
-                .saturating_add(60),
-        );
+        let retention_max_silence = state.retention_worker_max_silence();
         worker_registry.supervise(
             "archive-retention",
             WorkerCriticality::Restartable,
@@ -621,27 +615,25 @@ async fn run() -> Result<()> {
     // Listener ownership belongs to this process before any service task is
     // spawned. Test fixtures can therefore use `127.0.0.1:0` and consume a
     // nonce-bound readiness record instead of racing a port-number allocator.
-    let xmpp_listener = bind_runtime_listener("XMPP", state.config.xmpp_bind).await?;
-    let xmpps_listener = bind_runtime_listener("XMPPS", state.config.xmpps_bind).await?;
-    let http_listener = bind_runtime_listener("HTTP", state.config.http_bind).await?;
-    let metrics_listener = bind_runtime_listener("metrics", state.config.metrics_bind).await?;
-    let admin_listener = if state.config.web_admin_enabled {
-        Some(bind_runtime_listener("web administration", state.config.web_admin_bind).await?)
-    } else {
-        None
+    let listeners = state.runtime_listener_policy();
+    let xmpp_listener = bind_runtime_listener("XMPP", listeners.xmpp).await?;
+    let xmpps_listener = bind_runtime_listener("XMPPS", listeners.xmpps).await?;
+    let http_listener = bind_runtime_listener("HTTP", listeners.http).await?;
+    let metrics_listener = bind_runtime_listener("metrics", listeners.metrics).await?;
+    let admin_listener = match listeners.admin {
+        Some(bind) => Some(bind_runtime_listener("web administration", bind).await?),
+        None => None,
     };
-    let s2s_listener = if state.config.federation_enabled {
-        Some(bind_runtime_listener("S2S", state.config.s2s_bind).await?)
-    } else {
-        None
+    let s2s_listener = match listeners.s2s {
+        Some(bind) => Some(bind_runtime_listener("S2S", bind).await?),
+        None => None,
     };
-    let s2s_tls_listener = if state.config.federation_enabled {
-        Some(bind_runtime_listener("S2S Direct TLS", state.config.s2s_tls_bind).await?)
-    } else {
-        None
+    let s2s_tls_listener = match listeners.s2s_tls {
+        Some(bind) => Some(bind_runtime_listener("S2S Direct TLS", bind).await?),
+        None => None,
     };
     let component_listener = if state.accepts_component_connections() {
-        Some(bind_runtime_listener("external component", state.config.component_bind).await?)
+        Some(bind_runtime_listener("external component", listeners.component).await?)
     } else {
         None
     };
@@ -710,7 +702,7 @@ async fn run() -> Result<()> {
         },
     );
 
-    if state.cluster.is_enabled() {
+    if state.cluster_workers_enabled() {
         let state_pubsub = state.clone();
         let pubsub_cancel = cancel.clone();
         worker_registry.supervise(
@@ -791,7 +783,7 @@ async fn run() -> Result<()> {
         "HTTP",
         api::serve(state.clone(), cancel.clone(), http_listener),
     );
-    if state.config.web_admin_enabled {
+    if listeners.admin.is_some() {
         let Some(listener) = admin_listener else {
             unreachable!("web admin listener should be present when web_admin_enabled is true")
         };
@@ -801,7 +793,11 @@ async fn run() -> Result<()> {
             api::serve_administration(state.clone(), cancel.clone(), listener),
         );
     }
-    test_activation::publish_if_enabled(&state.config, &listener_addresses, std::process::id())?;
+    test_activation::publish_if_enabled(
+        state.test_listener_activation_policy(),
+        &listener_addresses,
+        std::process::id(),
+    )?;
 
     let mut shutdown_error = None;
     let graceful_signal = tokio::select! {

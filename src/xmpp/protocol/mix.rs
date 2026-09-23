@@ -6821,14 +6821,14 @@ async fn federated_mix_disco_info(
                 "item-not-found",
             ));
         }
-        let linked = state.config.mix_muc_mirror_enabled
+        let linked = state.mix_muc_mirror_enabled()
             && state
                 .mix_service()
                 .mix_muc_mirror_for_mix(channel.id)
                 .await?
                 .is_some();
         let mirror = super::mix_muc::conditional_mirror_discovery_form(
-            state.config.mix_muc_mirror_enabled,
+            state.mix_muc_mirror_enabled(),
             linked,
             super::mix_muc::MirrorDirection::Muc,
             &muc_domain,
@@ -6842,18 +6842,18 @@ async fn federated_mix_disco_info(
             &mirror,
         )?
     } else {
-        let linked = state.config.mix_muc_mirror_enabled
+        let linked = state.mix_muc_mirror_enabled()
             && state
                 .mix_service()
                 .mix_muc_mirror_service_complete(target.domainpart())
                 .await?;
         let mirror = super::mix_muc::conditional_mirror_discovery_form(
-            state.config.mix_muc_mirror_enabled,
+            state.mix_muc_mirror_enabled(),
             linked,
             super::mix_muc::MirrorDirection::Muc,
             &muc_domain,
         );
-        mix_service_disco_info_payload(&state.config.server_name, &mirror)?
+        mix_service_disco_info_payload(state.server_name(), &mirror)?
     };
     Ok(iq_result_to(
         &request.id,

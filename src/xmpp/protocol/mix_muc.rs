@@ -77,7 +77,7 @@ pub(crate) async fn maybe_link_local_mirror(
     localpart: &str,
     actor_bare_jid: &str,
 ) -> Result<MixMucLinkOutcome> {
-    if !state.config.mix_muc_mirror_enabled {
+    if !state.mix_muc_mirror_enabled() {
         return Ok(MixMucLinkOutcome::MissingCounterpart);
     }
     let outcome = state

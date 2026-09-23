@@ -678,12 +678,7 @@ impl ProtocolSession {
 
         match self
             .state
-            .cluster
-            .try_register_session(
-                &key,
-                self.connection_id,
-                crate::services::sm::SessionRouteClaimProof::Binding,
-            )
+            .claim_staged_binding_route(&key, self.connection_id)
             .await
         {
             Ok(true) => {}
@@ -743,8 +738,7 @@ impl ProtocolSession {
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
                     .state
-                    .cluster
-                    .unregister_session(&key, self.connection_id)
+                    .release_staged_binding_route(&key, self.connection_id)
                     .await;
                 let _ = self
                     .state
@@ -761,8 +755,7 @@ impl ProtocolSession {
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
                     .state
-                    .cluster
-                    .unregister_session(&key, self.connection_id)
+                    .release_staged_binding_route(&key, self.connection_id)
                     .await;
                 self.registered_key = None;
                 self.full_jid = None;
@@ -774,8 +767,7 @@ impl ProtocolSession {
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
                     .state
-                    .cluster
-                    .unregister_session(&key, self.connection_id)
+                    .release_staged_binding_route(&key, self.connection_id)
                     .await;
                 let _ = self
                     .state
@@ -802,8 +794,7 @@ impl ProtocolSession {
                 .remove_session_if_connection(&key, self.connection_id);
             let _ = self
                 .state
-                .cluster
-                .unregister_session(&key, self.connection_id)
+                .release_staged_binding_route(&key, self.connection_id)
                 .await;
             self.registered_key = None;
             self.full_jid = None;
@@ -1044,28 +1035,12 @@ pub(crate) async fn send_push_notification(
                 }
             }
             if !delivered {
-                let mut nodes = state
-                    .cluster
-                    .lookup_nodes(&subscription.service_jid)
-                    .await
-                    .unwrap_or_default();
-                nodes.sort();
-                for node_id in nodes {
-                    if node_id != state.cluster.node_id {
-                        delivered = state
-                            .cluster
-                            .send_to_node_primary(
-                                &node_id,
-                                &subscription.service_jid,
-                                &notification,
-                            )
-                            .await
-                            .is_ok_and(|receipt| receipt.delivered);
-                        if delivered {
-                            break;
-                        }
-                    }
-                }
+                delivered = state
+                    .route_push_service_notification_remote(
+                        &subscription.service_jid,
+                        &notification,
+                    )
+                    .await;
             }
         } else if let Some(domain) = service.as_ref().map(|jid| jid.domainpart()) {
             if state.federation_domain_allowed(domain) {

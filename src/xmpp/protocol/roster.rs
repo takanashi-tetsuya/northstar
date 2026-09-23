@@ -491,27 +491,18 @@ async fn deliver_roster_removal_presence(
             let _ = session.sender.try_send(set_to(stanza, &target_full));
         }
     }
-    if let Ok(nodes) = state.cluster.lookup_nodes(target_bare).await {
-        for node_id in nodes {
-            if node_id != state.cluster.node_id {
-                let _ = state
-                    .cluster
-                    .send_to_node_presence_subscription(
-                        &node_id,
-                        target_bare,
-                        stanza,
-                        false,
-                        crate::cluster::ClusterPresenceAuthority {
-                            owner_id,
-                            owner_auth_generation,
-                            recipient_id,
-                            recipient_auth_generation,
-                        },
-                    )
-                    .await;
-            }
-        }
-    }
+    state
+        .route_remote_roster_removal_presence(
+            target_bare,
+            stanza,
+            crate::cluster::ClusterPresenceAuthority {
+                owner_id,
+                owner_auth_generation,
+                recipient_id,
+                recipient_auth_generation,
+            },
+        )
+        .await;
 }
 
 pub(crate) async fn deliver_roster_change(
@@ -562,31 +553,27 @@ pub(crate) async fn deliver_roster_change(
     let push = roster_push_xml(&owner_jid, &owner_jid, change.version, item);
     let annotated_push = annotated
         .map(|annotated| roster_push_xml(&owner_jid, &owner_jid, change.version, annotated));
-    match state.cluster.lookup_nodes(&owner_jid).await {
-        Ok(nodes) => {
-            for node_id in nodes {
-                if node_id != state.cluster.node_id {
-                    match state
-                        .cluster
-                        .send_to_node_roster(
-                            &node_id,
-                            &owner_jid,
-                            owner_id,
-                            change.version,
-                            &push,
-                            annotated_push.as_deref(),
-                        )
-                        .await
-                    {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            state.post_accept_failure_telemetry().record_failure();
-                            tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, "committed roster push was not accepted by the remote node; roster version recovery remains authoritative");
-                        }
-                        Err(error) => {
-                            state.post_accept_failure_telemetry().record_failure();
-                            tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, ?error, "committed roster push failed across the cluster; roster version recovery remains authoritative");
-                        }
+    match state
+        .route_remote_roster_push(
+            &owner_jid,
+            owner_id,
+            change.version,
+            &push,
+            annotated_push.as_deref(),
+        )
+        .await
+    {
+        Ok(failures) => {
+            for failure in failures {
+                state.post_accept_failure_telemetry().record_failure();
+                match failure {
+                    crate::state::cluster_routing::RemoteRosterPushFailure::NotAccepted {
+                        node_id,
+                    } => {
+                        tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, "committed roster push was not accepted by the remote node; roster version recovery remains authoritative");
+                    }
+                    crate::state::cluster_routing::RemoteRosterPushFailure::Delivery(failure) => {
+                        tracing::warn!(owner = %owner_jid, remote_node = %failure.node_id, version = change.version, error=?failure.error, "committed roster push failed across the cluster; roster version recovery remains authoritative");
                     }
                 }
             }

@@ -145,7 +145,7 @@ fn command_name(node: &str) -> &'static str {
 
 fn command_enabled(session: &ProtocolSession, node: &str) -> bool {
     !matches!(node, RESTART | SHUTDOWN)
-        || (session.state.config.enable_xmpp_service_control
+        || (session.state.xmpp_service_control_enabled()
             && session.state.service_control_available())
 }
 
@@ -815,6 +815,7 @@ async fn execute_form_command(
             {
                 return Ok(None);
             }
+            let scram_policy = session.state.admin_scram_policy();
             if !matches!(
                 session
                     .state
@@ -825,8 +826,8 @@ async fn execute_form_command(
                         node,
                         &username,
                         password,
-                        session.state.config.scram_iterations,
-                        session.state.config.scram_sha1_enabled,
+                        scram_policy.iterations,
+                        scram_policy.sha1_enabled,
                         &payload,
                     )
                     .await?,
@@ -920,6 +921,7 @@ async fn execute_form_command(
             {
                 return Ok(None);
             }
+            let scram_policy = session.state.admin_scram_policy();
             let outcome = session
                 .state
                 .admin_command_service()
@@ -929,8 +931,8 @@ async fn execute_form_command(
                     node,
                     &username,
                     password,
-                    session.state.config.scram_iterations,
-                    session.state.config.scram_sha1_enabled,
+                    scram_policy.iterations,
+                    scram_policy.sha1_enabled,
                     session.state.local_domain(),
                     &payload,
                 )
@@ -1290,7 +1292,7 @@ async fn send_announcement(
     // grow a second 100k-entry recipient set in this protocol task.
     let local_recipients = session.state.send_local_announcement(&stanza);
     let mut recipient_count = local_recipients.len();
-    if session.state.cluster.is_enabled() {
+    if session.state.admin_remote_announcement_enabled() {
         let mut cursor = None;
         loop {
             let page = session
@@ -1301,18 +1303,10 @@ async fn send_announcement(
                 .ok_or_else(|| anyhow::anyhow!("administrator authorization changed"))?;
             for username in page.usernames {
                 let bare = local_account_jid(&username, session.state.local_domain())?;
-                let mut delivered_remotely = false;
-                for node_id in session.state.cluster.lookup_nodes(&bare).await? {
-                    if node_id != session.state.cluster.node_id
-                        && session
-                            .state
-                            .cluster
-                            .send_to_node_available(&node_id, &bare, &stanza)
-                            .await?
-                    {
-                        delivered_remotely = true;
-                    }
-                }
+                let delivered_remotely = session
+                    .state
+                    .send_remote_announcement_to_account(&bare, &stanza)
+                    .await?;
                 if delivered_remotely && !local_recipients.contains(&bare) {
                     recipient_count += 1;
                 }
@@ -1327,31 +1321,13 @@ async fn send_announcement(
 }
 
 async fn online_bare_jids(session: &ProtocolSession) -> Result<BTreeSet<String>> {
-    let mut users = session.state.local_online_bare_jids();
-    users.extend(session.state.cluster.online_bare_jids().await?);
-    Ok(users)
+    session.state.admin_online_bare_jids().await
 }
 
 async fn activity_bare_jids(
     session: &ProtocolSession,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
-    let idle_after = std::time::Duration::from_secs(session.state.config.admin_idle_seconds);
-    let (mut online, mut active) = session.state.local_activity_bare_jids(idle_after);
-    let cluster_active = session
-        .state
-        .cluster
-        .activity_bare_jids(session.state.config.admin_idle_seconds, true)
-        .await?;
-    let cluster_idle = session
-        .state
-        .cluster
-        .activity_bare_jids(session.state.config.admin_idle_seconds, false)
-        .await?;
-    active.extend(cluster_active);
-    online.extend(active.iter().cloned());
-    online.extend(cluster_idle);
-    let idle = online.difference(&active).cloned().collect();
-    Ok((active, idle))
+    session.state.admin_activity_bare_jids().await
 }
 
 async fn request_form(session: &ProtocolSession, actor: &AdminActor, node: &str) -> Result<String> {

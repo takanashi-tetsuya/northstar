@@ -164,26 +164,25 @@ impl ProtocolSession {
         }
         let upload_domain = self.upload_domain();
         let mix_domain = self.mix_domain();
+        let mirror_enabled = self.state.mix_muc_mirror_enabled();
         if target.localpart().is_none() && target.domainpart() == mix_domain {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let linked = self.state.config.mix_muc_mirror_enabled
+            let linked = mirror_enabled
                 && self
                     .state
                     .mix_service()
                     .mix_muc_mirror_service_complete(&mix_domain)
                     .await?;
             let mirror = super::mix_muc::conditional_mirror_discovery_form(
-                self.state.config.mix_muc_mirror_enabled,
+                mirror_enabled,
                 linked,
                 super::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
-            let query = super::mix::mix_service_disco_info_payload(
-                &self.state.config.server_name,
-                &mirror,
-            )?;
+            let query =
+                super::mix::mix_service_disco_info_payload(self.state.server_name(), &mirror)?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if target.localpart().is_some() && target.domainpart() == mix_domain {
@@ -213,7 +212,7 @@ impl ProtocolSession {
             {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let linked = self.state.config.mix_muc_mirror_enabled
+            let linked = mirror_enabled
                 && self
                     .state
                     .mix_service()
@@ -221,7 +220,7 @@ impl ProtocolSession {
                     .await?
                     .is_some();
             let mirror = super::mix_muc::conditional_mirror_discovery_form(
-                self.state.config.mix_muc_mirror_enabled,
+                mirror_enabled,
                 linked,
                 super::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
@@ -290,14 +289,14 @@ impl ProtocolSession {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let upload_name = format!("{} File Upload", self.state.config.server_name);
+            let upload_name = format!("{} File Upload", self.state.server_name());
             let mut query = disco_info_query(None);
             query.push_child(disco_identity("store", "file", Some(&upload_name)));
             query.push_child(disco_feature(northstar_xep_0363::NAMESPACE));
             let mut form = result_form(northstar_xep_0363::NAMESPACE);
             form.push_child(data_field(
                 "max-file-size",
-                [self.state.config.upload_max_bytes],
+                [self.state.upload_slot_limits().max_file_bytes],
             ));
             query.push_child(form);
             return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
@@ -306,19 +305,19 @@ impl ProtocolSession {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let linked = self.state.config.mix_muc_mirror_enabled
+            let linked = mirror_enabled
                 && self
                     .state
                     .mix_service()
                     .mix_muc_mirror_service_complete(&mix_domain)
                     .await?;
             let mirror = super::mix_muc::conditional_mirror_discovery_form(
-                self.state.config.mix_muc_mirror_enabled,
+                mirror_enabled,
                 linked,
                 super::mix_muc::MirrorDirection::Mix,
                 &mix_domain,
             );
-            let muc_name = format!("{} Group Chat", self.state.config.server_name);
+            let muc_name = format!("{} Group Chat", self.state.server_name());
             let mut query = disco_info_query(None);
             query.push_child(disco_identity("conference", "text", Some(&muc_name)));
             for feature in [
@@ -454,7 +453,7 @@ impl ProtocolSession {
                     northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED,
                 ));
             }
-            let linked = self.state.config.mix_muc_mirror_enabled
+            let linked = mirror_enabled
                 && self
                     .state
                     .mix_service()
@@ -462,7 +461,7 @@ impl ProtocolSession {
                     .await?
                     .is_some();
             query.push_validated_fragment(&super::mix_muc::conditional_mirror_discovery_form(
-                self.state.config.mix_muc_mirror_enabled,
+                mirror_enabled,
                 linked,
                 super::mix_muc::MirrorDirection::Mix,
                 &mix_domain,
@@ -604,13 +603,12 @@ impl ProtocolSession {
             && self
                 .state
                 .xmpp_extension_enabled(northstar_xep_0215::XEP_ID)
-            && (self.state.config.stun_service.is_some()
-                || self.state.config.turn_service.is_some())
+            && self.state.external_service_discovery_available()
         {
             features.push(northstar_xep_0215::NAMESPACE);
         }
         let mut query = disco_info_query(None);
-        for identity in disco_entity_identities(is_account, &self.state.config.server_name) {
+        for identity in disco_entity_identities(is_account, self.state.server_name()) {
             query.push_child(identity);
         }
         for feature in features {
@@ -618,7 +616,6 @@ impl ProtocolSession {
         }
 
         if !is_account {
-            let config = &self.state.config;
             let mut form = result_form("http://jabber.org/network/serverinfo");
             let mut add_addresses = |variable: &str, addrs: &[String]| {
                 if !addrs.is_empty() {
@@ -626,12 +623,9 @@ impl ProtocolSession {
                 }
             };
 
-            add_addresses("admin-addresses", &config.admin_addresses);
-            add_addresses("abuse-addresses", &config.abuse_addresses);
-            add_addresses("support-addresses", &config.support_addresses);
-            add_addresses("feedback-addresses", &config.feedback_addresses);
-            add_addresses("sales-addresses", &config.sales_addresses);
-            add_addresses("security-addresses", &config.security_addresses);
+            for (variable, addrs) in self.state.server_info_addresses() {
+                add_addresses(variable, addrs);
+            }
 
             form.push_child(data_field(
                 "serverinfo-pubsub-node",
@@ -924,17 +918,15 @@ impl ProtocolSession {
                 query.push_child(disco_item(
                     jid,
                     None,
-                    Some(&format!("{} {suffix}", self.state.config.server_name)),
+                    Some(&format!("{} {suffix}", self.state.server_name())),
                 ));
             }
-            for credential in &self.state.config.components {
-                for domain in &credential.allowed_domains {
-                    query.push_child(disco_item(
-                        domain,
-                        None,
-                        Some(&format!("External Component ({domain})")),
-                    ));
-                }
+            for domain in self.state.configured_component_domains() {
+                query.push_child(disco_item(
+                    &domain,
+                    None,
+                    Some(&format!("External Component ({domain})")),
+                ));
             }
         } else if target.localpart().is_some()
             && target.resourcepart().is_none()

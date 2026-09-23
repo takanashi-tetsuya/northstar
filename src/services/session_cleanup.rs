@@ -958,8 +958,7 @@ impl SessionCleanupService {
                         "unregister-cluster-session",
                         CleanupRecovery::ClusterReconciliation,
                         self.state
-                            .cluster
-                            .unregister_session(key, work.connection_id),
+                            .release_exact_local_session_route(key, work.connection_id),
                         &mut report,
                     )
                     .await;

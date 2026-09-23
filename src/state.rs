@@ -142,6 +142,13 @@ mod upload_http_read;
 pub(crate) use upload_http_read::UploadHttpReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
+mod admin_cluster_queries;
+mod binding_cluster_route;
+pub(crate) mod cluster_muc_projection;
+pub(crate) mod cluster_routing;
+mod message_cluster_routing;
+mod notification_routing;
+mod s2s_cluster_routing;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;
@@ -1894,6 +1901,45 @@ pub(crate) enum LocalMucNicknameMove {
     CollisionRestoreFailed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LocalMucJoinPublication {
+    Published,
+    AlreadyPublished,
+    Occupied,
+}
+
+fn publish_local_muc_join_if_vacant_in(
+    occupants: &DashMap<String, MucOccupant>,
+    joining: &MucOccupant,
+) -> LocalMucJoinPublication {
+    let Some(room_jid) = crate::jid::canonicalize_bare(&joining.room_jid).ok() else {
+        return LocalMucJoinPublication::Occupied;
+    };
+    if joining.connection_id.is_nil() || joining.cluster_epoch.is_nil() {
+        return LocalMucJoinPublication::Occupied;
+    }
+    let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &joining.nick);
+    match occupants.entry(key) {
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(joining.clone());
+            LocalMucJoinPublication::Published
+        }
+        dashmap::mapref::entry::Entry::Occupied(entry)
+            if entry.get().room_jid == room_jid
+                && entry.get().nick == joining.nick
+                && muc_departure_identity_matches(
+                    entry.get(),
+                    &joining.full_jid,
+                    joining.connection_id,
+                    joining.cluster_epoch,
+                ) =>
+        {
+            LocalMucJoinPublication::AlreadyPublished
+        }
+        dashmap::mapref::entry::Entry::Occupied(_) => LocalMucJoinPublication::Occupied,
+    }
+}
+
 fn move_local_muc_nickname_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     old: LocalMucOccupantIdentity<'_>,
@@ -2820,7 +2866,7 @@ impl ReadinessContext {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct S2sOfflineDeliveryLimits {
+pub(crate) struct OfflineDeliveryLimits {
     pub(crate) max_messages: i64,
     pub(crate) max_bytes: i64,
     pub(crate) ttl_days: i64,
@@ -2866,6 +2912,18 @@ pub(crate) struct ComponentRuntimePolicy {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) struct RuntimeListenerPolicy {
+    pub(crate) xmpp: std::net::SocketAddr,
+    pub(crate) xmpps: std::net::SocketAddr,
+    pub(crate) http: std::net::SocketAddr,
+    pub(crate) metrics: std::net::SocketAddr,
+    pub(crate) admin: Option<std::net::SocketAddr>,
+    pub(crate) s2s: Option<std::net::SocketAddr>,
+    pub(crate) s2s_tls: Option<std::net::SocketAddr>,
+    pub(crate) component: std::net::SocketAddr,
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct PubSubOwnerLimits {
     pub(crate) max_nodes: i64,
     pub(crate) max_storage_bytes: i64,
@@ -2879,8 +2937,24 @@ pub(crate) struct Sasl2FastTokenPolicy {
     pub(crate) strong_reauth_max_days: i64,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct AdminScramPolicy {
+    pub(crate) iterations: u32,
+    pub(crate) sha1_enabled: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct UploadSlotLimits {
+    pub(crate) max_file_bytes: u64,
+    pub(crate) max_files_per_user: i64,
+    pub(crate) max_bytes_per_user: i64,
+    pub(crate) max_retained_files: i64,
+    pub(crate) max_retained_bytes: i64,
+    pub(crate) max_pending_jobs: i64,
+}
+
 pub struct AppState {
-    pub config: Config,
+    config: Config,
     pool: PgPool,
     api_query_context: ApiQueryContext,
     metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
@@ -2999,7 +3073,7 @@ pub struct AppState {
         >,
     bosh: Option<crate::bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,
-    pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
+    muc_occupants: Arc<DashMap<String, MucOccupant>>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
     /// session.  Every room occupancy for the same client points at this Arc,
     /// preserving cross-room arrival order and enforcing one shared budget.
@@ -3475,6 +3549,25 @@ impl AppState {
         &self.config.server_name
     }
 
+    pub(crate) fn server_info_addresses(&self) -> [(&'static str, &[String]); 6] {
+        [
+            ("admin-addresses", &self.config.admin_addresses),
+            ("abuse-addresses", &self.config.abuse_addresses),
+            ("support-addresses", &self.config.support_addresses),
+            ("feedback-addresses", &self.config.feedback_addresses),
+            ("sales-addresses", &self.config.sales_addresses),
+            ("security-addresses", &self.config.security_addresses),
+        ]
+    }
+
+    pub(crate) fn external_service_discovery_available(&self) -> bool {
+        self.config.stun_service.is_some() || self.config.turn_service.is_some()
+    }
+
+    pub(crate) fn upload_public_url(&self) -> &str {
+        &self.config.public_url
+    }
+
     pub(crate) fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
         self.config.external_route_domain_allowed(domain)
     }
@@ -3501,6 +3594,16 @@ impl AppState {
 
     pub(crate) fn s2s_dane_mode(&self) -> crate::s2s::dane::DaneMode {
         self.config.federation_dane_mode
+    }
+
+    pub(crate) fn s2s_dns_override(&self, domain: &str) -> Option<(std::net::SocketAddr, bool)> {
+        self.config
+            .federation_dns_overrides
+            .iter()
+            .find(|(candidate, _, _)| {
+                crate::jid::prepare_domainpart(candidate).is_ok_and(|candidate| candidate == domain)
+            })
+            .map(|(_, address, direct_tls)| (*address, *direct_tls))
     }
 
     pub(crate) fn s2s_private_addresses_allowed(&self) -> bool {
@@ -3541,6 +3644,10 @@ impl AppState {
             .collect()
     }
 
+    pub(crate) fn xmpp_version_includes_os(&self) -> bool {
+        self.config.xep_0092_include_os
+    }
+
     pub(crate) fn sm_buffer_limits(&self) -> SmBufferLimits {
         SmBufferLimits {
             max_unacked_stanzas: self.config.sm_max_unacked_stanzas,
@@ -3572,6 +3679,42 @@ impl AppState {
         &self.config.trusted_proxy_ips
     }
 
+    pub(crate) fn runtime_listener_policy(&self) -> RuntimeListenerPolicy {
+        RuntimeListenerPolicy {
+            xmpp: self.config.xmpp_bind,
+            xmpps: self.config.xmpps_bind,
+            http: self.config.http_bind,
+            metrics: self.config.metrics_bind,
+            admin: self
+                .config
+                .web_admin_enabled
+                .then_some(self.config.web_admin_bind),
+            s2s: self
+                .config
+                .federation_enabled
+                .then_some(self.config.s2s_bind),
+            s2s_tls: self
+                .config
+                .federation_enabled
+                .then_some(self.config.s2s_tls_bind),
+            component: self.config.component_bind,
+        }
+    }
+
+    pub(crate) fn cluster_workers_enabled(&self) -> bool {
+        self.cluster.is_enabled()
+    }
+
+    pub(crate) fn test_listener_activation_policy(
+        &self,
+    ) -> crate::test_activation::TestActivationPolicy<'_> {
+        crate::test_activation::TestActivationPolicy {
+            enabled: self.config.test_listener_activation,
+            destination: self.config.test_readiness_file.as_deref(),
+            nonce: self.config.test_readiness_nonce.as_deref(),
+        }
+    }
+
     pub(crate) fn sm_session_policy(&self) -> SmSessionPolicy {
         SmSessionPolicy {
             require_same_device: self.config.sm_require_same_device,
@@ -3593,6 +3736,41 @@ impl AppState {
 
     pub(crate) fn c2s_scram_sha1_enabled(&self) -> bool {
         self.config.scram_sha1_enabled
+    }
+
+    pub(crate) fn admin_scram_policy(&self) -> AdminScramPolicy {
+        AdminScramPolicy {
+            iterations: self.config.scram_iterations,
+            sha1_enabled: self.config.scram_sha1_enabled,
+        }
+    }
+
+    pub(crate) fn admin_activity_idle_seconds(&self) -> u64 {
+        self.config.admin_idle_seconds
+    }
+
+    pub(crate) fn xmpp_service_control_enabled(&self) -> bool {
+        self.config.enable_xmpp_service_control
+    }
+
+    pub(crate) fn mix_muc_mirror_enabled(&self) -> bool {
+        self.config.mix_muc_mirror_enabled
+    }
+
+    pub(crate) fn xmpp_http_upload_enabled(&self) -> bool {
+        self.config.upload_mode.admits_new_uploads()
+            && self.xmpp_extension_enabled(northstar_xep_0363::XEP_ID)
+    }
+
+    pub(crate) fn upload_slot_limits(&self) -> UploadSlotLimits {
+        UploadSlotLimits {
+            max_file_bytes: self.config.upload_max_bytes,
+            max_files_per_user: self.config.upload_max_files_per_user,
+            max_bytes_per_user: self.config.upload_max_bytes_per_user,
+            max_retained_files: self.config.upload_storage_max_retained_files,
+            max_retained_bytes: self.config.upload_storage_max_retained_bytes,
+            max_pending_jobs: self.config.upload_storage_max_pending_jobs,
+        }
     }
 
     pub(crate) fn sasl2_fast_token_policy(&self) -> Sasl2FastTokenPolicy {
@@ -3629,12 +3807,16 @@ impl AppState {
         crate::xmpp::xml_util::validate_routed_message(root, &self.config.xmpp_extensions)
     }
 
-    pub(crate) fn s2s_requires_encrypted_archive(&self) -> bool {
+    pub(crate) fn archive_requires_encryption(&self) -> bool {
         self.config.require_encrypted_archive
     }
 
-    pub(crate) fn s2s_offline_delivery_limits(&self) -> S2sOfflineDeliveryLimits {
-        S2sOfflineDeliveryLimits {
+    pub(crate) fn muc_mam_retention_days(&self) -> i64 {
+        self.config.muc_mam_retention_days
+    }
+
+    pub(crate) fn offline_delivery_limits(&self) -> OfflineDeliveryLimits {
+        OfflineDeliveryLimits {
             max_messages: self.config.offline_max_messages_per_account,
             max_bytes: self.config.offline_max_bytes_per_account,
             ttl_days: self.config.offline_message_ttl_days,
@@ -3984,6 +4166,15 @@ impl AppState {
             db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
             crate::retention::RetentionPolicy::from_config(&self.config),
             crate::retention::RetentionCounters::from_metrics(&self.metrics),
+        )
+    }
+
+    pub(crate) fn retention_worker_max_silence(&self) -> Duration {
+        Duration::from_secs(
+            self.config
+                .retention_cleanup_interval_seconds
+                .saturating_mul(2)
+                .saturating_add(60),
         )
     }
 
@@ -6018,6 +6209,22 @@ impl AppState {
             .await
     }
 
+    pub(crate) async fn route_account_removal_presence_local(&self, recipient: &str, stanza: &str) {
+        for (_, session) in self.session_entries_for(recipient) {
+            let _ = session.sender.try_send(stanza.to_owned());
+        }
+        if let Ok(nodes) = self.cluster.lookup_nodes(recipient).await {
+            for node_id in nodes {
+                if node_id != self.cluster.node_id {
+                    let _ = self
+                        .cluster
+                        .send_to_node(&node_id, recipient, stanza, false, None)
+                        .await;
+                }
+            }
+        }
+    }
+
     pub(crate) fn locked_muc_expiry_service(
         &self,
     ) -> &crate::services::locked_muc_expiry::LockedMucExpiryService<
@@ -6951,6 +7158,15 @@ impl AppState {
         cluster_committed: bool,
     ) -> LocalMucNicknameMove {
         move_local_muc_nickname_exact_in(&self.muc_occupants, old, renamed, cluster_committed)
+    }
+
+    /// Publish a join under one map shard lock without replacing a later
+    /// transport that acquired the same nickname.
+    pub(crate) fn publish_local_muc_join_if_vacant(
+        &self,
+        joining: &MucOccupant,
+    ) -> LocalMucJoinPublication {
+        publish_local_muc_join_if_vacant_in(&self.muc_occupants, joining)
     }
 
     /// Compare and remove under one map shard lock. Callers retain the removed
@@ -9470,17 +9686,18 @@ mod session_key_tests {
         encode_api_control_entropy, ephemeral_api_control_secret, federation_rule_matches,
         insert_restored_muc_occupant, move_local_muc_nickname_exact_in, muc_actor_identity_matches,
         muc_departure_identity_matches, muc_suspended_teardown_identity_matches,
-        promote_suspended_muc_buffer, refresh_local_muc_policy_exact_in,
-        refresh_local_muc_presence_exact_in, remove_local_muc_occupant_exact_from,
-        runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
-        session_lookup, set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
+        promote_suspended_muc_buffer, publish_local_muc_join_if_vacant_in,
+        refresh_local_muc_policy_exact_in, refresh_local_muc_presence_exact_in,
+        remove_local_muc_occupant_exact_from, runtime_control_startup_retry_delay,
+        seal_suspended_muc_buffer, service_control_applies, session_lookup,
+        set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
         snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
         transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
-        LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant, MucOccupantEndpoint,
-        RouteIncarnationSignal, SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck,
-        StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase,
-        SuspendedMucRoute,
+        LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant,
+        MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
+        StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
+        SuspendedMucPhase, SuspendedMucRoute,
     };
     use dashmap::DashMap;
     use std::collections::{BTreeSet, VecDeque};
@@ -10440,6 +10657,98 @@ mod session_key_tests {
         .is_none());
         assert!(remove_local_muc_occupant_exact_from(&occupants, exact).is_some());
         assert!(!occupants.contains_key(&key));
+    }
+
+    #[test]
+    fn joining_again_cannot_overwrite_a_reused_nickname() {
+        let old = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let mut replacement = old.clone();
+        replacement.connection_id = uuid::Uuid::new_v4();
+        replacement.cluster_epoch = uuid::Uuid::new_v4();
+        let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+        let occupants = DashMap::new();
+
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &old),
+            LocalMucJoinPublication::Published
+        );
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &old),
+            LocalMucJoinPublication::AlreadyPublished
+        );
+        assert!(remove_local_muc_occupant_exact_from(
+            &occupants,
+            LocalMucOccupantIdentity::from(&old)
+        )
+        .is_some());
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &replacement),
+            LocalMucJoinPublication::Published
+        );
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &old),
+            LocalMucJoinPublication::Occupied
+        );
+        let stale_snapshot = replacement.clone();
+        let mut later = replacement.clone();
+        later.connection_id = uuid::Uuid::new_v4();
+        later.cluster_epoch = uuid::Uuid::new_v4();
+        occupants.insert(key.clone(), later.clone());
+        assert!(remove_local_muc_occupant_exact_from(
+            &occupants,
+            LocalMucOccupantIdentity::from(&stale_snapshot)
+        )
+        .is_none());
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &old),
+            LocalMucJoinPublication::Occupied,
+            "a failed exact eviction must leave the later actor untouched"
+        );
+        assert!(remove_local_muc_occupant_exact_from(
+            &occupants,
+            LocalMucOccupantIdentity::from(&old)
+        )
+        .is_none());
+        assert_eq!(
+            occupants.get(&key).unwrap().connection_id,
+            later.connection_id
+        );
+    }
+
+    #[test]
+    fn delayed_committed_join_does_not_evict_a_later_published_incarnation() {
+        // A can commit in PG, then lose authority while awaiting a Redis
+        // operation. B can subsequently commit and publish the same nickname.
+        // A's late local publication must leave B intact for exact PG checks.
+        let join_a = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let join_b = test_muc_occupant(
+            "bob@example.test/Laptop",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let key = crate::xmpp::xml_util::muc_occupant_key(&join_a.room_jid, &join_a.nick);
+        let occupants = DashMap::new();
+
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &join_b),
+            LocalMucJoinPublication::Published
+        );
+        assert_eq!(
+            publish_local_muc_join_if_vacant_in(&occupants, &join_a),
+            LocalMucJoinPublication::Occupied
+        );
+        let current = occupants.get(&key).unwrap();
+        assert_eq!(current.full_jid, join_b.full_jid);
+        assert_eq!(current.connection_id, join_b.connection_id);
+        assert_eq!(current.cluster_epoch, join_b.cluster_epoch);
     }
 
     #[test]

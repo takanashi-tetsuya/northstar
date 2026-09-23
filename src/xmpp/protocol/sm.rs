@@ -719,8 +719,7 @@ impl ProtocolSession {
                                 .remove_session_if_connection(&key, old_connection_id);
                             if let Err(error) = self
                                 .state
-                                .cluster
-                                .unregister_session(&key, old_connection_id)
+                                .release_exact_local_session_route(&key, old_connection_id)
                                 .await
                             {
                                 let _ = self
@@ -790,14 +789,11 @@ impl ProtocolSession {
         drop(mix_presence_epoch);
         match self
             .state
-            .cluster
-            .try_register_session(
+            .claim_sm_resume_route(
                 &key,
                 self.connection_id,
-                crate::services::sm::SessionRouteClaimProof::SmResume {
-                    session_id: claim.session_id,
-                    claim_token: claim.claim_token,
-                },
+                claim.session_id,
+                claim.claim_token,
             )
             .await
         {
@@ -860,8 +856,7 @@ impl ProtocolSession {
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
                     .state
-                    .cluster
-                    .unregister_session(&key, self.connection_id)
+                    .release_exact_local_session_route(&key, self.connection_id)
                     .await;
                 if !self
                     .state
@@ -894,8 +889,7 @@ impl ProtocolSession {
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
                     .state
-                    .cluster
-                    .unregister_session(&key, self.connection_id)
+                    .release_exact_local_session_route(&key, self.connection_id)
                     .await;
                 if !self
                     .state
@@ -1030,8 +1024,7 @@ impl ProtocolSession {
                     }
                     let _ = self
                         .state
-                        .cluster
-                        .unregister_session(&key, self.connection_id)
+                        .release_exact_local_session_route(&key, self.connection_id)
                         .await;
                     tracing::error!(
                         ?error,
@@ -1044,8 +1037,7 @@ impl ProtocolSession {
             }
             let _ = self
                 .state
-                .cluster
-                .unregister_session(&key, self.connection_id)
+                .release_exact_local_session_route(&key, self.connection_id)
                 .await;
             // Credential/SM finalization already committed. Never emit a
             // contradictory ordinary resume failure or re-run an unbound FAST

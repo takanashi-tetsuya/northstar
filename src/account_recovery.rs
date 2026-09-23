@@ -120,19 +120,9 @@ async fn route_account_removal_presence(state: &AppState, from: &str, to: &str, 
     };
     let domain = target.domainpart();
     if domain == state.local_domain() {
-        for (_, session) in state.session_entries_for(to) {
-            let _ = session.sender.try_send(stanza.clone());
-        }
-        if let Ok(nodes) = state.cluster.lookup_nodes(to).await {
-            for node_id in nodes {
-                if node_id != state.cluster.node_id {
-                    let _ = state
-                        .cluster
-                        .send_to_node(&node_id, to, &stanza, false, None)
-                        .await;
-                }
-            }
-        }
+        state
+            .route_account_removal_presence_local(to, &stanza)
+            .await;
     } else if state.federation_domain_allowed(domain) {
         let _ = state
             .federation_outbox()

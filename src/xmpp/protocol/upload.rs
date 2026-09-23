@@ -27,12 +27,7 @@ fn file_too_large(id: &str, from: &str, maximum: u64) -> String {
 
 impl ProtocolSession {
     pub(crate) fn http_upload_enabled(&self) -> bool {
-        self.state.config.upload_mode.admits_new_uploads()
-            && self
-                .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0363::XEP_ID)
+        self.state.xmpp_http_upload_enabled()
     }
 
     pub(crate) fn upload_domain(&self) -> String {
@@ -72,11 +67,12 @@ impl ProtocolSession {
                 return Ok(Action::Send(iq_error_from(id, &upload_domain, condition)));
             }
         };
-        if upload.size > self.state.config.upload_max_bytes {
+        let limits = self.state.upload_slot_limits();
+        if upload.size > limits.max_file_bytes {
             return Ok(Action::Send(file_too_large(
                 id,
                 &upload_domain,
-                self.state.config.upload_max_bytes,
+                limits.max_file_bytes,
             )));
         }
         let (slot_id, token) = match self
@@ -87,12 +83,12 @@ impl ProtocolSession {
                 filename: upload.filename,
                 content_type: upload.content_type,
                 size: upload.size,
-                max_files_per_user: self.state.config.upload_max_files_per_user,
-                max_bytes_per_user: self.state.config.upload_max_bytes_per_user,
+                max_files_per_user: limits.max_files_per_user,
+                max_bytes_per_user: limits.max_bytes_per_user,
                 storage_backend: self.state.upload_store().backend(),
-                max_retained_files: self.state.config.upload_storage_max_retained_files,
-                max_retained_bytes: self.state.config.upload_storage_max_retained_bytes,
-                max_pending_jobs: self.state.config.upload_storage_max_pending_jobs,
+                max_retained_files: limits.max_retained_files,
+                max_retained_bytes: limits.max_retained_bytes,
+                max_pending_jobs: limits.max_pending_jobs,
             })
             .await?
         {
@@ -105,8 +101,12 @@ impl ProtocolSession {
                 )));
             }
         };
-        let put_url = format!("{}/api/v1/upload/{}", self.state.config.public_url, slot_id);
-        let get_url = format!("{}/uploads/{}", self.state.config.public_url, slot_id);
+        let put_url = format!(
+            "{}/api/v1/upload/{}",
+            self.state.upload_public_url(),
+            slot_id
+        );
+        let get_url = format!("{}/uploads/{}", self.state.upload_public_url(), slot_id);
         let slot = match northstar_xep_0363::build_slot(&put_url, &token, &get_url) {
             Ok(slot) => slot,
             Err(error) => {

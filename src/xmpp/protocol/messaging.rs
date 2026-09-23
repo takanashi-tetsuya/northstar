@@ -5,10 +5,7 @@ use crate::services::messaging::{
     OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
     RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
-use crate::services::muc::{
-    ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
-    DurableMucInviteOutcome,
-};
+use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
 use crate::xmpp::xml_util::*;
@@ -330,7 +327,7 @@ impl ProtocolSession {
             && target_domain != self.pubsub_domain())
         .then_some(target_domain);
         if let Some(domain) = remote_domain {
-            if !self.state.config.external_route_domain_allowed(domain) {
+            if !self.state.xmpp_external_route_domain_allowed(domain) {
                 return Ok(message_error(root, "cancel", "remote-server-not-found"));
             }
             let stable_id = uuid::Uuid::new_v4();
@@ -416,28 +413,16 @@ impl ProtocolSession {
                 config_version,
             } = direct_invite_admission
             {
-                let cluster_authority = if self.state.cluster.is_enabled() {
-                    self.state
-                        .cluster
-                        .admit(crate::cluster::ClusterOperation::MucMutation)?;
-                    Some(ClusterMucInviteAuthority {
-                        operation_id: stable_id,
-                        expected_room_epoch: room_epoch,
-                        expected_config_version: config_version,
-                        actor: ClusterMucPrincipal::Local {
-                            user_id: user.id,
-                            bare_jid: bare_jid(from).to_owned(),
-                        },
-                        actor_full_jid: from.to_owned(),
-                        actor_target: None,
-                        subject: ClusterMucAffiliationSubject::Federated {
-                            bare_jid: target_jid.bare(),
-                        },
-                        reason: None,
-                    })
-                } else {
-                    None
-                };
+                let cluster_authority = self.state.direct_muc_invite_cluster_authority(
+                    stable_id,
+                    room_epoch,
+                    config_version,
+                    user.id,
+                    from,
+                    ClusterMucAffiliationSubject::Federated {
+                        bare_jid: target_jid.bare(),
+                    },
+                )?;
                 let actor_scope = bare_jid(from);
                 let target_scope = bare_jid(to);
                 let invitee_bare_jid = target_jid.bare();
@@ -471,11 +456,8 @@ impl ProtocolSession {
                     Ok(RemoteMucInviteAdmissionOutcome::Stored) => {
                         self.state.federation_outbox().wake_outbox();
                         if cluster_authority.is_some() {
-                            if let Err(error) = self
-                                .state
-                                .muc_service()
-                                .wake_committed_operation(&self.state.cluster, stable_id)
-                                .await
+                            if let Err(error) =
+                                self.state.wake_committed_direct_muc_invite(stable_id).await
                             {
                                 self.state.personal_message_telemetry().post_accept_failed();
                                 tracing::warn!(?error, %stable_id, "accepted federated direct MUC invite cluster wake failed");
@@ -685,7 +667,7 @@ impl ProtocolSession {
             add_stanza_id(&routed, &recipient_by, recipient_stable_id)
         };
         let encrypted = is_encrypted(root);
-        let durable_content_allowed = encrypted || !self.state.config.require_encrypted_archive;
+        let durable_content_allowed = encrypted || !self.state.archive_requires_encryption();
         let persistence_allowed = personal_retraction || offline_storage_permitted(root);
         let archive_allowed_by_stanza = personal_retraction || mam_storage_eligible(root);
         let sender_archive_stanza = if encrypted {
@@ -763,16 +745,7 @@ impl ProtocolSession {
         if unfiltered_local_targets > 0 && targets.is_empty() {
             return Ok(message_error(root, "cancel", "service-unavailable"));
         }
-        let remote_route_exists = self
-            .state
-            .cluster
-            .lookup_nodes(to)
-            .await
-            .is_ok_and(|nodes| {
-                nodes
-                    .into_iter()
-                    .any(|node| node != self.state.cluster.node_id)
-            });
+        let remote_route_exists = self.state.personal_message_remote_resource_exists(to).await;
         if targets.is_empty()
             && !remote_route_exists
             && self
@@ -793,16 +766,7 @@ impl ProtocolSession {
         let exact_full_target_can_route = bare_target
             || message_type == "chat"
             || !targets.is_empty()
-            || self
-                .state
-                .cluster
-                .lookup_nodes(to)
-                .await
-                .is_ok_and(|nodes| {
-                    nodes
-                        .into_iter()
-                        .any(|node_id| node_id != self.state.cluster.node_id)
-                });
+            || self.state.personal_message_remote_resource_exists(to).await;
         let mut history_committed = false;
         let mut durable_c2s_delivery = None;
         let direct_delivery_candidate = direct_invite_room.is_none()
@@ -946,6 +910,7 @@ impl ProtocolSession {
                 chrono::Utc::now(),
                 Some(self.state.local_domain()),
             );
+            let offline_limits = self.state.offline_delivery_limits();
             let delivery = DeliveryProjection {
                 id: recipient_stable_id,
                 recipient_id: recipient.id,
@@ -953,9 +918,9 @@ impl ProtocolSession {
                 sender_jid: from,
                 stanza: &delayed_delivery,
                 encrypted,
-                max_messages: self.state.config.offline_max_messages_per_account,
-                max_bytes: self.state.config.offline_max_bytes_per_account,
-                ttl_days: self.state.config.offline_message_ttl_days,
+                max_messages: offline_limits.max_messages,
+                max_bytes: offline_limits.max_bytes,
+                ttl_days: offline_limits.ttl_days,
                 mam_backed: recipient_history_enabled,
             };
             match self
@@ -1023,16 +988,7 @@ impl ProtocolSession {
                 && full_no_match_route(message_type) == FullNoMatchRoute::Reject
                 && targets.is_empty()
             {
-                let remote_exact = self
-                    .state
-                    .cluster
-                    .lookup_nodes(to)
-                    .await
-                    .is_ok_and(|nodes| {
-                        nodes
-                            .into_iter()
-                            .any(|node_id| node_id != self.state.cluster.node_id)
-                    });
+                let remote_exact = self.state.personal_message_remote_resource_exists(to).await;
                 if !remote_exact {
                     return Ok(message_error(root, "cancel", "service-unavailable"));
                 }
@@ -1050,29 +1006,17 @@ impl ProtocolSession {
                 } => (room_epoch, config_version),
                 _ => unreachable!("durable direct invite has room authority"),
             };
-            let cluster_authority = if self.state.cluster.is_enabled() {
-                self.state
-                    .cluster
-                    .admit(crate::cluster::ClusterOperation::MucMutation)?;
-                Some(ClusterMucInviteAuthority {
-                    operation_id: recipient_stable_id,
-                    expected_room_epoch: room_epoch,
-                    expected_config_version: config_version,
-                    actor: ClusterMucPrincipal::Local {
-                        user_id: user.id,
-                        bare_jid: bare_jid(from).to_owned(),
-                    },
-                    actor_full_jid: from.to_owned(),
-                    actor_target: None,
-                    subject: ClusterMucAffiliationSubject::Local {
-                        user_id: recipient.id,
-                        bare_jid: recipient_by.clone(),
-                    },
-                    reason: None,
-                })
-            } else {
-                None
-            };
+            let cluster_authority = self.state.direct_muc_invite_cluster_authority(
+                recipient_stable_id,
+                room_epoch,
+                config_version,
+                user.id,
+                from,
+                ClusterMucAffiliationSubject::Local {
+                    user_id: recipient.id,
+                    bare_jid: recipient_by.clone(),
+                },
+            )?;
             let delayed = add_delay_from(
                 &recipient_delivery,
                 chrono::Utc::now(),
@@ -1136,8 +1080,7 @@ impl ProtocolSession {
                     if cluster_authority.is_some() {
                         if let Err(error) = self
                             .state
-                            .muc_service()
-                            .wake_committed_operation(&self.state.cluster, recipient_stable_id)
+                            .wake_committed_direct_muc_invite(recipient_stable_id)
                             .await
                         {
                             self.state.personal_message_telemetry().post_accept_failed();
@@ -1216,63 +1159,22 @@ impl ProtocolSession {
         let mut delivered_key = delivered_keys.first().cloned();
 
         if deliver_all {
-            if let Ok(nodes) = self.state.cluster.lookup_nodes(to).await {
-                for node_id in nodes {
-                    if node_id == self.state.cluster.node_id {
-                        continue;
-                    }
-                    let accepted = if let Some(delivery) = live_delivery {
-                        self.state
-                            .cluster
-                            .send_to_node_available_durable(
-                                &node_id,
-                                to,
-                                &recipient_delivery,
-                                delivery,
-                            )
-                            .await
-                            .unwrap_or(false)
-                    } else {
-                        self.state
-                            .cluster
-                            .send_to_node_available(&node_id, to, &recipient_delivery)
-                            .await
-                            .unwrap_or(false)
-                    };
-                    if accepted {
-                        delivered = true;
-                    }
-                }
-            }
+            delivered |= self
+                .state
+                .route_personal_message_to_available_remote_resources(
+                    to,
+                    &recipient_delivery,
+                    live_delivery,
+                )
+                .await;
         } else if !delivered {
-            if let Ok(nodes) = self.state.cluster.lookup_nodes(to).await {
-                for node_id in nodes {
-                    if node_id != self.state.cluster.node_id {
-                        let receipt = if let Some(delivery) = live_delivery {
-                            self.state
-                                .cluster
-                                .send_to_node_primary_durable(
-                                    &node_id,
-                                    to,
-                                    &recipient_delivery,
-                                    delivery,
-                                )
-                                .await
-                                .unwrap_or_default()
-                        } else {
-                            self.state
-                                .cluster
-                                .send_to_node_primary(&node_id, to, &recipient_delivery)
-                                .await
-                                .unwrap_or_default()
-                        };
-                        if accepted_cluster_message_delivery(&self.state, &node_id, to, &receipt) {
-                            delivered = true;
-                            delivered_key = receipt.accepted_full_jid;
-                            break;
-                        }
-                    }
-                }
+            let remote = self
+                .state
+                .route_personal_message_to_remote_primary(to, &recipient_delivery, live_delivery)
+                .await;
+            if remote.delivered {
+                delivered = true;
+                delivered_key = remote.accepted_full_jid;
             }
         }
 
@@ -1367,44 +1269,17 @@ impl ProtocolSession {
                     }
                 }
                 if !delivered {
-                    if let Ok(nodes) = self.state.cluster.lookup_nodes(&recipient_by).await {
-                        for node_id in nodes {
-                            if node_id == self.state.cluster.node_id {
-                                continue;
-                            }
-                            let receipt = if let Some(delivery) = live_delivery {
-                                self.state
-                                    .cluster
-                                    .send_to_node_primary_durable(
-                                        &node_id,
-                                        &recipient_by,
-                                        &recipient_delivery,
-                                        delivery,
-                                    )
-                                    .await
-                                    .unwrap_or_default()
-                            } else {
-                                self.state
-                                    .cluster
-                                    .send_to_node_primary(
-                                        &node_id,
-                                        &recipient_by,
-                                        &recipient_delivery,
-                                    )
-                                    .await
-                                    .unwrap_or_default()
-                            };
-                            if accepted_cluster_message_delivery(
-                                &self.state,
-                                &node_id,
-                                &recipient_by,
-                                &receipt,
-                            ) {
-                                delivered = true;
-                                delivered_key = receipt.accepted_full_jid;
-                                break;
-                            }
-                        }
+                    let remote = self
+                        .state
+                        .route_personal_message_to_remote_primary(
+                            &recipient_by,
+                            &recipient_delivery,
+                            live_delivery,
+                        )
+                        .await;
+                    if remote.delivered {
+                        delivered = true;
+                        delivered_key = remote.accepted_full_jid;
                     }
                 }
             }
@@ -1738,56 +1613,15 @@ impl ProtocolSession {
             "completed local XEP-0280 Carbon fanout"
         );
 
-        match self.state.cluster.lookup_nodes(bare).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id != self.state.cluster.node_id {
-                        let Some(carbon) = carbon_message("sent", bare, bare, forwarded) else {
-                            self.state
-                                .personal_message_telemetry()
-                                .carbon_delivery_failed();
-                            tracing::error!(%node_id, %bare, direction = "sent", "suppressed an invalid cluster XEP-0280 Carbon payload");
-                            continue;
-                        };
-                        // Put the primary receiving resource first: a version 1
-                        // cluster peer understands only that scalar exclusion.
-                        // The version 2 list also excludes the sending resource.
-                        let mut exclusions = delivered_self.into_iter().collect::<Vec<_>>();
-                        exclusions.push(&current);
-                        let routed = if let Some((room, nick)) = muc_scope {
-                            self.state
-                                .cluster
-                                .send_to_node_muc_carbons_excluding(
-                                    &node_id,
-                                    bare,
-                                    &carbon,
-                                    &exclusions,
-                                    room,
-                                    nick,
-                                )
-                                .await
-                        } else {
-                            self.state
-                                .cluster
-                                .send_to_node_excluding(&node_id, bare, &carbon, true, &exclusions)
-                                .await
-                        };
-                        if let Err(error) = routed {
-                            self.state
-                                .personal_message_telemetry()
-                                .carbon_delivery_failed();
-                            tracing::warn!(%node_id, %bare, ?error, direction = "sent", "post-accept Carbon could not be routed to a cluster peer");
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                self.state
-                    .personal_message_telemetry()
-                    .carbon_delivery_failed();
-                tracing::warn!(%bare, ?error, direction = "sent", "cluster Carbon recipient lookup failed after primary acceptance");
-            }
-        }
+        self.state
+            .route_sent_carbons_to_remote_resources(
+                bare,
+                forwarded,
+                &current,
+                delivered_self,
+                muc_scope,
+            )
+            .await;
     }
 
     pub(crate) async fn send_received_carbons(
@@ -1966,32 +1800,9 @@ pub(crate) async fn send_received_carbons_for_state(
         "completed local XEP-0280 Carbon fanout"
     );
 
-    match state.cluster.lookup_nodes(recipient).await {
-        Ok(nodes) => {
-            for node_id in nodes {
-                if node_id != state.cluster.node_id {
-                    let Some(carbon) = carbon_message("received", recipient, recipient, forwarded)
-                    else {
-                        state.personal_message_telemetry().carbon_delivery_failed();
-                        tracing::error!(%node_id, %recipient, direction = "received", "suppressed an invalid cluster XEP-0280 Carbon payload");
-                        continue;
-                    };
-                    if let Err(error) = state
-                        .cluster
-                        .send_to_node(&node_id, recipient, &carbon, true, delivered)
-                        .await
-                    {
-                        state.personal_message_telemetry().carbon_delivery_failed();
-                        tracing::warn!(%node_id, %recipient, ?error, direction = "received", "post-accept Carbon could not be routed to a cluster peer");
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            state.personal_message_telemetry().carbon_delivery_failed();
-            tracing::warn!(%recipient, ?error, direction = "received", "cluster Carbon recipient lookup failed after primary acceptance");
-        }
-    }
+    state
+        .route_received_carbons_to_remote_resources(recipient, delivered, forwarded)
+        .await;
 }
 
 fn carbon_forwarded_sender(forwarded: &str) -> Option<String> {

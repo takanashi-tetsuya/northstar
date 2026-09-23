@@ -151,21 +151,15 @@ impl ProtocolSession {
                 }
             }
         }
-        match self.state.cluster.lookup_nodes(&owner).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id == self.state.cluster.node_id {
-                        continue;
-                    }
-                    let push = blocking_push_stanza(&owner, &payload);
-                    if let Err(error) = self
-                        .state
-                        .cluster
-                        .send_to_node_blocklist(&node_id, &owner, &push)
-                        .await
-                    {
-                        tracing::warn!(?error, %node_id, "failed clustered XEP-0191 push");
-                    }
+        match self
+            .state
+            .route_remote_blocklist_push(&owner, || blocking_push_stanza(&owner, &payload))
+            .await
+        {
+            Ok(failures) => {
+                for failure in failures {
+                    tracing::warn!(error=?failure.error, node_id=%failure.node_id,
+                        "failed clustered XEP-0191 push");
                 }
             }
             Err(error) => tracing::warn!(?error, "failed to locate clustered account resources"),
@@ -189,26 +183,15 @@ impl ProtocolSession {
             available,
         )
         .await;
-        match self.state.cluster.lookup_nodes(&owner).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id == self.state.cluster.node_id {
-                        continue;
-                    }
-                    if let Err(error) = self
-                        .state
-                        .cluster
-                        .send_blocking_presence_change(
-                            &node_id,
-                            &owner,
-                            &targets,
-                            changed_patterns,
-                            available,
-                        )
-                        .await
-                    {
-                        tracing::warn!(?error, %node_id, "failed clustered blocking presence update");
-                    }
+        match self
+            .state
+            .route_remote_blocking_presence_change(&owner, &targets, changed_patterns, available)
+            .await
+        {
+            Ok(failures) => {
+                for failure in failures {
+                    tracing::warn!(error=?failure.error, node_id=%failure.node_id,
+                        "failed clustered blocking presence update");
                 }
             }
             Err(error) => tracing::warn!(?error, "failed to locate clustered presence resources"),
@@ -298,8 +281,7 @@ pub(crate) async fn deliver_blocking_presence_change(
         available,
         |node_id, target, delivery| async move {
             let _ = state
-                .cluster
-                .send_to_node_available_presence(&node_id, &target, &delivery)
+                .route_remote_available_presence_to_node(&node_id, &target, &delivery)
                 .await;
             Ok(())
         },
@@ -365,17 +347,12 @@ where
                 for (_, recipient) in recipients {
                     let _ = recipient.sender.try_send(delivery.clone());
                 }
-                if let Ok(nodes) = state.cluster.lookup_nodes(&target).await {
+                if let Ok(nodes) = state.remote_resource_nodes(&target).await {
                     for node_id in nodes {
-                        if node_id != state.cluster.node_id {
-                            send_remote(node_id, target.clone(), delivery.clone()).await?;
-                        }
+                        send_remote(node_id, target.clone(), delivery.clone()).await?;
                     }
                 }
-            } else if state
-                .config
-                .external_route_domain_allowed(target_jid.domainpart())
-            {
+            } else if state.xmpp_external_route_domain_allowed(target_jid.domainpart()) {
                 let _ = state
                     .federation_outbox()
                     .send(target_jid.domainpart(), delivery, Some(from.clone()))

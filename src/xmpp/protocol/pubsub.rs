@@ -2824,19 +2824,11 @@ async fn route_service_message(
         }
         let mut remote_nodes = 0_usize;
         if !delivered {
-            for node_id in state.cluster.lookup_nodes(recipient).await? {
-                if node_id != state.cluster.node_id {
-                    remote_nodes += 1;
-                    if state
-                        .cluster
-                        .send_to_node(&node_id, recipient, &message, false, None)
-                        .await?
-                    {
-                        delivered = true;
-                        break;
-                    }
-                }
-            }
+            let remote = state
+                .route_local_notification_remote(recipient, &message)
+                .await?;
+            remote_nodes = remote.remote_nodes;
+            delivered = remote.delivered;
         }
         if !delivered {
             if remote_nodes == 0 && !targets.is_empty() && policy_eligible == 0 {

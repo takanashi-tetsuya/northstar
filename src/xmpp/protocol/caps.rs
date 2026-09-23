@@ -498,9 +498,7 @@ impl ProtocolSession {
     ) -> super::mix::MixSessionCapability {
         if !self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0115::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
         {
             return super::mix::MixSessionCapability::Unknown;
         }
@@ -533,9 +531,7 @@ impl ProtocolSession {
     pub(crate) fn commit_caps_observation(&self, presence: Node<'_, '_>, full_jid: &str) {
         if !self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0115::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
         {
             return;
         }
@@ -810,11 +806,7 @@ pub(crate) async fn observe_federated_caps(
     connection_id: uuid::Uuid,
     resource_epoch: &FederatedCapsGuard<'_>,
 ) -> FederatedCapsObservationResult {
-    if !state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0115::XEP_ID)
-    {
+    if !state.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) {
         return FederatedCapsObservationResult::Accepted;
     }
     let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {

@@ -117,13 +117,8 @@ impl ProtocolSession {
                     return Ok(Action::Send(iq_error(id, "bad-request")));
                 };
                 let account = format!("{}@{}", user.username, self.state.local_domain());
-                let remote_resource_exists = self
-                    .state
-                    .cluster
-                    .lookup_nodes(&account)
-                    .await?
-                    .into_iter()
-                    .any(|node| node != self.state.cluster.node_id);
+                let remote_resource_exists =
+                    self.state.account_has_remote_resources(&account).await?;
                 match self
                     .state
                     .privacy_service()
@@ -237,19 +232,11 @@ impl ProtocolSession {
                 tracing::warn!(%jid, list = %name, ?error, "XEP-0016 privacy-list push queue was unavailable; disconnecting stale resource");
             }
         }
-        match self.state.cluster.lookup_nodes(&account).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id != self.state.cluster.node_id {
-                        if let Err(error) = self
-                            .state
-                            .cluster
-                            .send_to_node_privacy(&node_id, &account, &base)
-                            .await
-                        {
-                            tracing::warn!(?error, %node_id, list = %name, "clustered XEP-0016 push failed");
-                        }
-                    }
+        match self.state.route_remote_privacy_push(&account, &base).await {
+            Ok(failures) => {
+                for failure in failures {
+                    tracing::warn!(error=?failure.error, node_id=%failure.node_id, list = %name,
+                        "clustered XEP-0016 push failed");
                 }
             }
             Err(error) => {

@@ -11,7 +11,7 @@ use crate::services::muc::{
     MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationTarget, MucConfigUpdate,
     MucConfigurationOutcome, MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome,
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
-    MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
+    MucSubjectOutcome, OfflineStoreOutcome,
 };
 use crate::state::{
     bare_jid, localpart, AppState, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
@@ -559,7 +559,6 @@ fn can_retrieve_affiliations(
 
 async fn unregister_remote_occupant(
     state: &AppState,
-    key: &str,
     mut departed: MucOccupant,
     removal_status: Option<u16>,
 ) -> Result<()> {
@@ -573,11 +572,7 @@ async fn unregister_remote_occupant(
             .federated_room_snapshot(localpart(&room_jid))
             .await?
         else {
-            state.muc_occupants.remove_if(key, |_, current| {
-                current.full_jid == departed.full_jid
-                    && current.connection_id == departed.connection_id
-                    && current.cluster_epoch == departed.cluster_epoch
-            });
+            state.remove_local_muc_occupant_exact((&departed).into());
             return Ok(());
         };
         let guard = state
@@ -589,40 +584,21 @@ async fn unregister_remote_occupant(
             .federated_room_snapshot(localpart(&room_jid))
             .await?
         else {
-            state.muc_occupants.remove_if(key, |_, current| {
-                current.full_jid == departed.full_jid
-                    && current.connection_id == departed.connection_id
-                    && current.cluster_epoch == departed.cluster_epoch
-            });
+            state.remove_local_muc_occupant_exact((&departed).into());
             return Ok(());
         };
         if refreshed_room.room_epoch != initial_room.room_epoch {
-            state.muc_occupants.remove_if(key, |_, current| {
-                current.full_jid == departed.full_jid
-                    && current.connection_id == departed.connection_id
-                    && current.cluster_epoch == departed.cluster_epoch
-            });
+            state.remove_local_muc_occupant_exact((&departed).into());
             return Ok(());
         }
-        let Some(current) = state
-            .muc_occupants
-            .get(key)
-            .map(|entry| entry.value().clone())
-        else {
+        let Some(current) = state.local_muc_occupant_exact((&departed).into()) else {
             return Ok(());
         };
-        if current.full_jid != departed.full_jid
-            || current.connection_id != departed.connection_id
-            || current.cluster_epoch != departed.cluster_epoch
-        {
-            return Ok(());
-        }
         departed = current;
         local_departure_room = Some(refreshed_room);
         Some(guard)
     };
     departed.role = "none".to_owned();
-    let serializable = SerializableMucOccupant::from(&departed);
     let mut clustered_leave = false;
     if state.cluster.is_enabled() {
         state
@@ -666,14 +642,15 @@ async fn unregister_remote_occupant(
                 "federated MUC leave committed; signed wake will be recovered by polling");
         }
     }
-    let removed_locally = state.muc_occupants.remove_if(key, |_, current| {
-        current.full_jid == departed.full_jid
-            && current.connection_id == departed.connection_id
-            && current.cluster_epoch == departed.cluster_epoch
-    });
+    let removed_locally = state.remove_local_muc_occupant_exact((&departed).into());
     if removed_locally.is_none() && !state.cluster.is_enabled() {
         return Ok(());
     }
+    if let Some(mut removed) = removed_locally {
+        removed.role = "none".to_owned();
+        departed = removed;
+    }
+    let serializable = SerializableMucOccupant::from(&departed);
     let locally_empty = state.muc_occupants_for(&room_jid).is_empty();
     if locally_empty {
         if let Some(room) = local_departure_room.as_ref() {
@@ -829,7 +806,7 @@ async fn federated_muc_presence_owned(
         request.stanza.kind.as_deref(),
         Some("unavailable" | "error")
     ) {
-        if let Some((key, occupant)) = existing {
+        if let Some((_, occupant)) = existing {
             let exact_connection = matches!(
                 &occupant.endpoint,
                 MucOccupantEndpoint::Federated { connection_id: owner, .. }
@@ -844,7 +821,7 @@ async fn federated_muc_presence_owned(
                 ));
             }
             let status = (request.stanza.kind.as_deref() == Some("error")).then_some(333);
-            unregister_remote_occupant(state, &key, occupant, status).await?;
+            unregister_remote_occupant(state, occupant, status).await?;
         }
         return Ok(None);
     }
@@ -1592,8 +1569,7 @@ async fn federated_muc_presence_owned(
             "service-unavailable",
         ));
     }
-    let key = muc_occupant_key(&room_jid, nick);
-    if !state.cluster.is_enabled() && state.muc_occupants.contains_key(&key) {
+    if !state.cluster.is_enabled() && state.local_muc_occupant_by_nick(&room_jid, nick).is_some() {
         return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
     }
     let history_request = match request.history_request {
@@ -1741,20 +1717,18 @@ async fn federated_muc_presence_owned(
     // clustered delivery to other nodes remains driven by the committed
     // PostgreSQL event rather than by this in-memory view.
     let local_existing = state.muc_occupants_for(&room_jid);
-    let locally_published = match state.muc_occupants.entry(key.clone()) {
-        dashmap::mapref::entry::Entry::Occupied(_) => false,
-        dashmap::mapref::entry::Entry::Vacant(entry) => {
-            entry.insert(occupant.clone());
-            true
-        }
-    };
-    if !locally_published {
+    let publication = state.publish_local_muc_join_if_vacant(&occupant);
+    if publication != crate::state::LocalMucJoinPublication::Published {
         if !state.cluster.is_enabled() {
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         }
-        tracing::warn!(room=%room_jid, %nick,
-            "replacing stale local federated MUC actor after authoritative clustered join");
-        state.muc_occupants.insert(key, occupant.clone());
+        if publication == crate::state::LocalMucJoinPublication::Occupied {
+            tracing::error!(room=%room_jid, %nick,
+                "committed federated MUC join found another local incarnation; preserving it and compensating this claim");
+            drop(local_join_guard);
+            super::muc::compensate_unpublished_cluster_muc_join(state, &room, &occupant).await;
+            return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+        }
     }
     drop(local_join_guard);
     state.cluster.join_muc(&room_jid).await?;
@@ -2076,12 +2050,7 @@ async fn federated_muc_message_owned(
                         &room_jid,
                         &delayed,
                         false,
-                        OfflineStorePolicy {
-                            max_messages: state.config.offline_max_messages_per_account,
-                            max_bytes: state.config.offline_max_bytes_per_account,
-                            ttl_days: state.config.offline_message_ttl_days,
-                            mam_backed: false,
-                        },
+                        super::muc::temporary_muc_offline_policy(state),
                     )
                     .await?;
                 if outcome == OfflineStoreOutcome::QuotaExceeded {
@@ -2101,9 +2070,7 @@ async fn federated_muc_message_owned(
             }
             return Ok(None);
         }
-        if !state
-            .config
-            .external_route_domain_allowed(target.domainpart())
+        if !state.xmpp_external_route_domain_allowed(target.domainpart())
             || !state
                 .federation_outbox()
                 .send(target.domainpart(), forwarded, Some(room_jid.clone()))
@@ -2242,12 +2209,7 @@ async fn federated_muc_message_owned(
                     .values()
                     .filter(|occupant| occupant.role == "moderator")
                 {
-                    let key = muc_occupant_key(&room_jid, &moderator.nick);
-                    if let Some(local) = state
-                        .muc_occupants
-                        .get(&key)
-                        .map(|entry| entry.value().clone())
-                    {
+                    if let Some(local) = state.local_muc_occupant_exact(moderator.into()) {
                         let _ = state
                             .deliver_to_muc_occupant(
                                 &local,
@@ -2321,12 +2283,7 @@ async fn federated_muc_message_owned(
                             "item-not-found",
                         ));
                     }
-                    let actor_key = muc_occupant_key(&room_jid, &own.nick);
-                    let Some(current_actor) = state
-                        .muc_occupants
-                        .get(&actor_key)
-                        .map(|entry| entry.value().clone())
-                    else {
+                    let Some(current_actor) = state.local_muc_occupant_exact((&own).into()) else {
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     };
                     if current_actor.full_jid != own.full_jid
@@ -2462,11 +2419,7 @@ async fn federated_muc_message_owned(
                 "jid-malformed",
             ));
         };
-        let target_key = muc_occupant_key(&room_jid, target_nick);
-        let local_target = state
-            .muc_occupants
-            .get(&target_key)
-            .map(|value| value.clone());
+        let local_target = state.local_muc_occupant_by_nick(&room_jid, target_nick);
         let (target_full_jid, route_via_cluster) = if let Some(target) = &local_target {
             (target.full_jid.clone(), false)
         } else {
@@ -2677,12 +2630,7 @@ async fn federated_muc_message_owned(
                             &room_jid,
                             &delayed,
                             false,
-                            OfflineStorePolicy {
-                                max_messages: state.config.offline_max_messages_per_account,
-                                max_bytes: state.config.offline_max_bytes_per_account,
-                                ttl_days: state.config.offline_message_ttl_days,
-                                mam_backed: false,
-                            },
+                            super::muc::temporary_muc_offline_policy(state),
                             cluster_authority.as_ref(),
                         )
                         .await?
@@ -2837,12 +2785,7 @@ async fn federated_muc_message_owned(
                             &room_jid,
                             &delayed,
                             false,
-                            OfflineStorePolicy {
-                                max_messages: state.config.offline_max_messages_per_account,
-                                max_bytes: state.config.offline_max_bytes_per_account,
-                                ttl_days: state.config.offline_message_ttl_days,
-                                mam_backed: false,
-                            },
+                            super::muc::temporary_muc_offline_policy(state),
                         )
                         .await?;
                     if offline_outcome == OfflineStoreOutcome::QuotaExceeded {
@@ -3109,7 +3052,7 @@ async fn federated_muc_message_owned(
     let encrypted = request.encrypted;
     let archive_enabled = room.logging_enabled
         && request.permanent_storage
-        && (encrypted || !state.config.require_encrypted_archive);
+        && (encrypted || !state.archive_requires_encryption());
     let archive = if archive_enabled && encrypted {
         encrypted_archive_stanza(&reflected)
     } else {
@@ -3310,7 +3253,7 @@ async fn federated_muc_message_owned(
                 stanza: archive.clone(),
                 encrypted,
                 archive: archive_enabled,
-                retention_days: state.config.muc_mam_retention_days,
+                retention_days: state.muc_mam_retention_days(),
                 authority: actor_authority,
             })
             .await?;
@@ -3454,7 +3397,7 @@ async fn federated_muc_iq_owned(
                         XmlElement::new("identity")
                             .attr("category", "conference")
                             .attr("type", "text")
-                            .attr("name", format!("{} Group Chat", state.config.server_name)),
+                            .attr("name", format!("{} Group Chat", state.server_name())),
                     );
                 for feature in [
                     "http://jabber.org/protocol/disco#info",
@@ -4204,12 +4147,7 @@ async fn federated_muc_iq_owned(
                 "jid-malformed",
             ));
         };
-        let target_key = muc_occupant_key(&room_jid, target_nick);
-        let Some(target) = state
-            .muc_occupants
-            .get(&target_key)
-            .map(|entry| entry.value().clone())
-        else {
+        let Some(target) = state.local_muc_occupant_by_nick(&room_jid, target_nick) else {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -4773,13 +4711,13 @@ async fn federated_muc_owner(
                     .muc_service()
                     .cancel_locked_room(room.id, &requester.full_jid)
                     .await?;
-                for (key, occupant) in state.muc_occupants_for(&requester.room_jid) {
+                for (_, occupant) in state.muc_occupants_for(&requester.room_jid) {
+                    let Some(occupant) = state.remove_local_muc_occupant_exact((&occupant).into())
+                    else {
+                        continue;
+                    };
                     let serializable = SerializableMucOccupant::from(&occupant);
                     state.remove_live_muc_membership(&serializable);
-                    state.muc_occupants.remove_if(&key, |_, current| {
-                        current.cluster_epoch == occupant.cluster_epoch
-                            && current.connection_id == occupant.connection_id
-                    });
                     if !state.cluster.is_enabled() {
                         let unavailable = muc_destroy_presence(&serializable, None, None);
                         let _ = state.deliver_to_muc_occupant(&occupant, unavailable).await;
@@ -4834,13 +4772,13 @@ async fn federated_muc_owner(
             } else {
                 state.muc_service().delete_room(room.id).await?;
             }
-            for (key, occupant) in state.muc_occupants_for(&requester.room_jid) {
+            for (_, occupant) in state.muc_occupants_for(&requester.room_jid) {
+                let Some(occupant) = state.remove_local_muc_occupant_exact((&occupant).into())
+                else {
+                    continue;
+                };
                 let serializable = SerializableMucOccupant::from(&occupant);
                 state.remove_live_muc_membership(&serializable);
-                state.muc_occupants.remove_if(&key, |_, current| {
-                    current.cluster_epoch == occupant.cluster_epoch
-                        && current.connection_id == occupant.connection_id
-                });
                 if cluster_operation.is_none() {
                     let unavailable = muc_destroy_presence(
                         &serializable,
@@ -5036,12 +4974,8 @@ async fn federated_muc_owner(
                     {
                         continue;
                     }
-                    let key = muc_occupant_key(&requester.room_jid, &nick);
-                    let locally_owned = state.muc_occupants.get(&key).is_some_and(|local| {
-                        local.full_jid == occupant.full_jid
-                            && local.cluster_epoch == occupant.cluster_epoch
-                            && local.connection_id == occupant.connection_id
-                    });
+                    let locally_owned =
+                        state.local_muc_occupant_exact((&occupant).into()).is_some();
                     if locally_owned {
                         continue;
                     }
@@ -5634,7 +5568,6 @@ async fn federated_muc_admin_set(
                     "jid-malformed",
                 ));
             };
-            let key = muc_occupant_key(&requester.room_jid, &target_nick);
             let target = if state.cluster.is_enabled() {
                 let authoritative = state
                     .muc_service()
@@ -5664,9 +5597,9 @@ async fn federated_muc_admin_set(
                 }
             } else {
                 state
-                    .muc_occupants
-                    .get(&key)
-                    .map(|occupant| SerializableMucOccupant::from(&*occupant))
+                    .local_muc_occupant_by_nick(&requester.room_jid, &target_nick)
+                    .as_ref()
+                    .map(SerializableMucOccupant::from)
                     .or_else(|| global_occupants.get(&target_nick).cloned())
             };
             let Some(target) = target else {
@@ -6107,11 +6040,7 @@ async fn federated_muc_admin_set(
                     "jid-malformed",
                 ));
             };
-            let key = muc_occupant_key(&requester.room_jid, &target_nick);
-            let local_target = state
-                .muc_occupants
-                .get(&key)
-                .map(|entry| entry.value().clone());
+            let local_target = state.local_muc_occupant_by_nick(&requester.room_jid, &target_nick);
             if local_target.is_none() {
                 let Some(mut target) = global_occupants.get(&target_nick).cloned() else {
                     return Ok(federated_error(
@@ -6545,24 +6474,10 @@ pub(crate) async fn federated_muc_connection_closed(
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
 ) -> Result<()> {
-    let departed: Vec<_> = state
-        .muc_occupants
-        .iter()
-        .filter_map(|entry| match &entry.value().endpoint {
-            MucOccupantEndpoint::Federated {
-                authenticated_domain: domain,
-                connection_id: bound_connection,
-                ..
-            } if same_authenticated_domain(domain, authenticated_domain)
-                && *bound_connection == connection_id =>
-            {
-                Some((entry.key().clone(), entry.value().clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    for (key, occupant) in departed {
-        unregister_remote_occupant(state, &key, occupant, Some(333)).await?;
+    let departed =
+        state.federated_muc_occupants_for_closed_connection(authenticated_domain, connection_id);
+    for occupant in departed {
+        unregister_remote_occupant(state, occupant, Some(333)).await?;
     }
     Ok(())
 }

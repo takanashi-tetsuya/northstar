@@ -5565,11 +5565,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
-    let occupants: Vec<_> = state
-        .muc_occupants
-        .iter()
-        .map(|entry| entry.value().clone())
-        .collect();
+    let occupants = state.local_cluster_muc_projection_snapshot();
     let mut muc_soft_state_errors = 0_u64;
     let mut active_muc_rooms = HashSet::new();
     for occupant in occupants {
@@ -5962,7 +5958,6 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
         sm_session_id: snapshot.sm_session_id,
         payload: String::new(),
     };
-    let subject_key = crate::xmpp::xml_util::muc_occupant_key(room_jid, &snapshot.nick);
     let subject_is_recipient = snapshot.full_jid == recipient.full_jid
         && snapshot.occupant_incarnation == recipient.cluster_epoch
         && snapshot.connection_uuid == recipient.connection_id;
@@ -5996,28 +5991,11 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
         // longer be able to deliver its required self-unavailable stanza.
         if subject_is_recipient {
             state.remove_live_muc_membership(&subject);
-            state.muc_occupants.remove_if(&subject_key, |_, current| {
-                current.full_jid == snapshot.full_jid
-                    && current.cluster_epoch == snapshot.occupant_incarnation
-                    && current.connection_id == snapshot.connection_uuid
-            });
+            state.remove_local_muc_occupant_exact((&subject).into());
         }
     } else {
         if subject_is_recipient {
-            if let Some(mut local) = state
-                .muc_occupants
-                .get(&subject_key)
-                .map(|entry| entry.value().clone())
-                .filter(|local| {
-                    local.cluster_epoch == snapshot.occupant_incarnation
-                        && local.connection_id == snapshot.connection_uuid
-                })
-            {
-                local.affiliation = snapshot.affiliation.clone();
-                local.role = snapshot.role.clone();
-                local.room_non_anonymous = room_non_anonymous;
-                state.muc_occupants.insert(subject_key, local);
-            }
+            state.apply_cluster_muc_policy_projection_exact(&subject);
         }
         stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
             &subject,
@@ -6169,20 +6147,7 @@ async fn deliver_cluster_muc_event(
         "join" | "resume" | "role" => {
             let target = target.context("MUC join/resume/role event has no exact target")?;
             if context.operation_kind == "role" {
-                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
-                if let Some(mut local) = state
-                    .muc_occupants
-                    .get(&target_key)
-                    .map(|entry| entry.value().clone())
-                    .filter(|local| {
-                        local.cluster_epoch == target.cluster_epoch
-                            && local.connection_id == target.connection_id
-                    })
-                {
-                    local.role = target.role.clone();
-                    local.affiliation = target.affiliation.clone();
-                    state.muc_occupants.insert(target_key, local);
-                }
+                state.apply_cluster_muc_role_projection_exact(&target);
             }
             let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
@@ -7237,17 +7202,7 @@ async fn listen_once(
                         "moderator" | "participant" | "visitor"
                     )
                 {
-                    let key = crate::xmpp::xml_util::muc_occupant_key(target, &occupant.nick);
-                    if let Some(mut local) = state.muc_occupants.get_mut(&key) {
-                        if local.cluster_epoch == occupant.cluster_epoch
-                            && local.full_jid == occupant.full_jid
-                            && local.connection_id == occupant.connection_id
-                        {
-                            local.role = occupant.role.clone();
-                            local.affiliation = occupant.affiliation.clone();
-                            local.room_non_anonymous = occupant.room_non_anonymous;
-                        }
-                    }
+                    state.apply_cluster_muc_policy_projection_exact(&occupant);
                     for (_, session) in state.muc_occupants_for(target) {
                         let self_presence = session.full_jid == occupant.full_jid;
                         let presence = crate::xmpp::xml_util::muc_presence_stanza(

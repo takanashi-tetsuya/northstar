@@ -264,12 +264,10 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 3;
+const MAX_APP_STATE_PUBLIC_FIELDS = 1;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
   'cluster',
-  'config',
-  'muc_occupants',
 ];
 
 if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {

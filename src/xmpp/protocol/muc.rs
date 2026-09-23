@@ -29,6 +29,87 @@ use std::sync::atomic::Ordering;
 // than discovering at disconnect that the session can no longer be resumed.
 const MAX_JOINED_ROOMS_PER_SESSION: usize = 256;
 
+pub(super) fn temporary_muc_offline_policy(state: &crate::state::AppState) -> OfflineStorePolicy {
+    let limits = state.offline_delivery_limits();
+    OfflineStorePolicy {
+        max_messages: limits.max_messages,
+        max_bytes: limits.max_bytes,
+        ttl_days: limits.ttl_days,
+        mam_backed: false,
+    }
+}
+
+/// Release a PG join that could not become a local occupant after an ABA
+/// collision. The leave and Redis cleanup target only the newly committed
+/// incarnation; a failed PG compensation remains fenced by its finite lease.
+pub(super) async fn compensate_unpublished_cluster_muc_join(
+    state: &crate::state::AppState,
+    room: &MucRoom,
+    occupant: &crate::state::MucOccupant,
+) {
+    match state
+        .muc_service()
+        .local_cluster_occupancy_target(room.id, occupant.cluster_epoch, occupant.connection_id)
+        .await
+    {
+        Ok(Some(target)) => {
+            let operation_id = uuid::Uuid::new_v4();
+            match state
+                .muc_service()
+                .transition_local_cluster_occupancy(
+                    operation_id,
+                    &target,
+                    "leave",
+                    &state.cluster.node_id,
+                    None,
+                    None,
+                    occupant.sm_session_id,
+                    std::time::Duration::from_secs(90),
+                )
+                .await
+            {
+                Ok(ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay) => {
+                    if let Err(error) = state
+                        .muc_service()
+                        .wake_committed_operation(&state.cluster, operation_id)
+                        .await
+                    {
+                        tracing::warn!(?error, %operation_id, room=%occupant.room_jid,
+                            "unpublished MUC join was compensated; event wake will be recovered by polling");
+                    }
+                }
+                Ok(outcome) => {
+                    tracing::error!(?outcome, room=%occupant.room_jid, nick=%occupant.nick,
+                    "PG rejected compensation of unpublished MUC join")
+                }
+                Err(error) => tracing::error!(?error, room=%occupant.room_jid, nick=%occupant.nick,
+                    "PG compensation of unpublished MUC join failed; lease expiry will fence it"),
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(?error, room=%occupant.room_jid, nick=%occupant.nick,
+                "could not locate unpublished MUC join for compensation");
+        }
+    }
+    // This join never became a local occupant. Remove only its exact Redis
+    // projection, even if PG already expired it or compensation is retried.
+    if let Err(error) = state
+        .cluster
+        .unregister_muc_occupant_epoch(
+            &occupant.room_jid,
+            &occupant.nick,
+            occupant.cluster_epoch,
+            occupant.connection_id,
+        )
+        .await
+    {
+        tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
+            epoch=%occupant.cluster_epoch, connection=%occupant.connection_id,
+            "could not remove Redis projection of unpublished MUC join");
+    }
+}
+
 #[derive(Debug)]
 struct MucClusterEffectFailure {
     stage: &'static str,
@@ -1547,9 +1628,7 @@ impl ProtocolSession {
         };
         if !self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0045::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(muc_stanza_error(
                 root,
@@ -1650,13 +1729,7 @@ impl ProtocolSession {
                 let nick = target
                     .resourcepart()
                     .expect("decline occupant resource checked");
-                let key = muc_occupant_key(&room_jid, nick);
-                if let Some(recipient) = self
-                    .state
-                    .muc_occupants
-                    .get(&key)
-                    .map(|entry| entry.value().clone())
-                {
+                if let Some(recipient) = self.state.local_muc_occupant_by_nick(&room_jid, nick) {
                     let _ = self
                         .state
                         .deliver_to_muc_occupant(&recipient, forwarded.clone())
@@ -1751,12 +1824,7 @@ impl ProtocolSession {
                             &room_jid,
                             &delayed,
                             false,
-                            OfflineStorePolicy {
-                                max_messages: self.state.config.offline_max_messages_per_account,
-                                max_bytes: self.state.config.offline_max_bytes_per_account,
-                                ttl_days: self.state.config.offline_message_ttl_days,
-                                mam_backed: false,
-                            },
+                            temporary_muc_offline_policy(&self.state),
                         )
                         .await?;
                     if outcome == OfflineStoreOutcome::QuotaExceeded {
@@ -1780,8 +1848,7 @@ impl ProtocolSession {
             }
             if !self
                 .state
-                .config
-                .external_route_domain_allowed(target.domainpart())
+                .xmpp_external_route_domain_allowed(target.domainpart())
                 || !self
                     .state
                     .federation_outbox()
@@ -1944,12 +2011,9 @@ impl ProtocolSession {
                         .values()
                         .filter(|occupant| occupant.role == "moderator")
                     {
-                        let key = muc_occupant_key(&room_jid, &moderator.nick);
                         if let Some(local) = self
                             .state
-                            .muc_occupants
-                            .get(&key)
-                            .map(|entry| entry.value().clone())
+                            .local_muc_occupant_by_nick(&room_jid, &moderator.nick)
                         {
                             let _ = self
                                 .state
@@ -2211,12 +2275,9 @@ impl ProtocolSession {
                     "jid-malformed",
                 )));
             };
-            let target_key = muc_occupant_key(&room_jid, target_nick);
             let local_target = self
                 .state
-                .muc_occupants
-                .get(&target_key)
-                .map(|entry| entry.value().clone());
+                .local_muc_occupant_by_nick(&room_jid, target_nick);
             let (target_full_jid, route_via_cluster) = if let Some(target) = &local_target {
                 (target.full_jid.clone(), false)
             } else {
@@ -2494,21 +2555,7 @@ impl ProtocolSession {
                                             &room_jid,
                                             &delayed,
                                             false,
-                                            OfflineStorePolicy {
-                                                max_messages: self
-                                                    .state
-                                                    .config
-                                                    .offline_max_messages_per_account,
-                                                max_bytes: self
-                                                    .state
-                                                    .config
-                                                    .offline_max_bytes_per_account,
-                                                ttl_days: self
-                                                    .state
-                                                    .config
-                                                    .offline_message_ttl_days,
-                                                mam_backed: false,
-                                            },
+                                            temporary_muc_offline_policy(&self.state),
                                             cluster_authority.as_ref(),
                                         )
                                         .await?
@@ -2738,21 +2785,7 @@ impl ProtocolSession {
                                             &room_jid,
                                             &delayed,
                                             false,
-                                            OfflineStorePolicy {
-                                                max_messages: self
-                                                    .state
-                                                    .config
-                                                    .offline_max_messages_per_account,
-                                                max_bytes: self
-                                                    .state
-                                                    .config
-                                                    .offline_max_bytes_per_account,
-                                                ttl_days: self
-                                                    .state
-                                                    .config
-                                                    .offline_message_ttl_days,
-                                                mam_backed: false,
-                                            },
+                                            temporary_muc_offline_policy(&self.state),
                                         )
                                         .await?;
                                     if offline_outcome == OfflineStoreOutcome::QuotaExceeded {
@@ -3067,7 +3100,7 @@ impl ProtocolSession {
         let encrypted = is_encrypted(root);
         let archive_enabled = room.logging_enabled
             && !has_no_store_hint(root)
-            && (encrypted || !self.state.config.require_encrypted_archive);
+            && (encrypted || !self.state.archive_requires_encryption());
         let archive = if archive_enabled && encrypted {
             encrypted_archive_stanza(&rewritten)
         } else {
@@ -3314,7 +3347,7 @@ impl ProtocolSession {
                 stanza: archive.clone(),
                 encrypted,
                 archive: archive_enabled,
-                retention_days: self.state.config.muc_mam_retention_days,
+                retention_days: self.state.muc_mam_retention_days(),
                 authority: actor_authority,
             };
             let admission = self
@@ -3839,14 +3872,15 @@ impl ProtocolSession {
                 self.state.muc_service().delete_room(room.id).await?;
             }
             let mut direct_destroy_deliveries = Vec::new();
-            for (key, occupant) in occupants {
+            for (_, occupant) in occupants {
+                let Some(occupant) = self
+                    .state
+                    .remove_local_muc_occupant_exact((&occupant).into())
+                else {
+                    continue;
+                };
                 let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                 self.state.remove_live_muc_membership(&serializable);
-                self.state.muc_occupants.remove_if(&key, |_, current| {
-                    current.full_jid == occupant.full_jid
-                        && current.connection_id == occupant.connection_id
-                        && current.cluster_epoch == occupant.cluster_epoch
-                });
                 if cluster_destroy_operation.is_none() {
                     let unavailable =
                         muc_destroy_presence(&serializable, alternate.as_deref(), reason);
@@ -3888,13 +3922,15 @@ impl ProtocolSession {
                     .await?
             {
                 let mut direct_cancel_deliveries = Vec::new();
-                for (key, occupant) in self.state.muc_occupants_for(room_jid) {
+                for (_, occupant) in self.state.muc_occupants_for(room_jid) {
+                    let Some(occupant) = self
+                        .state
+                        .remove_local_muc_occupant_exact((&occupant).into())
+                    else {
+                        continue;
+                    };
                     let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                     self.state.remove_live_muc_membership(&serializable);
-                    self.state.muc_occupants.remove_if(&key, |_, current| {
-                        current.cluster_epoch == occupant.cluster_epoch
-                            && current.connection_id == occupant.connection_id
-                    });
                     self.joined_rooms.remove_if(room_jid, |_, membership| {
                         membership.cluster_epoch == occupant.cluster_epoch
                     });
@@ -4363,9 +4399,7 @@ impl ProtocolSession {
         };
         if !self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0045::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(muc_stanza_error(
                 root,
@@ -4442,28 +4476,30 @@ impl ProtocolSession {
                     .local_room_snapshot(localpart(&room_jid))
                     .await?
                 else {
-                    let stale_key = muc_occupant_key(&room_jid, &joined.nick);
-                    self.state
-                        .muc_occupants
-                        .remove_if(&stale_key, |_, occupant| {
-                            occupant.full_jid == full_jid
-                                && occupant.connection_id == self.connection_id
-                                && occupant.cluster_epoch == joined.cluster_epoch
-                        });
+                    self.state.remove_local_muc_occupant_exact(
+                        crate::state::LocalMucOccupantIdentity {
+                            room_jid: &room_jid,
+                            nick: &joined.nick,
+                            full_jid: &full_jid,
+                            connection_id: self.connection_id,
+                            cluster_epoch: joined.cluster_epoch,
+                        },
+                    );
                     self.joined_rooms.remove_if(&room_jid, |_, current| {
                         current.cluster_epoch == joined.cluster_epoch
                     });
                     return Ok(Action::None);
                 };
                 if refreshed_room.room_epoch != initial_room.room_epoch {
-                    let stale_key = muc_occupant_key(&room_jid, &joined.nick);
-                    self.state
-                        .muc_occupants
-                        .remove_if(&stale_key, |_, occupant| {
-                            occupant.full_jid == full_jid
-                                && occupant.connection_id == self.connection_id
-                                && occupant.cluster_epoch == joined.cluster_epoch
-                        });
+                    self.state.remove_local_muc_occupant_exact(
+                        crate::state::LocalMucOccupantIdentity {
+                            room_jid: &room_jid,
+                            nick: &joined.nick,
+                            full_jid: &full_jid,
+                            connection_id: self.connection_id,
+                            cluster_epoch: joined.cluster_epoch,
+                        },
+                    );
                     self.joined_rooms.remove_if(&room_jid, |_, current| {
                         current.cluster_epoch == joined.cluster_epoch
                     });
@@ -4540,12 +4576,15 @@ impl ProtocolSession {
             }
             self.joined_rooms
                 .remove_if(&room_jid, |_, current| current == &joined);
-            let key = muc_occupant_key(&room_jid, &joined.nick);
-            let Some((_, departed)) = self.state.muc_occupants.remove_if(&key, |_, occupant| {
-                occupant.full_jid == full_jid
-                    && occupant.connection_id == self.connection_id
-                    && occupant.cluster_epoch == joined.cluster_epoch
-            }) else {
+            let Some(departed) = self.state.remove_local_muc_occupant_exact(
+                crate::state::LocalMucOccupantIdentity {
+                    room_jid: &room_jid,
+                    nick: &joined.nick,
+                    full_jid: &full_jid,
+                    connection_id: self.connection_id,
+                    cluster_epoch: joined.cluster_epoch,
+                },
+            ) else {
                 return Ok(Action::None);
             };
 
@@ -5401,8 +5440,12 @@ impl ProtocolSession {
                 )));
             }
         };
-        let key = muc_occupant_key(&room_jid, nick);
-        if !self.state.cluster.is_enabled() && self.state.muc_occupants.contains_key(&key) {
+        if !self.state.cluster.is_enabled()
+            && self
+                .state
+                .local_muc_occupant_by_nick(&room_jid, nick)
+                .is_some()
+        {
             return Ok(Action::Send(muc_stanza_error(
                 root, &full_jid, "cancel", "conflict",
             )));
@@ -5624,7 +5667,12 @@ impl ProtocolSession {
         // The early check above is only a fast path. In single-node mode the
         // exact nickname and room capacity must be rechecked while holding the
         // room gate because independent client sessions join concurrently.
-        if !self.state.cluster.is_enabled() && self.state.muc_occupants.contains_key(&key) {
+        if !self.state.cluster.is_enabled()
+            && self
+                .state
+                .local_muc_occupant_by_nick(&room_jid, nick)
+                .is_some()
+        {
             return Ok(Action::Send(muc_stanza_error(
                 root, &full_jid, "cancel", "conflict",
             )));
@@ -5799,27 +5847,22 @@ impl ProtocolSession {
         // has already admitted the join and this remains only a local fan-out
         // snapshot (the durable cluster event covers other nodes).
         let local_existing = self.state.muc_occupants_for(&room_jid);
-        let locally_published = match self.state.muc_occupants.entry(key) {
-            dashmap::mapref::entry::Entry::Occupied(_) => false,
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                entry.insert(occupant.clone());
-                true
-            }
-        };
-        if !locally_published {
-            // Clustered mode already committed the authoritative nickname and
-            // treats a local collision as stale cache elsewhere. A collision
-            // here can only be a single-node admission race and must not
-            // overwrite the actor which won the room gate.
+        let publication = self.state.publish_local_muc_join_if_vacant(&occupant);
+        if publication != crate::state::LocalMucJoinPublication::Published {
             if !self.state.cluster.is_enabled() {
                 return Ok(Action::Send(muc_stanza_error(
                     root, &full_jid, "cancel", "conflict",
                 )));
             }
-            tracing::warn!(%room_jid, %nick, "replacing stale local MUC actor after authoritative clustered join");
-            self.state
-                .muc_occupants
-                .insert(muc_occupant_key(&room_jid, nick), occupant.clone());
+            if publication == crate::state::LocalMucJoinPublication::Occupied {
+                tracing::error!(%room_jid, %nick,
+                    "committed MUC join found another local incarnation; preserving it and compensating this claim");
+                drop(local_join_guard);
+                compensate_unpublished_cluster_muc_join(&self.state, &room, &occupant).await;
+                return Ok(Action::Send(muc_stanza_error(
+                    root, &full_jid, "cancel", "conflict",
+                )));
+            }
         }
         self.joined_rooms.insert(
             room_jid.clone(),
@@ -5829,7 +5872,6 @@ impl ProtocolSession {
             },
         );
         drop(local_join_guard);
-
         if let Ok(json) = serde_json::to_string(&serializable) {
             let _ = self.state.cluster.join_muc(&room_jid).await;
             let _ = self
@@ -6342,7 +6384,6 @@ impl ProtocolSession {
                 let Ok(target_nick) = prepare_muc_nick(target_nick) else {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
                 };
-                let target_key = muc_occupant_key(room_jid, &target_nick);
                 let target = if self.state.cluster.is_enabled() {
                     let authoritative = self
                         .state
@@ -6377,9 +6418,9 @@ impl ProtocolSession {
                     }
                 } else {
                     self.state
-                        .muc_occupants
-                        .get(&target_key)
-                        .map(|occupant| crate::state::SerializableMucOccupant::from(&*occupant))
+                        .local_muc_occupant_by_nick(room_jid, &target_nick)
+                        .as_ref()
+                        .map(crate::state::SerializableMucOccupant::from)
                         .or_else(|| global_occupants.get(&target_nick).cloned())
                 };
                 let Some(target) = target else {
@@ -6899,12 +6940,9 @@ impl ProtocolSession {
                 let Ok(target_nick) = prepare_muc_nick(target_nick) else {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "jid-malformed")));
                 };
-                let target_key = muc_occupant_key(room_jid, &target_nick);
                 let local_target = self
                     .state
-                    .muc_occupants
-                    .get(&target_key)
-                    .map(|value| value.clone());
+                    .local_muc_occupant_by_nick(room_jid, &target_nick);
                 if local_target.is_none() {
                     let remote = self
                         .state
@@ -7008,7 +7046,7 @@ impl ProtocolSession {
                     }
                     continue;
                 }
-                let mut occupant = local_target.expect("checked above");
+                let occupant = local_target.expect("checked above");
                 if my_affiliation == "admin"
                     && matches!(occupant.affiliation.as_str(), "owner" | "admin")
                 {
@@ -7024,8 +7062,14 @@ impl ProtocolSession {
                 {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "not-allowed")));
                 }
-                occupant.role = new_role.to_owned();
                 if new_role == "none" {
+                    let Some(mut occupant) = self
+                        .state
+                        .remove_local_muc_occupant_exact((&occupant).into())
+                    else {
+                        return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
+                    };
+                    occupant.role = "none".to_owned();
                     let reason = child_text(item, "reason").map(str::to_owned);
                     let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                     for (_, other) in self.state.muc_occupants_for(room_jid) {
@@ -7070,13 +7114,6 @@ impl ProtocolSession {
                         .deliver_to_muc_occupant(&occupant, presence)
                         .await;
                     self.state.remove_live_muc_membership(&serializable);
-                    self.state
-                        .muc_occupants
-                        .remove_if(&target_key, |_, current| {
-                            current.full_jid == occupant.full_jid
-                                && current.connection_id == occupant.connection_id
-                                && current.cluster_epoch == occupant.cluster_epoch
-                        });
                     let is_empty = self.state.muc_occupants_for(room_jid).is_empty();
                     run_muc_cluster_eviction(
                         &self.state,
@@ -7089,9 +7126,14 @@ impl ProtocolSession {
                     )
                     .await;
                 } else {
-                    self.state
-                        .muc_occupants
-                        .insert(target_key, occupant.clone());
+                    let Some(occupant) = self.state.set_local_muc_role_exact(
+                        (&occupant).into(),
+                        &occupant.role,
+                        new_role,
+                        None,
+                    ) else {
+                        return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
+                    };
                     for (_, other) in self.state.muc_occupants_for(room_jid) {
                         let self_presence = other.full_jid == occupant.full_jid;
                         let presence = muc_presence_stanza(

@@ -340,7 +340,7 @@ impl ProtocolSession {
             let target = crate::jid::CanonicalJid::parse(to)
                 .expect("validated client stanza target must be canonicalizable");
             let target_domain = target.domainpart();
-            let owner = format!("{}@{}", user.username, self.state.config.domain);
+            let owner = format!("{}@{}", user.username, self.state.local_domain());
             if self
                 .state
                 .presence_service()
@@ -375,7 +375,7 @@ impl ProtocolSession {
                     Ok(Action::None)
                 };
             }
-            if target_domain == self.state.config.domain && target.localpart().is_some() {
+            if target_domain == self.state.local_domain() && target.localpart().is_some() {
                 if let Some(recipient) = self
                     .state
                     .presence_service()
@@ -383,7 +383,7 @@ impl ProtocolSession {
                     .await?
                 {
                     let recipient_bare =
-                        format!("{}@{}", recipient.username, self.state.config.domain);
+                        format!("{}@{}", recipient.username, self.state.local_domain());
                     if self
                         .state
                         .presence_service()
@@ -427,7 +427,7 @@ impl ProtocolSession {
         if let Some(to) = root.attribute("to") {
             if let Ok(target_jid) = crate::jid::CanonicalJid::parse(to) {
                 let domain = target_jid.domainpart();
-                if domain == self.state.config.domain
+                if domain == self.state.local_domain()
                     && target_jid.localpart().is_some()
                     && self
                         .state
@@ -450,7 +450,7 @@ impl ProtocolSession {
                         Ok(Action::None)
                     };
                 }
-                if domain == self.state.config.domain && target_jid.resourcepart().is_some() {
+                if domain == self.state.local_domain() && target_jid.resourcepart().is_some() {
                     // RFC 6121 section 8.5.3.1 applies this presence-leak
                     // protection to every IQ get/set addressed to an exact
                     // full JID, not only to capability discovery.  The same
@@ -481,7 +481,7 @@ impl ProtocolSession {
                         let requester_bare = crate::jid::canonical_bare_key(requester)
                             .expect("authenticated full JIDs are canonical");
                         let same_account = requester_bare
-                            == format!("{}@{}", target_user.username, self.state.config.domain);
+                            == format!("{}@{}", target_user.username, self.state.local_domain());
                         let subscribed = self
                             .state
                             .presence_service()
@@ -519,16 +519,8 @@ impl ProtocolSession {
                     // an error loop). Check this before a server-side
                     // XEP-0115 cache can answer for a stale resource.
                     let local_resource_matches = !self.state.session_entries_for(to).is_empty();
-                    let remote_resource_matches = self
-                        .state
-                        .cluster
-                        .lookup_nodes(to)
-                        .await
-                        .is_ok_and(|nodes| {
-                            nodes
-                                .iter()
-                                .any(|node_id| node_id != &self.state.cluster.node_id)
-                        });
+                    let remote_resource_matches =
+                        self.state.personal_message_remote_resource_exists(to).await;
                     if !local_resource_matches && !remote_resource_matches {
                         return if missing_full_jid_iq_needs_error(kind) {
                             Ok(Action::Send(stanza_error(
@@ -566,21 +558,10 @@ impl ProtocolSession {
                         }
                     }
                     if !delivered {
-                        if let Ok(nodes) = self.state.cluster.lookup_nodes(to).await {
-                            for node_id in nodes {
-                                if node_id != self.state.cluster.node_id
-                                    && self
-                                        .state
-                                        .cluster
-                                        .send_to_node(&node_id, to, &rewritten, false, None)
-                                        .await
-                                        .unwrap_or(false)
-                                {
-                                    delivered = true;
-                                    break;
-                                }
-                            }
-                        }
+                        delivered = self
+                            .state
+                            .route_client_iq_to_remote_resource(to, &rewritten)
+                            .await;
                     }
                     if delivered {
                         return Ok(Action::None);
@@ -689,7 +670,7 @@ impl ProtocolSession {
         let remote_iq_domain = root.attribute("to").and_then(|to| {
             let target = crate::jid::CanonicalJid::parse(to).ok()?;
             let domain = target.domainpart();
-            (domain != self.state.config.domain
+            (domain != self.state.local_domain()
                 && domain != muc_domain
                 && domain != upload_domain
                 && domain != self.pubsub_domain()
@@ -700,7 +681,7 @@ impl ProtocolSession {
             let Some(from) = self.full_jid.as_deref() else {
                 return Ok(Action::Send(iq_error(id, "not-authorized")));
             };
-            if !self.state.config.external_route_domain_allowed(domain) {
+            if !self.state.xmpp_external_route_domain_allowed(domain) {
                 return Ok(Action::Send(iq_error(id, "remote-server-not-found")));
             }
             if !self
@@ -908,11 +889,10 @@ impl ProtocolSession {
                 }
                 let os = self
                     .state
-                    .config
-                    .xep_0092_include_os
+                    .xmpp_version_includes_os()
                     .then_some(xmpp_version_os());
                 match northstar_xep_0092::build_response_from_parts(
-                    &self.state.config.server_name,
+                    self.state.server_name(),
                     env!("CARGO_PKG_VERSION"),
                     os,
                 ) {

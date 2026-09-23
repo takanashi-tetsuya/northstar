@@ -363,6 +363,7 @@ impl ProtocolSession {
             super::pep::profile_item_event(AVATAR_METADATA, &converted.metadata.1)?;
         let audience_state = std::sync::Arc::clone(&self.state);
         let publisher_full_jid = self.full_jid.clone();
+        let quotas = self.state.pep_account_quotas();
         let outcome = match self
             .state
             .profile_service()
@@ -375,8 +376,8 @@ impl ProtocolSession {
                     avatar_hash: avatar_hash.as_deref(),
                     data_item: data,
                     metadata_item: metadata,
-                    max_nodes: self.state.config.pep_max_nodes_per_account,
-                    max_storage_bytes: self.state.config.pep_max_storage_bytes_per_account,
+                    max_nodes: quotas.max_nodes,
+                    max_storage_bytes: quotas.max_storage_bytes,
                 },
                 &move |audience: &ProfileAudienceSnapshot| {
                     ProtocolSession::prepare_profile_audience_messages(

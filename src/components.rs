@@ -1095,8 +1095,8 @@ async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
     }
     let domains = bound_domains.iter().cloned().collect::<Vec<_>>();
     let drain_limit = state
-        .config
-        .component_queue_capacity
+        .component_runtime_policy()
+        .queue_capacity
         .min(COMPONENT_OUTBOX_DRAIN_LIMIT);
     for _ in 0..drain_limit {
         // Claim only when this socket is ready to start the row. A batch claim

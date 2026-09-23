@@ -182,19 +182,11 @@ pub(crate) async fn resolve_federation_endpoints(
     if state.s2s_dane_required() {
         return resolve_dns_endpoints(state, &domain).await;
     }
-    if let Some((_, address, direct_tls)) =
-        state
-            .config
-            .federation_dns_overrides
-            .iter()
-            .find(|(candidate, _, _)| {
-                crate::jid::prepare_domainpart(candidate).is_ok_and(|candidate| candidate == domain)
-            })
-    {
-        validate_endpoint(state, *address)?;
+    if let Some((address, direct_tls)) = state.s2s_dns_override(&domain) {
+        validate_endpoint(state, address)?;
         return Ok(vec![FederationEndpoint {
-            address: *address,
-            direct_tls: *direct_tls,
+            address,
+            direct_tls,
             tls_server_name: dns_domain,
             delegated_identity: false,
             public_key_pins: Vec::new(),

@@ -15,7 +15,12 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
-use crate::config::Config;
+#[derive(Clone, Copy)]
+pub(crate) struct TestActivationPolicy<'a> {
+    pub(crate) enabled: bool,
+    pub(crate) destination: Option<&'a Path>,
+    pub(crate) nonce: Option<&'a str>,
+}
 
 #[derive(Serialize)]
 struct ReadinessRecord<'a> {
@@ -26,20 +31,18 @@ struct ReadinessRecord<'a> {
 }
 
 pub(crate) fn publish_if_enabled(
-    config: &Config,
+    policy: TestActivationPolicy<'_>,
     listeners: &BTreeMap<String, SocketAddr>,
     pid: u32,
 ) -> Result<()> {
-    if !config.test_listener_activation {
+    if !policy.enabled {
         return Ok(());
     }
-    let destination = config
-        .test_readiness_file
-        .as_deref()
+    let destination = policy
+        .destination
         .context("test activation was enabled without a readiness destination")?;
-    let nonce = config
-        .test_readiness_nonce
-        .as_deref()
+    let nonce = policy
+        .nonce
         .context("test activation was enabled without a readiness nonce")?;
     publish(destination, nonce, pid, listeners)?;
     tracing::info!(

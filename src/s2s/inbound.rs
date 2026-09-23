@@ -1881,11 +1881,9 @@ pub(crate) async fn route_inbound_presence(
         && to_jid.resourcepart().is_some()
         && kind != "subscribe"
         && state.sessions_for(&to_jid.to_string()).is_empty()
-        && state
-            .cluster
-            .lookup_nodes(&to_jid.to_string())
+        && !state
+            .s2s_subscription_target_route_exists(&to_jid.to_string())
             .await
-            .map_or(true, |nodes| nodes.is_empty())
     {
         return Ok(None);
     }
@@ -2349,19 +2347,9 @@ pub(crate) async fn route_inbound_iq(
             }
         }
         if !delivered {
-            if let Ok(nodes) = state.cluster.lookup_nodes(to).await {
-                for node_id in nodes {
-                    if node_id != state.cluster.node_id
-                        && state
-                            .cluster
-                            .send_to_node(&node_id, to, raw, false, None)
-                            .await
-                            .unwrap_or(false)
-                    {
-                        break;
-                    }
-                }
-            }
+            state
+                .route_s2s_iq_response_to_remote_resource(to, raw)
+                .await;
         }
         return Ok(None);
     }
@@ -2420,11 +2408,7 @@ pub(crate) async fn route_inbound_iq(
         // server-side handler (including the XEP-0115 cache) can answer for
         // an exact resource which is not connected on any cluster node.
         let local_resource_matches = !state.session_entries_for(to).is_empty();
-        let remote_resource_matches = state.cluster.lookup_nodes(to).await.is_ok_and(|nodes| {
-            nodes
-                .iter()
-                .any(|node_id| node_id != &state.cluster.node_id)
-        });
+        let remote_resource_matches = state.s2s_remote_recipient_route_exists(to).await;
         if !local_resource_matches && !remote_resource_matches {
             return Ok(Some(s2s_iq_error(
                 root.attribute("id").unwrap_or_default(),
@@ -2843,11 +2827,7 @@ pub(crate) async fn route_inbound_iq(
             ] {
                 payload.push_child(XmlElement::new("feature").attr("var", feature));
             }
-            if state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0199::XEP_ID)
-            {
+            if state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) {
                 payload.push_child(
                     XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE),
                 );
@@ -2935,32 +2915,9 @@ pub(crate) async fn route_inbound_iq(
                 }
             }
             if !delivered {
-                if let Ok(nodes) = state.cluster.lookup_nodes(to).await {
-                    for node_id in nodes {
-                        if node_id == state.cluster.node_id {
-                            continue;
-                        }
-                        let accepted = if bare_target {
-                            state
-                                .cluster
-                                .send_to_node_primary(&node_id, to, raw)
-                                .await
-                                .is_ok_and(|receipt| receipt.delivered)
-                        } else {
-                            state
-                                .cluster
-                                .send_to_node(&node_id, to, raw, false, None)
-                                .await
-                                .unwrap_or(false)
-                        };
-                        if accepted {
-                            delivered = true;
-                            if bare_target {
-                                break;
-                            }
-                        }
-                    }
-                }
+                delivered = state
+                    .route_s2s_iq_request_remote(to, raw, bare_target)
+                    .await;
             }
             if !delivered {
                 return Ok(Some(s2s_iq_error(id, to, from, "service-unavailable")));
@@ -3066,11 +3023,7 @@ pub(crate) async fn route_inbound_message(
     if unfiltered_privacy_candidates > 0 && !privacy_allowed {
         return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
     }
-    let remote_route_exists = state
-        .cluster
-        .lookup_nodes(to)
-        .await
-        .is_ok_and(|nodes| nodes.into_iter().any(|node| node != state.cluster.node_id));
+    let remote_route_exists = state.s2s_remote_recipient_route_exists(to).await;
     if unfiltered_privacy_candidates == 0
         && !remote_route_exists
         && state
@@ -3101,7 +3054,7 @@ pub(crate) async fn route_inbound_message(
     );
     let annotated = add_stanza_id(&authoritative_raw, &recipient_by, stable_id);
     let encrypted = is_encrypted(root);
-    let durable_content_allowed = encrypted || !state.s2s_requires_encrypted_archive();
+    let durable_content_allowed = encrypted || !state.archive_requires_encryption();
     let persistence_allowed = personal_retraction || offline_storage_permitted(root);
     let archive = if encrypted {
         if let Some(command) = personal_retraction_command.as_ref() {
@@ -3258,7 +3211,7 @@ pub(crate) async fn route_inbound_message(
             .into_iter()
             .collect::<Vec<_>>();
         let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(state.local_domain()));
-        let limits = state.s2s_offline_delivery_limits();
+        let limits = state.offline_delivery_limits();
         let delivery = DeliveryProjection {
             id: stable_id,
             recipient_id: recipient.id,
@@ -3341,55 +3294,16 @@ pub(crate) async fn route_inbound_message(
     let mut delivered = delivered_key.is_some();
 
     if deliver_all {
-        if let Ok(nodes) = state.cluster.lookup_nodes(to).await {
-            for node_id in nodes {
-                if node_id == state.cluster.node_id {
-                    continue;
-                }
-                let accepted = if let Some(delivery) = live_delivery {
-                    state
-                        .cluster
-                        .send_to_node_available_durable(&node_id, to, &annotated, delivery)
-                        .await
-                        .unwrap_or(false)
-                } else {
-                    state
-                        .cluster
-                        .send_to_node_available(&node_id, to, &annotated)
-                        .await
-                        .unwrap_or(false)
-                };
-                if accepted {
-                    delivered = true;
-                }
-            }
-        }
+        delivered |= state
+            .route_s2s_message_to_available_remote_resources(to, &annotated, live_delivery)
+            .await;
     } else if !delivered {
-        if let Ok(nodes) = state.cluster.lookup_nodes(to).await {
-            for node_id in nodes {
-                if node_id != state.cluster.node_id {
-                    let receipt = if let Some(delivery) = live_delivery {
-                        state
-                            .cluster
-                            .send_to_node_primary_durable(&node_id, to, &annotated, delivery)
-                            .await
-                            .unwrap_or_default()
-                    } else {
-                        state
-                            .cluster
-                            .send_to_node_primary(&node_id, to, &annotated)
-                            .await
-                            .unwrap_or_default()
-                    };
-                    if crate::xmpp::protocol::messaging::accepted_cluster_message_delivery(
-                        state, &node_id, to, &receipt,
-                    ) {
-                        delivered = true;
-                        delivered_key = receipt.accepted_full_jid;
-                        break;
-                    }
-                }
-            }
+        let remote = state
+            .route_s2s_message_to_remote_primary(to, &annotated, live_delivery)
+            .await;
+        if remote.delivered {
+            delivered = true;
+            delivered_key = remote.accepted_full_jid;
         }
     }
 
@@ -3470,40 +3384,12 @@ pub(crate) async fn route_inbound_message(
                 }
             }
             if !delivered {
-                if let Ok(nodes) = state.cluster.lookup_nodes(&recipient_by).await {
-                    for node_id in nodes {
-                        if node_id == state.cluster.node_id {
-                            continue;
-                        }
-                        let receipt = if let Some(delivery) = live_delivery {
-                            state
-                                .cluster
-                                .send_to_node_primary_durable(
-                                    &node_id,
-                                    &recipient_by,
-                                    &annotated,
-                                    delivery,
-                                )
-                                .await
-                                .unwrap_or_default()
-                        } else {
-                            state
-                                .cluster
-                                .send_to_node_primary(&node_id, &recipient_by, &annotated)
-                                .await
-                                .unwrap_or_default()
-                        };
-                        if crate::xmpp::protocol::messaging::accepted_cluster_message_delivery(
-                            state,
-                            &node_id,
-                            &recipient_by,
-                            &receipt,
-                        ) {
-                            delivered = true;
-                            delivered_key = receipt.accepted_full_jid;
-                            break;
-                        }
-                    }
+                let remote = state
+                    .route_s2s_message_to_remote_primary(&recipient_by, &annotated, live_delivery)
+                    .await;
+                if remote.delivered {
+                    delivered = true;
+                    delivered_key = remote.accepted_full_jid;
                 }
             }
         }

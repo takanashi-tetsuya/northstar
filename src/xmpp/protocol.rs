@@ -720,7 +720,7 @@ impl ProtocolSession {
         self.rebind_resumed_caps_observation().await;
 
         if let (Some(device_id), Some(epoch)) = (self.user_agent_id, published_epoch) {
-            let account = format!("{}@{}", user.username, self.state.config.domain);
+            let account = format!("{}@{}", user.username, self.state.local_domain());
             let current = self.registered_key.as_deref();
             for (other_key, session) in self.state.session_entries_for(&account) {
                 if Some(other_key.as_str()) != current
@@ -754,7 +754,7 @@ impl ProtocolSession {
             self.authenticated.is_some(),
             self.full_jid.is_some(),
             self.authenticated_at,
-            self.state.config.resource_bind_timeout_seconds,
+            self.state.c2s_resource_bind_timeout_seconds(),
         )
     }
 
@@ -840,8 +840,8 @@ impl ProtocolSession {
                 .map(|entry| entry.stanza.len())
                 .sum::<usize>()
                 .saturating_add(stanza.len());
-            if self.sm_unacked.len() >= self.state.config.sm_max_unacked_stanzas
-                || next_bytes > self.state.config.sm_max_unacked_bytes
+            if self.sm_unacked.len() >= self.state.sm_buffer_limits().max_unacked_stanzas
+                || next_bytes > self.state.sm_buffer_limits().max_unacked_bytes
             {
                 self.sm_resume_allowed = false;
                 anyhow::bail!("XEP-0198 unacknowledged queue capacity reached");
@@ -854,7 +854,7 @@ impl ProtocolSession {
                         .and_then(|bytes| bytes.checked_add(stanza.len()))
                 })
                 .context("XEP-0198 projected resident-size overflow")?;
-            if projected > self.state.config.sm_max_snapshot_bytes
+            if projected > self.state.sm_buffer_limits().max_snapshot_bytes
                 || self
                     .sm_capacity
                     .as_ref()
@@ -1008,7 +1008,7 @@ impl ProtocolSession {
         let snapshot_bytes = snapshot
             .resident_bytes()
             .context("XEP-0198 snapshot resident-size overflow")?;
-        if snapshot_bytes > self.state.config.sm_max_snapshot_bytes
+        if snapshot_bytes > self.state.sm_buffer_limits().max_snapshot_bytes
             || self
                 .sm_capacity
                 .as_ref()
@@ -1024,9 +1024,9 @@ impl ProtocolSession {
                 self.connection_id,
                 &snapshot,
                 self.sm_resume_timeout_seconds,
-                self.state.config.sm_live_lease_seconds,
-                self.state.config.sm_max_unacked_stanzas,
-                self.state.config.sm_max_unacked_bytes,
+                self.state.sm_session_policy().live_lease_seconds,
+                self.state.sm_buffer_limits().max_unacked_stanzas,
+                self.state.sm_buffer_limits().max_unacked_bytes,
             ),
         )
         .await
@@ -1060,11 +1060,11 @@ impl ProtocolSession {
         let to = self
             .negotiation
             .stream_from()
-            .map(|username| format!("{}@{}", username, self.state.config.domain));
+            .map(|username| format!("{}@{}", username, self.state.local_domain()));
         if self.websocket {
             let _ = self.outbound.try_send(self.features());
             XmlElement::namespaced("open", "urn:ietf:params:xml:ns:xmpp-framing")
-                .attr("from", &self.state.config.domain)
+                .attr("from", self.state.local_domain())
                 .optional_attr("to", to.as_deref())
                 .attr("id", stream_id())
                 .attr("version", "1.0")
@@ -1072,7 +1072,7 @@ impl ProtocolSession {
                 .finish()
         } else {
             let mut opening = XmlElement::new("stream:stream")
-                .attr("from", &self.state.config.domain)
+                .attr("from", self.state.local_domain())
                 .optional_attr("to", to.as_deref())
                 .attr("id", stream_id())
                 .attr("version", "1.0")
@@ -1103,17 +1103,13 @@ impl ProtocolSession {
             if !self.sm_enabled
                 && self
                     .state
-                    .config
-                    .xmpp_extensions
-                    .enabled(northstar_xep_0198::XEP_ID)
+                    .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
             {
                 features.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
             }
             if self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0352::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
             {
                 features.push_child(XmlElement::namespaced("csi", northstar_xep_0352::NAMESPACE));
             }
@@ -1153,7 +1149,7 @@ impl ProtocolSession {
             mechanisms.push_child(XmlElement::new("mechanism").text("SCRAM-SHA-256-PLUS"));
         }
         mechanisms.push_child(XmlElement::new("mechanism").text("SCRAM-SHA-256"));
-        if self.state.config.scram_sha1_enabled {
+        if self.state.c2s_scram_sha1_enabled() {
             if self.channel_bindings.is_some() {
                 mechanisms.push_child(XmlElement::new("mechanism").text("SCRAM-SHA-1-PLUS"));
             }
@@ -1198,18 +1194,18 @@ impl ProtocolSession {
                 crate::auth::ExternalMechanism::new(self.client_certificate_identities.clone()),
             ),
             "PLAIN" => Box::new(crate::auth::PlainMechanism::new(
-                self.state.config.domain.clone(),
+                self.state.local_domain().to_owned(),
             )),
             "SCRAM-SHA-256" => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         crate::auth::ScramSha256Mechanism::new_with_channel_binding_support(
-                            self.state.config.domain.clone(),
+                            self.state.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(crate::auth::ScramSha256Mechanism::new(
-                        self.state.config.domain.clone(),
+                        self.state.local_domain().to_owned(),
                     ))
                 }
             }
@@ -1221,24 +1217,24 @@ impl ProtocolSession {
                     )));
                 };
                 Box::new(crate::auth::ScramSha256Mechanism::new_plus(
-                    self.state.config.domain.clone(),
+                    self.state.local_domain().to_owned(),
                     bindings,
                 ))
             }
-            "SCRAM-SHA-1" if self.state.config.scram_sha1_enabled => {
+            "SCRAM-SHA-1" if self.state.c2s_scram_sha1_enabled() => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         crate::auth::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
-                            self.state.config.domain.clone(),
+                            self.state.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(crate::auth::ScramSha256Mechanism::new_sha1(
-                        self.state.config.domain.clone(),
+                        self.state.local_domain().to_owned(),
                     ))
                 }
             }
-            "SCRAM-SHA-1-PLUS" if self.state.config.scram_sha1_enabled => {
+            "SCRAM-SHA-1-PLUS" if self.state.c2s_scram_sha1_enabled() => {
                 let Some(bindings) = self.channel_bindings.clone() else {
                     return Ok(Action::Send(failure(
                         "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -1246,7 +1242,7 @@ impl ProtocolSession {
                     )));
                 };
                 Box::new(crate::auth::ScramSha256Mechanism::new_sha1_plus(
-                    self.state.config.domain.clone(),
+                    self.state.local_domain().to_owned(),
                     bindings,
                 ))
             }

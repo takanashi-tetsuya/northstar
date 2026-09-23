@@ -28,6 +28,7 @@ pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migratio
 pub(crate) mod abuse_actor_state_repository;
 pub(crate) mod abuse_challenge_issuance_repository;
 pub mod abuse_keys;
+pub(crate) mod abuse_transaction_repository;
 pub(crate) mod abuse_verification_repository;
 pub mod account_deletion;
 pub mod account_repository;

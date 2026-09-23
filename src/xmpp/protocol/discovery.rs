@@ -147,9 +147,7 @@ impl ProtocolSession {
         if is_pubsub_service
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0060::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0060::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
@@ -160,9 +158,7 @@ impl ProtocolSession {
         if target.domainpart() == muc_domain
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0045::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
@@ -236,9 +232,7 @@ impl ProtocolSession {
                     || channel.administrator_retraction_rights != "nobody",
                 channel.allow_private_messages,
                 self.state
-                    .config
-                    .xmpp_extensions
-                    .enabled(northstar_xep_0313::XEP_ID),
+                    .xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
                 &mirror,
             )?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
@@ -343,9 +337,7 @@ impl ProtocolSession {
             }
             if self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0199::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
             {
                 query.push_child(disco_feature(northstar_xep_0199::NAMESPACE));
             }
@@ -434,9 +426,7 @@ impl ProtocolSession {
             }
             if self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0199::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
             {
                 query.push_child(disco_feature(
                     "http://jabber.org/protocol/muc#self-ping-optimization",
@@ -457,9 +447,7 @@ impl ProtocolSession {
             }
             if self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0313::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0313::XEP_ID)
             {
                 query.push_child(disco_feature(northstar_xep_0313::DISCO_FEATURE_MAM));
                 query.push_child(disco_feature(
@@ -570,17 +558,13 @@ impl ProtocolSession {
         if is_account
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0060::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0060::XEP_ID)
         {
             features.retain(|feature| !feature.starts_with("http://jabber.org/protocol/pubsub"));
         }
         if !self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0045::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             features.retain(|feature| *feature != northstar_xep_0045::XMLNS_MUC);
         }
@@ -590,9 +574,7 @@ impl ProtocolSession {
         if is_account
             && self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0313::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0313::XEP_ID)
         {
             features.push(northstar_xep_0313::DISCO_FEATURE_MAM);
             features.push(northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED);
@@ -600,9 +582,7 @@ impl ProtocolSession {
         if is_account
             && self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0357::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0357::XEP_ID)
         {
             features.push(northstar_xep_0357::DISCO_FEATURE_PUSH);
         }
@@ -618,14 +598,12 @@ impl ProtocolSession {
             if super::commands::available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");
             }
-            features.extend(self.state.config.xmpp_extensions.server_disco_features());
+            features.extend(self.state.server_disco_features());
         }
         if is_server
             && self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0215::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0215::XEP_ID)
             && (self.state.config.stun_service.is_some()
                 || self.state.config.turn_service.is_some())
         {
@@ -685,9 +663,7 @@ impl ProtocolSession {
         if target.domainpart() == muc_domain
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0045::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }

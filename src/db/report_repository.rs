@@ -55,17 +55,16 @@ impl PostgresReportRepository {
         let rejection = match acquired {
             db::IdempotencyAcquire::Acquired(lease) => {
                 if !lease.guard_verified {
-                    match self
-                        .abuse
-                        .verify_or_allow_in_tx_v2(
-                            &mut tx,
-                            action,
-                            admission.subject,
-                            admission.actors,
-                            admission.proof,
-                            admission.intent,
-                        )
-                        .await?
+                    match db::abuse_transaction_repository::verify_in_tx(
+                        &mut tx,
+                        &self.abuse,
+                        action,
+                        admission.subject,
+                        admission.actors,
+                        admission.proof,
+                        Some(admission.intent),
+                    )
+                    .await?
                     {
                         TransactionalGuardOutcome::Allowed => {
                             anyhow::ensure!(

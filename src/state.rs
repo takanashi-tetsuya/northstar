@@ -1722,7 +1722,7 @@ impl<'a> From<&'a MucOccupant> for LocalMucOccupantIdentity<'a> {
     }
 }
 
-fn remove_local_muc_occupant_exact_from(
+pub(crate) fn remove_local_muc_occupant_exact_from(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
 ) -> Option<MucOccupant> {
@@ -1742,6 +1742,106 @@ fn remove_local_muc_occupant_exact_from(
                 )
         })
         .map(|(_, occupant)| occupant)
+}
+
+fn with_local_muc_occupant_exact<R>(
+    occupants: &DashMap<String, MucOccupant>,
+    identity: LocalMucOccupantIdentity<'_>,
+    update: impl FnOnce(&mut MucOccupant) -> R,
+) -> Option<R> {
+    if identity.connection_id.is_nil() || identity.cluster_epoch.is_nil() {
+        return None;
+    }
+    let room_jid = crate::jid::canonicalize_bare(identity.room_jid).ok()?;
+    let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, identity.nick);
+    let mut occupant = occupants.get_mut(&key)?;
+    if occupant.room_jid != room_jid
+        || !muc_departure_identity_matches(
+            &occupant,
+            identity.full_jid,
+            identity.connection_id,
+            identity.cluster_epoch,
+        )
+    {
+        return None;
+    }
+    Some(update(&mut occupant))
+}
+
+fn set_local_muc_affiliation_exact_in(
+    occupants: &DashMap<String, MucOccupant>,
+    identity: LocalMucOccupantIdentity<'_>,
+    affiliation: &str,
+    moderated: bool,
+    only_if_none: bool,
+    expected_affiliation: Option<&str>,
+) -> Option<MucOccupant> {
+    with_local_muc_occupant_exact(occupants, identity, |current| {
+        if expected_affiliation.is_some_and(|expected| current.affiliation != expected) {
+            return None;
+        }
+        if !only_if_none || current.affiliation == "none" {
+            current.affiliation = affiliation.to_owned();
+            current.role = if matches!(current.affiliation.as_str(), "owner" | "admin") {
+                "moderator"
+            } else if moderated && current.affiliation == "none" {
+                "visitor"
+            } else {
+                "participant"
+            }
+            .to_owned();
+        }
+        Some(current.clone())
+    })
+    .flatten()
+}
+
+fn set_local_muc_role_exact_in(
+    occupants: &DashMap<String, MucOccupant>,
+    identity: LocalMucOccupantIdentity<'_>,
+    expected_role: &str,
+    role: &str,
+    non_anonymous: Option<bool>,
+) -> Option<MucOccupant> {
+    with_local_muc_occupant_exact(occupants, identity, |current| {
+        if current.role != expected_role {
+            return None;
+        }
+        current.role = role.to_owned();
+        if let Some(non_anonymous) = non_anonymous {
+            current.room_non_anonymous = non_anonymous;
+        }
+        Some(current.clone())
+    })
+    .flatten()
+}
+
+fn refresh_local_muc_policy_exact_in(
+    occupants: &DashMap<String, MucOccupant>,
+    identity: LocalMucOccupantIdentity<'_>,
+    moderated: Option<bool>,
+    non_anonymous: Option<bool>,
+) -> Option<(MucOccupant, bool)> {
+    with_local_muc_occupant_exact(occupants, identity, |current| {
+        let before_role = current.role.clone();
+        let before_non_anonymous = current.room_non_anonymous;
+        if let Some(moderated) = moderated {
+            current.role = if matches!(current.affiliation.as_str(), "owner" | "admin") {
+                "moderator"
+            } else if moderated && current.affiliation == "none" {
+                "visitor"
+            } else {
+                "participant"
+            }
+            .to_owned();
+        }
+        if let Some(non_anonymous) = non_anonymous {
+            current.room_non_anonymous = non_anonymous;
+        }
+        let changed =
+            current.role != before_role || current.room_non_anonymous != before_non_anonymous;
+        (current.clone(), changed)
+    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -2614,6 +2714,23 @@ pub(crate) struct S2sOfflineDeliveryLimits {
     pub(crate) ttl_days: i64,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SmBufferLimits {
+    pub(crate) max_unacked_stanzas: usize,
+    pub(crate) max_unacked_bytes: usize,
+    pub(crate) max_snapshot_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SmSessionPolicy {
+    pub(crate) require_same_device: bool,
+    pub(crate) resume_timeout_seconds: u64,
+    pub(crate) live_lease_seconds: u64,
+    pub(crate) claim_lease_seconds: u64,
+    pub(crate) max_per_account: usize,
+    pub(crate) max_global: usize,
+}
+
 pub struct AppState {
     pub config: Config,
     pool: PgPool,
@@ -3240,6 +3357,59 @@ impl AppState {
             northstar_xep_0199::NAMESPACE,
             "ping",
         )
+    }
+
+    pub(crate) fn xmpp_route_enabled(
+        &self,
+        stanza: northstar_xep_core::StanzaKind,
+        namespace: &str,
+        local_name: &str,
+    ) -> bool {
+        self.config
+            .xmpp_extensions
+            .route_enabled(stanza, namespace, local_name)
+    }
+
+    pub(crate) fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
+        self.config.xmpp_extensions.enabled(id)
+    }
+
+    pub(crate) fn server_disco_features(&self) -> Vec<&'static str> {
+        self.config
+            .xmpp_extensions
+            .server_disco_features()
+            .collect()
+    }
+
+    pub(crate) fn sm_buffer_limits(&self) -> SmBufferLimits {
+        SmBufferLimits {
+            max_unacked_stanzas: self.config.sm_max_unacked_stanzas,
+            max_unacked_bytes: self.config.sm_max_unacked_bytes,
+            max_snapshot_bytes: self.config.sm_max_snapshot_bytes,
+        }
+    }
+
+    pub(crate) fn sm_session_policy(&self) -> SmSessionPolicy {
+        SmSessionPolicy {
+            require_same_device: self.config.sm_require_same_device,
+            resume_timeout_seconds: self.config.sm_resume_timeout_seconds,
+            live_lease_seconds: self.config.sm_live_lease_seconds,
+            claim_lease_seconds: self.config.sm_claim_lease_seconds,
+            max_per_account: self.config.max_sessions_per_account,
+            max_global: self.config.sm_max_resumable_sessions,
+        }
+    }
+
+    pub(crate) fn sm_ip_binding(&self) -> &str {
+        &self.config.sm_ip_binding
+    }
+
+    pub(crate) fn c2s_resource_bind_timeout_seconds(&self) -> u64 {
+        self.config.resource_bind_timeout_seconds
+    }
+
+    pub(crate) fn c2s_scram_sha1_enabled(&self) -> bool {
+        self.config.scram_sha1_enabled
     }
 
     pub(crate) fn validate_routed_message(
@@ -5573,6 +5743,15 @@ impl AppState {
         &self.operation_muc_destroy_service
     }
 
+    pub(crate) async fn wake_committed_muc_operation(
+        &self,
+        operation_id: uuid::Uuid,
+    ) -> anyhow::Result<()> {
+        self.muc_service()
+            .wake_committed_operation(&self.cluster, operation_id)
+            .await
+    }
+
     pub(crate) fn locked_muc_expiry_service(
         &self,
     ) -> &crate::services::locked_muc_expiry::LockedMucExpiryService<
@@ -6486,6 +6665,54 @@ impl AppState {
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
         remove_local_muc_occupant_exact_from(&self.muc_occupants, identity)
+    }
+
+    /// Apply a registration or admin affiliation change to the same live
+    /// occupancy that was authorized. The returned snapshot holds no map lock.
+    pub(crate) fn set_local_muc_affiliation_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        affiliation: &str,
+        moderated: bool,
+        only_if_none: bool,
+        expected_affiliation: Option<&str>,
+    ) -> Option<MucOccupant> {
+        set_local_muc_affiliation_exact_in(
+            &self.muc_occupants,
+            identity,
+            affiliation,
+            moderated,
+            only_if_none,
+            expected_affiliation,
+        )
+    }
+
+    /// Change only the role and optional room visibility of an exact occupant.
+    pub(crate) fn set_local_muc_role_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        expected_role: &str,
+        role: &str,
+        non_anonymous: Option<bool>,
+    ) -> Option<MucOccupant> {
+        set_local_muc_role_exact_in(
+            &self.muc_occupants,
+            identity,
+            expected_role,
+            role,
+            non_anonymous,
+        )
+    }
+
+    /// Recompute policy fields from the current affiliation, preserving
+    /// transport, presence payload and any other concurrently refreshed data.
+    pub(crate) fn refresh_local_muc_policy_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        moderated: Option<bool>,
+        non_anonymous: Option<bool>,
+    ) -> Option<(MucOccupant, bool)> {
+        refresh_local_muc_policy_exact_in(&self.muc_occupants, identity, moderated, non_anonymous)
     }
 
     /// Revoke the exact live protocol actor membership represented by an
@@ -8948,8 +9175,9 @@ mod session_key_tests {
         encode_api_control_entropy, ephemeral_api_control_secret, federation_rule_matches,
         insert_restored_muc_occupant, muc_actor_identity_matches, muc_departure_identity_matches,
         muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-        remove_local_muc_occupant_exact_from, runtime_control_startup_retry_delay,
-        seal_suspended_muc_buffer, service_control_applies, session_lookup,
+        refresh_local_muc_policy_exact_in, remove_local_muc_occupant_exact_from,
+        runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
+        session_lookup, set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
         snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
         transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
@@ -9915,6 +10143,93 @@ mod session_key_tests {
         .is_none());
         assert!(remove_local_muc_occupant_exact_from(&occupants, exact).is_some());
         assert!(!occupants.contains_key(&key));
+    }
+
+    #[test]
+    fn exact_muc_profile_updates_reject_a_reused_nickname() {
+        let old = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let mut replacement =
+            test_muc_occupant(&old.full_jid, uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        replacement.affiliation = "none".to_owned();
+        replacement.role = "visitor".to_owned();
+        let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+        let occupants = DashMap::new();
+        occupants.insert(key.clone(), replacement.clone());
+
+        let stale = LocalMucOccupantIdentity::from(&old);
+        assert!(
+            set_local_muc_affiliation_exact_in(&occupants, stale, "owner", true, false, None,)
+                .is_none()
+        );
+        assert!(
+            set_local_muc_role_exact_in(&occupants, stale, "visitor", "participant", None)
+                .is_none()
+        );
+        assert!(
+            refresh_local_muc_policy_exact_in(&occupants, stale, Some(false), Some(true)).is_none()
+        );
+        let current = occupants.get(&key).unwrap();
+        assert_eq!(current.connection_id, replacement.connection_id);
+        assert_eq!(current.affiliation, "none");
+        assert_eq!(current.role, "visitor");
+    }
+
+    #[test]
+    fn exact_muc_updates_preserve_registration_and_presence_fields() {
+        let mut occupant = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        occupant.affiliation = "none".to_owned();
+        occupant.role = "visitor".to_owned();
+        occupant.payload = "<show>away</show>".to_owned();
+        let suspended = Arc::new(SuspendedMucEndpoint::new(uuid::Uuid::new_v4()));
+        occupant.endpoint = MucOccupantEndpoint::Suspended(Arc::clone(&suspended));
+        let key = crate::xmpp::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
+        let occupants = DashMap::new();
+        occupants.insert(key.clone(), occupant.clone());
+        let identity = LocalMucOccupantIdentity::from(&occupant);
+
+        let unchanged = set_local_muc_affiliation_exact_in(
+            &occupants,
+            identity,
+            "member",
+            true,
+            true,
+            Some("member"),
+        );
+        assert!(
+            unchanged.is_none(),
+            "the expected affiliation is an ABA guard"
+        );
+        let registered =
+            set_local_muc_affiliation_exact_in(&occupants, identity, "member", true, true, None)
+                .unwrap();
+        assert_eq!(registered.affiliation, "member");
+        assert_eq!(registered.role, "participant");
+        let still_registered =
+            set_local_muc_affiliation_exact_in(&occupants, identity, "owner", true, true, None)
+                .unwrap();
+        assert_eq!(still_registered.affiliation, "member");
+        assert_eq!(still_registered.role, "participant");
+        let (policy, changed) =
+            refresh_local_muc_policy_exact_in(&occupants, identity, Some(false), Some(false))
+                .unwrap();
+        assert!(changed);
+        assert_eq!(policy.payload, "<show>away</show>");
+        assert!(
+            matches!(policy.endpoint, MucOccupantEndpoint::Suspended(ref endpoint) if Arc::ptr_eq(endpoint, &suspended))
+        );
+        assert!(!policy.room_non_anonymous);
+        assert!(
+            set_local_muc_role_exact_in(&occupants, identity, "visitor", "moderator", None)
+                .is_none()
+        );
     }
 
     #[test]

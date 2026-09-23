@@ -2255,6 +2255,9 @@ if (!/\.wake_committed_operation\s*\(\s*&self\.state\.cluster\s*,/.test(mucProdu
 if (/\.wake_committed_muc_operation\s*\(\s*&self\.pool\b/.test(state)) {
   throw new Error('AppState runtime paths bypass MucService for committed MUC wakes');
 }
+if (!/pub\(crate\) async fn wake_committed_muc_operation\s*\([\s\S]*?\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&self\.cluster\s*,\s*operation_id\s*\)/.test(state)) {
+  throw new Error('AppState committed MUC wake must delegate to MucService with cluster authority');
+}
 const operationRuntimeSource = productionWithoutCfgTestModules(
   read('src/operation_runtime.rs'),
   'operation_runtime.rs production',
@@ -2263,12 +2266,11 @@ if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation
     || !operationRuntimeSource.includes('.claim_parent_with_targets(')) {
   throw new Error('administrator operation worker must keep its initial claim and target writes behind the journal service');
 }
-if (/\.wake_committed_muc_operation\s*\(/.test(operationRuntimeSource)
-    || /\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSource)) {
+if (/\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSource)) {
   throw new Error('operation_runtime.rs bypasses MucService for committed MUC wakes');
 }
-if (!/\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&state\.cluster\s*,/.test(operationRuntimeSource)) {
-  throw new Error('operation_runtime.rs no longer routes committed MUC wakes through MucService');
+if (!/state\.wake_committed_muc_operation\s*\(\s*operation\.id\s*\)/.test(operationRuntimeSource)) {
+  throw new Error('operation_runtime.rs no longer routes committed MUC wakes through the narrow state operation');
 }
 const mucServiceSource = read('src/services/muc.rs');
 const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucService');

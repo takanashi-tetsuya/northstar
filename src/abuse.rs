@@ -914,6 +914,10 @@ pub struct AbuseGuard {
 }
 
 impl AbuseGuard {
+    pub(crate) fn persistent_storage_enabled(&self) -> bool {
+        self.pool.is_some()
+    }
+
     pub fn new(config: AbuseConfig) -> Self {
         Self {
             config,
@@ -1688,58 +1692,6 @@ impl AbuseGuard {
         .await
     }
 
-    /// Verify and advance a persistent anti-abuse step inside the caller's
-    /// transaction. This is required when consuming a one-use PoW challenge
-    /// protects an idempotent mutation: challenge deletion, the durable guard
-    /// marker, business rows, audit, and response replay must commit or roll
-    /// back together.
-    #[cfg(test)]
-    pub async fn verify_or_allow_in_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        action: AbuseAction,
-        subject: &str,
-        actors: &[String],
-        proof: Option<&PowProof>,
-    ) -> anyhow::Result<TransactionalGuardOutcome> {
-        self.verify_or_allow_in_tx_bound(tx, action, subject, actors, proof, None)
-            .await
-    }
-
-    pub async fn verify_or_allow_in_tx_v2(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        action: AbuseAction,
-        subject: &str,
-        actors: &[String],
-        proof: Option<&PowProof>,
-        intent: &PowIntent,
-    ) -> anyhow::Result<TransactionalGuardOutcome> {
-        self.verify_or_allow_in_tx_bound(tx, action, subject, actors, proof, Some(intent))
-            .await
-    }
-
-    async fn verify_or_allow_in_tx_bound(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        action: AbuseAction,
-        subject: &str,
-        actors: &[String],
-        proof: Option<&PowProof>,
-        intent: Option<&PowIntent>,
-    ) -> anyhow::Result<TransactionalGuardOutcome> {
-        let result = if self.pool.is_some() {
-            self.verify_persistent_in_tx_bound(tx, action, subject, actors, proof, intent)
-                .await
-        } else {
-            Ok(self.verify_memory_bound(action, subject, actors, proof, intent))
-        }?;
-        Ok(match result {
-            Ok(_) => TransactionalGuardOutcome::Allowed,
-            Err(error) => TransactionalGuardOutcome::DeniedNeedsCommit(error),
-        })
-    }
-
     #[cfg(test)]
     fn verify_memory(
         &self,
@@ -1890,28 +1842,6 @@ impl AbuseGuard {
         }
     }
 
-    /// Read the persistent requirement while holding the caller's transaction.
-    /// Login uses this to decide whether a proof is necessary and to persist
-    /// cooldown decay under the same lease lock as proof consumption. A
-    /// backend error aborts the transaction and therefore never becomes an
-    /// accidental allow.
-    pub async fn current_requirement_in_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        action: AbuseAction,
-        actors: &[String],
-    ) -> anyhow::Result<WorkRequirement> {
-        anyhow::ensure!(
-            self.pool.is_some(),
-            "transactional abuse decisions require persistent storage"
-        );
-        let keys = self.persistent_actor_state_keys(action, actors);
-        crate::db::abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
-            self.current_requirement_decision(action, actors, states, now)
-        })
-        .await
-    }
-
     pub(crate) fn current_requirement_decision(
         &self,
         action: AbuseAction,
@@ -1925,6 +1855,18 @@ impl AbuseGuard {
         requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
     }
 
+    pub(crate) fn record_failure_decision(
+        &self,
+        action: AbuseAction,
+        actors: &[String],
+        states: &mut [DbActorState],
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
+        let requirement = self.current_requirement_decision(action, actors, states, now);
+        record_db_states(states, &shared_ip_keys, now, &requirement);
+    }
+
     pub async fn record_failure(
         &self,
         action: AbuseAction,
@@ -1936,31 +1878,6 @@ impl AbuseGuard {
             self.record_failure_memory(action, actors);
             Ok(())
         }
-    }
-
-    /// Advance a failed-operation abuse step in the caller's transaction.
-    /// REST mutations use this so an invalid credential, its idempotent error
-    /// response, and the increasing penalty either all commit or all retry.
-    pub async fn record_failure_in_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        action: AbuseAction,
-        actors: &[String],
-    ) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.pool.is_some(),
-            "transactional abuse decisions require persistent storage"
-        );
-        let keys = self.persistent_actor_state_keys(action, actors);
-        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        crate::db::abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
-            decay_db_states(states, now, &self.config);
-            self.merge_previous_actor_states(action, actors, states);
-            let requirement =
-                requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
-            record_db_states(states, &shared_ip_keys, now, &requirement);
-        })
-        .await
     }
 
     fn record_failure_memory(&self, action: AbuseAction, actors: &[String]) {
@@ -2181,13 +2098,8 @@ impl AbuseGuard {
         let pool = self.pool.as_ref().expect("persistent abuse pool");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
         let keys = self.persistent_actor_state_keys(action, actors);
-        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
         crate::db::abuse_actor_state_repository::record_failure(pool, &keys, |states, now| {
-            decay_db_states(states, now, &self.config);
-            self.merge_previous_actor_states(action, actors, states);
-            let requirement =
-                requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
-            record_db_states(states, &shared_ip_keys, now, &requirement);
+            self.record_failure_decision(action, actors, states, now);
         })
         .await
     }
@@ -2205,38 +2117,6 @@ impl AbuseGuard {
         let keys = self.persistent_actor_state_keys(action, actors);
         crate::db::abuse_verification_repository::verify(
             pool,
-            &keys,
-            proof.map(|proof| proof.challenge_id),
-            |states, now, challenge| {
-                self.decide_persistent_verification(
-                    PersistentVerificationInput {
-                        action,
-                        subject,
-                        actors,
-                        proof,
-                        intent,
-                    },
-                    states,
-                    now,
-                    challenge,
-                )
-            },
-        )
-        .await
-    }
-
-    async fn verify_persistent_in_tx_bound(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        action: AbuseAction,
-        subject: &str,
-        actors: &[String],
-        proof: Option<&PowProof>,
-        intent: Option<&PowIntent>,
-    ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
-        let keys = self.persistent_actor_state_keys(action, actors);
-        crate::db::abuse_verification_repository::verify_in_tx(
-            tx,
             &keys,
             proof.map(|proof| proof.challenge_id),
             |states, now, challenge| {
@@ -3704,17 +3584,17 @@ mod tests {
         )
         .await;
         let mut mismatch_tx = pool.begin().await.unwrap();
-        let mismatch_result = guard
-            .verify_or_allow_in_tx_v2(
-                &mut mismatch_tx,
-                AbuseAction::Report,
-                &subject,
-                &actors,
-                Some(&solve(&mismatch)),
-                &changed,
-            )
-            .await
-            .unwrap();
+        let mismatch_result = crate::db::abuse_transaction_repository::verify_in_tx(
+            &mut mismatch_tx,
+            &guard,
+            AbuseAction::Report,
+            &subject,
+            &actors,
+            Some(&solve(&mismatch)),
+            Some(&changed),
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             mismatch_result,
             TransactionalGuardOutcome::DeniedNeedsCommit(_)
@@ -3739,17 +3619,17 @@ mod tests {
         .await;
         let mut rollback_tx = pool.begin().await.unwrap();
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx_v2(
-                    &mut rollback_tx,
-                    AbuseAction::Report,
-                    &subject,
-                    &actors,
-                    Some(&proof),
-                    &expected,
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut rollback_tx,
+                &guard,
+                AbuseAction::Report,
+                &subject,
+                &actors,
+                Some(&proof),
+                Some(&expected),
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         rollback_tx.rollback().await.unwrap();
@@ -3763,17 +3643,17 @@ mod tests {
 
         let mut commit_tx = pool.begin().await.unwrap();
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx_v2(
-                    &mut commit_tx,
-                    AbuseAction::Report,
-                    &subject,
-                    &actors,
-                    Some(&proof),
-                    &expected,
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut commit_tx,
+                &guard,
+                AbuseAction::Report,
+                &subject,
+                &actors,
+                Some(&proof),
+                Some(&expected),
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         commit_tx.commit().await.unwrap();

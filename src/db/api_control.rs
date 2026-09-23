@@ -1452,10 +1452,14 @@ mod tests {
         assert!(resume_idempotency_lease_in_tx(&mut failed_tx, &lease, 30)
             .await
             .unwrap());
-        guard
-            .record_failure_in_tx(&mut failed_tx, AbuseAction::Login, &actors)
-            .await
-            .unwrap();
+        crate::db::abuse_transaction_repository::record_failure_in_tx(
+            &mut failed_tx,
+            &guard,
+            AbuseAction::Login,
+            &actors,
+        )
+        .await
+        .unwrap();
         assert!(
             mark_idempotency_guard_verified_in_tx(&mut failed_tx, &lease)
                 .await
@@ -1496,10 +1500,14 @@ mod tests {
         assert!(resume_idempotency_lease_in_tx(&mut retry_tx, &lease, 30)
             .await
             .unwrap());
-        guard
-            .record_failure_in_tx(&mut retry_tx, AbuseAction::Login, &actors)
-            .await
-            .unwrap();
+        crate::db::abuse_transaction_repository::record_failure_in_tx(
+            &mut retry_tx,
+            &guard,
+            AbuseAction::Login,
+            &actors,
+        )
+        .await
+        .unwrap();
         assert!(mark_idempotency_guard_verified_in_tx(&mut retry_tx, &lease)
             .await
             .unwrap());

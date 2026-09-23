@@ -301,17 +301,16 @@ impl AccountRepository for PostgresAccountRepository {
             transaction.rollback().await?;
             return Ok(RegistrationGuardOutcome::LeaseLost);
         }
-        let outcome = self
-            .abuse
-            .verify_or_allow_in_tx_v2(
-                &mut transaction,
-                crate::abuse::AbuseAction::Registration,
-                request.subject,
-                request.actors,
-                request.proof,
-                request.intent,
-            )
-            .await?;
+        let outcome = db::abuse_transaction_repository::verify_in_tx(
+            &mut transaction,
+            &self.abuse,
+            crate::abuse::AbuseAction::Registration,
+            request.subject,
+            request.actors,
+            request.proof,
+            Some(request.intent),
+        )
+        .await?;
         match outcome {
             crate::abuse::TransactionalGuardOutcome::Allowed => {
                 if !db::api_control::mark_idempotency_guard_verified_fence_in_tx(
@@ -355,18 +354,17 @@ impl AccountRepository for PostgresAccountRepository {
             .begin()
             .await
             .context("could not begin registration admission")?;
-        let admission_outcome = self
-            .abuse
-            .verify_or_allow_in_tx_v2(
-                &mut transaction,
-                crate::abuse::AbuseAction::Registration,
-                request.subject,
-                request.actors,
-                request.proof,
-                request.intent,
-            )
-            .await
-            .context("registration anti-abuse admission failed")?;
+        let admission_outcome = db::abuse_transaction_repository::verify_in_tx(
+            &mut transaction,
+            &self.abuse,
+            crate::abuse::AbuseAction::Registration,
+            request.subject,
+            request.actors,
+            request.proof,
+            Some(request.intent),
+        )
+        .await
+        .context("registration anti-abuse admission failed")?;
         match admission_outcome {
             crate::abuse::TransactionalGuardOutcome::Allowed => {}
             crate::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {

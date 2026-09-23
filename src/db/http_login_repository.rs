@@ -59,9 +59,13 @@ impl PostgresHttpLoginRepository {
         attempt_already_recorded: bool,
     ) -> Result<HttpLoginOutcome> {
         if !attempt_already_recorded {
-            self.abuse
-                .record_failure_in_tx(&mut tx, AbuseAction::Login, actors)
-                .await?;
+            db::abuse_transaction_repository::record_failure_in_tx(
+                &mut tx,
+                &self.abuse,
+                AbuseAction::Login,
+                actors,
+            )
+            .await?;
         }
         if !db::mark_idempotency_guard_verified_in_tx(&mut tx, lease).await? {
             return Ok(HttpLoginOutcome::LeaseLost);
@@ -166,10 +170,13 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                 guard_tx.rollback().await?;
                 return Ok(Outcome::LeaseLost);
             }
-            let requirement = self
-                .abuse
-                .current_requirement_in_tx(&mut guard_tx, AbuseAction::Login, request.actors)
-                .await?;
+            let requirement = db::abuse_transaction_repository::current_requirement_in_tx(
+                &mut guard_tx,
+                &self.abuse,
+                AbuseAction::Login,
+                request.actors,
+            )
+            .await?;
             if requirement.work_factor > 1 || requirement.retry_after_seconds > 0 {
                 if request.proof.is_none() {
                     if !db::abandon_idempotency_lease_in_tx(&mut guard_tx, lease).await? {
@@ -181,17 +188,16 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                         requirement,
                     )));
                 }
-                match self
-                    .abuse
-                    .verify_or_allow_in_tx_v2(
-                        &mut guard_tx,
-                        AbuseAction::Login,
-                        request.subject,
-                        request.actors,
-                        request.proof,
-                        request.intent,
-                    )
-                    .await?
+                match db::abuse_transaction_repository::verify_in_tx(
+                    &mut guard_tx,
+                    &self.abuse,
+                    AbuseAction::Login,
+                    request.subject,
+                    request.actors,
+                    request.proof,
+                    Some(request.intent),
+                )
+                .await?
                 {
                     TransactionalGuardOutcome::Allowed => {
                         proof_recorded_attempt = true;

@@ -123,7 +123,7 @@ impl ProtocolSession {
         let Some(from) = self.full_jid.as_deref() else {
             return Ok(message_error(root, "cancel", "not-authorized"));
         };
-        if let Err(condition) = validate_routed_message(root, &self.state.config.xmpp_extensions) {
+        if let Err(condition) = self.state.validate_routed_message(root) {
             // RFC 6120 section 8.3.1: never answer an error stanza with a
             // second stanza error. This validation boundary runs before every
             // local archive, Carbon and offline side effect.
@@ -1651,9 +1651,7 @@ impl ProtocolSession {
     ) {
         if !self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0280::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0280::XEP_ID)
         {
             return;
         }
@@ -1893,11 +1891,7 @@ pub(crate) async fn send_received_carbons_for_state(
     delivered: Option<&str>,
     forwarded: &str,
 ) {
-    if !state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0280::XEP_ID)
-    {
+    if !state.xmpp_extension_enabled(northstar_xep_0280::XEP_ID) {
         return;
     }
     let Some(peer) = carbon_forwarded_sender(forwarded) else {

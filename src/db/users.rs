@@ -499,16 +499,16 @@ async fn create_user_with_invitation_guarded_in_tx_bound(
     request_id: Option<Uuid>,
 ) -> Result<GuardedRegistrationOutcome> {
     if !guard_already_verified {
-        let decision = abuse
-            .verify_or_allow_in_tx_v2(
-                tx,
-                AbuseAction::Registration,
-                subject,
-                actors,
-                proof,
-                intent,
-            )
-            .await?;
+        let decision = crate::db::abuse_transaction_repository::verify_in_tx(
+            tx,
+            abuse,
+            AbuseAction::Registration,
+            subject,
+            actors,
+            proof,
+            Some(intent),
+        )
+        .await?;
         match decision {
             TransactionalGuardOutcome::Allowed => {}
             TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
@@ -1774,16 +1774,16 @@ pub async fn change_password_guarded_v2(
         .map_err(anyhow::Error::from)
         .context("password-change work admission failed")?;
     let mut tx = pool.begin().await?;
-    match abuse
-        .verify_or_allow_in_tx_v2(
-            &mut tx,
-            AbuseAction::PasswordChange,
-            subject,
-            actors,
-            proof,
-            intent,
-        )
-        .await?
+    match crate::db::abuse_transaction_repository::verify_in_tx(
+        &mut tx,
+        abuse,
+        AbuseAction::PasswordChange,
+        subject,
+        actors,
+        proof,
+        Some(intent),
+    )
+    .await?
     {
         TransactionalGuardOutcome::Allowed => {
             // Invalid/missing proofs are rejected before Argon2/SCRAM work.
@@ -2179,16 +2179,16 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
     expected_auth_generation: i64,
 ) -> Result<std::result::Result<bool, GuardError>> {
     let mut transaction = pool.begin().await?;
-    match abuse
-        .verify_or_allow_in_tx_v2(
-            &mut transaction,
-            AbuseAction::PasswordChange,
-            subject,
-            actors,
-            proof,
-            intent,
-        )
-        .await?
+    match crate::db::abuse_transaction_repository::verify_in_tx(
+        &mut transaction,
+        abuse,
+        AbuseAction::PasswordChange,
+        subject,
+        actors,
+        proof,
+        Some(intent),
+    )
+    .await?
     {
         TransactionalGuardOutcome::Allowed => {
             let found: bool = sqlx::query_scalar("SELECT northstar_user_quiesce_deletion($1,$2)")
@@ -3783,16 +3783,17 @@ mod tests {
         );
         let actors = vec![format!("user:{}", user.id)];
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx(
-                    &mut reserve,
-                    AbuseAction::PasswordChange,
-                    &format!("password_change:{}", user.id),
-                    &actors,
-                    None,
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut reserve,
+                &guard,
+                AbuseAction::PasswordChange,
+                &format!("password_change:{}", user.id),
+                &actors,
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         assert!(

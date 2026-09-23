@@ -552,6 +552,12 @@ through a read port while keeping the cached-recipient fast path and three
 independently admitted database reads in the transport worker.
 Administrator room destruction now clears only the committed audience's exact
 local occupant incarnations, so delayed cleanup cannot erase a recreated room.
+Abuse admission transactions now remain inside PostgreSQL adapters rather than
+passing SQLx transactions through the policy guard. XMPP extension and stream
+management policy reads use narrow state methods or immutable snapshots.
+Registration, voice and administrator MUC updates compare the exact occupant
+connection and epoch before changing the local projection; presence refresh
+and nickname changes still need the same boundary.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

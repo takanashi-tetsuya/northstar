@@ -4334,10 +4334,7 @@ async fn handle_channel_iq(
             }
             IqOperation::Ping
                 if request.kind == "get"
-                    && !state
-                        .config
-                        .xmpp_extensions
-                        .enabled(northstar_xep_0199::XEP_ID) =>
+                    && !state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) =>
             {
                 Ok(iq_error_to(
                     &request.id,
@@ -4595,10 +4592,7 @@ async fn handle_channel_iq(
         }
         IqOperation::Ping
             if request.kind == "get"
-                && !state
-                    .config
-                    .xmpp_extensions
-                    .enabled(northstar_xep_0199::XEP_ID) =>
+                && !state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) =>
         {
             Ok(iq_error_to(
                 &request.id,
@@ -5431,11 +5425,7 @@ async fn handle_mix_mam_iq(
     addressed: &str,
     reply_to: &str,
 ) -> Result<Vec<String>> {
-    if !state
-        .config
-        .xmpp_extensions
-        .enabled(northstar_xep_0313::XEP_ID)
-    {
+    if !state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
         return Ok(vec![iq_error_to(
             &request.id,
             addressed,
@@ -6848,10 +6838,7 @@ async fn federated_mix_disco_info(
             channel.allow_user_message_retraction
                 || channel.administrator_retraction_rights != "nobody",
             channel.allow_private_messages,
-            state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0313::XEP_ID),
+            state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
             &mirror,
         )?
     } else {
@@ -7455,15 +7442,12 @@ pub(crate) async fn federated_mix_message(
         if root.tag_name().name() != "message" {
             return Ok(false);
         }
-        let validation_error =
-            crate::xmpp::xml_util::validate_routed_message(root, &state.config.xmpp_extensions)
-                .err()
-                .map(|condition| {
-                    (
-                        crate::xmpp::xml_util::stanza_error_type(condition),
-                        condition,
-                    )
-                });
+        let validation_error = state.validate_routed_message(root).err().map(|condition| {
+            (
+                crate::xmpp::xml_util::stanza_error_type(condition),
+                condition,
+            )
+        });
         (
             root.attribute("from").unwrap_or_default().to_owned(),
             root.attribute("to").unwrap_or_default().to_owned(),

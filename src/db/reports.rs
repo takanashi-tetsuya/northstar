@@ -1093,16 +1093,17 @@ mod tests {
                 .unwrap(),
         );
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx(
-                    &mut tx,
-                    AbuseAction::Report,
-                    &subject,
-                    &actors,
-                    Some(&first_proof),
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut tx,
+                &guard,
+                AbuseAction::Report,
+                &subject,
+                &actors,
+                Some(&first_proof),
+                None,
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         assert!(
@@ -1181,16 +1182,17 @@ mod tests {
                 .unwrap(),
         );
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx(
-                    &mut crashed_tx,
-                    AbuseAction::Report,
-                    &subject,
-                    &actors,
-                    Some(&crash_proof),
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut crashed_tx,
+                &guard,
+                AbuseAction::Report,
+                &subject,
+                &actors,
+                Some(&crash_proof),
+                None,
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         assert!(
@@ -1219,16 +1221,17 @@ mod tests {
         );
         assert!(!retry_lease.guard_verified);
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx(
-                    &mut retry_tx,
-                    AbuseAction::Report,
-                    &subject,
-                    &actors,
-                    Some(&crash_proof),
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut retry_tx,
+                &guard,
+                AbuseAction::Report,
+                &subject,
+                &actors,
+                Some(&crash_proof),
+                None,
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         assert!(
@@ -1296,16 +1299,17 @@ mod tests {
                 .unwrap(),
         );
         assert!(matches!(
-            guard
-                .verify_or_allow_in_tx(
-                    &mut invalid_tx,
-                    AbuseAction::Report,
-                    &subject,
-                    &actors,
-                    Some(&invalid_proof),
-                )
-                .await
-                .unwrap(),
+            crate::db::abuse_transaction_repository::verify_in_tx(
+                &mut invalid_tx,
+                &guard,
+                AbuseAction::Report,
+                &subject,
+                &actors,
+                Some(&invalid_proof),
+                None,
+            )
+            .await
+            .unwrap(),
             TransactionalGuardOutcome::Allowed
         ));
         assert!(

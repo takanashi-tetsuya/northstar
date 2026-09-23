@@ -138,7 +138,7 @@ impl ProtocolSession {
             return Ok(Action::CloseWith(stream_error("unexpected-request")));
         }
         if root.tag_name().namespace() == Some(northstar_xep_0198::NAMESPACE) {
-            if !self.state.config.xmpp_extensions.route_enabled(
+            if !self.state.xmpp_route_enabled(
                 northstar_xep_core::StanzaKind::Stream,
                 northstar_xep_0198::NAMESPACE,
                 root.tag_name().name(),
@@ -155,7 +155,7 @@ impl ProtocolSession {
                 Ok(indication) => indication,
                 Err(_) => return Ok(Action::CloseWith(stream_error("bad-format"))),
             };
-            if !self.state.config.xmpp_extensions.route_enabled(
+            if !self.state.xmpp_route_enabled(
                 northstar_xep_core::StanzaKind::Stream,
                 northstar_xep_0352::NAMESPACE,
                 indication.local_name(),
@@ -422,9 +422,7 @@ impl ProtocolSession {
         let upload_domain = self.upload_domain();
         let caps_disco_get = self
             .state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0115::XEP_ID)
+            .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
             && is_caps_disco_get(root);
         if let Some(to) = root.attribute("to") {
             if let Ok(target_jid) = crate::jid::CanonicalJid::parse(to) {
@@ -606,7 +604,7 @@ impl ProtocolSession {
                     });
                     let is_ping = if kind == "get" {
                         if let Some(ping_child) = ping_child {
-                            if !self.state.config.xmpp_extensions.route_enabled(
+                            if !self.state.xmpp_route_enabled(
                                 northstar_xep_core::StanzaKind::IqGet,
                                 northstar_xep_0199::NAMESPACE,
                                 "ping",
@@ -738,12 +736,7 @@ impl ProtocolSession {
             } else {
                 northstar_xep_core::StanzaKind::IqSet
             };
-            if !self
-                .state
-                .config
-                .xmpp_extensions
-                .route_enabled(stanza, ns, "pubsub")
-            {
+            if !self.state.xmpp_route_enabled(stanza, ns, "pubsub") {
                 return Ok(Action::Send(iq_error(id, "feature-not-implemented")));
             }
         }
@@ -765,9 +758,7 @@ impl ProtocolSession {
             && is_muc_operation
             && !self
                 .state
-                .config
-                .xmpp_extensions
-                .enabled(northstar_xep_0045::XEP_ID)
+                .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(
                 id,
@@ -819,7 +810,7 @@ impl ProtocolSession {
             ("query", "jabber:iq:roster", "get") => self.roster_get(id, root, child).await,
             ("query", "jabber:iq:roster", "set") => self.roster_set(id, root, child).await,
             ("query", northstar_xep_0016::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0016::NAMESPACE,
                     "query",
@@ -828,7 +819,7 @@ impl ProtocolSession {
                 self.privacy_get(id, root, child).await
             }
             ("query", northstar_xep_0016::NAMESPACE, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0016::NAMESPACE,
                     "query",
@@ -868,7 +859,7 @@ impl ProtocolSession {
                 self.disco_items(id, root.attribute("to"), child).await
             }
             ("ping", northstar_xep_0199::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0199::NAMESPACE,
                     "ping",
@@ -884,7 +875,7 @@ impl ProtocolSession {
                 }
             }
             ("time", northstar_xep_0202::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0202::NAMESPACE,
                     "time",
@@ -906,7 +897,7 @@ impl ProtocolSession {
                 }
             }
             ("query", northstar_xep_0092::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0092::NAMESPACE,
                     "query",
@@ -938,7 +929,7 @@ impl ProtocolSession {
                 Ok(Action::Send(iq_error(id, "service-unavailable")))
             }
             ("services", northstar_xep_0215::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0215::NAMESPACE,
                     "services",
@@ -947,7 +938,7 @@ impl ProtocolSession {
                 self.external_services(id, root, child)
             }
             ("credentials", northstar_xep_0215::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0215::NAMESPACE,
                     "credentials",
@@ -958,7 +949,7 @@ impl ProtocolSession {
             ("vCard", "vcard-temp", "get") => self.vcard_get(id, root).await,
             ("vCard", "vcard-temp", "set") => self.vcard_set(id, root, child, raw).await,
             ("enable", northstar_xep_0357::XMLNS_PUSH, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0357::XMLNS_PUSH,
                     "enable",
@@ -967,7 +958,7 @@ impl ProtocolSession {
                 self.enable_push(id, root, child, raw).await
             }
             ("disable", northstar_xep_0357::XMLNS_PUSH, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0357::XMLNS_PUSH,
                     "disable",
@@ -985,7 +976,7 @@ impl ProtocolSession {
                 Action::Send(iq_error_from(id, &self.upload_domain(), "bad-request")),
             ),
             ("query", northstar_xep_0313::XMLNS_MAM, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0313::XMLNS_MAM,
                     "query",
@@ -994,7 +985,7 @@ impl ProtocolSession {
                 self.mam(id, child, root.attribute("to")).await
             }
             ("query", northstar_xep_0313::XMLNS_MAM, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0313::XMLNS_MAM,
                     "query",
@@ -1003,7 +994,7 @@ impl ProtocolSession {
                 self.mam_query_form(id, root.attribute("to"), child).await
             }
             ("metadata", northstar_xep_0313::XMLNS_MAM, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0313::XMLNS_MAM,
                     "metadata",
@@ -1012,7 +1003,7 @@ impl ProtocolSession {
                 self.mam_metadata(id, root.attribute("to"), child).await
             }
             ("prefs", northstar_xep_0313::XMLNS_MAM, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0313::XMLNS_MAM,
                     "prefs",
@@ -1022,7 +1013,7 @@ impl ProtocolSession {
                     .await
             }
             ("prefs", northstar_xep_0313::XMLNS_MAM, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0313::XMLNS_MAM,
                     "prefs",
@@ -1032,7 +1023,7 @@ impl ProtocolSession {
                     .await
             }
             ("enable", northstar_xep_0280::NAMESPACE, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0280::NAMESPACE,
                     "enable",
@@ -1041,7 +1032,7 @@ impl ProtocolSession {
                 self.set_carbons(id, root, child, true)
             }
             ("disable", northstar_xep_0280::NAMESPACE, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0280::NAMESPACE,
                     "disable",
@@ -1050,7 +1041,7 @@ impl ProtocolSession {
                 self.set_carbons(id, root, child, false)
             }
             ("blocklist", northstar_xep_0191::NAMESPACE, "get")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqGet,
                     northstar_xep_0191::NAMESPACE,
                     "blocklist",
@@ -1059,7 +1050,7 @@ impl ProtocolSession {
                 self.blocklist(id, root, child).await
             }
             ("block", northstar_xep_0191::NAMESPACE, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0191::NAMESPACE,
                     "block",
@@ -1068,7 +1059,7 @@ impl ProtocolSession {
                 self.block(id, root, child).await
             }
             ("unblock", northstar_xep_0191::NAMESPACE, "set")
-                if self.state.config.xmpp_extensions.route_enabled(
+                if self.state.xmpp_route_enabled(
                     northstar_xep_core::StanzaKind::IqSet,
                     northstar_xep_0191::NAMESPACE,
                     "unblock",

@@ -208,9 +208,9 @@ impl FederatedMessageRequest {
     fn from_node(
         root: Node<'_, '_>,
         raw: &str,
-        extensions: &crate::xmpp::extensions::ExtensionRuntime,
+        validation: std::result::Result<(), &'static str>,
     ) -> Self {
-        let validation_error = validate_routed_message(root, extensions)
+        let validation_error = validation
             .err()
             .map(|condition| (stanza_error_type(condition), condition));
         let invites = root
@@ -1902,7 +1902,8 @@ pub(crate) fn federated_muc_message<'a>(
     raw: &str,
 ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
     let authenticated_domain = authenticated_domain.to_owned();
-    let request = FederatedMessageRequest::from_node(root, raw, &state.config.xmpp_extensions);
+    let request =
+        FederatedMessageRequest::from_node(root, raw, state.validate_routed_message(root));
     async move {
         federated_muc_message_owned(state, &authenticated_domain, connection_id, request).await
     }
@@ -2367,8 +2368,12 @@ async fn federated_muc_message_owned(
                     {
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
-                    let target_key = muc_occupant_key(&room_jid, &target.nick);
-                    let Some(mut current_target) = state.muc_occupants.get_mut(&target_key) else {
+                    let Some(updated_occupant) = state.set_local_muc_role_exact(
+                        crate::state::LocalMucOccupantIdentity::from(target),
+                        "visitor",
+                        "participant",
+                        None,
+                    ) else {
                         return Ok(federated_error(
                             &request.stanza,
                             from,
@@ -2376,21 +2381,7 @@ async fn federated_muc_message_owned(
                             "item-not-found",
                         ));
                     };
-                    if current_target.full_jid != target.full_jid
-                        || current_target.connection_id != target.connection_id
-                        || current_target.cluster_epoch != target.cluster_epoch
-                        || current_target.role != "visitor"
-                    {
-                        return Ok(federated_error(
-                            &request.stanza,
-                            from,
-                            "cancel",
-                            "item-not-found",
-                        ));
-                    }
-                    current_target.role = "participant".to_owned();
-                    let updated = SerializableMucOccupant::from(&*current_target);
-                    drop(current_target);
+                    let updated = SerializableMucOccupant::from(&updated_occupant);
                     for (_, recipient) in state.muc_occupants_for(&room_jid) {
                         let self_presence = recipient.full_jid == updated.full_jid
                             && recipient.connection_id == updated.connection_id
@@ -3467,10 +3458,7 @@ async fn federated_muc_iq_owned(
         ));
     }
     if matches!(request.payload, FederatedIqPayload::Ping)
-        && !state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0199::XEP_ID)
+        && !state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
     {
         return Ok(federated_error(
             &request.stanza,
@@ -3513,11 +3501,7 @@ async fn federated_muc_iq_owned(
                 ] {
                     query.push_child(XmlElement::new("feature").attr("var", feature));
                 }
-                if state
-                    .config
-                    .xmpp_extensions
-                    .enabled(northstar_xep_0313::XEP_ID)
-                {
+                if state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
                     query.push_child(
                         XmlElement::new("feature")
                             .attr("var", northstar_xep_0313::DISCO_FEATURE_MAM),
@@ -3527,11 +3511,7 @@ async fn federated_muc_iq_owned(
                             .attr("var", northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED),
                     );
                 }
-                if state
-                    .config
-                    .xmpp_extensions
-                    .enabled(northstar_xep_0199::XEP_ID)
-                {
+                if state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) {
                     query.push_child(
                         XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE),
                     );
@@ -3748,22 +3728,14 @@ async fn federated_muc_iq_owned(
                 }
             ),
         ];
-        if state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0313::XEP_ID)
-        {
+        if state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
             features.push(northstar_xep_0313::DISCO_FEATURE_MAM.to_owned());
             features.push(northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED.to_owned());
         }
         for feature in features {
             payload.push_child(XmlElement::new("feature").attr("var", feature));
         }
-        if state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0199::XEP_ID)
-        {
+        if state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) {
             payload
                 .push_child(XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE));
         }
@@ -4044,7 +4016,7 @@ async fn federated_muc_iq_owned(
             .into_iter()
             .find(|(_, occupant)| same_remote_actor(&occupant.full_jid, &actor_full_jid));
         let target_is_occupant = joined.is_some();
-        if let Some((key, own)) = joined {
+        if let Some((_, own)) = joined {
             let affiliation = state
                 .muc_service()
                 .federated_affiliation(room.id, &actor_bare_jid)
@@ -4054,7 +4026,6 @@ async fn federated_muc_iq_owned(
                 state,
                 &room,
                 &own,
-                &key,
                 own.clone(),
                 OccupantChange {
                     affiliation: Some(&affiliation),
@@ -4098,11 +4069,7 @@ async fn federated_muc_iq_owned(
             | FederatedIqPayload::MamMetadata
             | FederatedIqPayload::MamError(_)
     ) {
-        if !state
-            .config
-            .xmpp_extensions
-            .enabled(northstar_xep_0313::XEP_ID)
-        {
+        if !state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -5158,14 +5125,13 @@ async fn federated_muc_owner(
                     }
                 }
             }
-            for (key, mut occupant) in state.muc_occupants_for(&requester.room_jid) {
+            for (_, mut occupant) in state.muc_occupants_for(&requester.room_jid) {
                 if updated_room.members_only && !room.members_only && occupant.affiliation == "none"
                 {
                     publish_occupant_change(
                         state,
                         &updated_room,
                         requester,
-                        &key,
                         occupant,
                         OccupantChange {
                             affiliation: None,
@@ -5190,7 +5156,6 @@ async fn federated_muc_owner(
                         state,
                         &updated_room,
                         requester,
-                        &key,
                         occupant,
                         OccupantChange {
                             affiliation: None,
@@ -5351,42 +5316,42 @@ async fn publish_occupant_change(
     state: &AppState,
     room: &MucRoom,
     actor: &MucOccupant,
-    key: &str,
     mut target: MucOccupant,
     change: OccupantChange<'_>,
 ) -> Result<()> {
-    if let Some(affiliation) = change.affiliation {
-        target.affiliation = affiliation.to_owned();
-    }
-    if let Some(role) = change.role {
-        target.role = role.to_owned();
+    let proposed_affiliation = change.affiliation.unwrap_or(&target.affiliation).to_owned();
+    let proposed_role = if let Some(role) = change.role {
+        role
     } else {
-        target.role = if matches!(target.affiliation.as_str(), "owner" | "admin") {
+        if matches!(proposed_affiliation.as_str(), "owner" | "admin") {
             "moderator"
-        } else if room.moderated && target.affiliation == "none" {
+        } else if room.moderated && proposed_affiliation == "none" {
             "visitor"
         } else {
             "participant"
         }
-        .to_owned();
-    }
-    let removal_status = if target.affiliation == "outcast" {
+    };
+    let removal_status = if proposed_affiliation == "outcast" {
         Some(301)
-    } else if target.affiliation == "none" && room.members_only {
+    } else if proposed_affiliation == "none" && room.members_only {
         Some(321)
-    } else if target.role == "none" {
+    } else if proposed_role == "none" {
         Some(307)
     } else {
         None
     };
     let actor_nick = actor.nick.as_str();
-    let serializable = SerializableMucOccupant::from(&target);
     if let Some(status) = removal_status {
-        state.muc_occupants.remove_if(key, |_, current| {
-            current.full_jid == target.full_jid
-                && current.connection_id == target.connection_id
-                && current.cluster_epoch == target.cluster_epoch
-        });
+        let Some(mut departed) = state
+            .remove_local_muc_occupant_exact(crate::state::LocalMucOccupantIdentity::from(&target))
+        else {
+            return Ok(());
+        };
+        departed.affiliation = proposed_affiliation.to_owned();
+        departed.role = proposed_role.to_owned();
+        departed.room_non_anonymous = target.room_non_anonymous;
+        target = departed;
+        let serializable = SerializableMucOccupant::from(&target);
         state
             .cluster
             .evict_muc_occupant(&serializable, status, Some(actor_nick), change.reason)
@@ -5436,7 +5401,26 @@ async fn publish_occupant_change(
         );
         let _ = state.deliver_to_muc_occupant(&target, self_presence).await;
     } else {
-        state.muc_occupants.insert(key.to_owned(), target.clone());
+        let Some(updated) = (if let Some(affiliation) = change.affiliation {
+            state.set_local_muc_affiliation_exact(
+                crate::state::LocalMucOccupantIdentity::from(&target),
+                affiliation,
+                room.moderated,
+                false,
+                Some(&target.affiliation),
+            )
+        } else {
+            state.set_local_muc_role_exact(
+                crate::state::LocalMucOccupantIdentity::from(&target),
+                &target.role,
+                proposed_role,
+                Some(target.room_non_anonymous),
+            )
+        }) else {
+            return Ok(());
+        };
+        target = updated;
+        let serializable = SerializableMucOccupant::from(&target);
         let json = serde_json::to_string(&serializable)?;
         state
             .cluster
@@ -6036,12 +6020,11 @@ async fn federated_muc_admin_set(
                 )
                 .await;
             }
-            for (key, occupant) in present {
+            for (_, occupant) in present {
                 publish_occupant_change(
                     state,
                     room,
                     requester,
-                    &key,
                     occupant,
                     OccupantChange {
                         affiliation: Some(affiliation),
@@ -6276,7 +6259,6 @@ async fn federated_muc_admin_set(
                 state,
                 room,
                 requester,
-                &key,
                 target,
                 OccupantChange {
                     affiliation: None,
@@ -6632,15 +6614,23 @@ mod tests {
         let document = roxmltree::Document::parse(invite).unwrap();
         let extensions = extension_runtime();
         assert!(
-            FederatedMessageRequest::from_node(document.root_element(), invite, &extensions)
-                .carbon_eligible
+            FederatedMessageRequest::from_node(
+                document.root_element(),
+                invite,
+                validate_routed_message(document.root_element(), &extensions),
+            )
+            .carbon_eligible
         );
 
         let private = "<message from='alice@remote.test/Phone' to='room@conference.example.test'><x xmlns='http://jabber.org/protocol/muc#user'><invite to='bob@example.test'/></x><private xmlns='urn:xmpp:carbons:2'/></message>";
         let document = roxmltree::Document::parse(private).unwrap();
         assert!(
-            !FederatedMessageRequest::from_node(document.root_element(), private, &extensions)
-                .carbon_eligible
+            !FederatedMessageRequest::from_node(
+                document.root_element(),
+                private,
+                validate_routed_message(document.root_element(), &extensions),
+            )
+            .carbon_eligible
         );
 
         // XEP-0334 explicitly says no-copy never overrides RFC 6121 handling
@@ -6649,8 +6639,12 @@ mod tests {
         let bare_no_copy = "<message from='alice@remote.test/Phone' to='room@conference.example.test'><x xmlns='http://jabber.org/protocol/muc#user'><invite to='bob@example.test'/></x><no-copy xmlns='urn:xmpp:hints'/></message>";
         let document = roxmltree::Document::parse(bare_no_copy).unwrap();
         assert!(
-            FederatedMessageRequest::from_node(document.root_element(), bare_no_copy, &extensions,)
-                .carbon_eligible
+            FederatedMessageRequest::from_node(
+                document.root_element(),
+                bare_no_copy,
+                validate_routed_message(document.root_element(), &extensions),
+            )
+            .carbon_eligible
         );
     }
 

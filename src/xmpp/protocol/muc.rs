@@ -1308,22 +1308,27 @@ impl ProtocolSession {
             let mut target_is_occupant = false;
             if let Some(joined) = self.joined_rooms.get(&room_jid) {
                 let joined_nick = joined.nick.clone();
+                let joined_epoch = joined.cluster_epoch;
                 drop(joined);
-                let key = muc_occupant_key(&room_jid, &joined_nick);
-                if let Some(mut occupant) = self.state.muc_occupants.get_mut(&key) {
+                if let Some(occupant) = self.state.set_local_muc_affiliation_exact(
+                    crate::state::LocalMucOccupantIdentity {
+                        room_jid: &room_jid,
+                        nick: &joined_nick,
+                        full_jid: self
+                            .full_jid
+                            .as_deref()
+                            .expect("bound session checked above"),
+                        connection_id: self.connection_id,
+                        cluster_epoch: joined_epoch,
+                    },
+                    &affiliation,
+                    room.moderated,
+                    false,
+                    None,
+                ) {
                     target_is_occupant = true;
-                    occupant.affiliation = affiliation;
-                    occupant.role = if matches!(occupant.affiliation.as_str(), "owner" | "admin") {
-                        "moderator"
-                    } else if room.moderated && occupant.affiliation == "none" {
-                        "visitor"
-                    } else {
-                        "participant"
-                    }
-                    .to_owned();
-                    let updated = crate::state::SerializableMucOccupant::from(&*occupant);
+                    let updated = crate::state::SerializableMucOccupant::from(&occupant);
                     let updated_json = serde_json::to_string(&updated)?;
-                    drop(occupant);
                     let _ = self
                         .state
                         .cluster
@@ -1471,19 +1476,27 @@ impl ProtocolSession {
         let mut target_is_occupant = false;
         if let Some(joined) = self.joined_rooms.get(&room_jid) {
             let joined_nick = joined.nick.clone();
+            let joined_epoch = joined.cluster_epoch;
             drop(joined);
-            let key = muc_occupant_key(&room_jid, &joined_nick);
-            if let Some(mut occupant) = self.state.muc_occupants.get_mut(&key) {
+            if let Some(occupant) = self.state.set_local_muc_affiliation_exact(
+                crate::state::LocalMucOccupantIdentity {
+                    room_jid: &room_jid,
+                    nick: &joined_nick,
+                    full_jid: self
+                        .full_jid
+                        .as_deref()
+                        .expect("bound session checked above"),
+                    connection_id: self.connection_id,
+                    cluster_epoch: joined_epoch,
+                },
+                "member",
+                room.moderated,
+                true,
+                None,
+            ) {
                 target_is_occupant = true;
-                if occupant.affiliation == "none" {
-                    occupant.affiliation = "member".to_owned();
-                    if room.moderated {
-                        occupant.role = "participant".to_owned();
-                    }
-                }
-                let updated = crate::state::SerializableMucOccupant::from(&*occupant);
+                let updated = crate::state::SerializableMucOccupant::from(&occupant);
                 let updated_json = serde_json::to_string(&updated)?;
-                drop(occupant);
                 let _ = self
                     .state
                     .cluster
@@ -1989,12 +2002,12 @@ impl ProtocolSession {
                         // PostgreSQL tuple here made every valid voice grant
                         // fail with <forbidden/> because no cluster occupancy
                         // row exists in this supported deployment mode.
-                        // Re-check the exact connection/incarnation under the
-                        // map write guard so a departed/rejoined occupant
-                        // cannot inherit an approval addressed to its stale
-                        // nickname.
-                        let target_key = muc_occupant_key(&room_jid, &target.nick);
-                        let Some(mut current) = self.state.muc_occupants.get_mut(&target_key)
+                        // Serialize with room mutations, then recheck both
+                        // actors before applying the target's exact role change.
+                        let service = self.state.muc_service();
+                        let _guard = service.lock_local_room_mutation(room.id).await;
+                        let Some(current_room) =
+                            service.local_room_snapshot(localpart(&room_jid)).await?
                         else {
                             return Ok(Action::Send(muc_stanza_error(
                                 root,
@@ -2003,10 +2016,7 @@ impl ProtocolSession {
                                 "item-not-found",
                             )));
                         };
-                        if current.full_jid != target.full_jid
-                            || current.connection_id != target.connection_id
-                            || current.cluster_epoch != target.cluster_epoch
-                            || current.role != "visitor"
+                        if current_room.id != room.id || current_room.room_epoch != room.room_epoch
                         {
                             return Ok(Action::Send(muc_stanza_error(
                                 root,
@@ -2015,9 +2025,43 @@ impl ProtocolSession {
                                 "item-not-found",
                             )));
                         }
-                        current.role = "participant".to_owned();
-                        let updated = crate::state::SerializableMucOccupant::from(&*current);
-                        drop(current);
+                        let Some(current_actor) = self.authorized_muc_occupant(&room_jid).await?
+                        else {
+                            return Ok(Action::Send(muc_stanza_error(
+                                root,
+                                from,
+                                "auth",
+                                "forbidden",
+                            )));
+                        };
+                        if current_actor.full_jid != own.full_jid
+                            || current_actor.connection_id != own.connection_id
+                            || current_actor.cluster_epoch != own.cluster_epoch
+                            || current_actor.role != "moderator"
+                        {
+                            return Ok(Action::Send(muc_stanza_error(
+                                root,
+                                from,
+                                "auth",
+                                "forbidden",
+                            )));
+                        }
+                        let Some(updated_occupant) = self.state.set_local_muc_role_exact(
+                            crate::state::LocalMucOccupantIdentity::from(target),
+                            "visitor",
+                            "participant",
+                            None,
+                        ) else {
+                            return Ok(Action::Send(muc_stanza_error(
+                                root,
+                                from,
+                                "cancel",
+                                "item-not-found",
+                            )));
+                        };
+                        let updated =
+                            crate::state::SerializableMucOccupant::from(&updated_occupant);
+                        drop(_guard);
                         for (_, recipient) in self.state.muc_occupants_for(&room_jid) {
                             let self_presence = recipient.full_jid == updated.full_jid
                                 && recipient.connection_id == updated.connection_id
@@ -4153,57 +4197,30 @@ impl ProtocolSession {
                 .map(|membership| membership.nick.clone());
             let mut evicted = Vec::new();
             let mut refreshed = Vec::new();
-            for (key, mut occupant) in self.state.muc_occupants_for(room_jid) {
+            for (_, occupant) in self.state.muc_occupants_for(room_jid) {
                 if members_only && !room.members_only && occupant.affiliation == "none" {
-                    occupant.role = "none".to_owned();
-                    let serializable = crate::state::SerializableMucOccupant::from(&occupant);
-                    self.state.remove_live_muc_membership(&serializable);
-                    if self
-                        .state
-                        .muc_occupants
-                        .remove_if(&key, |_, current| {
-                            current.full_jid == occupant.full_jid
-                                && current.connection_id == occupant.connection_id
-                                && current.cluster_epoch == occupant.cluster_epoch
-                        })
-                        .is_some()
-                    {
-                        evicted.push(occupant);
+                    if let Some(mut departed) = self.state.remove_local_muc_occupant_exact(
+                        crate::state::LocalMucOccupantIdentity::from(&occupant),
+                    ) {
+                        departed.role = "none".to_owned();
+                        let serializable = crate::state::SerializableMucOccupant::from(&departed);
+                        self.state.remove_live_muc_membership(&serializable);
+                        evicted.push(departed);
                     }
                     continue;
                 }
 
-                let mut changed = false;
-                if moderated != room.moderated {
-                    let next_role = if matches!(occupant.affiliation.as_str(), "owner" | "admin") {
-                        "moderator"
-                    } else if moderated && occupant.affiliation == "none" {
-                        "visitor"
-                    } else {
-                        "participant"
-                    };
-                    if occupant.role != next_role {
-                        occupant.role = next_role.to_owned();
-                        changed = true;
+                let moderated_change = (moderated != room.moderated).then_some(moderated);
+                let visibility_change =
+                    (non_anonymous != room.non_anonymous).then_some(non_anonymous);
+                if moderated_change.is_some() || visibility_change.is_some() {
+                    if let Some((updated, true)) = self.state.refresh_local_muc_policy_exact(
+                        crate::state::LocalMucOccupantIdentity::from(&occupant),
+                        moderated_change,
+                        visibility_change,
+                    ) {
+                        refreshed.push(updated);
                     }
-                }
-                if non_anonymous != room.non_anonymous {
-                    occupant.room_non_anonymous = non_anonymous;
-                    changed = true;
-                }
-                if changed {
-                    let Some(mut current) = self.state.muc_occupants.get_mut(&key) else {
-                        continue;
-                    };
-                    if current.full_jid != occupant.full_jid
-                        || current.connection_id != occupant.connection_id
-                        || current.cluster_epoch != occupant.cluster_epoch
-                    {
-                        continue;
-                    }
-                    *current = occupant.clone();
-                    drop(current);
-                    refreshed.push(occupant);
                 }
             }
             let room_empty_after_policy = self.state.muc_occupants_for(room_jid).is_empty();
@@ -6708,19 +6725,19 @@ impl ProtocolSession {
                     .await;
                 }
 
-                for (key, mut occupant) in occupants {
-                    occupant.affiliation = new_affil.to_owned();
+                for (_, occupant) in occupants {
                     let remove_from_room =
                         new_affil == "outcast" || (new_affil == "none" && room.members_only);
                     if remove_from_room {
+                        let Some(mut occupant) = self.state.remove_local_muc_occupant_exact(
+                            crate::state::LocalMucOccupantIdentity::from(&occupant),
+                        ) else {
+                            continue;
+                        };
+                        occupant.affiliation = new_affil.to_owned();
                         occupant.role = "none".to_owned();
                         let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                         self.state.remove_live_muc_membership(&serializable);
-                        self.state.muc_occupants.remove_if(&key, |_, current| {
-                            current.full_jid == occupant.full_jid
-                                && current.connection_id == occupant.connection_id
-                                && current.cluster_epoch == occupant.cluster_epoch
-                        });
                         let is_empty = self.state.muc_occupants_for(room_jid).is_empty();
                         let removal_status = if new_affil == "outcast" { 301 } else { 321 };
                         run_muc_cluster_eviction(
@@ -6765,15 +6782,15 @@ impl ProtocolSession {
                             .deliver_to_muc_occupant(&occupant, self_presence)
                             .await;
                     } else {
-                        occupant.role = if matches!(new_affil, "owner" | "admin") {
-                            "moderator"
-                        } else if room.moderated && new_affil == "none" {
-                            "visitor"
-                        } else {
-                            "participant"
-                        }
-                        .to_owned();
-                        self.state.muc_occupants.insert(key, occupant.clone());
+                        let Some(occupant) = self.state.set_local_muc_affiliation_exact(
+                            crate::state::LocalMucOccupantIdentity::from(&occupant),
+                            new_affil,
+                            room.moderated,
+                            false,
+                            Some(&occupant.affiliation),
+                        ) else {
+                            continue;
+                        };
 
                         let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                         if let Ok(json) = serde_json::to_string(&serializable) {

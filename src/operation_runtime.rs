@@ -20,7 +20,7 @@ use crate::services::operation_journal_worker::{
 use crate::{
     db,
     services::operation_muc_destroy::MucDestroyCommit,
-    state::{AppState, MucOccupant},
+    state::{AppState, LocalMucOccupantIdentity},
 };
 
 const LEASE_SECONDS: i64 = 60;
@@ -671,15 +671,13 @@ async fn execute_effect(
                     payload,
                 })
                 .await?;
-            if let Err(error) = state
-                .muc_service()
-                .wake_committed_operation(&state.cluster, operation.id)
-                .await
-            {
+            if let Err(error) = state.wake_committed_muc_operation(operation.id).await {
                 tracing::warn!(?error, operation_id=%operation.id,
                     "admin MUC destroy committed; signed wake failed and PostgreSQL polling will catch up");
             }
-            remove_committed_muc_audience(&state.muc_occupants, &committed);
+            remove_committed_muc_audience(&committed, |identity| {
+                state.remove_local_muc_occupant_exact(identity).is_some()
+            });
             Ok(json!({"destroyed":committed.destroyed,"room_jid":committed.room_jid}))
         }
         kind => anyhow::bail!("operation executor is unavailable for {kind}"),
@@ -689,9 +687,9 @@ async fn execute_effect(
 /// The room JID may already belong to a new room when a delayed operation
 /// worker reaches this cleanup. Only the occupancies captured by the committed
 /// tombstone may be removed from the local projection.
-fn remove_committed_muc_audience(
-    occupants: &dashmap::DashMap<String, MucOccupant>,
-    committed: &MucDestroyCommit,
+fn remove_committed_muc_audience<'a>(
+    committed: &'a MucDestroyCommit,
+    mut remove_exact: impl FnMut(LocalMucOccupantIdentity<'a>) -> bool,
 ) -> usize {
     if !committed.destroyed {
         return 0;
@@ -703,16 +701,13 @@ fn remove_committed_muc_audience(
             if expected.occupant_incarnation.is_nil() || expected.connection_id.is_nil() {
                 return false;
             }
-            let key = crate::xmpp::xml_util::muc_occupant_key(&committed.room_jid, &expected.nick);
-            occupants
-                .remove_if(&key, |_, current| {
-                    current.room_jid == committed.room_jid
-                        && current.full_jid == expected.full_jid
-                        && current.nick == expected.nick
-                        && current.cluster_epoch == expected.occupant_incarnation
-                        && current.connection_id == expected.connection_id
-                })
-                .is_some()
+            remove_exact(LocalMucOccupantIdentity {
+                room_jid: &committed.room_jid,
+                nick: &expected.nick,
+                full_jid: &expected.full_jid,
+                connection_id: expected.connection_id,
+                cluster_epoch: expected.occupant_incarnation,
+            })
         })
         .count()
 }
@@ -750,7 +745,7 @@ fn generation_cleanup_identity(payload: &Value) -> Result<(Uuid, i64)> {
 mod tests {
     use super::*;
     use crate::services::operation_muc_destroy::MucDestroyAudience;
-    use crate::state::MucOccupantEndpoint;
+    use crate::state::{remove_local_muc_occupant_exact_from, MucOccupant, MucOccupantEndpoint};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
     use tokio::sync::Notify;
@@ -854,7 +849,9 @@ mod tests {
                 old_connection,
             ),
         );
-        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 0);
+        let remove =
+            |identity| remove_local_muc_occupant_exact_from(&occupants, identity).is_some();
+        assert_eq!(remove_committed_muc_audience(&committed, remove), 0);
         assert_eq!(
             occupants.get(&key).unwrap().cluster_epoch,
             recreated_incarnation
@@ -873,7 +870,9 @@ mod tests {
                 resumed_connection,
             ),
         );
-        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 0);
+        let remove =
+            |identity| remove_local_muc_occupant_exact_from(&occupants, identity).is_some();
+        assert_eq!(remove_committed_muc_audience(&committed, remove), 0);
         assert_eq!(
             occupants.get(&key).unwrap().connection_id,
             resumed_connection
@@ -883,7 +882,9 @@ mod tests {
             key.clone(),
             muc_occupant(room_jid, full_jid, nick, old_incarnation, old_connection),
         );
-        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 1);
+        let remove =
+            |identity| remove_local_muc_occupant_exact_from(&occupants, identity).is_some();
+        assert_eq!(remove_committed_muc_audience(&committed, remove), 1);
         assert!(!occupants.contains_key(&key));
 
         let unrelated_room = "other@conference.example.test";
@@ -898,7 +899,9 @@ mod tests {
                 old_connection,
             ),
         );
-        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 0);
+        let remove =
+            |identity| remove_local_muc_occupant_exact_from(&occupants, identity).is_some();
+        assert_eq!(remove_committed_muc_audience(&committed, remove), 0);
         assert!(occupants.contains_key(&unrelated_key));
     }
 

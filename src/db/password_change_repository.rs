@@ -147,17 +147,16 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             format!("behavior:{}", user.id),
         ];
         if !lease.guard_verified {
-            match self
-                .abuse
-                .verify_or_allow_in_tx_v2(
-                    &mut reserve_tx,
-                    AbuseAction::PasswordChange,
-                    &subject,
-                    &actors,
-                    command.proof,
-                    command.intent,
-                )
-                .await?
+            match db::abuse_transaction_repository::verify_in_tx(
+                &mut reserve_tx,
+                &self.abuse,
+                AbuseAction::PasswordChange,
+                &subject,
+                &actors,
+                command.proof,
+                Some(command.intent),
+            )
+            .await?
             {
                 TransactionalGuardOutcome::Allowed => {
                     anyhow::ensure!(
@@ -290,9 +289,13 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
                 db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await?,
                 "password-change failure ownership changed"
             );
-            self.abuse
-                .record_failure_in_tx(&mut tx, AbuseAction::PasswordChange, &actors)
-                .await?;
+            db::abuse_transaction_repository::record_failure_in_tx(
+                &mut tx,
+                &self.abuse,
+                AbuseAction::PasswordChange,
+                &actors,
+            )
+            .await?;
             let response = self
                 .complete_response(
                     &mut tx,

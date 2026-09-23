@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
-const [abuse, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
+const [abuse, abuseTransaction, abuseVerification, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
     read('src/abuse.rs'),
     read('crates/northstar-abuse-policy/src/lib.rs'),
@@ -15,7 +15,10 @@ const [abuse, config, envExample, apiRouter, authRoutes, reportRoutes, protocolS
     read('crates/northstar-abuse-policy/src/pow.rs'),
     read('crates/northstar-abuse-policy/src/cooldown.rs'),
     read('crates/northstar-abuse-policy/src/config.rs'),
-  ]).then(parts => parts.join('\n')), read('src/config.rs'), read('.env.example'),
+  ]).then(parts => parts.join('\n')),
+  read('src/db/abuse_transaction_repository.rs'),
+  read('src/db/abuse_verification_repository.rs'),
+  read('src/config.rs'), read('.env.example'),
   read('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), read('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
   read('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/db/account_repository.rs'), read('src/account_recovery.rs'), read('src/db/users.rs'), read('src/db/api_control.rs'), read('src/error.rs'), read('src/xmpp/xml_util.rs'),
@@ -90,8 +93,12 @@ assert.match(dispatch, /"message"\s*=>\s*self\.message\(root,\s*xml,\s*client_xm
 assert.match(powIntentMigration, /protocol_version SMALLINT NOT NULL DEFAULT 1/);
 assert.match(powIntentMigration, /intent_method[\s\S]*intent_path[\s\S]*body_sha256[\s\S]*server_nonce[\s\S]*issued_at/,
   'durable challenges must store every v2 intent/time/nonce component');
-assert.match(abuse, /verify_or_allow_in_tx_v2/,
-  'v2 proof consumption must remain available inside the mutation transaction');
+assert.match(abuseTransaction, /pub\(crate\) async fn verify_in_tx\([\s\S]+abuse_verification_repository::verify_in_tx/,
+  'the database adapter must consume v2 proof inside the mutation transaction');
+assert.match(abuseVerification, /pub\(crate\) async fn verify_in_tx\([\s\S]+DELETE FROM abuse_pow_challenges WHERE id=\$1[\s\S]+persist_db_states/,
+  'one-use proof deletion and actor-state persistence must share that transaction');
+assert.doesNotMatch(abuse, /sqlx::Transaction/,
+  'anti-abuse policy must not accept database transactions');
 assert.match(abuse, /PasswordChange, "XMPP", "\/xmpp\/account-remove"/,
   'authenticated XMPP account removal must have a closed v2 intent route');
 assert.match(miscProtocol, /PasswordChangeRequest[\s\S]+\/xmpp\/account-remove[\s\S]+DeletionQuiesceRequest/,
@@ -117,7 +124,7 @@ assert.match(xmppRegistration, /password_work: crate::password_work::PasswordWor
 assert.match(xmppRegistration, /\.pool\s*\.begin\(\)/,
   'the complete registration operation must have one repository-owned transaction');
 assert.match(xmppRegistration,
-  /verify_or_allow_in_tx_v2[\s\S]+prepare_registration_with_reservation[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
+  /abuse_transaction_repository::verify_in_tx[\s\S]+prepare_registration_with_reservation[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
   'XMPP registration must reject invalid body-bound proofs before password derivation');
 assert.match(xmppRegistration, /request\.proof,\s*request\.intent,\s*true,\s*prepared/,
   'XMPP registration must keep proof consumption and account creation in one transaction');
@@ -168,16 +175,16 @@ const repositoryRegistrationGuard = accountRepository.slice(
   accountRepository.indexOf('async fn register('),
 );
 assert.match(repositoryRegistrationGuard,
-  /\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_fence_in_tx[\s\S]+verify_or_allow_in_tx_v2[\s\S]+mark_idempotency_guard_verified_fence_in_tx[\s\S]+transaction\.commit\(\)/,
+  /\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_fence_in_tx[\s\S]+abuse_transaction_repository::verify_in_tx[\s\S]+mark_idempotency_guard_verified_fence_in_tx[\s\S]+transaction\.commit\(\)/,
   'the repository must commit proof consumption and the guard marker together');
 assert.match(repositoryRegistrationGuard,
   /DeniedNeedsCommit[\s\S]+abandon_idempotency_lease_fence_in_tx[\s\S]+transaction\.commit\(\)/,
   'a registration denial must commit its penalty and abandon only the fenced lease');
 assert.match(httpRepositoryRegistration, /yield_http_registration_lease/,
   'temporary password-worker overload must preserve the committed proof marker while fencing the old worker');
-assert.match(dbUsers, /change_password_guarded_v2[\s\S]+verify_or_allow_in_tx_v2[\s\S]+apply_password_credentials_in_tx/,
+assert.match(dbUsers, /change_password_guarded_v2[\s\S]+abuse_transaction_repository::verify_in_tx[\s\S]+apply_password_credentials_in_tx/,
   'XMPP password proof consumption and credential rotation must share one transaction');
-assert.match(dbUsers, /begin_account_deletion_quiesce_guarded_v2[\s\S]+verify_or_allow_in_tx_v2[\s\S]+begin_account_deletion_quiesce_in_tx[\s\S]+transaction\.commit/,
+assert.match(dbUsers, /begin_account_deletion_quiesce_guarded_v2[\s\S]+abuse_transaction_repository::verify_in_tx[\s\S]+begin_account_deletion_quiesce_in_tx[\s\S]+transaction\.commit/,
   'account-removal proof consumption and durable account quiesce must share one transaction');
 assert.match(dbUsers, /begin_account_deletion_quiesce_in_tx[\s\S]+INSERT INTO account_deletion_requests/,
   'a committed account quiesce must create its crash-recovery owner in the same transaction');

@@ -172,6 +172,11 @@ Key ownership:
   cancellation tokens from the shared session map; the reaper has no session
   map authority. Worker deadlines, election locks and cancellation behavior
   remain unchanged.
+- Public configuration and host metadata use a discovery context containing
+  startup policy and the live registration and island-mode flags. HTTP transport
+  middleware receives only trusted proxy addresses and its rejection counter;
+  the administrator listener receives a separate gateway credential verifier.
+  These entry paths no longer need general application state for those checks.
 - Report and appeal services validate content before requesting a complete
   repository operation. Authorization, proof admission, semantic rejection or
   business mutation, and encrypted response replay share one transaction.

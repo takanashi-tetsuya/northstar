@@ -1001,7 +1001,10 @@ fn offers_xmpp_subprotocol(headers: &HeaderMap) -> bool {
         .any(|protocol| protocol.trim() == "xmpp")
 }
 
-pub async fn public_config(State(state): State<Arc<AppState>>) -> Json<Value> {
+pub async fn public_config(
+    State(state): State<crate::state::PublicDiscoveryContext>,
+) -> Json<Value> {
+    let policy = state.policy();
     let registration_mode = state.registration_mode();
     let open_registration = registration_mode != crate::config::RegistrationMode::Closed;
     let registration_mode = match registration_mode {
@@ -1009,36 +1012,35 @@ pub async fn public_config(State(state): State<Arc<AppState>>) -> Json<Value> {
         crate::config::RegistrationMode::Open => "open",
         crate::config::RegistrationMode::InvitationOnly => "invitation",
     };
-    let federation_enabled = state.config.federation_enabled && !state.island_mode_enabled();
+    let federation_enabled = state.federation_enabled();
     Json(json!({
-        "domain":state.config.domain,
-        "public_url":state.config.public_url,
+        "domain":policy.domain,
+        "public_url":policy.public_url,
         "open_registration":open_registration,
         "invitation_required":state.registration_requires_invitation(),
         "registration_mode":registration_mode,
         "registration_dependency_locked":state.registration_opening_is_dependency_locked(),
-        "archive_policy":if state.config.require_encrypted_archive {"encrypted_only"} else {"all"},
-        "websocket_path":state.config.websocket_enabled.then_some("/xmpp-websocket")
-        ,"bosh_path":(state.config.bosh_enabled && state.config.public_url.starts_with("https://")).then_some("/http-bind")
-        ,"upload_max_bytes":state.config.upload_mode.admits_new_uploads().then_some(state.config.upload_max_bytes)
-        ,"upload_download_max_bytes":state.config.upload_mode.keeps_storage_runtime().then_some(state.config.upload_download_max_bytes)
-        ,"upload_service":state.config.upload_mode.admits_new_uploads().then(||format!("upload.{}",state.config.domain))
-        ,"muc_service":format!("conference.{}",state.config.domain)
+        "archive_policy":if policy.require_encrypted_archive {"encrypted_only"} else {"all"},
+        "websocket_path":policy.websocket_enabled.then_some("/xmpp-websocket")
+        ,"bosh_path":(policy.bosh_enabled && policy.public_url.starts_with("https://")).then_some("/http-bind")
+        ,"upload_max_bytes":policy.upload_mode.admits_new_uploads().then_some(policy.upload_max_bytes)
+        ,"upload_download_max_bytes":policy.upload_mode.keeps_storage_runtime().then_some(policy.upload_download_max_bytes)
+        ,"upload_service":policy.upload_mode.admits_new_uploads().then(||format!("upload.{}",policy.domain))
+        ,"muc_service":format!("conference.{}",policy.domain)
         ,"federation_enabled":federation_enabled
-        ,"pow_max_work_factor":state.config.pow_max_work_factor
-        ,"pow_approximate_max_device_seconds":state.config.pow_max_device_seconds
+        ,"pow_max_work_factor":policy.pow_max_work_factor
+        ,"pow_approximate_max_device_seconds":policy.pow_max_device_seconds
         ,"capabilities":{
-            "rest_api":state.config.rest_api_enabled,
-            "websocket":state.config.websocket_enabled,
-            "bosh":state.config.bosh_enabled,
-            "web_client":state.config.web_client_enabled,
-            "passkeys":state.config.web_client_enabled && state.config.fast_token_enabled
-                && crate::services::passkeys::relying_party(&state.config.public_url).is_ok(),
-            "web_administration":state.config.web_admin_enabled,
-            "invitation_registration":state.config.web_client_enabled,
-            "upload_admission":state.config.upload_mode.admits_new_uploads(),
-            "upload_download":state.config.upload_mode.keeps_storage_runtime(),
-            "upload_mode":match state.config.upload_mode {
+            "rest_api":policy.rest_api_enabled,
+            "websocket":policy.websocket_enabled,
+            "bosh":policy.bosh_enabled,
+            "web_client":policy.web_client_enabled,
+            "passkeys":policy.passkeys_enabled,
+            "web_administration":policy.web_admin_enabled,
+            "invitation_registration":policy.web_client_enabled,
+            "upload_admission":policy.upload_mode.admits_new_uploads(),
+            "upload_download":policy.upload_mode.keeps_storage_runtime(),
+            "upload_mode":match policy.upload_mode {
                 crate::config::UploadMode::Enabled => "enabled",
                 crate::config::UploadMode::DrainReadOnly => "drain_read_only",
                 crate::config::UploadMode::Disabled => "disabled",
@@ -1048,22 +1050,22 @@ pub async fn public_config(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 pub async fn host_meta_xml(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::PublicDiscoveryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let policy = state.policy();
     let origin = request_base_url(
         peer.ip(),
         &headers,
-        &state.config.trusted_proxy_ips,
-        &state.config.domain,
-        &state.config.public_url,
+        &policy.trusted_proxy_ips,
+        &policy.domain,
+        &policy.public_url,
     );
-    let ws_href = state
-        .config
+    let ws_href = policy
         .websocket_enabled
         .then(|| secure_websocket_url(&origin));
-    let bosh_href = advertised_bosh_url(state.config.bosh_enabled, &state.config.public_url);
+    let bosh_href = advertised_bosh_url(policy.bosh_enabled, &policy.public_url);
 
     let bosh_link = bosh_href.as_deref().map_or_else(String::new, |href| {
         format!(
@@ -1096,40 +1098,40 @@ pub async fn host_meta_xml(
 }
 
 pub async fn host_meta_json(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::PublicDiscoveryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let policy = state.policy();
     let origin = request_base_url(
         peer.ip(),
         &headers,
-        &state.config.trusted_proxy_ips,
-        &state.config.domain,
-        &state.config.public_url,
+        &policy.trusted_proxy_ips,
+        &policy.domain,
+        &policy.public_url,
     );
-    let ws_href = state
-        .config
+    let ws_href = policy
         .websocket_enabled
         .then(|| secure_websocket_url(&origin));
-    let bosh_href = advertised_bosh_url(state.config.bosh_enabled, &state.config.public_url);
-    let federation_enabled = state.config.federation_enabled && !state.island_mode_enabled();
+    let bosh_href = advertised_bosh_url(policy.bosh_enabled, &policy.public_url);
+    let federation_enabled = state.federation_enabled();
     let json_body = host_meta_json_document(
         ws_href.as_deref(),
         bosh_href.as_deref(),
-        &state.config.domain,
-        &state.config.xep_0487_ips,
-        state.config.xep_0487_ttl_seconds,
-        state.config.xep_0487_priority,
-        state.config.xep_0487_weight,
-        state.config.xmpps_bind.port(),
-        federation_enabled.then_some(state.config.s2s_tls_bind.port()),
+        &policy.domain,
+        &policy.xep_0487_ips,
+        policy.xep_0487_ttl_seconds,
+        policy.xep_0487_priority,
+        policy.xep_0487_weight,
+        policy.xmpps_port,
+        federation_enabled.then_some(policy.s2s_tls_port),
     );
     let cache_control = header::HeaderValue::from_str(&format!(
         "public, max-age={}",
-        if state.config.xep_0487_ips.is_empty() {
+        if policy.xep_0487_ips.is_empty() {
             300
         } else {
-            state.config.xep_0487_ttl_seconds
+            policy.xep_0487_ttl_seconds
         }
     ))
     .expect("validated XEP-0487 TTL always forms a valid header");

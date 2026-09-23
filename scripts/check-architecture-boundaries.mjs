@@ -2069,6 +2069,7 @@ for (const [name, source] of [
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
   ['ApiQueryService', read('src/services/api_queries.rs')],
   ['ApiQueryContext', read('src/state/api_queries.rs')],
+  ['HTTP entry and public discovery policies', read('src/state/http_policy.rs')],
   ['API mutation values', read('src/services/api_mutations.rs')],
   ['ReportService', read('src/services/reports.rs')],
   ['ReportContext', read('src/state/reports.rs')],

@@ -1,3 +1,11 @@
+pub(crate) mod http_policy;
+pub(crate) use http_policy::{AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext};
+impl axum::extract::FromRef<Arc<AppState>> for PublicDiscoveryContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.public_discovery_context.clone()
+    }
+}
+
 pub(crate) mod capacity_maintenance;
 pub(crate) type CapacityLeaseRenewalContext = capacity_maintenance::CapacityLeaseRenewalContext<
     db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
@@ -1770,6 +1778,7 @@ pub struct AppState {
     pub config: Config,
     pub pool: PgPool,
     api_query_context: ApiQueryContext,
+    public_discovery_context: PublicDiscoveryContext,
     passkey_service: PasskeyService,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
@@ -2016,6 +2025,17 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
+    pub(crate) fn http_transport_policy(&self) -> HttpTransportPolicy {
+        HttpTransportPolicy::new(
+            self.config.trusted_proxy_ips.clone(),
+            Arc::clone(&self.metrics),
+        )
+    }
+
+    pub(crate) fn admin_gateway_verifier(&self) -> AdminGatewayVerifier {
+        AdminGatewayVerifier::new(self.web_admin_gateway_token.clone())
+    }
+
     pub(crate) fn capacity_lease_renewal_context(&self) -> CapacityLeaseRenewalContext {
         capacity_maintenance::CapacityLeaseRenewalContext::new(
             crate::services::capacity_maintenance::CapacityMaintenanceService::new(
@@ -2977,6 +2997,38 @@ impl AppState {
         let api_cursor = Arc::new(api_cursor);
         let federation_write_policy = FederationWritePolicy::new(island_mode);
         let registration_closed = Arc::new(AtomicBool::new(registration_closed));
+        let public_discovery_context = PublicDiscoveryContext::new(
+            http_policy::PublicDiscoveryPolicy {
+                domain: config.domain.clone(),
+                public_url: config.public_url.clone(),
+                trusted_proxy_ips: config.trusted_proxy_ips.clone(),
+                configured_registration_mode: config.configured_registration_mode(),
+                registration_dependency_locked: config.registration_dependency_locked(),
+                require_encrypted_archive: config.require_encrypted_archive,
+                federation_configured: config.federation_enabled,
+                rest_api_enabled: config.rest_api_enabled,
+                websocket_enabled: config.websocket_enabled,
+                bosh_enabled: config.bosh_enabled,
+                web_client_enabled: config.web_client_enabled,
+                passkeys_enabled: config.web_client_enabled
+                    && config.fast_token_enabled
+                    && crate::services::passkeys::relying_party(&config.public_url).is_ok(),
+                web_admin_enabled: config.web_admin_enabled,
+                upload_mode: config.upload_mode,
+                upload_max_bytes: config.upload_max_bytes,
+                upload_download_max_bytes: config.upload_download_max_bytes,
+                pow_max_work_factor: config.pow_max_work_factor,
+                pow_max_device_seconds: config.pow_max_device_seconds,
+                xep_0487_ips: config.xep_0487_ips.clone(),
+                xep_0487_ttl_seconds: config.xep_0487_ttl_seconds,
+                xep_0487_priority: config.xep_0487_priority,
+                xep_0487_weight: config.xep_0487_weight,
+                xmpps_port: config.xmpps_bind.port(),
+                s2s_tls_port: config.s2s_tls_bind.port(),
+            },
+            Arc::clone(&registration_closed),
+            Arc::clone(&federation_write_policy.island_mode),
+        );
         let api_query_context = api_queries::ApiQueryContext::new(
             crate::services::api_queries::ApiQueryService::new(
                 db::api_queries::PostgresApiQueryRepository::new(pool.clone()),
@@ -3060,6 +3112,7 @@ impl AppState {
         let state = Arc::new(Self {
             config,
             api_query_context,
+            public_discovery_context,
             omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService::new(
                 db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
             ),
@@ -3323,16 +3376,6 @@ impl AppState {
 
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
         self.web_admin_gateway_token.is_some()
-    }
-
-    pub(crate) fn admin_gateway_request_authorized(&self, candidate: Option<&str>) -> bool {
-        let Some(expected) = self.web_admin_gateway_token.as_deref() else {
-            return true;
-        };
-        candidate.is_some_and(|candidate| {
-            candidate.len() == expected.len()
-                && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
-        })
     }
 
     pub(crate) fn has_component_credentials(&self) -> bool {

@@ -397,6 +397,10 @@ use a typed maintenance service and PostgreSQL repository. The renewal context
 keeps only the shared route map needed to snapshot exact cancellation tokens;
 the reaper has no session-map authority. Legal holds, exports and the remaining
 runtime commands still need their own boundaries.
+Public configuration and host metadata now read a narrow discovery context;
+transport and administrator gateway middleware receive only their required
+policy and verifier. The discovery context shares the live registration and
+island-mode flags, so administrative changes remain visible without broad state.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field

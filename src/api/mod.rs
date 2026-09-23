@@ -11,13 +11,13 @@ use axum::{
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::net::SocketAddr;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 
 use crate::abuse::AbuseAction;
 use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::state::AppState;
+use crate::state::{AdminGatewayVerifier, AppState, HttpTransportPolicy};
 
 use crate::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
@@ -508,7 +508,7 @@ fn administrator_static_routes() -> Router<Arc<AppState>> {
 
 fn common_http_layers(
     router: Router<Arc<AppState>>,
-    state: Arc<AppState>,
+    state: HttpTransportPolicy,
     allow_plaintext_observability: bool,
 ) -> Router<Arc<AppState>> {
     let router = if allow_plaintext_observability {
@@ -606,7 +606,7 @@ pub fn public_router(state: Arc<AppState>) -> Router {
     if state.config.web_client_enabled {
         router = router.merge(web_client_static_routes());
     }
-    common_http_layers(router, Arc::clone(&state), true).with_state(state)
+    common_http_layers(router, state.http_transport_policy(), true).with_state(state)
 }
 
 pub fn administrator_router(state: Arc<AppState>) -> Router {
@@ -621,10 +621,10 @@ pub fn administrator_router(state: Arc<AppState>) -> Router {
         .merge(administrator_static_routes());
     common_http_layers(
         router.layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
+            state.admin_gateway_verifier(),
             administrator_gateway_authentication,
         )),
-        Arc::clone(&state),
+        state.http_transport_policy(),
         false,
     )
     .with_state(state)
@@ -643,7 +643,7 @@ async fn api_request_id(mut request: Request, next: Next) -> Response {
 }
 
 async fn secure_http_transport(
-    State(state): State<Arc<AppState>>,
+    State(state): State<HttpTransportPolicy>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
@@ -652,7 +652,7 @@ async fn secure_http_transport(
 }
 
 async fn secure_administrator_transport(
-    State(state): State<Arc<AppState>>,
+    State(state): State<HttpTransportPolicy>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
@@ -661,7 +661,7 @@ async fn secure_administrator_transport(
 }
 
 async fn secure_http_transport_policy(
-    state: Arc<AppState>,
+    state: HttpTransportPolicy,
     peer: SocketAddr,
     request: Request,
     next: Next,
@@ -672,16 +672,12 @@ async fn secure_http_transport_policy(
         request.uri().path(),
         peer.ip(),
         request.headers(),
-        &state.config.trusted_proxy_ips,
+        state.trusted_proxies(),
     ) {
         return next.run(request).await;
     }
 
-    let rejected = state
-        .metrics
-        .http_insecure_requests_rejected_total
-        .fetch_add(1, Ordering::Relaxed)
-        .saturating_add(1);
+    let rejected = state.record_insecure_rejection();
     if rejected.is_power_of_two() {
         tracing::warn!(
             peer_ip = %peer.ip(),
@@ -718,29 +714,33 @@ fn secure_transport_allowed(
 }
 
 async fn administrator_gateway_authentication(
-    State(state): State<Arc<AppState>>,
+    State(verifier): State<AdminGatewayVerifier>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let mut supplied = request
-        .headers()
-        .get_all("x-northstar-admin-gateway-token")
-        .iter();
-    let candidate = match (supplied.next(), supplied.next()) {
-        (Some(value), None) => value.to_str().ok(),
-        (None, None) => None,
-        _ => return administrator_gateway_rejection(),
-    };
-    if state.admin_gateway_request_authorized(candidate) {
-        // The proxy credential authorizes entry to this listener; it must not
-        // become ambient request data visible to downstream REST handlers,
-        // tracing, or future reverse-proxy integrations.
-        request
-            .headers_mut()
-            .remove("x-northstar-admin-gateway-token");
+    if authorize_administrator_gateway_headers(&verifier, request.headers_mut()) {
         return next.run(request).await;
     }
     administrator_gateway_rejection()
+}
+
+fn authorize_administrator_gateway_headers(
+    verifier: &AdminGatewayVerifier,
+    headers: &mut HeaderMap,
+) -> bool {
+    let mut supplied = headers.get_all("x-northstar-admin-gateway-token").iter();
+    let candidate = match (supplied.next(), supplied.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        (None, None) => None,
+        _ => return false,
+    };
+    if !verifier.authorized(candidate) {
+        return false;
+    }
+    // The proxy credential authorizes entry to this listener; it must not
+    // remain visible to downstream handlers, tracing or proxy integrations.
+    headers.remove("x-northstar-admin-gateway-token");
+    true
 }
 
 fn administrator_gateway_rejection() -> Response {
@@ -1212,6 +1212,57 @@ mod tests {
         assert!(public.contains("web_client_static_routes"));
         assert!(!public.contains("administrator_api_routes"));
         assert!(!public.contains("administrator_static_routes"));
+    }
+
+    #[test]
+    fn gateway_headers_require_one_verified_value_and_are_removed_before_dispatch() {
+        let secret = Arc::new(zeroize::Zeroizing::new(
+            uuid::Uuid::new_v4().simple().to_string(),
+        ));
+        let verifier = AdminGatewayVerifier::new(Some(Arc::clone(&secret)));
+        let mut headers = HeaderMap::new();
+        assert!(!authorize_administrator_gateway_headers(
+            &verifier,
+            &mut headers
+        ));
+        headers.insert(
+            "x-northstar-admin-gateway-token",
+            HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        assert!(!authorize_administrator_gateway_headers(
+            &verifier,
+            &mut headers
+        ));
+        headers.insert(
+            "x-northstar-admin-gateway-token",
+            HeaderValue::from_str(&secret).unwrap(),
+        );
+        headers.append(
+            "x-northstar-admin-gateway-token",
+            HeaderValue::from_str(&secret).unwrap(),
+        );
+        assert!(!authorize_administrator_gateway_headers(
+            &verifier,
+            &mut headers
+        ));
+        assert!(!authorize_administrator_gateway_headers(
+            &AdminGatewayVerifier::new(None),
+            &mut headers
+        ));
+        headers.remove("x-northstar-admin-gateway-token");
+        headers.insert(
+            "x-northstar-admin-gateway-token",
+            HeaderValue::from_str(&secret).unwrap(),
+        );
+        assert!(authorize_administrator_gateway_headers(
+            &verifier,
+            &mut headers
+        ));
+        assert!(!headers.contains_key("x-northstar-admin-gateway-token"));
+        assert!(authorize_administrator_gateway_headers(
+            &AdminGatewayVerifier::new(None),
+            &mut headers
+        ));
     }
 
     #[test]

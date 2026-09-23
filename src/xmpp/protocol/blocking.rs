@@ -140,19 +140,13 @@ impl ProtocolSession {
                     // server-authoritative list again after reconnect.
                     session.sender.disconnect_backpressured_transport();
                     session.disconnect.cancel();
-                    self.state
-                        .metrics
-                        .post_accept_side_effect_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.post_accept_failure_telemetry().record_failure();
                     tracing::warn!(%jid, ?error, "XEP-0191 blocklist push queue closed; disconnecting stale resource");
                 }
                 Err(_) => {
                     session.sender.disconnect_backpressured_transport();
                     session.disconnect.cancel();
-                    self.state
-                        .metrics
-                        .post_accept_side_effect_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.post_accept_failure_telemetry().record_failure();
                     tracing::warn!(%jid, "timed out delivering XEP-0191 blocklist push; disconnecting stale resource");
                 }
             }

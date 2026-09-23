@@ -3213,14 +3213,39 @@ for (const invariant of ['state.cluster.require_shutdown()', 'anyhow::bail!']) {
     throw new Error(`cluster failure policy lost fail-closed transition: ${invariant}`);
   }
 }
+const accountRevocationWorker = structBody(
+  read('src/cluster.rs'),
+  'pub(crate) async fn run_account_revocations<',
+);
+if (!mainSource.includes('state.account_revocation_worker_context()')
+    || /Arc<AppState>|\bstate\./.test(accountRevocationWorker)
+    || !accountRevocationWorker.includes('context.authority.identity()')
+    || !accountRevocationWorker.includes('context.routes.revoke(')
+    || !accountRevocationWorker.includes('context.routes.fence_all()')) {
+  throw new Error('account revocation worker must use a narrow live-identity and fail-closed route context');
+}
 const c2sTelemetry = read('src/xmpp/capabilities.rs');
 const c2sProtocol = read('src/xmpp/protocol.rs');
+const c2sDispatch = read('src/xmpp/protocol/dispatch.rs');
 if (!c2sTelemetry.includes('struct PostActionTelemetry')
+    || !c2sTelemetry.includes('struct InboundStanzaTelemetry')
+    || !c2sTelemetry.includes('struct PostAcceptFailureTelemetry')
+    || !c2sTelemetry.includes('struct PushSubscriptionTelemetry')
+    || !c2sTelemetry.includes('struct PushDeliveryTelemetry')
+    || !c2sTelemetry.includes('struct RegistrationTelemetry')
+    || !c2sTelemetry.includes('struct AccountAbuseTelemetry')
+    || !c2sTelemetry.includes('struct SessionBindTelemetry')
     || !c2sTelemetry.includes('struct PersonalMessageTelemetry')
     || !c2sTelemetry.includes('struct FederatedMucTelemetry')
     || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
     || !c2sProtocol.includes('c2s_post_action_telemetry()')
     || /(?:self\.)?state\.metrics\.post_action_/.test(c2sProtocol)
+    || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.state\.inbound_stanza_telemetry\(\)\.received\(\);/.test(c2sDispatch)
+    || /self\.state\.metrics\b/.test(c2sDispatch)
+    || ['privacy.rs', 'blocking.rs', 'roster.rs'].some((name) =>
+      /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${name}`)))
+    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/ibr.rs'))
+    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/misc.rs'))
     || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/messaging.rs'))
     || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/federated_muc.rs'))) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
@@ -3297,7 +3322,6 @@ const stateServiceAccessors = [
   'locked_muc_expiry_service',
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
-  'account_revocation_consumer_service',
   'session_authority_sweep_service',
   'cluster_session_route_maintenance_service',
   'cluster_replay_maintenance_service',

@@ -453,8 +453,11 @@ leases and the operation point-of-no-return transaction use separate worker
 services; effects still start after the durable fence commits. XEP-0215
 service selection and authorization now belong to the ExtDisco service.
 Background housekeeping retains five independent database cleanup steps behind
-a worker context. The account-revocation consumer uses one cluster-instance
-snapshot through read, local fencing and exact revision acknowledgement.
+a worker context. The account-revocation worker receives a typed consumer,
+local route revocation handle and narrow cluster failure reporter rather than
+`Arc<AppState>`. It reads the current cluster-instance epoch for each batch
+and uses that identity through read, local fencing and exact revision
+acknowledgement.
 Message admission, challenge issuance/cleanup, SASL penalties and Passkey proof
 checks now expose separate grants over the anti-abuse owner, removing the
 public `AppState.abuse` field. Inbound S2S offline admission and best-effort
@@ -482,8 +485,9 @@ privacy checks or lease cleanup, then recheck the exact connection before
 delivery.
 Background housekeeping receives only its two shared counters. Archive
 retention holds ten shared counter cells rather than the metrics registry.
-S2S ingress/egress and PEP/PubSub delivery use borrowed counters and timers
-instead of the complete registry.
+S2S ingress/egress, C2S stanza ingress, roster/privacy/blocking side-effect
+reporting, registration/account abuse, Push, and PEP/PubSub delivery use
+borrowed counters and timers instead of the complete registry.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

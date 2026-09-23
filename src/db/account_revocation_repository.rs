@@ -7,6 +7,7 @@ use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub(crate) struct PostgresAccountRevocationRepository {
     pool: PgPool,
 }

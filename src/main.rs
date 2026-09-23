@@ -747,7 +747,7 @@ async fn run() -> Result<()> {
             },
         );
 
-        let revocation_state = state.clone();
+        let revocation_context = Arc::new(state.account_revocation_worker_context());
         let revocation_cancel = cancel.clone();
         worker_registry.supervise(
             "account-revocations",
@@ -757,7 +757,7 @@ async fn run() -> Result<()> {
             cancel.clone(),
             move |heartbeat| {
                 cluster::run_account_revocations(
-                    Arc::clone(&revocation_state),
+                    Arc::clone(&revocation_context),
                     revocation_cancel.clone(),
                     heartbeat,
                 )

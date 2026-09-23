@@ -7,7 +7,6 @@ use crate::{
 };
 use anyhow::Result;
 use roxmltree::Node;
-use std::sync::atomic::Ordering;
 use zeroize::Zeroize;
 
 pub(crate) const IBR2_NS: &str = "urn:xmpp:register:0";
@@ -339,26 +338,17 @@ impl ProtocolSession {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::error!(?error, "XEP-0389 registration backend failed");
-                self.state
-                    .metrics
-                    .anti_abuse_backend_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().backend_failed();
                 return IbrCompletion::Failed("internal-server-error");
             }
         };
         match outcome {
             RegistrationOutcome::Created(user) => {
-                self.state
-                    .metrics
-                    .registrations_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().registered();
                 IbrCompletion::Created(user.username)
             }
             RegistrationOutcome::AbuseDenied(requirement) => {
-                self.state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().rate_limited();
                 if !self.ibr_pow_enabled {
                     return IbrCompletion::Retry(self.ibr_challenge(None, Some(&requirement)));
                 }
@@ -378,10 +368,7 @@ impl ProtocolSession {
                     }
                     Err(error) => {
                         tracing::warn!(?error, "XEP-0389 v2 challenge issuance failed");
-                        self.state
-                            .metrics
-                            .anti_abuse_backend_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.state.registration_telemetry().backend_failed();
                         IbrCompletion::Failed("resource-constraint")
                     }
                 }
@@ -392,10 +379,7 @@ impl ProtocolSession {
             RegistrationOutcome::UsernameTaken => IbrCompletion::Failed("conflict"),
             RegistrationOutcome::RateLimited => IbrCompletion::Failed("resource-constraint"),
             RegistrationOutcome::CapacityExhausted => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().capacity_rejected();
                 IbrCompletion::Failed("resource-constraint")
             }
             RegistrationOutcome::PasswordWorkOverloaded => {

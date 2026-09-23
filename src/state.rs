@@ -1822,6 +1822,148 @@ type PasskeyService =
 type RosterService = crate::services::roster::RosterService<db::roster::PostgresRosterRepository>;
 type UploadService = crate::services::upload::UploadService<db::upload::PostgresUploadRepository>;
 
+/// The revocation worker can only fence local routes. It cannot admit,
+/// replace, remove, or deliver through a session.
+#[derive(Clone)]
+pub(crate) struct AccountRevocationRoutes {
+    sessions: Arc<DashMap<String, OnlineSession>>,
+}
+
+impl AccountRevocationRoutes {
+    fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
+        Self { sessions }
+    }
+
+    fn revoke_in(
+        sessions: &DashMap<String, OnlineSession>,
+        user_id: uuid::Uuid,
+        bare_account_jid: &str,
+        auth_generation_exclusive: Option<i64>,
+    ) -> usize {
+        let Ok(bare_account_jid) = crate::jid::canonicalize_bare(bare_account_jid) else {
+            return 0;
+        };
+        let mut revoked = 0;
+        for entry in sessions.iter_mut() {
+            if bare_jid(entry.key()) == bare_account_jid
+                && entry.user_id == user_id
+                && auth_generation_exclusive
+                    .is_none_or(|generation| entry.auth_generation < generation)
+            {
+                entry.routable.store(false, Ordering::Release);
+                entry.disconnect.cancel();
+                revoked += 1;
+            }
+        }
+        revoked
+    }
+
+    pub(crate) fn revoke(
+        &self,
+        user_id: uuid::Uuid,
+        bare_account_jid: &str,
+        auth_generation_exclusive: Option<i64>,
+    ) -> usize {
+        Self::revoke_in(
+            &self.sessions,
+            user_id,
+            bare_account_jid,
+            auth_generation_exclusive,
+        )
+    }
+
+    pub(crate) fn fence_all(&self) {
+        for session in self.sessions.iter_mut() {
+            session.routable.store(false, Ordering::Release);
+            session.disconnect.cancel();
+        }
+    }
+}
+
+#[cfg(test)]
+mod account_revocation_route_tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn session(user_id: uuid::Uuid, generation: i64, routable: bool) -> OnlineSession {
+        let connection_id = uuid::Uuid::new_v4();
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        OnlineSession {
+            user_id,
+            auth_generation: generation,
+            user_agent_epoch: None,
+            connection_id,
+            route_incarnation: RouteIncarnationSignal::new(connection_id),
+            lifecycle: Arc::default(),
+            metrics_counted: Arc::default(),
+            routable: Arc::new(AtomicBool::new(routable)),
+            sender: crate::outbound::OutboundSender::new(sender),
+            available: Arc::default(),
+            mix_presence_gate: Arc::default(),
+            mix_presence_fallback_suppressed: Arc::default(),
+            caps_observation_generation: Arc::default(),
+            carbons: Arc::default(),
+            priority: Arc::default(),
+            show: Arc::default(),
+            blocklist_requested: Arc::default(),
+            roster_requested: Arc::default(),
+            roster_sync: Arc::default(),
+            mix_roster_annotations: Arc::default(),
+            privacy_active: Arc::default(),
+            privacy_requested: Arc::default(),
+            directed_presence: Arc::default(),
+            last_presence: Arc::default(),
+            ip: None,
+            resource: "fixture".into(),
+            user_agent_id: None,
+            sm_session_id: Arc::default(),
+            muc_memberships: Arc::default(),
+            connected_at: Instant::now(),
+            last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
+            disconnect: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    #[test]
+    fn narrow_revoker_fences_pending_old_generations_but_not_replacements() {
+        let sessions = Arc::new(DashMap::new());
+        let owner = uuid::Uuid::new_v4();
+        sessions.insert("alice@example.test/old".into(), session(owner, 4, true));
+        sessions.insert(
+            "alice@example.test/pending".into(),
+            session(owner, 4, false),
+        );
+        sessions.insert("alice@example.test/current".into(), session(owner, 5, true));
+        sessions.insert(
+            "alice@example.test/recreated".into(),
+            session(uuid::Uuid::new_v4(), 2, true),
+        );
+        sessions.insert("bob@example.test/device".into(), session(owner, 1, true));
+
+        let routes = AccountRevocationRoutes::new(Arc::clone(&sessions));
+        assert_eq!(routes.revoke(owner, "alice@example.test", Some(5)), 2);
+        for key in ["alice@example.test/old", "alice@example.test/pending"] {
+            let entry = sessions.get(key).unwrap();
+            assert!(!entry.routable.load(Ordering::Acquire));
+            assert!(entry.disconnect.is_cancelled());
+        }
+        for key in [
+            "alice@example.test/current",
+            "alice@example.test/recreated",
+            "bob@example.test/device",
+        ] {
+            let entry = sessions.get(key).unwrap();
+            assert!(entry.routable.load(Ordering::Acquire));
+            assert!(!entry.disconnect.is_cancelled());
+        }
+
+        routes.fence_all();
+        assert!(sessions.iter().all(|entry| {
+            !entry.routable.load(Ordering::Acquire) && entry.disconnect.is_cancelled()
+        }));
+    }
+}
+
 /// Private observability capability. It contains only read-only live probes
 /// and the existing typed persistence service, never AppState or a mutable
 /// cluster, worker, connection, upload, or SM owner.
@@ -2229,6 +2371,68 @@ impl AppState {
         self.metrics
             .database_operation_duration_seconds
             .observe(duration);
+    }
+
+    pub(crate) fn inbound_stanza_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_> {
+        crate::xmpp::capabilities::InboundStanzaTelemetry::new(&self.metrics.stanzas_in_total)
+    }
+
+    pub(crate) fn post_accept_failure_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PostAcceptFailureTelemetry<'_> {
+        crate::xmpp::capabilities::PostAcceptFailureTelemetry::new(
+            &self.metrics.post_accept_side_effect_failures_total,
+        )
+    }
+
+    pub(crate) fn push_subscription_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PushSubscriptionTelemetry<'_> {
+        crate::xmpp::capabilities::PushSubscriptionTelemetry::new(
+            &self.metrics.rate_limited_total,
+            &self.metrics.push_subscriptions_rate_limited_total,
+        )
+    }
+
+    pub(crate) fn push_delivery_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PushDeliveryTelemetry<'_> {
+        crate::xmpp::capabilities::PushDeliveryTelemetry::new(
+            &self.metrics.push_notifications_failed_total,
+            &self.metrics.push_notifications_routed_total,
+            &self.metrics.push_notifications_attempted_total,
+        )
+    }
+
+    pub(crate) fn registration_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::RegistrationTelemetry<'_> {
+        crate::xmpp::capabilities::RegistrationTelemetry::new(
+            &self.metrics.anti_abuse_backend_failures_total,
+            &self.metrics.registrations_total,
+            &self.metrics.rate_limited_total,
+            &self.metrics.capacity_reservations_rejected_total,
+        )
+    }
+
+    pub(crate) fn account_abuse_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::AccountAbuseTelemetry<'_> {
+        crate::xmpp::capabilities::AccountAbuseTelemetry::new(
+            &self.metrics.anti_abuse_backend_failures_total,
+            &self.metrics.rate_limited_total,
+        )
+    }
+
+    pub(crate) fn session_bind_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::SessionBindTelemetry<'_> {
+        crate::xmpp::capabilities::SessionBindTelemetry::new(
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.active_sessions,
+        )
     }
 
     pub(crate) fn c2s_post_action_telemetry(
@@ -4256,12 +4460,16 @@ impl AppState {
         &self.s2s_roster_authorization_service
     }
 
-    pub(crate) fn account_revocation_consumer_service(
+    pub(crate) fn account_revocation_worker_context(
         &self,
-    ) -> &crate::services::account_revocation_consumer::AccountRevocationConsumerService<
+    ) -> crate::cluster::AccountRevocationWorkerContext<
         db::account_revocation_repository::PostgresAccountRevocationRepository,
     > {
-        &self.account_revocation_consumer_service
+        crate::cluster::AccountRevocationWorkerContext::new(
+            self.account_revocation_consumer_service.clone(),
+            AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
+            self.cluster.account_revocation_authority(),
+        )
     }
 
     pub(crate) fn session_authority_sweep_service(
@@ -4819,22 +5027,12 @@ impl AppState {
         bare_account_jid: &str,
         auth_generation_exclusive: Option<i64>,
     ) -> usize {
-        let Ok(bare_account_jid) = crate::jid::canonicalize_bare(bare_account_jid) else {
-            return 0;
-        };
-        let mut revoked = 0;
-        for entry in self.sessions.iter_mut() {
-            if bare_jid(entry.key()) == bare_account_jid
-                && entry.user_id == user_id
-                && auth_generation_exclusive
-                    .is_none_or(|generation| entry.auth_generation < generation)
-            {
-                entry.routable.store(false, Ordering::Release);
-                entry.disconnect.cancel();
-                revoked += 1;
-            }
-        }
-        revoked
+        AccountRevocationRoutes::revoke_in(
+            &self.sessions,
+            user_id,
+            bare_account_jid,
+            auth_generation_exclusive,
+        )
     }
 
     /// Remove exactly one local route incarnation. Every rollback and Drop

@@ -6,6 +6,180 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::metrics::{DurationHistogram, DurationTimer};
 
+/// One counter for every client frame entering the protocol dispatcher,
+/// including stream framing and malformed XML.
+pub(crate) struct InboundStanzaTelemetry<'a> {
+    received: &'a AtomicU64,
+}
+
+impl<'a> InboundStanzaTelemetry<'a> {
+    pub(crate) fn new(received: &'a AtomicU64) -> Self {
+        Self { received }
+    }
+
+    pub(crate) fn received(&self) {
+        self.received.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// One post-commit delivery failure counter shared by roster, blocking and
+/// privacy pushes. Each caller retains its own recovery/disconnect decision.
+pub(crate) struct PostAcceptFailureTelemetry<'a> {
+    failures: &'a AtomicU64,
+}
+
+impl<'a> PostAcceptFailureTelemetry<'a> {
+    pub(crate) fn new(failures: &'a AtomicU64) -> Self {
+        Self { failures }
+    }
+
+    pub(crate) fn record_failure(&self) {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// A rejected XEP-0357 subscription contributes to both the global and
+/// feature-specific rate-limit counters, in that order.
+pub(crate) struct PushSubscriptionTelemetry<'a> {
+    rate_limited: &'a AtomicU64,
+    push_rate_limited: &'a AtomicU64,
+}
+
+impl<'a> PushSubscriptionTelemetry<'a> {
+    pub(crate) fn new(rate_limited: &'a AtomicU64, push_rate_limited: &'a AtomicU64) -> Self {
+        Self {
+            rate_limited,
+            push_rate_limited,
+        }
+    }
+
+    pub(crate) fn rate_limited(&self) {
+        self.rate_limited.fetch_add(1, Ordering::Relaxed);
+        self.push_rate_limited.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Results of accepted push-notification attempts and service responses.
+pub(crate) struct PushDeliveryTelemetry<'a> {
+    failed: &'a AtomicU64,
+    routed: &'a AtomicU64,
+    attempted: &'a AtomicU64,
+}
+
+impl<'a> PushDeliveryTelemetry<'a> {
+    pub(crate) fn new(
+        failed: &'a AtomicU64,
+        routed: &'a AtomicU64,
+        attempted: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            failed,
+            routed,
+            attempted,
+        }
+    }
+
+    pub(crate) fn failed(&self) {
+        self.failed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn routed(&self) {
+        self.routed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn attempted(&self) {
+        self.attempted.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// XEP-0077 and XEP-0389 registration outcome counters. Account maintenance
+/// receives a smaller capability below and cannot record new registrations.
+pub(crate) struct RegistrationTelemetry<'a> {
+    backend_failures: &'a AtomicU64,
+    registrations: &'a AtomicU64,
+    rate_limited: &'a AtomicU64,
+    capacity_rejected: &'a AtomicU64,
+}
+
+impl<'a> RegistrationTelemetry<'a> {
+    pub(crate) fn new(
+        backend_failures: &'a AtomicU64,
+        registrations: &'a AtomicU64,
+        rate_limited: &'a AtomicU64,
+        capacity_rejected: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            backend_failures,
+            registrations,
+            rate_limited,
+            capacity_rejected,
+        }
+    }
+
+    pub(crate) fn backend_failed(&self) {
+        self.backend_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn registered(&self) {
+        self.registrations.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn rate_limited(&self) {
+        self.rate_limited.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn capacity_rejected(&self) {
+        self.capacity_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// XEP-0077 password change and account deletion need only abuse outcomes.
+pub(crate) struct AccountAbuseTelemetry<'a> {
+    backend_failures: &'a AtomicU64,
+    rate_limited: &'a AtomicU64,
+}
+
+impl<'a> AccountAbuseTelemetry<'a> {
+    pub(crate) fn new(backend_failures: &'a AtomicU64, rate_limited: &'a AtomicU64) -> Self {
+        Self {
+            backend_failures,
+            rate_limited,
+        }
+    }
+
+    pub(crate) fn backend_failed(&self) {
+        self.backend_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn rate_limited(&self) {
+        self.rate_limited.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Binding reservation and exact staged-route installation counters. The
+/// route count is paired with the exact compare-remove once fence.
+pub(crate) struct SessionBindTelemetry<'a> {
+    capacity_rejected: &'a AtomicU64,
+    active_sessions: &'a AtomicU64,
+}
+
+impl<'a> SessionBindTelemetry<'a> {
+    pub(crate) fn new(capacity_rejected: &'a AtomicU64, active_sessions: &'a AtomicU64) -> Self {
+        Self {
+            capacity_rejected,
+            active_sessions,
+        }
+    }
+
+    pub(crate) fn capacity_rejected(&self) {
+        self.capacity_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn staged_route_installed(&self) {
+        self.active_sessions.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct PostActionTelemetry<'a> {
     started: &'a AtomicU64,
     completed: &'a AtomicU64,
@@ -281,10 +455,20 @@ impl<'a> PubSubOutboxTelemetry<'a> {
 mod tests {
     use super::{
         FederatedMucTelemetry, PepTelemetry, PersonalMessageTelemetry,
-        PersonalMessageTelemetryCells, PubSubOutboxTelemetry,
+        PersonalMessageTelemetryCells, PubSubOutboxTelemetry, PushSubscriptionTelemetry,
     };
     use crate::metrics::DurationHistogram;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn push_subscription_rejection_counts_global_and_feature_limits() {
+        let global = AtomicU64::new(2);
+        let push = AtomicU64::new(4);
+        PushSubscriptionTelemetry::new(&global, &push).rate_limited();
+
+        assert_eq!(global.load(Ordering::Relaxed), 3);
+        assert_eq!(push.load(Ordering::Relaxed), 5);
+    }
 
     #[test]
     fn queue_acceptance_counts_only_success_and_selects_delivery_class() {

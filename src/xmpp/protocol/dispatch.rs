@@ -4,7 +4,6 @@ use crate::xmpp::protocol::{Action, ProtocolSession};
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::{Document, Node};
-use std::sync::atomic::Ordering;
 
 fn xmpp_version_os() -> &'static str {
     match std::env::consts::OS {
@@ -26,10 +25,7 @@ fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action
 
 impl ProtocolSession {
     pub async fn handle(&mut self, xml: &str) -> Result<Action> {
-        self.state
-            .metrics
-            .stanzas_in_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.inbound_stanza_telemetry().received();
         let stream_open = crate::xmpp::protocol::sasl2::is_tcp_stream_opening(xml)
             || (self.websocket && is_websocket_open(xml));
         if stream_open {

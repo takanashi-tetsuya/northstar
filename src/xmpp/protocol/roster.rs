@@ -418,10 +418,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
             gate.fail(permit);
             outbound.disconnect_backpressured_transport();
             disconnect.cancel();
-            state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.post_accept_failure_telemetry().record_failure();
             tracing::warn!(%target, "roster delta could not enter the transport; forcing a full resync");
             return;
         }
@@ -436,10 +433,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
                         gate.fail(permit);
                         outbound.disconnect_backpressured_transport();
                         disconnect.cancel();
-                        state
-                            .metrics
-                            .post_accept_side_effect_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        state.post_accept_failure_telemetry().record_failure();
                         tracing::warn!(%target, version, "buffered roster push could not enter the transport; forcing a full resync");
                         return;
                     }
@@ -450,10 +444,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
             RosterFlushBatch::Failed | RosterFlushBatch::Superseded => {
                 outbound.disconnect_backpressured_transport();
                 disconnect.cancel();
-                state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.post_accept_failure_telemetry().record_failure();
                 tracing::warn!(%target, "roster synchronization fence failed; forcing a full resync");
                 return;
             }
@@ -554,20 +545,14 @@ pub(crate) async fn deliver_roster_change(
                 if let Err(error) = target.sender.try_send(push) {
                     target.sender.disconnect_backpressured_transport();
                     target.disconnect.cancel();
-                    state
-                        .metrics
-                        .post_accept_side_effect_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.post_accept_failure_telemetry().record_failure();
                     tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, ?error, "committed roster push did not enter the local resource queue; forcing a full resync");
                 }
             }
             RosterPushDisposition::Overflow => {
                 target.sender.disconnect_backpressured_transport();
                 target.disconnect.cancel();
-                state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.post_accept_failure_telemetry().record_failure();
                 tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, "roster synchronization buffer overflowed; forcing a full resync");
             }
         }
@@ -595,17 +580,11 @@ pub(crate) async fn deliver_roster_change(
                     {
                         Ok(true) => {}
                         Ok(false) => {
-                            state
-                                .metrics
-                                .post_accept_side_effect_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                            state.post_accept_failure_telemetry().record_failure();
                             tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, "committed roster push was not accepted by the remote node; roster version recovery remains authoritative");
                         }
                         Err(error) => {
-                            state
-                                .metrics
-                                .post_accept_side_effect_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                            state.post_accept_failure_telemetry().record_failure();
                             tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, ?error, "committed roster push failed across the cluster; roster version recovery remains authoritative");
                         }
                     }
@@ -613,10 +592,7 @@ pub(crate) async fn deliver_roster_change(
             }
         }
         Err(error) => {
-            state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.post_accept_failure_telemetry().record_failure();
             tracing::warn!(owner = %owner_jid, version = change.version, ?error, "could not discover remote resources for a committed roster push; roster version recovery remains authoritative");
         }
     }

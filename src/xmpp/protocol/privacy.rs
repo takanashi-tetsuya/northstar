@@ -233,10 +233,7 @@ impl ProtocolSession {
                 // state instead of allowing later pushes to cross this gap.
                 session.sender.disconnect_backpressured_transport();
                 session.disconnect.cancel();
-                self.state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.post_accept_failure_telemetry().record_failure();
                 tracing::warn!(%jid, list = %name, ?error, "XEP-0016 privacy-list push queue was unavailable; disconnecting stale resource");
             }
         }

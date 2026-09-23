@@ -260,10 +260,7 @@ impl ProtocolSession {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::error!(?error, "XEP-0077 registration backend failed");
-                self.state
-                    .metrics
-                    .anti_abuse_backend_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().backend_failed();
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "internal-server-error",
@@ -273,17 +270,11 @@ impl ProtocolSession {
         match outcome {
             RegistrationOutcome::Created(_) => {
                 self.negotiation.mark_registration_completed();
-                self.state
-                    .metrics
-                    .registrations_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().registered();
                 Ok(Action::Send(iq_result(id, "")))
             }
             RegistrationOutcome::AbuseDenied(requirement) => {
-                self.state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().rate_limited();
                 if !pow_enabled {
                     return Ok(Action::Send(iq_registration_abuse_error(
                         id,
@@ -305,10 +296,7 @@ impl ProtocolSession {
                     Ok(challenge) => Some(challenge),
                     Err(error) => {
                         tracing::warn!(?error, "XEP-0077 v2 challenge issuance failed");
-                        self.state
-                            .metrics
-                            .anti_abuse_backend_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.state.registration_telemetry().backend_failed();
                         None
                     }
                 };
@@ -332,10 +320,7 @@ impl ProtocolSession {
                 "resource-constraint",
             ))),
             RegistrationOutcome::CapacityExhausted => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.registration_telemetry().capacity_rejected();
                 Ok(Action::Send(iq_registration_error(
                     id,
                     "resource-constraint",
@@ -405,10 +390,7 @@ impl ProtocolSession {
         match changed {
             Ok(PasswordChangeOutcome::Changed) => {}
             Ok(PasswordChangeOutcome::AbuseDenied(requirement)) => {
-                self.state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.account_abuse_telemetry().rate_limited();
                 return Ok(Action::Send(iq_registration_abuse_error(
                     id,
                     &requirement,
@@ -423,10 +405,7 @@ impl ProtocolSession {
             }
             Err(error) => {
                 tracing::error!(?error, user_id = %user.id, "XEP-0077 password change failed");
-                self.state
-                    .metrics
-                    .anti_abuse_backend_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.account_abuse_telemetry().backend_failed();
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "internal-server-error",
@@ -494,10 +473,7 @@ impl ProtocolSession {
                 )));
             }
             Ok(DeletionQuiesceOutcome::AbuseDenied(requirement)) => {
-                self.state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.account_abuse_telemetry().rate_limited();
                 return Ok(Action::Send(iq_registration_abuse_error(
                     id,
                     &requirement,
@@ -506,10 +482,7 @@ impl ProtocolSession {
             }
             Err(error) => {
                 tracing::error!(?error, user_id = %user.id, "XEP-0077 guarded account quiesce failed");
-                self.state
-                    .metrics
-                    .anti_abuse_backend_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.account_abuse_telemetry().backend_failed();
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "internal-server-error",
@@ -645,10 +618,7 @@ impl ProtocolSession {
                 return Ok(Err(ResourceBindingFailure::Conflict));
             }
             BindingReservationOutcome::CapacityExhausted => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.session_bind_telemetry().capacity_rejected();
                 return Ok(Err(ResourceBindingFailure::CapacityExhausted));
             }
         }
@@ -708,10 +678,7 @@ impl ProtocolSession {
         self.registered_key = Some(key.clone());
         self.full_jid = Some(jid.clone());
         self.available = Some(available);
-        self.state
-            .metrics
-            .active_sessions
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.session_bind_telemetry().staged_route_installed();
 
         match self
             .state
@@ -963,14 +930,7 @@ impl ProtocolSession {
                 "resource-constraint",
             ))),
             PushEnableOutcome::RateLimited => {
-                self.state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, Ordering::Relaxed);
-                self.state
-                    .metrics
-                    .push_subscriptions_rate_limited_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.push_subscription_telemetry().rate_limited();
                 Ok(Action::Send(stanza_error(
                     iq,
                     "wait",
@@ -1133,25 +1093,16 @@ pub(crate) async fn send_push_notification(
                 .push_service()
                 .mark_unroutable(subscription.request_id)
                 .await?;
-            state
-                .metrics
-                .push_notifications_failed_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.push_delivery_telemetry().failed();
             tracing::debug!(
                 service = %subscription.service_jid,
                 has_options = subscription.options.is_some(),
                 "push service could not be routed"
             );
         } else {
-            state
-                .metrics
-                .push_notifications_routed_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.push_delivery_telemetry().routed();
         }
-        state
-            .metrics
-            .push_notifications_attempted_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.push_delivery_telemetry().attempted();
     }
     Ok(())
 }
@@ -1196,10 +1147,7 @@ pub(crate) async fn handle_push_delivery_response(
         PushResponseOutcome::Unknown | PushResponseOutcome::SenderMismatch => Ok(false),
         PushResponseOutcome::Completed => Ok(true),
         PushResponseOutcome::SubscriptionDisabled => {
-            state
-                .metrics
-                .push_notifications_failed_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.push_delivery_telemetry().failed();
             tracing::warn!(service = %sender, "push service rejected notifications repeatedly or permanently; subscription disabled");
             Ok(true)
         }

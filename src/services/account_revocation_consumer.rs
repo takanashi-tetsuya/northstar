@@ -38,6 +38,7 @@ pub(crate) trait AccountRevocationRepository: Send + Sync {
     fn cleanup(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct AccountRevocationConsumerService<R> {
     repository: R,
 }

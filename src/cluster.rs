@@ -1095,6 +1095,121 @@ pub(crate) struct ClusterReadinessProbe {
     instance_epoch: Arc<AtomicI64>,
 }
 
+/// Exactly the cluster identity, wakeup, and fail-closed reporting authority
+/// needed by the committed account-revocation consumer. No Redis client,
+/// publication key, or broader cluster control plane crosses this boundary.
+#[derive(Clone)]
+pub(crate) struct ClusterRevocationAuthority {
+    domain: String,
+    node_id: String,
+    instance_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+    notify: Arc<tokio::sync::Notify>,
+    enabled: bool,
+    failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    health: Arc<ClusterHealth>,
+    listener_rotation: Arc<tokio::sync::Notify>,
+}
+
+impl ClusterRevocationAuthority {
+    fn identity(
+        &self,
+    ) -> crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
+        crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
+            domain: self.domain.clone(),
+            node_id: self.node_id.clone(),
+            instance_uuid: self.instance_uuid,
+            instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+        }
+    }
+
+    fn record_failure(&self, error: &anyhow::Error) {
+        record_cluster_failure(
+            &self.health,
+            &self.listener_rotation,
+            self.enabled,
+            self.failure_policy,
+            ClusterFailureClass::PostgreSqlAuthority,
+            error,
+        );
+    }
+}
+
+fn record_cluster_failure(
+    health: &ClusterHealth,
+    listener_rotation: &tokio::sync::Notify,
+    enabled: bool,
+    policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    class: ClusterFailureClass,
+    error: &anyhow::Error,
+) {
+    if !enabled {
+        return;
+    }
+    // Serialize the failure fence with complete_reconciliation's generation
+    // check and healthy commit, so an older completion cannot hide failure.
+    let mut since = health
+        .failure_since
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED {
+        return;
+    }
+    let degraded = match policy {
+        Some(crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly) => {
+            CLUSTER_DURABLE_DIRECT_ONLY
+        }
+        _ => CLUSTER_FAIL_CLOSED,
+    };
+    let previous = health.state.swap(degraded, Ordering::AcqRel);
+    if previous != degraded {
+        health.degraded_transitions.fetch_add(1, Ordering::Relaxed);
+    }
+    let next_listener = health
+        .listener_generation
+        .load(Ordering::Acquire)
+        .saturating_add(1);
+    health
+        .required_listener_generation
+        .fetch_max(next_listener, Ordering::AcqRel);
+    health
+        .listener_rotation_epoch
+        .fetch_add(1, Ordering::AcqRel);
+    listener_rotation.notify_waiters();
+    if since.is_none() {
+        *since = Some(Instant::now());
+    }
+    drop(since);
+    tracing::error!(
+        ?error,
+        ?class,
+        ?policy,
+        "cluster control plane entered a degraded state"
+    );
+}
+
+pub(crate) struct AccountRevocationWorkerContext<R> {
+    service: crate::services::account_revocation_consumer::AccountRevocationConsumerService<R>,
+    routes: crate::state::AccountRevocationRoutes,
+    authority: ClusterRevocationAuthority,
+}
+
+impl<R: crate::services::account_revocation_consumer::AccountRevocationRepository>
+    AccountRevocationWorkerContext<R>
+{
+    pub(crate) fn new(
+        service: crate::services::account_revocation_consumer::AccountRevocationConsumerService<R>,
+        routes: crate::state::AccountRevocationRoutes,
+        authority: ClusterRevocationAuthority,
+    ) -> Self {
+        Self {
+            service,
+            routes,
+            authority,
+        }
+    }
+}
+
 impl ClusterReadinessProbe {
     pub(crate) fn readiness_error(&self) -> Option<String> {
         cluster_readiness_error(&self.health)
@@ -1472,14 +1587,17 @@ impl ClusterManager {
         Arc::clone(&self.account_revocation_notify)
     }
 
-    pub(crate) fn account_revocation_consumer_identity(
-        &self,
-    ) -> crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
-        crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
+    pub(crate) fn account_revocation_authority(&self) -> ClusterRevocationAuthority {
+        ClusterRevocationAuthority {
             domain: self.namespace.clone(),
             node_id: self.node_id.clone(),
             instance_uuid: self.connection_uuid,
-            instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+            instance_epoch: Arc::clone(&self.instance_epoch),
+            notify: Arc::clone(&self.account_revocation_notify),
+            enabled: self.is_enabled(),
+            failure_policy: self.failure_policy(),
+            health: Arc::clone(&self.health),
+            listener_rotation: Arc::clone(&self.listener_rotation),
         }
     }
 
@@ -1881,48 +1999,14 @@ impl ClusterManager {
     }
 
     fn record_failure(&self, class: ClusterFailureClass, error: &anyhow::Error) {
-        if !self.is_enabled() {
-            return;
-        }
-        // Serialize the failure fence with complete_reconciliation's generation
-        // check and healthy commit, so an older completion cannot hide failure.
-        let mut since = self
-            .health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if self.health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED {
-            return;
-        }
-        let degraded = match self.failure_policy() {
-            Some(crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly) => {
-                CLUSTER_DURABLE_DIRECT_ONLY
-            }
-            _ => CLUSTER_FAIL_CLOSED,
-        };
-        let previous = self.health.state.swap(degraded, Ordering::AcqRel);
-        if previous != degraded {
-            self.health
-                .degraded_transitions
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        let next_listener = self
-            .health
-            .listener_generation
-            .load(Ordering::Acquire)
-            .saturating_add(1);
-        self.health
-            .required_listener_generation
-            .fetch_max(next_listener, Ordering::AcqRel);
-        self.health
-            .listener_rotation_epoch
-            .fetch_add(1, Ordering::AcqRel);
-        self.listener_rotation.notify_waiters();
-        if since.is_none() {
-            *since = Some(Instant::now());
-        }
-        drop(since);
-        tracing::error!(?error, ?class, policy = ?self.failure_policy(), "cluster control plane entered a degraded state");
+        record_cluster_failure(
+            &self.health,
+            &self.listener_rotation,
+            self.is_enabled(),
+            self.failure_policy(),
+            class,
+            error,
+        );
     }
 
     fn confirm_listener_generation(&self, generation: u64, rotation_epoch: u64) -> Result<()> {
@@ -5401,15 +5485,17 @@ impl ClusterManager {
 
 /// Read committed account fences independently of Redis and cluster maintenance.
 /// Notifications reduce latency; polling recovers missed notifications.
-pub(crate) async fn run_account_revocations(
-    state: Arc<AppState>,
+pub(crate) async fn run_account_revocations<
+    R: crate::services::account_revocation_consumer::AccountRevocationRepository,
+>(
+    context: Arc<AccountRevocationWorkerContext<R>>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut cleanup_interval = tokio::time::interval(Duration::from_secs(30));
-    let notify = state.cluster.account_revocation_notify();
+    let notify = Arc::clone(&context.authority.notify);
     loop {
         tokio::select! {
             biased;
@@ -5420,7 +5506,7 @@ pub(crate) async fn run_account_revocations(
                 // A replaced process cannot host live sessions. Its queue can
                 // be removed, but an expired lease alone is not replacement.
                 match tokio::time::timeout(Duration::from_secs(2),
-                    state.account_revocation_consumer_service().cleanup()).await {
+                    context.service.cleanup()).await {
                     Ok(Ok(())) => {},
                     error => tracing::warn!(?error, "account revocation queue cleanup deferred"),
                 }
@@ -5428,11 +5514,11 @@ pub(crate) async fn run_account_revocations(
             }
         }
         let consume = async {
-            let identity = state.cluster.account_revocation_consumer_identity();
-            let more = state
-                .account_revocation_consumer_service()
+            let identity = context.authority.identity();
+            let more = context
+                .service
                 .consume_batch(&identity, |user_id, bare_jid, before_generation| {
-                    state.revoke_local_account_routes(user_id, bare_jid, before_generation);
+                    context.routes.revoke(user_id, bare_jid, before_generation);
                 })
                 .await?;
             if more {
@@ -5449,14 +5535,11 @@ pub(crate) async fn run_account_revocations(
         match result {
             Ok(()) => heartbeat.ok(),
             Err(error) => {
-                state.cluster.record_authority_failure(&error);
+                context.authority.record_failure(&error);
                 heartbeat.error(&error);
                 // An unreachable authority cannot confirm that existing
                 // credentials are still valid. Fence routes before retrying.
-                for session in state.sessions.iter_mut() {
-                    session.routable.store(false, Ordering::Release);
-                    session.disconnect.cancel();
-                }
+                context.routes.fence_all();
                 tracing::warn!(
                     ?error,
                     "account revocation authority unavailable; local routes fenced"
@@ -8236,20 +8319,55 @@ mod tests {
         let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
             .await
             .unwrap();
+        let authority = cluster.account_revocation_authority();
         cluster.instance_epoch.store(17, Ordering::Release);
-        let identity = cluster.account_revocation_consumer_identity();
+        let identity = authority.identity();
         cluster.instance_epoch.store(18, Ordering::Release);
 
         assert_eq!(identity.domain, "example.test");
         assert_eq!(identity.node_id, cluster.node_id);
         assert_eq!(identity.instance_uuid, cluster.connection_uuid);
         assert_eq!(identity.instance_epoch, 17);
+        assert_eq!(authority.identity().instance_epoch, 18);
+    }
+
+    #[tokio::test]
+    async fn revocation_authority_failure_fences_the_shared_cluster_health() {
+        let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
+            .await
+            .unwrap();
+        cluster
+            .health
+            .state
+            .store(CLUSTER_HEALTHY, Ordering::Release);
+        let mut authority = cluster.account_revocation_authority();
+        // A loopback-free fixture has no Redis pool; exercise the enabled
+        // branch against the same health and listener-rotation cells.
+        authority.enabled = true;
+        authority.record_failure(&anyhow::anyhow!("authority unavailable"));
+        assert_eq!(
+            cluster.health.state.load(Ordering::Acquire),
+            CLUSTER_FAIL_CLOSED
+        );
+        assert_eq!(
+            cluster.health.degraded_transitions.load(Ordering::Relaxed),
+            1
+        );
         assert_eq!(
             cluster
-                .account_revocation_consumer_identity()
-                .instance_epoch,
-            18
+                .health
+                .required_listener_generation
+                .load(Ordering::Acquire),
+            1
         );
+        assert_eq!(
+            cluster
+                .health
+                .listener_rotation_epoch
+                .load(Ordering::Acquire),
+            1
+        );
+        assert!(cluster.health.failure_since.lock().unwrap().is_some());
     }
 
     #[tokio::test]

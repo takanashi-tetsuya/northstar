@@ -10,9 +10,9 @@ import tempfile
 
 
 EXPECTED = {
-    "wrong-hostname": ("SSLV3_ALERT_BAD_CERTIFICATE", None),
-    "wrong-ca": ("TLSV1_ALERT_UNKNOWN_CA", None),
-    "wrong-client-cert": ("CERTIFICATE_VERIFY_FAILED", 20),
+    "wrong-hostname": (("SSLV3_ALERT_BAD_CERTIFICATE", "TLS_ALERT_BAD_CERTIFICATE"), None),
+    "wrong-ca": (("TLSV1_ALERT_UNKNOWN_CA",), None),
+    "wrong-client-cert": (("CERTIFICATE_VERIFY_FAILED",), 20),
 }
 MAX_LOG_BYTES = 128 * 1024
 
@@ -25,14 +25,15 @@ def check(label: str, application: str, observations: bytes) -> None:
         raise ValueError("child did not reach Redis initialization")
     if not observations or len(observations) > MAX_LOG_BYTES or not observations.endswith(b"\n"):
         raise ValueError("missing, oversized, or incomplete current-phase TLS observations")
-    expected = EXPECTED[label]
+    expected_reasons, expected_code = EXPECTED[label]
     events = [json.loads(line) for line in observations.splitlines()]
     if any(not isinstance(event, dict) for event in events):
         raise ValueError("TLS observation is not a structured event")
     for event in events:
         if (
             event.get("event") == "redis_tls_handshake_rejected"
-            and (event.get("reason"), event.get("verify_code")) == expected
+            and event.get("reason") in expected_reasons
+            and event.get("verify_code") == expected_code
         ):
             return
     raise ValueError(f"no matching current-phase TLS rejection for {label}")
@@ -54,8 +55,9 @@ def read_observations(path: Path, offset: int) -> bytes:
 def self_test() -> None:
     context = "Error: failed to publish the initial signed cluster node lease\nCaused by: Timed out"
 
-    def event(label: str) -> bytes:
-        reason, code = EXPECTED[label]
+    def event(label: str, *, reason: str | None = None) -> bytes:
+        reasons, code = EXPECTED[label]
+        reason = reason or reasons[0]
         return (json.dumps({"event": "redis_tls_handshake_rejected", "reason": reason, "verify_code": code}) + "\n").encode()
 
     def rejected(label: str, application: str, observations: bytes) -> None:
@@ -76,6 +78,7 @@ def self_test() -> None:
         for other in EXPECTED:
             if other != label:
                 rejected(label, context, event(other))
+    check("wrong-hostname", context, event("wrong-hostname", reason="TLS_ALERT_BAD_CERTIFICATE"))
     rejected("wrong-client-cert", context, event("wrong-client-cert").replace(b'"verify_code": 20', b'"verify_code": 21'))
     with tempfile.TemporaryDirectory(prefix="northstar-tls-rejection-check-") as directory:
         log = Path(directory) / "relay.log"

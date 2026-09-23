@@ -118,7 +118,8 @@ def serve_connection(raw_client: socket.socket, context: ssl.SSLContext, unix_so
             # exception text, peer data, certificates, or application bytes.
             reason = getattr(error, "reason", "OTHER_TLS_ERROR")
             if reason not in {
-                "SSLV3_ALERT_BAD_CERTIFICATE", "TLSV1_ALERT_UNKNOWN_CA",
+                "SSLV3_ALERT_BAD_CERTIFICATE", "TLS_ALERT_BAD_CERTIFICATE",
+                "TLSV1_ALERT_UNKNOWN_CA",
                 "CERTIFICATE_VERIFY_FAILED", "PEER_DID_NOT_RETURN_A_CERTIFICATE",
             }:
                 reason = "OTHER_TLS_ERROR"

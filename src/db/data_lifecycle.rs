@@ -194,30 +194,31 @@ pub async fn set_muc_retention_policy_in_tx(
     let Some(actor_is_admin) = actor_is_admin else {
         return Err(RetentionPolicyError::Forbidden);
     };
-    let room_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM muc_rooms WHERE id=$1)")
+    // Keep room and secondary-owner authority stable until the policy and its
+    // replay response commit. Cluster mutations lock the room first; legacy
+    // affiliation writers conflict with the exact affiliation lock below.
+    let room_owner: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT owner_id FROM muc_rooms WHERE id=$1 FOR SHARE")
             .bind(room_id)
-            .fetch_one(&mut **tx)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
-    if !room_exists {
+    let Some(room_owner) = room_owner else {
         return Err(RetentionPolicyError::NotFound);
-    }
-    let is_owner: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-             SELECT 1 FROM muc_rooms room WHERE room.id=$1 AND room.owner_id=$2
-             UNION ALL
-             SELECT 1 FROM muc_affiliations affiliation
-              WHERE affiliation.room_id=$1 AND affiliation.user_id=$2
-                AND affiliation.affiliation='owner')",
-    )
-    .bind(room_id)
-    .bind(actor_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
-    if !actor_is_admin && !is_owner {
-        return Err(RetentionPolicyError::Forbidden);
+    };
+    if !actor_is_admin && room_owner != Some(actor_id) {
+        let affiliation: Option<String> = sqlx::query_scalar(
+            "SELECT affiliation FROM muc_affiliations
+             WHERE room_id=$1 AND user_id=$2 FOR SHARE",
+        )
+        .bind(room_id)
+        .bind(actor_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
+        if affiliation.as_deref() != Some("owner") {
+            return Err(RetentionPolicyError::Forbidden);
+        }
     }
     let old: Option<i32> = sqlx::query_scalar(
         "SELECT retention_days FROM muc_retention_policies WHERE room_id=$1 FOR UPDATE",

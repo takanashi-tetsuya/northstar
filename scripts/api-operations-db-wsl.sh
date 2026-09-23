@@ -96,7 +96,8 @@ fi
 for port_test in \
   db::report_moderation_repository::tests::moderation_ports_commit_decisions_and_replay_terminal_errors_once \
   db::invitation_admin_repository::tests::invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once \
-  db::retention_policy_repository::tests::policy_ports_preserve_ceilings_room_ownership_and_response_replay; do
+  db::retention_policy_repository::tests::policy_ports_preserve_ceilings_room_ownership_and_response_replay \
+  db::retention_policy_repository::tests::retention_commit_holds_secondary_owner_until_affiliation_demotion; do
   port_output="$(cargo test --locked --offline "$port_test" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
     printf '%s\n' "$port_output"
     exit 1

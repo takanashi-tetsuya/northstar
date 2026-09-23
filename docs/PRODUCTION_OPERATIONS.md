@@ -1005,11 +1005,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 147 files from `0001` through
-`0148`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 148 files from `0001` through
+`0149`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0148`, with the exact SQLx description and SHA-384 checksum, before it
+through `0149`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1021,7 +1021,9 @@ Migration `0146` adds the disabled-upload state probe without granting runtime
 access to upload tables. Migration `0147` completes the storage-role cutover.
 Migration `0148` extends the cluster MUC operation ledger for administrative
 batches and the existing subject operation. Deploy it before enabling batch
-writers so every node can render their events.
+writers so every node can render their events. Migration `0149` records upload
+storage migration runs, object attempts and the restore outcome marker used by
+offline storage cutovers and crash recovery.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1195,7 +1197,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0148` manifest
+5. run the one-shot migration job through the complete `0001`-`0149` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;
@@ -1472,18 +1474,46 @@ PostgreSQL closed and preserves recovery evidence. A committed incoming XID
 authorizes exact rollback compensation; compensation publishes and verifies a
 different XID. Once the replay floor is durable, the fence can reopen only
 when the incoming transaction is committed and the replacement generation is
-authoritative. PostgreSQL may discard status for sufficiently old XIDs, so a
-hard-crash journal left unresolved for that long remains a manual fail-closed
-recovery case rather than being guessed.
+authoritative. The replacement transaction also writes a private marker that
+binds its restore ID, signed manifest digest, target database OID, outcome and
+XID. Recovery requires that marker when PostgreSQL has discarded an old XID
+status; missing or conflicting evidence leaves the database closed.
 
 `SIGINT`, `SIGTERM`, shell errors and ordinary exits use one compensation path.
 If pre-commit compensation or connection re-enable is incomplete, the script
 does not delete its plaintext work directory or cutover journal and leaves the
 database closed. Preserve every printed recovery path and do not blindly enable
-connections. `SIGKILL`, host reset and power loss cannot run shell traps; a
-remaining cutover directory intentionally blocks the next normal restore and
-requires an operator-reviewed recovery drill. Automatic hard-crash journal
-replay is not implemented in this release.
+connections. `SIGKILL`, host reset and power loss cannot run shell traps. After
+all PostgreSQL clients from the failed process have exited, use the retained
+cutover directory to resume the restore:
+
+```sh
+bash scripts/recover-restore.sh /srv/northstar-restore/uploads/.northstar-restore-cutover-RESTORE_ID \
+  --database-url-file /srv/northstar-secrets/restore-database-url \
+  --upload-dir /srv/northstar-restore/uploads \
+  --rollback-dir /srv/northstar-restore/rollback \
+  --rollback-state-file /srv/northstar-restore/floor/state \
+  --backup-dir /srv/northstar-backups/northstar-... \
+  --public-key-file /srv/northstar-secrets/backup-signing.pub \
+  --age-identity-file /srv/northstar-secrets/backup-age-identity \
+  --plaintext-staging-dir /run/northstar-restore \
+  --confirm-stopped NORTHSTAR-RECOVER
+```
+
+The command checks the signed archive and decrypted objects, private journal,
+original database OID,
+transaction marker and exact object hashes. An aborted incoming transaction
+restores the old object set. A committed incoming transaction finishes the
+verified new set and records the restore in the trusted floor. While checking
+the target, it temporarily allows one migrator connection, revokes workload
+`CONNECT`, and reinstates `ALLOW_CONNECTIONS=false` before touching objects.
+It keeps the fence closed if a check fails. For S3, set the target `UPLOAD_S3_*`
+configuration and `NORTHSTAR_BACKUP_STORAGE_HELPER` before running the same
+command. S3 recovery checks the signed source inventory against the journaled
+fresh-key results, reads every new exact version and compares the committed
+database locators and authority before advancing the trusted floor. An aborted
+incoming transaction reopens the original database without deleting the new
+attempt keys. Missing or changed versions leave the target closed for repair.
 
 The unique rollback set contains a pre-restore database dump and verified old
 uploads. These retained artifacts are plaintext by default even when the source

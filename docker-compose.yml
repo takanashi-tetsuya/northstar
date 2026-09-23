@@ -333,6 +333,7 @@ services:
       frontend:
         ipv4_address: ${XMPP_HTTP_IP:-172.31.240.3}
       backend:
+      object_store:
 
   caddy:
     image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
@@ -438,6 +439,20 @@ services:
     profiles: ["backup"]
     environment:
       BACKUP_SECURITY_POLICY: production
+      UPLOAD_STORAGE_BACKEND: ${UPLOAD_STORAGE_BACKEND:-local}
+      UPLOAD_S3_ENDPOINT: ${UPLOAD_S3_ENDPOINT:-}
+      UPLOAD_S3_REGION: ${UPLOAD_S3_REGION:-us-east-1}
+      UPLOAD_S3_BUCKET: ${UPLOAD_S3_BUCKET:-}
+      UPLOAD_S3_PREFIX: ${UPLOAD_S3_PREFIX:-northstar/uploads}
+      UPLOAD_S3_PATH_STYLE: ${UPLOAD_S3_PATH_STYLE:-false}
+      UPLOAD_S3_ALLOW_HTTP: ${UPLOAD_S3_ALLOW_HTTP:-false}
+      UPLOAD_S3_CREDENTIAL_MODE: ${UPLOAD_S3_CREDENTIAL_MODE:-ambient}
+      UPLOAD_S3_CREDENTIAL_BUNDLE_FILE: ${UPLOAD_S3_CREDENTIAL_BUNDLE_FILE:-}
+      UPLOAD_S3_ACCESS_KEY_ID_FILE: ${UPLOAD_S3_ACCESS_KEY_ID_FILE:-}
+      UPLOAD_S3_SECRET_ACCESS_KEY_FILE: ${UPLOAD_S3_SECRET_ACCESS_KEY_FILE:-}
+      UPLOAD_S3_SESSION_TOKEN_FILE: ${UPLOAD_S3_SESSION_TOKEN_FILE:-}
+      UPLOAD_S3_SSE_KMS_KEY_ID_FILE: ${UPLOAD_S3_SSE_KMS_KEY_ID_FILE:-}
+      NORTHSTAR_BACKUP_STORAGE_HELPER: /usr/local/bin/xmpp-server
       NORTHSTAR_BACKUP_APPLICATION_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
       BACKUP_SIGNING_KEY_FILE: /run/secrets/backup_signing_key
       BACKUP_AGE_RECIPIENT_FILE: /run/secrets/backup_age_recipients
@@ -474,6 +489,7 @@ services:
     logging: *bounded-logging
     networks:
       - backend
+      - object_store
 
   restore:
     build:
@@ -490,6 +506,20 @@ services:
     command: ["--help"]
     environment:
       BACKUP_SECURITY_POLICY: production
+      UPLOAD_STORAGE_BACKEND: ${UPLOAD_STORAGE_BACKEND:-local}
+      UPLOAD_S3_ENDPOINT: ${UPLOAD_S3_ENDPOINT:-}
+      UPLOAD_S3_REGION: ${UPLOAD_S3_REGION:-us-east-1}
+      UPLOAD_S3_BUCKET: ${UPLOAD_S3_BUCKET:-}
+      UPLOAD_S3_PREFIX: ${UPLOAD_S3_PREFIX:-northstar/uploads}
+      UPLOAD_S3_PATH_STYLE: ${UPLOAD_S3_PATH_STYLE:-false}
+      UPLOAD_S3_ALLOW_HTTP: ${UPLOAD_S3_ALLOW_HTTP:-false}
+      UPLOAD_S3_CREDENTIAL_MODE: ${UPLOAD_S3_CREDENTIAL_MODE:-ambient}
+      UPLOAD_S3_CREDENTIAL_BUNDLE_FILE: ${UPLOAD_S3_CREDENTIAL_BUNDLE_FILE:-}
+      UPLOAD_S3_ACCESS_KEY_ID_FILE: ${UPLOAD_S3_ACCESS_KEY_ID_FILE:-}
+      UPLOAD_S3_SECRET_ACCESS_KEY_FILE: ${UPLOAD_S3_SECRET_ACCESS_KEY_FILE:-}
+      UPLOAD_S3_SESSION_TOKEN_FILE: ${UPLOAD_S3_SESSION_TOKEN_FILE:-}
+      UPLOAD_S3_SSE_KMS_KEY_ID_FILE: ${UPLOAD_S3_SSE_KMS_KEY_ID_FILE:-}
+      NORTHSTAR_BACKUP_STORAGE_HELPER: /usr/local/bin/xmpp-server
       BACKUP_VERIFY_KEY_FILE: /run/secrets/backup_verify_key
       BACKUP_AGE_IDENTITY_FILE: /run/secrets/backup_age_identity
       BACKUP_ROLLBACK_STATE_FILE: /state/restore-floor
@@ -520,6 +550,7 @@ services:
     logging: *bounded-logging
     networks:
       - backend
+      - object_store
 
 volumes:
   postgres-data:
@@ -588,3 +619,4 @@ networks:
         - subnet: ${FRONTEND_SUBNET:-172.31.240.0/24}
   backend:
     internal: true
+  object_store:

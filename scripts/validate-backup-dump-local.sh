@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 umask 077
-[[ $# -eq 3 ]] || {
-  echo "usage: $0 DATABASE_DUMP SCRATCH_ROOT UPLOAD_ROWS_OUTPUT" >&2
+[[ $# -eq 3 || ($# -eq 5 && "$4" == --s3) ]] || {
+  echo "usage: $0 DATABASE_DUMP SCRATCH_ROOT UPLOAD_ROWS_OUTPUT [--s3 AUTHORITY_OUTPUT]" >&2
   exit 2
 }
 
@@ -11,6 +11,11 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 database_dump="$1"
 scratch_root="$2"
 upload_rows_output="$3"
+s3_inventory=false
+if [[ $# -eq 5 ]]; then
+  s3_inventory=true
+  authority_output="$5"
+fi
 grant_reconcile_sql="$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql"
 grant_boundary_sql="$project_dir/deploy/postgres-init/lib/verify-northstar-grant-boundary.sql"
 grant_apply_sql="$project_dir/deploy/postgres-init/lib/apply-northstar-grants.sql"
@@ -139,13 +144,56 @@ psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
   --set backup_role="$backup_role" \
   --set allow_bootstrap=false --set grant_phase=exact \
   --file "$grant_reconcile_sql"
-psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
-  --no-psqlrc --quiet --set ON_ERROR_STOP=1 --tuples-only --no-align \
-  --field-separator=$'\t' \
-  --command="SELECT id,size,COALESCE(encode(content_sha256,'hex'),'')
-             FROM public.upload_slots
-             WHERE uploaded AND expires_at > clock_timestamp()
-             ORDER BY id" >"$upload_rows_output"
+if [[ "$s3_inventory" == true ]]; then
+  psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
+    --no-psqlrc --quiet --set ON_ERROR_STOP=1 <<'PSQL'
+DO $validate_s3_backup$
+BEGIN
+  IF (SELECT COUNT(*) FROM public.upload_storage_authority)<>1
+     OR NOT EXISTS (SELECT 1 FROM public.upload_storage_authority
+                     WHERE singleton AND storage_backend='s3') THEN
+    RAISE EXCEPTION 'S3 backup requires one S3 storage authority';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.upload_slots
+              WHERE storage_backend<>'s3' OR storage_state<>'committed'
+                 OR NOT uploaded OR uploading
+                 OR storage_object_key IS NULL OR storage_object_version IS NULL
+                 OR storage_attempt IS NULL OR storage_sha256 IS NULL
+                 OR content_sha256 IS DISTINCT FROM storage_sha256
+                 OR storage_size IS DISTINCT FROM size
+                 OR storage_object_key IS DISTINCT FROM
+                    ('objects/' || id::text || '/' || storage_attempt::text)) THEN
+    RAISE EXCEPTION 'S3 backup requires exact-version committed S3 locators for every slot';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.upload_storage_jobs)
+     OR EXISTS (SELECT 1 FROM public.upload_cleanup_queue)
+     OR EXISTS (SELECT 1 FROM public.upload_storage_migration_runs
+                 WHERE state='copying') THEN
+    RAISE EXCEPTION 'S3 backup requires drained storage jobs, cleanup, and migration runs';
+  END IF;
+END
+$validate_s3_backup$;
+PSQL
+  psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
+    --no-psqlrc --quiet --set ON_ERROR_STOP=1 --tuples-only --no-align \
+    --field-separator=$'\t' \
+    --command="SELECT id,storage_object_key,storage_object_version,
+                      storage_size,encode(storage_sha256,'hex')
+                 FROM public.upload_slots ORDER BY id" >"$upload_rows_output"
+  psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
+    --no-psqlrc --quiet --set ON_ERROR_STOP=1 --tuples-only --no-align \
+    --field-separator=$'\t' \
+    --command="SELECT encode(namespace_sha256,'hex'),generation
+                 FROM public.upload_storage_authority WHERE singleton" >"$authority_output"
+else
+  psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
+    --no-psqlrc --quiet --set ON_ERROR_STOP=1 --tuples-only --no-align \
+    --field-separator=$'\t' \
+    --command="SELECT id,size,COALESCE(encode(content_sha256,'hex'),'')
+               FROM public.upload_slots
+               WHERE uploaded AND expires_at > clock_timestamp()
+               ORDER BY id" >"$upload_rows_output"
+fi
 
 pg_ctl -D "$data_dir" -m fast -w stop >/dev/null
 server_started=false

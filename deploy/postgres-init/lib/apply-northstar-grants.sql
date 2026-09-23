@@ -667,6 +667,7 @@ SELECT pg_catalog.format(
        ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
        ('northstar_cleanup_account_revocations(int4)'),
        ('northstar_upload_durable_state_exists()'),
+       ('northstar_storage_migration_active()'),
        ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
        ('northstar_cleanup_cluster_envelope_replays(int4)'),
        ('northstar_cluster_replay_capacity_healthy()'),
@@ -1240,6 +1241,10 @@ SELECT NOT EXISTS (
              ('upload_storage_capacity_ledger'),
              ('upload_slots'),
              ('upload_storage_jobs'),
+             ('upload_storage_migration_runs'),
+             ('upload_storage_migration_items'),
+             ('upload_storage_migration_attempts'),
+             ('northstar_restore_outcome_markers'),
              ('upload_cleanup_queue')
            ) AS protected(name)
            CROSS JOIN LATERAL (
@@ -1261,6 +1266,47 @@ SELECT NOT EXISTS (
 \if :northstar_runtime_upload_authorities_are_capability_only
 \else
   \echo 'runtime upload authorities must be capability-only'
+  \quit 38
+\endif
+
+-- Migration journals and restore outcome markers are writable only by their
+-- migrator owner. The backup role may read them for a complete logical dump.
+SELECT NOT EXISTS (
+         SELECT 1
+           FROM (VALUES
+             ('upload_storage_migration_runs'),
+             ('upload_storage_migration_items'),
+             ('upload_storage_migration_attempts'),
+             ('northstar_restore_outcome_markers')
+           ) AS protected(name)
+           CROSS JOIN LATERAL (
+             SELECT pg_catalog.to_regclass('public.' || protected.name) AS oid
+           ) AS relation
+           CROSS JOIN (VALUES
+             (:'runtime_role'),(:'storage_role'),(:'command_role')
+           ) AS workload(role_name)
+          WHERE relation.oid IS NULL
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'SELECT')
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'INSERT')
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'UPDATE')
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'DELETE')
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'TRUNCATE')
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'REFERENCES')
+             OR pg_catalog.has_table_privilege(workload.role_name,relation.oid,'TRIGGER')
+             OR pg_catalog.has_any_column_privilege(workload.role_name,relation.oid,'SELECT')
+             OR pg_catalog.has_any_column_privilege(workload.role_name,relation.oid,'INSERT')
+             OR pg_catalog.has_any_column_privilege(workload.role_name,relation.oid,'UPDATE')
+             OR NOT pg_catalog.has_table_privilege(:'backup_role',relation.oid,'SELECT')
+             OR pg_catalog.has_table_privilege(:'backup_role',relation.oid,'INSERT')
+             OR pg_catalog.has_table_privilege(:'backup_role',relation.oid,'UPDATE')
+             OR pg_catalog.has_table_privilege(:'backup_role',relation.oid,'DELETE')
+             OR pg_catalog.has_table_privilege(:'backup_role',relation.oid,'TRUNCATE')
+             OR pg_catalog.has_table_privilege(:'backup_role',relation.oid,'REFERENCES')
+             OR pg_catalog.has_table_privilege(:'backup_role',relation.oid,'TRIGGER')
+       ) AS northstar_offline_journal_acl_is_exact \gset
+\if :northstar_offline_journal_acl_is_exact
+\else
+  \echo 'offline journals must be migrator-owned and backup-readable only'
   \quit 38
 \endif
 
@@ -1620,6 +1666,7 @@ SELECT NOT EXISTS (
                       ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
                       ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
                       ('northstar_upload_durable_state_exists()'),
+                      ('northstar_storage_migration_active()'),
                       ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
                       ('northstar_cleanup_cluster_envelope_replays(int4)'),
                       ('northstar_cluster_replay_capacity_healthy()'),
@@ -1725,6 +1772,7 @@ SELECT NOT EXISTS (
            ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
            ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
            ('northstar_upload_durable_state_exists()'),
+           ('northstar_storage_migration_active()'),
            ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
            ('northstar_cleanup_cluster_envelope_replays(int4)'),
            ('northstar_cluster_replay_capacity_healthy()'),

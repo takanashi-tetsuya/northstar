@@ -271,7 +271,6 @@ use hickory_resolver::{
     system_conf::read_system_conf,
     TokioResolver,
 };
-use sha2::{Digest, Sha256};
 use sqlx::{
     pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -1014,51 +1013,25 @@ fn admit_bounded_omemo_poll_ip(
 /// Credential material is deliberately excluded: rotating credentials must
 /// not change storage authority.
 fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8; 32]> {
-    fn field(digest: &mut Sha256, value: &str) {
-        digest.update((value.len() as u64).to_be_bytes());
-        digest.update(value.as_bytes());
-    }
-
-    let mut digest = Sha256::new();
-    digest.update(b"northstar/upload-storage-namespace/v2\0");
-    field(&mut digest, &config.upload_storage_backend);
-    if config.upload_storage_backend == "local" {
-        std::fs::create_dir_all(&config.upload_dir)
-            .context("could not prepare UPLOAD_DIR for storage authority")?;
-        let canonical = std::fs::canonicalize(&config.upload_dir)
-            .context("could not canonicalize UPLOAD_DIR for storage authority")?;
-        field(&mut digest, &canonical.to_string_lossy());
-    } else {
-        field(
-            &mut digest,
-            config
-                .upload_s3_endpoint
-                .as_deref()
-                .unwrap_or("<aws-default-endpoint>"),
-        );
-        field(&mut digest, &config.upload_s3_region);
-        field(
-            &mut digest,
-            config.upload_s3_bucket.as_deref().unwrap_or_default(),
-        );
-        field(&mut digest, &config.upload_s3_prefix);
-        digest.update([
-            u8::from(config.upload_s3_path_style),
-            u8::from(config.upload_s3_allow_http),
-        ]);
-        if let Some(kms_file) = config.upload_s3_sse_kms_key_id_file.as_deref() {
-            digest.update([1]);
-            let mut kms = Zeroizing::new(crate::config::read_secret_file(
-                kms_file,
-                "UPLOAD_S3_SSE_KMS_KEY_ID_FILE",
-            )?);
-            field(&mut digest, kms.as_str());
-            kms.zeroize();
-        } else {
-            digest.update([0]);
-        }
-    }
-    Ok(digest.finalize().into())
+    let s3 = (config.upload_storage_backend == "s3").then(|| S3UploadSettings {
+        endpoint: config.upload_s3_endpoint.clone(),
+        region: config.upload_s3_region.clone(),
+        bucket: config.upload_s3_bucket.clone().unwrap_or_default(),
+        prefix: config.upload_s3_prefix.clone(),
+        path_style: config.upload_s3_path_style,
+        allow_http: config.upload_s3_allow_http,
+        ambient_credentials: config.upload_s3_credential_mode == "ambient",
+        credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
+        access_key_id_file: config.upload_s3_access_key_id_file.clone(),
+        secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
+        session_token_file: config.upload_s3_session_token_file.clone(),
+        sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
+    });
+    crate::storage::upload_storage_namespace_id(
+        &config.upload_storage_backend,
+        &config.upload_dir,
+        s3.as_ref(),
+    )
 }
 
 #[allow(unused_imports)]
@@ -4448,6 +4421,10 @@ impl AppState {
         startup_phase.complete();
         let upload_startup_phase =
             crate::logging::StartupPhase::begin("upload_storage_initialization");
+        anyhow::ensure!(
+            !db::upload_migration_active(&pool).await?,
+            "offline upload migration is active; keep all nodes stopped"
+        );
         let upload_storage_pool = match config.storage_pool_mode {
             StoragePoolMode::Disabled => None,
             StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone()),

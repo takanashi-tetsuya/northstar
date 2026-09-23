@@ -22,6 +22,12 @@ singleton PostgreSQL `upload_storage_authority` row. A node with a different
 namespace fails before accepting traffic. Credentials are excluded from this
 digest so credential rotation does not change object authority.
 
+In the Compose deployment, `xmpp`, `backup`, and `restore` use the
+`object_store` network to reach the S3 endpoint. For file-mode credentials,
+mount the same protected JSON bundle into each service with a private Compose
+override and set `UPLOAD_S3_CREDENTIAL_BUNDLE_FILE` to its in-container path.
+The base Compose file does not mount S3 credentials.
+
 Keys are server-generated and canonical:
 
 ```text
@@ -146,10 +152,10 @@ for nullable identity fields). The fixed-search-path trigger then clears the
 slot's reservation in the same transaction. An exact `ON CONFLICT` replay is
 neutral; a changed projection is rejected by immutable-identity guards and
 cannot consume another slot's debt. Queue-table mutation is not granted to
-`PUBLIC`. Production deployments use separate migrator and runtime credentials.
-The runtime role is a non-owner without CREATE or TEMP privileges, but retains
-DML on mutable application tables, including upload queues. Subsystem-specific
-queue roles remain future work; see [database roles](DATABASE_ROLES.md).
+`PUBLIC`. Production deployments use separate migrator, runtime and storage
+credentials. The runtime role cannot mutate upload queues; the storage role
+owns the bounded upload-storage operations and has no general application-table
+write access. See [database roles](DATABASE_ROLES.md).
 
 New-slot admission evaluates `pending + debt`, locks that one row with a 50 ms lock timeout (then
 the account row in fixed order), enforces configured retained-file/byte
@@ -278,31 +284,41 @@ boundary remains; it must never be described as E2EE.
 
 ## Backup and restore boundary
 
-The repository's backup format v2 and `backup.sh` archive **local** committed
-upload files and validate them against a PostgreSQL snapshot. S3 objects require
-a separate backup; a database/control-plane dump alone is incomplete.
+Format v2 archives local committed upload files and validates them against a
+PostgreSQL snapshot. Format v3 archives S3 objects at the exact versions named
+by that snapshot, with a signed and encrypted inventory of each committed
+key, version, size and SHA-256. Backup refuses uncommitted slots, mixed local/S3
+locators, absent version IDs, and pending storage or cleanup work. It reads and
+hashes every recorded version before publishing `READY`.
 
-An S3 deployment needs two coordinated artifacts:
+S3 restore writes archive bytes to fresh attempt-qualified keys, checks each
+new version and digest, then remaps all database locators and the namespace
+authority in one fenced PostgreSQL replacement transaction. It verifies the
+new versions again before advancing the trusted restore floor or reopening
+connections. Missing, substituted or mismatched objects abort the restore.
+Keep a protected provider-native snapshot or replication of the bucket as an
+independent recovery copy. Preserve version history, KMS key policy and
+material, Object Lock settings and noncurrent-version retention for the full
+backup lifetime. None of these credentials or provider controls are embedded
+in the archive. See [BACKUP_SECURITY.md](BACKUP_SECURITY.md) for the script and
+container procedure.
 
-1. a PostgreSQL backup whose upload manifest contains `id`, backend, committed
-   object key/version, exact size, SHA-256, fence and expiry; and
-2. a provider-native, independently protected snapshot/replication/versioned
-   backup of the named bucket and prefix.
-
-Restore into an isolated namespace first. Restore PostgreSQL, restore or map
-the exact object versions, then run a bounded manifest validator that HEADs and
-streams every live committed reference to confirm version, size and SHA-256.
-Only after every reference validates may the namespace authority be activated
-and traffic enabled. Missing, substituted or mismatched objects are a failed
-restore, not entries to skip. Provider credentials, KMS key policy/material,
-Object Lock configuration and noncurrent-version retention are separate backup
-dependencies and are never embedded in the local upload tar.
-
-Migration from local to S3 is not an in-place configuration toggle: startup
-will reject it while local locators exist. Copy each immutable object to a new
-attempt-qualified S3 key, verify the bytes, update locators in a purpose-built
-transactional migration, drain exact cleanup jobs, then advance the namespace
-authority. No such online migration command is claimed in this release.
+Switching between local and S3 storage requires an offline migration. Stop all
+Northstar nodes and workers, drain upload and cleanup jobs, take a backup, and
+run `xmpp-server storage migrate --from local --to s3 --all-nodes-stopped`
+(reverse `--from` and `--to` for S3 to local). Run it with the database migrator
+credential and the source and target storage configuration. The command keeps a
+durable run ID; pass `--run-id UUID` to resume a known run after interruption.
+It checks every source size and SHA-256, then rereads every verified destination
+at its exact version and checks its full digest immediately before switching
+locators and namespace authority in one transaction. A destination that has
+disappeared or changed leaves the source authority in place. Server startup
+refuses an active migration run; this check does not replace stopping nodes
+that were already running before the run began.
+Retired attempts remain in the journal for exact cleanup review. The journal
+and restore outcome marker are migrator-owned and backup-readable; runtime,
+storage, and command roles cannot read or modify them. Start servers only after
+the command reports the committed generation and manifest digest.
 
 ### Offline namespace-authority v1 to v2 upgrade
 

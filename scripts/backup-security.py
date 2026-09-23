@@ -23,6 +23,7 @@ import uuid
 
 
 HEX_256 = re.compile(r"[0-9a-f]{64}")
+RESTORE_ID = re.compile(r"[0-9a-f]{32}")
 SAFE_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~-]{0,127}")
 RFC3339_UTC = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
@@ -48,6 +49,17 @@ V2_REQUIRED = {
     "upload_archive_sha256",
     "upload_plain_sha256",
     "upload_consistency",
+}
+
+V3_REQUIRED = V2_REQUIRED | {
+    "storage_backend",
+    "storage_namespace_sha256",
+    "storage_generation",
+    "upload_inventory",
+    "upload_inventory_archive_sha256",
+    "upload_inventory_plain_sha256",
+    "upload_object_count",
+    "upload_object_bytes",
 }
 
 V1_REQUIRED = {
@@ -135,11 +147,13 @@ def validate_manifest(path: Path) -> dict[str, str]:
         if not values["successful_migrations"].isdigit():
             fail("successful_migrations must be a non-negative integer")
         return values
-    if first != "format=northstar-backup-v2":
+    if first not in {"format=northstar-backup-v2", "format=northstar-backup-v3"}:
         fail("unsupported backup format")
 
-    values = parse_kv(path, allowed=V2_REQUIRED, required=V2_REQUIRED)
-    if values["manifest_version"] != "2":
+    version = first.removeprefix("format=northstar-backup-v")
+    schema = V3_REQUIRED if version == "3" else V2_REQUIRED
+    values = parse_kv(path, allowed=schema, required=schema)
+    if values["manifest_version"] != version:
         fail("unsupported manifest version")
     try:
         parsed_generation = uuid.UUID(values["backup_generation"])
@@ -159,7 +173,10 @@ def validate_manifest(path: Path) -> dict[str, str]:
         fail("northstar_version is not a safe version identifier")
     if not values["successful_migrations"].isdigit():
         fail("successful_migrations must be a non-negative integer")
-    if values["upload_consistency"] != "immutable-final-files":
+    expected_consistency = (
+        "immutable-exact-version-objects" if version == "3" else "immutable-final-files"
+    )
+    if values["upload_consistency"] != expected_consistency:
         fail("unsupported upload consistency model")
     if values["encryption"] not in {"none", "age"}:
         fail("unsupported payload encryption")
@@ -177,17 +194,31 @@ def validate_manifest(path: Path) -> dict[str, str]:
         "database_contents": f"database.contents{suffix}",
         "upload_archive": f"uploads.tar.gz{suffix}",
     }
+    if version == "3":
+        if values["storage_backend"] != "s3":
+            fail("v3 currently requires an exact-version S3 object inventory")
+        if not HEX_256.fullmatch(values["storage_namespace_sha256"]):
+            fail("storage namespace digest is invalid")
+        for key in ("storage_generation", "upload_object_count"):
+            if not values[key].isdigit() or (key == "storage_generation" and int(values[key]) < 1):
+                fail(f"{key} must be a valid non-negative integer")
+        if not values["upload_object_bytes"].isdigit():
+            fail("upload_object_bytes must be a non-negative integer")
+        expected_names["upload_inventory"] = f"upload-inventory.tsv{suffix}"
     for key, expected in expected_names.items():
         if values[key] != expected:
             fail(f"{key} is not the canonical name for this encryption mode")
-    for key in (
+    digests = [
         "database_archive_sha256",
         "database_plain_sha256",
         "database_contents_archive_sha256",
         "database_contents_plain_sha256",
         "upload_archive_sha256",
         "upload_plain_sha256",
-    ):
+    ]
+    if version == "3":
+        digests.extend(("upload_inventory_archive_sha256", "upload_inventory_plain_sha256"))
+    for key in digests:
         if not HEX_256.fullmatch(values[key]):
             fail(f"{key} is not a lowercase SHA-256 digest")
     return values
@@ -238,6 +269,8 @@ def verify_artifacts(
             manifest["database_contents"],
             manifest["upload_archive"],
         }
+        if manifest["format"] == "northstar-backup-v3":
+            expected.add(manifest["upload_inventory"])
         if manifest["signature"] != "none":
             expected.add("manifest.sig")
     checksums = parse_checksum_file(backup / "SHA256SUMS", expected)
@@ -252,12 +285,14 @@ def verify_artifacts(
             artifact = backup / name
         if digest(artifact) != expected_digest:
             fail(f"SHA-256 mismatch for {name}")
-    if manifest["format"] == "northstar-backup-v2":
-        pairs = (
+    if manifest["format"] in {"northstar-backup-v2", "northstar-backup-v3"}:
+        pairs = [
             (manifest["database_archive"], manifest["database_archive_sha256"]),
             (manifest["database_contents"], manifest["database_contents_archive_sha256"]),
             (manifest["upload_archive"], manifest["upload_archive_sha256"]),
-        )
+        ]
+        if manifest["format"] == "northstar-backup-v3":
+            pairs.append((manifest["upload_inventory"], manifest["upload_inventory_archive_sha256"]))
         for name, expected_digest in pairs:
             if digest(backup / name) != expected_digest:
                 fail(f"signed manifest digest mismatch for {name}")
@@ -350,11 +385,19 @@ def read_restore_state(path: Path) -> dict[str, str] | None:
     require_regular(path, private=True)
     values = parse_kv(
         path,
-        allowed={"format", "generation", "sequence", "manifest_sha256", "restored_at"},
+        allowed={"format", "generation", "sequence", "manifest_sha256", "restored_at",
+                 "last_restore_id", "last_manifest_sha256"},
         required={"format", "generation", "sequence", "manifest_sha256", "restored_at"},
     )
-    if values["format"] != "northstar-restore-state-v1":
+    if values["format"] not in {"northstar-restore-state-v1", "northstar-restore-state-v2"}:
         fail("unsupported restore state format")
+    if values["format"] == "northstar-restore-state-v2":
+        if not RESTORE_ID.fullmatch(values.get("last_restore_id", "")):
+            fail("restore state last restore ID is invalid")
+        if not HEX_256.fullmatch(values.get("last_manifest_sha256", "")):
+            fail("restore state last manifest digest is invalid")
+    elif "last_restore_id" in values or "last_manifest_sha256" in values:
+        fail("legacy restore state contains new-format fields")
     try:
         generation = str(uuid.UUID(values["generation"]))
     except ValueError:
@@ -378,7 +421,7 @@ def check_rollback(
     allow_generation_change: bool,
 ) -> None:
     manifest = validate_manifest(manifest_path)
-    if manifest["format"] != "northstar-backup-v2":
+    if manifest["format"] not in {"northstar-backup-v2", "northstar-backup-v3"}:
         fail("legacy backups do not carry monotonic rollback metadata")
     current = read_restore_state(state_path)
     if current is None:
@@ -398,14 +441,18 @@ def commit_restore_state(
     state_path: Path,
     *,
     allow_generation_change: bool,
+    restore_id: str,
 ) -> None:
+    if not RESTORE_ID.fullmatch(restore_id):
+        fail("restore ID must be 32 lowercase hexadecimal characters")
     manifest = validate_manifest(manifest_path)
-    if manifest["format"] != "northstar-backup-v2":
+    if manifest["format"] not in {"northstar-backup-v2", "northstar-backup-v3"}:
         fail("cannot commit rollback state for a legacy backup")
     current = read_restore_state(state_path)
     generation = manifest["backup_generation"]
     sequence = int(manifest["backup_sequence"])
-    manifest_digest = digest(manifest_path)
+    restored_manifest_digest = digest(manifest_path)
+    manifest_digest = restored_manifest_digest
     if current is not None and current["generation"] == generation:
         # A deliberate older restore must never lower the replay floor.
         if sequence <= int(current["sequence"]):
@@ -416,10 +463,12 @@ def commit_restore_state(
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     atomic_write(
         state_path,
-        "format=northstar-restore-state-v1\n"
+        "format=northstar-restore-state-v2\n"
         f"generation={generation}\n"
         f"sequence={sequence}\n"
         f"manifest_sha256={manifest_digest}\n"
+        f"last_restore_id={restore_id}\n"
+        f"last_manifest_sha256={restored_manifest_digest}\n"
         f"restored_at={timestamp}\n",
     )
 
@@ -453,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
     commit.add_argument("manifest", type=Path)
     commit.add_argument("state_file", type=Path)
     commit.add_argument("--allow-generation-change", action="store_true")
+    commit.add_argument("--restore-id", required=True)
     return parser
 
 
@@ -485,6 +535,7 @@ def main() -> int:
             args.manifest,
             args.state_file,
             allow_generation_change=args.allow_generation_change,
+            restore_id=args.restore_id,
         )
     return 0
 

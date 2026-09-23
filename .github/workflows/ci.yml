@@ -1336,20 +1336,91 @@ jobs:
   disaster-recovery:
     name: Isolated disaster-recovery drill
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Install private PostgreSQL test tools
-        run: bash scripts/ci-install-ubuntu-packages.sh age postgresql postgresql-client
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      - name: Install backup encryption tool
+        run: bash scripts/ci-install-ubuntu-packages.sh age
+
+      - name: Identify PostgreSQL tool platform
+        id: pg_platform
+        run: |
+          . /etc/os-release
+          printf 'version=%s-%s\n' "$ID" "$VERSION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private PostgreSQL 17 tools
+        id: pg_tools
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-pg17-backup-tools
+          key: pg17-backup-zlib-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pg_platform.outputs.version }}-${{ hashFiles('scripts/ci-postgres17-tools.sh') }}
+
+      - name: Install PostgreSQL build prerequisites
+        if: steps.pg_tools.outputs.cache-hit != 'true'
+        run: bash scripts/ci-install-ubuntu-packages.sh bison flex zlib1g-dev
+
+      - name: Prepare private PostgreSQL 17 tools
+        env:
+          NORTHSTAR_PG17_COMPRESSION: gzip
+        run: bash scripts/ci-postgres17-tools.sh "$RUNNER_TEMP/northstar-pg17-backup-tools"
 
       - name: Run backup, verification, and restore
+        run: |
+          export PATH="$RUNNER_TEMP/northstar-pg17-backup-tools/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-pg17-backup-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          bash scripts/github-ci-run.sh "Disaster-recovery drill" bash scripts/backup-restore-wsl.sh
+
+  storage-migration-integration:
+    name: Versioned S3 storage migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      - name: Start loopback-only PostgreSQL 17 fixture
+        run: bash scripts/loopback-postgres-ci.sh start
+
+      - name: Install PostgreSQL client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
+
+      - name: Prove interrupted local/S3 and S3/local cutovers
         run: >-
-          bash scripts/github-ci-run.sh "Disaster-recovery drill"
-          bash scripts/backup-restore-wsl.sh
+          bash scripts/github-ci-run.sh "Versioned S3 storage migration"
+          bash scripts/test-storage-migration-wsl.sh
+
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
 
   ci-required:
     name: CI required
@@ -1383,6 +1454,7 @@ jobs:
       - listener-readiness-stress-scheduled
       - xep0487-integration
       - disaster-recovery
+      - storage-migration-integration
     steps:
       - name: Check out the evaluated source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

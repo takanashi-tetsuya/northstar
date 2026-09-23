@@ -229,22 +229,27 @@ expect_failure tampered-manifest bash "$script_dir/verify-backup.sh" \
 
 restore_state="$fixture_root/restore-state"
 python3 "$script_dir/backup-security.py" commit-restore-state \
-  "$fixture_root/sequence-1/manifest.txt" "$restore_state"
+  "$fixture_root/sequence-1/manifest.txt" "$restore_state" \
+  --restore-id 11111111111111111111111111111111
 expect_failure replayed-sequence bash "$script_dir/verify-backup.sh" \
   "$fixture_root/sequence-1" --require-signature \
   --public-key-file "$fixture_root/signing.pub" --rollback-state-file "$restore_state"
 bash "$script_dir/verify-backup.sh" "$fixture_root/sequence-2" --require-signature \
   --public-key-file "$fixture_root/signing.pub" --rollback-state-file "$restore_state" >/dev/null
 python3 "$script_dir/backup-security.py" commit-restore-state \
-  "$fixture_root/sequence-2/manifest.txt" "$restore_state"
+  "$fixture_root/sequence-2/manifest.txt" "$restore_state" \
+  --restore-id 22222222222222222222222222222222
 highest_manifest_digest="$(sed -n 's/^manifest_sha256=//p' "$restore_state")"
 bash "$script_dir/verify-backup.sh" "$fixture_root/sequence-1" --require-signature \
   --public-key-file "$fixture_root/signing.pub" --rollback-state-file "$restore_state" \
   --allow-rollback >/dev/null
 python3 "$script_dir/backup-security.py" commit-restore-state \
-  "$fixture_root/sequence-1/manifest.txt" "$restore_state"
+  "$fixture_root/sequence-1/manifest.txt" "$restore_state" \
+  --restore-id 33333333333333333333333333333333
 grep -qx 'sequence=2' "$restore_state"
 grep -qx "manifest_sha256=$highest_manifest_digest" "$restore_state"
+grep -qx 'last_restore_id=33333333333333333333333333333333' "$restore_state"
+grep -qx "last_manifest_sha256=$(sha256sum "$fixture_root/sequence-1/manifest.txt" | awk '{print $1}')" "$restore_state"
 
 expect_failure unapproved-generation bash "$script_dir/verify-backup.sh" \
   "$fixture_root/new-generation" --require-signature \
@@ -372,4 +377,6 @@ else
   echo "age is unavailable; encrypted fixture was skipped" >&2
 fi
 
+python3 "$script_dir/test-backup-inventory.py"
+python3 "$script_dir/test-restore-recovery.py"
 echo "backup security offline fixtures passed"

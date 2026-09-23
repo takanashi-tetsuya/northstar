@@ -7,6 +7,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 output_root="$project_dir/backups"
 database_url_file="${DATABASE_URL_FILE:-}"
 upload_dir="${UPLOAD_DIR:-$project_dir/data/uploads}"
+storage_backend="${UPLOAD_STORAGE_BACKEND:-local}"
+storage_helper="${NORTHSTAR_BACKUP_STORAGE_HELPER:-xmpp-server}"
 retention_days=0
 signing_key_file="${BACKUP_SIGNING_KEY_FILE:-}"
 require_signature="${BACKUP_REQUIRE_SIGNATURE:-false}"
@@ -29,6 +31,7 @@ Options:
   --output DIR                 Backup destination root
   --database-url-file FILE     PostgreSQL URL secret file
   --upload-dir DIR             Immutable upload-object directory
+  --storage-backend BACKEND    local (v2) or s3 exact-version inventory (v3)
   --retention-days DAYS        Delete canonical backups older than DAYS
   --sequence-state-file FILE   Persistent generation/sequence state
   --signing-key-file FILE      OpenSSL Ed25519 private key (file only)
@@ -53,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --output) output_root="${2:?missing output directory}"; shift 2 ;;
     --database-url-file) database_url_file="${2:?missing database URL file}"; shift 2 ;;
     --upload-dir) upload_dir="${2:?missing upload directory}"; shift 2 ;;
+    --storage-backend) storage_backend="${2:?missing storage backend}"; shift 2 ;;
     --retention-days) retention_days="${2:?missing retention days}"; shift 2 ;;
     --sequence-state-file) sequence_state_file="${2:?missing sequence state file}"; shift 2 ;;
     --signing-key-file) signing_key_file="${2:?missing signing key file}"; shift 2 ;;
@@ -81,6 +85,12 @@ case "$security_policy" in
 esac
 
 [[ "$retention_days" =~ ^[0-9]+$ ]] || { echo "retention days must be a non-negative integer" >&2; exit 2; }
+[[ "$storage_backend" == local || "$storage_backend" == s3 ]] \
+  || { echo "storage backend must be local or s3" >&2; exit 2; }
+if [[ "$storage_backend" == s3 ]]; then
+  command -v "$storage_helper" >/dev/null \
+    || { echo "S3 backup requires the Northstar storage helper" >&2; exit 1; }
+fi
 case "${require_signature,,}" in
   1|true|yes) require_signature=true ;;
   0|false|no) require_signature=false ;;
@@ -432,6 +442,15 @@ fi
 
 start_maintenance_session
 attest_repository_migration_ledger
+if [[ "$storage_backend" == s3 ]]; then
+  preflight_state="$("${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align \
+    --set ON_ERROR_STOP=1 --command="SELECT NOT EXISTS \
+      (SELECT 1 FROM public.upload_storage_migration_runs WHERE state='copying') \
+      AND NOT EXISTS (SELECT 1 FROM public.upload_storage_jobs) \
+      AND NOT EXISTS (SELECT 1 FROM public.upload_cleanup_queue)")"
+  [[ "$preflight_state" == t ]] \
+    || { echo "S3 backup requires drained migration, storage, and cleanup journals" >&2; exit 1; }
+fi
 
 "${pg_client[@]}" pg_dump \
   --format=custom \
@@ -441,27 +460,49 @@ attest_repository_migration_ledger
   --file="$payload_staging/database.dump"
 pg_restore --list "$payload_staging/database.dump" > "$payload_staging/database.contents"
 
-if [[ -d "$upload_dir" ]]; then
-  upload_dir="$(cd "$upload_dir" && pwd -P)"
-  tar --create --gzip --file="$payload_staging/uploads.tar.gz" \
-    --exclude='*.part' \
-    --exclude='.northstar-upload-root' \
-    --exclude='.pre-restore.*' \
-    --exclude='.northstar-restore.*' \
-    --exclude='.northstar-restore-*' \
-    --directory="$upload_dir" .
-else
-  tar --create --gzip --file="$payload_staging/uploads.tar.gz" --files-from=/dev/null
-fi
-python3 "$script_dir/verify-upload-archive.py" "$payload_staging/uploads.tar.gz"
-
-# Prove that every live upload referenced by the exact database dump is present
-# in the captured archive with the authoritative size and digest. Extra archive
-# objects are harmless; a missing or changed referenced object blocks READY.
 upload_rows="$payload_staging/upload-rows.tsv"
-bash "$script_dir/validate-backup-dump-local.sh" \
-  "$payload_staging/database.dump" "$validation_staging_root" "$upload_rows"
-python3 - "$payload_staging/uploads.tar.gz" "$upload_rows" <<'PY'
+if [[ "$storage_backend" == s3 ]]; then
+  authority_file="$payload_staging/storage-authority.tsv"
+  bash "$script_dir/validate-backup-dump-local.sh" \
+    "$payload_staging/database.dump" "$validation_staging_root" "$upload_rows" \
+    --s3 "$authority_file"
+  read -r storage_namespace_sha256 storage_generation <"$authority_file"
+  [[ "$storage_namespace_sha256" =~ ^[0-9a-f]{64}$ \
+     && "$storage_generation" =~ ^[1-9][0-9]*$ ]] \
+    || { echo "validated S3 authority is malformed" >&2; exit 1; }
+  inventory_plain="$payload_staging/upload-inventory.tsv"
+  read -r upload_object_count upload_object_bytes \
+    < <(python3 "$script_dir/backup-inventory.py" build "$upload_rows" "$inventory_plain")
+  object_staging="$payload_staging/s3-objects"
+  mkdir -m 0700 "$object_staging"
+  "$storage_helper" storage backup-object export \
+    "$inventory_plain" "$object_staging" "$storage_namespace_sha256"
+  python3 "$script_dir/backup-inventory.py" pack \
+    "$inventory_plain" "$object_staging" "$payload_staging/uploads.tar.gz"
+  python3 "$script_dir/backup-inventory.py" verify \
+    "$inventory_plain" "$payload_staging/uploads.tar.gz" \
+    "$upload_object_count" "$upload_object_bytes"
+  rm -rf --one-file-system -- "$object_staging"
+  rm -- "$authority_file"
+else
+  if [[ -d "$upload_dir" ]]; then
+    upload_dir="$(cd "$upload_dir" && pwd -P)"
+    tar --create --gzip --file="$payload_staging/uploads.tar.gz" \
+      --exclude='*.part' \
+      --exclude='.northstar-upload-root' \
+      --exclude='.pre-restore.*' \
+      --exclude='.northstar-restore.*' \
+      --exclude='.northstar-restore-*' \
+      --directory="$upload_dir" .
+  else
+    tar --create --gzip --file="$payload_staging/uploads.tar.gz" --files-from=/dev/null
+  fi
+  python3 "$script_dir/verify-upload-archive.py" "$payload_staging/uploads.tar.gz"
+
+  # The exact database dump determines which local objects must be present.
+  bash "$script_dir/validate-backup-dump-local.sh" \
+    "$payload_staging/database.dump" "$validation_staging_root" "$upload_rows"
+  python3 - "$payload_staging/uploads.tar.gz" "$upload_rows" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -504,17 +545,24 @@ missing = sorted(required.keys() - seen)
 if missing:
     raise SystemExit(f"database dump references missing upload objects: {missing}")
 PY
+fi
 rm -- "$upload_rows"
 
 database_version="$("${pg_client[@]}" psql --no-psqlrc --tuples-only --no-align --command='SHOW server_version' | tr -d '\r\n')"
 database_plain_sha256="$(sha256sum "$payload_staging/database.dump" | awk '{print $1}')"
 database_contents_plain_sha256="$(sha256sum "$payload_staging/database.contents" | awk '{print $1}')"
 upload_plain_sha256="$(sha256sum "$payload_staging/uploads.tar.gz" | awk '{print $1}')"
+if [[ "$storage_backend" == s3 ]]; then
+  inventory_plain_sha256="$(sha256sum "$inventory_plain" | awk '{print $1}')"
+fi
 
 encryption=none
 database_archive=database.dump
 database_contents=database.contents
 upload_archive=uploads.tar.gz
+if [[ "$storage_backend" == s3 ]]; then
+  inventory_archive=upload-inventory.tsv
+fi
 if [[ -n "$age_recipient_file" ]]; then
   encryption=age
   age --encrypt --recipients-file "$age_recipient_file" \
@@ -523,6 +571,11 @@ if [[ -n "$age_recipient_file" ]]; then
     --output "$staging/database.contents.age" "$payload_staging/database.contents"
   age --encrypt --recipients-file "$age_recipient_file" \
     --output "$staging/uploads.tar.gz.age" "$payload_staging/uploads.tar.gz"
+  if [[ "$storage_backend" == s3 ]]; then
+    age --encrypt --recipients-file "$age_recipient_file" \
+      --output "$staging/upload-inventory.tsv.age" "$inventory_plain"
+    inventory_archive=upload-inventory.tsv.age
+  fi
   database_archive=database.dump.age
   database_contents=database.contents.age
   upload_archive=uploads.tar.gz.age
@@ -530,6 +583,9 @@ fi
 database_archive_sha256="$(sha256sum "$staging/$database_archive" | awk '{print $1}')"
 database_contents_archive_sha256="$(sha256sum "$staging/$database_contents" | awk '{print $1}')"
 upload_archive_sha256="$(sha256sum "$staging/$upload_archive" | awk '{print $1}')"
+if [[ "$storage_backend" == s3 ]]; then
+  inventory_archive_sha256="$(sha256sum "$staging/$inventory_archive" | awk '{print $1}')"
+fi
 
 signature=none
 signing_key_id=none
@@ -546,9 +602,15 @@ if [[ -n "$signing_key_file" ]]; then
   signing_key_id="sha256:$(sha256sum "$staging/.signing-public.der" | awk '{print $1}')"
   rm -- "$staging/.signing-public.der"
 fi
+backup_format_version=2
+upload_consistency=immutable-final-files
+if [[ "$storage_backend" == s3 ]]; then
+  backup_format_version=3
+  upload_consistency=immutable-exact-version-objects
+fi
 cat > "$staging/manifest.txt" <<EOF
-format=northstar-backup-v2
-manifest_version=2
+format=northstar-backup-v$backup_format_version
+manifest_version=$backup_format_version
 backup_generation=$backup_generation
 backup_sequence=$backup_sequence
 created_at=$created_at
@@ -567,10 +629,25 @@ database_contents_plain_sha256=$database_contents_plain_sha256
 upload_archive=$upload_archive
 upload_archive_sha256=$upload_archive_sha256
 upload_plain_sha256=$upload_plain_sha256
-upload_consistency=immutable-final-files
+upload_consistency=$upload_consistency
 EOF
+if [[ "$storage_backend" == s3 ]]; then
+  cat >>"$staging/manifest.txt" <<EOF
+storage_backend=s3
+storage_namespace_sha256=$storage_namespace_sha256
+storage_generation=$storage_generation
+upload_inventory=$inventory_archive
+upload_inventory_archive_sha256=$inventory_archive_sha256
+upload_inventory_plain_sha256=$inventory_plain_sha256
+upload_object_count=$upload_object_count
+upload_object_bytes=$upload_object_bytes
+EOF
+fi
 python3 "$script_dir/backup-security.py" validate-manifest "$staging/manifest.txt"
 checksum_files=("$database_archive" "$database_contents" "$upload_archive" manifest.txt)
+if [[ "$storage_backend" == s3 ]]; then
+  checksum_files+=("$inventory_archive")
+fi
 if [[ "$signature" == openssl-ed25519 ]]; then
   openssl pkeyutl -sign -rawin -inkey "$signing_key_file" -passin pass: \
     -in "$staging/manifest.txt" -out "$staging/manifest.sig" 2>/dev/null

@@ -7,6 +7,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 backup_dir=""
 database_url_file="${DATABASE_URL_FILE:-}"
 upload_dir="${UPLOAD_DIR:-$project_dir/data/uploads}"
+storage_helper="${NORTHSTAR_BACKUP_STORAGE_HELPER:-xmpp-server}"
 rollback_dir="${ROLLBACK_DIR:-}"
 plaintext_staging_root="${RESTORE_PLAINTEXT_STAGING_DIR:-${TMPDIR:-/tmp}}"
 confirmation=""
@@ -26,6 +27,7 @@ grant_boundary_sql="$project_dir/deploy/postgres-init/lib/verify-northstar-grant
 grant_apply_sql="$project_dir/deploy/postgres-init/lib/apply-northstar-grants.sql"
 capability_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-capability-manifest.sql"
 migration_ledger_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
+restore_marker_sql="$project_dir/deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql"
 readonly database_migrator_role='northstar_migrator'
 readonly database_runtime_role='northstar_runtime'
 readonly database_storage_role='northstar_storage'
@@ -161,11 +163,12 @@ done
 test_fail_after_moves="${NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES:-0}"
 test_fail_point="${NORTHSTAR_RESTORE_TEST_FAIL_POINT:-}"
 test_signal_point="${NORTHSTAR_RESTORE_TEST_SIGNAL_POINT:-}"
+test_kill_point="${NORTHSTAR_RESTORE_TEST_KILL_POINT:-}"
 [[ "$test_fail_after_moves" =~ ^[0-9]+$ ]] \
   || { echo "NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES must be a non-negative integer" >&2; exit 2; }
-for test_point in "$test_fail_point" "$test_signal_point"; do
+for test_point in "$test_fail_point" "$test_signal_point" "$test_kill_point"; do
   case "$test_point" in
-    ""|after-database-switch|after-first-old|after-first-new|before-commit) ;;
+    ""|after-database-switch|after-s3-import|after-s3-database-switch|after-first-old|after-first-new|before-commit) ;;
     *) echo "unsupported restore fault-injection point: $test_point" >&2; exit 2 ;;
   esac
 done
@@ -179,7 +182,7 @@ for command in awk bash chown chmod cmp cp createdb date du find flock grep id i
     || { echo "required command is unavailable: $command" >&2; exit 1; }
 done
 for grant_policy_file in "$grant_boundary_sql" "$migration_ledger_manifest_sql" \
-  "$capability_manifest_sql" "$grant_apply_sql"; do
+  "$capability_manifest_sql" "$grant_apply_sql" "$restore_marker_sql"; do
   [[ -f "$grant_policy_file" && ! -L "$grant_policy_file" && -r "$grant_policy_file" ]] \
     || { echo "database grant policy is missing or unsafe: $grant_policy_file" >&2; exit 1; }
 done
@@ -376,6 +379,10 @@ declare -A psql_session_fifo_dir_registry=()
 declare -A psql_session_input_fifo_registry=()
 declare -A psql_session_output_fifo_registry=()
 target_database=""
+target_database_oid=""
+manifest_sha256=""
+s3_mode=false
+s3_remap_sql=""
 control_backend_pid=""
 target_coordinator_backend_pid=""
 primary_backend_pid=""
@@ -402,6 +409,7 @@ database_fence_active=false
 database_generation_state="original"
 compensation_required=false
 restore_committed=false
+forward_decision_durable=false
 preserve_work=false
 cleanup_running=false
 last_failure_status=0
@@ -1333,7 +1341,7 @@ SQL
 }
 
 discover_target_coordinator_identity() {
-  local worker_database
+  local worker_database oid_sql="$work_dir/target-database-oid.sql" oid_output="$work_dir/target-database-oid.out"
   read_restore_worker_identity coordinator "$target_coordinator_in" \
     "$target_coordinator_out" "$work_dir/target-coordinator-init.out" \
     target_coordinator_backend_pid worker_database || return 1
@@ -1343,6 +1351,12 @@ discover_target_coordinator_identity() {
      && "$worker_database" != template1 ]] \
     || { echo "restore coordinator has an unsafe target database identity" >&2; return 1; }
   target_database="$worker_database"
+  printf "SELECT '__DATABASE_OID__' || oid::text FROM pg_catalog.pg_database WHERE datname = current_database();\n" >"$oid_sql"
+  target_coordinator_command "$oid_sql" "$oid_output" || return 1
+  target_database_oid="$(sed -n 's/^__DATABASE_OID__//p' "$oid_output")"
+  [[ "$target_database_oid" =~ ^[1-9][0-9]{0,9}$ \
+     && "$(grep -c '^__DATABASE_OID__' "$oid_output")" == 1 ]] \
+    || { echo "restore coordinator cannot establish the exact target database OID" >&2; return 1; }
 }
 
 verify_primary_target_identity() {
@@ -1541,9 +1555,15 @@ set_target_database_connections() {
 
 activate_target_database_fence() {
   local sql_file="$work_dir/database-fence.sql" session_counts remaining_sessions allowed_sessions
+  journal_append fence-intent "target-database=$target_database" "target-database-oid=$target_database_oid"
   fence_attempted=true
   if ! set_target_database_connections false; then
-    fence_attempted=false
+    # The ALTER may have committed even when the client lost its response.
+    # A failed attempt to undo it must leave the fence and journal visible.
+    if set_target_database_connections true; then
+      journal_append fence-undone
+      fence_attempted=false
+    fi
     return 1
   fi
   journal_append state ConnectionsDenied
@@ -1562,22 +1582,28 @@ FROM pg_stat_activity
 WHERE datname = :'target_db';
 SQL
   if ! control_session_command "$sql_file" "$work_dir/database-fence.out"; then
-    set_target_database_connections true || true
-    fence_attempted=false
+    if set_target_database_connections true; then
+      journal_append fence-undone
+      fence_attempted=false
+    fi
     return 1
   fi
   session_counts="$(sed -n '/^[0-9][0-9]*:[0-9][0-9]*$/p' "$work_dir/database-fence.out")"
   if [[ ! "$session_counts" =~ ^[0-9]+:[0-9]+$ ]]; then
     echo "failed to identify the exact restore database sessions" >&2
-    set_target_database_connections true || true
-    fence_attempted=false
+    if set_target_database_connections true; then
+      journal_append fence-undone
+      fence_attempted=false
+    fi
     return 1
   fi
   IFS=: read -r remaining_sessions allowed_sessions <<<"$session_counts"
   if (( remaining_sessions != 0 || allowed_sessions != 3 )); then
     echo "restore refused: $remaining_sessions other target database session(s) remain after the connection fence; stop Northstar and all database clients, then retry" >&2
-    set_target_database_connections true || true
-    fence_attempted=false
+    if set_target_database_connections true; then
+      journal_append fence-undone
+      fence_attempted=false
+    fi
     return 1
   fi
   journal_append state OldWorkloadsDrained
@@ -1699,6 +1725,7 @@ replace_database_from_dump() {
   # XID before it sends even the first destructive byte.
   {
     cat "$grant_variables" &&
+    printf '%s\n' 'SET search_path TO public,pg_catalog;' &&
     printf '%s\n' 'BEGIN;' &&
     printf "%s\n" \
       "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0));" &&
@@ -1780,10 +1807,29 @@ SQL
       --clean --if-exists --no-owner --no-acl --file=- >&"$worker_in"; then
     stream_ok=false
   fi
+  # pg_restore can reset search_path to empty. Rebind the restored public
+  # schema before applying repository policy or the exact S3 locator remap.
+  if [[ "$stream_ok" == true ]] \
+    && ! printf '%s\n' 'SET LOCAL search_path TO public,pg_catalog;' >&"$worker_in"; then
+    stream_ok=false
+  fi
+  if [[ "$stream_ok" == true && "$transaction_kind" == incoming \
+     && "$s3_mode" == true ]] \
+    && ! cat "$s3_remap_sql" >&"$worker_in"; then
+    stream_ok=false
+  fi
   if [[ "$stream_ok" == true ]] \
     && { ! cat "$migration_ledger_manifest_sql" >&"$worker_in" \
       || ! cat "$capability_manifest_sql" >&"$worker_in" \
+      || ! cat "$restore_marker_sql" >&"$worker_in" \
       || ! cat "$grant_apply_sql" >&"$worker_in"; }; then
+    stream_ok=false
+  fi
+  # This marker is committed with the replacement itself. Recovery can prove
+  # the exact restored generation after pg_xact_status is no longer retained.
+  if [[ "$stream_ok" == true ]] \
+    && { ! printf "INSERT INTO northstar_restore_outcome_markers (restore_id, manifest_sha256, target_database_oid, outcome, transaction_xid) VALUES ('%s', decode('%s','hex'), %s::oid, '%s', %s::pg_catalog.xid8);\n" \
+           "$restore_id" "$manifest_sha256" "$target_database_oid" "$transaction_kind" "$xid_line" >&"$worker_in"; }; then
     stream_ok=false
   fi
   if [[ "$stream_ok" == true ]]; then
@@ -1918,7 +1964,11 @@ compensate_restore() {
     echo "cannot compensate an unknown database generation" >&2
     return 1
   fi
-  if [[ "$database_ok" == true && -n "$cutover_dir" && -d "$cutover_dir" ]]; then
+  if [[ "$s3_mode" == true ]]; then
+    # Imported attempt-qualified versions are never reused or deleted during
+    # compensation. Their durable intent remains for exact operator cleanup.
+    journal_append s3-new-objects-retained || journal_ok=false
+  elif [[ "$database_ok" == true && -n "$cutover_dir" && -d "$cutover_dir" ]]; then
     rollback_uploads_from_journal || upload_ok=false
   fi
   if [[ "$upload_ok" == true && "$database_ok" == true ]]; then
@@ -1956,6 +2006,11 @@ finish_restore() {
          || "$database_generation_state" != replacement ]]; then
       database_outcome_unknown=true
     fi
+  elif [[ "$forward_decision_durable" == true ]]; then
+    # A durable forward decision bars compensation even if the subsequent
+    # trusted-floor write was interrupted. Recovery must finish it exactly.
+    database_outcome_unknown=true
+    compensation_ok=false
   elif [[ "$compensation_required" == true ]]; then
     if ! settle_active_restore_transaction; then
       database_outcome_unknown=true
@@ -1978,7 +2033,7 @@ finish_restore() {
 
   if [[ "$compensation_ok" == true && "$fence_ok" == true \
      && "$cleanup_ok" == true ]]; then
-    if [[ "$restore_committed" != true ]]; then
+    if [[ "$restore_committed" != true && "$s3_mode" != true ]]; then
       remove_cutover_dir || cleanup_ok=false
     fi
     if [[ "$cleanup_ok" == true ]]; then
@@ -2030,6 +2085,211 @@ if available < needed + reserve:
 PY
 }
 
+run_s3_helper() (
+  close_inherited_parent_fds || exit 125
+  exec "$storage_helper" storage backup-object "$@"
+)
+
+restore_s3_backup() {
+  local source_namespace source_generation target_namespace dump_authority
+  local object_count object_bytes largest_bytes candidate_count candidate_bytes
+  local target_inventory results attempts authority_file actual_rows comparison_sql comparison_out
+  local source_inventory="$payload_dir/upload-inventory.tsv"
+  [[ "${UPLOAD_STORAGE_BACKEND:-}" == s3 ]] \
+    || { echo 'S3 backup requires UPLOAD_STORAGE_BACKEND=s3 at restore' >&2; return 1; }
+  command -v "$storage_helper" >/dev/null \
+    || { echo 'S3 restore requires the Northstar storage helper' >&2; return 1; }
+  source_namespace="$(python3 "$script_dir/backup-security.py" field "$payload_dir/manifest.txt" storage_namespace_sha256)"
+  source_generation="$(python3 "$script_dir/backup-security.py" field "$payload_dir/manifest.txt" storage_generation)"
+  object_count="$(python3 "$script_dir/backup-security.py" field "$payload_dir/manifest.txt" upload_object_count)"
+  object_bytes="$(python3 "$script_dir/backup-security.py" field "$payload_dir/manifest.txt" upload_object_bytes)"
+  [[ "$source_namespace" =~ ^[0-9a-f]{64}$ && "$source_generation" =~ ^[1-9][0-9]*$ \
+     && "$object_count" =~ ^[0-9]+$ && "$object_bytes" =~ ^[0-9]+$ ]] \
+    || { echo 'verified S3 backup has invalid authority fields' >&2; return 1; }
+  target_namespace="$(run_s3_helper namespace)"
+  [[ "$target_namespace" =~ ^[0-9a-f]{64}$ ]] \
+    || { echo 'target S3 namespace digest is invalid' >&2; return 1; }
+
+  # The isolated dump validation proves every locator is committed, versioned
+  # and represented exactly once by the authenticated inventory.
+  authority_file="$work_dir/s3-dump-authority.tsv"
+  actual_rows="$work_dir/s3-dump-rows.tsv"
+  bash "$script_dir/validate-backup-dump-local.sh" \
+    "$payload_dir/database.dump" "$work_dir" "$actual_rows" --s3 "$authority_file"
+  read -r dump_authority candidate_count <"$authority_file"
+  [[ "$dump_authority" == "$source_namespace" && "$candidate_count" == "$source_generation" ]] \
+    || { echo 'S3 dump authority differs from the signed manifest' >&2; return 1; }
+  python3 - "$source_inventory" "$actual_rows" <<'PY'
+import pathlib, sys
+inventory = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines()[1:]
+rows = pathlib.Path(sys.argv[2]).read_text(encoding='utf-8').splitlines()
+if inventory != rows:
+    raise SystemExit('S3 dump locators differ from the signed inventory')
+PY
+  read -r candidate_count candidate_bytes largest_bytes \
+    < <(python3 - "$payload_dir/uploads.tar.gz" "$max_upload_object_bytes" "$max_upload_total_bytes" <<'PY'
+import sys, tarfile
+count = total = largest = 0
+with tarfile.open(sys.argv[1], 'r:gz') as archive:
+    for member in archive:
+        if not member.isfile():
+            continue
+        if member.size > int(sys.argv[2]):
+            raise SystemExit('S3 backup contains an oversized object')
+        count += 1
+        total += member.size
+        largest = max(largest, member.size)
+        if total > int(sys.argv[3]):
+            raise SystemExit('S3 backup exceeds restore total-byte limit')
+print(count, total, largest)
+PY
+)
+  [[ "$candidate_count" == "$object_count" && "$candidate_bytes" == "$object_bytes" ]] \
+    || { echo 'S3 archive totals differ from the signed manifest' >&2; return 1; }
+  require_available_space "$resolved_staging" "$object_bytes" 'S3 archive extraction'
+  tar --extract --gzip --no-same-owner --file="$payload_dir/uploads.tar.gz" --directory="$extract_dir"
+  validate_upload_namespace "$extract_dir" false \
+    || { echo 'S3 archive expanded outside the strict UUID namespace' >&2; return 1; }
+  find "$extract_dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 0600 {} +
+  python3 "$script_dir/backup-inventory.py" verify \
+    "$source_inventory" "$payload_dir/uploads.tar.gz" "$object_count" "$object_bytes"
+
+  # The local UUID volume is only a durable journal location in S3 mode; no
+  # application object is moved there or read from there.
+  cutover_dir="$resolved_upload/.northstar-restore-cutover-$restore_id"
+  mkdir -m 0700 "$cutover_dir"
+  journal_file="$cutover_dir/journal.tsv"
+  printf 'format\tnorthstar-restore-s3-journal-v1\t%s\n' "$restore_id" >"$journal_file"
+  chmod 0600 "$journal_file"
+  fsync_path "$journal_file"
+  fsync_path "$cutover_dir"
+  fsync_path "$resolved_upload"
+  journal_append s3-inventory \
+    "source-namespace=$source_namespace" \
+    "source-generation=$source_generation" \
+    "target-namespace=$target_namespace" \
+    "inventory-sha256=$(sha256sum "$source_inventory" | awk '{print $1}')"
+
+  rollback_set="$resolved_rollback/restore-$(date -u +%Y%m%dT%H%M%SZ)-$restore_id"
+  mkdir -m 0700 "$rollback_set"
+  fsync_path "$resolved_rollback"
+  rollback_dump="$rollback_set/database-before.dump"
+  echo 'restore phase=database-authority-preflight' >&2
+  establish_restore_database_authorities
+  echo 'restore phase=rollback-snapshot' >&2
+  run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
+    --file="$rollback_dump"
+  chmod 0600 "$rollback_dump"
+  run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
+  fsync_path "$rollback_dump"
+  fsync_path "$rollback_set"
+  journal_append rollback-ready "$rollback_set"
+  rollback_state_pre_sha256=none
+  if [[ -n "$rollback_state_file" && -f "$rollback_state_file" ]]; then
+    rollback_state_pre_sha256="$(sha256sum "$rollback_state_file" | awk '{print $1}')"
+  fi
+  journal_append restore-binding \
+    "target-database=$target_database" \
+    "target-database-oid=$target_database_oid" \
+    "manifest-sha256=$manifest_sha256" \
+    "rollback-state-file=${rollback_state_file:-none}" \
+    "rollback-state-pre-sha256=$rollback_state_pre_sha256" \
+    "backup-directory=$backup_dir" \
+    "rollback-dump=$rollback_dump" \
+    "rollback-dump-sha256=$(sha256sum "$rollback_dump" | awk '{print $1}')"
+  journal_append state Prepared
+  start_compensation_worker
+  echo 'restore phase=connection-fence' >&2
+  activate_target_database_fence
+  release_primary_policy_lock_after_fence
+  compensation_required=true
+  journal_append state BackupVerified
+
+  # Each attempt UUID is durably recorded before any remote PUT. A failed or
+  # uncertain PUT is never retried with the same key.
+  attempts="$cutover_dir/s3-attempts.tsv"
+  results="$cutover_dir/s3-results.tsv"
+  target_inventory="$cutover_dir/s3-target-inventory.tsv"
+  s3_remap_sql="$cutover_dir/s3-remap.sql"
+  python3 "$script_dir/backup-inventory.py" attempts "$source_inventory" "$attempts"
+  fsync_path "$attempts"
+  journal_append s3-import-intent "attempts-sha256=$(sha256sum "$attempts" | awk '{print $1}')"
+  run_s3_helper import "$source_inventory" "$extract_dir" "$target_namespace" "$attempts" "$results"
+  fsync_path "$results"
+  python3 "$script_dir/backup-inventory.py" results "$source_inventory" "$results" "$target_inventory"
+  fsync_path "$target_inventory"
+  run_s3_helper verify "$target_inventory" "$target_namespace"
+  python3 "$script_dir/backup-inventory.py" remap-sql \
+    "$source_inventory" "$target_inventory" "$s3_remap_sql" \
+    "$source_namespace" "$source_generation" "$target_namespace"
+  fsync_path "$s3_remap_sql"
+  journal_append s3-import-verified \
+    "results-sha256=$(sha256sum "$results" | awk '{print $1}')" \
+    "target-sha256=$(sha256sum "$target_inventory" | awk '{print $1}')" \
+    "remap-sha256=$(sha256sum "$s3_remap_sql" | awk '{print $1}')"
+  if [[ "$test_kill_point" == after-s3-import ]]; then
+    echo 'injecting SIGKILL after exact S3 import' >&2
+    kill -KILL "$$"
+  fi
+
+  journal_append database-switch-intent
+  replacement_committed=false
+  echo 'restore phase=database-replacement' >&2
+  replace_database_from_dump "$payload_dir/database.dump" restored exact \
+    "$primary_worker_in" "$primary_worker_out" incoming
+  journal_append database-switch-done
+  journal_append state RestoreApplied
+  journal_append state RolesReconciled
+  if [[ "$test_kill_point" == after-s3-database-switch ]]; then
+    echo 'injecting SIGKILL after S3 database replacement' >&2
+    kill -KILL "$$"
+  fi
+
+  # Verify the committed, exact target versions again before the irreversible
+  # forward decision and monotonic replay-floor write.
+  run_s3_helper verify "$target_inventory" "$target_namespace"
+  comparison_sql="$work_dir/s3-post-restore-check.sql"
+  comparison_out="$work_dir/s3-post-restore-check.out"
+  cat >"$comparison_sql" <<SQL
+SELECT '__S3_RESTORE_OK__' || (
+  (SELECT count(*) FROM public.upload_slots)=$object_count
+  AND EXISTS (SELECT 1 FROM public.upload_storage_authority
+      WHERE singleton AND storage_backend='s3'
+        AND namespace_sha256=decode('$target_namespace','hex')
+        AND generation=$((source_generation + 1)))
+  AND NOT EXISTS (SELECT 1 FROM public.upload_storage_jobs)
+  AND NOT EXISTS (SELECT 1 FROM public.upload_cleanup_queue)
+)::text;
+SQL
+  primary_worker_command "$comparison_sql" "$comparison_out"
+  grep -qx '__S3_RESTORE_OK__true' "$comparison_out" \
+    || { echo 'committed S3 authority or locator count is invalid' >&2; return 1; }
+  journal_append state PostRestoreVerified
+  trap '' INT TERM
+  forward_decision_durable=true
+  journal_append forward-decision "$restore_id" "$manifest_sha256" "$incoming_restore_xid"
+  if [[ -n "$rollback_state_file" ]]; then
+    commit_args=()
+    [[ "$allow_generation_change" == true ]] && commit_args+=(--allow-generation-change)
+    python3 "$script_dir/backup-security.py" commit-restore-state \
+      "$payload_dir/manifest.txt" "$rollback_state_file" \
+      --restore-id "$restore_id" "${commit_args[@]}"
+  fi
+  restore_committed=true
+  compensation_required=false
+  journal_append committed || preserve_work=true
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  release_target_database_fence
+  close_db_sessions
+  journal_append state Completed || preserve_work=true
+  if [[ "$preserve_work" != true ]]; then
+    remove_cutover_dir
+    remove_work_dir
+  fi
+  echo 'S3 restore complete: database and exact-version object namespace'
+}
+
 backup_stored_bytes="$(du -sb "$backup_dir" | awk '{print $1}')"
 require_available_space "$resolved_staging" "$backup_stored_bytes" "backup materialization"
 
@@ -2042,6 +2302,14 @@ verify_args=("$backup_dir" --materialize-dir "$payload_dir")
 [[ "$allow_generation_change" == true ]] && verify_args+=(--allow-generation-change)
 [[ "$security_policy" == development-legacy ]] && verify_args+=(--development-insecure-legacy)
 bash "$script_dir/verify-backup.sh" "${verify_args[@]}"
+manifest_sha256="$(sha256sum "$payload_dir/manifest.txt" | awk '{print $1}')"
+[[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid verified manifest digest" >&2; exit 1; }
+if [[ "$(python3 "$script_dir/backup-security.py" field "$payload_dir/manifest.txt" format)" \
+      == northstar-backup-v3 ]]; then
+  s3_mode=true
+  restore_s3_backup
+  exit 0
+fi
 
 read -r upload_member_count upload_total_bytes upload_largest_bytes \
   < <(python3 - "$payload_dir/uploads.tar.gz" "$max_upload_object_bytes" "$max_upload_total_bytes" <<'PY'
@@ -2203,6 +2471,9 @@ fsync_path "$new_manifest"
 fsync_path "$journal_file"
 fsync_path "$cutover_dir"
 fsync_path "$resolved_upload"
+journal_append object-manifests \
+  "old-sha256=$(sha256sum "$old_manifest" | awk '{print $1}')" \
+  "new-sha256=$(sha256sum "$new_manifest" | awk '{print $1}')"
 
 while IFS=$'\t' read -r object_id object_size object_digest; do
   [[ -n "$object_id" ]] || continue
@@ -2239,6 +2510,19 @@ run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
 fsync_path "$rollback_dump"
 fsync_path "$rollback_set"
 journal_append rollback-ready "$rollback_set"
+rollback_state_pre_sha256=none
+if [[ -n "$rollback_state_file" && -f "$rollback_state_file" ]]; then
+  rollback_state_pre_sha256="$(sha256sum "$rollback_state_file" | awk '{print $1}')"
+fi
+journal_append restore-binding \
+  "target-database=$target_database" \
+  "target-database-oid=$target_database_oid" \
+  "manifest-sha256=$manifest_sha256" \
+  "rollback-state-file=${rollback_state_file:-none}" \
+  "rollback-state-pre-sha256=$rollback_state_pre_sha256" \
+  "backup-directory=$backup_dir" \
+  "rollback-dump=$rollback_dump" \
+  "rollback-dump-sha256=$(sha256sum "$rollback_dump" | awk '{print $1}')"
 journal_append state Prepared
 
 # ALLOW_CONNECTIONS=false is the fail-closed boundary. The restore does not
@@ -2269,6 +2553,10 @@ journal_append state RolesReconciled
 
 inject_at() {
   local point="$1"
+  if [[ "$test_kill_point" == "$point" ]]; then
+    echo "injecting SIGKILL at restore point: $point" >&2
+    kill -KILL "$$"
+  fi
   if [[ "$test_signal_point" == "$point" ]]; then
     echo "injecting SIGTERM at restore point: $point" >&2
     kill -TERM "$$"
@@ -2346,16 +2634,18 @@ journal_append rollback-uploads-verified
 journal_append state PostRestoreVerified
 inject_at before-commit
 
-journal_append commit-intent
-# Ignore interactive signals only across the tiny replay-floor commit boundary.
-# Once the durable floor succeeds, the new data plane is authoritative even if
-# later connection re-enable or cleanup fails.
+# An ambiguous journal write may already have reached stable storage. From
+# this point onward, cleanup preserves the fence for recovery instead of
+# compensating. Ignore signals across the decision and replay-floor write.
 trap '' INT TERM
+forward_decision_durable=true
+journal_append forward-decision "$restore_id" "$manifest_sha256" "$incoming_restore_xid"
 if [[ -n "$rollback_state_file" ]]; then
   commit_args=()
   [[ "$allow_generation_change" == true ]] && commit_args+=(--allow-generation-change)
   python3 "$script_dir/backup-security.py" commit-restore-state \
-    "$payload_dir/manifest.txt" "$rollback_state_file" "${commit_args[@]}"
+    "$payload_dir/manifest.txt" "$rollback_state_file" \
+    --restore-id "$restore_id" "${commit_args[@]}"
 fi
 restore_committed=true
 journal_append committed || preserve_work=true

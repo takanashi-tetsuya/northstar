@@ -14,7 +14,7 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','storage','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
@@ -138,6 +138,7 @@ VALUES
   ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)','storage','0113'),
   ('northstar_upload_capability_catalog_healthy(text)','storage','0113'),
   ('northstar_upload_durable_state_exists()','runtime','0146'),
+  ('northstar_storage_migration_active()','runtime','0149'),
   ('northstar_upload_require_capacity_lock()','private','0131'),
   ('guard_upload_capacity_nowait()','private','0131'),
   ('northstar_session_delete_expired_live_leases()','runtime','0114'),
@@ -363,4 +364,8 @@ VALUES
   ('mix_pam_operations',TRUE,FALSE,TRUE,FALSE,'0123'),
   ('mix_delivery_capacity_releases',TRUE,FALSE,FALSE,FALSE,'0126'),
   ('mix_pam_operation_capacity',TRUE,FALSE,FALSE,FALSE,'0128'),
-  ('mix_pam_operation_user_capacity',TRUE,FALSE,FALSE,FALSE,'0128');
+  ('mix_pam_operation_user_capacity',TRUE,FALSE,FALSE,FALSE,'0128'),
+  ('upload_storage_migration_runs',FALSE,FALSE,FALSE,FALSE,'0149'),
+  ('upload_storage_migration_items',FALSE,FALSE,FALSE,FALSE,'0149'),
+  ('upload_storage_migration_attempts',FALSE,FALSE,FALSE,FALSE,'0149'),
+  ('northstar_restore_outcome_markers',FALSE,FALSE,FALSE,FALSE,'0149');

@@ -1,8 +1,15 @@
 use anyhow::{Context, Result};
 use object_store::ObjectStoreExt as _;
 use sha2::{Digest, Sha256};
-use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc, task::Poll};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+    task::Poll,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::services::upload_safety::{
     UploadAuthorityGeneration, UploadIoClass, UploadIoPermit, UploadSafetyError, UploadSafetyGate,
@@ -26,9 +33,217 @@ pub fn is_upload_safety_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<UploadSafetyError>().is_some()
 }
 
+pub(crate) mod backup;
+pub(crate) mod migrate;
 mod s3;
 
 pub use s3::{S3UploadSettings, S3UploadStore};
+
+/// Parse the one S3 namespace used by offline storage tools. This intentionally
+/// does not load the server configuration: during local-to-S3 migration both
+/// endpoint sets must be available while the live server still names local.
+pub(crate) fn s3_settings_from_env() -> Result<S3UploadSettings> {
+    let optional = |name| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let flag = |name| -> Result<bool> {
+        match std::env::var(name).as_deref() {
+            Ok("true") => Ok(true),
+            Ok("false") | Err(std::env::VarError::NotPresent) => Ok(false),
+            _ => anyhow::bail!("{name} must be exactly true or false"),
+        }
+    };
+    let endpoint = optional("UPLOAD_S3_ENDPOINT");
+    let region = optional("UPLOAD_S3_REGION").unwrap_or_else(|| "us-east-1".to_owned());
+    let bucket = optional("UPLOAD_S3_BUCKET").context("UPLOAD_S3_BUCKET is required")?;
+    let prefix =
+        std::env::var("UPLOAD_S3_PREFIX").unwrap_or_else(|_| "northstar/uploads".to_owned());
+    let path_style = flag("UPLOAD_S3_PATH_STYLE")?;
+    let allow_http = flag("UPLOAD_S3_ALLOW_HTTP")?;
+    anyhow::ensure!(
+        (3..=63).contains(&bucket.len())
+            && !bucket.starts_with(['.', '-'])
+            && !bucket.ends_with(['.', '-'])
+            && !bucket.contains("..")
+            && bucket.bytes().all(|byte| byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'-')),
+        "UPLOAD_S3_BUCKET must be a canonical lowercase DNS-style bucket name"
+    );
+    anyhow::ensure!(
+        !region.is_empty()
+            && region.len() <= 128
+            && region
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || matches!(value, '-' | '_')),
+        "UPLOAD_S3_REGION is invalid"
+    );
+    anyhow::ensure!(
+        prefix.len() <= 512
+            && (prefix.is_empty()
+                || prefix.split('/').all(|part| !part.is_empty()
+                    && !matches!(part, "." | "..")
+                    && part.len() <= 128
+                    && part
+                        .chars()
+                        .all(|value| value.is_ascii_alphanumeric()
+                            || matches!(value, '-' | '_' | '.')))),
+        "UPLOAD_S3_PREFIX must be a bounded canonical relative prefix"
+    );
+    let development = flag("MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT")?
+        && std::env::var("XMPP_DOMAIN").is_ok_and(|domain| {
+            domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".test")
+        });
+    if let Some(value) = endpoint.as_deref() {
+        let uri: axum::http::Uri = value.parse().context("UPLOAD_S3_ENDPOINT is invalid")?;
+        let scheme = uri
+            .scheme_str()
+            .context("UPLOAD_S3_ENDPOINT needs a scheme")?;
+        let authority = uri.authority().context("UPLOAD_S3_ENDPOINT needs a host")?;
+        anyhow::ensure!(
+            !authority.as_str().contains('@')
+                && uri.path_and_query().is_none_or(|path| path.as_str() == "/"),
+            "UPLOAD_S3_ENDPOINT cannot contain credentials, path, query or fragment"
+        );
+        match scheme {
+            "https" if !allow_http => {}
+            "http"
+                if allow_http
+                    && development
+                    && matches!(authority.host(), "127.0.0.1" | "localhost" | "[::1]") => {}
+            _ => anyhow::bail!(
+                "UPLOAD_S3_ENDPOINT requires HTTPS outside explicit loopback development"
+            ),
+        }
+    } else {
+        anyhow::ensure!(
+            !allow_http,
+            "UPLOAD_S3_ALLOW_HTTP requires an explicit endpoint"
+        );
+    }
+    let credential_mode =
+        optional("UPLOAD_S3_CREDENTIAL_MODE").unwrap_or_else(|| "ambient".to_owned());
+    let credential_bundle_file = optional("UPLOAD_S3_CREDENTIAL_BUNDLE_FILE").map(PathBuf::from);
+    let access_key_id_file = optional("UPLOAD_S3_ACCESS_KEY_ID_FILE").map(PathBuf::from);
+    let secret_access_key_file = optional("UPLOAD_S3_SECRET_ACCESS_KEY_FILE").map(PathBuf::from);
+    let session_token_file = optional("UPLOAD_S3_SESSION_TOKEN_FILE").map(PathBuf::from);
+    let sse_kms_key_id_file = optional("UPLOAD_S3_SSE_KMS_KEY_ID_FILE").map(PathBuf::from);
+    let ambient_credentials = match credential_mode.as_str() {
+        "ambient" => {
+            anyhow::ensure!(
+                credential_bundle_file.is_none()
+                    && access_key_id_file.is_none()
+                    && secret_access_key_file.is_none()
+                    && session_token_file.is_none(),
+                "ambient S3 credentials cannot be combined with credential files"
+            );
+            for forbidden in [
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_ENDPOINT",
+                "AWS_ENDPOINT_URL_S3",
+                "AWS_ALLOW_HTTP",
+                "AWS_SKIP_SIGNATURE",
+                "AWS_METADATA_ENDPOINT",
+                "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            ] {
+                anyhow::ensure!(
+                    std::env::var_os(forbidden).is_none(),
+                    "{forbidden} is not accepted by the constrained S3 provider chain"
+                );
+            }
+            true
+        }
+        "files" => {
+            let pair = access_key_id_file.is_some() && secret_access_key_file.is_some();
+            anyhow::ensure!(
+                credential_bundle_file.is_some() != pair,
+                "S3 file credentials require one bundle or access/secret pair"
+            );
+            anyhow::ensure!(
+                credential_bundle_file.is_none()
+                    || (access_key_id_file.is_none()
+                        && secret_access_key_file.is_none()
+                        && session_token_file.is_none()),
+                "S3 credential bundle cannot be combined with legacy credential files"
+            );
+            anyhow::ensure!(
+                development || credential_bundle_file.is_some(),
+                "production S3 file credentials require an atomic credential bundle"
+            );
+            false
+        }
+        _ => anyhow::bail!("UPLOAD_S3_CREDENTIAL_MODE must be files or ambient"),
+    };
+    Ok(S3UploadSettings {
+        endpoint,
+        region,
+        bucket,
+        prefix,
+        path_style,
+        allow_http,
+        ambient_credentials,
+        credential_bundle_file,
+        access_key_id_file,
+        secret_access_key_file,
+        session_token_file,
+        sse_kms_key_id_file,
+    })
+}
+
+/// Non-secret identity of the exact upload namespace. The migration tool uses
+/// this same encoder as server startup, so a cutover cannot bind a different
+/// bucket, prefix or filesystem root to an otherwise valid journal.
+pub(crate) fn upload_storage_namespace_id(
+    backend: &str,
+    local_root: &Path,
+    s3: Option<&S3UploadSettings>,
+) -> Result<[u8; 32]> {
+    fn field(digest: &mut Sha256, value: &str) {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(b"northstar/upload-storage-namespace/v2\0");
+    field(&mut digest, backend);
+    match backend {
+        "local" => {
+            std::fs::create_dir_all(local_root)
+                .context("could not prepare UPLOAD_DIR for storage authority")?;
+            let canonical = std::fs::canonicalize(local_root)
+                .context("could not canonicalize UPLOAD_DIR for storage authority")?;
+            field(&mut digest, &canonical.to_string_lossy());
+        }
+        "s3" => {
+            let settings = s3.context("S3 namespace settings are missing")?;
+            field(
+                &mut digest,
+                settings
+                    .endpoint
+                    .as_deref()
+                    .unwrap_or("<aws-default-endpoint>"),
+            );
+            field(&mut digest, &settings.region);
+            field(&mut digest, &settings.bucket);
+            field(&mut digest, &settings.prefix);
+            digest.update([u8::from(settings.path_style), u8::from(settings.allow_http)]);
+            if let Some(kms_file) = settings.sse_kms_key_id_file.as_deref() {
+                digest.update([1]);
+                let mut kms = Zeroizing::new(crate::config::read_secret_file(
+                    kms_file,
+                    "UPLOAD_S3_SSE_KMS_KEY_ID_FILE",
+                )?);
+                field(&mut digest, kms.as_str());
+                kms.zeroize();
+            } else {
+                digest.update([0]);
+            }
+        }
+        _ => anyhow::bail!("upload storage backend must be local or s3"),
+    }
+    Ok(digest.finalize().into())
+}
 
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 

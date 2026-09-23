@@ -12,17 +12,24 @@ The original v1 format remains readable only through the explicit
 cannot satisfy production fail-closed policy. The default scripts and base
 Compose reject v1, unsigned v2, and unencrypted payloads.
 
-This format archives upload bytes only for `UPLOAD_STORAGE_BACKEND=local`.
-With the S3 backend it is a database/control-plane backup and must not be
-described as containing uploaded objects. S3 recovery requires an exact
-PostgreSQL locator/version/size/SHA-256 manifest, a separately protected
-provider-native bucket/prefix backup, and full validation in an isolated
-namespace before traffic. The complete contract, including noncurrent-version,
-KMS and Object Lock boundaries, is [UPLOAD_STORAGE.md](UPLOAD_STORAGE.md).
+Reading an older manifest does not upgrade its database schema. Restore applies
+the current grant policy to the dump and stops if the dump predates required
+tables. Upgrade an older database through the supported migration path and
+take a new backup before restoring it into a current deployment.
+
+Local uploads continue to use v2. S3 backups use v3: the signed manifest also
+binds the S3 namespace digest, authority generation, object count and byte
+total, plus an encrypted exact-version inventory. Every committed object is
+read at the version named by the database dump and checked against its full
+size and SHA-256 before `READY` is published. The archived bytes and inventory
+are both encrypted in production. Backups refuse mixed storage backends,
+uncommitted slots, missing versions, and outstanding storage or cleanup jobs.
+The provider still needs bucket versioning, protected noncurrent versions,
+appropriate KMS access and lifecycle policy; see [UPLOAD_STORAGE.md](UPLOAD_STORAGE.md).
 
 ## Threat model and trust boundary
 
-The signed v2 manifest records a canonical backup generation UUID, a positive
+The signed manifest records a canonical backup generation UUID, a positive
 monotonic sequence, an RFC 3339 UTC creation time, the Northstar build version,
 PostgreSQL version and migration count, encryption/signature algorithms, and
 both stored-archive and plaintext SHA-256 digests for:
@@ -38,7 +45,10 @@ production data plane. The producer restores its exact dump into an isolated,
 one-shot local PostgreSQL cluster on a private Unix socket and proves
 that every live upload row referenced by that dump has a same-size archive
 member and, when present in the row, the same SHA-256 digest. `READY` is written
-only after that check and after all publication files have been `fsync`ed.
+only after that check and after all publication files have been `fsync`ed. For
+v3, the isolated database validation also proves the complete committed S3
+locator set matches the signed inventory; no expired-but-retained row is
+silently omitted.
 
 This protects against accidental corruption, archive substitution, an
 untrusted backup store, the wrong verification key, the wrong age identity,
@@ -55,6 +65,7 @@ The backup image contains the supported toolchain:
 - `age` and `age-keygen` for mandatory production encryption;
 - Python 3 (including `fcntl`, so the scripts target Linux/WSL containers);
 - PostgreSQL client tools, GNU coreutils, tar, gzip, and util-linux `flock`.
+- the Northstar storage helper for exact-version S3 transfer and readback.
 
 Native installations may use the same scripts after installing these tools.
 `age` is required by every production backup and non-metadata restore.
@@ -114,6 +125,16 @@ Create a signed and encrypted backup:
 sudo docker compose \
   --profile backup run --rm backup
 ```
+
+For S3 deployments, set `UPLOAD_STORAGE_BACKEND=s3` and the same
+`UPLOAD_S3_ENDPOINT`, region, bucket, prefix and addressing mode used by the
+server. Mount the same protected credential bundle into the backup and restore
+containers, including `xmpp`, through a private Compose override, and set
+`UPLOAD_S3_CREDENTIAL_BUNDLE_FILE` to that in-container path. All three services
+attach to the `object_store` egress network because the database-only `backend`
+network is intentionally internal. The bucket must
+return immutable version IDs for both reads and writes. A backup with a missing
+or changed exact version fails without `READY`.
 
 The base Compose backup profile uses a private `/scratch` tmpfs for the plaintext dump and tar
 archive, then writes only ciphertext to the backup destination. Restore also
@@ -180,6 +201,14 @@ scripts/backup.sh \
   --plaintext-staging-dir /secure-ephemeral-scratch \
   --northstar-version 0.2.0
 ```
+
+For S3, replace `--upload-dir` with `--storage-backend s3` and export the
+validated `UPLOAD_S3_*` settings. `xmpp-server storage backup-object namespace`
+prints the non-secret digest of those settings; it must match the database
+authority at backup time. The restore uses fresh attempt-qualified keys even
+when the destination bucket and prefix match the source, verifies each returned
+version, then updates all database locators and the namespace authority in one
+PostgreSQL transaction before reopening traffic.
 
 Verify and materialize payloads into a pre-created empty directory:
 

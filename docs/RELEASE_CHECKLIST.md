@@ -170,9 +170,14 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   subject events and the new administrative batch kind both pass the ledger
   constraint, then deploy nodes that can render batch events before enabling
   batch writes.
+- [ ] Apply migration `0149` before offline upload migration. Reconcile grants:
+  the migrator owns the journal and restore markers, backup can read them,
+  and runtime, storage and command roles cannot access them. Confirm storage
+  cutover requires stopped nodes
+  and drained upload work; backup must reject an active migration run.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 147 migrations from `0001` through the current
-  repository maximum `0148`, with `0021` as the sole intentional gap.
+  identity and verify all 148 migrations from `0001` through the current
+  repository maximum `0149`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

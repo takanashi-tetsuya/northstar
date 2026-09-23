@@ -386,7 +386,21 @@ renewal uses exact batches of at most 128 local actors and removes their local
 authority if a full verification cannot complete within the 90-second lease.
 Exact disconnect cleanup leaves the PostgreSQL occupancy without duplicating
 the committed outbox presence. Five isolated PostgreSQL fixtures and the
-standalone and two-node protocol suites passed locally.
+standalone and two-node protocol suites passed locally. All 31 jobs in
+[CI run #328](https://github.com/takanashi-tetsuya/northstar/actions/runs/35924924937)
+passed for commit `61ee355`.
+
+Stage 4 adds an offline Local ↔ S3 migration command with a durable attempt
+journal. It verifies source bytes, pins S3 versions, rereads every destination
+before the atomic locator and authority switch, and retains source objects and
+retired attempts. Runtime startup rejects an active migration, while stopping
+already-running nodes remains an operator precondition. S3 backup format v3
+binds an exact-version inventory to the signed archive; restore writes fresh
+keys and remaps locators in one database transaction. A separate recovery
+command uses the fsynced journal, transaction status and same-transaction
+outcome marker to decide whether to complete or compensate a crashed restore.
+The isolated PostgreSQL 17 and versioned MinIO migration fixture passed both
+directions, ambiguous-write retry and missing-version rejection locally.
 
 ### Transaction and authority map
 

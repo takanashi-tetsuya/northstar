@@ -40,7 +40,7 @@ mod xmpp;
 use anyhow::{Context, Result};
 use config::Config;
 use futures::FutureExt;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use state::AppState;
 use std::{
     any::Any, collections::BTreeMap, future::Future, net::SocketAddr, panic::AssertUnwindSafe,
@@ -149,13 +149,16 @@ fn migration_environment_from_values(
     })
 }
 
-async fn run_migrations() -> Result<()> {
-    let environment = migration_environment_from_values(
+fn migration_environment() -> Result<MigrationEnvironment> {
+    migration_environment_from_values(
         std::env::var("MIGRATOR_DATABASE_URL").ok(),
         std::env::var_os("MIGRATOR_DATABASE_URL_FILE").map(PathBuf::from),
         std::env::var("XMPP_DOMAIN").ok(),
         std::env::var("MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT").ok(),
-    )?;
+    )
+}
+
+async fn connect_migrator_pool(environment: &MigrationEnvironment) -> Result<PgPool> {
     let pool_options = PgPoolOptions::new().max_connections(2).min_connections(0);
     let pool_options = if environment.allow_unsafe_role_for_development {
         pool_options
@@ -174,6 +177,12 @@ async fn run_migrations() -> Result<()> {
     } else {
         db::attest_migrator_role(&pool).await?;
     }
+    Ok(pool)
+}
+
+async fn run_migrations() -> Result<()> {
+    let environment = migration_environment()?;
+    let pool = connect_migrator_pool(&environment).await?;
     db::migrate_for_domain(&pool, &environment.domain).await?;
     pool.close().await;
     Ok(())
@@ -194,7 +203,7 @@ async fn run() -> Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if matches!(arguments.first().map(String::as_str), Some("--help" | "-h")) {
         anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --help");
-        println!("Northstar XMPP server\n\n  xmpp-server serve core         Start protocol/session/administration server\n  xmpp-server serve maintenance  Start isolated retention and subscription maintenance server\n  xmpp-server serve standalone   Start the compatible combined server (default)\n  xmpp-server --subservers       Show process responsibility inventory\n  xmpp-server migrate           Apply migrations with explicit migrator credentials\n  xmpp-server --healthcheck [IP:PORT]\n  xmpp-server --version");
+        println!("Northstar XMPP server\n\n  xmpp-server serve core         Start protocol/session/administration server\n  xmpp-server serve maintenance  Start isolated retention and subscription maintenance server\n  xmpp-server serve standalone   Start the compatible combined server (default)\n  xmpp-server --subservers       Show process responsibility inventory\n  xmpp-server migrate           Apply migrations with explicit migrator credentials\n  xmpp-server storage migrate --from local|s3 --to s3|local --all-nodes-stopped\n  xmpp-server storage backup-object export|import ...\n  xmpp-server --healthcheck [IP:PORT]\n  xmpp-server --version");
         return Ok(());
     }
     if arguments.first().map(String::as_str) == Some("--subservers") {
@@ -269,6 +278,19 @@ async fn run() -> Result<()> {
             anyhow::bail!("usage: xmpp-server migrate");
         }
         return run_migrations().await;
+    }
+    if arguments.first().map(String::as_str) == Some("storage") {
+        match arguments.get(1).map(String::as_str) {
+            Some("migrate") => {
+                let environment = migration_environment()?;
+                let pool = connect_migrator_pool(&environment).await?;
+                let result = storage::migrate::run_cli(&pool, &arguments[2..]).await;
+                pool.close().await;
+                return result;
+            }
+            Some("backup-object") => return storage::backup::run_cli(&arguments[2..]).await,
+            _ => anyhow::bail!("usage: xmpp-server storage migrate|backup-object ..."),
+        }
     }
     let process_role = if arguments.first().map(String::as_str) == Some("pie") {
         subservers::ProcessRole::Standalone

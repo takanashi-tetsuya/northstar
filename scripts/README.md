@@ -52,8 +52,17 @@ binary, connect to an existing database or replace client protocol tests. See
 
 `test-restore-session-protocol.py` checks bounded restore-session markers;
 the full isolated `backup-restore-wsl.sh` drill also runs its generated SQL
-against PostgreSQL. `test-listener-stress-phases.py` exercises the small
+against PostgreSQL, including a SIGKILL recovery after the first new object
+move. The same drill backs up and restores exact S3 versions against a
+disposable MinIO bucket, rejects a missing version, and recovers a committed
+restore after SIGKILL. `test-restore-recovery.py` checks exact local-object
+replay and rejects damaged journals without a database. `test-listener-stress-phases.py` exercises
 fixture synchronization and identity checks without starting Northstar.
+
+`test-storage-migration-wsl.sh` uses a disposable PostgreSQL 17 schema and a
+versioned loopback MinIO bucket from `lib/isolated-minio-fixture.sh` to check
+both migration directions and interruption recovery. `test-backup-inventory.py`
+checks the S3 backup inventory and fresh restore locator mapping offline.
 
 `listener-readiness-stress-wsl.sh` runs 5 × 50 for PRs and `main`, and 20 × 50
 for weekly or manual CI. Select `extended_stress` when dispatching CI to run

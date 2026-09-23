@@ -424,6 +424,340 @@ if PGPASSWORD="$backup_password" PGHOST="$socket_dir" PGUSER="$backup_role" \
   exit 1
 fi
 
+# SIGKILL bypasses EXIT traps. A fresh process must prove the committed XID
+# against the in-transaction marker, finish the exact object set, and reopen
+# the database only after writing its own durable forward decision and floor.
+recovery_root="$production_root/hard-crash"
+recovery_uploads="$recovery_root/uploads"
+recovery_rollback="$recovery_root/rollback"
+recovery_floor_dir="$recovery_root/floor"
+mkdir -p -m 0700 "$recovery_root" "$recovery_uploads" \
+  "$recovery_rollback" "$recovery_floor_dir"
+mark_upload_root "$recovery_uploads"
+mark_rollback_root "$recovery_rollback"
+printf '%s' 'pre-crash bytes' >"$recovery_uploads/$upload_id"
+chmod 0600 "$recovery_uploads/$upload_id"
+create_restore_database northstar_recovery_target
+apply_repository_migrations northstar_recovery_target
+reconcile_repository_grants northstar_recovery_target
+recovery_url_file="$recovery_root/database-url"
+printf '%s\n' \
+  "postgresql://$migrator_role:$migrator_password@/northstar_recovery_target?host=$encoded_socket" \
+  >"$recovery_url_file"
+chmod 0600 "$recovery_url_file"
+if NORTHSTAR_RESTORE_TEST_KILL_POINT=after-first-new BACKUP_SECURITY_POLICY=production \
+   bash "$project_dir/scripts/restore-backup.sh" "$production_backup_dir" \
+   --confirm-restore NORTHSTAR-RESTORE \
+   --database-url-file "$recovery_url_file" \
+   --upload-dir "$recovery_uploads" --rollback-dir "$recovery_rollback" \
+   --plaintext-staging-dir "$production_scratch" \
+   --public-key-file "$production_verify_key" \
+   --age-identity-file "$production_age_identity" \
+   --rollback-state-file "$recovery_floor_dir/floor" >/dev/null 2>&1; then
+  echo "SIGKILL fixture unexpectedly completed the restore" >&2
+  exit 1
+fi
+recovery_closed="$(PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" \
+  PGUSER="$bootstrap_role" PGDATABASE=postgres "$postgres_bin/psql" \
+  --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1 \
+  --command="SELECT NOT datallowconn FROM pg_database WHERE datname='northstar_recovery_target'")"
+[[ "$recovery_closed" == t ]] \
+  || { echo "hard-crashed restore did not retain its database fence" >&2; exit 1; }
+PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
+  PGDATABASE=postgres "$postgres_bin/psql" --no-psqlrc --quiet \
+  --set ON_ERROR_STOP=1 \
+  --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='northstar_recovery_target'" \
+  >/dev/null
+recovery_cutover="$(find "$recovery_uploads" -mindepth 1 -maxdepth 1 \
+  -type d -name '.northstar-restore-cutover-*' -print -quit)"
+[[ -n "$recovery_cutover" ]] \
+  || { echo "SIGKILL fixture lost its durable cutover journal" >&2; exit 1; }
+bash "$project_dir/scripts/recover-restore.sh" "$recovery_cutover" \
+  --database-url-file "$recovery_url_file" \
+  --upload-dir "$recovery_uploads" --rollback-dir "$recovery_rollback" \
+  --rollback-state-file "$recovery_floor_dir/floor" \
+  --backup-dir "$production_backup_dir" \
+  --public-key-file "$production_verify_key" \
+  --age-identity-file "$production_age_identity" \
+  --plaintext-staging-dir "$production_scratch" \
+  --confirm-stopped NORTHSTAR-RECOVER >/dev/null
+[[ "$(<"$recovery_uploads/$upload_id")" == "$upload_body" ]] \
+  || { echo "SIGKILL recovery did not activate the exact backup object" >&2; exit 1; }
+grep -qx 'format=northstar-restore-state-v2' "$recovery_floor_dir/floor" \
+  || { echo "SIGKILL recovery did not publish the bound restore floor" >&2; exit 1; }
+recovered_value="$(read_canonical_probe northstar_recovery_target "$source_probe_user_id")"
+[[ "$recovered_value" == "$source_probe_marker|$source_probe_marker" ]] \
+  || { echo "SIGKILL recovery did not reopen the exact restored database" >&2; exit 1; }
+
+# The S3 drill uses a versioned, disposable MinIO bucket. It first proves that
+# an older exact version is backed up even when a newer version is current;
+# then it removes the required version and proves the next backup fails closed.
+# Both normal restore and post-COMMIT crash recovery must create fresh keys and
+# advance the database storage authority in the same replacement transaction.
+exercise_s3_backup_restore() (
+  set -euo pipefail
+  source "$project_dir/scripts/lib/isolated-minio-fixture.sh"
+  trap northstar_minio_stop EXIT
+  local s3_root="$production_root/s3" s3_bucket=northstar-backup-it
+  local s3_source=northstar_s3_backup_source
+  local s3_target=northstar_s3_restore_target
+  local s3_crash_target=northstar_s3_crash_target
+  local s3_user=22222222-2222-4222-8222-222222222222
+  local s3_object=33333333-3333-4333-8333-333333333333
+  local s3_attempt=44444444-4444-4444-8444-444444444444
+  local s3_key="objects/$s3_object/$s3_attempt"
+  local s3_body="$s3_root/source-object" s3_changed="$s3_root/newer-object"
+  local s3_version s3_digest s3_size s3_namespace s3_archive
+  local restored_key restored_version restored_digest restored_namespace restored_generation
+  local crash_key crash_version crash_namespace crash_generation crash_journal
+  local aborted_journal aborted_key aborted_version
+  mkdir -p -m 0700 "$s3_root" "$s3_root/backups" "$s3_root/failed-backups" \
+    "$s3_root/uploads" "$s3_root/rollback" "$s3_root/crash-uploads" \
+    "$s3_root/crash-rollback" "$s3_root/floor" "$s3_root/crash-floor" \
+    "$s3_root/abort-uploads" "$s3_root/abort-rollback" "$s3_root/abort-floor"
+  mark_upload_root "$s3_root/uploads"
+  mark_upload_root "$s3_root/crash-uploads"
+  mark_upload_root "$s3_root/abort-uploads"
+  mark_rollback_root "$s3_root/rollback"
+  mark_rollback_root "$s3_root/crash-rollback"
+  mark_rollback_root "$s3_root/abort-rollback"
+  command -v cargo >/dev/null || { echo 'S3 drill requires cargo' >&2; exit 1; }
+  cargo build --locked --bin rust-xmpp-server --quiet
+  export NORTHSTAR_BACKUP_STORAGE_HELPER="$project_dir/target/debug/rust-xmpp-server"
+  export NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost
+  export MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true
+  export UPLOAD_STORAGE_BACKEND=s3
+  export UPLOAD_S3_ENDPOINT UPLOAD_S3_BUCKET="$s3_bucket"
+  export UPLOAD_S3_REGION=us-east-1 UPLOAD_S3_PREFIX=backup-it
+  export UPLOAD_S3_PATH_STYLE=true UPLOAD_S3_ALLOW_HTTP=true
+  export UPLOAD_S3_CREDENTIAL_MODE=files
+  export UPLOAD_S3_ACCESS_KEY_ID_FILE UPLOAD_S3_SECRET_ACCESS_KEY_FILE
+  NORTHSTAR_MINIO_ENGINE="${NORTHSTAR_MINIO_ENGINE:-docker}"
+  northstar_minio_start "$s3_root"
+  UPLOAD_S3_ENDPOINT="$NORTHSTAR_MINIO_ENDPOINT"
+  UPLOAD_S3_ACCESS_KEY_ID_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE"
+  UPLOAD_S3_SECRET_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE"
+  s3_fixture() {
+    python3 "$project_dir/scripts/lib/s3-fixture.py" \
+      --endpoint "$NORTHSTAR_MINIO_ENDPOINT" --bucket "$s3_bucket" \
+      --access-key-file "$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \
+      --secret-key-file "$NORTHSTAR_MINIO_SECRET_KEY_FILE" "$@"
+  }
+  s3_fixture create-versioned-bucket
+  printf '%s' 'northstar exact-version S3 restore probe' >"$s3_body"
+  printf '%s' 'newer content must not enter the signed backup' >"$s3_changed"
+  s3_size="$(stat -c '%s' "$s3_body")"
+  s3_digest="$(sha256sum "$s3_body" | awk '{print $1}')"
+  s3_version="$(s3_fixture put "backup-it/$s3_key" "$s3_body")"
+  s3_fixture put "backup-it/$s3_key" "$s3_changed" >/dev/null
+  s3_namespace="$("$NORTHSTAR_BACKUP_STORAGE_HELPER" storage backup-object namespace)"
+
+  create_restore_database "$s3_source"
+  apply_repository_migrations "$s3_source"
+  seed_canonical_probe "$s3_source" "$s3_user" s3-backup-fixture s3-database-restored
+  PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
+    PGDATABASE="$s3_source" "$postgres_bin/psql" --no-psqlrc \
+    --set ON_ERROR_STOP=1 --set=s3_object="$s3_object" \
+    --set=s3_user="$s3_user" --set=s3_attempt="$s3_attempt" \
+    --set=s3_key="$s3_key" --set=s3_version="$s3_version" \
+    --set=s3_size="$s3_size" --set=s3_digest="$s3_digest" \
+    --set=s3_namespace="$s3_namespace" >/dev/null <<'PSQL'
+SELECT northstar_upload_bind_capacity_policy(100000,1000000,1099511627776);
+INSERT INTO upload_storage_authority(storage_backend,namespace_sha256)
+VALUES ('s3',decode(:'s3_namespace','hex'));
+INSERT INTO upload_slots(id,user_id,filename,content_type,size,token_hash,expires_at,
+  uploaded,uploading,content_sha256,completed_at,put_expires_at,storage_backend,
+  storage_state,storage_attempt,storage_object_key,storage_object_version,
+  storage_sha256,storage_size)
+VALUES (:'s3_object'::uuid,:'s3_user'::uuid,'s3-fixture.bin','application/octet-stream',
+  :'s3_size'::bigint,decode(repeat('33',32),'hex'),clock_timestamp()+INTERVAL '1 day',
+  TRUE,FALSE,decode(:'s3_digest','hex'),clock_timestamp(),
+  clock_timestamp()+INTERVAL '15 minutes','s3','committed',:'s3_attempt'::uuid,
+  :'s3_key',:'s3_version',decode(:'s3_digest','hex'),:'s3_size'::bigint);
+-- A real upload commits through a slot UPDATE, which reserves its durable
+-- cleanup obligation. Give the seeded row the same ledger projection.
+UPDATE upload_slots SET storage_updated_at=clock_timestamp()
+ WHERE id=:'s3_object'::uuid;
+PSQL
+  reconcile_repository_grants "$s3_source"
+  local s3_backup_url="$s3_root/backup-database-url"
+  printf '%s\n' \
+    "postgresql://$backup_role:$backup_password@/$s3_source?host=$encoded_socket" \
+    >"$s3_backup_url"
+  chmod 0600 "$s3_backup_url"
+  BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/backup.sh" \
+    --storage-backend s3 --database-url-file "$s3_backup_url" \
+    --output "$s3_root/backups" --sequence-state-file "$s3_root/sequence" \
+    --signing-key-file "$production_signing_key" \
+    --age-recipient-file "$production_age_recipients" \
+    --plaintext-staging-dir "$production_scratch" \
+    --northstar-version fixture-s3 >/dev/null
+  s3_archive="$(find "$s3_root/backups" -mindepth 1 -maxdepth 1 -type d \
+    -name 'northstar-*' -print -quit)"
+  [[ -n "$s3_archive" ]] || { echo 'S3 backup did not publish READY' >&2; exit 1; }
+  BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/verify-backup.sh" \
+    "$s3_archive" --public-key-file "$production_verify_key" \
+    --age-identity-file "$production_age_identity" \
+    --rollback-state-file "$s3_root/verify-floor" >/dev/null
+  s3_fixture delete-version "backup-it/$s3_key" "$s3_version" >/dev/null
+  if BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/backup.sh" \
+    --storage-backend s3 --database-url-file "$s3_backup_url" \
+    --output "$s3_root/failed-backups" --sequence-state-file "$s3_root/sequence" \
+    --signing-key-file "$production_signing_key" \
+    --age-recipient-file "$production_age_recipients" \
+    --plaintext-staging-dir "$production_scratch" \
+    --northstar-version fixture-s3 >/dev/null 2>&1; then
+    echo 'S3 backup accepted a missing exact source version' >&2
+    exit 1
+  fi
+  [[ -z "$(find "$s3_root/failed-backups" -mindepth 1 -maxdepth 2 -name READY -print -quit)" ]] \
+    || { echo 'failed S3 backup published READY' >&2; exit 1; }
+
+  create_restore_database "$s3_target"
+  apply_repository_migrations "$s3_target"
+  reconcile_repository_grants "$s3_target"
+  local s3_restore_url="$s3_root/restore-database-url"
+  printf '%s\n' \
+    "postgresql://$migrator_role:$migrator_password@/$s3_target?host=$encoded_socket" \
+    >"$s3_restore_url"
+  chmod 0600 "$s3_restore_url"
+  BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/restore-backup.sh" \
+    "$s3_archive" --confirm-restore NORTHSTAR-RESTORE \
+    --database-url-file "$s3_restore_url" \
+    --upload-dir "$s3_root/uploads" --rollback-dir "$s3_root/rollback" \
+    --plaintext-staging-dir "$production_scratch" \
+    --public-key-file "$production_verify_key" \
+    --age-identity-file "$production_age_identity" \
+    --rollback-state-file "$s3_root/floor/current" >/dev/null
+  IFS='|' read -r restored_key restored_version restored_digest restored_namespace restored_generation \
+    <<<"$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
+      PGDATABASE="$s3_target" "$postgres_bin/psql" --no-psqlrc --tuples-only \
+      --no-align --set ON_ERROR_STOP=1 --command="SELECT storage_object_key || '|' || \
+      storage_object_version || '|' || encode(storage_sha256,'hex') || '|' || \
+      encode(a.namespace_sha256,'hex') || '|' || a.generation::text FROM upload_slots s \
+      CROSS JOIN upload_storage_authority a WHERE s.id='$s3_object'::uuid")"
+  [[ "$restored_key" == objects/$s3_object/* \
+     && "$restored_key" != "$s3_key" && -n "$restored_version" \
+     && "$restored_digest" == "$s3_digest" \
+     && "$restored_namespace" == "$s3_namespace" \
+     && "$restored_generation" == 2 ]] \
+    || { echo 'S3 restore did not atomically remap the exact object' >&2; exit 1; }
+  s3_fixture get "backup-it/$restored_key" "$restored_version" \
+    "$s3_root/restored-object" >/dev/null
+  cmp "$s3_body" "$s3_root/restored-object"
+  [[ "$(read_canonical_probe "$s3_target" "$s3_user")" == \
+     's3-database-restored|s3-database-restored' ]] \
+    || { echo 'S3 restore did not activate the signed database' >&2; exit 1; }
+
+  create_restore_database "$s3_crash_target"
+  apply_repository_migrations "$s3_crash_target"
+  reconcile_repository_grants "$s3_crash_target"
+  local s3_crash_url="$s3_root/crash-database-url"
+  printf '%s\n' \
+    "postgresql://$migrator_role:$migrator_password@/$s3_crash_target?host=$encoded_socket" \
+    >"$s3_crash_url"
+  chmod 0600 "$s3_crash_url"
+  if NORTHSTAR_RESTORE_TEST_KILL_POINT=after-s3-import \
+     BACKUP_SECURITY_POLICY=production \
+     bash "$project_dir/scripts/restore-backup.sh" "$s3_archive" \
+       --confirm-restore NORTHSTAR-RESTORE \
+       --database-url-file "$s3_crash_url" \
+       --upload-dir "$s3_root/abort-uploads" \
+       --rollback-dir "$s3_root/abort-rollback" \
+       --plaintext-staging-dir "$production_scratch" \
+       --public-key-file "$production_verify_key" \
+       --age-identity-file "$production_age_identity" \
+       --rollback-state-file "$s3_root/abort-floor/current" >/dev/null 2>&1; then
+    echo 'S3 pre-commit SIGKILL fixture unexpectedly completed' >&2
+    exit 1
+  fi
+  aborted_journal="$(find "$s3_root/abort-uploads" -mindepth 1 -maxdepth 1 \
+    -type d -name '.northstar-restore-cutover-*' -print -quit)"
+  [[ -n "$aborted_journal" ]] \
+    || { echo 'S3 pre-commit crash lost its durable journal' >&2; exit 1; }
+  PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
+    PGDATABASE=postgres "$postgres_bin/psql" --no-psqlrc --quiet \
+    --set ON_ERROR_STOP=1 \
+    --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                WHERE datname='$s3_crash_target'" >/dev/null
+  bash "$project_dir/scripts/recover-restore.sh" "$aborted_journal" \
+    --database-url-file "$s3_crash_url" \
+    --upload-dir "$s3_root/abort-uploads" \
+    --rollback-dir "$s3_root/abort-rollback" \
+    --rollback-state-file "$s3_root/abort-floor/current" \
+    --backup-dir "$s3_archive" \
+    --public-key-file "$production_verify_key" \
+    --age-identity-file "$production_age_identity" \
+    --plaintext-staging-dir "$production_scratch" \
+    --confirm-stopped NORTHSTAR-RECOVER >/dev/null
+  [[ "$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
+       PGDATABASE="$s3_crash_target" "$postgres_bin/psql" --no-psqlrc \
+       --tuples-only --no-align --set ON_ERROR_STOP=1 \
+       --command='SELECT count(*) FROM upload_slots')" == 0 \
+     && ! -e "$s3_root/abort-floor/current" ]] \
+    || { echo 'S3 pre-commit recovery changed the original authority' >&2; exit 1; }
+  IFS=$'\t' read -r _ aborted_key aborted_version _ _ \
+    < <(sed -n '2p' "$aborted_journal/s3-results.tsv")
+  [[ "$aborted_key" == objects/$s3_object/* && -n "$aborted_version" ]] \
+    || { echo 'S3 pre-commit journal lost its uploaded attempt' >&2; exit 1; }
+  s3_fixture get "backup-it/$aborted_key" "$aborted_version" \
+    "$s3_root/aborted-object" >/dev/null
+  cmp "$s3_body" "$s3_root/aborted-object"
+
+  if NORTHSTAR_RESTORE_TEST_KILL_POINT=after-s3-database-switch \
+     BACKUP_SECURITY_POLICY=production \
+     bash "$project_dir/scripts/restore-backup.sh" "$s3_archive" \
+       --confirm-restore NORTHSTAR-RESTORE \
+       --database-url-file "$s3_crash_url" \
+       --upload-dir "$s3_root/crash-uploads" \
+       --rollback-dir "$s3_root/crash-rollback" \
+       --plaintext-staging-dir "$production_scratch" \
+       --public-key-file "$production_verify_key" \
+       --age-identity-file "$production_age_identity" \
+       --rollback-state-file "$s3_root/crash-floor/current" >/dev/null 2>&1; then
+    echo 'S3 SIGKILL fixture unexpectedly completed' >&2
+    exit 1
+  fi
+  crash_journal="$(find "$s3_root/crash-uploads" -mindepth 1 -maxdepth 1 \
+    -type d -name '.northstar-restore-cutover-*' -print -quit)"
+  [[ -n "$crash_journal" ]] || { echo 'S3 crash lost its durable journal' >&2; exit 1; }
+  # The killed restore parent can leave only its own private PostgreSQL
+  # coprocesses alive. This isolated database has no other workload sessions.
+  PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
+    PGDATABASE=postgres "$postgres_bin/psql" --no-psqlrc --quiet \
+    --set ON_ERROR_STOP=1 \
+    --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                WHERE datname='$s3_crash_target'" >/dev/null
+  bash "$project_dir/scripts/recover-restore.sh" "$crash_journal" \
+    --database-url-file "$s3_crash_url" \
+    --upload-dir "$s3_root/crash-uploads" \
+    --rollback-dir "$s3_root/crash-rollback" \
+    --rollback-state-file "$s3_root/crash-floor/current" \
+    --backup-dir "$s3_archive" \
+    --public-key-file "$production_verify_key" \
+    --age-identity-file "$production_age_identity" \
+    --plaintext-staging-dir "$production_scratch" \
+    --confirm-stopped NORTHSTAR-RECOVER >/dev/null
+  IFS='|' read -r crash_key crash_version crash_namespace crash_generation \
+    <<<"$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
+      PGDATABASE="$s3_crash_target" "$postgres_bin/psql" --no-psqlrc \
+      --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --command="SELECT s.storage_object_key || '|' || s.storage_object_version || '|' || \
+      encode(a.namespace_sha256,'hex') || '|' || a.generation::text \
+      FROM upload_slots s CROSS JOIN \
+      upload_storage_authority a WHERE s.id='$s3_object'::uuid")"
+  [[ "$crash_key" == objects/$s3_object/* && "$crash_key" != "$s3_key" \
+     && "$crash_key" != "$restored_key" && -n "$crash_version" \
+     && "$crash_namespace" == "$s3_namespace" \
+     && "$crash_generation" == 2 ]] \
+    || { echo 'S3 recovery did not commit fresh exact-version locators' >&2; exit 1; }
+  s3_fixture get "backup-it/$crash_key" "$crash_version" \
+    "$s3_root/crash-object" >/dev/null
+  cmp "$s3_body" "$s3_root/crash-object"
+  grep -qx 'format=northstar-restore-state-v2' "$s3_root/crash-floor/current"
+)
+exercise_s3_backup_restore
+
 # The remaining fault matrix intentionally uses the explicit development policy
 # so its fixtures stay plaintext and independently mutable. Production behavior
 # has already been exercised above and remains the application default.
@@ -1047,4 +1381,4 @@ fi
 [[ ! -e "$unsafe_floor_state_dir/floor.lock" ]] \
   || { echo "unsafe trusted-floor parent was mutated before rejection" >&2; exit 1; }
 
-echo "backup/restore: production signing+age+role separation, private validation PostgreSQL, non-terminating peer fence, atomic ACL convergence, shared maintenance fence, pre-destructive fsynced xid8 intent, post-barrier pg_xact_status arbitration, dump-to-upload validation, strict paths and budgets, same-filesystem journaled cutover, same-UUID/first-old/first-new/SIGTERM compensation, retry recovery, separate rollback retention and durable READY publication passed"
+echo "backup/restore: signed and encrypted local/S3 archives, exact-version MinIO inventory, missing-version rejection, pre/post-COMMIT S3 crash recovery, private PostgreSQL validation, transaction-outcome arbitration, journaled local cutover and durable READY publication passed"

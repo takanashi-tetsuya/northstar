@@ -241,6 +241,11 @@ else
   database_archive="$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" database_archive)"
   database_contents="$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" database_contents)"
   upload_archive="$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" upload_archive)"
+  if [[ "$format" == northstar-backup-v3 ]]; then
+    inventory_archive="$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" upload_inventory)"
+    inventory_count="$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" upload_object_count)"
+    inventory_bytes="$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" upload_object_bytes)"
+  fi
   if [[ "$encryption" == age ]]; then
     command -v age >/dev/null || { echo "required command is unavailable: age" >&2; exit 1; }
     [[ -n "$age_identity_file" ]] \
@@ -256,10 +261,17 @@ else
       --output "$materialize_dir/database.contents" "$backup_dir/$database_contents"
     age --decrypt --identity "$age_identity_file" \
       --output "$materialize_dir/uploads.tar.gz" "$backup_dir/$upload_archive"
+    if [[ "$format" == northstar-backup-v3 ]]; then
+      age --decrypt --identity "$age_identity_file" \
+        --output "$materialize_dir/upload-inventory.tsv" "$backup_dir/$inventory_archive"
+    fi
   else
     cp -- "$backup_dir/$database_archive" "$materialize_dir/database.dump"
     cp -- "$backup_dir/$database_contents" "$materialize_dir/database.contents"
     cp -- "$backup_dir/$upload_archive" "$materialize_dir/uploads.tar.gz"
+    if [[ "$format" == northstar-backup-v3 ]]; then
+      cp -- "$backup_dir/$inventory_archive" "$materialize_dir/upload-inventory.tsv"
+    fi
   fi
   [[ "$(sha256sum "$materialize_dir/database.dump" | awk '{print $1}')" \
       == "$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" database_plain_sha256)" ]] \
@@ -270,10 +282,23 @@ else
   [[ "$(sha256sum "$materialize_dir/uploads.tar.gz" | awk '{print $1}')" \
       == "$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" upload_plain_sha256)" ]] \
     || { echo "plaintext upload digest verification failed" >&2; exit 1; }
+  if [[ "$format" == northstar-backup-v3 ]]; then
+    [[ "$(sha256sum "$materialize_dir/upload-inventory.tsv" | awk '{print $1}')" \
+        == "$(python3 "$script_dir/backup-security.py" field "$trusted_manifest" upload_inventory_plain_sha256)" ]] \
+      || { echo "plaintext inventory digest verification failed" >&2; exit 1; }
+  fi
 fi
 chmod 0600 "$materialize_dir/database.dump" "$materialize_dir/database.contents" "$materialize_dir/uploads.tar.gz"
+if [[ "$format" == northstar-backup-v3 ]]; then
+  chmod 0600 "$materialize_dir/upload-inventory.tsv"
+fi
 pg_restore --list "$materialize_dir/database.dump" >/dev/null
 python3 "$script_dir/verify-upload-archive.py" "$materialize_dir/uploads.tar.gz"
+if [[ "$format" == northstar-backup-v3 ]]; then
+  python3 "$script_dir/backup-inventory.py" verify \
+    "$materialize_dir/upload-inventory.tsv" "$materialize_dir/uploads.tar.gz" \
+    "$inventory_count" "$inventory_bytes"
+fi
 cp -- "$trusted_manifest" "$materialize_dir/manifest.txt"
 [[ "$signature" == none ]] || cp -- "$trusted_signature" "$materialize_dir/manifest.sig"
 chmod 0600 "$materialize_dir/manifest.txt"

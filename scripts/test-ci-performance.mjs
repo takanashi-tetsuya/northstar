@@ -186,13 +186,16 @@ test('cache restores retain mandatory Cargo commands and checked runtime builds'
 
 test('pressure jobs restore only the verified smoke artifact from this run', () => {
   const smoke = job(workflow, 'listener-readiness-stress-smoke');
+  const artifactName = 'name: listener-runtime-${{ github.sha }}-${{ github.run_id }}';
   assert.ok(smoke.indexOf('Package verified runtime') > smoke.indexOf('Prove one round with two pairs'));
   assert.ok(smoke.includes('python3 scripts/ci-runtime-artifact.py pack'));
   assert.ok(smoke.includes('--build-log "$RUNNER_TEMP/runtime-build.jsonl"'));
+  assert.ok(smoke.includes(artifactName));
+  assert.ok(smoke.includes('overwrite: true'));
   for (const lane of ['regular', 'scheduled']) {
     const block = job(workflow, `listener-readiness-stress-${lane}`);
     assert.match(block, /uses: actions\/download-artifact@[0-9a-f]{40}/);
-    assert.ok(block.includes('name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}'));
+    assert.ok(block.includes(artifactName));
     assert.ok(block.includes('digest-mismatch: error'));
     assert.ok(block.includes('NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture'));
     assert.doesNotMatch(block, /rust-build-cache|cargo fetch|continue-on-error|github-token:|run-id:/);

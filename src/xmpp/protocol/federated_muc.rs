@@ -888,6 +888,9 @@ async fn federated_muc_presence_owned(
                 if *owner == connection_id && occupant.connection_id == connection_id
         );
         if !federated_endpoint_matches(&occupant, authenticated_domain) || !exact_connection {
+            tracing::debug!(room=%room_jid, existing_connection_id=%occupant.connection_id,
+                incoming_connection_id=%connection_id, exact_connection,
+                "federated MUC presence rejected an existing occupant endpoint");
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         }
         if occupant.nick != nick {
@@ -1127,6 +1130,8 @@ async fn federated_muc_presence_owned(
             return Ok(None);
         }
         if !is_idempotent_remote_join(&occupant, authenticated_domain, &actor_full_jid, nick) {
+            tracing::debug!(room=%room_jid, %nick,
+                "federated MUC presence rejected a non-idempotent actor refresh");
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         }
         if let Some(room) = guarded_room.as_ref() {
@@ -1202,6 +1207,8 @@ async fn federated_muc_presence_owned(
                 "PG-authoritative MUC presence refresh lost its exact local incarnation; reconciliation will repair the cache");
             return Ok(None);
         } else if state.local_muc_occupant_by_nick(&room_jid, nick).is_some() {
+            tracing::debug!(room=%room_jid, %nick,
+                "federated MUC presence refresh found a different local occupant");
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         } else {
             return Ok(federated_error(
@@ -1526,6 +1533,8 @@ async fn federated_muc_presence_owned(
         .federated_nick_reserved_for_other(room.id, &actor_bare_jid, nick)
         .await?
     {
+        tracing::debug!(room=%room_jid, %nick,
+            "federated MUC join rejected a reserved nickname");
         return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
     }
     let local_occupant_count = if state.federated_muc_pg_authority_enabled() {
@@ -1546,6 +1555,8 @@ async fn federated_muc_presence_owned(
     if !state.federated_muc_pg_authority_enabled()
         && state.local_muc_occupant_by_nick(&room_jid, nick).is_some()
     {
+        tracing::debug!(room=%room_jid, %nick,
+            "federated MUC join rejected an occupied local nickname");
         return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
     }
     let history_request = match request.history_request {
@@ -1628,9 +1639,11 @@ async fn federated_muc_presence_owned(
                     "registration-required",
                 ));
             }
-            ClusterMucJoinOutcome::ReservedNickname
+            conflict @ (ClusterMucJoinOutcome::ReservedNickname
             | ClusterMucJoinOutcome::NicknameConflict
-            | ClusterMucJoinOutcome::FullJidConflict => {
+            | ClusterMucJoinOutcome::FullJidConflict) => {
+                tracing::debug!(room=%room_jid, %nick, ?conflict,
+                    "federated MUC join rejected by PostgreSQL occupancy authority");
                 return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
             }
             ClusterMucJoinOutcome::Full => {

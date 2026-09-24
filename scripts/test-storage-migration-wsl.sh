@@ -6,7 +6,7 @@ umask 077
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$project_dir"
 source "$project_dir/scripts/lib/isolated-minio-fixture.sh"
-for program in cargo cmp curl "${NORTHSTAR_MINIO_ENGINE:-docker}" openssl psql python3 sha256sum; do
+for program in cargo cmp curl dpkg-deb openssl psql python3 sha256sum; do
   command -v "$program" >/dev/null || { echo "storage migration fixture needs $program" >&2; exit 2; }
 done
 [[ "$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -p "${PGPORT:-5432}" -U xmpp_test -d xmpp_test -Atqc 'SHOW server_version_num')" == 17* ]] || {

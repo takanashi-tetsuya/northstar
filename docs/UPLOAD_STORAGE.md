@@ -365,9 +365,10 @@ URLs must stay disabled.
 The repository contains pure/in-memory tests for canonical keys, canceled and
 length-mismatched local writes, create-only duplicate promotion, two clients
 sharing one fake store, client swapping and each durable transition. The
-loopback-only MinIO fixture is
-[`deploy/docker-compose.minio-test.yml`](../deploy/docker-compose.minio-test.yml),
-and its Rust round-trip test is ignored by default.
+loopback-only MinIO fixture in
+[`scripts/lib/isolated-minio-fixture.sh`](../scripts/lib/isolated-minio-fixture.sh)
+uses a checksum-verified upstream release. The Rust round-trip test is ignored
+by default.
 
 Before production qualification, execute and retain results for all of these
 on the exact release commit and target provider:

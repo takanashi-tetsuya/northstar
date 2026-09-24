@@ -692,7 +692,10 @@ another set of crates. Track implementation and external evidence separately in
 C1 now uses one authorized root-discovery query instead of repeated per-node
 reads, and node lookups have a separate read-only repository capability from
 node mutations. Subscription expiry policy takes an explicit observation time
-from its caller, so the core does not read the process clock. C2 has a shared
+from its caller, so the core does not read the process clock. Subscription
+admission policy is also shared by the service precheck and the PostgreSQL
+transaction; the transaction still re-reads affiliation before committing.
+C2 has a shared
 MAM page-size and filter limit across the wire
 parser, application service and PostgreSQL adapter. The pure RSM window calculation
 resides in archive core; cursor resolution and page execution still share the

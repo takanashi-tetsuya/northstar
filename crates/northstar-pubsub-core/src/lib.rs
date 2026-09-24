@@ -378,6 +378,33 @@ impl PubSubSubscription {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PubSubSubscribePolicy {
+    Subscribed,
+    Pending,
+    ClosedNode,
+    Forbidden,
+}
+
+pub fn pubsub_subscribe_policy(
+    access_model: &str,
+    affiliation: Option<&str>,
+) -> PubSubSubscribePolicy {
+    use PubSubSubscribePolicy::*;
+    if matches!(affiliation, Some("outcast" | "publish-only")) {
+        return Forbidden;
+    }
+    let affiliated = matches!(affiliation, Some("owner" | "publisher" | "member"));
+    match access_model {
+        "open" => Subscribed,
+        "whitelist" if affiliated => Subscribed,
+        "whitelist" => ClosedNode,
+        "authorize" if affiliated => Subscribed,
+        "authorize" => Pending,
+        _ => Forbidden,
+    }
+}
+
 #[cfg(test)]
 mod subscription_tests {
     use super::*;
@@ -404,6 +431,23 @@ mod subscription_tests {
         assert!(!subscription.is_expired_at(before));
         assert!(!subscription.is_active_at(deadline));
         assert!(subscription.is_expired_at(deadline));
+    }
+
+    #[test]
+    fn subscribe_policy_keeps_affiliation_and_access_boundaries() {
+        use PubSubSubscribePolicy::*;
+        for (access, affiliation, expected) in [
+            ("open", None, Subscribed),
+            ("open", Some("publish-only"), Forbidden),
+            ("open", Some("outcast"), Forbidden),
+            ("whitelist", Some("member"), Subscribed),
+            ("whitelist", None, ClosedNode),
+            ("authorize", Some("publisher"), Subscribed),
+            ("authorize", None, Pending),
+            ("unknown", Some("owner"), Forbidden),
+        ] {
+            assert_eq!(pubsub_subscribe_policy(access, affiliation), expected);
+        }
     }
 }
 

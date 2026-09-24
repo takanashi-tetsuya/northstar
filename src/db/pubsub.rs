@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeSet, HashMap};
@@ -2521,24 +2522,15 @@ pub async fn set_subscription_limited_with_options_and_renderer(
     .bind(&requester)
     .fetch_optional(&mut *transaction)
     .await?;
-    if matches!(affiliation.as_deref(), Some("outcast" | "publish-only")) {
-        transaction.rollback().await?;
-        return Ok(SubscribeOutcome::Forbidden);
-    }
-    let affiliated = matches!(
-        affiliation.as_deref(),
-        Some("owner" | "publisher" | "member")
-    );
-    let authorized_state = match node.access_model.as_str() {
-        "open" => "subscribed",
-        "whitelist" if affiliated => "subscribed",
-        "whitelist" => {
+    let authorized_state = match pubsub_subscribe_policy(&node.access_model, affiliation.as_deref())
+    {
+        PubSubSubscribePolicy::Subscribed => "subscribed",
+        PubSubSubscribePolicy::Pending => "pending",
+        PubSubSubscribePolicy::ClosedNode => {
             transaction.rollback().await?;
             return Ok(SubscribeOutcome::ClosedNode);
         }
-        "authorize" if affiliated => "subscribed",
-        "authorize" => "pending",
-        _ => {
+        PubSubSubscribePolicy::Forbidden => {
             transaction.rollback().await?;
             return Ok(SubscribeOutcome::Forbidden);
         }

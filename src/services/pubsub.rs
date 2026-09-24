@@ -29,6 +29,7 @@ pub(crate) use northstar_pubsub_application::{
     PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult, PubSubSubscribeCommand,
     PubSubSubscribeResult, PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
 };
+use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 pub(crate) use northstar_pubsub_core::{
     CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome,
     PepAudienceSnapshot, PepBookmarkMutationOutcome, PepConfigureNodeWrite, PepCreateOutcome,
@@ -274,7 +275,8 @@ impl<R: PubSubRepository> PubSubService<R> {
             });
         };
         let affiliation = self.get_node_affiliation(node.id, write.requester).await?;
-        if affiliation.as_deref() == Some("outcast") {
+        let policy = pubsub_subscribe_policy(&node.access_model, affiliation.as_deref());
+        if policy == PubSubSubscribePolicy::Forbidden {
             return Ok(PubSubSubscribeResult {
                 outcome: PubSubSubscribeOutcome::Forbidden,
             });
@@ -292,31 +294,15 @@ impl<R: PubSubRepository> PubSubService<R> {
                 });
             }
         }
-        let state_value = match node.access_model.as_str() {
-            "open" => "subscribed",
-            "whitelist"
-                if matches!(
-                    affiliation.as_deref(),
-                    Some("owner" | "publisher" | "member")
-                ) =>
-            {
-                "subscribed"
-            }
-            "authorize"
-                if matches!(
-                    affiliation.as_deref(),
-                    Some("owner" | "publisher" | "member")
-                ) =>
-            {
-                "subscribed"
-            }
-            "authorize" => "pending",
-            "whitelist" => {
+        let state_value = match policy {
+            PubSubSubscribePolicy::Subscribed => "subscribed",
+            PubSubSubscribePolicy::Pending => "pending",
+            PubSubSubscribePolicy::ClosedNode => {
                 return Ok(PubSubSubscribeResult {
                     outcome: PubSubSubscribeOutcome::ClosedNode,
                 });
             }
-            _ => {
+            PubSubSubscribePolicy::Forbidden => {
                 return Ok(PubSubSubscribeResult {
                     outcome: PubSubSubscribeOutcome::Forbidden,
                 });

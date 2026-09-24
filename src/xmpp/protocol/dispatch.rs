@@ -27,7 +27,7 @@ impl ProtocolSession {
     pub async fn handle(&mut self, xml: &str) -> Result<Action> {
         self.state.inbound_stanza_telemetry().received();
         let stream_open = crate::xmpp::protocol::sasl2::is_tcp_stream_opening(xml)
-            || (self.websocket && is_websocket_open(xml));
+            || (self.uses_websocket_framing() && is_websocket_open(xml));
         if stream_open {
             if self.negotiation.is_open() {
                 return Ok(Action::CloseWith(stream_error("unexpected-request")));
@@ -71,7 +71,7 @@ impl ProtocolSession {
             if root.attributes().len() != 0
                 || root.children().any(|child| child.is_element())
                 || root.text().is_some_and(|text| !text.trim().is_empty())
-                || self.websocket
+                || self.uses_websocket_framing()
                 || self.secure_transport
                 || self.authenticated.is_some()
             {
@@ -168,7 +168,7 @@ impl ProtocolSession {
             return Ok(self.client_state(indication));
         }
         if matches!(root.tag_name().name(), "iq" | "message" | "presence") {
-            if !valid_client_stanza_namespace(root, self.websocket, xml) {
+            if !valid_client_stanza_namespace(root, self.uses_websocket_framing(), xml) {
                 return Ok(Action::CloseWith(stream_error("invalid-namespace")));
             }
             if let Err(condition) = crate::xmpp::stanza_validation::validate_client_stanza(root) {

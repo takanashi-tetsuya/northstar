@@ -408,7 +408,6 @@ pub struct ProtocolSession {
     /// never used as an authentication bypass.
     pub secure_transport: bool,
     pub(crate) transport: ClientTransport,
-    pub(crate) websocket: bool,
     pub(crate) peer_ip: IpAddr,
     pub(crate) connected_at: std::time::Instant,
     pub(crate) last_activity: Arc<std::sync::RwLock<std::time::Instant>>,
@@ -537,6 +536,10 @@ pub struct ProtocolSession {
 }
 
 impl ProtocolSession {
+    pub(crate) fn uses_websocket_framing(&self) -> bool {
+        self.transport == ClientTransport::WebSocket
+    }
+
     pub fn new(
         state: Arc<AppState>,
         outbound: crate::outbound::OutboundSender,
@@ -549,7 +552,6 @@ impl ProtocolSession {
             outbound,
             secure_transport,
             transport,
-            websocket: transport == ClientTransport::WebSocket,
             peer_ip,
             connected_at: std::time::Instant::now(),
             last_activity: Arc::new(std::sync::RwLock::new(std::time::Instant::now())),
@@ -1060,7 +1062,7 @@ impl ProtocolSession {
             .negotiation
             .stream_from()
             .map(|username| format!("{}@{}", username, self.state.local_domain()));
-        if self.websocket {
+        if self.uses_websocket_framing() {
             let _ = self.outbound.try_send(self.features());
             XmlElement::namespaced("open", "urn:ietf:params:xml:ns:xmpp-framing")
                 .attr("from", self.state.local_domain())

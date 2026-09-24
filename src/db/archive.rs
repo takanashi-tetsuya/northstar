@@ -2,7 +2,9 @@ use crate::abuse::ContentIdentityAuthenticators;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
-use northstar_archive_core::{plan_mam_page, ResolvedMamRsmPage};
+use northstar_archive_core::{
+    decide_mam_room_read, plan_mam_page, MamRoomReadDecision, ResolvedMamRsmPage,
+};
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -1391,13 +1393,16 @@ async fn authorize_mam_room_in_transaction(
         return Ok(MamRoomReadOutcome::Missing);
     };
     let affiliation: Option<String> = row.try_get("affiliation")?;
-    if affiliation.as_deref() == Some("outcast")
-        || (row.try_get::<bool, _>("members_only")?
-            && !matches!(affiliation.as_deref(), Some("owner" | "admin" | "member")))
-        || (row.try_get::<Option<String>, _>("password_hash")?.is_some() && !currently_joined)
-    {
-        return Ok(MamRoomReadOutcome::Forbidden);
-    }
+    let reveal_real_jid = match decide_mam_room_read(
+        row.try_get("members_only")?,
+        row.try_get("non_anonymous")?,
+        row.try_get::<Option<String>, _>("password_hash")?.is_some(),
+        affiliation.as_deref(),
+        currently_joined,
+    ) {
+        MamRoomReadDecision::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
+        MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
+    };
     let room_id: Uuid = row.try_get("id")?;
     let occupant_id_secret = match row.try_get::<Option<Vec<u8>>, _>("occupant_id_secret")? {
         Some(secret) if !secret.is_empty() => secret,
@@ -1422,8 +1427,6 @@ async fn authorize_mam_room_in_transaction(
             secret
         }
     };
-    let reveal_real_jid = row.try_get::<bool, _>("non_anonymous")?
-        || matches!(affiliation.as_deref(), Some("owner" | "admin"));
     Ok(MamRoomReadOutcome::Allowed {
         access: MamRoomArchiveAccess {
             room_id,
@@ -1477,13 +1480,16 @@ async fn authorize_federated_mam_room_in_transaction(
     .bind(viewer_bare_jid)
     .fetch_optional(&mut **transaction)
     .await?;
-    if affiliation.as_deref() == Some("outcast")
-        || (row.try_get::<bool, _>("members_only")?
-            && !matches!(affiliation.as_deref(), Some("owner" | "admin" | "member")))
-        || (row.try_get::<Option<String>, _>("password_hash")?.is_some() && !currently_joined)
-    {
-        return Ok(MamRoomReadOutcome::Forbidden);
-    }
+    let reveal_real_jid = match decide_mam_room_read(
+        row.try_get("members_only")?,
+        row.try_get("non_anonymous")?,
+        row.try_get::<Option<String>, _>("password_hash")?.is_some(),
+        affiliation.as_deref(),
+        currently_joined,
+    ) {
+        MamRoomReadDecision::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
+        MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
+    };
     let occupant_id_secret = match row.try_get::<Option<Vec<u8>>, _>("occupant_id_secret")? {
         Some(secret) if !secret.is_empty() => secret,
         _ => {
@@ -1504,8 +1510,6 @@ async fn authorize_federated_mam_room_in_transaction(
             secret
         }
     };
-    let reveal_real_jid = row.try_get::<bool, _>("non_anonymous")?
-        || matches!(affiliation.as_deref(), Some("owner" | "admin"));
     Ok(MamRoomReadOutcome::Allowed {
         access: MamRoomArchiveAccess {
             room_id,

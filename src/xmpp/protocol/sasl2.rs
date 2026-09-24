@@ -717,7 +717,11 @@ impl ProtocolSession {
         &mut self,
         xml: &str,
     ) -> std::result::Result<(), StreamOpenError> {
-        let parsed = parse_stream_open(xml, self.websocket, self.state.local_domain())?;
+        let parsed = parse_stream_open(
+            xml,
+            self.uses_websocket_framing(),
+            self.state.local_domain(),
+        )?;
         if let (Some(authenticated), Some(stream_from)) =
             (self.authenticated.as_ref(), parsed.from.as_deref())
         {

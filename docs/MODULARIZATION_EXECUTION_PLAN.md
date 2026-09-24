@@ -693,7 +693,10 @@ C1 now uses one authorized root-discovery query instead of repeated per-node
 reads. C2 has a shared MAM page-size and filter limit across the wire parser,
 application service and PostgreSQL adapter. The pure RSM window calculation
 resides in archive core; cursor resolution and page execution still share the
-authorized transaction. These are completed slices, not packet exit claims.
+authorized transaction. Local and federated room readers now share one pure
+visibility decision while retaining their distinct database locks. D1 no
+longer stores a second WebSocket flag alongside the transport kind. These are
+completed slices, not packet exit claims.
 
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run

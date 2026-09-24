@@ -104,6 +104,32 @@ pub fn plan_mam_page(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MamRoomReadDecision {
+    Forbidden,
+    Allowed { reveal_real_jid: bool },
+}
+
+/// Decide archive visibility from facts read under the room's database lock.
+/// Local and federated readers must use the same policy before projecting rows.
+pub fn decide_mam_room_read(
+    members_only: bool,
+    non_anonymous: bool,
+    password_protected: bool,
+    affiliation: Option<&str>,
+    currently_joined: bool,
+) -> MamRoomReadDecision {
+    if affiliation == Some("outcast")
+        || (members_only && !matches!(affiliation, Some("owner" | "admin" | "member")))
+        || (password_protected && !currently_joined)
+    {
+        return MamRoomReadDecision::Forbidden;
+    }
+    MamRoomReadDecision::Allowed {
+        reveal_real_jid: non_anonymous || matches!(affiliation, Some("owner" | "admin")),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MamArchiveQuery {
     pub with_jid: Option<String>,
@@ -383,5 +409,40 @@ mod tests {
         let indexed = plan_mam_page(None, None, ResolvedMamRsmPage::Index(7), 20);
         assert_eq!(indexed.offset, Some(7));
         assert_eq!(indexed.fetch_limit, 21);
+    }
+
+    #[test]
+    fn room_read_policy_keeps_membership_and_anonymity_boundaries() {
+        use MamRoomReadDecision::{Allowed, Forbidden};
+        assert_eq!(
+            decide_mam_room_read(false, false, false, Some("outcast"), true),
+            Forbidden
+        );
+        assert_eq!(
+            decide_mam_room_read(true, false, false, None, true),
+            Forbidden
+        );
+        assert_eq!(
+            decide_mam_room_read(false, false, true, Some("member"), false),
+            Forbidden
+        );
+        assert_eq!(
+            decide_mam_room_read(true, false, false, Some("member"), true),
+            Allowed {
+                reveal_real_jid: false
+            }
+        );
+        assert_eq!(
+            decide_mam_room_read(true, false, false, Some("admin"), true),
+            Allowed {
+                reveal_real_jid: true
+            }
+        );
+        assert_eq!(
+            decide_mam_room_read(false, true, false, None, false),
+            Allowed {
+                reveal_real_jid: true
+            }
+        );
     }
 }

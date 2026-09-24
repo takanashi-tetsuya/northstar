@@ -121,6 +121,8 @@ Key ownership:
   degraded health and leaves the durable outbox available for polling. Local
   and federated handlers share the voice-request form and XEP-0045 affiliation
   policy, while retaining their separate occupancy and delivery authorities.
+  `MucDeliveryContext` routes occupant stanzas; Redis wakes and durable outbox
+  claims retain their own completion rules.
 - Profile publication uses one repository operation for vCard, avatar/PEP
   changes and their notification audience. The application service keeps the
   shared PubSub mutation permit until that operation finishes or is cancelled.
@@ -129,6 +131,8 @@ Key ownership:
   policy locks, item/subscription changes and the immutable outbox audience.
   XML rendering uses domain snapshots while those locks are held. Subscription
   notifications use the XEP-0060 builder from both service and protocol paths.
+  `PubSubNotificationDelivery` routes local, clustered and federated recipients
+  after the durable outbox claims an event.
   Notification claims carry their payload digest and lease token without a
   hidden database row or a second copy of the payload.
 - Blocking, privacy, Push and private XML storage use injected repository

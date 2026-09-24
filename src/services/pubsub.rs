@@ -1652,6 +1652,20 @@ pub(crate) fn pubsub_node_config_form(config: &PubSubNodeConfig, form_type: &str
 }
 const SUBSCRIBE_AUTH_FORM: &str = "http://jabber.org/protocol/pubsub#subscribe_authorization";
 
+fn subscription_delivery_kind(
+    subscription: &PubSubSubscription,
+    subscription_node_id: Uuid,
+) -> (PubSubOutboxDeliveryKind, Option<(Uuid, i32)>) {
+    if subscription.digest {
+        (
+            PubSubOutboxDeliveryKind::PubSubDigest,
+            Some((subscription_node_id, subscription.digest_frequency)),
+        )
+    } else {
+        (PubSubOutboxDeliveryKind::PubSubChildren, None)
+    }
+}
+
 impl PubSubEventRenderer {
     pub(crate) fn render_transactional_node_event(
         &self,
@@ -1671,17 +1685,8 @@ impl PubSubEventRenderer {
                 delivery.collection.as_deref(),
                 None,
             )?;
-            let (kind, digest) = if delivery.subscription.digest {
-                (
-                    PubSubOutboxDeliveryKind::PubSubDigest,
-                    Some((
-                        delivery.subscription_node_id,
-                        delivery.subscription.digest_frequency,
-                    )),
-                )
-            } else {
-                (PubSubOutboxDeliveryKind::PubSubChildren, None)
-            };
+            let (kind, digest) =
+                subscription_delivery_kind(&delivery.subscription, delivery.subscription_node_id);
             outbox.push(PubSubOutboxInsert::new(
                 event_id,
                 ordering_key.clone(),
@@ -1942,14 +1947,7 @@ impl PubSubEventRenderer {
                 None,
                 Some(item.created_at),
             )?;
-            let (kind, digest) = if subscription.digest {
-                (
-                    PubSubOutboxDeliveryKind::PubSubDigest,
-                    Some((node.id, subscription.digest_frequency)),
-                )
-            } else {
-                (PubSubOutboxDeliveryKind::PubSubChildren, None)
-            };
+            let (kind, digest) = subscription_delivery_kind(subscription, node.id);
             outbox.push(PubSubOutboxInsert::new(
                 last_item_event_id,
                 format!("pubsub:{}", node.id),

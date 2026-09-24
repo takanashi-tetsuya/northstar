@@ -165,8 +165,6 @@ pub(crate) mod cluster_listener_blocking;
 pub(crate) mod cluster_listener_dispatch;
 pub(crate) mod cluster_listener_message;
 pub(crate) mod cluster_listener_mix_caps;
-pub(crate) mod cluster_listener_presence_sender;
-pub(crate) mod cluster_listener_security;
 pub(crate) mod cluster_listener_sm_muc_teardown;
 pub(crate) mod cluster_maintenance;
 pub(crate) mod cluster_maintenance_context;

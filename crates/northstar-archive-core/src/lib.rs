@@ -59,6 +59,51 @@ pub enum MamRsmPage {
     Index(i64),
 }
 
+pub type ArchivePoint = (DateTime<Utc>, Uuid);
+
+/// Cursor timestamps have already been resolved in the authorized database
+/// snapshot before the pure paging policy runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvedMamRsmPage {
+    First,
+    Last,
+    Before(ArchivePoint),
+    After(ArchivePoint),
+    Index(i64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MamPageWindow {
+    pub after: Option<ArchivePoint>,
+    pub before: Option<ArchivePoint>,
+    pub descending: bool,
+    pub offset: Option<i64>,
+    pub fetch_limit: i64,
+}
+
+/// Intersect form and RSM bounds without changing the authorized SQL snapshot.
+pub fn plan_mam_page(
+    form_after: Option<ArchivePoint>,
+    form_before: Option<ArchivePoint>,
+    page: ResolvedMamRsmPage,
+    max: i64,
+) -> MamPageWindow {
+    let (rsm_after, rsm_before, descending, offset) = match page {
+        ResolvedMamRsmPage::First => (None, None, false, None),
+        ResolvedMamRsmPage::Last => (None, None, true, None),
+        ResolvedMamRsmPage::Before(point) => (None, Some(point), true, None),
+        ResolvedMamRsmPage::After(point) => (Some(point), None, false, None),
+        ResolvedMamRsmPage::Index(index) => (None, None, false, Some(index)),
+    };
+    MamPageWindow {
+        after: form_after.into_iter().chain(rsm_after).max(),
+        before: form_before.into_iter().chain(rsm_before).min(),
+        descending,
+        offset,
+        fetch_limit: max.max(0).saturating_add(1),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MamArchiveQuery {
     pub with_jid: Option<String>,
@@ -308,5 +353,35 @@ mod tests {
         assert_eq!(row.peer_jid(), "peer@example.test");
         assert_eq!(row.stanza(), "<message/>");
         assert_eq!(row.created_at(), &now);
+    }
+
+    #[test]
+    fn page_window_uses_the_tighter_form_and_rsm_bounds() {
+        let point = |seconds| (DateTime::from_timestamp(seconds, 0).unwrap(), Uuid::nil());
+        let after = plan_mam_page(
+            Some(point(10)),
+            Some(point(50)),
+            ResolvedMamRsmPage::After(point(20)),
+            100,
+        );
+        assert_eq!(after.after, Some(point(20)));
+        assert_eq!(after.before, Some(point(50)));
+        assert_eq!(after.fetch_limit, 101);
+        assert!(!after.descending);
+
+        let before = plan_mam_page(
+            Some(point(10)),
+            Some(point(50)),
+            ResolvedMamRsmPage::Before(point(40)),
+            0,
+        );
+        assert_eq!(before.after, Some(point(10)));
+        assert_eq!(before.before, Some(point(40)));
+        assert_eq!(before.fetch_limit, 1);
+        assert!(before.descending);
+
+        let indexed = plan_mam_page(None, None, ResolvedMamRsmPage::Index(7), 20);
+        assert_eq!(indexed.offset, Some(7));
+        assert_eq!(indexed.fetch_limit, 21);
     }
 }

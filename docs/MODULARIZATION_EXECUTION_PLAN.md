@@ -689,6 +689,12 @@ another set of crates. Track implementation and external evidence separately in
 | R2 | Certificate revocation: specify PKIX/DANE and inbound/outbound trust policy first; prototype operator-supplied, freshness-checked OCSP stapling before considering bounded online retrieval | Valid, revoked, stale, unavailable and malformed responses have documented fail policy and TLS interoperability tests; no certificate-provided URL is fetched without explicit source and network policy |
 | R3 | WASM provenance: reproduce the deployed `libomemo.js` and `hash-wasm` bytes from pinned source and toolchains in isolated builders | Two independent builds match the shipped bytes, with recorded source/toolchain digests, SBOM and offline verification; until then the status remains `provenance-traced-not-reproducible` |
 
+C1 now uses one authorized root-discovery query instead of repeated per-node
+reads. C2 has a shared MAM page-size and filter limit across the wire parser,
+application service and PostgreSQL adapter. The pure RSM window calculation
+resides in archive core; cursor resolution and page execution still share the
+authorized transaction. These are completed slices, not packet exit claims.
+
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run
 after their own test fixtures are ready; they need not hold up unrelated code

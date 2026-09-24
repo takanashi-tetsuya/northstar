@@ -1427,13 +1427,14 @@ mod tests {
                 .unwrap()
         });
         let partial = root.join(format!("{id}.{attempt}.part"));
-        for _ in 0..100 {
-            if tokio::fs::try_exists(&partial).await.unwrap() {
-                break;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !tokio::fs::try_exists(&partial).await.unwrap() {
+                assert!(!task.is_finished(), "upload ended before staging began");
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::task::yield_now().await;
-        }
-        assert!(tokio::fs::try_exists(&partial).await.unwrap());
+        })
+        .await
+        .expect("upload did not create its staging file");
         assert!(store.get(&key, None).await.unwrap().is_none());
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());

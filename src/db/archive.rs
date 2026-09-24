@@ -1,6 +1,9 @@
 use crate::abuse::ContentIdentityAuthenticators;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_archive_application::MAX_MAM_PAGE_SIZE;
+use northstar_archive_core::{plan_mam_page, ResolvedMamRsmPage};
+use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
@@ -98,6 +101,14 @@ pub async fn set_mam_preferences(
     user_id: Uuid,
     preferences: &MamPreferences,
 ) -> Result<()> {
+    anyhow::ensure!(
+        preferences
+            .always
+            .len()
+            .saturating_add(preferences.never.len())
+            <= MAX_PREFS_JIDS,
+        "MAM preferences exceed the JID limit"
+    );
     anyhow::ensure!(
         matches!(
             preferences.default_policy.as_str(),
@@ -1274,41 +1285,26 @@ async fn mam_archive_page_for_in_transaction(
         .fetch_one(&mut **transaction)
         .await?;
 
-    let (rsm_after, rsm_before, descending) = match query.page {
-        MamRsmPage::First => (None, None, false),
-        MamRsmPage::Last => (None, None, true),
-        MamRsmPage::Index(_) => (None, None, false),
-        MamRsmPage::After(id) => (
-            Some((
-                mam_archive_point(transaction, source, &blocked_patterns, id)
-                    .await?
-                    .expect("validated MAM RSM id disappeared"),
-                id,
-            )),
-            None,
-            false,
-        ),
-        MamRsmPage::Before(id) => (
-            None,
-            Some((
-                mam_archive_point(transaction, source, &blocked_patterns, id)
-                    .await?
-                    .expect("validated MAM RSM id disappeared"),
-                id,
-            )),
-            true,
-        ),
+    let resolved_page = match query.page {
+        MamRsmPage::First => ResolvedMamRsmPage::First,
+        MamRsmPage::Last => ResolvedMamRsmPage::Last,
+        MamRsmPage::Index(index) => ResolvedMamRsmPage::Index(index),
+        MamRsmPage::After(id) => ResolvedMamRsmPage::After((
+            mam_archive_point(transaction, source, &blocked_patterns, id)
+                .await?
+                .expect("validated MAM RSM id disappeared"),
+            id,
+        )),
+        MamRsmPage::Before(id) => ResolvedMamRsmPage::Before((
+            mam_archive_point(transaction, source, &blocked_patterns, id)
+                .await?
+                .expect("validated MAM RSM id disappeared"),
+            id,
+        )),
     };
 
-    let max = query.max.clamp(0, 100);
-    let page_after = match (form_after, rsm_after) {
-        (Some(left), Some(right)) => Some(std::cmp::max(left, right)),
-        (left, right) => left.or(right),
-    };
-    let page_before = match (form_before, rsm_before) {
-        (Some(left), Some(right)) => Some(std::cmp::min(left, right)),
-        (left, right) => left.or(right),
-    };
+    let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
+    let window = plan_mam_page(form_after, form_before, resolved_page, max);
     let mut page_builder = QueryBuilder::<Postgres>::new("SELECT ");
     page_builder
         .push(source.select_columns())
@@ -1319,16 +1315,16 @@ async fn mam_archive_page_for_in_transaction(
         source,
         query,
         &blocked_patterns,
-        page_after,
-        page_before,
+        window.after,
+        window.before,
     );
-    page_builder.push(if descending {
+    page_builder.push(if window.descending {
         " ORDER BY created_at DESC, id DESC LIMIT "
     } else {
         " ORDER BY created_at ASC, id ASC LIMIT "
     });
-    page_builder.push_bind(max + 1);
-    if let MamRsmPage::Index(index) = query.page {
+    page_builder.push_bind(window.fetch_limit);
+    if let Some(index) = window.offset {
         page_builder.push(" OFFSET ").push_bind(index);
     }
     let fetched = page_builder.build().fetch_all(&mut **transaction).await?;
@@ -1337,7 +1333,7 @@ async fn mam_archive_page_for_in_transaction(
     if has_more {
         rows.truncate(max as usize);
     }
-    if descending {
+    if window.descending {
         rows.reverse();
     }
 

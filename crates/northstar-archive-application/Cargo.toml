@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 northstar-archive-core = { path = "../northstar-archive-core" }
+northstar-xep-0313 = { path = "../northstar-xep-0313" }
 northstar-xmpp-types = { path = "../northstar-xmpp-types" }
 chrono = { version = "0.4" }
 uuid = { version = "1.12", features = ["v4"] }

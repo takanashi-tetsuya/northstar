@@ -1990,6 +1990,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "northstar-archive-core",
+ "northstar-xep-0313",
  "northstar-xmpp-types",
  "uuid",
 ]

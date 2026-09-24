@@ -109,12 +109,15 @@ pub enum MamQueryValidationError {
     InvalidTimeRange,
     NegativeMaxResults,
     ExcessiveMaxResults,
+    ExcessiveIdFilter,
+    InvalidRsmIndex,
     InvalidWithJid,
     InvalidPreferenceMode,
+    ExcessivePreferences,
 }
 
-/// Maximum page size allowed by Northstar policy.
-pub const MAX_MAM_PAGE_SIZE: i64 = 1000;
+/// Keep service admission aligned with the XEP parser's wire-level limit.
+pub const MAX_MAM_PAGE_SIZE: i64 = northstar_xep_0313::MAX_MAM_RESULTS as i64;
 
 /// Pure validation of a MAM query command.
 pub fn validate_mam_query_command(cmd: &MamQueryCommand) -> Result<(), MamQueryValidationError> {
@@ -126,6 +129,14 @@ pub fn validate_mam_query_command(cmd: &MamQueryCommand) -> Result<(), MamQueryV
     }
     if cmd.query.max > MAX_MAM_PAGE_SIZE {
         return Err(MamQueryValidationError::ExcessiveMaxResults);
+    }
+    if cmd.query.ids.len() > northstar_xep_0313::MAX_MAM_IDS {
+        return Err(MamQueryValidationError::ExcessiveIdFilter);
+    }
+    if let MamRsmPage::Index(index) = cmd.query.page {
+        if index < 0 || index as u64 > northstar_xep_0313::MAX_MAM_RSM_INDEX {
+            return Err(MamQueryValidationError::InvalidRsmIndex);
+        }
     }
     if let Some(with_jid) = &cmd.query.with_jid {
         if northstar_xmpp_types::CanonicalJid::parse(with_jid).is_err() {
@@ -139,6 +150,9 @@ pub fn validate_mam_query_command(cmd: &MamQueryCommand) -> Result<(), MamQueryV
 pub fn validate_mam_preferences(prefs: &MamPreferences) -> Result<(), MamQueryValidationError> {
     if !matches!(prefs.default_policy.as_str(), "always" | "never" | "roster") {
         return Err(MamQueryValidationError::InvalidPreferenceMode);
+    }
+    if prefs.always.len().saturating_add(prefs.never.len()) > northstar_xep_0313::MAX_PREFS_JIDS {
+        return Err(MamQueryValidationError::ExcessivePreferences);
     }
     for jid in prefs.always.iter().chain(prefs.never.iter()) {
         if northstar_xmpp_types::CanonicalJid::parse(jid).is_err() {
@@ -194,6 +208,35 @@ mod tests {
             validate_mam_query_command(&invalid_max),
             Err(MamQueryValidationError::NegativeMaxResults)
         );
+
+        let mut excessive_max = cmd;
+        excessive_max.query.max = MAX_MAM_PAGE_SIZE + 1;
+        assert_eq!(
+            validate_mam_query_command(&excessive_max),
+            Err(MamQueryValidationError::ExcessiveMaxResults)
+        );
+
+        let mut invalid_index = excessive_max.clone();
+        invalid_index.query.max = 20;
+        invalid_index.query.page = MamRsmPage::Index(-1);
+        assert_eq!(
+            validate_mam_query_command(&invalid_index),
+            Err(MamQueryValidationError::InvalidRsmIndex)
+        );
+        invalid_index.query.page =
+            MamRsmPage::Index(northstar_xep_0313::MAX_MAM_RSM_INDEX as i64 + 1);
+        assert_eq!(
+            validate_mam_query_command(&invalid_index),
+            Err(MamQueryValidationError::InvalidRsmIndex)
+        );
+
+        let mut too_many_ids = invalid_index;
+        too_many_ids.query.page = MamRsmPage::First;
+        too_many_ids.query.ids = vec![Uuid::nil(); northstar_xep_0313::MAX_MAM_IDS + 1];
+        assert_eq!(
+            validate_mam_query_command(&too_many_ids),
+            Err(MamQueryValidationError::ExcessiveIdFilter)
+        );
     }
 
     #[test]
@@ -217,6 +260,13 @@ mod tests {
         assert_eq!(
             validate_mam_preferences(&invalid_jid),
             Err(MamQueryValidationError::InvalidWithJid)
+        );
+
+        let mut excessive = valid_prefs;
+        excessive.always = vec!["bob@example.test".to_string(); northstar_xep_0313::MAX_PREFS_JIDS];
+        assert_eq!(
+            validate_mam_preferences(&excessive),
+            Err(MamQueryValidationError::ExcessivePreferences)
         );
     }
 }

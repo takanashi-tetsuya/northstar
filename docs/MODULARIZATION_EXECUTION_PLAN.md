@@ -257,8 +257,10 @@ optional cluster occupancy target. The application layer rejects inconsistent
 commands before repository invocation; PostgreSQL remains the final authority
 under its existing transaction locks. Request-owned MUC post-commit effects
 also moved out of the protocol module into a bounded, sealed, order-preserving
-application plan. Subject, moderation, affiliation, join/leave and room
-configuration mutations still need to converge on the same repository port.
+application plan. Subject, moderation/retraction, affiliation, configuration
+and registration use typed application commands and atomic service methods.
+Remaining room work is to verify any residual join/leave or adapter-specific
+path against the same authority and post-commit boundaries.
 PubSub/PEP already has core/application crates, typed commands, a service and
 repository ports. Its remaining work is a complete command/query boundary and
 consolidation of the PostgreSQL adapter, while preserving the transactional

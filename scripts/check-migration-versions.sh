@@ -1185,7 +1185,7 @@ for required_source_fragment in \
     'self.next_claim = now;' \
     'self.empty_delay = Self::BASE_DELAY;'
 do
-    if ! grep -Fq "$required_source_fragment" src/xmpp/protocol/mix.rs; then
+    if ! grep -Fq "$required_source_fragment" src/xmpp/protocol/mix/worker.rs; then
         echo "MIX durable delivery lane is missing lossless wake invariant: $required_source_fragment" >&2
         exit 1
     fi

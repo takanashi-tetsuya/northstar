@@ -301,7 +301,7 @@ if (!state.includes('fn local_domain(&self) -> &str')
 const clusterMessageResolver = structBody(read('src/cluster.rs'), 'async fn resolve_node_message_delivery<');
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
-    || !read('src/cluster.rs').includes('message_policy.verifier()')
+    || !read('src/cluster/listener.rs').includes('message_policy.verifier()')
     || !read('src/state/cluster_listener_message.rs').includes('verifier: self.node_message_contract_verifier()')) {
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
@@ -526,7 +526,8 @@ if (!/service_control_applies\(\s*self\.process_started_at,\s*&control\s*,?\s*\)
 if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
-const mixProtocol = read('src/xmpp/protocol/mix.rs');
+const mixProtocol = read('src/xmpp/protocol/mix.rs') + '\n' +
+  read('src/xmpp/protocol/mix/worker.rs');
 const mixProtocolProduction = productionWithoutCfgTestModules(
   mixProtocol,
   'src/xmpp/protocol/mix.rs',
@@ -3197,7 +3198,7 @@ const workerResponsibilityEvidence = {
   'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['src/xmpp/protocol/mix.rs', 'MIX protocol capability startup', '10 s'],
-  'mix-delivery-outbox': ['src/xmpp/protocol/mix.rs', 'MIX capability startup', '30 s'],
+  'mix-delivery-outbox': ['src/xmpp/protocol/mix/worker.rs', 'MIX capability startup', '30 s'],
   'mix-presence-recovery': ['src/xmpp/protocol/mix.rs', 'MIX capability startup', '90 s'],
   'pubsub-digest-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '5 s'],
   'pubsub-event-outbox-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '30 s'],
@@ -3548,7 +3549,7 @@ if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occup
     || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
-const clusterListener = structBody(read('src/cluster.rs'), 'async fn listen_once(');
+const clusterListener = structBody(read('src/cluster/listener.rs'), 'async fn listen_once(');
 const clusterListenerTransport = structBody(read('src/cluster.rs'), 'pub(crate) struct ClusterPubsubListenerTransport');
 const clusterListenerSupervisor = structBody(read('src/cluster.rs'), 'pub(crate) async fn run_pubsub_listener(');
 if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)

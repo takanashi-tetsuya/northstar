@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { verifyMixOutboxLifecycle } from './check-architecture-boundaries.mjs';
 
-const baseline = fs.readFileSync(new URL('../src/xmpp/protocol/mix.rs', import.meta.url), 'utf8')
+const baseline = [
+  '../src/xmpp/protocol/mix.rs',
+  '../src/xmpp/protocol/mix/worker.rs',
+].map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8'))
+  .join('\n')
   .replace(/\r\n/g, '\n');
 
 // Mutate one real production body in memory. No Rust fixture is compiled or

@@ -2511,6 +2511,10 @@
       ],
       [
         "northstar-xep-0092",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-xep-0092",
         "roxmltree"
       ],
       [
@@ -2520,6 +2524,10 @@
       [
         "northstar-xep-0115",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0115",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0115",
@@ -2540,6 +2548,10 @@
       [
         "northstar-xep-0184",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0184",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0184",
@@ -2587,6 +2599,10 @@
       ],
       [
         "northstar-xep-0202",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-xep-0202",
         "roxmltree"
       ],
       [
@@ -2596,6 +2612,10 @@
       [
         "northstar-xep-0215",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0215",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0215",
@@ -2639,6 +2659,10 @@
       ],
       [
         "northstar-xep-0308",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-xep-0308",
         "roxmltree"
       ],
       [
@@ -2667,6 +2691,10 @@
       ],
       [
         "northstar-xep-0333",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-xep-0333",
         "roxmltree"
       ],
       [
@@ -2716,6 +2744,10 @@
       [
         "northstar-xep-0363",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0363",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0363",
@@ -2728,6 +2760,10 @@
       [
         "northstar-xep-0380",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0380",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0380",
@@ -2736,6 +2772,10 @@
       [
         "northstar-xep-0444",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0444",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0444",
@@ -2744,6 +2784,10 @@
       [
         "northstar-xep-0461",
         "northstar-xep-core"
+      ],
+      [
+        "northstar-xep-0461",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xep-0461",

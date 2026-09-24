@@ -6,10 +6,11 @@ use uuid::Uuid;
 pub(crate) use northstar_archive_application::{
     validate_mam_preferences, validate_mam_query_command, ArchiveBoundary, ArchivePage, ArchiveRow,
     FederatedMamAdmissionOutcome, FederatedMamOutboxLimits, FederatedMamStreamPage,
-    FederatedMamStreamRequest, FederatedMamStreamRow, MamArchiveQuery, MamMetadataCommand,
-    MamMetadataResult, MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand,
-    MamQueryCommand, MamQueryResult, MamQueryScope, MamRepository, MamRoomAccess,
-    MamRoomAccessOutcome, MamRoomReadOutcome, MamRsmPage,
+    FederatedMamStreamRequest, FederatedMamStreamRow, FederatedMamStreamWriter, MamArchiveQuery,
+    MamMetadataCommand, MamMetadataResult, MamPreferences, MamPreferencesGetCommand,
+    MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand, MamQueryRepository,
+    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRoomReadOutcome,
+    MamRsmPage,
 };
 
 #[derive(Clone)]
@@ -19,7 +20,7 @@ pub(crate) struct MamService<R> {
     outbox_wake: tokio::sync::mpsc::Sender<()>,
 }
 
-impl<R: MamRepository<Error = anyhow::Error>> MamService<R> {
+impl<R> MamService<R> {
     pub(crate) fn new(
         repository: R,
         outbox_limits: FederatedMamOutboxLimits,
@@ -31,7 +32,9 @@ impl<R: MamRepository<Error = anyhow::Error>> MamService<R> {
             outbox_wake,
         }
     }
+}
 
+impl<R: MamQueryRepository<Error = anyhow::Error>> MamService<R> {
     pub(crate) async fn execute_mam_query(
         &self,
         command: MamQueryCommand,
@@ -56,15 +59,6 @@ impl<R: MamRepository<Error = anyhow::Error>> MamService<R> {
         self.repository.get_preferences(command).await
     }
 
-    pub(crate) async fn execute_mam_preferences_set(
-        &self,
-        command: MamPreferencesSetCommand,
-    ) -> Result<()> {
-        if let Err(error) = validate_mam_preferences(&command.preferences) {
-            anyhow::bail!("invalid mam preferences: {error:?}");
-        }
-        self.repository.set_preferences(command).await
-    }
     pub(crate) async fn authorize_room(
         &self,
         localpart: &str,
@@ -97,7 +91,21 @@ impl<R: MamRepository<Error = anyhow::Error>> MamService<R> {
             .authorized_federated_room_boundaries(localpart, viewer_bare_jid, currently_joined)
             .await
     }
+}
 
+impl<R: MamPreferencesWriter<Error = anyhow::Error>> MamService<R> {
+    pub(crate) async fn execute_mam_preferences_set(
+        &self,
+        command: MamPreferencesSetCommand,
+    ) -> Result<()> {
+        if let Err(error) = validate_mam_preferences(&command.preferences) {
+            anyhow::bail!("invalid mam preferences: {error:?}");
+        }
+        self.repository.set_preferences(command).await
+    }
+}
+
+impl<R: FederatedMamStreamWriter<Error = anyhow::Error>> MamService<R> {
     pub(crate) async fn admit_federated_room_stream<F>(
         &self,
         request: FederatedMamStreamRequest<'_>,

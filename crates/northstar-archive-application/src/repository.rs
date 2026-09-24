@@ -18,7 +18,9 @@ pub struct FederatedMamOutboxLimits {
     pub max_per_domain: i64,
 }
 
-pub trait MamRepository: Send + Sync {
+/// Archive reads retain authorization and page selection in one database snapshot.
+/// Legacy room reads may also initialize a missing occupant-ID secret.
+pub trait MamQueryRepository: Send + Sync {
     type Error;
     fn query_archive(
         &self,
@@ -32,10 +34,6 @@ pub trait MamRepository: Send + Sync {
         &self,
         command: MamPreferencesGetCommand,
     ) -> impl Future<Output = Result<MamPreferences, Self::Error>> + Send;
-    fn set_preferences(
-        &self,
-        command: MamPreferencesSetCommand,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn authorize_room(
         &self,
         localpart: &str,
@@ -54,6 +52,18 @@ pub trait MamRepository: Send + Sync {
         viewer_bare_jid: &str,
         currently_joined: bool,
     ) -> impl Future<Output = Result<MamRoomReadOutcome<MamArchiveBoundaries>, Self::Error>> + Send;
+}
+
+pub trait MamPreferencesWriter: Send + Sync {
+    type Error;
+    fn set_preferences(
+        &self,
+        command: MamPreferencesSetCommand,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
+pub trait FederatedMamStreamWriter: Send + Sync {
+    type Error;
     /// Keep room authorization and all response rows, including the terminal
     /// IQ, in one transaction. Rendering must be synchronous and side-effect free.
     fn admit_federated_room_stream<F>(

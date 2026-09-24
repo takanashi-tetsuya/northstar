@@ -66,7 +66,7 @@ impl PostgresMamRepository {
     }
 }
 
-impl MamRepository for PostgresMamRepository {
+impl MamQueryRepository for PostgresMamRepository {
     type Error = anyhow::Error;
     async fn query_archive(&self, command: MamQueryCommand) -> Result<MamQueryResult> {
         match command.scope {
@@ -138,9 +138,6 @@ impl MamRepository for PostgresMamRepository {
     async fn get_preferences(&self, command: MamPreferencesGetCommand) -> Result<MamPreferences> {
         db::mam_preferences(&self.pool, command.owner_id).await
     }
-    async fn set_preferences(&self, command: MamPreferencesSetCommand) -> Result<()> {
-        db::set_mam_preferences(&self.pool, command.owner_id, &command.preferences).await
-    }
     /// Resolve room policy and affiliation in one repository snapshot, then
     /// return a capability that can be used for MAM reads.
     async fn authorize_room(
@@ -201,6 +198,18 @@ impl MamRepository for PostgresMamRepository {
             .await?,
         )
     }
+}
+
+impl MamPreferencesWriter for PostgresMamRepository {
+    type Error = anyhow::Error;
+
+    async fn set_preferences(&self, command: MamPreferencesSetCommand) -> Result<()> {
+        db::set_mam_preferences(&self.pool, command.owner_id, &command.preferences).await
+    }
+}
+
+impl FederatedMamStreamWriter for PostgresMamRepository {
+    type Error = anyhow::Error;
 
     /// Authorize a federated room archive read, render its complete wire
     /// response, and admit every result plus the terminal IQ to the durable

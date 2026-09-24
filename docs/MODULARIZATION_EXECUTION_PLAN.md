@@ -699,8 +699,12 @@ admission policy; the transaction still re-reads affiliation before commit.
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for
 personal, MUC and MIX queries. Cursor resolution, authorization, counting and
-page execution remain in the same database snapshot. Local and federated room
-readers share a pure visibility decision while retaining their distinct locks.
+page execution remain in the same database snapshot. Archive queries,
+preference updates and atomic federated outbox admission now require separate
+repository capabilities. Local and federated room readers share a pure
+visibility decision while retaining their distinct locks. Legacy room reads
+can still initialize a missing occupant-ID secret; the query capability is
+therefore not a claim that every SQL statement is read-only.
 D1 no longer stores a second WebSocket flag alongside the transport kind.
 These are completed slices, not packet exit claims.
 

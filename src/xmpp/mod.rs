@@ -4,6 +4,7 @@ pub(crate) mod framing;
 pub(crate) mod protocol;
 pub(crate) mod stanza_validation;
 mod tcp_action;
+mod websocket_action;
 pub(crate) mod xml_builder;
 pub(crate) mod xml_util;
 
@@ -16,7 +17,7 @@ use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use framing::XmlEntityFramer;
 use futures::FutureExt;
-use protocol::{Action, ProtocolSession};
+use protocol::ProtocolSession;
 use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -1221,243 +1222,17 @@ pub async fn websocket_connection(
                         {
                             framer.reset_entity();
                         }
-                        match action {
-                            Ok(Action::Send(reply)) => {
-                                if session.record_outbound(&reply).await.is_err() {
-                                    session.sm_resume_allowed = false;
-                                    let domain = session.state.local_domain().to_owned();
-                                    websocket_fatal_error(
-                                        &mut socket,
-                                        &domain,
-                                        opening,
-                                        crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                        &mut terminal_sequence,
-                                    ).await;
-                                    break;
-                                }
-                                if !websocket_send_live(
-                                    &mut socket,
-                                    Message::Text(reply.into()),
-                                    &send_cancellation,
-                                )
-                                .await
-                                {
-                                    // A broken transport remains eligible for XEP-0198 resume.
-                                    break;
-                                }
-                            }
-                            Ok(Action::SendMany(replies)) => {
-                                let mut failed = false;
-                                for reply in replies {
-                                    if session.record_outbound(&reply).await.is_err() {
-                                        session.sm_resume_allowed = false;
-                                        let domain = session.state.local_domain().to_owned();
-                                        websocket_fatal_error(
-                                            &mut socket,
-                                            &domain,
-                                            opening,
-                                            crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                            &mut terminal_sequence,
-                                        ).await;
-                                        failed = true;
-                                        break;
-                                    }
-                                    if !websocket_send_live(
-                                        &mut socket,
-                                        Message::Text(reply.into()),
-                                        &send_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                }
-                                if failed {
-                                    break;
-                                }
-                            }
-                            Ok(Action::SendManyItems(items)) => {
-                                let mut failed = false;
-                                for item in items {
-                                    if !websocket_record_and_send_item(
-                                        &mut socket,
-                                        &mut session,
-                                        item,
-                                        opening,
-                                        &mut terminal_sequence,
-                                        &send_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                }
-                                if failed {
-                                    break;
-                                }
-                            }
-                            Ok(Action::SendManyThenActivate(replies)) => {
-                                let mut failed = false;
-                                for (index, reply) in replies.into_iter().enumerate() {
-                                    if session.record_outbound(&reply).await.is_err() {
-                                        session.sm_resume_allowed = false;
-                                        failed = true;
-                                        break;
-                                    }
-                                    if !websocket_send_live(
-                                        &mut socket,
-                                        Message::Text(reply.into()),
-                                        &send_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                    if index == 0
-                                        && !session
-                                            .publish_committed_authentication_and_route()
-                                            .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                }
-                                if failed {
-                                    break;
-                                }
-                            }
-                            Ok(Action::SendManyAndClose(replies)) => {
-                                session.sm_resume_allowed = false;
-                                websocket_send_many_and_close(
-                                    &mut socket,
-                                    replies,
-                                    true,
-                                    &mut terminal_sequence,
-                                )
-                                .await;
-                                break;
-                            }
-                            Ok(Action::Resume(payload)) => {
-                                let crate::xmpp::protocol::ResumeTransportParts {
-                                    control,
-                                    post_control,
-                                    replay,
-                                    activate_route,
-                                    transient_capacity: _resume_transport_capacity,
-                                } = payload.into_transport_parts();
-                                if session.record_outbound(&control).await.is_err() {
-                                    session.sm_resume_allowed = false;
-                                    let domain = session.state.local_domain().to_owned();
-                                    websocket_fatal_error(
-                                        &mut socket,
-                                        &domain,
-                                        opening,
-                                        crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                        &mut terminal_sequence,
-                                    ).await;
-                                    break;
-                                }
-                                if !websocket_send_live(
-                                    &mut socket,
-                                    Message::Text(control.into()),
-                                    &send_cancellation,
-                                )
-                                .await
-                                {
-                                    break;
-                                }
-                                if activate_route
-                                    && !session
-                                        .publish_committed_authentication_and_route()
-                                        .await
-                                {
-                                    break;
-                                }
-                                let mut failed = false;
-                                for nonza in post_control {
-                                    if session.record_outbound(&nonza).await.is_err() {
-                                        session.sm_resume_allowed = false;
-                                        failed = true;
-                                        break;
-                                    }
-                                    if !websocket_send_live(
-                                        &mut socket,
-                                        Message::Text(nonza.into()),
-                                        &send_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                }
-                                if failed {
-                                    break;
-                                }
-                                for stanza in replay {
-                                    if !websocket_send_live(
-                                        &mut socket,
-                                        Message::Text(stanza.into()),
-                                        &send_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                    session.record_replayed();
-                                }
-                                if failed {
-                                    break;
-                                }
-                            }
-                            Ok(Action::Close) => {
-                                session.sm_resume_allowed = false;
-                                websocket_orderly_close(
-                                    &mut socket,
-                                    true,
-                                    &mut terminal_sequence,
-                                ).await;
-                                break;
-                            }
-                            Ok(Action::CloseWith(reply)) => {
-                                session.sm_resume_allowed = false;
-                                let domain = session.state.local_domain().to_owned();
-                                websocket_fatal_error(
-                                    &mut socket,
-                                    &domain,
-                                    opening,
-                                    reply,
-                                    &mut terminal_sequence,
-                                ).await;
-                                break;
-                            }
-                            Ok(Action::None) => {}
-                            Ok(Action::StartTls) => {
-                                if !websocket_send_live(
-                                    &mut socket,
-                                    Message::Text("<failure xmlns='urn:ietf:params:xml:ns:xmpp-tls'><unexpected-request/></failure>".into()),
-                                        &send_cancellation,
-                                ).await {
-                                    break;
-                                }
-                            }
-                            Err(error) => {
-                                tracing::debug!(?error, "invalid WebSocket XMPP stanza");
-                                session.sm_resume_allowed = false;
-                                let domain = session.state.local_domain().to_owned();
-                                websocket_fatal_error(
-                                    &mut socket,
-                                    &domain,
-                                    opening,
-                                    crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                    &mut terminal_sequence,
-                                ).await;
-                                break;
-                            }
+                        if !websocket_action::apply(
+                            &mut socket,
+                            &mut session,
+                            action,
+                            opening,
+                            &mut terminal_sequence,
+                            &send_cancellation,
+                        )
+                        .await
+                        {
+                            break;
                         }
                         session.start_post_action_tasks();
                     },

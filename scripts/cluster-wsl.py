@@ -1472,10 +1472,17 @@ def run() -> None:
     fixture.check("type='result'" in shutdown_barrier, "shutdown CSI barrier did not complete")
     server_a_pid = int(os.environ["NORTHSTAR_CLUSTER_PID_A"])
     os.kill(server_a_pid, signal.SIGTERM)
-    # One connection can occupy several rooms; graceful shutdown emits 332
-    # for each of them.  Select the dedicated fixture room instead of taking
-    # whichever valid 332 happens to be queued first.
-    shutdown_presence, _ = alice_a.receive_until(f"from='{shutdown_room}/Alice'")
+    # Earlier self-presence can still be queued for this room. Wait for its
+    # shutdown notice while allowing notices for other rooms to arrive first.
+    shutdown_deadline = time.monotonic() + 10
+    shutdown_presence = ""
+    while time.monotonic() < shutdown_deadline:
+        frame, _ = alice_a.receive_until(
+            "code='332'", timeout=max(0.1, shutdown_deadline - time.monotonic())
+        )
+        if f"from='{shutdown_room}/Alice'" in frame:
+            shutdown_presence = frame
+            break
     fixture.check(
         "type='unavailable'" in shutdown_presence
         and "code='332'" in shutdown_presence,

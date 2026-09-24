@@ -423,9 +423,17 @@ pub struct PubSubAffiliation {
 }
 
 #[derive(Clone, Debug)]
-pub struct PubSubDiscoNode {
+pub struct PubSubRootDiscoNode {
     pub node: String,
     pub title: Option<String>,
+    pub index: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PubSubRootDiscoPage {
+    pub total: i64,
+    pub cursor_exists: bool,
+    pub nodes: Vec<PubSubRootDiscoNode>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -258,13 +258,6 @@ async fn root_disco_items(
     requester: &str,
     rsm: Option<&PubSubRsmRequest>,
 ) -> Result<PubSubReply> {
-    let total = usize::try_from(
-        state
-            .pubsub_service()
-            .visible_root_disco_count(requester)
-            .await?,
-    )
-    .map_err(|_| anyhow::anyhow!("visible PubSub root count exceeded platform bounds"))?;
     let max = rsm
         .and_then(|request| request.max)
         .unwrap_or(100)
@@ -275,44 +268,33 @@ async fn root_disco_items(
             .as_deref()
             .or_else(|| request.before.as_ref().and_then(|value| value.as_deref()))
     });
-    if let Some(cursor) = cursor {
-        if !state
-            .pubsub_service()
-            .visible_root_disco_cursor_exists(requester, cursor)
-            .await?
-        {
-            return Ok(PubSubReply::Error("item-not-found"));
-        }
-    }
     let backwards = rsm.is_some_and(|request| request.before.is_some());
-    let mut visible = if max == 0 {
-        Vec::new()
-    } else {
-        state
-            .pubsub_service()
-            .visible_root_disco_page(requester, cursor, backwards, max as i64)
-            .await?
-            .into_iter()
-            .map(|node| DiscoItem {
-                node: node.node,
-                title: node.title,
-                published_item: false,
-            })
-            .collect::<Vec<_>>()
-    };
-    if backwards {
-        visible.reverse();
+    let mut page = state
+        .pubsub_service()
+        .root_disco_page(requester, cursor, backwards, max as i64)
+        .await?;
+    if !page.cursor_exists {
+        return Ok(PubSubReply::Error("item-not-found"));
     }
-    let first_index = match visible.first() {
-        Some(first) => usize::try_from(
-            state
-                .pubsub_service()
-                .visible_root_disco_index(requester, &first.node)
-                .await?,
-        )
-        .map_err(|_| anyhow::anyhow!("visible PubSub root index exceeded platform bounds"))?,
+    let total = usize::try_from(page.total)
+        .map_err(|_| anyhow::anyhow!("visible PubSub root count exceeded platform bounds"))?;
+    if backwards {
+        page.nodes.reverse();
+    }
+    let first_index = match page.nodes.first() {
+        Some(first) => usize::try_from(first.index)
+            .map_err(|_| anyhow::anyhow!("visible PubSub root index exceeded platform bounds"))?,
         None => 0,
     };
+    let visible = page
+        .nodes
+        .into_iter()
+        .map(|node| DiscoItem {
+            node: node.node,
+            title: node.title,
+            published_item: false,
+        })
+        .collect::<Vec<_>>();
     // A service-side default limit is always finite. If an old client omitted
     // RSM and the result was truncated, include the notation recommended by
     // XEP-0059/XEP-0060 so it can discover and continue the full set.

@@ -860,15 +860,6 @@ impl From<db::PubSubAffiliation> for PubSubAffiliation {
     }
 }
 
-impl From<db::PubSubDiscoNode> for PubSubDiscoNode {
-    fn from(value: db::PubSubDiscoNode) -> Self {
-        Self {
-            node: value.node,
-            title: value.title,
-        }
-    }
-}
-
 impl From<db::SubscriptionAuthorizationOutcome> for SubscriptionAuthorizationOutcome {
     fn from(value: db::SubscriptionAuthorizationOutcome) -> Self {
         match value {
@@ -1400,45 +1391,6 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
             .await
             .map_err(map_database_busy)
     }
-    async fn visible_root_disco_count(&self, requester: &str) -> Result<i64> {
-        let outcome: Result<_> =
-            async { db::visible_root_disco_count(&self.pool, requester).await }.await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn visible_root_disco_cursor_exists(
-        &self,
-        requester: &str,
-        cursor: &str,
-    ) -> Result<bool> {
-        let outcome: Result<_> =
-            async { db::visible_root_disco_cursor_exists(&self.pool, requester, cursor).await }
-                .await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn visible_root_disco_index(&self, requester: &str, node: &str) -> Result<i64> {
-        let outcome: Result<_> =
-            async { db::visible_root_disco_index(&self.pool, requester, node).await }.await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn visible_root_disco_page(
-        &self,
-        requester: &str,
-        cursor: Option<&str>,
-        backwards: bool,
-        limit: i64,
-    ) -> Result<Vec<PubSubDiscoNode>> {
-        let outcome: Result<_> = async {
-            Ok(
-                db::visible_root_disco_page(&self.pool, requester, cursor, backwards, limit)
-                    .await?
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            )
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
     async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
         let outcome: Result<_> = async {
             Ok(db::get_node_affiliation(&self.pool, node_id, requester)
@@ -1510,6 +1462,19 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
         }
         .await;
         outcome.map_err(map_database_busy)
+    }
+}
+impl PubSubRootDiscoveryQueryRepository for PostgresPubSubRepository {
+    async fn root_disco_page(
+        &self,
+        requester: &str,
+        cursor: Option<&str>,
+        backwards: bool,
+        limit: i64,
+    ) -> Result<PubSubRootDiscoPage> {
+        db::root_disco_page(&self.pool, requester, cursor, backwards, limit)
+            .await
+            .map_err(map_database_busy)
     }
 }
 impl PubSubItemRepository for PostgresPubSubRepository {

@@ -39,27 +39,6 @@ pub trait PubSubNodeRepository: Send + Sync {
         &self,
         collection_id: Uuid,
     ) -> impl std::future::Future<Output = Result<Vec<PubSubNode>>> + Send;
-    fn visible_root_disco_count(
-        &self,
-        requester: &str,
-    ) -> impl std::future::Future<Output = Result<i64>> + Send;
-    fn visible_root_disco_cursor_exists(
-        &self,
-        requester: &str,
-        cursor: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
-    fn visible_root_disco_index(
-        &self,
-        requester: &str,
-        node: &str,
-    ) -> impl std::future::Future<Output = Result<i64>> + Send;
-    fn visible_root_disco_page(
-        &self,
-        requester: &str,
-        cursor: Option<&str>,
-        backwards: bool,
-        limit: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<PubSubDiscoNode>>> + Send;
     fn is_owner(
         &self,
         node_id: Uuid,
@@ -84,6 +63,17 @@ pub trait PubSubNodeRepository: Send + Sync {
         child: &PubSubNode,
         requester: &str,
     ) -> impl std::future::Future<Output = Result<CollectionUpdateOutcome>> + Send;
+}
+/// Read-only root discovery. Count, cursor admission and rows come from one
+/// authorized database statement rather than independent snapshots.
+pub trait PubSubRootDiscoveryQueryRepository: Send + Sync {
+    fn root_disco_page(
+        &self,
+        requester: &str,
+        cursor: Option<&str>,
+        backwards: bool,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<PubSubRootDiscoPage>> + Send;
 }
 pub trait PubSubItemRepository: Send + Sync {
     fn purge_node_as_owner_with_outbox(
@@ -487,6 +477,7 @@ pub trait PepAffiliationRepository: Send + Sync {
 }
 pub trait PubSubRepository:
     PubSubNodeRepository
+    + PubSubRootDiscoveryQueryRepository
     + PubSubItemRepository
     + PubSubSubscriptionRepository
     + PubSubAffiliationRepository
@@ -499,6 +490,7 @@ pub trait PubSubRepository:
 }
 impl<T> PubSubRepository for T where
     T: PubSubNodeRepository
+        + PubSubRootDiscoveryQueryRepository
         + PubSubItemRepository
         + PubSubSubscriptionRepository
         + PubSubAffiliationRepository

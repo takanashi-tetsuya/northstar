@@ -1910,16 +1910,17 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
     assert_eq!(replay_page_sizes, vec![100, 100, 100, 100, 100, 14]);
 
     let root_total = usize::try_from(
-        visible_root_disco_count(&pool, &diamond_subscriber)
+        root_disco_page(&pool, &diamond_subscriber, None, false, 0)
             .await
-            .unwrap(),
+            .unwrap()
+            .total,
     )
     .unwrap();
     assert!(root_total > 512);
     let mut root_cursor = None;
     let mut root_seen = std::collections::BTreeSet::new();
     loop {
-        let page = visible_root_disco_page(
+        let page = root_disco_page(
             &pool,
             &diamond_subscriber,
             root_cursor.as_deref(),
@@ -1928,10 +1929,13 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
         )
         .await
         .unwrap();
-        if page.is_empty() {
+        assert!(page.cursor_exists);
+        assert_eq!(usize::try_from(page.total).unwrap(), root_total);
+        if page.nodes.is_empty() {
             break;
         }
-        for node in page {
+        for node in page.nodes {
+            assert_eq!(usize::try_from(node.index).unwrap(), root_seen.len());
             assert!(
                 root_seen.insert(node.node.clone()),
                 "root disco keyset page returned a duplicate node"
@@ -1941,22 +1945,23 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
     }
     assert_eq!(root_seen.len(), root_total);
     assert!(root_seen.contains("serverinfo"));
-    assert!(
-        visible_root_disco_cursor_exists(&pool, &diamond_subscriber, "serverinfo")
-            .await
-            .unwrap()
-    );
+    let serverinfo = root_disco_page(&pool, &diamond_subscriber, Some("serverinfo"), true, 1)
+        .await
+        .unwrap();
+    assert!(serverinfo.cursor_exists);
+    assert_eq!(usize::try_from(serverinfo.total).unwrap(), root_total);
     assert_eq!(
-        usize::try_from(
-            visible_root_disco_index(&pool, &diamond_subscriber, "serverinfo")
-                .await
-                .unwrap()
-        )
-        .unwrap(),
+        usize::try_from(serverinfo.nodes[0].index).unwrap() + 1,
         root_seen
             .iter()
             .take_while(|node| node.as_str() < "serverinfo")
             .count()
+    );
+    assert!(
+        !root_disco_page(&pool, &diamond_subscriber, Some("missing-root"), false, 0)
+            .await
+            .unwrap()
+            .cursor_exists
     );
     let pending_jid = format!("pending-{suffix}@example.test/desktop");
     set_subscription(&pool, first_id, &pending_jid, "pending")

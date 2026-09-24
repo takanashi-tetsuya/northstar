@@ -93,10 +93,15 @@ input in the application layer, keeps the existing atomic DB transaction path, a
 returns a typed outcome + `content_changed` flag. `src/xmpp/protocol/pep.rs`
 now maps that typed result to protocol outcomes and does not own a publish DB
 pipeline.
+Root PubSub discovery now uses a read-only repository port returning its
+authorized count, cursor result, page and index from one PostgreSQL statement.
+This replaces four separately observed snapshots and preserves zero-length
+and reverse RSM pages.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
-same command/result boundary so XML handlers have zero commit composition.
+same command/result boundary, then separate the other read routes into query
+capabilities. XML handlers must retain zero commit composition.
 
 ### Packet 2 — Complete room convergence
 

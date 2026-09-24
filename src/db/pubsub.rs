@@ -57,13 +57,9 @@ const EDGE_EXCEEDS_MAX_DEPTH_SQL: &str = "WITH RECURSIVE
          + 1
          + COALESCE((SELECT MAX(depth) FROM descendants), 0) > 64";
 
-pub use northstar_pubsub_core::{PubSubNode, PubSubNodeConfig};
-
-#[derive(Clone, Debug)]
-pub struct PubSubDiscoNode {
-    pub node: String,
-    pub title: Option<String>,
-}
+pub use northstar_pubsub_core::{
+    PubSubNode, PubSubNodeConfig, PubSubRootDiscoNode, PubSubRootDiscoPage,
+};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct PubSubItem {
@@ -3534,106 +3530,20 @@ pub async fn collection_visible_items(
         .collect())
 }
 
-/// Visible root discovery is filtered and paged in PostgreSQL. The synthetic
-/// serverinfo item participates in the same lexical UID order, so XEP-0059
-/// cursors and counts remain exact without loading every tenant's nodes.
-pub async fn visible_root_disco_count(pool: &PgPool, requester: &str) -> Result<i64> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    sqlx::query_scalar(
-        "WITH visible AS (
-             SELECT n.node
-               FROM pubsub_nodes n
-              WHERE NOT EXISTS (
-                        SELECT 1 FROM pubsub_collection_members e
-                         WHERE e.child_node_id=n.id
-                    )
-                AND NOT EXISTS (
-                        SELECT 1 FROM pubsub_affiliations denied
-                         WHERE denied.node_id=n.id AND denied.jid=$1
-                           AND denied.affiliation='outcast'
-                    )
-                AND (
-                    n.access_model='open'
-                    OR EXISTS (
-                        SELECT 1 FROM pubsub_affiliations allowed
-                         WHERE allowed.node_id=n.id AND allowed.jid=$1
-                           AND allowed.affiliation IN ('owner','publisher','member')
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM pubsub_subscriptions s
-                         WHERE s.node_id=n.id
-                           AND split_part(s.jid,'/',1)=$1
-                           AND s.state='subscribed'
-                           AND (s.expire IS NULL OR s.expire>NOW())
-                    )
-                )
-             UNION ALL SELECT 'serverinfo'
-         ) SELECT COUNT(*) FROM visible",
-    )
-    .bind(requester)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
-}
-
-pub async fn visible_root_disco_cursor_exists(
-    pool: &PgPool,
-    requester: &str,
-    cursor: &str,
-) -> Result<bool> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    sqlx::query_scalar(
-        "WITH visible AS (
-             SELECT n.node
-               FROM pubsub_nodes n
-              WHERE NOT EXISTS (SELECT 1 FROM pubsub_collection_members e WHERE e.child_node_id=n.id)
-                AND NOT EXISTS (SELECT 1 FROM pubsub_affiliations denied WHERE denied.node_id=n.id AND denied.jid=$1 AND denied.affiliation='outcast')
-                AND (n.access_model='open'
-                     OR EXISTS (SELECT 1 FROM pubsub_affiliations allowed WHERE allowed.node_id=n.id AND allowed.jid=$1 AND allowed.affiliation IN ('owner','publisher','member'))
-                     OR EXISTS (SELECT 1 FROM pubsub_subscriptions s WHERE s.node_id=n.id AND split_part(s.jid,'/',1)=$1 AND s.state='subscribed' AND (s.expire IS NULL OR s.expire>NOW())))
-             UNION ALL SELECT 'serverinfo'
-         ) SELECT EXISTS(SELECT 1 FROM visible WHERE node=$2)",
-    )
-    .bind(requester)
-    .bind(cursor)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
-}
-
-pub async fn visible_root_disco_index(pool: &PgPool, requester: &str, node: &str) -> Result<i64> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    sqlx::query_scalar(
-        "WITH visible AS (
-             SELECT n.node
-               FROM pubsub_nodes n
-              WHERE NOT EXISTS (SELECT 1 FROM pubsub_collection_members e WHERE e.child_node_id=n.id)
-                AND NOT EXISTS (SELECT 1 FROM pubsub_affiliations denied WHERE denied.node_id=n.id AND denied.jid=$1 AND denied.affiliation='outcast')
-                AND (n.access_model='open'
-                     OR EXISTS (SELECT 1 FROM pubsub_affiliations allowed WHERE allowed.node_id=n.id AND allowed.jid=$1 AND allowed.affiliation IN ('owner','publisher','member'))
-                     OR EXISTS (SELECT 1 FROM pubsub_subscriptions s WHERE s.node_id=n.id AND split_part(s.jid,'/',1)=$1 AND s.state='subscribed' AND (s.expire IS NULL OR s.expire>NOW())))
-             UNION ALL SELECT 'serverinfo'
-         ) SELECT COUNT(*) FROM visible WHERE node<$2",
-    )
-    .bind(requester)
-    .bind(node)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
-}
-
-pub async fn visible_root_disco_page(
+/// Count, cursor admission, page and index share one authorized statement
+/// snapshot. A concurrent node or ACL change cannot split their results.
+pub async fn root_disco_page(
     pool: &PgPool,
     requester: &str,
     cursor: Option<&str>,
     backwards: bool,
     limit: i64,
-) -> Result<Vec<PubSubDiscoNode>> {
+) -> Result<PubSubRootDiscoPage> {
     let requester = crate::jid::canonical_bare_key(requester)?;
     let order = if backwards { "DESC" } else { "ASC" };
     let comparison = if backwards { "<" } else { ">" };
     let sql = format!(
-        "WITH visible AS (
+        "WITH visible AS MATERIALIZED (
              SELECT n.node,n.title
                FROM pubsub_nodes n
               WHERE NOT EXISTS (SELECT 1 FROM pubsub_collection_members e WHERE e.child_node_id=n.id)
@@ -3642,23 +3552,47 @@ pub async fn visible_root_disco_page(
                      OR EXISTS (SELECT 1 FROM pubsub_affiliations allowed WHERE allowed.node_id=n.id AND allowed.jid=$1 AND allowed.affiliation IN ('owner','publisher','member'))
                      OR EXISTS (SELECT 1 FROM pubsub_subscriptions s WHERE s.node_id=n.id AND split_part(s.jid,'/',1)=$1 AND s.state='subscribed' AND (s.expire IS NULL OR s.expire>NOW())))
              UNION ALL SELECT 'serverinfo',NULL::TEXT
-         ) SELECT node,title FROM visible
-            WHERE ($2::TEXT IS NULL OR node {comparison} $2)
-            ORDER BY node {order} LIMIT $3"
+         ), ranked AS MATERIALIZED (
+             SELECT node,title,ROW_NUMBER() OVER (ORDER BY node)-1 AS ordinal
+               FROM visible
+         ), summary AS (
+             SELECT COUNT(*) AS total,
+                    ($2::TEXT IS NULL OR EXISTS(SELECT 1 FROM ranked WHERE node=$2)) AS cursor_exists
+               FROM ranked
+         )
+         SELECT summary.total,summary.cursor_exists,page.node,page.title,page.ordinal
+           FROM summary
+           LEFT JOIN LATERAL (
+               SELECT node,title,ordinal FROM ranked
+                WHERE ($2::TEXT IS NULL OR node {comparison} $2)
+                ORDER BY node {order} LIMIT $3
+           ) page ON TRUE"
     );
     let rows = sqlx::query(&sql)
         .bind(requester)
         .bind(cursor)
-        .bind(limit.clamp(1, 1_000))
+        .bind(limit.clamp(0, 1_000))
         .fetch_all(pool)
         .await?;
-    Ok(rows
+    let summary = rows
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("root disco query returned no summary"))?;
+    let nodes = rows
         .iter()
-        .map(|row| PubSubDiscoNode {
-            node: row.get("node"),
-            title: row.get("title"),
+        .filter_map(|row| {
+            row.get::<Option<String>, _>("node")
+                .map(|node| PubSubRootDiscoNode {
+                    node,
+                    title: row.get("title"),
+                    index: row.get("ordinal"),
+                })
         })
-        .collect())
+        .collect();
+    Ok(PubSubRootDiscoPage {
+        total: summary.get("total"),
+        cursor_exists: summary.get("cursor_exists"),
+        nodes,
+    })
 }
 
 #[cfg(test)]

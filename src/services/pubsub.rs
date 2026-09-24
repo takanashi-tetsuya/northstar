@@ -38,9 +38,9 @@ pub(crate) use northstar_pubsub_core::{
     PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscription,
     PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
     PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
-    PubSubDeleteNodeWrite, PubSubDiscoNode, PubSubItem, PubSubNode, PubSubNodeConfig,
-    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome,
-    PubSubRetractWrite, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
+    PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubPublishOutcome,
+    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
+    PubSubRootDiscoPage, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
     PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
     PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome,
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
@@ -50,7 +50,8 @@ pub(crate) use northstar_pubsub_core::{
 pub(crate) use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemRepository, PepNodeRepository, PepSubscriptionRepository,
     PubSubAffiliationRepository, PubSubItemRepository, PubSubNodeRepository,
-    PubSubOutboxRepository, PubSubRepository, PubSubSubscriptionRepository,
+    PubSubOutboxRepository, PubSubRepository, PubSubRootDiscoveryQueryRepository,
+    PubSubSubscriptionRepository,
 };
 pub(crate) use northstar_pubsub_core::{
     canonical_profile_item_id, default_pep_node_config, ClaimedPubSubOutboxDelivery,
@@ -998,36 +999,15 @@ impl<R: PubSubRepository> PubSubService<R> {
             .collection_visible_items(collection_id, requester, global_item_limit, xml_byte_limit)
             .await
     }
-    pub(crate) async fn visible_root_disco_count(&self, requester: &str) -> Result<i64> {
-        self.repository.visible_root_disco_count(requester).await
-    }
-    pub(crate) async fn visible_root_disco_cursor_exists(
-        &self,
-        requester: &str,
-        cursor: &str,
-    ) -> Result<bool> {
-        self.repository
-            .visible_root_disco_cursor_exists(requester, cursor)
-            .await
-    }
-    pub(crate) async fn visible_root_disco_index(
-        &self,
-        requester: &str,
-        node: &str,
-    ) -> Result<i64> {
-        self.repository
-            .visible_root_disco_index(requester, node)
-            .await
-    }
-    pub(crate) async fn visible_root_disco_page(
+    pub(crate) async fn root_disco_page(
         &self,
         requester: &str,
         cursor: Option<&str>,
         backwards: bool,
         limit: i64,
-    ) -> Result<Vec<PubSubDiscoNode>> {
+    ) -> Result<PubSubRootDiscoPage> {
         self.repository
-            .visible_root_disco_page(requester, cursor, backwards, limit)
+            .root_disco_page(requester, cursor, backwards, limit)
             .await
     }
     pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {

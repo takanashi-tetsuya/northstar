@@ -2095,6 +2095,10 @@
       ],
       [
         "northstar-archive-application",
+        "northstar-xep-0313"
+      ],
+      [
+        "northstar-archive-application",
         "northstar-xmpp-types"
       ],
       [

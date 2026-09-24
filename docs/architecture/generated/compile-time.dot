@@ -979,6 +979,7 @@ digraph compile_time {
   "northstar-abuse-policy" -> "uuid";
   "northstar-archive-application" -> "chrono";
   "northstar-archive-application" -> "northstar-archive-core";
+  "northstar-archive-application" -> "northstar-xep-0313";
   "northstar-archive-application" -> "northstar-xmpp-types";
   "northstar-archive-application" -> "uuid";
   "northstar-archive-core" -> "chrono";

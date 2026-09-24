@@ -200,3 +200,6 @@ cargo test --locked --offline \
 cargo test --locked --offline \
   db::cluster_muc::tests::postgres_admin_batch_is_atomic_under_replay_and_failure \
   -- --ignored --exact --nocapture
+cargo test --locked --offline \
+  db::cluster_muc::tests::federated_rebind_is_atomic_and_fences_the_old_connection \
+  -- --ignored --exact --nocapture

@@ -855,6 +855,15 @@ pub(crate) trait MucRepository:
         sm_session_id: Option<Uuid>,
         lease: Duration,
     ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
+    fn rebind_federated_cluster_occupancy(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        authenticated_domain: &str,
+        new_connection_uuid: Uuid,
+        lease: Duration,
+    ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
     fn disconnect_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
@@ -1641,6 +1650,27 @@ impl<R: MucRepository> MucService<R> {
                 new_connection_uuid,
                 new_connection_epoch,
                 sm_session_id,
+                lease,
+            )
+            .await
+    }
+
+    pub(crate) async fn rebind_federated_cluster_occupancy(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        authenticated_domain: &str,
+        new_connection_uuid: Uuid,
+        lease: Duration,
+    ) -> Result<ClusterMucTransitionOutcome> {
+        self.repository
+            .rebind_federated_cluster_occupancy(
+                operation_id,
+                target,
+                owner_node_id,
+                authenticated_domain,
+                new_connection_uuid,
                 lease,
             )
             .await

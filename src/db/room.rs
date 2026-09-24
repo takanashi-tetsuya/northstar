@@ -1263,6 +1263,28 @@ impl MucRepository for PostgresMucRepository {
         .into())
     }
 
+    async fn rebind_federated_cluster_occupancy(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        authenticated_domain: &str,
+        new_connection_uuid: Uuid,
+        lease: Duration,
+    ) -> Result<ClusterMucTransitionOutcome> {
+        Ok(db::rebind_federated_cluster_muc_occupancy(
+            &self.pool,
+            operation_id,
+            &target.into(),
+            owner_node_id,
+            authenticated_domain,
+            new_connection_uuid,
+            lease,
+        )
+        .await?
+        .into())
+    }
+
     async fn disconnect_local_cluster_occupancy(
         &self,
         operation_id: Uuid,

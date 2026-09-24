@@ -704,6 +704,13 @@ visibility decision while retaining their distinct database locks. D1 no
 longer stores a second WebSocket flag alongside the transport kind. These are
 completed slices, not packet exit claims.
 
+Federated MUC now rebinds an existing local occupant to a new authenticated
+S2S connection through an exact PostgreSQL occupancy transition. The
+transaction rechecks the remote affiliation, advances the connection fence and
+transfers pending delivery before the local projection changes. This covers a
+reconnect to the same owning node; cross-node recovery and third-party
+interoperability remain part of `EXT-CLUSTER` and `EXT-FEDERATION`.
+
 R1 already has a restartable local/S3 recovery command, durable XID and
 same-transaction markers, and isolated pre/post-commit hard-kill drills. Its
 remaining work is protected rollback storage, independent key/state recovery

@@ -392,6 +392,185 @@ async fn postgres_failure_fixture_covers_cluster_muc_authority() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the disposable schema created by scripts/muc-db-wsl.sh"]
+async fn federated_rebind_is_atomic_and_fences_the_old_connection() {
+    use super::super::muc::get_or_create_muc_room;
+
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("run this ignored test through scripts/muc-db-wsl.sh");
+    assert!(std::env::var_os("XMPP_TEST_CREATED_SCHEMA_LOG").is_some());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+    let creator = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,'rebind-owner','test')")
+        .bind(creator)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (room, _) = get_or_create_muc_room(
+        &pool,
+        "federated-rebind",
+        creator,
+        "rebind-owner@local.test/Phone",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE muc_rooms SET configuration_state='active',
+                configuration_owner_jid=NULL,configuration_expires_at=NULL WHERE id=$1",
+    )
+    .bind(room.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let config_version: i64 =
+        sqlx::query_scalar("SELECT config_version FROM muc_rooms WHERE id=$1")
+            .bind(room.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let old_connection = Uuid::new_v4();
+    let new_connection = Uuid::new_v4();
+    let principal = ClusterMucPrincipal::Federated {
+        bare_jid: "bob@remote.test".into(),
+        authenticated_domain: "remote.test".into(),
+    };
+    let joined = claim_cluster_muc_occupancy(
+        &pool,
+        ClusterMucJoin {
+            operation_id: Uuid::new_v4(),
+            room_id: room.id,
+            expected_room_epoch: room.room_epoch,
+            expected_config_version: config_version,
+            principal,
+            full_jid: "bob@remote.test/Phone",
+            nick: "Bob",
+            owner_node_id: "rebind-node",
+            connection_uuid: old_connection,
+            connection_epoch: 1,
+            sm_session_id: None,
+            occupant_incarnation: Uuid::new_v4(),
+            presence_payload: "<x xmlns='http://jabber.org/protocol/muc'/>",
+            lease: Duration::from_secs(90),
+        },
+    )
+    .await
+    .unwrap();
+    let ClusterMucJoinOutcome::Joined(joined) = joined else {
+        panic!("federated actor could not join");
+    };
+    let old_target = ClusterMucOccupancyTarget::from(&joined);
+    assert!(rebind_federated_cluster_muc_occupancy(
+        &pool,
+        Uuid::new_v4(),
+        &old_target,
+        "rebind-node",
+        "evil.test",
+        new_connection,
+        Duration::from_secs(90),
+    )
+    .await
+    .is_err());
+    sqlx::query(
+        "INSERT INTO muc_external_affiliations(room_id,jid,affiliation)
+         VALUES($1,'bob@remote.test','outcast')",
+    )
+    .bind(room.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rebind_federated_cluster_muc_occupancy(
+            &pool,
+            Uuid::new_v4(),
+            &old_target,
+            "rebind-node",
+            "remote.test",
+            new_connection,
+            Duration::from_secs(90),
+        )
+        .await
+        .unwrap(),
+        ClusterMucTransitionOutcome::Unauthorized
+    );
+    sqlx::query("DELETE FROM muc_external_affiliations WHERE room_id=$1 AND jid=$2")
+        .bind(room.id)
+        .bind("bob@remote.test")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE muc_rooms SET members_only=TRUE WHERE id=$1")
+        .bind(room.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rebind_federated_cluster_muc_occupancy(
+            &pool,
+            Uuid::new_v4(),
+            &old_target,
+            "rebind-node",
+            "remote.test",
+            new_connection,
+            Duration::from_secs(90),
+        )
+        .await
+        .unwrap(),
+        ClusterMucTransitionOutcome::Unauthorized
+    );
+    sqlx::query("UPDATE muc_rooms SET members_only=FALSE WHERE id=$1")
+        .bind(room.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let operation_id = Uuid::new_v4();
+    assert_eq!(
+        rebind_federated_cluster_muc_occupancy(
+            &pool,
+            operation_id,
+            &old_target,
+            "rebind-node",
+            "remote.test",
+            new_connection,
+            Duration::from_secs(90),
+        )
+        .await
+        .unwrap(),
+        ClusterMucTransitionOutcome::Applied
+    );
+    let (connection, epoch): (Uuid, i64) = sqlx::query_as(
+        "SELECT connection_uuid,connection_epoch FROM cluster_muc_occupancies
+          WHERE room_id=$1 AND occupant_incarnation=$2",
+    )
+    .bind(room.id)
+    .bind(joined.occupant_incarnation)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((connection, epoch), (new_connection, 2));
+    assert_eq!(
+        disconnect_cluster_muc_occupancy(&pool, Uuid::new_v4(), &old_target, "rebind-node")
+            .await
+            .unwrap(),
+        ClusterMucTransitionOutcome::Stale
+    );
+    let (kind, details): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT operation_kind,details FROM cluster_muc_operations WHERE operation_id=$1",
+    )
+    .bind(operation_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kind, "resume");
+    assert_eq!(details["connection_rebind"], true);
+    pool.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the disposable schema created by scripts/muc-db-wsl.sh"]
 async fn postgres_admin_batch_is_atomic_under_replay_and_failure() {
     use super::super::muc::{get_or_create_muc_room, MucAffiliationTarget};
     use ClusterMucAdminBatchOutcome as Outcome;

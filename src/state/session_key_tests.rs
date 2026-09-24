@@ -5,10 +5,11 @@ use super::{
     ephemeral_api_control_secret, federation_rule_matches, insert_restored_muc_occupant,
     move_local_muc_nickname_exact_in, muc_actor_identity_matches, muc_departure_identity_matches,
     muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-    publish_local_muc_join_if_vacant_in, refresh_local_muc_policy_exact_in,
-    refresh_local_muc_presence_exact_in, remove_local_muc_occupant_exact_from,
-    runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
-    session_lookup, set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
+    publish_local_muc_join_if_vacant_in, rebind_local_federated_muc_occupant_exact_in,
+    refresh_local_muc_policy_exact_in, refresh_local_muc_presence_exact_in,
+    remove_local_muc_occupant_exact_from, runtime_control_startup_retry_delay,
+    seal_suspended_muc_buffer, service_control_applies, session_lookup,
+    set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
     snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
     suspended_muc_resume_actor_matches, suspended_occupant_is_created,
     transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
@@ -1177,6 +1178,47 @@ fn presence_refresh_rejects_reused_or_suspended_transport() {
         &occupants.get(&key).unwrap().endpoint,
         MucOccupantEndpoint::Suspended(_)
     ));
+}
+
+#[test]
+fn federated_rebind_fences_old_disconnect_and_reused_nickname() {
+    let old_connection = uuid::Uuid::new_v4();
+    let new_connection = uuid::Uuid::new_v4();
+    let mut old = test_muc_occupant(
+        "alice@remote.example.test/Phone",
+        old_connection,
+        uuid::Uuid::new_v4(),
+    );
+    old.endpoint = MucOccupantEndpoint::Federated {
+        authenticated_domain: "remote.example.test".to_owned(),
+        connection_id: old_connection,
+    };
+    let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+    let occupants = DashMap::new();
+    occupants.insert(key.clone(), old.clone());
+
+    let rebound = rebind_local_federated_muc_occupant_exact_in(&occupants, &old, new_connection)
+        .expect("the exact federated actor can rebind");
+    assert_eq!(rebound.connection_id, new_connection);
+    assert!(remove_local_muc_occupant_exact_from(&occupants, (&old).into()).is_none());
+    assert_eq!(occupants.get(&key).unwrap().connection_id, new_connection);
+
+    let replacement = test_muc_occupant(&old.full_jid, uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    occupants.insert(key.clone(), replacement.clone());
+    assert!(
+        rebind_local_federated_muc_occupant_exact_in(&occupants, &old, new_connection).is_none()
+    );
+    assert_eq!(
+        occupants.get(&key).unwrap().cluster_epoch,
+        replacement.cluster_epoch
+    );
+
+    occupants.remove(&key);
+    assert_eq!(
+        publish_local_muc_join_if_vacant_in(&occupants, &rebound),
+        LocalMucJoinPublication::Published
+    );
+    assert_eq!(occupants.get(&key).unwrap().connection_id, new_connection);
 }
 
 #[test]

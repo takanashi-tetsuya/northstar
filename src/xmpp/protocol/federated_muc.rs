@@ -887,11 +887,102 @@ async fn federated_muc_presence_owned(
             MucOccupantEndpoint::Federated { connection_id: owner, .. }
                 if *owner == connection_id && occupant.connection_id == connection_id
         );
-        if !federated_endpoint_matches(&occupant, authenticated_domain) || !exact_connection {
+        if !federated_endpoint_matches(&occupant, authenticated_domain) {
             tracing::debug!(room=%room_jid, existing_connection_id=%occupant.connection_id,
                 incoming_connection_id=%connection_id, exact_connection,
                 "federated MUC presence rejected an existing occupant endpoint");
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+        }
+        if !exact_connection {
+            if !is_idempotent_remote_join(&occupant, authenticated_domain, &actor_full_jid, nick) {
+                return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+            }
+            let mut rebind_operation = None;
+            if state.federated_muc_pg_authority_enabled() {
+                state.federated_muc_admit_mutation()?;
+                let Some(room) = state
+                    .muc_service()
+                    .federated_room_snapshot(localpart(&room_jid))
+                    .await?
+                else {
+                    return Ok(federated_error(
+                        &request.stanza,
+                        from,
+                        "cancel",
+                        "item-not-found",
+                    ));
+                };
+                let Some(target) = state
+                    .muc_service()
+                    .local_cluster_occupancy_target(
+                        room.id,
+                        occupant.cluster_epoch,
+                        occupant.connection_id,
+                    )
+                    .await?
+                else {
+                    return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+                };
+                let operation_id = uuid::Uuid::new_v4();
+                match state
+                    .muc_service()
+                    .rebind_federated_cluster_occupancy(
+                        operation_id,
+                        &target,
+                        state.federated_muc_owner_node_id(),
+                        authenticated_domain,
+                        connection_id,
+                        std::time::Duration::from_secs(90),
+                    )
+                    .await?
+                {
+                    ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {
+                        rebind_operation = Some(operation_id);
+                    }
+                    ClusterMucTransitionOutcome::Unauthorized => {
+                        return Ok(federated_error(
+                            &request.stanza,
+                            from,
+                            "auth",
+                            "not-authorized",
+                        ));
+                    }
+                    _ => {
+                        return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+                    }
+                }
+            }
+            if let Some(operation_id) = rebind_operation {
+                if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
+                    tracing::warn!(?error, %operation_id, room=%room_jid,
+                        "federated MUC rebind committed; polling will deliver its event");
+                }
+            }
+            let rebound = if let Some(rebound) =
+                state.rebind_local_federated_muc_occupant_exact(&occupant, connection_id)
+            {
+                rebound
+            } else {
+                // The old stream may have removed its local entry after the
+                // PostgreSQL commit. Restore only an empty slot; never replace
+                // a newer incarnation or a different connection.
+                let mut replacement = occupant.clone();
+                replacement.connection_id = connection_id;
+                replacement.endpoint = MucOccupantEndpoint::Federated {
+                    authenticated_domain: authenticated_domain.to_owned(),
+                    connection_id,
+                };
+                match state.publish_local_muc_join_if_vacant(&replacement) {
+                    crate::state::LocalMucJoinPublication::Published
+                    | crate::state::LocalMucJoinPublication::AlreadyPublished => replacement,
+                    crate::state::LocalMucJoinPublication::Occupied => {
+                        tracing::warn!(room=%room_jid, %nick,
+                            "committed federated MUC rebind found a different local projection");
+                        return Ok(None);
+                    }
+                }
+            };
+            occupant = rebound;
         }
         if occupant.nick != nick {
             let room = if let Some(room) = guarded_room.as_ref() {

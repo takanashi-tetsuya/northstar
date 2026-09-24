@@ -1551,6 +1551,35 @@ fn refresh_local_muc_presence_exact_in(
     .flatten()
 }
 
+fn rebind_local_federated_muc_occupant_exact_in(
+    occupants: &DashMap<String, MucOccupant>,
+    old: &MucOccupant,
+    new_connection_id: uuid::Uuid,
+) -> Option<MucOccupant> {
+    let MucOccupantEndpoint::Federated {
+        authenticated_domain,
+        ..
+    } = &old.endpoint
+    else {
+        return None;
+    };
+    if new_connection_id.is_nil() || new_connection_id == old.connection_id {
+        return None;
+    }
+    with_local_muc_occupant_exact(occupants, old.into(), |current| {
+        if !muc_presence_endpoint_matches(current, old) {
+            return None;
+        }
+        current.connection_id = new_connection_id;
+        current.endpoint = MucOccupantEndpoint::Federated {
+            authenticated_domain: authenticated_domain.clone(),
+            connection_id: new_connection_id,
+        };
+        Some(current.clone())
+    })
+    .flatten()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LocalMucNicknameMove {
     Published,
@@ -5820,6 +5849,16 @@ impl AppState {
         apply_policy: bool,
     ) -> Option<MucOccupant> {
         refresh_local_muc_presence_exact_in(&self.muc_occupants, prepared, apply_policy)
+    }
+
+    /// Update only the exact old federated actor after PostgreSQL commits a
+    /// connection rebind. A late old-stream disconnect cannot remove it.
+    pub(crate) fn rebind_local_federated_muc_occupant_exact(
+        &self,
+        old: &MucOccupant,
+        new_connection_id: uuid::Uuid,
+    ) -> Option<MucOccupant> {
+        rebind_local_federated_muc_occupant_exact_in(&self.muc_occupants, old, new_connection_id)
     }
 
     /// Move a nickname after the caller's room gate or PG transition. A local

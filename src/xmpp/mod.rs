@@ -3,6 +3,7 @@ pub(crate) mod extensions;
 pub(crate) mod framing;
 pub(crate) mod protocol;
 pub(crate) mod stanza_validation;
+mod tcp_action;
 pub(crate) mod xml_builder;
 pub(crate) mod xml_util;
 
@@ -596,96 +597,14 @@ where
                         }
                     };
                     let xml_entity_restarted = stream_was_open && !session.negotiation.is_open();
-                    match action {
-                        Action::Send(reply) => {
-                            if !tcp_record_and_send(&mut io, session, &reply, opening).await? {
-                                return Ok(DriveOutcome::Done);
-                            }
-                        },
-                        Action::SendMany(replies) => {
-                            for reply in replies {
-                                if !tcp_record_and_send(&mut io, session, &reply, opening).await? {
-                                    return Ok(DriveOutcome::Done);
-                                }
-                            }
-                        }
-                        Action::SendManyItems(items) => {
-                            for item in items {
-                                if !tcp_record_and_send_item(
-                                    &mut io,
-                                    session,
-                                    &item,
-                                    opening,
-                                )
-                                .await?
-                                {
-                                    return Ok(DriveOutcome::Done);
-                                }
-                            }
-                        }
-                        Action::SendManyThenActivate(replies) => {
-                            for (index, reply) in replies.into_iter().enumerate() {
-                                if !tcp_record_and_send(&mut io, session, &reply, opening).await? {
-                                    return Ok(DriveOutcome::Done);
-                                }
-                                if index == 0
-                                    && !session.publish_committed_authentication_and_route().await
-                                {
-                                    return Ok(DriveOutcome::Done);
-                                }
-                            }
-                        }
-                        Action::SendManyAndClose(replies) => {
-                            session.sm_resume_allowed = false;
-                            for reply in replies {
-                                send(&mut io, &reply).await?;
-                            }
-                            send(&mut io, "</stream:stream>").await?;
+                    match tcp_action::apply(&mut io, session, action, opening).await? {
+                        tcp_action::TcpActionDisposition::Continue => {}
+                        tcp_action::TcpActionDisposition::Close => {
                             return Ok(DriveOutcome::Done);
                         }
-                        Action::Resume(payload) => {
-                            let crate::xmpp::protocol::ResumeTransportParts {
-                                control,
-                                post_control,
-                                replay,
-                                activate_route,
-                                transient_capacity: _resume_transport_capacity,
-                            } = payload.into_transport_parts();
-                            if !tcp_record_and_send(&mut io, session, &control, opening).await? {
-                                return Ok(DriveOutcome::Done);
-                            }
-                            if activate_route
-                                && !session.publish_committed_authentication_and_route().await
-                            {
-                                return Ok(DriveOutcome::Done);
-                            }
-                            for nonza in post_control {
-                                if !tcp_record_and_send(&mut io, session, &nonza, opening).await? {
-                                    return Ok(DriveOutcome::Done);
-                                }
-                            }
-                            for stanza in replay {
-                                send(&mut io, &stanza).await?;
-                                session.record_replayed();
-                            }
+                        tcp_action::TcpActionDisposition::Upgrade => {
+                            return Ok(DriveOutcome::Upgrade(io));
                         }
-                        Action::StartTls => return Ok(DriveOutcome::Upgrade(io)),
-                        Action::CloseWith(reply) => {
-                            session.sm_resume_allowed = false;
-                            tcp_fatal_error(
-                                &mut io,
-                                session.state.local_domain(),
-                                opening,
-                                &reply,
-                            )
-                            .await?;
-                            return Ok(DriveOutcome::Done);
-                        }
-                        Action::Close => {
-                            send(&mut io, "</stream:stream>").await?;
-                            return Ok(DriveOutcome::Done);
-                        }
-                        Action::None => {}
                     }
                     if xml_entity_restarted {
                         // A successful legacy SASL exchange closes the first

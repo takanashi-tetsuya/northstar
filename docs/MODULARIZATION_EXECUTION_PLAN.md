@@ -705,7 +705,10 @@ repository capabilities. Local and federated room readers share a pure
 visibility decision while retaining their distinct locks. Legacy room reads
 can still initialize a missing occupant-ID secret; the query capability is
 therefore not a claim that every SQL statement is read-only.
-D1 no longer stores a second WebSocket flag alongside the transport kind.
+D1 no longer stores a second WebSocket flag alongside the transport kind. The
+TCP action executor now has its own adapter, shared by plain TCP and direct TLS;
+it retains the existing write, authentication-publication and SM replay order.
+WebSocket and BOSH still execute their transport-specific actions separately.
 These are completed slices, not packet exit claims.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated

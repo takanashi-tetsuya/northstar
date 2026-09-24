@@ -26,7 +26,9 @@ admin_commands_source="$project_dir/src/db/admin_commands.rs"
 roster_source="$project_dir/src/db/roster.rs"
 mix_source="$project_dir/src/db/mix.rs"
 muc_source="$project_dir/src/db/muc.rs"
+muc_test_source="$project_dir/src/db/muc_tests.rs"
 muc_protocol_source="$project_dir/src/xmpp/protocol/muc.rs"
+muc_protocol_test_source="$project_dir/src/xmpp/protocol/muc_tests.rs"
 omemo_recovery_source="$project_dir/src/db/omemo_recovery.rs"
 user_capability_migration="$project_dir/migrations/0108_user_command_capabilities.sql"
 admin_cleanup_migration="$project_dir/migrations/0111_admin_session_cleanup_effects.sql"
@@ -87,7 +89,8 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$grant_runner" "$grant_image" "$backup_image" "$backup_runner" "$postgres_runner" \
   "$role_attestation" "$db_module" "$main_source" "$state_source" "$pie_source" \
   "$users_source" "$admin_commands_source" "$roster_source" "$mix_source" \
-  "$muc_source" "$muc_protocol_source" "$omemo_recovery_source" \
+  "$muc_source" "$muc_test_source" "$muc_protocol_source" \
+  "$muc_protocol_test_source" "$omemo_recovery_source" \
   "$user_capability_migration" "$admin_cleanup_migration" \
   "$cluster_authority_migration" "$upload_authority_migration" \
   "$session_authority_migration" \
@@ -1489,28 +1492,32 @@ if grep -Fq 'no_matching_frame' "$message_pow_fixture"; then
   fail 'message PoW duplicate suppression must use an ordered recipient barrier instead of a timed absence window'
 fi
 
+require_literal "$muc_source" '#[path = "muc_tests.rs"]' \
+  'MUC repository must compile its extracted tests'
+require_literal "$muc_protocol_source" '#[path = "muc_tests.rs"]' \
+  'MUC protocol must compile its extracted tests'
 muc_pause_line=$(grep -nF 'install_muc_authorization_test_pause("admin_affiliation")' \
-  "$muc_source" | head -n 1 | cut -d: -f1)
+  "$muc_test_source" | head -n 1 | cut -d: -f1)
 muc_revoke_line=$(awk -v start="$muc_pause_line" \
   'NR > start && /set_muc_affiliation\(&pool, room_id, "carol", "none"\)/ { print NR; exit }' \
-  "$muc_source")
+  "$muc_test_source")
 muc_applied_line=$(awk -v start="$muc_revoke_line" \
-  'NR > start && /MucAffiliationOutcome::Applied/ { print NR; exit }' "$muc_source")
+  'NR > start && /MucAffiliationOutcome::Applied/ { print NR; exit }' "$muc_test_source")
 muc_resume_line=$(awk -v start="$muc_applied_line" \
-  'NR > start && /resume\.notify_one\(\)/ { print NR; exit }' "$muc_source")
+  'NR > start && /resume\.notify_one\(\)/ { print NR; exit }' "$muc_test_source")
 [[ -n "$muc_pause_line" && -n "$muc_revoke_line" && -n "$muc_applied_line" \
    && -n "$muc_resume_line" && "$muc_pause_line" -lt "$muc_revoke_line" \
    && "$muc_revoke_line" -lt "$muc_applied_line" \
    && "$muc_applied_line" -lt "$muc_resume_line" ]] \
   || fail 'MUC affiliation race must prove a real applied owner-to-none revocation before resuming the read'
-require_literal "$muc_protocol_source" \
+require_literal "$muc_protocol_test_source" \
   'members_can_retrieve_omemo_recipient_lists_in_private_non_anonymous_rooms' \
   'MUC member affiliation-list exception must retain a direct OMEMO policy regression test'
 for muc_repository_policy in \
   'set_muc_affiliation(&pool, room_id, "carol", "member")' \
   'for requested in ["owner", "admin", "member"]' \
   '"outcast"'; do
-  require_literal "$muc_source" "$muc_repository_policy" \
+  require_literal "$muc_test_source" "$muc_repository_policy" \
     "MUC PostgreSQL fixture must exercise the real member affiliation-list policy: $muc_repository_policy"
 done
 

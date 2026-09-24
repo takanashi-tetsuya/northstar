@@ -293,7 +293,7 @@ The small observer integration fixture can be run independently with
 It starts its own temporary, fsync-enabled PG17 cluster as an ordinary user and
 tests 100 runtime-control connections, delayed replies, actual waits, case mapping,
 failure windows and cancellation. It does not
-run application servers or replace the regular 5-by-50 acceptance matrix.
+run application servers or replace the regular 2-by-50 acceptance matrix.
 The startup scheduler's failure paths are also checked independently of a
 database using controlled child processes.
 

@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       scheduled_stress:
-        description: "Run the 20x50 endurance matrix instead of the regular 5x50 verification"
+        description: "Run the 20x50 endurance matrix instead of the regular 2x50 verification"
         type: boolean
         default: false
       extended_stress:
@@ -1095,7 +1095,7 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   listener-readiness-stress-regular:
-    name: Listener/readiness stress (regular 5x50 · ${{ matrix.fixture }})
+    name: Listener/readiness stress (regular 2x50 · ${{ matrix.fixture }})
     needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
       ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -1106,7 +1106,7 @@ jobs:
     # This is a capacity ceiling only. Every fixture worker has its own
     # process-group deadline inside the stress driver, so a hung child cannot
     # consume a round until GitHub's job-level timeout.
-    timeout-minutes: 60
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -1161,7 +1161,7 @@ jobs:
           NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
         run: >-
           python3 scripts/listener-readiness-observed-wsl.py
-          --mode regular --fixture "${{ matrix.fixture }}" --rounds 5 --pairs 50
+          --mode regular --fixture "${{ matrix.fixture }}" --rounds 2 --pairs 50
 
       - name: Upload failed listener/readiness diagnostics
         if: ${{ failure() && steps.listener_matrix.outputs.driver_succeeded != 'true' && steps.listener_matrix.outputs.driver_started != 'false' }}

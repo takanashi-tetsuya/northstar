@@ -699,6 +699,11 @@ visibility decision while retaining their distinct database locks. D1 no
 longer stores a second WebSocket flag alongside the transport kind. These are
 completed slices, not packet exit claims.
 
+R1 already has a restartable local/S3 recovery command, durable XID and
+same-transaction markers, and isolated pre/post-commit hard-kill drills. Its
+remaining work is protected rollback storage, independent key/state recovery
+and target-environment drills; an expired or ambiguous XID remains fail-closed.
+
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run
 after their own test fixtures are ready; they need not hold up unrelated code

@@ -732,6 +732,25 @@ retention expires. Keep protected rollback data and durable same-transaction
 markers. If the journal, lineage or outcome is ambiguous, preserve the fence
 for operator recovery rather than promising unconditional roll-forward.
 
+**R2 revocation profile.** The first OCSP mode is an operator-supplied response
+for Northstar's own TLS certificate. Before rustls staples its bytes, reload
+must verify the response signature and responder authority, exact issuer and
+serial, `good` status, and a bounded `thisUpdate`–`nextUpdate` interval. A
+configured response that is revoked, stale, malformed or for another leaf is
+rejected; the last valid TLS snapshot remains active, and a strict stapling
+profile stops new handshakes when that snapshot's response expires. Outbound
+S2S may later require a verified stapled response under an explicit strict
+PKIX profile, including PKIX-EE. DANE-EE does not inherit CA revocation. An
+XEP-0487 pin must not bypass an enabled PKIX revocation rule; C2S client
+certificate authentication keeps its separate CRL policy. No mode may fetch a
+URL supplied by a peer certificate. Any future online source needs an operator
+allowlist, address and redirect controls, bounded time/size/cache, and a stated
+policy for missing responses. Test `good`, `revoked`, `unknown`, missing, stale,
+wrong-issuer and invalid-signature responses against TLS 1.2 and 1.3 before
+advertising support. See [RFC 6960](https://www.rfc-editor.org/rfc/rfc6960),
+[RFC 6066](https://www.rfc-editor.org/rfc/rfc6066) and
+[RFC 7673](https://www.rfc-editor.org/rfc/rfc7673).
+
 ### 8.2 External qualification on a frozen release candidate
 
 Freeze the candidate commit and record the binary/container digest, schema,

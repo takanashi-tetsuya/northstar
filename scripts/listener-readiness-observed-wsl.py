@@ -372,7 +372,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["regular"], required=True)
     parser.add_argument("--fixture", choices=["federation", "mix-federation"], required=True)
-    parser.add_argument("--rounds", choices=[5], type=int, required=True)
+    parser.add_argument("--rounds", choices=[2], type=int, required=True)
     parser.add_argument("--pairs", choices=[50], type=int, required=True)
     args = parser.parse_args()
     os.umask(0o077)

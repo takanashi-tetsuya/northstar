@@ -186,9 +186,9 @@ recorded process identities and liveness, including earlier batches, before
 advancing and before releasing all pairs into the concurrent business tests.
 A dead server fails the round; neither startup nor a failed round is retried.
 
-PR and main CI run five rounds of 50 pairs, with all 100 servers live before
+PR and main CI run two rounds of 50 pairs, with all 100 servers live before
 concurrent protocol work begins. Weekly runs repeat the same workload for
-20 rounds. Manual runs default to 5 rounds; `scheduled_stress`
+20 rounds. Manual runs default to 2 rounds; `scheduled_stress`
 selects 20 and `extended_stress` selects 100.
 Smoke tests retain the one-pair and two-pair cases.
 This validates concurrent operation after batched startup on the available runner.

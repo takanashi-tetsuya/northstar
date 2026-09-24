@@ -325,6 +325,8 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
             "  listener-readiness-stress-scheduled:", 1)[0]
         self.assertIn("python3 scripts/listener-readiness-observed-wsl.py", regular)
         self.assertIn('--mode regular --fixture "¤{{ matrix.fixture }}" --rounds 2 --pairs 50'.replace("¤", "$"), regular)
+        entry = (ROOT / "scripts/listener-readiness-observed-wsl.py").read_text()
+        self.assertIn('parser.add_argument("--rounds", choices=[2]', entry)
         self.assertIn('NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"', regular)
         self.assertIn("timeout-minutes: 45", regular)
         artifact = regular.split("      - name: Upload bounded control observer evidence", 1)[1]

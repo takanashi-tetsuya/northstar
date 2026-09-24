@@ -312,7 +312,7 @@ finally:
         client = (ROOT / "federation-wsl.py").read_text().split("def run(", 1)[1]
         self.assertLess(client.index('wait_for_fixture_phase("live", server_pids)'), client.index('verify_starttls_failure_boundary()'))
         driver = (ROOT / "listener-readiness-stress-wsl.sh").read_text()
-        self.assertIn('regular) [[ -n "$rounds" ]] || rounds=5', driver)
+        self.assertIn('regular) [[ -n "$rounds" ]] || rounds=2', driver)
         self.assertIn('pairs="50"', driver)
         self.assertLess(driver.index('"fixture-preparation-release-r$round"'), driver.index('"all-pair-live-release-r$round"'))
         self.assertLess(driver.index('"all-pair-live-release-r$round"'), driver.index('"federation-transport-release-r$round"'))

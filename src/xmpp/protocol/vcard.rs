@@ -1,14 +1,13 @@
 use super::{Action, ProtocolSession};
 use crate::services::profile::{
-    AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot, ProfilePublishStatus,
-    PublicVCard,
+    detected_media_type, sha1_hex, AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot,
+    ProfilePublishStatus, PublicVCard,
 };
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use roxmltree::Node;
-use sha1::{Digest, Sha1};
 
 const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
 const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
@@ -54,38 +53,6 @@ fn converted_avatar_items(
                     .finish(),
             ),
         }
-    }
-}
-
-fn sha1_hex(bytes: &[u8]) -> String {
-    let digest = Sha1::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("image/png")
-    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
-        Some("image/webp")
-    } else if bytes.starts_with(b"BM") {
-        Some("image/bmp")
-    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
-        Some("image/tiff")
-    } else if bytes.starts_with(&[0, 0, 1, 0]) {
-        Some("image/vnd.microsoft.icon")
-    } else if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        match &bytes[8..12] {
-            b"avif" | b"avis" => Some("image/avif"),
-            b"heic" | b"heix" | b"hevc" | b"hevx" => Some("image/heic"),
-            b"mif1" | b"msf1" => Some("image/heif"),
-            _ => None,
-        }
-    } else {
-        None
     }
 }
 

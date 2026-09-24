@@ -9,6 +9,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 pub use northstar_xmpp_types::CanonicalJid;
+use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -226,7 +227,7 @@ pub enum PepBookmarkMutationOutcome {
     Forbidden,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct PubSubNode {
     pub id: Uuid,
     pub node: String,

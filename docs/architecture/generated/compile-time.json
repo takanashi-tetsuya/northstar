@@ -2754,6 +2754,10 @@
     ],
     [
       "northstar-pubsub-core",
+      "serde"
+    ],
+    [
+      "northstar-pubsub-core",
       "sha2"
     ],
     [

@@ -421,39 +421,6 @@ fn snapshot_deliveries(audience: &PepAudienceSnapshot) -> Result<Vec<(String, St
 }
 
 #[test]
-fn node_config_mapping_round_trips_every_policy_field() {
-    let service = PubSubNodeConfig {
-        access_model: "whitelist".to_owned(),
-        publish_model: "subscribers".to_owned(),
-        max_items: 37,
-        title: Some("A title".to_owned()),
-        description: Some("A description".to_owned()),
-        deliver_payloads: false,
-        notify_delete: false,
-        notify_retract: false,
-        persist_items: false,
-        send_last_published_item: "never".to_owned(),
-        node_type: "collection".to_owned(),
-        deliver_notifications: false,
-        notify_config: false,
-        notify_sub: false,
-        language: Some("en".to_owned()),
-        payload_type: Some("urn:example:payload".to_owned()),
-        max_payload_size: 65_535,
-        children_max: 23,
-        children_association_policy: "whitelist".to_owned(),
-        children_association_whitelist: vec!["owner@example.test".to_owned()],
-        collections: vec!["parent".to_owned()],
-        children: vec!["child".to_owned()],
-    };
-
-    let repository = db::PubSubNodeConfig::from(&service);
-    let round_trip = PubSubNodeConfig::from(repository);
-
-    assert_eq!(round_trip, service);
-}
-
-#[test]
 fn subscription_mapping_round_trips_authoritative_delivery_options() {
     let expiry = Utc.with_ymd_and_hms(2030, 4, 5, 6, 7, 8).unwrap();
     let service = PubSubSubscription {

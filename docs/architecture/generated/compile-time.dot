@@ -1029,6 +1029,7 @@ digraph compile_time {
   "northstar-pubsub-core" -> "base64";
   "northstar-pubsub-core" -> "chrono";
   "northstar-pubsub-core" -> "northstar-xmpp-types";
+  "northstar-pubsub-core" -> "serde";
   "northstar-pubsub-core" -> "sha2";
   "northstar-pubsub-core" -> "uuid";
   "northstar-room-application" -> "northstar-room-core";

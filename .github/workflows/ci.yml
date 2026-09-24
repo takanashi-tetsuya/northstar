@@ -226,6 +226,9 @@ jobs:
           sh scripts/check-migration-versions.sh
           sh scripts/check-compose-config-mapping.sh
 
+      - name: Verify isolated database test schema lifecycle
+        run: bash scripts/test-isolated-test-schema.sh
+
       - name: Verify generated TLS identities and fail-closed CRL handling
         run: bash scripts/runtime-tls-test-wsl.sh
 

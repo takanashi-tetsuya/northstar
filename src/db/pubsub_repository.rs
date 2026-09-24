@@ -763,126 +763,6 @@ impl From<db::PepItem> for PepItem {
     }
 }
 
-impl From<db::PubSubNode> for PubSubNode {
-    fn from(value: db::PubSubNode) -> Self {
-        Self {
-            id: value.id,
-            node: value.node,
-            creator_jid: value.creator_jid,
-            access_model: value.access_model,
-            publish_model: value.publish_model,
-            max_items: value.max_items,
-            title: value.title,
-            description: value.description,
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item,
-            node_type: value.node_type,
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language,
-            payload_type: value.payload_type,
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy,
-            children_association_whitelist: value.children_association_whitelist,
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<&PubSubNode> for db::PubSubNode {
-    fn from(value: &PubSubNode) -> Self {
-        Self {
-            id: value.id,
-            node: value.node.clone(),
-            creator_jid: value.creator_jid.clone(),
-            access_model: value.access_model.clone(),
-            publish_model: value.publish_model.clone(),
-            max_items: value.max_items,
-            title: value.title.clone(),
-            description: value.description.clone(),
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item.clone(),
-            node_type: value.node_type.clone(),
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language.clone(),
-            payload_type: value.payload_type.clone(),
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy.clone(),
-            children_association_whitelist: value.children_association_whitelist.clone(),
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<db::PubSubNodeConfig> for PubSubNodeConfig {
-    fn from(value: db::PubSubNodeConfig) -> Self {
-        Self {
-            access_model: value.access_model,
-            publish_model: value.publish_model,
-            max_items: value.max_items,
-            title: value.title,
-            description: value.description,
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item,
-            node_type: value.node_type,
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language,
-            payload_type: value.payload_type,
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy,
-            children_association_whitelist: value.children_association_whitelist,
-            collections: value.collections,
-            children: value.children,
-        }
-    }
-}
-
-impl From<&PubSubNodeConfig> for db::PubSubNodeConfig {
-    fn from(value: &PubSubNodeConfig) -> Self {
-        Self {
-            access_model: value.access_model.clone(),
-            publish_model: value.publish_model.clone(),
-            max_items: value.max_items,
-            title: value.title.clone(),
-            description: value.description.clone(),
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item.clone(),
-            node_type: value.node_type.clone(),
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language.clone(),
-            payload_type: value.payload_type.clone(),
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy.clone(),
-            children_association_whitelist: value.children_association_whitelist.clone(),
-            collections: value.collections.clone(),
-            children: value.children.clone(),
-        }
-    }
-}
-
 impl From<db::PubSubItem> for PubSubItem {
     fn from(value: db::PubSubItem) -> Self {
         Self {
@@ -1096,7 +976,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_create(
             self,
-            &node.clone().into(),
+            node,
             &audience
                 .iter()
                 .map(|delivery| PubSubNotificationDelivery {
@@ -1119,7 +999,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_items(
             self,
-            &node.clone().into(),
+            node,
             items,
             &audience
                 .iter()
@@ -1142,7 +1022,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_purge(
             self,
-            &node.clone().into(),
+            node,
             &audience
                 .iter()
                 .map(|delivery| PubSubNotificationDelivery {
@@ -1165,7 +1045,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_retract(
             self,
-            &node.clone().into(),
+            node,
             item_ids,
             &audience
                 .iter()
@@ -1190,7 +1070,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_delete(
             self,
-            &node.clone().into(),
+            node,
             redirect,
             &audience
                 .iter()
@@ -1215,8 +1095,8 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_configuration(
             self,
-            &node.clone().into(),
-            &config.clone().into(),
+            node,
+            config,
             &audience
                 .iter()
                 .map(|delivery| PubSubNotificationDelivery {
@@ -1240,7 +1120,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_collection_edge(
             self,
-            &source.clone().into(),
+            source,
             action,
             target_node,
             &audience
@@ -1268,7 +1148,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_subscription_transition(
             self,
-            &node.clone().into(),
+            node,
             &subscription.clone().into(),
             notify_recipients,
             authorization_recipients,
@@ -1287,7 +1167,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubEventRenderer {
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_affiliation_transition(
             self,
-            &node.clone().into(),
+            node,
             jid,
             affiliation,
             event_id,
@@ -1486,15 +1366,12 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
         config: &PubSubNodeConfig,
     ) -> Result<PubSubConfigOutcome> {
         let outcome: Result<_> = async {
-            let node = db::PubSubNode::from(node);
-            let expected = db::PubSubNodeConfig::from(expected);
-            let config = db::PubSubNodeConfig::from(config);
             Ok(db::update_node_config_and_graph_with_outbox(
                 &self.pool,
-                &node,
+                node,
                 requester,
-                &expected,
-                &config,
+                expected,
+                config,
                 &self.renderer,
             )
             .await?
@@ -1505,35 +1382,23 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
     }
 
     async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
-        let outcome: Result<_> =
-            async { Ok(db::get_node(&self.pool, node).await?.map(Into::into)) }.await;
-        outcome.map_err(map_database_busy)
+        db::get_node(&self.pool, node)
+            .await
+            .map_err(map_database_busy)
     }
     async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
         let outcome: Result<_> = async { db::node_redirect(&self.pool, node).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
-        let outcome: Result<_> = async {
-            Ok(db::collection_parents(&self.pool, child_id)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
-        }
-        .await;
-        outcome.map_err(map_database_busy)
+        db::collection_parents(&self.pool, child_id)
+            .await
+            .map_err(map_database_busy)
     }
     async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
-        let outcome: Result<_> = async {
-            Ok(db::collection_children(&self.pool, collection_id)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
-        }
-        .await;
-        outcome.map_err(map_database_busy)
+        db::collection_children(&self.pool, collection_id)
+            .await
+            .map_err(map_database_busy)
     }
     async fn visible_root_disco_count(&self, requester: &str) -> Result<i64> {
         let outcome: Result<_> =
@@ -1592,12 +1457,11 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
         max_nodes_per_owner: i64,
     ) -> Result<CreateNodeOutcome> {
         let outcome: Result<_> = async {
-            let config = db::PubSubNodeConfig::from(config);
             Ok(db::create_node_with_renderer(
                 &self.pool,
                 node,
                 creator_jid,
-                &config,
+                config,
                 max_nodes_per_owner,
                 &self.renderer,
             )
@@ -1614,12 +1478,10 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
         requester: &str,
     ) -> Result<CollectionUpdateOutcome> {
         let outcome: Result<_> = async {
-            let collection = db::PubSubNode::from(collection);
-            let child = db::PubSubNode::from(child);
             Ok(db::associate_collection_child_with_renderer(
                 &self.pool,
-                &collection,
-                &child,
+                collection,
+                child,
                 requester,
                 &self.renderer,
             )
@@ -1636,12 +1498,10 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
         requester: &str,
     ) -> Result<CollectionUpdateOutcome> {
         let outcome: Result<_> = async {
-            let collection = db::PubSubNode::from(collection);
-            let child = db::PubSubNode::from(child);
             Ok(db::dissociate_collection_child_with_renderer(
                 &self.pool,
-                &collection,
-                &child,
+                collection,
+                child,
                 requester,
                 &self.renderer,
             )
@@ -1747,10 +1607,9 @@ impl PubSubItemRepository for PostgresPubSubRepository {
         max_storage_bytes_per_owner: i64,
     ) -> Result<PublishItemsOutcome> {
         let outcome: Result<_> = async {
-            let node = db::PubSubNode::from(node);
             Ok(db::publish_items_with_renderer(
                 &self.pool,
-                &node,
+                node,
                 publisher_jid,
                 items,
                 false,

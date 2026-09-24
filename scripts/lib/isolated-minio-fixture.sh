@@ -3,7 +3,7 @@
 # Source this file, call northstar_minio_start, then northstar_minio_stop in
 # the caller's EXIT trap. No production bucket or credentials are accepted.
 
-readonly NORTHSTAR_MINIO_IMAGE='quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e'
+readonly NORTHSTAR_MINIO_IMAGE='quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e'
 
 northstar_minio_start() {
   local work_dir=$1

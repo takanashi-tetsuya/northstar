@@ -283,8 +283,8 @@ for (const phrase of [
 }
 const normalizedKnownIssues = knownIssues.replace(/\s+/g, ' ');
 for (const restoreMarker of [
-  '四个独立注册并预先核验 PID 的 backend',
-  '三个登记目标 PID',
+  '註冊並核驗四個後端 PID',
+  '目標庫只允許後三個已登記 PID',
 ]) {
   if (!normalizedKnownIssues.includes(restoreMarker)) {
     throw new Error(`KNOWN_ISSUES.md is missing the current four-session restore boundary: ${restoreMarker}`);

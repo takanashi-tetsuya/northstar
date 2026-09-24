@@ -107,7 +107,7 @@ function verifyPressureGate(source, name, rounds) {
 test('diagnostic preflight is required for every event and both pressure matrices', () => {
   verifyWorkflowCoverage(workflow);
   assert.ok(ALWAYS_REQUIRED.includes('listener-diagnostics'));
-  for (const [name, rounds] of [['listener-readiness-stress-regular', 5], ['listener-readiness-stress-scheduled', '"$LISTENER_STRESS_ROUNDS"']]) {
+  for (const [name, rounds] of [['listener-readiness-stress-regular', 2], ['listener-readiness-stress-scheduled', '"$LISTENER_STRESS_ROUNDS"']]) {
     verifyPressureGate(workflow, name, rounds);
     for (const old of ['needs: [listener-readiness-stress-smoke, listener-diagnostics]',
                        "needs.listener-diagnostics.result == 'success'", `--rounds ${rounds} --pairs 50`]) {

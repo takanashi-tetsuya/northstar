@@ -7,8 +7,9 @@
 //! dependencies and does not maintain global state.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(308);
 pub const NAMESPACE: &str = "urn:xmpp:message-correct:0";
@@ -188,26 +189,9 @@ pub fn parse_message<'a, 'input>(
 /// The `id` attribute is required, non-empty, and bounded. All attribute values are XML-escaped.
 pub fn build_replace(id: &str) -> Result<String, ValidationError> {
     validate_identifier(id).map_err(|()| ValidationError::InvalidId)?;
-    let mut xml = String::with_capacity(id.len() + 64);
-    xml.push_str("<replace xmlns='urn:xmpp:message-correct:0' id='");
-    escape_attribute(&mut xml, id);
-    xml.push_str("'/>");
-    Ok(xml)
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
+    Ok(XmlElement::namespaced("replace", NAMESPACE)
+        .attr("id", id)
+        .finish())
 }
 
 #[cfg(test)]

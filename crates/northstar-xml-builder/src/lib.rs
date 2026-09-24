@@ -212,6 +212,7 @@ fn escape_attribute_into(value: &str, output: &mut String) {
         match character {
             '&' => output.push_str("&amp;"),
             '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
             '\'' => output.push_str("&apos;"),
             '"' => output.push_str("&quot;"),
             '\t' => output.push_str("&#x9;"),
@@ -251,10 +252,10 @@ mod tests {
     #[test]
     fn runtime_values_are_escaped_once() {
         let xml = XmlElement::new("message")
-            .attr("to", "a'b&c@example.test")
+            .attr("to", "a'b&c>@example.test")
             .child(XmlElement::new("body").text("<hello & goodbye>"))
             .finish();
-        assert_eq!(xml, "<message to='a&apos;b&amp;c@example.test'><body>&lt;hello &amp; goodbye&gt;</body></message>");
+        assert_eq!(xml, "<message to='a&apos;b&amp;c&gt;@example.test'><body>&lt;hello &amp; goodbye&gt;</body></message>");
         Document::parse(&xml).unwrap();
     }
 

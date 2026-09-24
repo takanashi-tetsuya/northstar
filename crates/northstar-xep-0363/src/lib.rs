@@ -8,6 +8,7 @@
 //! HTTP listener or URL-construction authority.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 
 /// XEP-0363 numeric identifier.
@@ -146,41 +147,29 @@ pub fn build_slot(
     {
         return Err(ValidationError::InvalidResponseValue);
     }
-    Ok(format!(
-        "<slot xmlns='{NAMESPACE}'><put url='{}'><header name='Authorization'>Bearer {}</header></put><get url='{}'/></slot>",
-        escape_attribute(put_url),
-        escape_text(bearer_token),
-        escape_attribute(get_url),
-    ))
+    Ok(XmlElement::namespaced("slot", NAMESPACE)
+        .child(
+            XmlElement::new("put").attr("url", put_url).child(
+                XmlElement::new("header")
+                    .attr("name", "Authorization")
+                    .text(format!("Bearer {bearer_token}")),
+            ),
+        )
+        .child(XmlElement::new("get").attr("url", get_url))
+        .finish())
 }
 
 /// Build the XEP-0363 application-condition payload for an oversized request.
 pub fn build_file_too_large(maximum: u64) -> String {
-    format!(
-        "<file-too-large xmlns='{NAMESPACE}'><max-file-size>{maximum}</max-file-size></file-too-large>"
-    )
+    XmlElement::namespaced("file-too-large", NAMESPACE)
+        .child(XmlElement::new("max-file-size").text(maximum.to_string()))
+        .finish()
 }
 
 fn valid_response_value(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
         && !value.chars().any(|character| character.is_control())
-}
-
-fn escape_attribute(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\'', "&apos;")
-        .replace('"', "&quot;")
-}
-
-fn escape_text(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

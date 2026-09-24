@@ -26,7 +26,8 @@ use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
 use crate::state::{AppState, MixIqRelayStage, PendingMixIqRelay};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{
-    add_stanza_id, is_encrypted, mam_extended_form, stanza_error, stanza_error_type,
+    add_stanza_id, iq_error_to, iq_result_to, is_encrypted, mam_extended_form, stanza_error,
+    stanza_error_type,
 };
 use anyhow::{Context, Result};
 use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
@@ -1507,35 +1508,6 @@ fn parse_fields(form: Node<'_, '_>) -> Result<BTreeMap<String, Vec<String>>> {
         );
     }
     Ok(fields)
-}
-
-fn iq_result_to(id: &str, from: &str, to: &str, payload: &str) -> String {
-    let mut iq = XmlElement::namespaced("iq", "jabber:client")
-        .attr("type", "result")
-        .attr("from", from)
-        .attr("to", to)
-        .attr("id", id);
-    if iq.push_validated_fragment(payload).is_err() {
-        return iq_error_to(id, from, to, "wait", "internal-server-error");
-    }
-    iq.finish()
-}
-
-fn iq_error_to(id: &str, from: &str, to: &str, error_type: &str, condition: &str) -> String {
-    let condition = XmlElement::dynamic(condition)
-        .unwrap_or_else(|_| XmlElement::new("undefined-condition"))
-        .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
-    XmlElement::namespaced("iq", "jabber:client")
-        .attr("type", "error")
-        .attr("from", from)
-        .attr("to", to)
-        .attr("id", id)
-        .child(
-            XmlElement::new("error")
-                .attr("type", error_type)
-                .child(condition),
-        )
-        .finish()
 }
 
 fn mix_xdata_value_field(

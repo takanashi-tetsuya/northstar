@@ -1,16 +1,17 @@
 use super::{Action, ProtocolSession};
 use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::pubsub::{
-    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PubSubConfigOutcome,
-    PubSubConfigureNodeCommand, PubSubConfigureNodeWrite, PubSubCreateNodeCommand,
-    PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubNode,
-    PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
-    PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
-    PubSubRetractWrite, PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite,
-    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite, PubSubSubscribeCommand,
-    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
-    PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
+    subscription_event_children, CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome,
+    PubSubConfigOutcome, PubSubConfigureNodeCommand, PubSubConfigureNodeWrite,
+    PubSubCreateNodeCommand, PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite,
+    PubSubItem, PubSubNode, PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome,
+    PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand,
+    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsCommand,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
+    PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
+    PubSubSubscriptionOptions, PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
@@ -33,7 +34,6 @@ struct DiscoItem {
 
 const NS_PUBSUB: &str = northstar_xep_0060::NS_PUBSUB;
 const NS_PUBSUB_OWNER: &str = northstar_xep_0060::NS_PUBSUB_OWNER;
-const NS_PUBSUB_EVENT: &str = northstar_xep_0060::NS_PUBSUB_EVENT;
 const NS_DATA: &str = northstar_xep_0060::NS_DATA;
 const NS_RSM: &str = northstar_xep_0060::NS_RSM;
 const NODE_CONFIG_FORM: &str = northstar_xep_0060::NODE_CONFIG_FORM;
@@ -2279,47 +2279,6 @@ async fn is_owner(state: &AppState, node_id: uuid::Uuid, jid: &str) -> Result<bo
     state.pubsub_service().is_owner(node_id, jid).await
 }
 
-fn subscription_event_children(
-    subscription: &PubSubSubscription,
-    event: &str,
-    collection: Option<&str>,
-    delay: Option<chrono::DateTime<chrono::Utc>>,
-) -> Result<String> {
-    let mut headers = XmlElement::namespaced("headers", "http://jabber.org/protocol/shim").child(
-        XmlElement::new("header")
-            .attr("name", "SubID")
-            .text(subscription.subid.clone()),
-    );
-    if let Some(collection) = collection {
-        headers.push_child(
-            XmlElement::new("header")
-                .attr("name", "Collection")
-                .text(collection.to_owned()),
-        );
-    }
-    let mut children = XmlElement::new("northstar-children");
-    let mut event_wrapper = XmlElement::namespaced("event", NS_PUBSUB_EVENT);
-    event_wrapper.push_validated_fragment(event)?;
-    children.push_child(event_wrapper);
-    if subscription.include_body {
-        if let Some(body) = event_body(event)? {
-            children.push_child(XmlElement::new("body").text(body));
-        }
-    }
-    children.push_child(headers);
-    if let Some(stamp) = delay {
-        children.push_child(
-            XmlElement::namespaced("delay", "urn:xmpp:delay").attr("stamp", stamp.to_rfc3339()),
-        );
-    }
-    Ok(children.finish_children())
-}
-
-fn event_body(event: &str) -> Result<Option<String>> {
-    northstar_xep_0060::extract_atom_event_body(event)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
-}
-
 #[cfg(test)]
 fn pubsub_policy_suppression_is_terminal(
     show_eligible_resources: usize,
@@ -3353,7 +3312,7 @@ fn serialize_pubsub_item(node: Node<'_, '_>, item_id: &str) -> Result<String> {
 mod tests {
     use super::{
         config_equivalent, data_form_fields, disco_item_xml, disco_rsm_page, error_condition,
-        event_body, item_retrieval_access, node_config_form, normalized_bare, parse_node_config,
+        item_retrieval_access, node_config_form, normalized_bare, parse_node_config,
         parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
         publish_batch_size_allowed, pubsub_policy_suppression_is_terminal, pubsub_rsm_page,
         reply_error, serialize_pubsub_item, subscription_options_form, subscription_payload,
@@ -3372,7 +3331,9 @@ mod tests {
         let event = format!(
             "<entry xmlns='http://www.w3.org/2005/Atom'><summary>{summary}</summary></entry>"
         );
-        let body = event_body(&event).unwrap().unwrap();
+        let body = northstar_xep_0060::extract_atom_event_body(&event)
+            .unwrap()
+            .unwrap();
         assert_eq!(body.len(), 1_023);
         assert_eq!(body, "a".repeat(1_023));
     }

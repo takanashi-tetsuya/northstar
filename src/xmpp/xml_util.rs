@@ -780,6 +780,18 @@ pub(crate) fn iq_result_from(id: &str, from: &str, payload: &str) -> String {
     }
 }
 
+pub(crate) fn iq_result_to(id: &str, from: &str, to: &str, payload: &str) -> String {
+    let mut result = XmlElement::namespaced("iq", "jabber:client")
+        .attr("type", "result")
+        .attr("from", from)
+        .attr("to", to)
+        .attr("id", id);
+    if result.push_validated_fragment(payload).is_err() {
+        return iq_error_to(id, from, to, "wait", "internal-server-error");
+    }
+    result.finish()
+}
+
 pub(crate) fn iq_error(id: &str, condition: &str) -> String {
     XmlElement::namespaced("iq", "jabber:client")
         .attr("type", "error")
@@ -801,6 +813,29 @@ pub(crate) fn iq_error_from(id: &str, from: &str, condition: &str) -> String {
             XmlElement::new("error")
                 .attr("type", stanza_error_type(condition))
                 .child(stanza_condition_element(condition)),
+        )
+        .finish()
+}
+
+pub(crate) fn iq_error_to(
+    id: &str,
+    from: &str,
+    to: &str,
+    error_type: &str,
+    condition: &str,
+) -> String {
+    let condition = XmlElement::dynamic(condition)
+        .unwrap_or_else(|_| XmlElement::new("undefined-condition"))
+        .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
+    XmlElement::namespaced("iq", "jabber:client")
+        .attr("type", "error")
+        .attr("from", from)
+        .attr("to", to)
+        .attr("id", id)
+        .child(
+            XmlElement::new("error")
+                .attr("type", error_type)
+                .child(condition),
         )
         .finish()
 }
@@ -2586,12 +2621,12 @@ pub(crate) fn mam_storage_eligible(root: Node<'_, '_>) -> bool {
 mod tests {
     use super::{
         add_delay_from, add_muc_user_status, add_stanza_id, blocked_stanza_error, carbon_message,
-        child_text, failure, has_no_store_hint, iq_error, iq_result, is_abuse_rated_message,
-        mam_muc_stanza, mam_storage_eligible, message_storage_policy, muc_occupant_id,
-        muc_occupant_key, muc_presence_stanza_with_status, offline_storage_permitted,
-        prepare_muc_nick, reflect_iq_error_response, set_from, set_muc_occupant_id, set_to,
-        should_carbon, stanza_error, stanza_error_type, stream_error, stream_id,
-        strip_stanza_ids_by_domain, strip_untrusted_direct_delays, valid_bare_jid,
+        child_text, failure, has_no_store_hint, iq_error, iq_error_to, iq_result, iq_result_to,
+        is_abuse_rated_message, mam_muc_stanza, mam_storage_eligible, message_storage_policy,
+        muc_occupant_id, muc_occupant_key, muc_presence_stanza_with_status,
+        offline_storage_permitted, prepare_muc_nick, reflect_iq_error_response, set_from,
+        set_muc_occupant_id, set_to, should_carbon, stanza_error, stanza_error_type, stream_error,
+        stream_id, strip_stanza_ids_by_domain, strip_untrusted_direct_delays, valid_bare_jid,
         valid_language_tag, valid_muc_nick, validate_delivery_receipts,
         validate_modern_message_payloads, validate_no_client_carbon, validate_routed_message,
         BASE64, MAX_OMEMO2_PAYLOAD_BYTES,
@@ -2602,6 +2637,43 @@ mod tests {
     fn transient(xml: &str) -> bool {
         let document = Document::parse(xml).expect("test message must be valid XML");
         has_no_store_hint(document.root_element())
+    }
+
+    #[test]
+    fn addressed_iq_builder_preserves_routing_and_rejects_malformed_payloads() {
+        let valid = iq_result_to(
+            "req-1",
+            "room@example.test",
+            "alice@example.test",
+            "<query/>",
+        );
+        let document = Document::parse(&valid).unwrap();
+        let root = document.root_element();
+        assert_eq!(root.attribute("type"), Some("result"));
+        assert_eq!(root.attribute("from"), Some("room@example.test"));
+        assert_eq!(root.attribute("to"), Some("alice@example.test"));
+        assert_eq!(root.attribute("id"), Some("req-1"));
+        assert_eq!(root.children().filter(|node| node.is_element()).count(), 1);
+
+        let rejected = iq_result_to("req-2", "room@example.test", "alice@example.test", "<x>");
+        let document = Document::parse(&rejected).unwrap();
+        let root = document.root_element();
+        assert_eq!(root.attribute("type"), Some("error"));
+        assert!(document.descendants().any(|node| {
+            node.is_element()
+                && node.tag_name().name() == "internal-server-error"
+                && node.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-stanzas")
+        }));
+
+        let error = iq_error_to(
+            "req-3",
+            "room@example.test",
+            "alice@example.test",
+            "auth",
+            "forbidden",
+        );
+        let document = Document::parse(&error).unwrap();
+        assert_eq!(document.root_element().attribute("type"), Some("error"));
     }
 
     #[test]

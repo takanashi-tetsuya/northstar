@@ -8,8 +8,9 @@
 //! injected explicitly as typed values.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(92);
 pub const NAMESPACE: &str = "jabber:iq:version";
@@ -300,26 +301,16 @@ pub fn build_response(identity: &ServerIdentity<'_>) -> Result<String, Validatio
     }
     validate_field_text(identity.version)?;
 
-    let os_len = identity.os.map_or(0, |s| s.len() + 10);
-    let mut output =
-        String::with_capacity(64 + identity.name.len() + identity.version.len() + os_len);
-    output.push_str("<query xmlns='jabber:iq:version'><name>");
-    escape_xml_text(&mut output, identity.name);
-    output.push_str("</name><version>");
-    escape_xml_text(&mut output, identity.version);
-    output.push_str("</version>");
-
+    let mut query = XmlElement::namespaced("query", NAMESPACE)
+        .child(XmlElement::new("name").text(identity.name))
+        .child(XmlElement::new("version").text(identity.version));
     if let Some(os) = identity.os {
         if !os.trim().is_empty() {
             validate_field_text(os)?;
-            output.push_str("<os>");
-            escape_xml_text(&mut output, os);
-            output.push_str("</os>");
+            query.push_child(XmlElement::new("os").text(os));
         }
     }
-
-    output.push_str("</query>");
-    Ok(output)
+    Ok(query.finish())
 }
 
 /// Build an XEP-0092 version response XML payload string from raw parts.
@@ -330,21 +321,6 @@ pub fn build_response_from_parts(
 ) -> Result<String, ValidationError> {
     let identity = ServerIdentity::new(name, version, os);
     build_response(&identity)
-}
-
-fn escape_xml_text(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -463,7 +439,7 @@ mod tests {
 
         assert_eq!(
             xml,
-            "<query xmlns='jabber:iq:version'><name>Northstar &amp; Friends &lt;edition&gt;</name><version>0.2.0 &quot;preview&apos;1&quot;</version><os>Linux &gt; Unix &amp; BSD</os></query>"
+            "<query xmlns='jabber:iq:version'><name>Northstar &amp; Friends &lt;edition&gt;</name><version>0.2.0 \"preview'1\"</version><os>Linux &gt; Unix &amp; BSD</os></query>"
         );
 
         let parsed = parse_response(&xml).expect("parse response succeeds");

@@ -5,8 +5,8 @@
 //! generates an acknowledgement merely because the server observed delivery.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::Write;
 
 pub const XEP_ID: XepId = XepId::new(184);
 pub const NAMESPACE: &str = "urn:xmpp:receipts";
@@ -130,11 +130,9 @@ pub const fn build_request() -> &'static str {
 
 pub fn build_received(id: &str) -> Result<String, ValidationError> {
     validate_id(id).map_err(|()| ValidationError::InvalidReceivedId)?;
-    let mut xml = String::with_capacity(id.len() + 48);
-    xml.push_str("<received xmlns='urn:xmpp:receipts' id='");
-    escape_attribute(&mut xml, id);
-    xml.push_str("'/>");
-    Ok(xml)
+    Ok(XmlElement::namespaced("received", NAMESPACE)
+        .attr("id", id)
+        .finish())
 }
 
 fn validate_id(id: &str) -> Result<(), ()> {
@@ -142,22 +140,6 @@ fn validate_id(id: &str) -> Result<(), ()> {
         Err(())
     } else {
         Ok(())
-    }
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                // Writing a char into a String cannot fail.
-                let _ = output.write_char(character);
-            }
-        }
     }
 }
 

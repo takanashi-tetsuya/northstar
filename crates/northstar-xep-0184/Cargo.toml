@@ -16,5 +16,6 @@ route-ids = [
 worker-ids = []
 
 [dependencies]
+northstar-xml-builder = { path = "../northstar-xml-builder" }
 northstar-xep-core = { path = "../northstar-xep-core" }
 roxmltree = "0.20"

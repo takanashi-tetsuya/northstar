@@ -8,8 +8,9 @@
 //! aggregation or read state.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(444);
 pub const NAMESPACE: &str = "urn:xmpp:reactions:0";
@@ -283,7 +284,7 @@ where
     validate_identifier(id).map_err(|()| ValidationError::InvalidId)?;
 
     let mut count = 0usize;
-    let mut body = String::new();
+    let mut element = XmlElement::namespaced("reactions", NAMESPACE).attr("id", id);
     for reaction in reactions {
         let r = reaction.as_ref();
         validate_reaction_str(r)?;
@@ -291,61 +292,14 @@ where
         if count > MAX_REACTIONS {
             return Err(ValidationError::ExcessiveReactions);
         }
-        body.push_str("<reaction>");
-        escape_xml_text(&mut body, r);
-        body.push_str("</reaction>");
+        element.push_child(XmlElement::new("reaction").text(r));
     }
-
-    if count == 0 {
-        let mut xml = String::with_capacity(id.len() + 64);
-        xml.push_str("<reactions xmlns='urn:xmpp:reactions:0' id='");
-        escape_attribute(&mut xml, id);
-        xml.push_str("'/>");
-        return Ok(xml);
-    }
-
-    let mut xml = String::with_capacity(id.len() + body.len() + 64);
-    xml.push_str("<reactions xmlns='urn:xmpp:reactions:0' id='");
-    escape_attribute(&mut xml, id);
-    xml.push_str("'>");
-    xml.push_str(&body);
-    xml.push_str("</reactions>");
-    Ok(xml)
+    Ok(element.finish())
 }
 
 /// Build an XML string for a reaction retraction (`<reactions id='...'/>`) per XEP-0444 Section 3.3.
 pub fn build_retraction(id: &str) -> Result<String, ValidationError> {
     build_reactions(id, std::iter::empty::<&str>())
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
-}
-
-fn escape_xml_text(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -576,7 +530,7 @@ mod tests {
         let xml = build_reactions(id, reactions).expect("build reactions");
         assert_eq!(
             xml,
-            "<reactions xmlns='urn:xmpp:reactions:0' id='msg-1&amp;&lt;&apos;&quot;'><reaction>👍&amp;&lt;</reaction><reaction>rock&apos;n&apos;roll</reaction><reaction>&lt;3</reaction></reactions>"
+            "<reactions xmlns='urn:xmpp:reactions:0' id='msg-1&amp;&lt;&apos;&quot;'><reaction>👍&amp;&lt;</reaction><reaction>rock'n'roll</reaction><reaction>&lt;3</reaction></reactions>"
         );
 
         let parsed = parse_element(&xml).expect("parse built reactions");

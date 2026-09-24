@@ -7,8 +7,9 @@
 //! All time and timezone offset values are provided explicitly by the caller.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(202);
 pub const NAMESPACE: &str = "urn:xmpp:time";
@@ -380,34 +381,16 @@ pub fn build_response(time: &EntityTime<'_>) -> Result<String, ValidationError> 
     validate_tzo(time.tzo)?;
     validate_utc(time.utc)?;
 
-    let mut output = String::with_capacity(64 + time.tzo.len() + time.utc.len());
-    output.push_str("<time xmlns='urn:xmpp:time'><tzo>");
-    escape_xml_text(&mut output, time.tzo);
-    output.push_str("</tzo><utc>");
-    escape_xml_text(&mut output, time.utc);
-    output.push_str("</utc></time>");
-    Ok(output)
+    Ok(XmlElement::namespaced("time", NAMESPACE)
+        .child(XmlElement::new("tzo").text(time.tzo))
+        .child(XmlElement::new("utc").text(time.utc))
+        .finish())
 }
 
 /// Build an XEP-0202 time response XML payload string from raw offset and timestamp strings.
 pub fn build_response_from_parts(tzo: &str, utc: &str) -> Result<String, ValidationError> {
     let entity_time = EntityTime::new(tzo, utc)?;
     build_response(&entity_time)
-}
-
-fn escape_xml_text(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

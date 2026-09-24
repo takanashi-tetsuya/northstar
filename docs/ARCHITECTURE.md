@@ -79,6 +79,9 @@ Key ownership:
   protocol tree no longer imports database authority/domain symbols, accesses
   a pool, or uses SQLx directly; persistence is reached only through the
   purpose-specific application-service capabilities exposed by `AppState`.
+- Protocol output uses `northstar-xml-builder` for escaping and validated
+  fragments. Several XEP crates use it for generated payloads while keeping
+  their existing parse and input-validation rules.
 - `src/services/messaging.rs` owns personal-message communication policy and
   durable admission. The stanza handler still owns XML and live routing, but
   cannot directly query users/blocking/privacy or compose MAM, S2S outbox, C2S
@@ -115,16 +118,19 @@ Key ownership:
 - MUC uses an injected room repository for complete mutations and snapshots.
   Room and occupant fences stay inside the PostgreSQL adapter. A separate wake
   port sends committed operation notifications; notification failure records
-  degraded health and leaves the durable outbox available for polling.
+  degraded health and leaves the durable outbox available for polling. Local
+  and federated handlers share the voice-request form and XEP-0045 affiliation
+  policy, while retaining their separate occupancy and delivery authorities.
 - Profile publication uses one repository operation for vCard, avatar/PEP
   changes and their notification audience. The application service keeps the
   shared PubSub mutation permit until that operation finishes or is cancelled.
 - PubSub and PEP use the repository traits in `northstar-pubsub-application`.
   Validation and admission stay in the service; PostgreSQL operations own
   policy locks, item/subscription changes and the immutable outbox audience.
-  XML rendering uses domain snapshots while those locks are held. Notification
-  claims carry their payload digest and lease token without a hidden database
-  row or a second copy of the payload.
+  XML rendering uses domain snapshots while those locks are held. Subscription
+  notifications use the XEP-0060 builder from both service and protocol paths.
+  Notification claims carry their payload digest and lease token without a
+  hidden database row or a second copy of the payload.
 - Blocking, privacy, Push and private XML storage use injected repository
   ports. Privacy keeps live-resource conflict checks in the service, and
   private storage keeps quota policy and bookmark extension preservation.

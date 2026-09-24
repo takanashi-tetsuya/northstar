@@ -8,8 +8,9 @@
 //! storage, or transport dependencies and maintains no global state.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(380);
 pub const NAMESPACE: &str = "urn:xmpp:eme:0";
@@ -224,35 +225,10 @@ pub fn build_encryption(
         validate_value(n).map_err(|()| ValidationError::InvalidName)?;
     }
 
-    let name_len = name.map_or(0, |n| n.len() + 10);
-    let mut xml = String::with_capacity(mechanism_namespace.len() + name_len + 64);
-    xml.push_str("<encryption xmlns='urn:xmpp:eme:0' namespace='");
-    escape_attribute(&mut xml, mechanism_namespace);
-    xml.push('\'');
-
-    if let Some(n) = name {
-        xml.push_str(" name='");
-        escape_attribute(&mut xml, n);
-        xml.push('\'');
-    }
-
-    xml.push_str("/>");
-    Ok(xml)
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
+    Ok(XmlElement::namespaced("encryption", NAMESPACE)
+        .attr("namespace", mechanism_namespace)
+        .optional_attr("name", name)
+        .finish())
 }
 
 #[cfg(test)]

@@ -2258,6 +2258,7 @@ name = "northstar-xep-0092"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2267,6 +2268,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
  "serde",
  "sha1",
@@ -2279,6 +2281,7 @@ name = "northstar-xep-0184"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2315,6 +2318,7 @@ name = "northstar-xep-0202"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2324,6 +2328,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "northstar-xep-core",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
  "thiserror 2.0.20",
@@ -2346,6 +2351,7 @@ name = "northstar-xep-0308"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2366,6 +2372,7 @@ name = "northstar-xep-0333"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2405,6 +2412,7 @@ name = "northstar-xep-0363"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
  "thiserror 2.0.20",
 ]
@@ -2414,6 +2422,7 @@ name = "northstar-xep-0380"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2422,6 +2431,7 @@ name = "northstar-xep-0444"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 
@@ -2430,6 +2440,7 @@ name = "northstar-xep-0461"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "roxmltree",
 ]
 

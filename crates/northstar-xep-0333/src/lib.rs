@@ -8,8 +8,9 @@
 //! global state, and never invents server read state.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(333);
 pub const NAMESPACE: &str = "urn:xmpp:chat-markers:0";
@@ -275,30 +276,11 @@ pub fn build_acknowledged(id: &str) -> Result<String, ValidationError> {
     build_marker_with_id("acknowledged", id)
 }
 
-fn build_marker_with_id(tag: &str, id: &str) -> Result<String, ValidationError> {
+fn build_marker_with_id(tag: &'static str, id: &str) -> Result<String, ValidationError> {
     validate_identifier(id).map_err(|()| ValidationError::InvalidId)?;
-    let mut xml = String::with_capacity(tag.len() * 2 + id.len() + 48);
-    xml.push('<');
-    xml.push_str(tag);
-    xml.push_str(" xmlns='urn:xmpp:chat-markers:0' id='");
-    escape_attribute(&mut xml, id);
-    xml.push_str("'/>");
-    Ok(xml)
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
+    Ok(XmlElement::namespaced(tag, NAMESPACE)
+        .attr("id", id)
+        .finish())
 }
 
 #[cfg(test)]

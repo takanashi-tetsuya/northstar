@@ -509,28 +509,7 @@ fn federated_error(
 }
 
 fn federated_iq_result(stanza: &FederatedStanza, from: &str, to: &str, payload: &str) -> String {
-    let mut iq = XmlElement::namespaced("iq", "jabber:client")
-        .attr("from", from)
-        .attr("to", to)
-        .attr("type", "result")
-        .attr("id", stanza.id.as_deref().unwrap_or_default());
-    if iq.push_validated_fragment(payload).is_err() {
-        return XmlElement::namespaced("iq", "jabber:client")
-            .attr("from", from)
-            .attr("to", to)
-            .attr("type", "error")
-            .attr("id", stanza.id.as_deref().unwrap_or_default())
-            .child(
-                XmlElement::new("error")
-                    .attr("type", "wait")
-                    .child(XmlElement::namespaced(
-                        "internal-server-error",
-                        "urn:ietf:params:xml:ns:xmpp-stanzas",
-                    )),
-            )
-            .finish();
-    }
-    iq.finish()
+    iq_result_to(stanza.id.as_deref().unwrap_or_default(), from, to, payload)
 }
 
 fn same_bare_jid(left: &str, right: &str) -> bool {
@@ -549,12 +528,23 @@ fn can_retrieve_affiliations(
     members_only: bool,
     non_anonymous: bool,
 ) -> bool {
-    matches!(requested, "owner" | "admin" | "member" | "outcast")
-        && (matches!(requester, "owner" | "admin")
-            || (requester == "member"
-                && members_only
-                && non_anonymous
-                && matches!(requested, "owner" | "admin" | "member")))
+    use northstar_xep_0045::{Affiliation, PermissionDecision};
+
+    if !matches!(requested, "owner" | "admin" | "member" | "outcast") {
+        return false;
+    }
+    let (Some(requester), Some(requested)) = (
+        Affiliation::from_str_name(requester),
+        Affiliation::from_str_name(requested),
+    ) else {
+        return false;
+    };
+    northstar_xep_0045::evaluate_affiliation_list_access(
+        requester,
+        requested,
+        members_only,
+        non_anonymous,
+    ) == PermissionDecision::Allowed
 }
 
 async fn unregister_remote_occupant(
@@ -2136,45 +2126,8 @@ async fn federated_muc_message_owned(
                 if !room.moderated || own.role != "visitor" {
                     return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                 }
-                let voice_request = XmlElement::new("message")
-                    .attr("from", &room_jid)
-                    .attr("type", "normal")
-                    .attr("id", uuid::Uuid::new_v4())
-                    .child(
-                        XmlElement::namespaced("x", "jabber:x:data")
-                            .attr("type", "form")
-                            .child(XmlElement::new("title").text("Voice request"))
-                            .child(
-                                XmlElement::new("instructions")
-                                    .text("Approve this request to grant the occupant voice."),
-                            )
-                            .child(super::muc::muc_xdata_value_field(
-                                "FORM_TYPE",
-                                "hidden",
-                                "http://jabber.org/protocol/muc#request",
-                            ))
-                            .child(super::muc::muc_xdata_value_field(
-                                "muc#role",
-                                "list-single",
-                                "participant",
-                            ))
-                            .child(super::muc::muc_xdata_value_field(
-                                "muc#jid",
-                                "jid-single",
-                                &own.full_jid,
-                            ))
-                            .child(super::muc::muc_xdata_value_field(
-                                "muc#roomnick",
-                                "text-single",
-                                &own.nick,
-                            ))
-                            .child(super::muc::muc_xdata_value_field(
-                                "muc#request_allow",
-                                "boolean",
-                                "false",
-                            )),
-                    )
-                    .finish();
+                let voice_request =
+                    super::muc::muc_voice_request(&room_jid, &own.full_jid, &own.nick);
                 for moderator in occupants
                     .values()
                     .filter(|occupant| occupant.role == "moderator")
@@ -3640,7 +3593,7 @@ async fn federated_muc_iq_owned(
                                 XmlElement::new("instructions")
                                     .text("Choose the nickname to reserve in this room."),
                             )
-                            .child(super::muc::muc_xdata_value_field(
+                            .child(xdata_value_field(
                                 "FORM_TYPE",
                                 "hidden",
                                 "http://jabber.org/protocol/muc#register",
@@ -6562,6 +6515,35 @@ pub(crate) async fn federated_muc_connection_closed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn federated_affiliation_lists_follow_shared_muc_permissions() {
+        for requester in ["owner", "admin"] {
+            for requested in ["owner", "admin", "member", "outcast"] {
+                assert!(can_retrieve_affiliations(
+                    requester, requested, false, false
+                ));
+            }
+            assert!(!can_retrieve_affiliations(requester, "none", true, true));
+        }
+        for requested in ["owner", "admin", "member"] {
+            assert!(can_retrieve_affiliations("member", requested, true, true));
+        }
+        for (requester, requested, members_only, non_anonymous) in [
+            ("member", "outcast", true, true),
+            ("member", "member", false, true),
+            ("member", "member", true, false),
+            ("none", "member", true, true),
+            ("invalid", "member", true, true),
+        ] {
+            assert!(!can_retrieve_affiliations(
+                requester,
+                requested,
+                members_only,
+                non_anonymous
+            ));
+        }
+    }
 
     fn extension_runtime() -> crate::xmpp::extensions::ExtensionRuntime {
         crate::xmpp::extensions::ExtensionRuntime::resolve(

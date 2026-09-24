@@ -3,9 +3,9 @@
 use crate::constants::*;
 use crate::error::CapsError;
 use crate::model::{CapsAdvertisement, DiscoInfo, ExtendedForm, Feature, FormField, Identity};
+use northstar_xml_builder::XmlElement;
 use roxmltree::{Document, Node};
 use std::collections::HashSet;
-use std::fmt::Write;
 
 /// Parses a `<c xmlns='http://jabber.org/protocol/caps'/>` child from an enclosing `<presence>` stanza node.
 ///
@@ -65,29 +65,12 @@ pub fn parse_caps_xml(xml: &str) -> Result<CapsAdvertisement, CapsError> {
 
 /// Builds a `<c xmlns='http://jabber.org/protocol/caps' .../>` XML string from a `CapsAdvertisement`.
 pub fn build_caps_element(caps: &CapsAdvertisement) -> String {
-    let mut xml = String::with_capacity(128);
-    xml.push_str("<c xmlns='http://jabber.org/protocol/caps'");
-
-    if let Some(ref hash) = caps.hash {
-        xml.push_str(" hash='");
-        escape_attribute(&mut xml, hash);
-        xml.push('\'');
-    }
-
-    xml.push_str(" node='");
-    escape_attribute(&mut xml, &caps.node);
-    xml.push_str("' ver='");
-    escape_attribute(&mut xml, &caps.ver);
-    xml.push('\'');
-
-    if let Some(ref ext) = caps.ext {
-        xml.push_str(" ext='");
-        escape_attribute(&mut xml, ext);
-        xml.push('\'');
-    }
-
-    xml.push_str("/>");
-    xml
+    XmlElement::namespaced("c", CAPS_NS)
+        .optional_attr("hash", caps.hash.as_deref())
+        .attr("node", &caps.node)
+        .attr("ver", &caps.ver)
+        .optional_attr("ext", caps.ext.as_deref())
+        .finish()
 }
 
 /// Parses a `<query xmlns='http://jabber.org/protocol/disco#info'/>` XML node into `DiscoInfo`.
@@ -252,87 +235,51 @@ pub fn parse_disco_info_xml(xml: &str) -> Result<DiscoInfo, CapsError> {
 
 /// Builds a `<query xmlns='http://jabber.org/protocol/disco#info' ...>` XML element from `DiscoInfo`.
 pub fn build_disco_info_query(disco: &DiscoInfo) -> String {
-    let mut xml = String::with_capacity(512);
-    xml.push_str("<query xmlns='http://jabber.org/protocol/disco#info'");
-
-    if let Some(ref node) = disco.node {
-        xml.push_str(" node='");
-        escape_attribute(&mut xml, node);
-        xml.push('\'');
-    }
-
-    xml.push('>');
-
+    let mut query =
+        XmlElement::namespaced("query", DISCO_INFO_NS).optional_attr("node", disco.node.as_deref());
     for identity in &disco.identities {
-        xml.push_str("<identity category='");
-        escape_attribute(&mut xml, identity.category());
-        xml.push_str("' type='");
-        escape_attribute(&mut xml, identity.kind());
-        xml.push('\'');
-
-        if let Some(lang) = identity.lang() {
-            xml.push_str(" xml:lang='");
-            escape_attribute(&mut xml, lang);
-            xml.push('\'');
-        }
-
-        if let Some(name) = identity.name() {
-            xml.push_str(" name='");
-            escape_attribute(&mut xml, name);
-            xml.push('\'');
-        }
-
-        xml.push_str("/>");
-    }
-
-    for feature in &disco.features {
-        xml.push_str("<feature var='");
-        escape_attribute(&mut xml, feature.var());
-        xml.push_str("'/>");
-    }
-
-    for form in &disco.forms {
-        xml.push_str(
-            "<x xmlns='jabber:x:data' type='result'><field var='FORM_TYPE' type='hidden'><value>",
+        query.push_child(
+            XmlElement::new("identity")
+                .attr("category", identity.category())
+                .attr("type", identity.kind())
+                .optional_attr("xml:lang", identity.lang())
+                .optional_attr("name", identity.name()),
         );
-        escape_text(&mut xml, form.form_type());
-        xml.push_str("</value></field>");
-
-        for field in form.fields() {
-            xml.push_str("<field var='");
-            escape_attribute(&mut xml, field.var());
-            xml.push_str("'>");
-            for val in field.values() {
-                xml.push_str("<value>");
-                escape_text(&mut xml, val);
-                xml.push_str("</value>");
-            }
-            xml.push_str("</field>");
-        }
-
-        xml.push_str("</x>");
     }
-
-    xml.push_str("</query>");
-    xml
+    for feature in &disco.features {
+        query.push_child(XmlElement::new("feature").attr("var", feature.var()));
+    }
+    for form in &disco.forms {
+        let mut x = XmlElement::namespaced("x", "jabber:x:data")
+            .attr("type", "result")
+            .child(
+                XmlElement::new("field")
+                    .attr("var", "FORM_TYPE")
+                    .attr("type", "hidden")
+                    .child(XmlElement::new("value").text(form.form_type())),
+            );
+        for field in form.fields() {
+            let mut field_element = XmlElement::new("field").attr("var", field.var());
+            for val in field.values() {
+                field_element.push_child(XmlElement::new("value").text(val.as_str()));
+            }
+            x.push_child(field_element);
+        }
+        query.push_child(x);
+    }
+    query.finish()
 }
 
 /// Builds a disco#info IQ request query string:
 /// `<iq type='get' from='{from}' to='{to}' id='{id}'><query xmlns='http://jabber.org/protocol/disco#info' node='{node}#{ver}'/></iq>`
 pub fn build_disco_info_request(from: &str, to: &str, id: &str, node: &str, ver: &str) -> String {
-    let mut xml = String::with_capacity(256);
-    xml.push_str("<iq type='get' from='");
-    escape_attribute(&mut xml, from);
-    xml.push_str("' to='");
-    escape_attribute(&mut xml, to);
-    xml.push_str("' id='");
-    escape_attribute(&mut xml, id);
-    xml.push_str("'><query xmlns='http://jabber.org/protocol/disco#info' node='");
-    escape_attribute(&mut xml, node);
-    xml.push('#');
-    escape_attribute(&mut xml, ver);
-    xml.push_str("'/></iq>");
-    xml
+    XmlElement::new("iq")
+        .attr("type", "get")
+        .attr("from", from)
+        .attr("to", to)
+        .attr("id", id)
+        .child(XmlElement::namespaced("query", DISCO_INFO_NS).attr("node", format!("{node}#{ver}")))
+        .finish()
 }
 
 /// Validates that the node attribute in a disco#info query response matches the expected `"{node}#{ver}"`.
@@ -351,33 +298,5 @@ pub fn validate_disco_node_attribute(
             expected,
             actual: "<none>".to_owned(),
         }),
-    }
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for c in value.chars() {
-        match c {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            other => {
-                let _ = output.write_char(other);
-            }
-        }
-    }
-}
-
-fn escape_text(output: &mut String, value: &str) {
-    for c in value.chars() {
-        match c {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            other => {
-                let _ = output.write_char(other);
-            }
-        }
     }
 }

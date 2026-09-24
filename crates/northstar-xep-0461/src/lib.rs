@@ -18,8 +18,9 @@
 //! storage decisions.
 
 use northstar_xep_core::{ExtensionDescriptor, StanzaKind, StanzaRoute, XepId};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
-use std::fmt::{self, Write};
+use std::fmt;
 
 pub const XEP_ID: XepId = XepId::new(461);
 pub const NAMESPACE: &str = "urn:xmpp:reply:0";
@@ -243,28 +244,10 @@ pub fn build_reply(to: &str, id: &str) -> Result<String, ValidationError> {
     validate_to_attribute(to).map_err(|()| ValidationError::InvalidTo)?;
     validate_identifier(id).map_err(|()| ValidationError::InvalidId)?;
 
-    let mut xml = String::with_capacity(to.len() + id.len() + 64);
-    xml.push_str("<reply xmlns='urn:xmpp:reply:0' to='");
-    escape_attribute(&mut xml, to);
-    xml.push_str("' id='");
-    escape_attribute(&mut xml, id);
-    xml.push_str("'/>");
-    Ok(xml)
-}
-
-fn escape_attribute(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\'' => output.push_str("&apos;"),
-            '"' => output.push_str("&quot;"),
-            character => {
-                let _ = output.write_char(character);
-            }
-        }
-    }
+    Ok(XmlElement::namespaced("reply", NAMESPACE)
+        .attr("to", to)
+        .attr("id", id)
+        .finish())
 }
 
 #[cfg(test)]

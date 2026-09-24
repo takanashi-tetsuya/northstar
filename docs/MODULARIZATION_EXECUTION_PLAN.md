@@ -689,23 +689,20 @@ another set of crates. Track implementation and external evidence separately in
 | R2 | Certificate revocation: specify PKIX/DANE and inbound/outbound trust policy first; prototype operator-supplied, freshness-checked OCSP stapling before considering bounded online retrieval | Valid, revoked, stale, unavailable and malformed responses have documented fail policy and TLS interoperability tests; no certificate-provided URL is fetched without explicit source and network policy |
 | R3 | WASM provenance: reproduce the deployed `libomemo.js` and `hash-wasm` bytes from pinned source and toolchains in isolated builders | Two independent builds match the shipped bytes, with recorded source/toolchain digests, SBOM and offline verification; until then the status remains `provenance-traced-not-reproducible` |
 
-C1 now uses one authorized root-discovery query instead of repeated per-node
-reads, and node lookups have a separate read-only repository capability from
-node mutations. Item, subscription and affiliation queries also have separate
-repository capabilities from their mutations; the corresponding service reads
-need only those query capabilities. Subscription expiry policy takes an explicit
-observation time
-from its caller, so the core does not read the process clock. Subscription
-admission policy is also shared by the service precheck and the PostgreSQL
-transaction; the transaction still re-reads affiliation before committing.
-C2 has a shared
-MAM page-size and filter limit across the wire
-parser, application service and PostgreSQL adapter. The pure RSM window calculation
-resides in archive core; cursor resolution and page execution still share the
-authorized transaction. Local and federated room readers now share one pure
-visibility decision while retaining their distinct database locks. D1 no
-longer stores a second WebSocket flag alongside the transport kind. These are
-completed slices, not packet exit claims.
+C1 uses one authorized root-discovery query instead of repeated per-node reads.
+Node, item, subscription and affiliation queries have separate repository
+capabilities from their mutations, and service reads require only those query
+capabilities. Subscription expiry policy receives the observation time from its
+caller. Service prechecks and the PostgreSQL transaction share subscription
+admission policy; the transaction still re-reads affiliation before commit.
+
+C2 shares MAM page-size and filter limits across the wire parser, application
+service and PostgreSQL adapter. Archive core now plans the RSM window for
+personal, MUC and MIX queries. Cursor resolution, authorization, counting and
+page execution remain in the same database snapshot. Local and federated room
+readers share a pure visibility decision while retaining their distinct locks.
+D1 no longer stores a second WebSocket flag alongside the transport kind.
+These are completed slices, not packet exit claims.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated
 S2S connection through an exact PostgreSQL occupancy transition. The

@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_archive_application::MAX_MAM_PAGE_SIZE;
+use northstar_archive_core::{plan_mam_page, ResolvedMamRsmPage};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::{
@@ -4926,38 +4928,23 @@ async fn mix_mam_page_for(
         .fetch_one(&mut *transaction)
         .await?;
 
-    let (rsm_after, rsm_before, descending) = match query.page {
-        super::MamRsmPage::First => (None, None, false),
-        super::MamRsmPage::Last => (None, None, true),
-        super::MamRsmPage::Index(_) => (None, None, false),
-        super::MamRsmPage::After(id) => (
-            Some(
-                mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
-                    .await?
-                    .expect("validated MIX MAM after cursor disappeared"),
-            ),
-            None,
-            false,
+    let resolved_page = match query.page {
+        super::MamRsmPage::First => ResolvedMamRsmPage::First,
+        super::MamRsmPage::Last => ResolvedMamRsmPage::Last,
+        super::MamRsmPage::Index(index) => ResolvedMamRsmPage::Index(index),
+        super::MamRsmPage::After(id) => ResolvedMamRsmPage::After(
+            mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
+                .await?
+                .expect("validated MIX MAM after cursor disappeared"),
         ),
-        super::MamRsmPage::Before(id) => (
-            None,
-            Some(
-                mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
-                    .await?
-                    .expect("validated MIX MAM before cursor disappeared"),
-            ),
-            true,
+        super::MamRsmPage::Before(id) => ResolvedMamRsmPage::Before(
+            mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
+                .await?
+                .expect("validated MIX MAM before cursor disappeared"),
         ),
     };
-    let page_after = match (form_after, rsm_after) {
-        (Some(left), Some(right)) => Some(std::cmp::max(left, right)),
-        (left, right) => left.or(right),
-    };
-    let page_before = match (form_before, rsm_before) {
-        (Some(left), Some(right)) => Some(std::cmp::min(left, right)),
-        (left, right) => left.or(right),
-    };
-    let max = query.max.clamp(0, 100);
+    let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
+    let window = plan_mam_page(form_after, form_before, resolved_page, max);
     let mut page_builder = QueryBuilder::<Postgres>::new(
         "SELECT authoritative_id AS id, item_id, payload, created_at FROM mix_events",
     );
@@ -4966,16 +4953,16 @@ async fn mix_mam_page_for(
         channel_id,
         query,
         &blocked_patterns,
-        page_after,
-        page_before,
+        window.after,
+        window.before,
     );
-    page_builder.push(if descending {
+    page_builder.push(if window.descending {
         " ORDER BY created_at DESC, id DESC LIMIT "
     } else {
         " ORDER BY created_at ASC, id ASC LIMIT "
     });
-    page_builder.push_bind(max + 1);
-    if let super::MamRsmPage::Index(index) = query.page {
+    page_builder.push_bind(window.fetch_limit);
+    if let Some(index) = window.offset {
         page_builder.push(" OFFSET ").push_bind(index);
     }
     let rows = page_builder.build().fetch_all(&mut *transaction).await?;
@@ -4992,7 +4979,7 @@ async fn mix_mam_page_for(
     if has_more {
         events.truncate(max as usize);
     }
-    if descending {
+    if window.descending {
         events.reverse();
     }
 

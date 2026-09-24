@@ -111,6 +111,55 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     assert_eq!(after.first_index, 2);
     assert!(after.complete);
 
+    let before = mix_mam_page(
+        &pool,
+        channel_id,
+        &query(super::super::MamRsmPage::Before(third), 1),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(before.events[0].id, second);
+    assert_eq!(before.first_index, 1);
+    assert!(!before.complete);
+
+    let indexed = mix_mam_page(
+        &pool,
+        channel_id,
+        &query(super::super::MamRsmPage::Index(1), 2),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        indexed
+            .events
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>(),
+        vec![second, third]
+    );
+    assert_eq!(indexed.first_index, 1);
+    assert!(!indexed.complete);
+
+    let mut intersected = query(super::super::MamRsmPage::Before(fourth), 10);
+    intersected.after_id = Some(first);
+    let intersected = mix_mam_page(&pool, channel_id, &intersected)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        intersected
+            .events
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>(),
+        vec![second, third]
+    );
+    assert_eq!(intersected.total, 3);
+    assert_eq!(intersected.first_index, 0);
+    assert!(intersected.complete);
+
     let mut filtered = query(super::super::MamRsmPage::Last, 1);
     filtered.with_jid = Some("bob@example.test".to_owned());
     let filtered = mix_mam_page(&pool, channel_id, &filtered)

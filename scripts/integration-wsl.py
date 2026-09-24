@@ -4737,17 +4737,32 @@ def run() -> None:
         f"<presence xmlns='jabber:client' id='muc-full-resync' to='{room}/Bob'>"
         "<x xmlns='http://jabber.org/protocol/muc'><history maxstanzas='0'/></x></presence>"
     )
-    _, resync_frames = bob.receive_until("<subject")
+    resync_frames = []
+    resync_self_index = None
+    resync_subject_index = None
+    resync_deadline = time.monotonic() + 10
+    while time.monotonic() < resync_deadline:
+        try:
+            frame = bob.receive(max(0.1, resync_deadline - time.monotonic()))
+        except (TimeoutError, socket.timeout):
+            break
+        resync_frames.append(frame)
+        if "id='muc-full-resync'" in frame and "code='110'" in frame:
+            resync_self_index = len(resync_frames) - 1
+        if resync_self_index is not None and "<subject" in frame:
+            resync_subject_index = len(resync_frames) - 1
+            break
     resync = "".join(resync_frames)
     check(
-        f"from='{room}/Alice'" in resync
-        and "id='muc-full-resync'" in resync
-        and "code='110'" in resync
-        and resync.index(f"from='{room}/Alice'") < resync.index("code='110'")
-        # An empty MUC subject is correctly serialized as <subject/>.  Check
-        # the subject element's start rather than requiring a non-empty body.
-        < resync.index("<subject"),
-        "repeated tagged MUC join did not return roster, self-presence, then subject",
+        resync_self_index is not None
+        and resync_subject_index is not None
+        and any(
+            f"from='{room}/Alice'" in frame
+            for frame in resync_frames[:resync_self_index]
+        )
+        and resync_self_index < resync_subject_index,
+        "repeated tagged MUC join did not return roster, self-presence, then subject: "
+        + repr(resync[:4096]),
     )
     alice_saw_bob, _ = alice.receive_until(f"from='{room}/Bob'")
     check("type='unavailable'" not in alice_saw_bob, "MUC join was not broadcast")

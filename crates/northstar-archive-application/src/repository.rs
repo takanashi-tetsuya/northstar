@@ -18,8 +18,8 @@ pub struct FederatedMamOutboxLimits {
     pub max_per_domain: i64,
 }
 
-/// Archive reads retain authorization and page selection in one database snapshot.
-/// Legacy room reads may also initialize a missing occupant-ID secret.
+/// Room archive reads retain authorization and page selection in one database
+/// snapshot. Legacy rooms may also initialize a missing occupant-ID secret.
 pub trait MamQueryRepository: Send + Sync {
     type Error;
     fn query_archive(

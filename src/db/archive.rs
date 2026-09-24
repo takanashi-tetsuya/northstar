@@ -1371,6 +1371,33 @@ async fn mam_archive_page_for_in_transaction(
     }))
 }
 
+async fn mam_room_occupant_id_secret_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+    existing: Option<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    if let Some(secret) = existing.filter(|secret| !secret.is_empty()) {
+        return Ok(secret);
+    }
+    // Older rooms lack the XEP-0421 secret. Keep the one-time repair in the
+    // same snapshot that produces the authorized archive capability.
+    let mut secret = vec![0_u8; 32];
+    rand::thread_rng().fill_bytes(&mut secret);
+    let updated = sqlx::query(
+        "UPDATE muc_rooms SET occupant_id_secret=$2
+          WHERE id=$1 AND occupant_id_secret IS NULL",
+    )
+    .bind(room_id)
+    .bind(&secret)
+    .execute(&mut **transaction)
+    .await?;
+    anyhow::ensure!(
+        updated.rows_affected() == 1,
+        "MAM room occupant-id secret changed during snapshot authorization"
+    );
+    Ok(secret)
+}
+
 async fn authorize_mam_room_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     localpart: &str,
@@ -1404,29 +1431,12 @@ async fn authorize_mam_room_in_transaction(
         MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
     };
     let room_id: Uuid = row.try_get("id")?;
-    let occupant_id_secret = match row.try_get::<Option<Vec<u8>>, _>("occupant_id_secret")? {
-        Some(secret) if !secret.is_empty() => secret,
-        _ => {
-            // Historical rooms created before XEP-0421 support may not have a
-            // secret. Repair it inside this same snapshot before returning an
-            // authorized archive capability.
-            let mut secret = vec![0_u8; 32];
-            rand::thread_rng().fill_bytes(&mut secret);
-            let updated = sqlx::query(
-                "UPDATE muc_rooms SET occupant_id_secret=$2
-                  WHERE id=$1 AND occupant_id_secret IS NULL",
-            )
-            .bind(room_id)
-            .bind(&secret)
-            .execute(&mut **transaction)
-            .await?;
-            anyhow::ensure!(
-                updated.rows_affected() == 1,
-                "MAM room occupant-id secret changed during snapshot authorization"
-            );
-            secret
-        }
-    };
+    let occupant_id_secret = mam_room_occupant_id_secret_in_transaction(
+        transaction,
+        room_id,
+        row.try_get("occupant_id_secret")?,
+    )
+    .await?;
     Ok(MamRoomReadOutcome::Allowed {
         access: MamRoomArchiveAccess {
             room_id,
@@ -1490,26 +1500,12 @@ async fn authorize_federated_mam_room_in_transaction(
         MamRoomReadDecision::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
         MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
     };
-    let occupant_id_secret = match row.try_get::<Option<Vec<u8>>, _>("occupant_id_secret")? {
-        Some(secret) if !secret.is_empty() => secret,
-        _ => {
-            let mut secret = vec![0_u8; 32];
-            rand::thread_rng().fill_bytes(&mut secret);
-            let updated = sqlx::query(
-                "UPDATE muc_rooms SET occupant_id_secret=$2
-                  WHERE id=$1 AND occupant_id_secret IS NULL",
-            )
-            .bind(room_id)
-            .bind(&secret)
-            .execute(&mut **transaction)
-            .await?;
-            anyhow::ensure!(
-                updated.rows_affected() == 1,
-                "federated MAM room occupant-id secret changed during snapshot authorization"
-            );
-            secret
-        }
-    };
+    let occupant_id_secret = mam_room_occupant_id_secret_in_transaction(
+        transaction,
+        room_id,
+        row.try_get("occupant_id_secret")?,
+    )
+    .await?;
     Ok(MamRoomReadOutcome::Allowed {
         access: MamRoomArchiveAccess {
             room_id,
@@ -3279,6 +3275,43 @@ mod history_identity_pg_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("UPDATE muc_rooms SET occupant_id_secret=NULL WHERE id=$1")
+            .bind(room_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let local_secret = match authorize_mam_room(&pool, "snapshot-room", viewer_id, false)
+            .await
+            .unwrap()
+        {
+            MamRoomReadOutcome::Allowed { access, .. } => access.occupant_id_secret,
+            other => panic!("legacy local room was not authorized: {other:?}"),
+        };
+        assert_eq!(local_secret.len(), 32);
+        sqlx::query("UPDATE muc_rooms SET occupant_id_secret=NULL WHERE id=$1")
+            .bind(room_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let federated_secret =
+            match authorize_federated_mam_room(&pool, "snapshot-room", "remote@remote.test", false)
+                .await
+                .unwrap()
+            {
+                MamRoomReadOutcome::Allowed { access, .. } => access.occupant_id_secret,
+                other => panic!("legacy federated room was not authorized: {other:?}"),
+            };
+        assert_eq!(federated_secret.len(), 32);
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<Vec<u8>>>(
+                "SELECT occupant_id_secret FROM muc_rooms WHERE id=$1"
+            )
+            .bind(room_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            Some(federated_secret)
+        );
         let message_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO muc_messages

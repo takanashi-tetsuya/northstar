@@ -654,7 +654,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
   }
   const mixNoHolTest = structBody(
-    mixProtocol,
+    read('src/xmpp/protocol/mix_tests.rs'),
     'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
   );
   if (
@@ -3221,6 +3221,9 @@ while (pendingResponsibilitySources.length > 0) {
     if (entry.isDirectory()) pendingResponsibilitySources.push(full);
     else if (entry.isFile() && entry.name.endsWith('.rs')) {
       const relative = path.relative(root, full).replaceAll('\\', '/');
+      // Sibling test modules are compiled only through #[cfg(test)] #[path].
+      // They are not production worker registration sites.
+      if (/(?:^|\/)(?:[^/]*_tests|tests)\.rs$/.test(relative)) continue;
       productionRustSources.push({
         relative,
         source: productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative),

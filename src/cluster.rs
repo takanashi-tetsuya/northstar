@@ -20,44 +20,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Debug)]
-struct RedisConnectionManager {
-    client: redis::Client,
-}
+mod pool;
 
-impl bb8::ManageConnection for RedisConnectionManager {
-    type Connection = redis::aio::MultiplexedConnection;
-    type Error = redis::RedisError;
-
-    async fn connect(&self) -> std::result::Result<Self::Connection, Self::Error> {
-        let config = redis::AsyncConnectionConfig::new()
-            .set_connection_timeout(Some(REDIS_CONNECT_TIMEOUT))
-            .set_response_timeout(Some(REDIS_IO_TIMEOUT));
-        self.client
-            .get_multiplexed_async_connection_with_config(&config)
-            .await
-    }
-
-    async fn is_valid(
-        &self,
-        connection: &mut Self::Connection,
-    ) -> std::result::Result<(), Self::Error> {
-        let pong: String = redis::cmd("PING").query_async(connection).await?;
-        if pong == "PONG" {
-            Ok(())
-        } else {
-            Err((
-                redis::ErrorKind::Extension,
-                "Redis PING returned an invalid response",
-            )
-                .into())
-        }
-    }
-
-    fn has_broken(&self, _: &mut Self::Connection) -> bool {
-        false
-    }
-}
+use pool::{
+    cluster_pool_builder, open_pubsub, publish_listener_probe, subscribe_pubsub,
+    RedisConnectionManager,
+};
 
 const SESSION_TTL_SECONDS: u64 = 900;
 // Match the configured XEP-0198 resume-timeout upper bound. This prevents a
@@ -111,45 +79,6 @@ const PRESENCE_AUTHORITY_VERSION: u16 = 1;
 const LEGACY_DELIVERY_PROTOCOL_MAX: u16 = 7;
 #[cfg(test)]
 const MAX_REPLAY_ENTRIES: usize = 65_536;
-
-async fn open_pubsub(client: &redis::Client) -> Result<redis::aio::PubSub> {
-    tokio::time::timeout(REDIS_CONNECT_TIMEOUT, client.get_async_pubsub())
-        .await
-        .context("Redis PubSub connection timed out")?
-        .context("failed to connect Redis PubSub")
-}
-
-async fn subscribe_pubsub(pubsub: &mut redis::aio::PubSub, channel: &str) -> Result<()> {
-    tokio::time::timeout(REDIS_IO_TIMEOUT, pubsub.subscribe(channel))
-        .await
-        .context("Redis PubSub subscription timed out")?
-        .context("failed to subscribe Redis PubSub")
-}
-
-async fn publish_listener_probe(
-    transport: &ClusterPubsubListenerTransport,
-    channel: &str,
-    token: &str,
-) -> Result<()> {
-    let pool = transport
-        .pool
-        .as_ref()
-        .context("Redis listener probe started without a configured pool")?;
-    let mut connection = pool.get().await?;
-    let receivers: usize =
-        tokio::time::timeout(REDIS_IO_TIMEOUT, connection.publish(channel, token))
-            .await
-            .context("Redis listener self-loop publish timed out")??;
-    anyhow::ensure!(receivers > 0, "Redis listener self-loop had no subscriber");
-    Ok(())
-}
-
-fn cluster_pool_builder<M: bb8::ManageConnection>() -> bb8::Builder<M> {
-    Pool::<M>::builder()
-        .max_size(CLUSTER_REDIS_POOL_MAX_SIZE)
-        .connection_timeout(REDIS_IO_TIMEOUT)
-        .retry_connection(false)
-}
 
 fn requires_correlated_ack(peer_version: Option<&str>) -> bool {
     peer_version

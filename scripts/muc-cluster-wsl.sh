@@ -54,7 +54,7 @@ require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
   "existing.destination_instance_uuid<>p_destination_uuid" "destination instance replay fence"
 require_literal "$project_dir/src/db/muc.rs" \
   "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency"
-require_literal "$project_dir/src/cluster.rs" \
+require_literal "$project_dir/src/cluster/listener.rs" \
   "executable MUC control rejected" "untrusted executable MUC control rejection"
 require_literal "$project_dir/src/cluster.rs" \
   "worker.delivery_read.recipient_snapshot(delivery).await" "recipient snapshot service boundary"

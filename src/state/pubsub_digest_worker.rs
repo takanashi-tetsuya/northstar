@@ -36,11 +36,13 @@ impl PubSubDigestWorkerContext {
         node_id: Uuid,
         subscriber_jid: &str,
     ) -> Result<Option<Vec<String>>> {
-        Ok(self
+        let subscription = self
             .service
             .outbox_get_subscription(node_id, subscriber_jid)
-            .await?
-            .filter(|subscription| subscription.deliver && subscription.is_active())
+            .await?;
+        let now = chrono::Utc::now();
+        Ok(subscription
+            .filter(|subscription| subscription.deliver && subscription.is_active_at(now))
             .map(|subscription| subscription.show_values))
     }
 

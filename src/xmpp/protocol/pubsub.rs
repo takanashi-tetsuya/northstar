@@ -600,7 +600,7 @@ async fn handle_entity_get(
                     "not-subscribed",
                 )));
             };
-            if subscription.is_expired() {
+            if subscription.is_expired_at(chrono::Utc::now()) {
                 return Ok(PubSubReply::ExtendedError(PubSubError::new(
                     "unexpected-request",
                     "not-subscribed",
@@ -696,9 +696,11 @@ async fn handle_entity_get(
             let subscriptions = state
                 .pubsub_service()
                 .subscriptions_for_jid(&requester_full, Some(node_name))
-                .await?
+                .await?;
+            let now = chrono::Utc::now();
+            let subscriptions = subscriptions
                 .into_iter()
-                .filter(PubSubSubscription::is_active)
+                .filter(|subscription| subscription.is_active_at(now))
                 .collect::<Vec<_>>();
             if let Err(reply) = item_retrieval_access(
                 &node.access_model,
@@ -960,7 +962,7 @@ async fn handle_entity_set(
                     "not-subscribed",
                 )));
             };
-            if subscription.is_expired() {
+            if subscription.is_expired_at(chrono::Utc::now()) {
                 return Ok(PubSubReply::ExtendedError(PubSubError::new(
                     "unexpected-request",
                     "not-subscribed",

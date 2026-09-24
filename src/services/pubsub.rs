@@ -286,7 +286,7 @@ impl<R: PubSubRepository> PubSubService<R> {
                     outcome: PubSubSubscribeOutcome::PendingSubscription,
                 });
             }
-            if existing.is_active() && write.options.is_none() {
+            if existing.is_active_at(chrono::Utc::now()) && write.options.is_none() {
                 return Ok(PubSubSubscribeResult {
                     outcome: PubSubSubscribeOutcome::ExistingActive(existing.clone()),
                 });
@@ -369,7 +369,7 @@ impl<R: PubSubRepository> PubSubService<R> {
                 outcome: PubSubUnsubscribeOutcome::NotSubscribed,
             });
         };
-        if subscription.is_expired() {
+        if subscription.is_expired_at(chrono::Utc::now()) {
             return Ok(PubSubUnsubscribeResult {
                 outcome: PubSubUnsubscribeOutcome::NotSubscribed,
             });

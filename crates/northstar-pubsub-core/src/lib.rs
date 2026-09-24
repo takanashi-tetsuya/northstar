@@ -369,12 +369,41 @@ pub struct PubSubSubscription {
 }
 
 impl PubSubSubscription {
-    pub fn is_active(&self) -> bool {
-        self.state == "subscribed" && self.expire.is_none_or(|expire| expire > Utc::now())
+    pub fn is_active_at(&self, now: DateTime<Utc>) -> bool {
+        self.state == "subscribed" && self.expire.is_none_or(|expire| expire > now)
     }
 
-    pub fn is_expired(&self) -> bool {
-        self.expire.is_some_and(|expire| expire <= Utc::now())
+    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
+        self.expire.is_some_and(|expire| expire <= now)
+    }
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::*;
+
+    #[test]
+    fn subscription_expires_at_its_deadline() {
+        let deadline = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let subscription = PubSubSubscription {
+            node: "updates".into(),
+            jid: "reader@example.org".into(),
+            state: "subscribed".into(),
+            subid: "s1".into(),
+            deliver: true,
+            digest: false,
+            digest_frequency: 0,
+            expire: Some(deadline),
+            include_body: false,
+            show_values: Vec::new(),
+            subscription_type: "items".into(),
+            subscription_depth: Some(1),
+        };
+        let before = deadline - chrono::Duration::nanoseconds(1);
+        assert!(subscription.is_active_at(before));
+        assert!(!subscription.is_expired_at(before));
+        assert!(!subscription.is_active_at(deadline));
+        assert!(subscription.is_expired_at(deadline));
     }
 }
 

@@ -691,7 +691,9 @@ another set of crates. Track implementation and external evidence separately in
 
 C1 now uses one authorized root-discovery query instead of repeated per-node
 reads, and node lookups have a separate read-only repository capability from
-node mutations. C2 has a shared MAM page-size and filter limit across the wire
+node mutations. Subscription expiry policy takes an explicit observation time
+from its caller, so the core does not read the process clock. C2 has a shared
+MAM page-size and filter limit across the wire
 parser, application service and PostgreSQL adapter. The pure RSM window calculation
 resides in archive core; cursor resolution and page execution still share the
 authorized transaction. Local and federated room readers now share one pure

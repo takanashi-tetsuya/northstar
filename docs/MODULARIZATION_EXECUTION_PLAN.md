@@ -258,8 +258,11 @@ commands before repository invocation; PostgreSQL remains the final authority
 under its existing transaction locks. Request-owned MUC post-commit effects
 also moved out of the protocol module into a bounded, sealed, order-preserving
 application plan. Subject, moderation, affiliation, join/leave and room
-configuration mutations still need to converge on the same repository port;
-PubSub/PEP command/query separation has not started.
+configuration mutations still need to converge on the same repository port.
+PubSub/PEP already has core/application crates, typed commands, a service and
+repository ports. Its remaining work is a complete command/query boundary and
+consolidation of the PostgreSQL adapter, while preserving the transactional
+audience snapshot and outbox.
 
 ### Phase D — Session kernel and transport ports
 
@@ -663,3 +666,94 @@ restore ID and manifest digest to its outcome, and trusted restore state must
 record that digest independently of its monotonic rollback floor. A missing or
 old XID outcome without matching transaction evidence, a damaged journal, or
 conflicting evidence keeps the fence and recovery artifacts intact.
+
+## 8. Next execution plan: domain convergence and release qualification
+
+This plan extends Phases C–F without restarting completed extraction. The
+`northstar-pubsub-*` and `northstar-archive-*` crates already exist; the
+`StreamNegotiation` state machine and `OrderedOutboundSink` are already used.
+The work is to finish their call paths and remove duplicate policy, not to add
+another set of crates. Track implementation and external evidence separately in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md). A green CI run cannot close an external gate.
+
+### 8.1 Ordered implementation packets
+
+| Order | Packet and change | Exit evidence |
+| --- | --- | --- |
+| C1 | PubSub/PEP: give read queries and mutations separate application methods and repository capabilities; move pure node policy and bounded traversal to the existing core/application crates; consolidate duplicate adapter logic in `src/db/pubsub.rs` and `src/db/pubsub_repository.rs` only after callers move | Publish, subscribe, node mutation and query paths use the service; no protocol SQL; lock-order and concurrent privacy/roster/access-change tests pass; query paths cause no mutation effects |
+| C2 | Archive/MAM: move pure scope authorization and RSM validation/projection into the existing archive crates; keep SQL execution in the PostgreSQL adapter | Personal, MUC and MIX MAM queries preserve exact visibility, stable page ordering/count/first/last, tombstone behavior and bounded result sets; failure and concurrent-authority tests pass |
+| D1 | Session/transport: narrow `ProtocolSession` capabilities, move transport action execution to TCP, direct TLS, WebSocket and BOSH adapters, and isolate SM/CSI substates around the existing ordered outbound port | Each transport passes stream/auth/bind, cancellation, backpressure, reconnect and SM replay tests; BOSH response fences and exact route incarnation remain intact; the kernel imports no socket implementation |
+| R1 | Restore and backup hardening: make interrupted restore recovery restartable, bind journal, database lineage, restore ID and manifest digest to durable commit evidence, and protect rollback material | Hard-kill tests at each durable boundary resolve to safe resume/compensation or retain the fence; encrypted rollback backup and key recovery are drilled; ambiguous or old XID status fails closed |
+| R2 | Certificate revocation: specify PKIX/DANE and inbound/outbound trust policy first; prototype operator-supplied, freshness-checked OCSP stapling before considering bounded online retrieval | Valid, revoked, stale, unavailable and malformed responses have documented fail policy and TLS interoperability tests; no certificate-provided URL is fetched without explicit source and network policy |
+| R3 | WASM provenance: reproduce the deployed `libomemo.js` and `hash-wasm` bytes from pinned source and toolchains in isolated builders | Two independent builds match the shipped bytes, with recorded source/toolchain digests, SBOM and offline verification; until then the status remains `provenance-traced-not-reproducible` |
+
+C1 and C2 precede D1 because they close application authority boundaries before
+the wider transport split. R1–R3 are independent hardening packets and can run
+after their own test fixtures are ready; they need not hold up unrelated code
+refactoring. Every runtime-changing packet must meet section 6's checks before
+the next packet changes the same authority path. Record baseline query latency,
+lock wait, outbox lag and transport cancellation behavior before changing them.
+
+**PubSub transaction rule.** A publish mutation must capture authorization,
+audience and durable outbox intents under the existing PostgreSQL transaction
+and lock order. The post-commit plan may dispatch the committed intents; it
+must not recalculate the authorized recipients from newer state. Otherwise an
+unsubscribe, block or policy change racing a publish changes who receives that
+event. Do not claim that CQRS alone removes lock contention: measure and
+optimize bounded work within the transaction without moving authority outside
+it. Commands and queries may share the same PostgreSQL database and do not
+imply eventually consistent replicas.
+
+**Archive consistency rule.** Admission, visibility and the rows forming one
+MAM page must use the same authorized query snapshot where the existing path
+requires it, including federated room streams. Extracting pure RSM policy must
+not turn a page into separate, inconsistent database reads.
+
+**Restore rule.** `pg_xact_status(xid8)` reports recent transaction outcome;
+it does not reconstruct replaced data and may return `NULL` after status
+retention expires. Keep protected rollback data and durable same-transaction
+markers. If the journal, lineage or outcome is ambiguous, preserve the fence
+for operator recovery rather than promising unconditional roll-forward.
+
+### 8.2 External qualification on a frozen release candidate
+
+Freeze the candidate commit and record the binary/container digest, schema,
+configuration, topology, dependency/client versions and raw logs for every
+run. Set pass thresholds and RPO/RTO targets before running tests. A failure
+creates a code or operations packet, followed by a new candidate and a rerun
+of affected gates. Close each of the seven existing evidence rows individually:
+
+| Gate | Required target-environment evidence |
+| --- | --- |
+| `EXT-CLUSTER` | PostgreSQL, Redis and S3/MinIO multi-node tests with asymmetric partition, failover, lease loss, rolling upgrade and hard-kill; verify MUC occupancy, presence, delivery and measured RPO/RTO. Keep multi-node `Experimental` until this passes. |
+| `EXT-FEDERATION` | Public staging DNSSEC/SRV/TLSA, PKIX/DANE, IPv4/IPv6 and bidirectional S2S with fixed Prosody/ejabberd versions; record certificate rotation and negative cases. |
+| `EXT-COMPONENT` | Real XEP-0114 accept/connect and XEP-0225 peers; exercise STARTTLS where applicable, restart, backpressure, retries and duplicate boundaries. |
+| `EXT-CLIENT` | Fixed Gajim, Conversations, Dino and Monal versions plus browser clients; check supported login, OMEMO 2/trust, Carbons, CSI/SM and MAM with explicit expected deviations. |
+| `EXT-OPERATIONS` | Alert delivery/on-call, off-site encrypted backup, restore, upgrade and rollback drills with named operators and measured recovery times. |
+| `EXT-CAPACITY` | Representative presence, OMEMO, MUC, MAM, upload, Push and S2S workload on target hardware, including 24–72 hour soak; capture RSS, queue lag, database WAL/IOPS, p95/p99 and saturation limits. |
+| `EXT-SECURITY` | Independent review and penetration test of the frozen candidate, threat model, privileges, browser crypto and exposed protocols; triage and retest findings. |
+
+These gates qualify only the tested topology and feature profile. Closure of
+all seven does not silently close separate product gaps such as
+`PROFILE-REVOCATION`, `SUPPLY-WASM`, `OPS-BACKUP-COMPAT` or provider-specific S3
+limits. A production-readiness claim must name its supported deployment mode
+and remaining exceptions.
+
+### 8.3 Optional product expansion after core qualification
+
+1. Finish the XEP-0357 **server role** first: publish bounded notifications to
+   client-selected XMPP push services and verify registration, retry, privacy
+   and offline-spool behavior. An FCM/APNs/WebPush gateway is a separate,
+   opt-in service requiring client-provider credentials; push wakeups do not
+   replace durable message storage.
+2. Complete XEP-0447/0448 metadata, encrypted-source and S3 interoperability
+   tests. Treat resumable chunked upload as a separate transport feature with
+   its own integrity, quota and cleanup design. Validate provider versioning,
+   retention and legal holds before promising exact expiry deletion.
+3. Qualify the existing XEP-0487 JSON host metadata endpoint and S2S consumer
+   with public deployment URLs and real clients. Preserve existing DNS and TLS
+   fallbacks and security checks; do not count endpoint presence as adoption.
+
+The XEP-0357 specification is Deferred, while XEP-0447/0448 and XEP-0487 are
+Experimental. Keep their advertised support and production claims matched to
+the implemented profile and interoperability evidence.

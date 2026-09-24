@@ -2,10 +2,10 @@
 
 ## 1. Executive status
 
-Northstar currently builds as one deployable server binary over 49 internal
-`northstar-*` libraries. The extraction is no longer experimental: all 49
-libraries are root workspace members, direct runtime dependencies where
-applicable, and covered by the same lockfile and strict workspace Clippy gate.
+Northstar currently builds as one deployable server binary. The root workspace
+lists 60 crate members, including 51 `northstar-*` crates. Extracted libraries
+are root workspace members and share the lockfile and strict workspace Clippy
+gate; their integration must still be assessed by actual call paths.
 
 The protocol leaf layer is substantially separated. The application and
 infrastructure layers are not. The current work should therefore be described
@@ -20,8 +20,8 @@ Evidence from the current pass:
 | Workspace strict Clippy | passed with all targets and all features |
 | Root all-feature check | passed |
 | XEP plugin gate | 24 plugins, 56 exclusive routes, no forbidden capabilities |
-| Program architecture gate | 9 public `AppState` capabilities; protocol has zero DB/SQLx/pool references |
-| Library inventory | 49 integrated libraries; no nested workspace or library-local lockfile |
+| Program architecture gate | `AppState` fields are private; protocol has zero DB/SQLx/pool references |
+| Library inventory | 60 crate workspace members, including 51 `northstar-*` crates; no nested workspace or library-local lockfile |
 
 This is static/unit evidence only. PostgreSQL, Redis, browser, Gajim,
 federation, load, fuzz, backup/restore and packaging qualification remain part
@@ -71,37 +71,16 @@ The architecture checks enforce the bottom half of this direction. The top
 half still contains broad root capabilities, especially in API, cluster,
 federation, upload, PubSub, MIX and worker orchestration.
 
-## 4. Remaining library forecast
+## 4. Remaining boundary work
 
-The expected final count is **50–56 internal libraries**, so approximately
-**12–18 additional libraries** remain. The range is intentional: a library is
-created only when it owns a stable authority/transaction boundary. Tiny helper
-crates and one-crate-per-file extraction are explicitly rejected.
+The earlier crate-count forecast is obsolete: PubSub, roster, archive, upload,
+federation and session core/application crates already exist. The remaining
+work is to move real callers and authority into those boundaries, then remove
+duplicate root logic. A new crate is justified only by a stable capability
+boundary, never by a file-count target.
 
-| Proposed library or convergence target | Responsibility | Depends on | Estimated effort |
-| --- | --- | --- | ---: |
-| `northstar-pubsub-core` | owned node/item/subscription commands, immutable authorization/audience snapshots and typed outcomes | XEP-0060, XMPP types | 5–8 d |
-| `northstar-pubsub-application` | repository ports for atomic node/item/audience/outbox mutations; PEP account adapter | PubSub core | 7–12 d |
-| `northstar-roster-core` | roster/subscription/visibility commands and immutable generation snapshots | XMPP types, presence core | 3–5 d |
-| `northstar-roster-application` | atomic roster mutation, subscription transition and push plan repositories | roster core | 5–8 d |
-| `northstar-archive-core` | personal/MUC/MIX visibility facts, query commands, tombstone/correction/reaction projections | XEP-0059/0313 | 4–7 d |
-| `northstar-archive-application` | MAM query and retention repository ports without XML rewriting | archive core | 5–9 d |
-| `northstar-upload-core` | slot/object locator/version/digest lifecycle and reconciliation commands | XEP-0363 | 4–7 d |
-| `northstar-upload-application` | atomic capacity/slot/cleanup authority plus versioned object-store effects | upload core | 7–12 d |
-| `northstar-object-store-port` | exact put/get/delete-version contract for local and S3 adapters | upload core | 2–4 d |
-| `northstar-federation-core` | authenticated-domain grants, route plans, outbox lease and retry values | XMPP types | 4–7 d |
-| `northstar-federation-application` | DNS/TLS decision inputs, durable S2S/component outbox repositories and relay authorization | federation core | 7–11 d |
-| `northstar-session-application` | authentication, bind, resume-store, publication and ordered-output ports around one kernel | session/delivery/auth cores | 7–12 d |
-| `northstar-live-routing` | exact route incarnation, resource selection and replacement outcomes | session core, presence core | 3–6 d |
-| `northstar-administration-core` | typed commands, operation identity, audit facts and runtime-setting policy | XMPP types | 3–5 d |
-| `northstar-administration-application` | command-role repository, idempotency journal and effect arbitration | administration core | 5–9 d |
-| optional `northstar-worker-runtime` | executor-neutral worker registration, health and restart/fatal policy | no domain capability | 3–5 d |
-| optional `northstar-cluster-application` | PostgreSQL lease authority and Redis soft-state adapter split | routing/federation/room ports | 8–14 d |
-| optional `northstar-push-provider` | provider-neutral XEP-0357 delivery attempt and retry port | XEP-0357 | 2–4 d |
-
-“Optional” means the boundary may remain a root module if extraction would
-only wrap an implementation without reducing authority. The responsibility
-must still be narrowed even if no new crate is created.
+The next implementation packets and their exit tests are maintained in
+[MODULARIZATION_EXECUTION_PLAN.md](MODULARIZATION_EXECUTION_PLAN.md#8-next-execution-plan-domain-convergence-and-release-qualification).
 
 ## 5. Ordered implementation packets
 
@@ -145,7 +124,9 @@ rules, and the memory-pure `RosterSyncGate` push fence into `northstar-roster-ap
 `src/services/roster.rs` now provides atomic `execute_roster_*` methods, and `src/xmpp/protocol/roster.rs`
 dispatches typed commands without manual parameter passing or database coupling.
 
-Remaining for Packet 4: Archive / MAM domain extraction (`northstar-archive-core`, `northstar-archive-application`).
+Remaining for Packet 4: Complete the existing archive/MAM core and application
+integration. Move pure authorization and paging policy out of the PostgreSQL
+adapter without splitting an authorized query's consistent result snapshot.
 
 ### Packet 5 — Upload/object lifecycle
 
@@ -164,25 +145,19 @@ durable fallback result.
 
 ### Packet 7 — Administration and final composition
 
-Move REST/admin operation transactions behind command-role ports, privatize
-the remaining five `AppState` capabilities, regenerate configuration/docs from
+Move REST/admin operation transactions behind command-role ports, narrow the
+remaining broad transport capabilities, regenerate configuration/docs from
 the effective capability graph, and remove obsolete facades. Then execute the
 complete environment-dependent release matrix.
 
-## 6. Time forecast
+## 6. Scheduling
 
-Based on the completed message, delivery and first room slices, the remaining
-work is approximately **70–110 focused developer-days** including unit and
-fault-injection tests, but excluding waiting for third-party interoperability
-feedback. A realistic solo calendar is **14–24 weeks**. Two developers who
-divide by authority boundary rather than editing the same root modules can
-reduce calendar time to roughly **9–15 weeks**; the work does not scale
-linearly because every packet shares integration and release gates.
-
-The largest uncertainty is not writing structs or moving files. It is proving
-that cancellation, crash recovery, authorization snapshots and transaction /
-external-effect boundaries remain correct across MUC, PubSub, upload and
-cluster modes.
+Estimate each remaining packet after recording its call sites, database lock
+wait, external fixtures and release environment. Third-party interoperability,
+independent security review and 24–72 hour soak require separate calendar time;
+they cannot be inferred from code size. The critical path is preserving
+transaction and delivery behavior through PubSub, archive and session changes,
+then qualifying a frozen release candidate in its target environment.
 
 ## 7. Completion definition
 

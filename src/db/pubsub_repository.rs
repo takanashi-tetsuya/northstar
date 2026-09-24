@@ -1479,23 +1479,7 @@ impl PubSubRootDiscoveryQueryRepository for PostgresPubSubRepository {
             .map_err(map_database_busy)
     }
 }
-impl PubSubItemRepository for PostgresPubSubRepository {
-    async fn purge_node_as_owner_with_outbox(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-    ) -> Result<OwnerMutationOutcome> {
-        let outcome: Result<_> = async {
-            Ok(
-                db::purge_node_as_owner_with_outbox(&self.pool, node_id, requester, &self.renderer)
-                    .await?
-                    .into(),
-            )
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
-
+impl PubSubItemQueryRepository for PostgresPubSubRepository {
     async fn get_items(
         &self,
         node_id: Uuid,
@@ -1566,6 +1550,23 @@ impl PubSubItemRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
+}
+impl PubSubItemMutationRepository for PostgresPubSubRepository {
+    async fn purge_node_as_owner_with_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+    ) -> Result<OwnerMutationOutcome> {
+        let outcome: Result<_> = async {
+            Ok(
+                db::purge_node_as_owner_with_outbox(&self.pool, node_id, requester, &self.renderer)
+                    .await?
+                    .into(),
+            )
+        }
+        .await;
+        outcome.map_err(map_database_busy)
+    }
     async fn publish_items(
         &self,
         node: &PubSubNode,
@@ -1612,7 +1613,7 @@ impl PubSubItemRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 }
-impl PubSubSubscriptionRepository for PostgresPubSubRepository {
+impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
     async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
         let outcome: Result<_> = async { db::is_subscribed(&self.pool, node_id, jid).await }.await;
         outcome.map_err(map_database_busy)
@@ -1679,6 +1680,8 @@ impl PubSubSubscriptionRepository for PostgresPubSubRepository {
             async { db::active_subscriber_count(&self.pool, node_id).await }.await;
         outcome.map_err(map_database_busy)
     }
+}
+impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
     async fn update_subscription_options_checked(
         &self,
         node_id: Uuid,
@@ -1805,7 +1808,7 @@ impl PubSubSubscriptionRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 }
-impl PubSubAffiliationRepository for PostgresPubSubRepository {
+impl PubSubAffiliationQueryRepository for PostgresPubSubRepository {
     async fn get_node_affiliation(&self, node_id: Uuid, jid: &str) -> Result<Option<String>> {
         let outcome: Result<_> =
             async { db::get_node_affiliation(&self.pool, node_id, jid).await }.await;
@@ -1845,6 +1848,8 @@ impl PubSubAffiliationRepository for PostgresPubSubRepository {
         let outcome: Result<_> = async { db::get_publisher_jids(&self.pool, node_id).await }.await;
         outcome.map_err(map_database_busy)
     }
+}
+impl PubSubAffiliationMutationRepository for PostgresPubSubRepository {
     async fn set_affiliations(
         &self,
         node_id: Uuid,

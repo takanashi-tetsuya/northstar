@@ -78,13 +78,7 @@ pub trait PubSubRootDiscoveryQueryRepository: Send + Sync {
         limit: i64,
     ) -> impl std::future::Future<Output = Result<PubSubRootDiscoPage>> + Send;
 }
-pub trait PubSubItemRepository: Send + Sync {
-    fn purge_node_as_owner_with_outbox(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-    ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
-
+pub trait PubSubItemQueryRepository: Send + Sync {
     fn get_items(
         &self,
         node_id: Uuid,
@@ -107,6 +101,13 @@ pub trait PubSubItemRepository: Send + Sync {
         node: &PubSubNode,
         requester: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+pub trait PubSubItemMutationRepository: Send + Sync {
+    fn purge_node_as_owner_with_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
     fn publish_items(
         &self,
         node: &PubSubNode,
@@ -122,7 +123,7 @@ pub trait PubSubItemRepository: Send + Sync {
         force_notification: bool,
     ) -> impl std::future::Future<Output = Result<RetractItemsOutcome>> + Send;
 }
-pub trait PubSubSubscriptionRepository: Send + Sync {
+pub trait PubSubSubscriptionQueryRepository: Send + Sync {
     fn is_subscribed(
         &self,
         node_id: Uuid,
@@ -152,6 +153,8 @@ pub trait PubSubSubscriptionRepository: Send + Sync {
         &self,
         node_id: Uuid,
     ) -> impl std::future::Future<Output = Result<i64>> + Send;
+}
+pub trait PubSubSubscriptionMutationRepository: Send + Sync {
     fn update_subscription_options_checked(
         &self,
         node_id: Uuid,
@@ -195,7 +198,7 @@ pub trait PubSubSubscriptionRepository: Send + Sync {
         allow: bool,
     ) -> impl std::future::Future<Output = Result<SubscriptionAuthorizationOutcome>> + Send;
 }
-pub trait PubSubAffiliationRepository: Send + Sync {
+pub trait PubSubAffiliationQueryRepository: Send + Sync {
     fn get_node_affiliation(
         &self,
         node_id: Uuid,
@@ -218,6 +221,8 @@ pub trait PubSubAffiliationRepository: Send + Sync {
         &self,
         node_id: Uuid,
     ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+}
+pub trait PubSubAffiliationMutationRepository: Send + Sync {
     fn set_affiliations(
         &self,
         node_id: Uuid,
@@ -482,9 +487,12 @@ pub trait PubSubRepository:
     PubSubNodeMutationRepository
     + PubSubNodeQueryRepository
     + PubSubRootDiscoveryQueryRepository
-    + PubSubItemRepository
-    + PubSubSubscriptionRepository
-    + PubSubAffiliationRepository
+    + PubSubItemQueryRepository
+    + PubSubItemMutationRepository
+    + PubSubSubscriptionQueryRepository
+    + PubSubSubscriptionMutationRepository
+    + PubSubAffiliationQueryRepository
+    + PubSubAffiliationMutationRepository
     + PubSubOutboxRepository
     + PepNodeRepository
     + PepItemRepository
@@ -496,9 +504,12 @@ impl<T> PubSubRepository for T where
     T: PubSubNodeMutationRepository
         + PubSubNodeQueryRepository
         + PubSubRootDiscoveryQueryRepository
-        + PubSubItemRepository
-        + PubSubSubscriptionRepository
-        + PubSubAffiliationRepository
+        + PubSubItemQueryRepository
+        + PubSubItemMutationRepository
+        + PubSubSubscriptionQueryRepository
+        + PubSubSubscriptionMutationRepository
+        + PubSubAffiliationQueryRepository
+        + PubSubAffiliationMutationRepository
         + PubSubOutboxRepository
         + PepNodeRepository
         + PepItemRepository

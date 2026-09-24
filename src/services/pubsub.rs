@@ -50,9 +50,11 @@ pub(crate) use northstar_pubsub_core::{
 
 pub(crate) use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemRepository, PepNodeRepository, PepSubscriptionRepository,
-    PubSubAffiliationRepository, PubSubItemRepository, PubSubNodeMutationRepository,
+    PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
+    PubSubItemMutationRepository, PubSubItemQueryRepository, PubSubNodeMutationRepository,
     PubSubNodeQueryRepository, PubSubOutboxRepository, PubSubRepository,
-    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionRepository,
+    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
+    PubSubSubscriptionQueryRepository,
 };
 pub(crate) use northstar_pubsub_core::{
     canonical_profile_item_id, default_pep_node_config, ClaimedPubSubOutboxDelivery,
@@ -93,7 +95,7 @@ pub(crate) struct PubSubService<R> {
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
 }
 
-impl<R: PubSubRepository> PubSubService<R> {
+impl<R> PubSubService<R> {
     pub(crate) fn new_with_durable_outbox_database_admission(
         repository: R,
         primary_pool_max_connections: u32,
@@ -126,6 +128,9 @@ impl<R: PubSubRepository> PubSubService<R> {
     async fn durable_outbox_database_turn(&self) -> tokio::sync::OwnedSemaphorePermit {
         self.durable_outbox_database_admission.acquire().await
     }
+}
+
+impl<R: PubSubRepository> PubSubService<R> {
     pub(crate) async fn publish_profile_items(
         &self,
         profile_service: &ProfileService<impl ProfileRepository>,
@@ -883,59 +888,6 @@ impl<R: PubSubRepository> PubSubService<R> {
             .await?;
         self.repository.publish_pep_items(command, factory).await
     }
-    pub(crate) async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
-        self.repository.get_node(node).await
-    }
-    pub(crate) async fn get_node_affiliation(
-        &self,
-        node_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<String>> {
-        self.repository.get_node_affiliation(node_id, jid).await
-    }
-    pub(crate) async fn affiliations_for_jid(
-        &self,
-        jid: &str,
-        node: Option<&str>,
-    ) -> Result<Vec<PubSubAffiliation>> {
-        self.repository.affiliations_for_jid(jid, node).await
-    }
-    pub(crate) async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
-        self.repository.node_affiliations(node_id).await
-    }
-    pub(crate) async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
-        self.repository.is_subscribed(node_id, jid).await
-    }
-    pub(crate) async fn subscriptions_for_jid(
-        &self,
-        jid: &str,
-        node: Option<&str>,
-    ) -> Result<Vec<PubSubSubscription>> {
-        self.repository.subscriptions_for_jid(jid, node).await
-    }
-    pub(crate) async fn subscriptions_addressing_jid_page(
-        &self,
-        jid: &str,
-        after: Option<(&str, &str)>,
-        limit: i64,
-    ) -> Result<Vec<PubSubSubscription>> {
-        self.repository
-            .subscriptions_addressing_jid_page(jid, after, limit)
-            .await
-    }
-    pub(crate) async fn node_subscriptions(
-        &self,
-        node_id: Uuid,
-    ) -> Result<Vec<PubSubSubscription>> {
-        self.repository.node_subscriptions(node_id).await
-    }
-    pub(crate) async fn get_subscription(
-        &self,
-        node_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<PubSubSubscription>> {
-        self.repository.get_subscription(node_id, jid).await
-    }
     pub(crate) async fn outbox_get_subscription(
         &self,
         node_id: Uuid,
@@ -944,63 +896,6 @@ impl<R: PubSubRepository> PubSubService<R> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.outbox_get_subscription(node_id, jid).await
-    }
-    pub(crate) async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        self.repository.get_owner_jids(node_id).await
-    }
-    pub(crate) async fn get_publisher_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        self.repository.get_publisher_jids(node_id).await
-    }
-    pub(crate) async fn active_subscriber_count(&self, node_id: Uuid) -> Result<i64> {
-        self.repository.active_subscriber_count(node_id).await
-    }
-    pub(crate) async fn get_items(
-        &self,
-        node_id: Uuid,
-        item_ids: &[String],
-        limit: i64,
-    ) -> Result<Vec<PubSubItem>> {
-        self.repository.get_items(node_id, item_ids, limit).await
-    }
-    pub(crate) async fn item_ids_for_disco(&self, node_id: Uuid) -> Result<Vec<String>> {
-        self.repository.item_ids_for_disco(node_id).await
-    }
-    pub(crate) async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
-        self.repository.node_redirect(node).await
-    }
-    pub(crate) async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
-        self.repository.collection_parents(child_id).await
-    }
-    pub(crate) async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
-        self.repository.collection_children(collection_id).await
-    }
-    pub(crate) async fn collection_visible_items(
-        &self,
-        collection_id: Uuid,
-        requester: &str,
-        global_item_limit: i64,
-        xml_byte_limit: i64,
-    ) -> Result<Vec<CollectionVisibleItem>> {
-        self.repository
-            .collection_visible_items(collection_id, requester, global_item_limit, xml_byte_limit)
-            .await
-    }
-    pub(crate) async fn root_disco_page(
-        &self,
-        requester: &str,
-        cursor: Option<&str>,
-        backwards: bool,
-        limit: i64,
-    ) -> Result<PubSubRootDiscoPage> {
-        self.repository
-            .root_disco_page(requester, cursor, backwards, limit)
-            .await
-    }
-    pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
-        self.repository.can_publish(node, requester).await
-    }
-    pub(crate) async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
-        self.repository.is_owner(node_id, requester).await
     }
     pub(crate) async fn update_subscription_options_checked(
         &self,
@@ -1376,6 +1271,148 @@ impl<R: PubSubRepository> PubSubService<R> {
         self.repository.acknowledge_pubsub_digests(ids).await
     }
 }
+
+impl<R: PubSubNodeQueryRepository> PubSubService<R> {
+    pub(crate) async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
+        self.repository.get_node(node).await
+    }
+
+    pub(crate) async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
+        self.repository.node_redirect(node).await
+    }
+
+    pub(crate) async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
+        self.repository.collection_parents(child_id).await
+    }
+
+    pub(crate) async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
+        self.repository.collection_children(collection_id).await
+    }
+
+    pub(crate) async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
+        self.repository.is_owner(node_id, requester).await
+    }
+}
+
+impl<R: PubSubRootDiscoveryQueryRepository> PubSubService<R> {
+    pub(crate) async fn root_disco_page(
+        &self,
+        requester: &str,
+        cursor: Option<&str>,
+        backwards: bool,
+        limit: i64,
+    ) -> Result<PubSubRootDiscoPage> {
+        self.repository
+            .root_disco_page(requester, cursor, backwards, limit)
+            .await
+    }
+}
+
+impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
+    pub(crate) async fn get_node_affiliation(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<String>> {
+        self.repository.get_node_affiliation(node_id, jid).await
+    }
+
+    pub(crate) async fn affiliations_for_jid(
+        &self,
+        jid: &str,
+        node: Option<&str>,
+    ) -> Result<Vec<PubSubAffiliation>> {
+        self.repository.affiliations_for_jid(jid, node).await
+    }
+
+    pub(crate) async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
+        self.repository.node_affiliations(node_id).await
+    }
+
+    pub(crate) async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
+        self.repository.get_owner_jids(node_id).await
+    }
+
+    pub(crate) async fn get_publisher_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
+        self.repository.get_publisher_jids(node_id).await
+    }
+}
+
+impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
+    pub(crate) async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
+        self.repository.is_subscribed(node_id, jid).await
+    }
+
+    pub(crate) async fn subscriptions_for_jid(
+        &self,
+        jid: &str,
+        node: Option<&str>,
+    ) -> Result<Vec<PubSubSubscription>> {
+        self.repository.subscriptions_for_jid(jid, node).await
+    }
+
+    pub(crate) async fn subscriptions_addressing_jid_page(
+        &self,
+        jid: &str,
+        after: Option<(&str, &str)>,
+        limit: i64,
+    ) -> Result<Vec<PubSubSubscription>> {
+        self.repository
+            .subscriptions_addressing_jid_page(jid, after, limit)
+            .await
+    }
+
+    pub(crate) async fn node_subscriptions(
+        &self,
+        node_id: Uuid,
+    ) -> Result<Vec<PubSubSubscription>> {
+        self.repository.node_subscriptions(node_id).await
+    }
+
+    pub(crate) async fn get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<PubSubSubscription>> {
+        self.repository.get_subscription(node_id, jid).await
+    }
+
+    pub(crate) async fn active_subscriber_count(&self, node_id: Uuid) -> Result<i64> {
+        self.repository.active_subscriber_count(node_id).await
+    }
+}
+
+impl<R: PubSubItemQueryRepository> PubSubService<R> {
+    pub(crate) async fn get_items(
+        &self,
+        node_id: Uuid,
+        item_ids: &[String],
+        limit: i64,
+    ) -> Result<Vec<PubSubItem>> {
+        self.repository.get_items(node_id, item_ids, limit).await
+    }
+
+    pub(crate) async fn item_ids_for_disco(&self, node_id: Uuid) -> Result<Vec<String>> {
+        self.repository.item_ids_for_disco(node_id).await
+    }
+
+    pub(crate) async fn collection_visible_items(
+        &self,
+        collection_id: Uuid,
+        requester: &str,
+        global_item_limit: i64,
+        xml_byte_limit: i64,
+    ) -> Result<Vec<CollectionVisibleItem>> {
+        self.repository
+            .collection_visible_items(collection_id, requester, global_item_limit, xml_byte_limit)
+            .await
+    }
+
+    pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
+        self.repository.can_publish(node, requester).await
+    }
+}
+
 fn serialized_item_payload_matches_type(item_xml: &str, payload_type: &str) -> bool {
     roxmltree::Document::parse(item_xml)
         .ok()

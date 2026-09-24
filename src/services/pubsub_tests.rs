@@ -7,6 +7,51 @@ use chrono::{TimeZone, Utc};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+struct QueryOnlyItems;
+
+impl PubSubItemQueryRepository for QueryOnlyItems {
+    async fn get_items(
+        &self,
+        _node_id: Uuid,
+        _item_ids: &[String],
+        _limit: i64,
+    ) -> Result<Vec<PubSubItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn item_ids_for_disco(&self, _node_id: Uuid) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    async fn collection_visible_items(
+        &self,
+        _collection_id: Uuid,
+        _requester: &str,
+        _global_item_limit: i64,
+        _xml_byte_limit: i64,
+    ) -> Result<Vec<CollectionVisibleItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn can_publish(&self, _node: &PubSubNode, _requester: &str) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+#[tokio::test]
+async fn item_queries_do_not_require_mutation_repository_capability() {
+    let service = PubSubService::new_with_durable_outbox_database_admission(
+        QueryOnlyItems,
+        2,
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+    );
+    assert!(service
+        .get_items(Uuid::new_v4(), &[], 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 #[tokio::test]
 async fn injected_durable_outbox_admission_stays_separate_from_foreground_mutations() {
     let pool = sqlx::postgres::PgPoolOptions::new()

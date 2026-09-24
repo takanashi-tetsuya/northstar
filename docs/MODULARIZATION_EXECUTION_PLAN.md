@@ -690,8 +690,9 @@ another set of crates. Track implementation and external evidence separately in
 | R3 | WASM provenance: reproduce the deployed `libomemo.js` and `hash-wasm` bytes from pinned source and toolchains in isolated builders | Two independent builds match the shipped bytes, with recorded source/toolchain digests, SBOM and offline verification; until then the status remains `provenance-traced-not-reproducible` |
 
 C1 now uses one authorized root-discovery query instead of repeated per-node
-reads. C2 has a shared MAM page-size and filter limit across the wire parser,
-application service and PostgreSQL adapter. The pure RSM window calculation
+reads, and node lookups have a separate read-only repository capability from
+node mutations. C2 has a shared MAM page-size and filter limit across the wire
+parser, application service and PostgreSQL adapter. The pure RSM window calculation
 resides in archive core; cursor resolution and page execution still share the
 authorized transaction. Local and federated room readers now share one pure
 visibility decision while retaining their distinct database locks. D1 no

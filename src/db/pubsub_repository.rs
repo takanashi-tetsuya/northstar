@@ -1327,7 +1327,7 @@ impl db::PubSubMutationOutboxRenderer for PubSubService<PostgresPubSubRepository
         )
     }
 }
-impl PubSubNodeRepository for PostgresPubSubRepository {
+impl PubSubNodeMutationRepository for PostgresPubSubRepository {
     async fn delete_node_as_owner_with_redirect_and_outbox(
         &self,
         node_id: Uuid,
@@ -1372,35 +1372,6 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 
-    async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
-        db::get_node(&self.pool, node)
-            .await
-            .map_err(map_database_busy)
-    }
-    async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
-        let outcome: Result<_> = async { db::node_redirect(&self.pool, node).await }.await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
-        db::collection_parents(&self.pool, child_id)
-            .await
-            .map_err(map_database_busy)
-    }
-    async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
-        db::collection_children(&self.pool, collection_id)
-            .await
-            .map_err(map_database_busy)
-    }
-    async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
-        let outcome: Result<_> = async {
-            Ok(db::get_node_affiliation(&self.pool, node_id, requester)
-                .await?
-                .as_deref()
-                == Some("owner"))
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
     async fn create_node(
         &self,
         node: &str,
@@ -1459,6 +1430,37 @@ impl PubSubNodeRepository for PostgresPubSubRepository {
             )
             .await?
             .into())
+        }
+        .await;
+        outcome.map_err(map_database_busy)
+    }
+}
+impl PubSubNodeQueryRepository for PostgresPubSubRepository {
+    async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
+        db::get_node(&self.pool, node)
+            .await
+            .map_err(map_database_busy)
+    }
+    async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
+        let outcome: Result<_> = async { db::node_redirect(&self.pool, node).await }.await;
+        outcome.map_err(map_database_busy)
+    }
+    async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
+        db::collection_parents(&self.pool, child_id)
+            .await
+            .map_err(map_database_busy)
+    }
+    async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
+        db::collection_children(&self.pool, collection_id)
+            .await
+            .map_err(map_database_busy)
+    }
+    async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
+        let outcome: Result<_> = async {
+            Ok(db::get_node_affiliation(&self.pool, node_id, requester)
+                .await?
+                .as_deref()
+                == Some("owner"))
         }
         .await;
         outcome.map_err(map_database_busy)

@@ -7,22 +7,7 @@ use crate::{
 use anyhow::Result;
 use northstar_pubsub_core::*;
 use uuid::Uuid;
-pub trait PubSubNodeRepository: Send + Sync {
-    fn delete_node_as_owner_with_redirect_and_outbox(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        redirect: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
-
-    fn update_node_config_and_graph_with_outbox(
-        &self,
-        node: &PubSubNode,
-        requester: &str,
-        expected: &PubSubNodeConfig,
-        config: &PubSubNodeConfig,
-    ) -> impl std::future::Future<Output = Result<PubSubConfigOutcome>> + Send;
-
+pub trait PubSubNodeQueryRepository: Send + Sync {
     fn get_node(
         &self,
         node: &str,
@@ -44,6 +29,24 @@ pub trait PubSubNodeRepository: Send + Sync {
         node_id: Uuid,
         requester: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+
+pub trait PubSubNodeMutationRepository: Send + Sync {
+    fn delete_node_as_owner_with_redirect_and_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        redirect: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
+
+    fn update_node_config_and_graph_with_outbox(
+        &self,
+        node: &PubSubNode,
+        requester: &str,
+        expected: &PubSubNodeConfig,
+        config: &PubSubNodeConfig,
+    ) -> impl std::future::Future<Output = Result<PubSubConfigOutcome>> + Send;
+
     fn create_node(
         &self,
         node: &str,
@@ -476,7 +479,8 @@ pub trait PepAffiliationRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
 }
 pub trait PubSubRepository:
-    PubSubNodeRepository
+    PubSubNodeMutationRepository
+    + PubSubNodeQueryRepository
     + PubSubRootDiscoveryQueryRepository
     + PubSubItemRepository
     + PubSubSubscriptionRepository
@@ -489,7 +493,8 @@ pub trait PubSubRepository:
 {
 }
 impl<T> PubSubRepository for T where
-    T: PubSubNodeRepository
+    T: PubSubNodeMutationRepository
+        + PubSubNodeQueryRepository
         + PubSubRootDiscoveryQueryRepository
         + PubSubItemRepository
         + PubSubSubscriptionRepository

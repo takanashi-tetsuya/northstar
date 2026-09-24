@@ -49,9 +49,9 @@ pub(crate) use northstar_pubsub_core::{
 
 pub(crate) use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemRepository, PepNodeRepository, PepSubscriptionRepository,
-    PubSubAffiliationRepository, PubSubItemRepository, PubSubNodeRepository,
-    PubSubOutboxRepository, PubSubRepository, PubSubRootDiscoveryQueryRepository,
-    PubSubSubscriptionRepository,
+    PubSubAffiliationRepository, PubSubItemRepository, PubSubNodeMutationRepository,
+    PubSubNodeQueryRepository, PubSubOutboxRepository, PubSubRepository,
+    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionRepository,
 };
 pub(crate) use northstar_pubsub_core::{
     canonical_profile_item_id, default_pep_node_config, ClaimedPubSubOutboxDelivery,

@@ -18,6 +18,7 @@ use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::Node;
 use std::{
+    borrow::Cow,
     collections::{BTreeSet, HashMap},
     sync::Arc,
     time::Duration,
@@ -33,7 +34,6 @@ struct DiscoItem {
 const NS_PUBSUB: &str = northstar_xep_0060::NS_PUBSUB;
 const NS_PUBSUB_OWNER: &str = northstar_xep_0060::NS_PUBSUB_OWNER;
 const NS_PUBSUB_EVENT: &str = northstar_xep_0060::NS_PUBSUB_EVENT;
-const NS_PUBSUB_ERRORS: &str = northstar_xep_0060::NS_PUBSUB_ERRORS;
 const NS_DATA: &str = northstar_xep_0060::NS_DATA;
 const NS_RSM: &str = northstar_xep_0060::NS_RSM;
 const NODE_CONFIG_FORM: &str = northstar_xep_0060::NODE_CONFIG_FORM;
@@ -56,24 +56,6 @@ pub(crate) enum PubSubReply {
 }
 
 pub(crate) type PubSubError = northstar_xep_0060::PubSubError;
-
-pub(crate) fn error_payload(error: &PubSubReply) -> Option<(&'static str, String)> {
-    match error {
-        PubSubReply::Result(_) => None,
-        PubSubReply::Error(condition) => Some((stanza_error_type(condition), String::new())),
-        PubSubReply::ExtendedError(error) => {
-            let extra = error
-                .pubsub_condition
-                .map(|specific| {
-                    dynamic_protocol_element(specific, NS_PUBSUB_ERRORS)
-                        .optional_attr("feature", error.feature)
-                        .finish()
-                })
-                .unwrap_or_default();
-            Some((stanza_error_type(error.condition), extra))
-        }
-    }
-}
 
 pub(crate) fn error_condition(error: &PubSubReply) -> Option<&'static str> {
     match error {
@@ -98,77 +80,20 @@ fn invalid_subscription_options() -> PubSubReply {
     PubSubReply::ExtendedError(PubSubError::new("bad-request", "invalid-options"))
 }
 
-fn stanza_error_type(condition: &str) -> &'static str {
-    northstar_xep_0060::stanza_error_type_for_condition(condition).as_str()
-}
-
 fn pubsub_iq_error(id: &str, from: &str, reply: &PubSubReply) -> String {
-    let condition = error_condition(reply).unwrap_or("undefined-condition");
-    let (kind, _) = error_payload(reply).unwrap_or(("cancel", String::new()));
-    let mut stanza_error = XmlElement::new("error")
-        .attr("type", kind)
-        .child(stanza_condition_element(reply, condition));
-    if let PubSubReply::ExtendedError(error) = reply {
-        if let Some(specific) = error.pubsub_condition {
-            stanza_error.push_child(
-                dynamic_protocol_element(specific, NS_PUBSUB_ERRORS)
-                    .optional_attr("feature", error.feature),
-            );
-        }
-    }
-    XmlElement::namespaced("iq", "jabber:client")
-        .attr("type", "error")
-        .attr("from", from)
-        .attr("id", id)
-        .child(stanza_error)
-        .finish()
+    northstar_xep_0060::build_iq_error(id, from, &reply_error(reply))
 }
 
 pub(crate) fn pubsub_s2s_iq_error(id: &str, from: &str, to: &str, reply: &PubSubReply) -> String {
-    let condition = error_condition(reply).unwrap_or("undefined-condition");
-    let (kind, _) = error_payload(reply).unwrap_or(("cancel", String::new()));
-    let mut stanza_error = XmlElement::new("error")
-        .attr("type", kind)
-        .child(stanza_condition_element(reply, condition));
-    if let PubSubReply::ExtendedError(error) = reply {
-        if let Some(specific) = error.pubsub_condition {
-            stanza_error.push_child(
-                dynamic_protocol_element(specific, NS_PUBSUB_ERRORS)
-                    .optional_attr("feature", error.feature),
-            );
-        }
-    }
-    XmlElement::namespaced("iq", "jabber:server")
-        .attr("type", "error")
-        .attr("id", id)
-        .attr("from", from)
-        .attr("to", to)
-        .child(stanza_error)
-        .finish()
+    northstar_xep_0060::build_s2s_iq_error(id, from, to, &reply_error(reply))
 }
 
-fn dynamic_protocol_element(name: &str, namespace: &'static str) -> XmlElement {
-    // Error/collection element names come from finite protocol enums. If a
-    // future caller violates that invariant, fail closed with a legal stanza
-    // condition instead of emitting an unchecked QName.
-    match XmlElement::dynamic(name) {
-        Ok(element) => element.attr("xmlns", namespace),
-        Err(_) => {
-            XmlElement::namespaced("undefined-condition", "urn:ietf:params:xml:ns:xmpp-stanzas")
-        }
+fn reply_error(reply: &PubSubReply) -> Cow<'_, PubSubError> {
+    match reply {
+        PubSubReply::Result(_) => Cow::Owned(PubSubError::simple("undefined-condition")),
+        PubSubReply::Error(condition) => Cow::Owned(PubSubError::simple(condition)),
+        PubSubReply::ExtendedError(error) => Cow::Borrowed(error),
     }
-}
-
-fn stanza_condition_element(reply: &PubSubReply, condition: &str) -> XmlElement {
-    let mut element = dynamic_protocol_element(condition, "urn:ietf:params:xml:ns:xmpp-stanzas");
-    if let PubSubReply::ExtendedError(PubSubError {
-        redirect: Some(uri),
-        ..
-    }) = reply
-    {
-        element = element.text(uri.to_owned());
-    }
-    element
 }
 
 pub(crate) fn service_disco_payload(state: &AppState) -> String {
@@ -3428,12 +3353,12 @@ fn serialize_pubsub_item(node: Node<'_, '_>, item_id: &str) -> Result<String> {
 mod tests {
     use super::{
         config_equivalent, data_form_fields, disco_item_xml, disco_rsm_page, error_condition,
-        error_payload, event_body, item_retrieval_access, node_config_form, normalized_bare,
-        parse_node_config, parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
+        event_body, item_retrieval_access, node_config_form, normalized_bare, parse_node_config,
+        parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
         publish_batch_size_allowed, pubsub_policy_suppression_is_terminal, pubsub_rsm_page,
-        serialize_pubsub_item, subscription_options_form, subscription_payload, valid_item_id,
-        valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS, NODE_CONFIG_FORM,
-        PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
+        reply_error, serialize_pubsub_item, subscription_options_form, subscription_payload,
+        valid_item_id, valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS,
+        NODE_CONFIG_FORM, PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
     };
     use crate::services::pubsub::{
         PubSubItem, PubSubNodeConfig, PubSubSubscription, PubSubSubscriptionOptions,
@@ -3529,28 +3454,31 @@ mod tests {
         let missing_subid =
             item_retrieval_access("authorize", None, &subscriptions, None).unwrap_err();
         assert_eq!(error_condition(&missing_subid), Some("bad-request"));
-        assert!(error_payload(&missing_subid)
-            .unwrap()
+        assert!(reply_error(&missing_subid)
+            .error_payload()
             .1
             .contains("subid-required"));
 
         let invalid_subid =
             item_retrieval_access("authorize", None, &subscriptions, Some("wrong")).unwrap_err();
         assert_eq!(error_condition(&invalid_subid), Some("not-acceptable"));
-        assert!(error_payload(&invalid_subid)
-            .unwrap()
+        assert!(reply_error(&invalid_subid)
+            .error_payload()
             .1
             .contains("invalid-subid"));
         assert!(item_retrieval_access("authorize", None, &subscriptions, Some("two")).is_ok());
 
         let closed = item_retrieval_access("whitelist", None, &[], None).unwrap_err();
         assert_eq!(error_condition(&closed), Some("not-allowed"));
-        assert!(error_payload(&closed).unwrap().1.contains("closed-node"));
+        assert!(reply_error(&closed)
+            .error_payload()
+            .1
+            .contains("closed-node"));
 
         let not_subscribed = item_retrieval_access("authorize", None, &[], None).unwrap_err();
         assert_eq!(error_condition(&not_subscribed), Some("not-authorized"));
-        assert!(error_payload(&not_subscribed)
-            .unwrap()
+        assert!(reply_error(&not_subscribed)
+            .error_payload()
             .1
             .contains("not-subscribed"));
 
@@ -3607,8 +3535,8 @@ mod tests {
 
         let reply = super::node_config_parse_error(condition);
         assert_eq!(error_condition(&reply), Some("not-acceptable"));
-        assert!(error_payload(&reply)
-            .unwrap()
+        assert!(reply_error(&reply)
+            .error_payload()
             .1
             .contains("unsupported-access-model"));
     }
@@ -3694,7 +3622,10 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error_condition(&reply), Some("bad-request"));
-        assert!(error_payload(&reply).unwrap().1.contains("invalid-options"));
+        assert!(reply_error(&reply)
+            .error_payload()
+            .1
+            .contains("invalid-options"));
     }
 
     #[test]
@@ -3727,9 +3658,25 @@ mod tests {
     #[test]
     fn extended_errors_use_pubsub_namespace_and_gone_carries_uri_text() {
         let unsupported = PubSubReply::ExtendedError(PubSubError::unsupported("publish"));
-        let (_, extra) = error_payload(&unsupported).unwrap();
-        assert!(extra.contains("xmlns='http://jabber.org/protocol/pubsub#errors'"));
-        assert!(extra.contains("feature='publish'"));
+        let federated = super::pubsub_s2s_iq_error(
+            "i0",
+            "pubsub.example.test",
+            "remote.example.test",
+            &unsupported,
+        );
+        let document = Document::parse(&federated).unwrap();
+        let iq = document.root_element();
+        assert_eq!(iq.tag_name().namespace(), Some("jabber:server"));
+        assert_eq!(iq.attribute("to"), Some("remote.example.test"));
+        let unsupported_condition = document
+            .descendants()
+            .find(|node| {
+                node.tag_name().name() == "unsupported"
+                    && node.tag_name().namespace()
+                        == Some("http://jabber.org/protocol/pubsub#errors")
+            })
+            .unwrap();
+        assert_eq!(unsupported_condition.attribute("feature"), Some("publish"));
 
         let moved = super::pubsub_iq_error(
             "i1",

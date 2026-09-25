@@ -1411,11 +1411,7 @@ impl ProtocolSession {
                     .store(true, std::sync::atomic::Ordering::Release);
             }
             if let Some(active) = bind.csi_active {
-                if active {
-                    self.csi_state.set_active();
-                } else {
-                    self.csi_state.set_inactive();
-                }
+                self.set_csi_active(active);
             }
             if let Some(sm) = bind.sm {
                 match self.enable_sm_inline(sm.resume, sm.max).await {

@@ -1,21 +1,43 @@
 use super::{Action, ProtocolSession};
 use northstar_xep_0352::{
-    classify_stanza, CsiIndication, CsiPolicyConfig, DeferredQueue, DeliveryAction, EnqueueResult,
-    OverflowDecision, StanzaMetadata,
+    classify_stanza, CsiIndication, CsiPolicyConfig, CsiStateMachine, DeferredQueue,
+    DeliveryAction, EnqueueResult, OverflowDecision, StanzaMetadata,
 };
 
+pub(super) struct CsiSubstate {
+    state: CsiStateMachine,
+    deferred: DeferredQueue<crate::outbound::OutboundItem>,
+}
+
+impl Default for CsiSubstate {
+    fn default() -> Self {
+        Self {
+            state: CsiStateMachine::new(),
+            deferred: default_queue(),
+        }
+    }
+}
+
 impl ProtocolSession {
+    pub(super) fn set_csi_active(&mut self, active: bool) {
+        if active {
+            self.csi.state.set_active();
+        } else {
+            self.csi.state.set_inactive();
+        }
+    }
+
     pub(crate) fn client_state(&mut self, indication: CsiIndication) -> Action {
         // XEP-0352 is advertised immediately after authentication, alongside
         // resource binding, so the state may be changed before binding.
         if self.authenticated.is_none() {
             return Action::Send(crate::xmpp::xml_util::stream_error("not-authorized"));
         }
-        self.csi_state.apply_indication(indication);
+        self.csi.state.apply_indication(indication);
         if indication.is_inactive() {
             return Action::None;
         }
-        Action::SendManyItems(self.csi_deferred.drain_all())
+        Action::SendManyItems(self.csi.deferred.drain_all())
     }
 
     /// Applies the XEP-0352 policy to transient outbound traffic. Durable
@@ -24,10 +46,10 @@ impl ProtocolSession {
         &mut self,
         item: crate::outbound::OutboundItem,
     ) -> Option<crate::outbound::OutboundItem> {
-        if self.csi_state.is_active() {
+        if self.csi.state.is_active() {
             return Some(item);
         }
-        defer_stanza(&mut self.csi_deferred, item)
+        defer_stanza(&mut self.csi.deferred, item)
     }
 }
 

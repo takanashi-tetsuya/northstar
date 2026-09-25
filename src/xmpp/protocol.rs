@@ -457,8 +457,7 @@ pub struct ProtocolSession {
     pub(crate) directed_presence: Arc<DashSet<String>>,
     pub(crate) last_presence: Arc<std::sync::RwLock<Option<String>>>,
     pub(crate) joined_rooms: Arc<dashmap::DashMap<String, crate::state::JoinedMucMembership>>,
-    pub(crate) csi_state: northstar_xep_0352::CsiStateMachine,
-    pub(crate) csi_deferred: northstar_xep_0352::DeferredQueue<crate::outbound::OutboundItem>,
+    csi: csi::CsiSubstate,
     /// Bind 2 clients catch up through MAM metadata and must never receive the
     /// legacy offline queue again on their initial presence.
     pub(crate) bind2_mam_catchup: bool,
@@ -578,8 +577,7 @@ impl ProtocolSession {
             directed_presence: Arc::new(DashSet::new()),
             last_presence: Arc::new(std::sync::RwLock::new(None)),
             joined_rooms: Arc::new(dashmap::DashMap::new()),
-            csi_state: northstar_xep_0352::CsiStateMachine::new(),
-            csi_deferred: csi::default_queue(),
+            csi: csi::CsiSubstate::default(),
             bind2_mam_catchup: false,
             sm_enabled: false,
             sm_db_id: None,

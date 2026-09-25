@@ -48,7 +48,7 @@ pub(super) async fn apply<S: AsyncWrite + Unpin>(
             }
         }
         Action::SendManyAndClose(replies) => {
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             for reply in replies {
                 send(io, &reply).await?;
             }
@@ -81,7 +81,7 @@ pub(super) async fn apply<S: AsyncWrite + Unpin>(
         }
         Action::StartTls => return Ok(TcpActionDisposition::Upgrade),
         Action::CloseWith(reply) => {
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             tcp_fatal_error(io, session.state.local_domain(), opening, &reply).await?;
             return Ok(TcpActionDisposition::Close);
         }

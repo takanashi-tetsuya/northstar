@@ -156,6 +156,16 @@ fn sm_resume_token_hash(emitted_bearer: &str) -> [u8; 32] {
 }
 
 impl ProtocolSession {
+    /// A fatal or explicit terminal transport outcome cannot leave this
+    /// connection eligible for stream resumption.
+    pub(crate) fn forbid_sm_resume(&mut self) {
+        self.sm_resume_allowed = false;
+    }
+
+    pub(crate) fn has_sm_session(&self) -> bool {
+        self.sm_db_id.is_some()
+    }
+
     /// Enables XEP-0198 as an inline Bind 2 feature and returns the exact XML
     /// that belongs inside `<bound/>`. Resume tokens are 256-bit random
     /// bearers; PostgreSQL receives only SHA-256(token).

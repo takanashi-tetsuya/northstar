@@ -20,7 +20,7 @@ pub(super) async fn apply(
     match action {
         Ok(Action::Send(reply)) => {
             if session.record_outbound(&reply).await.is_err() {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
@@ -40,7 +40,7 @@ pub(super) async fn apply(
         Ok(Action::SendMany(replies)) => {
             for reply in replies {
                 if session.record_outbound(&reply).await.is_err() {
-                    session.sm_resume_allowed = false;
+                    session.forbid_sm_resume();
                     let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
                         socket,
@@ -78,7 +78,7 @@ pub(super) async fn apply(
         Ok(Action::SendManyThenActivate(replies)) => {
             for (index, reply) in replies.into_iter().enumerate() {
                 if session.record_outbound(&reply).await.is_err() {
-                    session.sm_resume_allowed = false;
+                    session.forbid_sm_resume();
                     return false;
                 }
                 if !websocket_send_live(socket, Message::Text(reply.into()), send_cancellation)
@@ -92,7 +92,7 @@ pub(super) async fn apply(
             }
         }
         Ok(Action::SendManyAndClose(replies)) => {
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             websocket_send_many_and_close(socket, replies, true, terminal_sequence).await;
             return false;
         }
@@ -105,7 +105,7 @@ pub(super) async fn apply(
                 transient_capacity: _resume_transport_capacity,
             } = payload.into_transport_parts();
             if session.record_outbound(&control).await.is_err() {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
@@ -126,7 +126,7 @@ pub(super) async fn apply(
             }
             for nonza in post_control {
                 if session.record_outbound(&nonza).await.is_err() {
-                    session.sm_resume_allowed = false;
+                    session.forbid_sm_resume();
                     return false;
                 }
                 if !websocket_send_live(socket, Message::Text(nonza.into()), send_cancellation)
@@ -145,12 +145,12 @@ pub(super) async fn apply(
             }
         }
         Ok(Action::Close) => {
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             websocket_orderly_close(socket, true, terminal_sequence).await;
             return false;
         }
         Ok(Action::CloseWith(reply)) => {
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             let domain = session.state.local_domain().to_owned();
             websocket_fatal_error(socket, &domain, opening, reply, terminal_sequence).await;
             return false;
@@ -167,7 +167,7 @@ pub(super) async fn apply(
         }
         Err(error) => {
             tracing::debug!(?error, "invalid WebSocket XMPP stanza");
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             let domain = session.state.local_domain().to_owned();
             websocket_fatal_error(
                 socket,

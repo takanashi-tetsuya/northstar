@@ -461,18 +461,18 @@ pub struct ProtocolSession {
     /// Bind 2 clients catch up through MAM metadata and must never receive the
     /// legacy offline queue again on their initial presence.
     pub(crate) bind2_mam_catchup: bool,
-    pub(crate) sm_enabled: bool,
-    pub(crate) sm_db_id: Option<uuid::Uuid>,
-    pub(crate) sm_session_id_shared: Arc<std::sync::RwLock<Option<uuid::Uuid>>>,
-    pub(crate) sm_resume_allowed: bool,
-    pub(crate) sm_resume_timeout_seconds: u64,
-    pub(crate) sm_inbound_h: u32,
-    pub(crate) sm_outbound_h: u32,
-    pub(crate) sm_acked_h: u32,
-    pub(crate) sm_unacked: VecDeque<crate::outbound::SmUnackedStanza>,
+    sm_enabled: bool,
+    sm_db_id: Option<uuid::Uuid>,
+    sm_session_id_shared: Arc<std::sync::RwLock<Option<uuid::Uuid>>>,
+    sm_resume_allowed: bool,
+    sm_resume_timeout_seconds: u64,
+    sm_inbound_h: u32,
+    sm_outbound_h: u32,
+    sm_acked_h: u32,
+    sm_unacked: VecDeque<crate::outbound::SmUnackedStanza>,
     /// Process-local bytes retained for a resumable XEP-0198 epoch. The same
     /// RAII lease is transferred into exact disconnect recovery.
-    pub(crate) sm_capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
+    sm_capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
     pub(crate) sasl_state: Option<Box<dyn crate::auth::SaslMechanism>>,
     /// Exact account incarnation which supplied the verifier for the current
     /// SCRAM exchange. `Some(None)` records a dummy verifier for an unknown or

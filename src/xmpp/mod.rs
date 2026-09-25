@@ -433,11 +433,11 @@ where
                 return Ok(DriveOutcome::Done);
             }
             _ = disconnect.cancelled() => {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 return Ok(DriveOutcome::Done);
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.negotiation.is_open();
                 let domain = session.state.local_domain().to_owned();
@@ -457,7 +457,7 @@ where
                     return Ok(DriveOutcome::Done);
                 }
             }
-            _ = sm_lease_watch.tick(), if session.sm_db_id.is_some() => {
+            _ = sm_lease_watch.tick(), if session.has_sm_session() => {
                 if let Err(error) = session.checkpoint_sm().await {
                     tcp_internal_backend_error(
                         &mut io,
@@ -470,7 +470,7 @@ where
                 }
             }
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let domain = session.state.local_domain().to_owned();
                 let _ = tcp_fatal_error(
                     &mut io,
@@ -493,7 +493,7 @@ where
                 pending_utf8.extend_from_slice(&bytes[..count]);
                 if let Err(error) = append_utf8(&mut pending_utf8, &mut buffer) {
                     tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid UTF-8 in XMPP stream");
-                    session.sm_resume_allowed = false;
+                    session.forbid_sm_resume();
                     let opening = !session.negotiation.is_open();
                     tcp_fatal_error(
                         &mut io,
@@ -518,7 +518,7 @@ where
                         Ok(Some(frame)) => {
                             if frame.len() > MAX_XMPP_FRAME_BYTES {
                                 tracing::debug!(peer_ip = %session.peer_ip, "XMPP frame exceeded 1 MiB");
-                                session.sm_resume_allowed = false;
+                                session.forbid_sm_resume();
                                 let opening = !session.negotiation.is_open();
                                 tcp_fatal_error(
                                     &mut io,
@@ -537,7 +537,7 @@ where
                             // must not be rejected as one oversized stanza.
                             if buffer.len() + pending_utf8.len() > MAX_XMPP_FRAME_BYTES {
                                 tracing::debug!(peer_ip = %session.peer_ip, "incomplete XMPP frame exceeded 1 MiB");
-                                session.sm_resume_allowed = false;
+                                session.forbid_sm_resume();
                                 let opening = !session.negotiation.is_open();
                                 tcp_fatal_error(
                                     &mut io,
@@ -552,7 +552,7 @@ where
                         }
                         Err(error) => {
                             tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid XMPP framing");
-                            session.sm_resume_allowed = false;
+                            session.forbid_sm_resume();
                             let condition = framing::stream_error_condition(&error);
                             let opening = !session.negotiation.is_open();
                             tcp_fatal_error(
@@ -574,7 +574,7 @@ where
                         Ok(Ok(action)) => action,
                         Ok(Err(error)) => {
                             tracing::error!(?error, peer_ip = %session.peer_ip, "XMPP protocol/backend failure");
-                            session.sm_resume_allowed = false;
+                            session.forbid_sm_resume();
                             tcp_fatal_error(
                                 &mut io,
                                 session.state.local_domain(),
@@ -585,7 +585,7 @@ where
                             return Ok(DriveOutcome::Done);
                         }
                         Err(_) => {
-                            session.sm_resume_allowed = false;
+                            session.forbid_sm_resume();
                             let error = anyhow::anyhow!("XMPP protocol/backend operation timed out");
                             tcp_internal_backend_error(
                                 &mut io,
@@ -1002,7 +1002,7 @@ async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
     error: &anyhow::Error,
 ) {
     tracing::error!(?error, operation, peer_ip = %session.peer_ip, "XMPP transport/backend failure");
-    session.sm_resume_allowed = false;
+    session.forbid_sm_resume();
     let domain = session.state.local_domain().to_owned();
     // The original backend error is authoritative; a broken or stalled peer
     // must not keep the task alive while the terminal response is attempted.
@@ -1074,13 +1074,13 @@ pub async fn websocket_connection(
                 break;
             }
             _ = disconnect.cancelled() => {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let opened = session.negotiation.is_open();
                 websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
                 break;
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 tracing::debug!(%peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle WebSocket XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.negotiation.is_open();
                 let domain = session.state.local_domain().to_owned();
@@ -1098,7 +1098,7 @@ pub async fn websocket_connection(
                     >= session.state.unauthenticated_timeout()
                 {
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
-                    session.sm_resume_allowed = false;
+                    session.forbid_sm_resume();
                     let opening = !session.negotiation.is_open();
                     let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
@@ -1111,9 +1111,9 @@ pub async fn websocket_connection(
                     break;
                 }
             }
-            _ = sm_lease_watch.tick(), if session.sm_db_id.is_some() => {
+            _ = sm_lease_watch.tick(), if session.has_sm_session() => {
                 if session.checkpoint_sm().await.is_err() {
-                    session.sm_resume_allowed = false;
+                    session.forbid_sm_resume();
                     let opening = !session.negotiation.is_open();
                     let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
@@ -1127,7 +1127,7 @@ pub async fn websocket_connection(
                 }
             }
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let opening = !session.negotiation.is_open();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
@@ -1156,7 +1156,7 @@ pub async fn websocket_connection(
                             Ok(frame) => frame,
                             Err(error) => {
                                 tracing::debug!(?error, "invalid WebSocket XMPP framing");
-                                session.sm_resume_allowed = false;
+                                session.forbid_sm_resume();
                                 let condition = framing::stream_error_condition(&error);
                                 let opening = !session.negotiation.is_open();
                                 let domain = session.state.local_domain().to_owned();
@@ -1171,7 +1171,7 @@ pub async fn websocket_connection(
                             }
                         };
                         if websocket_has_invalid_stream_header_namespace(&frame) {
-                            session.sm_resume_allowed = false;
+                            session.forbid_sm_resume();
                             let opening = !session.negotiation.is_open();
                             let domain = session.state.local_domain().to_owned();
                             websocket_fatal_error(
@@ -1184,7 +1184,7 @@ pub async fn websocket_connection(
                             break;
                         }
                         if websocket_close_has_content(&frame) {
-                            session.sm_resume_allowed = false;
+                            session.forbid_sm_resume();
                             let opening = !session.negotiation.is_open();
                             let domain = session.state.local_domain().to_owned();
                             websocket_fatal_error(
@@ -1263,7 +1263,7 @@ pub async fn websocket_connection(
                             payload_bytes = payload.len(),
                             "rejected binary WebSocket XMPP message before XML processing"
                         );
-                        session.sm_resume_allowed = false;
+                        session.forbid_sm_resume();
                         let opening = !session.negotiation.is_open();
                         let domain = session.state.local_domain().to_owned();
                         websocket_fatal_error(
@@ -1306,7 +1306,7 @@ pub async fn websocket_connection(
     // Preserve resumability for transport/backpressure failures, but never for
     // an explicit administrative or certificate-driven session revocation.
     if disconnect.is_cancelled() {
-        session.sm_resume_allowed = false;
+        session.forbid_sm_resume();
     }
     if needs_shutdown_terminal_sequence(
         actor_shutdown.is_cancelled(),
@@ -1330,7 +1330,7 @@ async fn websocket_record_and_send_item(
     let managed_by_sm = match session.record_outbound_item(&item).await {
         Ok(managed) => managed,
         Err(_) => {
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             let domain = session.state.local_domain().to_owned();
             websocket_fatal_error(
                 socket,
@@ -1353,7 +1353,7 @@ async fn websocket_record_and_send_item(
             Ok(Ok(delivery)) => Some(delivery),
             Ok(Err(error)) => {
                 tracing::error!(?error, message_id = %delivery.message_id, "failed to fence durable WebSocket write");
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
@@ -1367,7 +1367,7 @@ async fn websocket_record_and_send_item(
             }
             Err(_) => {
                 tracing::error!(message_id = %delivery.message_id, "timed out fencing durable WebSocket write");
-                session.sm_resume_allowed = false;
+                session.forbid_sm_resume();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
@@ -1387,7 +1387,7 @@ async fn websocket_record_and_send_item(
         Ok(delivery) => delivery,
         Err(error) => {
             tracing::error!(?error, "failed to fence durable MIX WebSocket write");
-            session.sm_resume_allowed = false;
+            session.forbid_sm_resume();
             let domain = session.state.local_domain().to_owned();
             websocket_fatal_error(
                 socket,

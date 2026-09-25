@@ -710,7 +710,10 @@ TCP and WebSocket action executors now have separate adapters. Plain TCP and
 direct TLS share the TCP adapter; both adapters retain their existing write,
 authentication-publication and SM replay order. BOSH still executes its
 transport-specific actions separately. CSI now owns its state machine and
-deferred outbound queue as one private session substate.
+deferred outbound queue as one private session substate. SM counters, leases and
+resumption state are private to the protocol module; transport adapters can
+forbid resumption or check whether an SM session exists without editing those
+fields directly.
 These are completed slices, not packet exit claims.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated

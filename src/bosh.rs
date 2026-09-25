@@ -502,7 +502,7 @@ impl BoshActor {
                     break;
                 }
                 _ = disconnect.cancelled() => {
-                    self.protocol.sm_resume_allowed = false;
+                    self.protocol.forbid_sm_resume();
                     self.terminate_waiters("system-shutdown");
                     break;
                 }
@@ -522,11 +522,11 @@ impl BoshActor {
                                 }
                             };
                             if !keep_running {
-                                self.protocol.sm_resume_allowed = false;
+                                self.protocol.forbid_sm_resume();
                             }
                         }
                         Some(BoshCommand::Overactivity) => {
-                            self.protocol.sm_resume_allowed = false;
+                            self.protocol.forbid_sm_resume();
                             self.terminate_waiters("policy-violation");
                             keep_running = false;
                         }
@@ -544,7 +544,7 @@ impl BoshActor {
                                 .await,
                                 Ok(true)
                             ) {
-                                self.protocol.sm_resume_allowed = false;
+                                self.protocol.forbid_sm_resume();
                                 self.terminate_waiters("policy-violation");
                                 keep_running = false;
                             } else if self.held.is_some()
@@ -557,13 +557,13 @@ impl BoshActor {
                                     Ok(true)
                                 )
                             {
-                                self.protocol.sm_resume_allowed = false;
+                                self.protocol.forbid_sm_resume();
                                 self.terminate_waiters("internal-server-error");
                                 keep_running = false;
                             }
                         }
                         None => {
-                            self.protocol.sm_resume_allowed = false;
+                            self.protocol.forbid_sm_resume();
                             self.terminate_waiters("internal-server-error");
                             keep_running = false;
                         }
@@ -578,7 +578,7 @@ impl BoshActor {
                         .await,
                         Ok(true)
                     ) {
-                        self.protocol.sm_resume_allowed = false;
+                        self.protocol.forbid_sm_resume();
                         self.terminate_waiters("internal-server-error");
                         keep_running = false;
                     }
@@ -590,7 +590,7 @@ impl BoshActor {
                     keep_running = false;
                 }
                 _ = tokio::time::sleep_until(resource_bind_deadline.into()), if self.protocol.resource_bind_deadline().is_some() => {
-                    self.protocol.sm_resume_allowed = false;
+                    self.protocol.forbid_sm_resume();
                     self.terminate_waiters("policy-violation");
                     keep_running = false;
                 }
@@ -601,10 +601,10 @@ impl BoshActor {
                     {
                         self.terminate_waiters("policy-violation");
                         keep_running = false;
-                    } else if self.protocol.sm_db_id.is_some()
+                    } else if self.protocol.has_sm_session()
                         && self.protocol.checkpoint_sm().await.is_err()
                     {
-                        self.protocol.sm_resume_allowed = false;
+                        self.protocol.forbid_sm_resume();
                         self.terminate_waiters("internal-server-error");
                         keep_running = false;
                     }
@@ -679,7 +679,7 @@ impl BoshActor {
                     .is_err()
             {
                 let _ = response.send(terminal_response("internal-server-error"));
-                self.protocol.sm_resume_allowed = false;
+                self.protocol.forbid_sm_resume();
                 self.terminate_waiters("internal-server-error");
                 return false;
             }
@@ -748,7 +748,7 @@ impl BoshActor {
                     // the first is still held is normal only when the client
                     // has data to send. A second empty request inside the
                     // advertised polling interval is XEP-0124 overactivity.
-                    self.protocol.sm_resume_allowed = false;
+                    self.protocol.forbid_sm_resume();
                     self.terminate_waiters("policy-violation");
                     return false;
                 }
@@ -776,7 +776,7 @@ impl BoshActor {
                 std::mem::swap(&mut oldest.responders, &mut terminating.responders);
                 let _ = self.process_pending(terminating).await;
                 if !self.finish_pending(oldest, None, false).await {
-                    self.protocol.sm_resume_allowed = false;
+                    self.protocol.forbid_sm_resume();
                 }
                 self.terminate_waiters("other-request");
                 return false;
@@ -785,7 +785,7 @@ impl BoshActor {
                 && self.buffered.contains_key(&self.next_rid)
                 && !self.finish_held(None).await
             {
-                self.protocol.sm_resume_allowed = false;
+                self.protocol.forbid_sm_resume();
                 self.terminate_waiters("internal-server-error");
                 return false;
             }
@@ -936,7 +936,7 @@ impl BoshActor {
         }
 
         if request.terminate {
-            self.protocol.sm_resume_allowed = false;
+            self.protocol.forbid_sm_resume();
             let _ = self.finish_pending(pending, Some("terminate"), false).await;
             self.terminate_waiters("other-request");
             return false;
@@ -1012,7 +1012,7 @@ impl BoshActor {
                 true
             }
             Action::SendManyAndClose(replies) => {
-                self.protocol.sm_resume_allowed = false;
+                self.protocol.forbid_sm_resume();
                 for reply in replies {
                     if !self.push_output(reply) {
                         return false;
@@ -1068,7 +1068,7 @@ impl BoshActor {
                     .to_owned(),
             ),
             Action::CloseWith(reply) => {
-                self.protocol.sm_resume_allowed = false;
+                self.protocol.forbid_sm_resume();
                 if !self.push_output(reply.clone()) {
                     // A stream error is the authoritative final payload. If
                     // ordinary queued stanzas consumed the bounded output
@@ -1081,7 +1081,7 @@ impl BoshActor {
                 false
             }
             Action::Close => {
-                self.protocol.sm_resume_allowed = false;
+                self.protocol.forbid_sm_resume();
                 false
             }
             Action::None => {

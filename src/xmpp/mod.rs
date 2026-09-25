@@ -239,24 +239,12 @@ async fn xmpps_tcp_connection(
         protocol::ClientTransport::Tcp,
         peer.ip(),
     );
-    session.secure_transport = true;
-    session.channel_bindings = channel_bindings(&secure, tls_server_end_point)?;
-    session.client_certificate_identities = secure
-        .get_ref()
-        .1
-        .peer_certificates()
-        .map(|certificates| {
-            crate::tls::c2s_client_xmpp_identities(certificates, state.local_domain())
-        })
-        .transpose()?
-        .unwrap_or_default();
-    session.client_certificate_chain = secure
-        .get_ref()
-        .1
-        .peer_certificates()
-        .map(<[_]>::to_vec)
-        .unwrap_or_default();
-    session.tls_generation = tls_generation;
+    session.activate_tls(tls_session_evidence(
+        &secure,
+        tls_server_end_point,
+        tls_generation,
+        state.local_domain(),
+    )?);
     tracing::debug!(%peer, "XMPPS connection established");
     let transport = AssertUnwindSafe(drive_io(secure, &mut session, &mut rx, &actor_shutdown))
         .catch_unwind()
@@ -303,24 +291,12 @@ async fn tcp_connection(
                 result.context("STARTTLS handshake timed out")?.context("TLS handshake failed")?
             }
         };
-        session.secure_transport = true;
-        session.channel_bindings = channel_bindings(&secure, tls_server_end_point)?;
-        session.client_certificate_identities = secure
-            .get_ref()
-            .1
-            .peer_certificates()
-            .map(|certificates| {
-                crate::tls::c2s_client_xmpp_identities(certificates, state.local_domain())
-            })
-            .transpose()?
-            .unwrap_or_default();
-        session.client_certificate_chain = secure
-            .get_ref()
-            .1
-            .peer_certificates()
-            .map(<[_]>::to_vec)
-            .unwrap_or_default();
-        session.tls_generation = tls_generation;
+        session.activate_tls(tls_session_evidence(
+            &secure,
+            tls_server_end_point,
+            tls_generation,
+            state.local_domain(),
+        )?);
         tracing::debug!(%peer, "XMPP connection upgraded to TLS");
         let _ = drive_io(secure, &mut session, &mut rx, &actor_shutdown).await?;
         Ok(())
@@ -345,6 +321,31 @@ fn channel_bindings(
         })
         .ok();
     crate::auth::ChannelBindings::from_available(tls_server_end_point, tls_exporter)
+}
+
+fn tls_session_evidence(
+    secure: &tokio_rustls::server::TlsStream<TcpStream>,
+    tls_server_end_point: Option<Vec<u8>>,
+    generation: u64,
+    domain: &str,
+) -> Result<protocol::TlsSessionEvidence> {
+    let connection = secure.get_ref().1;
+    let channel_bindings = channel_bindings(secure, tls_server_end_point)?;
+    let client_certificate_identities = connection
+        .peer_certificates()
+        .map(|certificates| crate::tls::c2s_client_xmpp_identities(certificates, domain))
+        .transpose()?
+        .unwrap_or_default();
+    let client_certificate_chain = connection
+        .peer_certificates()
+        .map(<[_]>::to_vec)
+        .unwrap_or_default();
+    Ok(protocol::TlsSessionEvidence {
+        channel_bindings,
+        client_certificate_identities,
+        client_certificate_chain,
+        generation,
+    })
 }
 
 enum DriveOutcome<S> {

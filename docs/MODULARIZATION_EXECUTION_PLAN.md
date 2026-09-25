@@ -714,7 +714,8 @@ response fences retained by the actor. CSI now owns its state machine and
 deferred outbound queue as one private session substate. SM counters, leases and
 resumption state are private to the protocol module; transport adapters can
 forbid resumption or check whether an SM session exists without editing those
-fields directly.
+fields directly. Direct TLS and STARTTLS now build channel-binding and client
+certificate evidence before atomically activating the secure session state.
 These are completed slices, not packet exit claims.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated

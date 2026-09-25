@@ -358,6 +358,13 @@ pub(crate) enum ClientTransport {
     Bosh,
 }
 
+pub(crate) struct TlsSessionEvidence {
+    pub channel_bindings: Option<crate::auth::ChannelBindings>,
+    pub client_certificate_identities: Vec<String>,
+    pub client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
+    pub generation: u64,
+}
+
 fn client_stream_limits_feature(transport: ClientTransport, authenticated: bool) -> String {
     match transport {
         // BOSH has request-body overhead plus independently configurable
@@ -406,7 +413,7 @@ pub struct ProtocolSession {
     /// Authoritative transport-security decision. Native TLS and trusted
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
     /// never used as an authentication bypass.
-    pub secure_transport: bool,
+    secure_transport: bool,
     pub(crate) transport: ClientTransport,
     pub(crate) peer_ip: IpAddr,
     pub(crate) connected_at: std::time::Instant,
@@ -496,17 +503,16 @@ pub struct ProtocolSession {
     /// failure or execute the commit a second time.
     pub(crate) pending_credential_commit:
         Option<crate::services::authentication::CredentialCommitReceipt>,
-    pub(crate) channel_bindings: Option<crate::auth::ChannelBindings>,
+    channel_bindings: Option<crate::auth::ChannelBindings>,
     /// Bare JIDs authenticated by the optional C2S client-certificate PKIX
     /// verifier and id-on-xmppAddr SAN parser for this exact TLS connection.
-    pub(crate) client_certificate_identities: Vec<String>,
+    client_certificate_identities: Vec<String>,
     /// Exact DER chain and TLS snapshot which authenticated this transport.
     /// They remain inert until SASL EXTERNAL succeeds; password/SCRAM/FAST
     /// sessions are never registered for CRL-triggered draining merely
     /// because the client happened to present a certificate.
-    pub(crate) client_certificate_chain:
-        Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
-    pub(crate) tls_generation: u64,
+    client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
+    tls_generation: u64,
     _certificate_session: Option<crate::tls::CertificateSessionGuard>,
     pub(crate) disconnect: tokio_util::sync::CancellationToken,
     /// Stable owner of the durable stream row.  A resumed transport gets a
@@ -535,6 +541,14 @@ pub struct ProtocolSession {
 }
 
 impl ProtocolSession {
+    pub(crate) fn activate_tls(&mut self, evidence: TlsSessionEvidence) {
+        self.channel_bindings = evidence.channel_bindings;
+        self.client_certificate_identities = evidence.client_certificate_identities;
+        self.client_certificate_chain = evidence.client_certificate_chain;
+        self.tls_generation = evidence.generation;
+        self.secure_transport = true;
+    }
+
     pub(crate) fn uses_websocket_framing(&self) -> bool {
         self.transport == ClientTransport::WebSocket
     }

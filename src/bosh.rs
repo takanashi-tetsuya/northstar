@@ -465,8 +465,7 @@ impl BoshActor {
     }
 
     async fn run_loop(&mut self) {
-        let disconnect = self.protocol.disconnect.clone();
-        let backpressure_disconnect = self.protocol.outbound.backpressure_disconnect();
+        let signals = self.protocol.termination_signals();
         let mut maintenance = tokio::time::interval(Duration::from_secs(1));
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut keep_running = true;
@@ -498,12 +497,12 @@ impl BoshActor {
                     self.terminate_waiters("system-shutdown");
                     break;
                 }
-                _ = backpressure_disconnect.cancelled() => {
+                _ = signals.backpressured() => {
                     tracing::warn!(peer_ip = %self.protocol.peer_ip, "closed slow BOSH XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
                     self.terminate_waiters("policy-violation");
                     break;
                 }
-                _ = disconnect.cancelled() => {
+                _ = signals.revoked() => {
                     self.protocol.forbid_sm_resume();
                     self.terminate_waiters("system-shutdown");
                     break;
@@ -614,12 +613,7 @@ impl BoshActor {
 
     async fn finish(&mut self) {
         let state = Arc::clone(&self.protocol.state);
-        if self
-            .protocol
-            .outbound
-            .backpressure_disconnect()
-            .is_cancelled()
-        {
+        if self.protocol.termination_signals().is_backpressured() {
             state.record_c2s_backpressure_disconnect();
         }
         // Stop admitting HTTP requests before durable/session finalization.

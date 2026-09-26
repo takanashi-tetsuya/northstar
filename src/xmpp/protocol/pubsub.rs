@@ -1,8 +1,8 @@
 use super::{Action, ProtocolSession};
 use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::pubsub::{
-    subscription_event_children, CollectionUpdateOutcome, CreateNodeOutcome, LeafDiscoItems,
-    OwnerMutationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
+    subscription_event_children, CollectionDiscoItems, CollectionUpdateOutcome, CreateNodeOutcome,
+    LeafDiscoItems, OwnerMutationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
     PubSubConfigureNodeWrite, PubSubCreateNodeCommand, PubSubCreateNodeWrite,
     PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubListPageQuery, PubSubNode,
     PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
@@ -213,10 +213,20 @@ pub(crate) async fn federated_disco_items(
                 return missing_node_reply(state, node_name).await;
             };
             if node.node_type == "collection" {
-                if !can_retrieve(state, &node, &requester).await? {
-                    return Ok(PubSubReply::Error("forbidden"));
-                }
-                for child in state.pubsub_service().collection_children(node.id).await? {
+                let children = match state
+                    .pubsub_service()
+                    .collection_disco_items(node_name, &requester)
+                    .await?
+                {
+                    CollectionDiscoItems::Items(children) => children,
+                    CollectionDiscoItems::NotFound => {
+                        return missing_node_reply(state, node_name).await;
+                    }
+                    CollectionDiscoItems::NotCollection | CollectionDiscoItems::Forbidden => {
+                        return Ok(PubSubReply::Error("forbidden"));
+                    }
+                };
+                for child in children {
                     // XEP-0248 defines collection visibility using the
                     // collection's access model, not each child's model.
                     visible.push(DiscoItem {

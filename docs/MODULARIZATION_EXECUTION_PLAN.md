@@ -274,6 +274,10 @@ application plan. Subject, moderation/retraction, affiliation, configuration
 and registration use typed application commands and atomic service methods.
 Local and federated joins now use the same room-core snapshot check for room
 incarnation and configuration version before their existing error mapping.
+After a federated join commits in PostgreSQL, room-index and exact-occupant
+Redis repairs may degrade independently without suppressing the joiner's
+initial presence. The legacy Redis-authoritative path retains its strict
+effect order.
 Remaining room work is to verify any residual join/leave or adapter-specific
 path against the same authority and post-commit boundaries.
 PubSub/PEP already has core/application crates, typed commands, a service and
@@ -289,7 +293,11 @@ boundary is still incremental.
 Leaf disco#items now reads node configuration, requester affiliation and
 subscription, and retained item IDs in one read-only PostgreSQL statement.
 The service applies the existing access rule to that snapshot before the
-protocol builds a response. Collection discovery keeps its existing path.
+protocol builds a response.
+Collection disco#items now takes the same single-statement approach for the
+parent policy and its immediate children. It preserves parent-only visibility,
+name order and the 1,000-child limit; SQL avoids reading children for denied
+requests, and the service applies the shared access rule before responding.
 Archive/MAM now resolves all referenced form and RSM IDs in one visible query
 within the page's repeatable-read snapshot. Archive core validates those
 points and plans the same count and page bounds; missing or invisible IDs
@@ -328,6 +336,9 @@ lifetime/cancellation paths still need separation.
 The session now owns the unauthenticated deadline decision. TCP, WebSocket and
 BOSH keep their existing timer cadence and close behavior while consulting the
 same session predicate.
+The transports now observe policy revocation and backpressure through a
+read-only session view. Their shutdown order and SM/BOSH cancellation behavior
+remain transport-owned; adapters cannot cancel the session's raw tokens.
 
 ### Phase E — Infrastructure ports
 

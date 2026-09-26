@@ -1,6 +1,8 @@
 use super::*;
 use crate::db;
-use crate::services::pubsub::{LeafDiscoItems, PubSubService};
+use crate::services::pubsub::{
+    CollectionDiscoItems, LeafDiscoItems, PubSubCollectionDiscoChild, PubSubService,
+};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -1238,6 +1240,328 @@ async fn leaf_disco_rechecks_configuration_after_stale_node_lookup() {
     assert_eq!(
         service.leaf_disco_items(&node_name, &owner).await.unwrap(),
         LeafDiscoItems::NotLeaf
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn collection_disco_sql_gate_matches_parent_policy_on_read_only_pool() {
+    let (url, pool) = integration_pool(6).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let owner = format!("owner-{suffix}@example.test");
+    let requester = format!("reader-{suffix}@example.test");
+    let subscription_jid = format!("{requester}/Phone");
+    let parent_name = format!("collection-policy-{suffix}");
+    let parent_config = PubSubNodeConfig {
+        node_type: "collection".to_owned(),
+        ..Default::default()
+    };
+    let parent_id = match create_node(&pool, &parent_name, &owner, &parent_config, 10)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(id) => id,
+        other => panic!("unexpected collection create outcome: {other:?}"),
+    };
+    let parent = get_node_by_id(&pool, parent_id).await.unwrap().unwrap();
+    let first = create_default_test_node(&pool, &format!("a-{suffix}"), &owner).await;
+    let restricted_config = PubSubNodeConfig {
+        access_model: "whitelist".to_owned(),
+        ..Default::default()
+    };
+    let restricted_name = format!("z-{suffix}");
+    let restricted_id = match create_node(&pool, &restricted_name, &owner, &restricted_config, 10)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(id) => id,
+        other => panic!("unexpected restricted child create outcome: {other:?}"),
+    };
+    let restricted = get_node_by_id(&pool, restricted_id).await.unwrap().unwrap();
+    sqlx::query("UPDATE pubsub_nodes SET title='Private title' WHERE id=$1")
+        .bind(restricted_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO pubsub_affiliations(node_id,jid,affiliation)
+         VALUES($1,$2,'outcast')",
+    )
+    .bind(restricted_id)
+    .bind(&requester)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for child in [&restricted, &first] {
+        assert_eq!(
+            associate_collection_child(&pool, &parent, child, &owner)
+                .await
+                .unwrap(),
+            CollectionUpdateOutcome::Updated
+        );
+    }
+
+    let read_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let service = PubSubService::new(read_pool.clone(), "example.test");
+    let expected_children = vec![
+        PubSubCollectionDiscoChild {
+            node: first.node.clone(),
+            title: None,
+        },
+        PubSubCollectionDiscoChild {
+            node: restricted.node.clone(),
+            title: Some("Private title".to_owned()),
+        },
+    ];
+    assert_eq!(
+        service
+            .collection_disco_items(&parent_name, &requester)
+            .await
+            .unwrap(),
+        CollectionDiscoItems::Items(expected_children.clone()),
+        "the parent's open policy must reveal both children in node-name order, even when a child denies access"
+    );
+
+    for access in ["open", "whitelist", "authorize"] {
+        sqlx::query("UPDATE pubsub_nodes SET access_model=$2 WHERE id=$1")
+            .bind(parent_id)
+            .bind(access)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for affiliation in [
+            None,
+            Some("owner"),
+            Some("publisher"),
+            Some("member"),
+            Some("publish-only"),
+            Some("outcast"),
+        ] {
+            if let Some(affiliation) = affiliation {
+                sqlx::query(
+                    "INSERT INTO pubsub_affiliations(node_id,jid,affiliation)
+                     VALUES($1,$2,$3)
+                     ON CONFLICT(node_id,jid) DO UPDATE SET affiliation=EXCLUDED.affiliation",
+                )
+                .bind(parent_id)
+                .bind(&requester)
+                .bind(affiliation)
+                .execute(&pool)
+                .await
+                .unwrap();
+            } else {
+                sqlx::query("DELETE FROM pubsub_affiliations WHERE node_id=$1 AND jid=$2")
+                    .bind(parent_id)
+                    .bind(&requester)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            for subscription in ["absent", "active", "expired"] {
+                if subscription == "absent" {
+                    sqlx::query("DELETE FROM pubsub_subscriptions WHERE node_id=$1 AND jid=$2")
+                        .bind(parent_id)
+                        .bind(&subscription_jid)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                } else {
+                    sqlx::query(
+                        "INSERT INTO pubsub_subscriptions(node_id,jid,state,subid,expire)
+                         VALUES($1,$2,'subscribed',$3,
+                                CASE WHEN $4 THEN NOW()-INTERVAL '1 second' ELSE NULL END)
+                         ON CONFLICT(node_id,jid) DO UPDATE SET
+                             state='subscribed',expire=EXCLUDED.expire",
+                    )
+                    .bind(parent_id)
+                    .bind(&subscription_jid)
+                    .bind(Uuid::new_v4().to_string())
+                    .bind(subscription == "expired")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                }
+                let snapshot = collection_disco_snapshot(
+                    &read_pool,
+                    &parent_name,
+                    &format!("{requester}/Tablet"),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let expected = northstar_xep_0060::can_retrieve_pure(
+                    access.parse().unwrap(),
+                    affiliation.map(|value| value.parse().unwrap()),
+                    subscription == "active",
+                );
+                assert_eq!(
+                    snapshot.affiliation.as_deref(),
+                    affiliation,
+                    "affiliation facts changed for {access}/{affiliation:?}/{subscription}"
+                );
+                assert_eq!(
+                    snapshot.subscribed,
+                    subscription == "active",
+                    "subscription facts changed for {access}/{affiliation:?}/{subscription}"
+                );
+                assert_eq!(
+                    snapshot.children.len(),
+                    if expected { 2 } else { 0 },
+                    "SQL child gate disagrees with pure policy for {access}/{affiliation:?}/{subscription}"
+                );
+                assert_eq!(
+                    service
+                        .collection_disco_items(&parent_name, &requester)
+                        .await
+                        .unwrap(),
+                    if expected {
+                        CollectionDiscoItems::Items(expected_children.clone())
+                    } else {
+                        CollectionDiscoItems::Forbidden
+                    },
+                    "service policy disagrees for {access}/{affiliation:?}/{subscription}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn collection_disco_rechecks_parent_and_edges_after_stale_lookup() {
+    let (_, pool) = integration_pool(6).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let owner = format!("owner-{suffix}@example.test");
+    let outsider = format!("outsider-{suffix}@example.test");
+    let parent_name = format!("collection-race-{suffix}");
+    let config = PubSubNodeConfig {
+        node_type: "collection".to_owned(),
+        ..Default::default()
+    };
+    let parent_id = match create_node(&pool, &parent_name, &owner, &config, 10)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(id) => id,
+        other => panic!("unexpected collection create outcome: {other:?}"),
+    };
+    let stale = get_node_by_id(&pool, parent_id).await.unwrap().unwrap();
+    let first = create_default_test_node(&pool, &format!("first-{suffix}"), &owner).await;
+    let second = create_default_test_node(&pool, &format!("second-{suffix}"), &owner).await;
+    assert_eq!(
+        associate_collection_child(&pool, &stale, &first, &owner)
+            .await
+            .unwrap(),
+        CollectionUpdateOutcome::Updated
+    );
+    let service = PubSubService::new(pool.clone(), "example.test");
+    assert_eq!(
+        service
+            .collection_disco_items(&parent_name, &outsider)
+            .await
+            .unwrap(),
+        CollectionDiscoItems::Items(vec![PubSubCollectionDiscoChild {
+            node: first.node.clone(),
+            title: None,
+        }])
+    );
+
+    // A configuration commit between the protocol's initial node lookup and
+    // its collection query must override the stale access model.
+    let mut expected = stale.config();
+    expected.children = vec![first.node.clone()];
+    let mut restricted = expected.clone();
+    restricted.access_model = "whitelist".to_owned();
+    assert_eq!(
+        update_node_config_and_graph_with_outbox(
+            &pool,
+            &stale,
+            &owner,
+            &expected,
+            &restricted,
+            &NoopMutationOutboxRenderer,
+        )
+        .await
+        .unwrap(),
+        PubSubConfigOutcome::Updated
+    );
+    assert_eq!(stale.access_model, "open");
+    assert_eq!(
+        service
+            .collection_disco_items(&parent_name, &outsider)
+            .await
+            .unwrap(),
+        CollectionDiscoItems::Forbidden
+    );
+
+    let current = get_node_by_id(&pool, parent_id).await.unwrap().unwrap();
+    assert_eq!(
+        dissociate_collection_child(&pool, &current, &first, &owner)
+            .await
+            .unwrap(),
+        CollectionUpdateOutcome::Updated
+    );
+    assert_eq!(
+        associate_collection_child(&pool, &current, &second, &owner)
+            .await
+            .unwrap(),
+        CollectionUpdateOutcome::Updated
+    );
+    assert_eq!(
+        service
+            .collection_disco_items(&parent_name, &owner)
+            .await
+            .unwrap(),
+        CollectionDiscoItems::Items(vec![PubSubCollectionDiscoChild {
+            node: second.node.clone(),
+            title: None,
+        }])
+    );
+
+    // Production refuses collection-to-leaf conversion. Model an externally
+    // seeded type change after the stale lookup to exercise the read boundary.
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query("DELETE FROM pubsub_collection_members WHERE collection_node_id=$1")
+        .bind(parent_id)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE pubsub_nodes SET node_type='leaf' WHERE id=$1")
+        .bind(parent_id)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    assert_eq!(
+        service
+            .collection_disco_items(&parent_name, &owner)
+            .await
+            .unwrap(),
+        CollectionDiscoItems::NotCollection
+    );
+    sqlx::query("DELETE FROM pubsub_nodes WHERE id=$1")
+        .bind(parent_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .collection_disco_items(&parent_name, &owner)
+            .await
+            .unwrap(),
+        CollectionDiscoItems::NotFound
     );
 }
 

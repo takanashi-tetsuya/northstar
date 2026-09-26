@@ -21,9 +21,10 @@ pub(crate) use northstar_pubsub_application::{
     PepDeleteNodeCommand, PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome,
     PepPublishItemsResult, PepPurgeNodeCommand, PepPurgeNodeResult, PepRetractCommand,
     PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand,
-    PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult, PubSubConfigureNodeCommand,
-    PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
+    PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult, PubSubCollectionDiscoChild,
+    PubSubCollectionDiscoSnapshot, PubSubConfigureNodeCommand, PubSubConfigureNodeResult,
+    PubSubCreateNodeCommand, PubSubCreateNodeResult, PubSubDeleteNodeCommand,
+    PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
     PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand,
     PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,
@@ -1445,20 +1446,39 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
         if snapshot.node_type != "leaf" {
             return Ok(LeafDiscoItems::NotLeaf);
         }
-        let access_model = snapshot
-            .access_model
-            .parse::<northstar_xep_0060::AccessModel>()
-            .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
-        let affiliation = snapshot
-            .affiliation
-            .as_deref()
-            .map(str::parse::<northstar_xep_0060::Affiliation>)
-            .transpose()
-            .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
-        if !northstar_xep_0060::can_retrieve_pure(access_model, affiliation, snapshot.subscribed) {
+        if !can_retrieve_disco_snapshot(
+            &snapshot.access_model,
+            snapshot.affiliation.as_deref(),
+            snapshot.subscribed,
+        )? {
             return Ok(LeafDiscoItems::Forbidden);
         }
         Ok(LeafDiscoItems::Items(snapshot.item_ids))
+    }
+
+    pub(crate) async fn collection_disco_items(
+        &self,
+        node: &str,
+        requester: &str,
+    ) -> Result<CollectionDiscoItems> {
+        let Some(snapshot) = self
+            .repository
+            .collection_disco_snapshot(node, requester)
+            .await?
+        else {
+            return Ok(CollectionDiscoItems::NotFound);
+        };
+        if snapshot.node_type != "collection" {
+            return Ok(CollectionDiscoItems::NotCollection);
+        }
+        if !can_retrieve_disco_snapshot(
+            &snapshot.access_model,
+            snapshot.affiliation.as_deref(),
+            snapshot.subscribed,
+        )? {
+            return Ok(CollectionDiscoItems::Forbidden);
+        }
+        Ok(CollectionDiscoItems::Items(snapshot.children))
     }
 
     pub(crate) async fn get_items(
@@ -1487,12 +1507,39 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
     }
 }
 
+fn can_retrieve_disco_snapshot(
+    access_model: &str,
+    affiliation: Option<&str>,
+    subscribed: bool,
+) -> Result<bool> {
+    let access_model = access_model
+        .parse::<northstar_xep_0060::AccessModel>()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
+    let affiliation = affiliation
+        .map(str::parse::<northstar_xep_0060::Affiliation>)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
+    Ok(northstar_xep_0060::can_retrieve_pure(
+        access_model,
+        affiliation,
+        subscribed,
+    ))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LeafDiscoItems {
     NotFound,
     NotLeaf,
     Forbidden,
     Items(Vec<String>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CollectionDiscoItems {
+    NotFound,
+    NotCollection,
+    Forbidden,
+    Items(Vec<PubSubCollectionDiscoChild>),
 }
 
 #[derive(Clone)]

@@ -181,14 +181,15 @@ def main() -> None:
     ]
     guests = {name: f"lab@{guest_ip(name)}" for name in ("ns-a", "ns-b", "infra")}
 
-    def run(name: str, command: str, timeout: int = 45) -> str:
+    def run(name: str, command: str, timeout: int = 45,
+            error_tail: int = 1200) -> str:
         result = subprocess.run(
             ssh + [guests[name], command], capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode:
             raise RuntimeError(
                 f"{name} probe exited {result.returncode}: "
-                f"{(result.stdout + result.stderr)[-1200:]}"
+                f"{(result.stdout + result.stderr)[-error_tail:]}"
             )
         return result.stdout.strip()
 
@@ -287,7 +288,8 @@ def main() -> None:
                 # account's upload admission window. Space these writes out.
                 if iteration > 0 and iteration % 90 == 0:
                     record["upload"] = run(
-                        "ns-a", "cd /home/lab/northstar && python3 local-vm-lab-upload.py"
+                        "ns-a", "cd /home/lab/northstar && python3 local-vm-lab-upload.py",
+                        error_tail=4096,
                     )
                 for name in ("ns-a", "ns-b"):
                     pid, rss_kib, inode = service_sample(name)

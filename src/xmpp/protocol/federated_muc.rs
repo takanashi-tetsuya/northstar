@@ -41,6 +41,98 @@ fn record_federated_muc_post_commit_failure(
     );
 }
 
+trait FederatedJoinProjectionPort: Sync {
+    fn join_room(&self, room_jid: &str) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn register_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        exact_occupant_json: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn publish_presence(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        created: bool,
+        id: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+}
+
+impl FederatedJoinProjectionPort for AppState {
+    fn join_room(&self, room_jid: &str) -> impl std::future::Future<Output = Result<()>> + Send {
+        self.federated_muc_join_room(room_jid)
+    }
+
+    fn register_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        exact_occupant_json: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send {
+        self.federated_muc_register_occupant(room_jid, nick, exact_occupant_json)
+    }
+
+    fn publish_presence(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        created: bool,
+        id: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        self.federated_muc_publish_presence(room_jid, occupant, false, created, id)
+    }
+}
+
+enum FederatedJoinProjectionResult {
+    Committed {
+        room_join: Result<()>,
+        registration: Result<bool>,
+    },
+    Legacy,
+}
+
+struct FederatedJoinProjectionRequest<'a> {
+    committed: bool,
+    room_jid: &'a str,
+    nick: &'a str,
+    exact_occupant_json: &'a str,
+    occupant: &'a SerializableMucOccupant,
+    created: bool,
+    id: Option<&'a str>,
+}
+
+/// PostgreSQL has already committed its join and outbox. Redis is a repairable
+/// projection in that mode, so neither attempted write can suppress the
+/// joiner's initial presence. Legacy mode still requires each Redis effect.
+async fn project_federated_join<P: FederatedJoinProjectionPort>(
+    port: &P,
+    request: FederatedJoinProjectionRequest<'_>,
+) -> Result<FederatedJoinProjectionResult> {
+    let room_join = port.join_room(request.room_jid).await;
+    if request.committed {
+        // Exact registration may repair stale Redis capacity state even when
+        // publishing the room index failed; attempt both in this order.
+        let registration = port
+            .register_occupant(request.room_jid, request.nick, request.exact_occupant_json)
+            .await;
+        return Ok(FederatedJoinProjectionResult::Committed {
+            room_join,
+            registration,
+        });
+    }
+    room_join?;
+    port.register_occupant(request.room_jid, request.nick, request.exact_occupant_json)
+        .await?;
+    port.publish_presence(
+        request.room_jid,
+        request.occupant,
+        request.created,
+        request.id,
+    )
+    .await?;
+    Ok(FederatedJoinProjectionResult::Legacy)
+}
+
 fn authenticated_remote_actor(authenticated_domain: &str, from: &str) -> bool {
     let Ok(actor) = crate::jid::CanonicalJid::parse(from) else {
         return false;
@@ -1689,6 +1781,7 @@ async fn federated_muc_presence_owned(
         payload: request.payload.clone(),
     };
     let serializable = SerializableMucOccupant::from(&occupant);
+    let exact_occupant_json = serde_json::to_string(&serializable)?;
     let mut cluster_event_id = None;
     if state.federated_muc_pg_authority_enabled() {
         state.federated_muc_admit_mutation()?;
@@ -1804,24 +1897,37 @@ async fn federated_muc_presence_owned(
     }
     drop(local_join_guard);
     if state.federated_muc_redis_transport_enabled() {
-        state.federated_muc_join_room(&room_jid).await?;
-        state
-            .federated_muc_register_occupant(
-                &room_jid,
+        match project_federated_join(
+            state,
+            FederatedJoinProjectionRequest {
+                committed: cluster_event_id.is_some(),
+                room_jid: &room_jid,
                 nick,
-                &serde_json::to_string(&serializable)?,
-            )
-            .await?;
-        if cluster_event_id.is_none() {
-            state
-                .federated_muc_publish_presence(
-                    &room_jid,
-                    &serializable,
-                    false,
-                    created,
-                    request.stanza.id.as_deref(),
-                )
-                .await?;
+                exact_occupant_json: &exact_occupant_json,
+                occupant: &serializable,
+                created,
+                id: request.stanza.id.as_deref(),
+            },
+        )
+        .await?
+        {
+            FederatedJoinProjectionResult::Committed {
+                room_join,
+                registration,
+            } => {
+                if let Err(error) = room_join {
+                    tracing::warn!(?error, room=%room_jid,
+                        "PostgreSQL committed federated MUC join; Redis room index repair failed");
+                }
+                match registration {
+                    Ok(true) => {}
+                    Ok(false) => tracing::warn!(room=%room_jid, %nick,
+                        "PostgreSQL committed federated MUC join; Redis rejected exact occupant repair"),
+                    Err(error) => tracing::warn!(?error, room=%room_jid, %nick,
+                        "PostgreSQL committed federated MUC join; Redis exact occupant repair failed"),
+                }
+            }
+            FederatedJoinProjectionResult::Legacy => {}
         }
     }
 
@@ -6618,6 +6724,161 @@ pub(crate) async fn federated_muc_connection_closed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    struct JoinProjectionFaultPort {
+        calls: Mutex<Vec<&'static str>>,
+        fail_join: bool,
+        fail_registration: bool,
+        fail_presence: bool,
+    }
+
+    impl JoinProjectionFaultPort {
+        fn new(fail_join: bool, fail_registration: bool, fail_presence: bool) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                fail_join,
+                fail_registration,
+                fail_presence,
+            }
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl FederatedJoinProjectionPort for JoinProjectionFaultPort {
+        async fn join_room(&self, room_jid: &str) -> Result<()> {
+            assert_eq!(room_jid, "room@conference.example.test");
+            self.calls.lock().unwrap().push("join");
+            if self.fail_join {
+                anyhow::bail!("injected room-index failure");
+            }
+            Ok(())
+        }
+
+        async fn register_occupant(
+            &self,
+            room_jid: &str,
+            nick: &str,
+            exact_occupant_json: &str,
+        ) -> Result<bool> {
+            assert_eq!(room_jid, "room@conference.example.test");
+            assert_eq!(nick, "RemoteBob");
+            assert!(exact_occupant_json.contains("remote.test/Phone"));
+            self.calls.lock().unwrap().push("register");
+            if self.fail_registration {
+                anyhow::bail!("injected exact-occupant failure");
+            }
+            Ok(true)
+        }
+
+        async fn publish_presence(
+            &self,
+            room_jid: &str,
+            occupant: &SerializableMucOccupant,
+            created: bool,
+            id: Option<&str>,
+        ) -> Result<()> {
+            assert_eq!(room_jid, "room@conference.example.test");
+            assert_eq!(occupant.nick, "RemoteBob");
+            assert!(created);
+            assert_eq!(id, Some("remote-join"));
+            self.calls.lock().unwrap().push("presence");
+            if self.fail_presence {
+                anyhow::bail!("injected legacy presence failure");
+            }
+            Ok(())
+        }
+    }
+
+    fn join_projection_occupant() -> SerializableMucOccupant {
+        SerializableMucOccupant {
+            full_jid: "bob@remote.test/Phone".to_owned(),
+            room_jid: "room@conference.example.test".to_owned(),
+            nick: "RemoteBob".to_owned(),
+            affiliation: "none".to_owned(),
+            role: "participant".to_owned(),
+            room_non_anonymous: true,
+            occupant_id: "occupant".to_owned(),
+            cluster_epoch: uuid::Uuid::new_v4(),
+            connection_id: uuid::Uuid::new_v4(),
+            federated_domain: Some("remote.test".to_owned()),
+            sm_session_id: None,
+            payload: String::new(),
+        }
+    }
+
+    async fn run_join_projection_fault(
+        port: &JoinProjectionFaultPort,
+        committed: bool,
+    ) -> Result<FederatedJoinProjectionResult> {
+        let occupant = join_projection_occupant();
+        let json = serde_json::to_string(&occupant)?;
+        project_federated_join(
+            port,
+            FederatedJoinProjectionRequest {
+                committed,
+                room_jid: &occupant.room_jid,
+                nick: &occupant.nick,
+                exact_occupant_json: &json,
+                occupant: &occupant,
+                created: true,
+                id: Some("remote-join"),
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn committed_federated_join_attempts_exact_repair_after_redis_room_failure() {
+        let port = JoinProjectionFaultPort::new(true, false, false);
+        let FederatedJoinProjectionResult::Committed {
+            room_join,
+            registration,
+        } = run_join_projection_fault(&port, true).await.unwrap()
+        else {
+            panic!("expected committed join projection");
+        };
+        assert!(room_join.is_err());
+        assert!(matches!(registration, Ok(true)));
+        assert_eq!(port.calls(), ["join", "register"]);
+
+        let port = JoinProjectionFaultPort::new(true, true, false);
+        let FederatedJoinProjectionResult::Committed {
+            room_join,
+            registration,
+        } = run_join_projection_fault(&port, true).await.unwrap()
+        else {
+            panic!("expected committed join projection");
+        };
+        assert!(room_join.is_err());
+        assert!(registration.is_err());
+        assert_eq!(port.calls(), ["join", "register"]);
+    }
+
+    #[tokio::test]
+    async fn legacy_federated_join_keeps_strict_projection_order() {
+        let port = JoinProjectionFaultPort::new(false, false, false);
+        assert!(matches!(
+            run_join_projection_fault(&port, false).await.unwrap(),
+            FederatedJoinProjectionResult::Legacy
+        ));
+        assert_eq!(port.calls(), ["join", "register", "presence"]);
+
+        let port = JoinProjectionFaultPort::new(true, false, false);
+        assert!(run_join_projection_fault(&port, false).await.is_err());
+        assert_eq!(port.calls(), ["join"]);
+
+        let port = JoinProjectionFaultPort::new(false, true, false);
+        assert!(run_join_projection_fault(&port, false).await.is_err());
+        assert_eq!(port.calls(), ["join", "register"]);
+
+        let port = JoinProjectionFaultPort::new(false, false, true);
+        assert!(run_join_projection_fault(&port, false).await.is_err());
+        assert_eq!(port.calls(), ["join", "register", "presence"]);
+    }
 
     #[test]
     fn federated_affiliation_lists_follow_shared_muc_permissions() {

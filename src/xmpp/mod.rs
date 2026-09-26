@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use framing::XmlEntityFramer;
 use futures::FutureExt;
-use protocol::ProtocolSession;
+use protocol::{ProtocolSession, SessionTerminationSignals};
 use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -382,7 +382,7 @@ enum DriveOutcome<S> {
 
 struct BackpressureDisconnectMetric {
     state: Arc<AppState>,
-    disconnect: tokio_util::sync::CancellationToken,
+    signals: SessionTerminationSignals,
 }
 
 async fn finish_protocol_session<T>(
@@ -410,7 +410,7 @@ async fn finish_protocol_session<T>(
 
 impl Drop for BackpressureDisconnectMetric {
     fn drop(&mut self) {
-        if self.disconnect.is_cancelled() {
+        if self.signals.is_backpressured() {
             self.state.record_c2s_backpressure_disconnect();
         }
     }
@@ -426,11 +426,10 @@ async fn drive_io<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let disconnect = session.disconnect.clone();
-    let backpressure_disconnect = session.outbound.backpressure_disconnect();
+    let signals = session.termination_signals();
     let _backpressure_metric = BackpressureDisconnectMetric {
         state: Arc::clone(&session.state),
-        disconnect: backpressure_disconnect.clone(),
+        signals: signals.clone(),
     };
     let mut buffer = String::new();
     let mut framer = XmlEntityFramer::default();
@@ -458,11 +457,11 @@ where
                 // keep an already-negotiated SM stream eligible for resume.
                 return Ok(DriveOutcome::Done);
             }
-            _ = backpressure_disconnect.cancelled() => {
+            _ = signals.backpressured() => {
                 tracing::warn!(peer_ip = %session.peer_ip, "closed slow XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
                 return Ok(DriveOutcome::Done);
             }
-            _ = disconnect.cancelled() => {
+            _ = signals.revoked() => {
                 session.forbid_sm_resume();
                 return Ok(DriveOutcome::Done);
             }
@@ -709,8 +708,7 @@ fn websocket_close() -> String {
 
 struct WebSocketSendCancellation<'a> {
     actor_shutdown: &'a tokio_util::sync::CancellationToken,
-    disconnect: &'a tokio_util::sync::CancellationToken,
-    backpressure_disconnect: &'a tokio_util::sync::CancellationToken,
+    signals: &'a SessionTerminationSignals,
 }
 
 async fn websocket_send_live(
@@ -721,8 +719,8 @@ async fn websocket_send_live(
     tokio::select! {
         biased;
         _ = cancellation.actor_shutdown.cancelled() => false,
-        _ = cancellation.disconnect.cancelled() => false,
-        _ = cancellation.backpressure_disconnect.cancelled() => false,
+        _ = cancellation.signals.revoked() => false,
+        _ = cancellation.signals.backpressured() => false,
         result = tokio::time::timeout(XMPP_WRITE_TIMEOUT, socket.send(message)) => {
             matches!(result, Ok(Ok(())))
         }
@@ -953,16 +951,14 @@ pub async fn websocket_connection(
         peer_ip,
     );
     let mut framer = XmlEntityFramer::default();
-    let disconnect = session.disconnect.clone();
-    let backpressure_disconnect = session.outbound.backpressure_disconnect();
+    let signals = session.termination_signals();
     let send_cancellation = WebSocketSendCancellation {
         actor_shutdown: &actor_shutdown,
-        disconnect: &disconnect,
-        backpressure_disconnect: &backpressure_disconnect,
+        signals: &signals,
     };
     let _backpressure_metric = BackpressureDisconnectMetric {
         state: Arc::clone(&session.state),
-        disconnect: backpressure_disconnect.clone(),
+        signals: signals.clone(),
     };
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
@@ -994,11 +990,11 @@ pub async fn websocket_connection(
                 ).await;
                 break;
             }
-            _ = backpressure_disconnect.cancelled() => {
+            _ = signals.backpressured() => {
                 tracing::warn!(%peer_ip, "closed slow WebSocket XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
                 break;
             }
-            _ = disconnect.cancelled() => {
+            _ = signals.revoked() => {
                 session.forbid_sm_resume();
                 let opened = session.is_stream_open();
                 websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
@@ -1228,12 +1224,12 @@ pub async fn websocket_connection(
     // A session-policy disconnect can win while a socket write is pending.
     // Preserve resumability for transport/backpressure failures, but never for
     // an explicit administrative or certificate-driven session revocation.
-    if disconnect.is_cancelled() {
+    if signals.is_revoked() {
         session.forbid_sm_resume();
     }
     if needs_shutdown_terminal_sequence(
         actor_shutdown.is_cancelled(),
-        disconnect.is_cancelled(),
+        signals.is_revoked(),
         &terminal_sequence,
     ) {
         let opened = session.is_stream_open();

@@ -220,6 +220,10 @@ run_exact_ignored \
 run_exact_ignored \
   db::pubsub::integration_tests::leaf_disco_rechecks_configuration_after_stale_node_lookup
 run_exact_ignored \
+  db::pubsub::integration_tests::collection_disco_sql_gate_matches_parent_policy_on_read_only_pool
+run_exact_ignored \
+  db::pubsub::integration_tests::collection_disco_rechecks_parent_and_edges_after_stale_lookup
+run_exact_ignored \
   db::pubsub::integration_tests::node_metadata_keeps_affiliation_order_and_live_subscription_scope
 run_exact_ignored \
   db::pubsub::integration_tests::restricted_open_publish_is_denied_by_locked_publish_and_retract

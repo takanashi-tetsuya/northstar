@@ -18,6 +18,14 @@ impl PubSubItemQueryRepository for QueryOnlyItems {
         Ok(None)
     }
 
+    async fn collection_disco_snapshot(
+        &self,
+        _node: &str,
+        _requester: &str,
+    ) -> Result<Option<PubSubCollectionDiscoSnapshot>> {
+        Ok(None)
+    }
+
     async fn get_items(
         &self,
         _node_id: Uuid,

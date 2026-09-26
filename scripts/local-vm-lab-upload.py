@@ -9,7 +9,6 @@ import importlib.util
 import json
 import pathlib
 import re
-import sys
 import time
 from typing import Callable
 from urllib.parse import urlsplit
@@ -23,11 +22,8 @@ STANZA_NS = "urn:ietf:params:xml:ns:xmpp-stanzas"
 
 
 def log_slot_event(event: dict[str, object]) -> None:
-    payload = json.dumps(event, sort_keys=True)
-    # The soak controller retains stdout on success and includes stderr on
-    # failure; emit the credential-free attempt record to both paths.
-    print(payload, flush=True)
-    print(payload, file=sys.stderr, flush=True)
+    # The soak controller retains this bounded stream for passing and failed probes.
+    print(json.dumps(event, sort_keys=True), flush=True)
 
 
 def slot_reply_kind(response: str, request_id: str, upload_domain: str) -> str:

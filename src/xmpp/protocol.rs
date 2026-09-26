@@ -450,9 +450,36 @@ struct PresenceSubstate {
     availability_generation: Arc<AtomicU64>,
 }
 
+/// Read-only transport observation of the two independent session exit
+/// signals. The transport owns process shutdown separately; only protocol and
+/// application authority may cancel a session or its outbound queue.
+#[derive(Clone)]
+pub(crate) struct SessionTerminationSignals {
+    policy_revoke: tokio_util::sync::CancellationToken,
+    backpressure: tokio_util::sync::CancellationToken,
+}
+
+impl SessionTerminationSignals {
+    pub(crate) async fn revoked(&self) {
+        self.policy_revoke.cancelled().await;
+    }
+
+    pub(crate) async fn backpressured(&self) {
+        self.backpressure.cancelled().await;
+    }
+
+    pub(crate) fn is_revoked(&self) -> bool {
+        self.policy_revoke.is_cancelled()
+    }
+
+    pub(crate) fn is_backpressured(&self) -> bool {
+        self.backpressure.is_cancelled()
+    }
+}
+
 pub struct ProtocolSession {
     pub(crate) state: Arc<AppState>,
-    pub(crate) outbound: crate::outbound::OutboundSender,
+    outbound: crate::outbound::OutboundSender,
     /// Authoritative transport-security decision. Native TLS and trusted
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
     /// never used as an authentication bypass.
@@ -526,7 +553,7 @@ pub struct ProtocolSession {
     client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
     tls_generation: u64,
     _certificate_session: Option<crate::tls::CertificateSessionGuard>,
-    pub(crate) disconnect: tokio_util::sync::CancellationToken,
+    disconnect: tokio_util::sync::CancellationToken,
     /// Stable owner of the durable stream row.  A resumed transport gets a
     /// fresh value so a late checkpoint from the old connection cannot win.
     pub(crate) connection_id: uuid::Uuid,
@@ -571,6 +598,13 @@ impl ProtocolSession {
     /// authenticated account or a mutable authentication capability.
     pub(crate) fn is_authenticated(&self) -> bool {
         self.authenticated.is_some()
+    }
+
+    pub(crate) fn termination_signals(&self) -> SessionTerminationSignals {
+        SessionTerminationSignals {
+            policy_revoke: self.disconnect.clone(),
+            backpressure: self.outbound.backpressure_disconnect(),
+        }
     }
 
     /// The authentication clock belongs to the session. Transports keep
@@ -2079,7 +2113,7 @@ mod legacy_sasl_wire_tests {
         drop_requires_local_quiesce, durable_delivery_managed_by_sm, legacy_sasl_auth,
         legacy_sasl_payload, resource_bind_deadline_for, unauthenticated_timed_out_for, Action,
         PostActionSupervisor, PostActionTelemetry, ResumePayload, SessionCleanupOwnership,
-        StreamLimits,
+        SessionTerminationSignals, StreamLimits,
     };
     use roxmltree::Document;
 
@@ -2191,6 +2225,28 @@ mod legacy_sasl_wire_tests {
             claim_session_cleanup(&superseded),
             SessionCleanupOwnership::SupersededBySm
         );
+    }
+
+    #[tokio::test]
+    async fn termination_signals_keep_revocation_and_backpressure_distinct() {
+        let policy_revoke = tokio_util::sync::CancellationToken::new();
+        let backpressure = tokio_util::sync::CancellationToken::new();
+        let signals = SessionTerminationSignals {
+            policy_revoke: policy_revoke.clone(),
+            backpressure: backpressure.clone(),
+        };
+        assert!(!signals.is_revoked());
+        assert!(!signals.is_backpressured());
+
+        backpressure.cancel();
+        signals.backpressured().await;
+        assert!(signals.is_backpressured());
+        assert!(!signals.is_revoked());
+
+        policy_revoke.cancel();
+        signals.revoked().await;
+        assert!(signals.is_revoked());
+        assert!(signals.is_backpressured());
     }
 
     #[test]

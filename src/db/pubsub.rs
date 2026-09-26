@@ -3180,6 +3180,83 @@ pub async fn leaf_disco_snapshot(
     }))
 }
 
+pub struct CollectionDiscoChild {
+    pub node: String,
+    pub title: Option<String>,
+}
+
+pub struct CollectionDiscoSnapshot {
+    pub node_type: String,
+    pub access_model: String,
+    pub affiliation: Option<String>,
+    pub subscribed: bool,
+    pub children: Vec<CollectionDiscoChild>,
+}
+
+/// Read the parent policy and its immediate children from one statement.
+/// The SQL gate avoids scanning edges for denied requests; the service checks
+/// the same authority facts with can_retrieve_pure before exposing the list.
+pub async fn collection_disco_snapshot(
+    pool: &PgPool,
+    node: &str,
+    requester: &str,
+) -> Result<Option<CollectionDiscoSnapshot>> {
+    let requester = crate::jid::canonical_bare_key(requester)?;
+    let rows = sqlx::query(
+        "WITH authority AS MATERIALIZED (
+             SELECT n.id,n.node_type,n.access_model,
+                    (SELECT a.affiliation FROM pubsub_affiliations a
+                      WHERE a.node_id=n.id AND a.jid=$2) AS affiliation,
+                    EXISTS(SELECT 1 FROM pubsub_subscriptions s
+                            WHERE s.node_id=n.id
+                              AND split_part(s.jid, '/', 1)=$2
+                              AND s.state='subscribed'
+                              AND (s.expire IS NULL OR s.expire>statement_timestamp())) AS subscribed
+               FROM pubsub_nodes n WHERE n.node=$1
+         )
+         SELECT authority.node_type,authority.access_model,
+                authority.affiliation,authority.subscribed,
+                child.node AS child_node,child.title AS child_title
+           FROM authority
+           LEFT JOIN LATERAL (
+               SELECT n.node,n.title
+                 FROM pubsub_collection_members e
+                 JOIN pubsub_nodes n ON n.id=e.child_node_id
+                WHERE e.collection_node_id=authority.id
+                  AND authority.node_type='collection'
+                  AND authority.affiliation IS DISTINCT FROM 'outcast'
+                  AND (authority.access_model='open'
+                       OR authority.affiliation IN ('owner','publisher','member')
+                       OR authority.subscribed)
+                ORDER BY n.node LIMIT 1000
+           ) child ON TRUE
+          ORDER BY child.node",
+    )
+    .bind(node)
+    .bind(requester)
+    .fetch_all(pool)
+    .await?;
+    let Some(first) = rows.first() else {
+        return Ok(None);
+    };
+    let mut children = Vec::with_capacity(rows.len());
+    for row in &rows {
+        if let Some(node) = row.get::<Option<String>, _>("child_node") {
+            children.push(CollectionDiscoChild {
+                node,
+                title: row.get("child_title"),
+            });
+        }
+    }
+    Ok(Some(CollectionDiscoSnapshot {
+        node_type: first.get("node_type"),
+        access_model: first.get("access_model"),
+        affiliation: first.get("affiliation"),
+        subscribed: first.get("subscribed"),
+        children,
+    }))
+}
+
 #[cfg(test)]
 pub async fn retract_items(
     pool: &PgPool,

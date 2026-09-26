@@ -1502,6 +1502,29 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
             item_ids: snapshot.item_ids,
         }))
     }
+    async fn collection_disco_snapshot(
+        &self,
+        node: &str,
+        requester: &str,
+    ) -> Result<Option<PubSubCollectionDiscoSnapshot>> {
+        let snapshot = db::collection_disco_snapshot(&self.pool, node, requester)
+            .await
+            .map_err(map_database_busy)?;
+        Ok(snapshot.map(|snapshot| PubSubCollectionDiscoSnapshot {
+            node_type: snapshot.node_type,
+            access_model: snapshot.access_model,
+            affiliation: snapshot.affiliation,
+            subscribed: snapshot.subscribed,
+            children: snapshot
+                .children
+                .into_iter()
+                .map(|child| PubSubCollectionDiscoChild {
+                    node: child.node,
+                    title: child.title,
+                })
+                .collect(),
+        }))
+    }
     async fn get_items(
         &self,
         node_id: Uuid,

@@ -214,6 +214,8 @@ run_exact_ignored() {
 run_exact_ignored \
   db::pubsub::integration_tests::query_ports_succeed_with_read_only_database_connections
 run_exact_ignored \
+  db::pubsub::integration_tests::node_metadata_keeps_affiliation_order_and_live_subscription_scope
+run_exact_ignored \
   db::pubsub::integration_tests::timed_out_mutation_begin_rolls_back_before_releasing_connection
 run_exact_ignored \
   db::pubsub::integration_tests::timed_out_mutation_acquire_leaves_no_detached_waiter

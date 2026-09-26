@@ -41,13 +41,13 @@ pub(crate) use northstar_pubsub_core::{
     PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscription,
     PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
     PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
-    PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubPublishOutcome,
-    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
-    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
-    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeOutcome,
-    PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionAuthorizationOutcome,
-    SubscriptionOptionsOutcome, UnsubscribeOutcome,
+    PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata,
+    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome,
+    PubSubRetractWrite, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
+    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
+    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
+    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
 
 pub(crate) use northstar_pubsub_application::{
@@ -1356,6 +1356,10 @@ impl<R: PubSubNodeQueryRepository> PubSubService<R> {
     pub(crate) async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
         self.repository.is_owner(node_id, requester).await
     }
+
+    pub(crate) async fn node_metadata(&self, node_id: Uuid) -> Result<PubSubNodeMetadata> {
+        self.repository.node_metadata(node_id).await
+    }
 }
 
 impl<R: PubSubRootDiscoveryQueryRepository> PubSubService<R> {
@@ -1386,14 +1390,6 @@ impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
 
     pub(crate) async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
         self.repository.node_affiliations(node_id).await
-    }
-
-    pub(crate) async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        self.repository.get_owner_jids(node_id).await
-    }
-
-    pub(crate) async fn get_publisher_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        self.repository.get_publisher_jids(node_id).await
     }
 }
 
@@ -1434,10 +1430,6 @@ impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
         jid: &str,
     ) -> Result<Option<PubSubSubscription>> {
         self.repository.get_subscription(node_id, jid).await
-    }
-
-    pub(crate) async fn active_subscriber_count(&self, node_id: Uuid) -> Result<i64> {
-        self.repository.active_subscriber_count(node_id).await
     }
 }
 

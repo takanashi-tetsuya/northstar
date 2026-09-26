@@ -3486,7 +3486,7 @@ pub(crate) async fn route_inbound_message(
             is_remote_muc_private_message(root, from, authenticated_domain);
         if should_carbon(root) && !remote_muc_private_message {
             if let Some(delivered_key) = delivered_key.as_deref() {
-                crate::xmpp::protocol::messaging::send_received_carbons_for_state(
+                crate::services::message_carbons::send_received_carbons(
                     state,
                     &recipient_by,
                     Some(delivered_key),

@@ -3056,12 +3056,7 @@ fn node_config_form(config: &PubSubNodeConfig, form_type: &str) -> String {
 pub(crate) async fn node_metadata_form(state: &AppState, node: &PubSubNode) -> Result<String> {
     let title = node.title.as_deref().unwrap_or(&node.node);
     let description = node.description.as_deref().unwrap_or_default();
-    let owners = state.pubsub_service().get_owner_jids(node.id).await?;
-    let publishers = state.pubsub_service().get_publisher_jids(node.id).await?;
-    let count = state
-        .pubsub_service()
-        .active_subscriber_count(node.id)
-        .await?;
+    let metadata = state.pubsub_service().node_metadata(node.id).await?;
     let mut form = XmlElement::namespaced("x", NS_DATA)
         .attr("type", "result")
         .child(data_field_element(
@@ -3079,19 +3074,22 @@ pub(crate) async fn node_metadata_form(state: &AppState, node: &PubSubNode) -> R
         ("pubsub#access_model", node.access_model.clone()),
         ("pubsub#publish_model", node.publish_model.clone()),
         ("pubsub#max_items", node.max_items.to_string()),
-        ("pubsub#num_subscribers", count.to_string()),
+        (
+            "pubsub#num_subscribers",
+            metadata.active_subscribers.to_string(),
+        ),
     ] {
         form.push_child(data_field_element(variable, None, [value]));
     }
     form.push_child(data_field_element(
         "pubsub#owner",
         Some("jid-multi"),
-        owners.iter(),
+        metadata.owners.iter(),
     ));
     form.push_child(data_field_element(
         "pubsub#publisher",
         Some("jid-multi"),
-        publishers.iter(),
+        metadata.publishers.iter(),
     ));
     Ok(form.finish())
 }

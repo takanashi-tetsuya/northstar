@@ -176,6 +176,7 @@ mod cluster_shutdown;
 mod cluster_teardown;
 pub(crate) mod federated_muc_cluster_effects;
 mod locked_muc_expiry;
+mod message_carbon_delivery;
 mod message_cluster_routing;
 pub(crate) mod mix_iq_relay;
 pub(crate) mod mix_outbox;

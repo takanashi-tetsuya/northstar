@@ -29,6 +29,10 @@ pub trait PubSubNodeQueryRepository: Send + Sync {
         node_id: Uuid,
         requester: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn node_metadata(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<PubSubNodeMetadata>> + Send;
 }
 
 pub trait PubSubNodeMutationRepository: Send + Sync {
@@ -149,10 +153,6 @@ pub trait PubSubSubscriptionQueryRepository: Send + Sync {
         node_id: Uuid,
         jid: &str,
     ) -> impl std::future::Future<Output = Result<Option<PubSubSubscription>>> + Send;
-    fn active_subscriber_count(
-        &self,
-        node_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<i64>> + Send;
 }
 pub trait PubSubSubscriptionMutationRepository: Send + Sync {
     fn update_subscription_options_checked(
@@ -213,14 +213,6 @@ pub trait PubSubAffiliationQueryRepository: Send + Sync {
         &self,
         node_id: Uuid,
     ) -> impl std::future::Future<Output = Result<Vec<PubSubAffiliation>>> + Send;
-    fn get_owner_jids(
-        &self,
-        node_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
-    fn get_publisher_jids(
-        &self,
-        node_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
 }
 pub trait PubSubAffiliationMutationRepository: Send + Sync {
     fn set_affiliations(

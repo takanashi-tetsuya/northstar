@@ -495,6 +495,13 @@ pub struct PubSubAffiliation {
     pub affiliation: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PubSubNodeMetadata {
+    pub owners: Vec<String>,
+    pub publishers: Vec<String>,
+    pub active_subscribers: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct PubSubRootDiscoNode {
     pub node: String,

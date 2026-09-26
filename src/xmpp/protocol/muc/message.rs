@@ -953,8 +953,8 @@ impl ProtocolSession {
                                 }
                             }
                             if delivered && carbon_eligible {
-                                super::super::messaging::send_received_carbons_for_state(
-                                    &self.state,
+                                crate::services::message_carbons::send_received_carbons(
+                                    &*self.state,
                                     &invitee_bare,
                                     delivered_full_jid.as_deref(),
                                     &forwarded,

@@ -238,10 +238,12 @@ after a stored commit, never on commit failure or replay. Offline Push
 admission likewise dispatches only after a stored row or committed MAM
 recovery; a failed transaction or replay does not notify again. The Push
 service owns claim, route, settlement and telemetry order, with XML and
-transport routing in a state adapter. Carbon and personal-message route
-execution, plus failure-injection coverage for their effects, remain to be
-moved out of protocol handlers. The existing PostgreSQL atomic operations
-have deliberately not been split during this convergence.
+transport routing in a state adapter. Local Carbon target selection, privacy
+checks, bounded fan-out and deadline accounting now belong to an application
+service; its state adapter owns live sessions, XML wrapping and cluster
+routing. Personal-message route execution and broader failure-injection
+coverage remain. The existing PostgreSQL atomic operations have deliberately
+not been split during this convergence.
 
 ### Phase C — Room and PubSub command/query separation
 
@@ -322,6 +324,18 @@ continues to negotiate its HTTP binding limits independently.
 
 Exit: services can be unit-tested with fault-injecting ports and runtime
 database credentials cannot perform DDL.
+
+Current progress: application services use domain repository traits and
+PostgreSQL adapters with separate runtime, migration and command roles. Upload
+objects already use an `UploadStore` port with exact staged commit, abort,
+versioned read and delete operations for local and S3 storage. XEP-0357 Push
+uses a routing port for XMPP push service JIDs; FCM, APNs and WebPush gateways
+remain separate optional products. Cluster MUC maintenance now calls an
+injectable soft-state projection service for room join, exact occupant refresh
+and room reconciliation. It keeps PostgreSQL as the authority and classifies
+Redis failure or identity rejection without marking reconciliation ready.
+Other Redis call paths still need the same narrow capability and degradation
+review; these slices do not complete Phase E.
 
 ### Phase F — Final composition and release evidence
 
@@ -740,6 +754,9 @@ Root PubSub discovery now projects the database's authorized count and cursor
 page in the application layer. The PostgreSQL adapter still obtains both in
 one statement snapshot; the protocol layer only renders the resulting items
 and RSM fields.
+Node metadata discovery now reads owner and publisher JIDs and the active
+subscriber count in one read-only statement snapshot. It retains the previous
+affiliation filters, JID ordering and subscription expiry rule.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for

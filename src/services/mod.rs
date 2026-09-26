@@ -30,6 +30,7 @@ pub(crate) mod locked_muc_expiry;
 pub(crate) mod login_abuse;
 pub(crate) mod mam;
 pub(crate) mod message_admission;
+pub(crate) mod message_carbons;
 pub(crate) mod messaging;
 pub(crate) mod metrics_snapshot;
 pub(crate) mod mix;

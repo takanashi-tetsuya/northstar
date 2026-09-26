@@ -2326,6 +2326,26 @@ impl ClusterMaintenanceRedis {
     }
 }
 
+impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis {
+    async fn join_room(&self, room_jid: &str) -> Result<()> {
+        self.join_muc(room_jid).await
+    }
+
+    async fn refresh_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        exact_occupant_json: &str,
+    ) -> Result<bool> {
+        self.register_muc_occupant(room_jid, nick, exact_occupant_json)
+            .await
+    }
+
+    async fn reconcile_room(&self, room_jid: &str) -> Result<()> {
+        self.reconcile_muc_soft_state(room_jid).await
+    }
+}
+
 impl ClusterMaintenanceControl {
     async fn refresh_peers_with<R: ClusterAuthorityRepository>(
         &self,
@@ -6768,23 +6788,17 @@ async fn maintenance_once(
     }
     // Clear lost authority before any Redis network wait can postpone its
     // route fence. Redis remains a disposable projection of renewed actors.
+    let soft_state = crate::services::muc::MucSoftStateProjectionService::new(redis);
     let mut muc_soft_state_errors = 0_u64;
     let mut active_muc_rooms = HashSet::new();
     for occupant in renewed_muc {
         let serializable = crate::state::SerializableMucOccupant::from(&occupant);
         let json = serde_json::to_string(&serializable)?;
-        if let Err(error) = async {
-            redis.join_muc(&occupant.room_jid).await?;
-            anyhow::ensure!(
-                redis
-                    .register_muc_occupant(&occupant.room_jid, &occupant.nick, &json)
-                    .await?,
-                "Redis MUC soft-state rejected the exact PostgreSQL occupant"
-            );
-            Ok::<_, anyhow::Error>(())
-        }
-        .await
+        if let Err(error) = soft_state
+            .refresh(&occupant.room_jid, &occupant.nick, &json)
+            .await
         {
+            let error = anyhow::Error::from(error);
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
             control.record_control_plane_failure(&error);
             tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
@@ -6797,7 +6811,8 @@ async fn maintenance_once(
     // removes crashed-node members while another live node keeps renewing the
     // room lease, without imposing O(occupants²) maintenance work.
     for room in active_muc_rooms {
-        if let Err(error) = redis.reconcile_muc_soft_state(&room).await {
+        if let Err(error) = soft_state.reconcile_room(&room).await {
+            let error = anyhow::Error::from(error);
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
             control.record_control_plane_failure(&error);
             tracing::warn!(?error, %room, "could not reconcile Redis MUC room soft-state");

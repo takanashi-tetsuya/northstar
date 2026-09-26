@@ -2764,7 +2764,7 @@ async fn federated_muc_message_owned(
                 }
                 if delivered {
                     if request.carbon_eligible {
-                        super::messaging::send_received_carbons_for_state(
+                        crate::services::message_carbons::send_received_carbons(
                             state,
                             &invitee_bare,
                             delivered_full_jid.as_deref(),

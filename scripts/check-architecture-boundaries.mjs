@@ -3574,12 +3574,28 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
     || countMatches(read('src/api/mod.rs'), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
-const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
-const clusterRedisMaintenance = structBody(read('src/cluster.rs'), 'struct ClusterMaintenanceRedis');
+const clusterSource = read('src/cluster.rs');
+const clusterMaintenance = structBody(clusterSource, 'async fn maintenance_once(');
+const clusterRedisMaintenance = structBody(clusterSource, 'struct ClusterMaintenanceRedis');
+const mucSoftStatePort = structBody(mucServiceSource, 'pub(crate) trait MucSoftStateProjectionPort');
+const mucSoftStateService = structBody(mucServiceSource, 'impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P>');
+const mucRedisAdapter = structBody(clusterSource, 'impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
 if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || /\b(?:signer|pubsub|publisher|delivery_route)\s*:/.test(clusterRedisMaintenance)
     || !/\bredis\s*\.\s*refresh_session\s*\(/.test(clusterMaintenance)
-    || !/\bredis\s*\.\s*reconcile_muc_soft_state\s*\(/.test(clusterMaintenance)) {
+    || !clusterMaintenance.includes('MucSoftStateProjectionService::new(redis)')
+    || !/\bsoft_state\s*\.\s*refresh\s*\(/.test(clusterMaintenance)
+    || !/\bsoft_state\s*\.\s*reconcile_room\s*\(/.test(clusterMaintenance)
+    || /\bredis\s*\.\s*(?:join_muc|register_muc_occupant|reconcile_muc_soft_state)\s*\(/.test(clusterMaintenance)
+    || clusterMaintenance.indexOf('for chunk in unrenewed_muc.chunks(')
+      > clusterMaintenance.indexOf('MucSoftStateProjectionService::new(redis)')
+    || /\b(?:ClusterManager|AppState|redis::)\b/.test(mucSoftStatePort + mucSoftStateService)
+    || !mucSoftStateService.includes('.join_room(room_jid)')
+    || !mucSoftStateService.includes('.refresh_occupant(room_jid, nick, exact_occupant_json)')
+    || !mucSoftStateService.includes('.reconcile_room(room_jid)')
+    || !mucRedisAdapter.includes('self.join_muc(room_jid)')
+    || !mucRedisAdapter.includes('self.register_muc_occupant(room_jid, nick, exact_occupant_json)')
+    || !mucRedisAdapter.includes('self.reconcile_muc_soft_state(room_jid)')) {
   throw new Error('cluster lease maintenance must use scoped Redis projection authority');
 }
 if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occupancy;')

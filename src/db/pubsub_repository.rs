@@ -1466,6 +1466,11 @@ impl PubSubNodeQueryRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
+    async fn node_metadata(&self, node_id: Uuid) -> Result<PubSubNodeMetadata> {
+        db::node_metadata(&self.pool, node_id)
+            .await
+            .map_err(map_database_busy)
+    }
 }
 impl PubSubRootDiscoveryQueryRepository for PostgresPubSubRepository {
     async fn root_disco_page(
@@ -1676,11 +1681,6 @@ impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-    async fn active_subscriber_count(&self, node_id: Uuid) -> Result<i64> {
-        let outcome: Result<_> =
-            async { db::active_subscriber_count(&self.pool, node_id).await }.await;
-        outcome.map_err(map_database_busy)
-    }
 }
 impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
     async fn update_subscription_options_checked(
@@ -1839,14 +1839,6 @@ impl PubSubAffiliationQueryRepository for PostgresPubSubRepository {
                 .collect())
         }
         .await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        let outcome: Result<_> = async { db::get_owner_jids(&self.pool, node_id).await }.await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn get_publisher_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        let outcome: Result<_> = async { db::get_publisher_jids(&self.pool, node_id).await }.await;
         outcome.map_err(map_database_busy)
     }
 }

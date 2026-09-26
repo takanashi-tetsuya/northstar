@@ -437,6 +437,68 @@ async fn create_default_test_node(pool: &PgPool, node: &str, owner: &str) -> Pub
     get_node_by_id(pool, node_id).await.unwrap().unwrap()
 }
 
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn node_metadata_keeps_affiliation_order_and_live_subscription_scope() {
+    let (_, pool) = integration_pool(2).await;
+    let node_name = format!("metadata-{}", Uuid::new_v4().simple());
+    let node = create_default_test_node(&pool, &node_name, "alice@example.test").await;
+    let initial = node_metadata(&pool, node.id).await.unwrap();
+    assert_eq!(initial.owners, ["alice@example.test"]);
+    assert!(initial.publishers.is_empty());
+    assert_eq!(initial.active_subscribers, 0);
+
+    for (jid, affiliation) in [
+        ("zoe@example.test", "owner"),
+        ("zack@example.test", "publisher"),
+        ("amy@example.test", "publish-only"),
+        ("member@example.test", "member"),
+        ("outcast@example.test", "outcast"),
+    ] {
+        sqlx::query(
+            "INSERT INTO pubsub_affiliations(node_id, jid, affiliation) VALUES ($1, $2, $3)",
+        )
+        .bind(node.id)
+        .bind(jid)
+        .bind(affiliation)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for (jid, state, expiry) in [
+        ("bob@example.test", "subscribed", None),
+        ("ghost@example.test/Phone", "subscribed", Some(3600)),
+        ("expired@example.test", "subscribed", Some(-3600)),
+        ("pending@example.test", "pending", None),
+    ] {
+        sqlx::query(
+            "INSERT INTO pubsub_subscriptions(node_id, jid, state, subid, expire)
+             VALUES ($1, $2, $3, $4, NOW() + $5::INT * INTERVAL '1 second')",
+        )
+        .bind(node.id)
+        .bind(jid)
+        .bind(state)
+        .bind(Uuid::new_v4().to_string())
+        .bind(expiry)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(
+        node_metadata(&pool, node.id).await.unwrap(),
+        PubSubNodeMetadata {
+            owners: vec!["alice@example.test".into(), "zoe@example.test".into()],
+            publishers: vec!["amy@example.test".into(), "zack@example.test".into()],
+            active_subscribers: 2,
+        }
+    );
+    let missing = node_metadata(&pool, Uuid::new_v4()).await.unwrap();
+    assert!(missing.owners.is_empty());
+    assert!(missing.publishers.is_empty());
+    assert_eq!(missing.active_subscribers, 0);
+}
+
 async fn subscribe_for_race(
     pool: &PgPool,
     node: &PubSubNode,
@@ -495,6 +557,10 @@ async fn query_ports_succeed_with_read_only_database_connections() {
     assert_eq!(
         service.get_node(&node_name).await.unwrap().unwrap().id,
         node.id
+    );
+    assert_eq!(
+        service.node_metadata(node.id).await.unwrap().owners,
+        ["alice@example.test"]
     );
     assert!(
         service
@@ -1954,7 +2020,11 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
             .count(),
         1
     );
-    let remaining_owner = get_owner_jids(&pool, first_id).await.unwrap().remove(0);
+    let remaining_owner = node_metadata(&pool, first_id)
+        .await
+        .unwrap()
+        .owners
+        .remove(0);
     assert!(matches!(
         set_affiliations(
             &pool,

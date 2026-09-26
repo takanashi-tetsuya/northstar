@@ -112,7 +112,7 @@ const EDGE_EXCEEDS_MAX_DEPTH_SQL: &str = "WITH RECURSIVE
          + COALESCE((SELECT MAX(depth) FROM descendants), 0) > 64";
 
 pub use northstar_pubsub_core::{
-    PubSubNode, PubSubNodeConfig, PubSubRootDiscoNode, PubSubRootDiscoPage,
+    PubSubNode, PubSubNodeConfig, PubSubNodeMetadata, PubSubRootDiscoNode, PubSubRootDiscoPage,
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -2833,32 +2833,30 @@ fn row_to_subscription(row: &sqlx::postgres::PgRow) -> PubSubSubscription {
     }
 }
 
-pub async fn get_owner_jids(pool: &PgPool, node_id: Uuid) -> Result<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT jid FROM pubsub_affiliations WHERE node_id = $1 AND affiliation = 'owner' ORDER BY jid",
+/// One read-only statement keeps the metadata fields on the same snapshot.
+/// The caller must already have authorized discovery of this node.
+pub async fn node_metadata(pool: &PgPool, node_id: Uuid) -> Result<PubSubNodeMetadata> {
+    let row = sqlx::query(
+        "SELECT ARRAY(
+             SELECT jid FROM pubsub_affiliations
+              WHERE node_id=$1 AND affiliation='owner' ORDER BY jid
+         ) AS owners,
+         ARRAY(
+             SELECT jid FROM pubsub_affiliations
+              WHERE node_id=$1 AND affiliation IN ('publisher','publish-only') ORDER BY jid
+         ) AS publishers,
+         (SELECT COUNT(*) FROM pubsub_subscriptions
+           WHERE node_id=$1 AND state='subscribed'
+             AND (expire IS NULL OR expire>NOW())) AS active_subscribers",
     )
     .bind(node_id)
-    .fetch_all(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(rows.iter().map(|row| row.get("jid")).collect())
-}
-
-pub async fn get_publisher_jids(pool: &PgPool, node_id: Uuid) -> Result<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT jid FROM pubsub_affiliations WHERE node_id = $1 AND affiliation IN ('publisher', 'publish-only') ORDER BY jid",
-    )
-    .bind(node_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.iter().map(|row| row.get("jid")).collect())
-}
-
-pub async fn active_subscriber_count(pool: &PgPool, node_id: Uuid) -> Result<i64> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_subscriptions WHERE node_id = $1 AND state = 'subscribed' AND (expire IS NULL OR expire > NOW())")
-        .bind(node_id)
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into)
+    Ok(PubSubNodeMetadata {
+        owners: row.get("owners"),
+        publishers: row.get("publishers"),
+        active_subscribers: row.get("active_subscribers"),
+    })
 }
 
 #[cfg(test)]

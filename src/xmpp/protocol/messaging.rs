@@ -15,36 +15,13 @@ use crate::{
     state::{bare_jid, AppState},
 };
 use anyhow::Result;
-use futures::{stream::FuturesUnordered, StreamExt};
 pub(crate) use northstar_message_core::{
     bare_message_route, durable_direct_delivery_allowed, durable_full_no_match_recovers,
     full_no_match_route, missing_user_message_should_error, undelivered_disposition,
     BareMessageRoute, DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
 };
 use roxmltree::Node;
-use std::{future::Future, pin::Pin, sync::atomic::Ordering, time::Duration};
-
-const CARBON_FANOUT_CONCURRENCY: usize = 8;
-// Carbons are post-accept, volatile copies. A half-second queue/privacy budget
-// isolates a slow resource while the eight-wide bound keeps the default
-// 64-resource account fanout below the old five-second shared deadline even
-// when every target is unhealthy.
-const CARBON_TARGET_TIMEOUT: Duration = Duration::from_millis(500);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CarbonFanoutAttempt {
-    Delivered,
-    Skipped,
-    Failed,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct CarbonFanoutSummary {
-    delivered: usize,
-    failed: usize,
-    timed_out: usize,
-    timed_out_targets: Vec<String>,
-}
+use std::{future::Future, sync::atomic::Ordering};
 
 fn mixes_personal_retraction_and_direct_invite(root: Node<'_, '_>) -> bool {
     let has_retraction = root.children().any(|node| {
@@ -58,52 +35,6 @@ fn mixes_personal_retraction_and_direct_invite(root: Node<'_, '_>) -> bool {
                 && node.tag_name().name() == "x"
                 && node.tag_name().namespace() == Some("jabber:x:conference")
         })
-}
-
-type CarbonFanoutFuture<'a> = Pin<Box<dyn Future<Output = CarbonFanoutAttempt> + Send + 'a>>;
-
-async fn timed_carbon_attempt(
-    target: String,
-    attempt: CarbonFanoutFuture<'_>,
-    target_timeout: Duration,
-) -> (
-    String,
-    Result<CarbonFanoutAttempt, tokio::time::error::Elapsed>,
-) {
-    (target, tokio::time::timeout(target_timeout, attempt).await)
-}
-
-async fn bounded_carbon_fanout(
-    attempts: Vec<(String, CarbonFanoutFuture<'_>)>,
-    concurrency: usize,
-    target_timeout: Duration,
-) -> CarbonFanoutSummary {
-    // Clamp even internal callers so a future refactor cannot accidentally
-    // turn per-message fanout into an unbounded set of in-flight DB/queue
-    // operations.
-    let concurrency = concurrency.clamp(1, CARBON_FANOUT_CONCURRENCY);
-    let mut pending = attempts.into_iter();
-    let mut in_flight = FuturesUnordered::new();
-    for (target, attempt) in pending.by_ref().take(concurrency) {
-        in_flight.push(timed_carbon_attempt(target, attempt, target_timeout));
-    }
-    let mut summary = CarbonFanoutSummary::default();
-    while let Some((target, result)) = in_flight.next().await {
-        match result {
-            Ok(CarbonFanoutAttempt::Delivered) => summary.delivered += 1,
-            Ok(CarbonFanoutAttempt::Skipped) => {}
-            Ok(CarbonFanoutAttempt::Failed) => summary.failed += 1,
-            Err(_) => {
-                summary.failed += 1;
-                summary.timed_out += 1;
-                summary.timed_out_targets.push(target);
-            }
-        }
-        if let Some((target, attempt)) = pending.next() {
-            in_flight.push(timed_carbon_attempt(target, attempt, target_timeout));
-        }
-    }
-    summary
 }
 
 /// An outbox wake is only a hint to process a row that has already committed.
@@ -1550,104 +1481,14 @@ impl ProtocolSession {
         delivered_self: Option<&str>,
         muc_scope: Option<(&str, &str)>,
     ) {
-        if !self
-            .state
-            .xmpp_extension_enabled(northstar_xep_0280::XEP_ID)
-        {
-            return;
-        }
-        let current = crate::jid::canonical_session_key(from).unwrap_or_else(|_| from.to_owned());
-        let bare = bare_jid(from);
-        let Some(peer) = carbon_forwarded_recipient(forwarded) else {
-            tracing::warn!(%bare, direction = "sent", "suppressed a Carbon whose forwarded recipient was not a canonical JID");
-            return;
-        };
-        let sessions = self.state.session_entries_for(bare);
-        let mut selected_resources = 0_usize;
-        let state = &self.state;
-        let peer_ref = peer.as_str();
-        let attempts: Vec<(String, CarbonFanoutFuture<'_>)> = sessions
-            .iter()
-            .filter_map(|(jid, session)| {
-            if !carbon_resource_selected(
-                jid,
-                session.carbons.load(Ordering::Acquire),
-                &[Some(current.as_str()), delivered_self],
-            ) {
-                return None;
-            }
-            selected_resources += 1;
-            if muc_scope.is_some_and(|(room, nick)| {
-                session
-                    .muc_memberships
-                    .get(room)
-                    .is_none_or(|membership| membership.nick != nick)
-            }) {
-                return None;
-            }
-            // Use the exact canonical route key inspected above. Rebuilding
-            // it from the caller's bare JID and a stored resource can create
-            // a differently-spelled `to` address at federation/IDNA
-            // boundaries, which standards clients are allowed to reject.
-            let target_jid = jid.clone();
-            let timeout_target = target_jid.clone();
-            let session = session.clone();
-            Some((timeout_target, Box::pin(async move {
-                match state
-                    .privacy_allows_session(&session, peer_ref, PrivacyStanzaKind::Message)
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => return CarbonFanoutAttempt::Skipped,
-                    Err(error) => {
-                        tracing::warn!(?error, %target_jid, direction = "sent", "privacy policy failed closed for a local Carbon");
-                        return CarbonFanoutAttempt::Skipped;
-                    }
-                }
-                let Some(carbon) = carbon_message("sent", bare, &target_jid, forwarded) else {
-                    state.personal_message_telemetry().carbon_delivery_failed();
-                    tracing::error!(%target_jid, direction = "sent", "suppressed an invalid XEP-0280 Carbon payload");
-                    return CarbonFanoutAttempt::Failed;
-                };
-                if session.sender.send(carbon).await.is_err() {
-                    state.personal_message_telemetry().carbon_delivery_failed();
-                    tracing::warn!(%target_jid, direction = "sent", "post-accept Carbon could not be admitted to the local session queue");
-                    CarbonFanoutAttempt::Failed
-                } else {
-                    tracing::trace!(%target_jid, peer = %peer_ref, direction = "sent", "delivered a local XEP-0280 Carbon");
-                    CarbonFanoutAttempt::Delivered
-                }
-            }) as CarbonFanoutFuture<'_>))
-        })
-            .collect();
-        let summary =
-            bounded_carbon_fanout(attempts, CARBON_FANOUT_CONCURRENCY, CARBON_TARGET_TIMEOUT).await;
-        for target_jid in &summary.timed_out_targets {
-            state.personal_message_telemetry().carbon_delivery_failed();
-            state.personal_message_telemetry().carbon_target_timed_out();
-            tracing::warn!(%target_jid, direction = "sent", "post-accept Carbon target exceeded its independent fanout deadline");
-        }
-        let delivered_resources = summary.delivered;
-        tracing::debug!(
-            %bare,
-            session_resources = sessions.len(),
-            selected_resources,
-            delivered_resources,
-            failed_resources = summary.failed,
-            timed_out_resources = summary.timed_out,
-            direction = "sent",
-            "completed local XEP-0280 Carbon fanout"
-        );
-
-        self.state
-            .route_sent_carbons_to_remote_resources(
-                bare,
-                forwarded,
-                &current,
-                delivered_self,
-                muc_scope,
-            )
-            .await;
+        crate::services::message_carbons::send_sent_carbons(
+            &*self.state,
+            from,
+            forwarded,
+            delivered_self,
+            muc_scope,
+        )
+        .await;
     }
 
     pub(crate) async fn send_received_carbons(
@@ -1656,7 +1497,13 @@ impl ProtocolSession {
         delivered: Option<&str>,
         forwarded: &str,
     ) {
-        send_received_carbons_for_state(&self.state, recipient, delivered, forwarded).await;
+        crate::services::message_carbons::send_received_carbons(
+            &*self.state,
+            recipient,
+            delivered,
+            forwarded,
+        )
+        .await;
     }
 }
 
@@ -1718,10 +1565,6 @@ pub(crate) fn direct_delivery_mode(root: Node<'_, '_>) -> DirectDeliveryMode {
     )
 }
 
-fn carbon_resource_selected(jid: &str, enabled: bool, excluded: &[Option<&str>]) -> bool {
-    northstar_xep_0280::resource_selected(jid, enabled, excluded)
-}
-
 /// Version 1 peers can only return an uncorrelated legacy delivered-count.
 /// Treat a positive count as accepted during rolling upgrades so a stanza
 /// that may already have reached a resource is never duplicated into offline
@@ -1740,105 +1583,6 @@ pub(crate) fn accepted_cluster_message_delivery(
     receipt.delivered
 }
 
-/// Deliver a received Carbon for an already-authorized, already-routed stanza.
-///
-/// S2S delivery uses this entry point after block-list evaluation and after the
-/// primary resource has been chosen.  Keeping the forwarding primitive here
-/// prevents federation code from constructing server-asserted Carbon wrappers.
-pub(crate) async fn send_received_carbons_for_state(
-    state: &AppState,
-    recipient: &str,
-    delivered: Option<&str>,
-    forwarded: &str,
-) {
-    if !state.xmpp_extension_enabled(northstar_xep_0280::XEP_ID) {
-        return;
-    }
-    let Some(peer) = carbon_forwarded_sender(forwarded) else {
-        tracing::warn!(%recipient, direction = "received", "suppressed a Carbon whose forwarded sender was not a canonical JID");
-        return;
-    };
-    let sessions = state.session_entries_for(recipient);
-    let session_resources = sessions.len();
-    let mut selected_resources = 0_usize;
-    let peer_ref = peer.as_str();
-    // Materialize an owned attempt set before the first await. Keeping the
-    // `sessions.iter()` adapter inside the generic async fan-out made its
-    // future carry a borrowed-iterator closure whose higher-ranked `FnOnce`
-    // lifetime could not be proven `Send` by federated callers. Each selected
-    // session was cloned by the old code anyway, so moving the request-owned
-    // snapshot preserves target selection and ordering while removing that
-    // artificial lifetime coupling.
-    let attempts: Vec<(String, CarbonFanoutFuture<'_>)> = sessions
-        .into_iter()
-        .filter_map(|(jid, session)| {
-        if !carbon_resource_selected(&jid, session.carbons.load(Ordering::Acquire), &[delivered]) {
-            return None;
-        }
-        selected_resources += 1;
-        let target_jid = jid;
-        let timeout_target = target_jid.clone();
-        Some((timeout_target, Box::pin(async move {
-            match state
-                .privacy_allows_session(&session, peer_ref, PrivacyStanzaKind::Message)
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => return CarbonFanoutAttempt::Skipped,
-                Err(error) => {
-                    tracing::warn!(?error, %target_jid, direction = "received", "privacy policy failed closed for a local Carbon");
-                    return CarbonFanoutAttempt::Skipped;
-                }
-            }
-            let Some(carbon) = carbon_message("received", recipient, &target_jid, forwarded)
-            else {
-                state.personal_message_telemetry().carbon_delivery_failed();
-                tracing::error!(%target_jid, direction = "received", "suppressed an invalid XEP-0280 Carbon payload");
-                return CarbonFanoutAttempt::Failed;
-            };
-            if session.sender.send(carbon).await.is_err() {
-                state.personal_message_telemetry().carbon_delivery_failed();
-                tracing::warn!(%target_jid, direction = "received", "post-accept Carbon could not be admitted to the local session queue");
-                CarbonFanoutAttempt::Failed
-            } else {
-                tracing::trace!(%target_jid, peer = %peer_ref, direction = "received", "delivered a local XEP-0280 Carbon");
-                CarbonFanoutAttempt::Delivered
-            }
-        }) as CarbonFanoutFuture<'_>))
-    })
-        .collect();
-    let summary =
-        bounded_carbon_fanout(attempts, CARBON_FANOUT_CONCURRENCY, CARBON_TARGET_TIMEOUT).await;
-    for target_jid in &summary.timed_out_targets {
-        state.personal_message_telemetry().carbon_delivery_failed();
-        state.personal_message_telemetry().carbon_target_timed_out();
-        tracing::warn!(%target_jid, direction = "received", "post-accept Carbon target exceeded its independent fanout deadline");
-    }
-    let delivered_resources = summary.delivered;
-    tracing::debug!(
-        %recipient,
-        session_resources,
-        selected_resources,
-        delivered_resources,
-        failed_resources = summary.failed,
-        timed_out_resources = summary.timed_out,
-        direction = "received",
-        "completed local XEP-0280 Carbon fanout"
-    );
-
-    state
-        .route_received_carbons_to_remote_resources(recipient, delivered, forwarded)
-        .await;
-}
-
-fn carbon_forwarded_sender(forwarded: &str) -> Option<String> {
-    northstar_xep_0280::forwarded_sender(forwarded)
-}
-
-fn carbon_forwarded_recipient(forwarded: &str) -> Option<String> {
-    northstar_xep_0280::forwarded_recipient(forwarded)
-}
-
 /// Return the exact client-controlled commitment used by PoW v2. Routing uses
 /// a separate server-authoritative stanza whose `from` and inherited
 /// `xml:lang` may have been materialized at dispatch. Those assertions must
@@ -1850,13 +1594,12 @@ fn message_pow_intent_payload(client_raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_message_route, carbon_forwarded_recipient, carbon_forwarded_sender,
-        carbon_resource_selected, direct_delivery_mode, durable_direct_delivery_allowed,
+        bare_message_route, direct_delivery_mode, durable_direct_delivery_allowed,
         durable_full_no_match_recovers, full_no_match_route, message_pow_intent_payload,
         missing_user_message_should_error, mixes_personal_retraction_and_direct_invite,
         offline_storage_eligible, undelivered_disposition, wake_federation_outbox_after_commit,
-        BareMessageRoute, CarbonFanoutAttempt, CarbonFanoutFuture, DirectDeliveryMode,
-        DurableAdmissionOutcome, FullNoMatchRoute, MessagePostCommit, UndeliveredDisposition,
+        BareMessageRoute, DirectDeliveryMode, DurableAdmissionOutcome, FullNoMatchRoute,
+        MessagePostCommit, UndeliveredDisposition,
     };
     use crate::{
         abuse::{AbuseAction, PowIntent},
@@ -1869,25 +1612,6 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
-
-    #[test]
-    fn carbons_are_resource_scoped_and_never_echo_to_primary_delivery() {
-        assert!(carbon_resource_selected(
-            "alice@example.test/tablet",
-            true,
-            &[Some("alice@example.test/phone")]
-        ));
-        assert!(!carbon_resource_selected(
-            "alice@example.test/phone",
-            true,
-            &[Some("alice@example.test/phone")]
-        ));
-        assert!(!carbon_resource_selected(
-            "alice@example.test/tablet",
-            false,
-            &[]
-        ));
-    }
 
     #[tokio::test]
     async fn federation_outbox_wake_waits_for_durable_commit() {
@@ -1952,36 +1676,6 @@ mod tests {
     }
 
     #[test]
-    fn received_carbon_privacy_peer_is_the_forwarded_sender() {
-        assert_eq!(
-            carbon_forwarded_sender(
-                "<message xmlns='jabber:client' from='Blocked@Example.test/Phone' to='alice@example.test/Tablet'/>",
-            ),
-            Some("blocked@example.test/Phone".to_owned())
-        );
-        assert_eq!(carbon_forwarded_sender("<message/>"), None);
-        assert_eq!(
-            carbon_forwarded_sender("<presence from='a@example.test'/>"),
-            None
-        );
-    }
-
-    #[test]
-    fn sent_carbon_privacy_peer_is_the_forwarded_recipient() {
-        assert_eq!(
-            carbon_forwarded_recipient(
-                "<message xmlns='jabber:client' from='alice@example.test/Phone' to='Blocked@Example.test/Tablet'/>",
-            ),
-            Some("blocked@example.test/Tablet".to_owned())
-        );
-        assert_eq!(carbon_forwarded_recipient("<message/>"), None);
-        assert_eq!(
-            carbon_forwarded_recipient("<presence to='a@example.test'/>"),
-            None
-        );
-    }
-
-    #[test]
     fn signal_only_messages_use_volatile_online_delivery() {
         for xml in [
             "<message type='chat'><received xmlns='urn:xmpp:receipts' id='m1'/></message>",
@@ -2020,80 +1714,6 @@ mod tests {
             DirectDeliveryMode::Volatile,
             true
         ));
-    }
-
-    #[tokio::test]
-    async fn one_slow_carbon_target_does_not_starve_later_healthy_resources() {
-        let (slow_tx, _slow_rx) = tokio::sync::mpsc::channel(1);
-        let slow = crate::outbound::OutboundSender::new(slow_tx);
-        slow.try_send("occupied".to_owned()).unwrap();
-        let (fast_one_tx, mut fast_one_rx) = tokio::sync::mpsc::channel(1);
-        let (fast_two_tx, mut fast_two_rx) = tokio::sync::mpsc::channel(1);
-        let targets = vec![
-            ("slow", slow),
-            (
-                "fast-one",
-                crate::outbound::OutboundSender::new(fast_one_tx),
-            ),
-            (
-                "fast-two",
-                crate::outbound::OutboundSender::new(fast_two_tx),
-            ),
-        ];
-        let attempts: Vec<(String, CarbonFanoutFuture<'_>)> = targets
-            .into_iter()
-            .map(|(target, sender)| {
-                (
-                    target.to_owned(),
-                    Box::pin(async move {
-                        if sender.send(format!("carbon-{target}")).await.is_ok() {
-                            CarbonFanoutAttempt::Delivered
-                        } else {
-                            CarbonFanoutAttempt::Failed
-                        }
-                    }) as CarbonFanoutFuture<'_>,
-                )
-            })
-            .collect();
-        let summary = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            super::bounded_carbon_fanout(attempts, 2, std::time::Duration::from_millis(50)),
-        )
-        .await
-        .expect("bounded Carbon fanout did not complete");
-        assert_eq!(summary.delivered, 2);
-        assert_eq!(summary.failed, 1);
-        assert_eq!(summary.timed_out, 1);
-        assert_eq!(summary.timed_out_targets, vec!["slow"]);
-        assert_eq!(fast_one_rx.recv().await.unwrap().stanza, "carbon-fast-one");
-        assert_eq!(fast_two_rx.recv().await.unwrap().stanza, "carbon-fast-two");
-    }
-
-    #[tokio::test]
-    async fn carbon_fanout_never_exceeds_its_fixed_concurrency_bound() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let maximum = Arc::new(AtomicUsize::new(0));
-        let attempts: Vec<(String, CarbonFanoutFuture<'_>)> = (0..24)
-            .map(|index| {
-                let active = Arc::clone(&active);
-                let maximum = Arc::clone(&maximum);
-                (
-                    format!("resource-{index}"),
-                    Box::pin(async move {
-                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        maximum.fetch_max(now, Ordering::SeqCst);
-                        tokio::task::yield_now().await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        CarbonFanoutAttempt::Delivered
-                    }) as CarbonFanoutFuture<'_>,
-                )
-            })
-            .collect();
-        let summary =
-            super::bounded_carbon_fanout(attempts, 3, std::time::Duration::from_secs(1)).await;
-        assert_eq!(summary.delivered, 24);
-        assert_eq!(summary.failed, 0);
-        assert!(maximum.load(Ordering::SeqCst) <= 3);
     }
 
     #[test]
@@ -2160,29 +1780,6 @@ mod tests {
             challenge, changed,
             "one client payload byte change must reject"
         );
-    }
-
-    #[test]
-    fn self_messages_exclude_sending_and_primary_receiving_resources() {
-        let excluded = [
-            Some("alice@example.test/phone"),
-            Some("alice@example.test/laptop"),
-        ];
-        assert!(!carbon_resource_selected(
-            "alice@example.test/phone",
-            true,
-            &excluded
-        ));
-        assert!(!carbon_resource_selected(
-            "alice@example.test/laptop",
-            true,
-            &excluded
-        ));
-        assert!(carbon_resource_selected(
-            "alice@example.test/tablet",
-            true,
-            &excluded
-        ));
     }
 
     #[test]

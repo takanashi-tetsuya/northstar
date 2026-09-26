@@ -119,6 +119,10 @@ def make_fixtures(dnskey: Path, cert: Path, host: str, port: int, ttl: int, outp
         "tlsa-usage1.rr": f"{owner} {ttl} IN TLSA 1 1 1 {spki_hash}",
         "tlsa-usage3.rr": f"{owner} {ttl} IN TLSA 3 1 1 {spki_hash}",
         "tlsa-wrong-digest.rr": f"{owner} {ttl} IN TLSA 1 1 1 {wrong_hash}",
+        "tlsa-unsupported-only.rr": "\n".join(
+            f"{owner} {ttl} IN TLSA {usage} 1 1 {spki_hash}"
+            for usage in (0, 2)
+        ),
     }
     for name, value in records.items():
         write_private(output / name, value + "\n")
@@ -163,6 +167,12 @@ def self_test() -> None:
         assert manifest["spki_sha256"] in (output / "tlsa-usage1.rr").read_text()
         assert manifest["spki_sha256"] in (output / "tlsa-usage3.rr").read_text()
         assert manifest["spki_sha256"] not in (output / "tlsa-wrong-digest.rr").read_text()
+        unsupported = (output / "tlsa-unsupported-only.rr").read_text().splitlines()
+        assert len(unsupported) == 2
+        assert unsupported == [
+            f"_5269._tcp.prosody.lab.test. 300 IN TLSA {usage} 1 1 {manifest['spki_sha256']}"
+            for usage in (0, 2)
+        ]
         assert (output / "anchor.dnskey").read_text().strip() == TEST_DNSKEY
         for path in output.iterdir():
             assert path.stat().st_mode & 0o077 == 0

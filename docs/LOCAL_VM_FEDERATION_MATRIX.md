@@ -51,6 +51,12 @@ A/AAAA and TLSA records before starting Northstar. Include the resulting
 proof and the resolver's own secure status in the evidence. Publish only one
 of the generated positive or negative TLSA RRsets for a case; publishing both
 would leave a valid association in the negative test.
+For F7, `tlsa-wrong-digest.rr` supplies the mismatched usage 1 record, and
+`tlsa-unsupported-only.rr` supplies a separate RRset containing only usages
+0 and 2. Replace the entire TLSA RRset between those subcases, increment the
+zone serial, wait for the previous TTL to expire, and verify the signed answer
+before sending a fresh marker. A positive usage 1 or 3 record left in the
+same RRset invalidates the negative result.
 
 Use a separately signed `fed.lab.test` child zone for negative records and
 new test peer names. Publish its DS in `lab.test`; keep PostgreSQL, Redis and

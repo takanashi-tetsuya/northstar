@@ -25,9 +25,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Only a newer revision of the same PR supersedes an active run.
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Every push starts CI; a newer head on the same branch supersedes its older
+  # full matrix. PRs behave the same way. Manual and scheduled runs stay distinct.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.ref) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   rust-fmt:

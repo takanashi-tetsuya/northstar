@@ -189,6 +189,13 @@ addresses a plausible probe race; it does not prove the service has no stale
 route behavior. The failed JSONL and service logs remain evidence, and a new
 full-duration run is required. This traffic lacks MUC, OMEMO, sustained MAM
 and mobile push, so a pass will still not close `EXT-CAPACITY`.
+The corrected run started at 2026-09-26 04:16 UTC as
+`northstar-lab-soak-route-ready.service`, writing
+`/tmp/northstar-lab-evidence-5865007/soak-24h-route-ready.jsonl`. The first
+observation passed both federation peers and cross-node delivery. The guest
+helper matched source SHA-256
+`add18a57579a5ab88625b20cb3243b12617c440775127bed8bf139e1136ce48b`;
+the binary digest below did not change. The full 24-hour result is pending.
 The initial federation and cluster probes used source commit
 `58650079da8d21408ab6d027127796b7863ccf5c` and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.

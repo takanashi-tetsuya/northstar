@@ -271,6 +271,10 @@ consolidation of the PostgreSQL adapter, while preserving the transactional
 audience snapshot and outbox. The publish precheck now reads affiliation and
 active subscription in one read-only statement snapshot; the mutation
 transaction still makes the authoritative decision.
+Root discovery and authorized item/disco RSM page selection now project
+through the PubSub application layer. SQL transactions, audience snapshots
+and the outbox remain in the PostgreSQL adapter; the wider command/query
+boundary is still incremental.
 
 ### Phase D — Session kernel and transport ports
 

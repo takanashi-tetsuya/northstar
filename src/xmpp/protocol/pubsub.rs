@@ -4,14 +4,14 @@ use crate::services::pubsub::{
     subscription_event_children, CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome,
     PubSubConfigOutcome, PubSubConfigureNodeCommand, PubSubConfigureNodeWrite,
     PubSubCreateNodeCommand, PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite,
-    PubSubItem, PubSubNode, PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome,
-    PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand,
-    PubSubRetractOutcome, PubSubRetractWrite, PubSubRootDiscoQuery, PubSubSetAffiliationsCommand,
-    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
-    PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
-    PubSubSubscriptionOptions, PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome,
-    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-    SubscriptionOptionsOutcome,
+    PubSubItem, PubSubListPageQuery, PubSubNode, PubSubNodeConfig, PubSubPublishCommand,
+    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite,
+    PubSubRetractCommand, PubSubRetractOutcome, PubSubRetractWrite, PubSubRootDiscoQuery,
+    PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand,
+    PubSubSetSubscriptionsWrite, PubSubSubscribeCommand, PubSubSubscribeOutcome,
+    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeCommand,
+    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
+    SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
@@ -3173,38 +3173,7 @@ fn pubsub_rsm_page(
     request: &PubSubRsmRequest,
     fallback_max: usize,
 ) -> std::result::Result<(Vec<PubSubItem>, String), PubSubReply> {
-    let total = items.len();
-    let max = request.max.unwrap_or(fallback_max).min(1_000);
-    let cursor_index = |cursor: &str| {
-        items
-            .iter()
-            .position(|item| item.item_id == cursor)
-            .ok_or(PubSubReply::Error("item-not-found"))
-    };
-    let (start, end) = if let Some(after) = request.after.as_deref() {
-        let start = cursor_index(after)?.saturating_add(1).min(total);
-        (start, start.saturating_add(max).min(total))
-    } else if let Some(before) = request.before.as_ref() {
-        let end = match before.as_deref() {
-            Some(before) => cursor_index(before)?,
-            None => total,
-        };
-        (end.saturating_sub(max), end)
-    } else {
-        (0, max.min(total))
-    };
-    let page = items
-        .into_iter()
-        .skip(start)
-        .take(end - start)
-        .collect::<Vec<_>>();
-    let rsm = rsm_set_element(
-        page.first().map(|item| (start, item.item_id.as_str())),
-        page.last().map(|item| item.item_id.as_str()),
-        total,
-    )
-    .finish();
-    Ok((page, rsm))
+    page_with_rsm(items, request, fallback_max, |item| &item.item_id)
 }
 
 fn disco_rsm_page(
@@ -3212,38 +3181,33 @@ fn disco_rsm_page(
     request: &PubSubRsmRequest,
     fallback_max: usize,
 ) -> std::result::Result<(Vec<DiscoItem>, String), PubSubReply> {
-    let total = items.len();
-    let max = request.max.unwrap_or(fallback_max).min(1_000);
-    let cursor_index = |cursor: &str| {
-        items
-            .iter()
-            .position(|item| item.node == cursor)
-            .ok_or(PubSubReply::Error("item-not-found"))
-    };
-    let (start, end) = if let Some(after) = request.after.as_deref() {
-        let start = cursor_index(after)?.saturating_add(1).min(total);
-        (start, start.saturating_add(max).min(total))
-    } else if let Some(before) = request.before.as_ref() {
-        let end = match before.as_deref() {
-            Some(before) => cursor_index(before)?,
-            None => total,
-        };
-        (end.saturating_sub(max), end)
-    } else {
-        (0, max.min(total))
-    };
-    let page = items
-        .into_iter()
-        .skip(start)
-        .take(end - start)
-        .collect::<Vec<_>>();
+    page_with_rsm(items, request, fallback_max, |item| &item.node)
+}
+
+fn page_with_rsm<T>(
+    items: Vec<T>,
+    request: &PubSubRsmRequest,
+    fallback_max: usize,
+    id: impl Fn(&T) -> &str,
+) -> std::result::Result<(Vec<T>, String), PubSubReply> {
+    let page = northstar_pubsub_application::page_pubsub_list(
+        items,
+        PubSubListPageQuery {
+            max: request.max,
+            after: request.after.as_deref(),
+            before: request.before.as_ref().map(|before| before.as_deref()),
+        },
+        fallback_max,
+        id,
+    )
+    .map_err(|_| PubSubReply::Error("item-not-found"))?;
     let rsm = rsm_set_element(
-        page.first().map(|item| (start, item.node.as_str())),
-        page.last().map(|item| item.node.as_str()),
-        total,
+        page.first.as_ref().map(|(index, id)| (*index, id.as_str())),
+        page.last.as_deref(),
+        page.total,
     )
     .finish();
-    Ok((page, rsm))
+    Ok((page.items, rsm))
 }
 
 fn subscription_payload(

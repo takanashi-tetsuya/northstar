@@ -23,7 +23,7 @@ pub(crate) use northstar_pubsub_application::{
     PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand,
     PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult, PubSubConfigureNodeCommand,
     PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeResult,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubListPageQuery,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
     PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand,
     PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,

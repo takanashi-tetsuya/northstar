@@ -17,6 +17,8 @@ use northstar_pubsub_core::{
 };
 pub mod repository;
 pub use repository::*;
+mod list_page;
+pub use list_page::{page_pubsub_list, PubSubListPage, PubSubListPageError, PubSubListPageQuery};
 mod root_discovery;
 pub use root_discovery::{discover_roots, PubSubRootDiscoQuery, PubSubRootDiscoResult};
 mod publish_policy;

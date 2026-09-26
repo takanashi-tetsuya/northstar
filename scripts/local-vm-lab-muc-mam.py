@@ -15,6 +15,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 
 DOMAIN = "ns-a.lab.test"
@@ -70,6 +71,17 @@ def exchange(client: object, phase: str, xml: str, marker: str, evidence: Eviden
     return reply, frames, elapsed_ms
 
 
+def assert_no_plaintext_fallback(result: str) -> None:
+    # The forwarded message keeps the client's stanza ID, which may contain a
+    # marker. Only a body carrying that marker would reveal plaintext content.
+    for element in ET.fromstring(result).iter():
+        if element.tag.rpartition("}")[2] != "body":
+            continue
+        assert "lab-muc-mam-" not in "".join(element.itertext()), (
+            "plaintext fallback leaked into room MAM"
+        )
+
+
 def page(
     client: object, room: str, before: str | None, evidence: Evidence,
 ) -> tuple[list[str], int, int, int]:
@@ -95,7 +107,7 @@ def page(
         ids.append(match.group(1))
         assert "urn:xmpp:forward:0" in result and f"from='{room}/" in result, result
         assert "<encrypted xmlns='jabber:x:encrypted'" in result, result
-        assert "lab-muc-mam-" not in result, "plaintext fallback leaked into room MAM"
+        assert_no_plaintext_fallback(result)
     assert len(ids) <= 2 and len(ids) == len(set(ids)), reply
     count = re.search(r"<count>(\d+)</count>", fin)
     first = re.search(r"<first index='(\d+)'", fin)
@@ -120,8 +132,10 @@ def self_test() -> None:
             result = (
                 f"<message><result xmlns='urn:xmpp:mam:2' queryid='{query_id}' id='{row_id}'>"
                 "<forwarded xmlns='urn:xmpp:forward:0'>"
-                "<message from='room@conference.ns-a.lab.test/Alice'>"
+                "<message xmlns='jabber:client' id='lab-muc-mam-123' "
+                "from='room@conference.ns-a.lab.test/Alice'>"
                 "<encrypted xmlns='jabber:x:encrypted'>AQIDBA==</encrypted>"
+                "<body>This message is end-to-end encrypted.</body>"
                 "</message></forwarded></result></message>"
             )
             fin = (
@@ -143,6 +157,19 @@ def self_test() -> None:
             records = [json.loads(line) for line in evidence.path.read_text().splitlines()]
             assert [row["direction"] for row in records] == ["sent", "received", "received"]
             assert evidence.path.stat().st_mode & 0o777 == 0o600
+            assert_no_plaintext_fallback(
+                "<result xmlns='urn:xmpp:mam:2'><message xmlns='jabber:client' "
+                "id='lab-muc-mam-123'><body>encrypted</body></message></result>"
+            )
+            try:
+                assert_no_plaintext_fallback(
+                    "<result xmlns='urn:xmpp:mam:2'><message xmlns='jabber:client'>"
+                    "<body>lab-muc-mam-123</body></message></result>"
+                )
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("plaintext body escaped the MAM assertion")
             try:
                 evidence.record("oversized", "received", "x" * (MAX_XML_BYTES + 1))
             except RuntimeError:

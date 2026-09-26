@@ -53,7 +53,7 @@ python3 local-vm-lab-component.py \
   --slixmpp-version VERSION_RECORDED_ABOVE \
   --events /home/lab/northstar/component-evidence/peer.jsonl \
   --ledger /home/lab/northstar/component-evidence/seen.sqlite3 \
-  --seconds 600
+  --seconds 600 --max-reconnect-attempts 10
 ```
 
 Create `component-evidence` as a private directory before running. In a
@@ -76,6 +76,13 @@ different secret on a separate run and require authentication to fail before
 any component message is routed. Keep the correct component disconnected for
 that negative run so a duplicate-owner rejection cannot mask the wrong-secret
 result.
+
+The probe schedules at most `--max-reconnect-attempts` one-second reconnects
+after unexpected disconnects; its JSONL records each attempt and subsequent
+authentication. The timer ends the process at `--seconds`, and a normal stop
+cannot schedule another reconnect. A server restart qualifies only if a new
+`authenticated` event and a matching C2S echo follow it. Slixmpp itself does
+not automatically reconnect in this probe; the bounded retry is harness code.
 
 For restart, disconnect the component, queue a uniquely marked message, and
 verify the `s2s_outbox` row remains. Restart the same Slixmpp process with the

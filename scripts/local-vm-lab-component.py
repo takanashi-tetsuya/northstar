@@ -99,6 +99,12 @@ def stable_id(message: object, trusted_by: str) -> tuple[str, str] | None:
     return None
 
 
+def reconnect_delay(attempts: int, limit: int, stopping: bool) -> float | None:
+    if stopping or attempts >= limit:
+        return None
+    return 1.0
+
+
 def self_test() -> None:
     class Sample:
         xml = ET.fromstring(
@@ -109,6 +115,10 @@ def self_test() -> None:
 
     assert stable_id(Sample(), "alice@ns-a.lab.test") == ("alice@ns-a.lab.test", "stable-id")
     assert stable_id(Sample(), "bob@ns-a.lab.test") is None
+    assert reconnect_delay(0, 3, False) == 1.0
+    assert reconnect_delay(2, 3, False) == 1.0
+    assert reconnect_delay(3, 3, False) is None
+    assert reconnect_delay(0, 3, True) is None
     with tempfile.TemporaryDirectory(prefix="northstar-component-ledger-") as directory:
         base = pathlib.Path(directory)
         evidence = Evidence(base / "events.jsonl", base / "seen.sqlite3")
@@ -127,7 +137,8 @@ def self_test() -> None:
 def run(args: argparse.Namespace) -> None:
     if args.host not in ("127.0.0.1", "::1"):
         raise ValueError("the XEP-0114 lab component may connect only to loopback")
-    if not 1 <= args.port <= 65535 or not 5 <= args.seconds <= 3600:
+    if (not 1 <= args.port <= 65535 or not 5 <= args.seconds <= 3600
+            or not 0 <= args.max_reconnect_attempts <= 30):
         raise ValueError("port or duration is outside the bounded lab range")
     secret = protected_secret(args.secret_file)
     version = importlib.metadata.version("slixmpp")
@@ -136,21 +147,40 @@ def run(args: argparse.Namespace) -> None:
     from slixmpp.componentxmpp import ComponentXMPP
 
     evidence = Evidence(args.events, args.ledger)
+    loop = asyncio.get_event_loop()
 
     class LabComponent(ComponentXMPP):
         def __init__(self) -> None:
             super().__init__(args.jid, secret, args.host, args.port)
             self.authenticated = False
+            self.authentications = 0
+            self.reconnect_attempts = 0
+            self.reconnect_handle: asyncio.TimerHandle | None = None
+            self.stopping = False
             self.add_event_handler("session_start", self.on_session_start)
             self.add_event_handler("disconnected", self.on_disconnected)
             self.add_event_handler("message", self.on_message)
 
         def on_session_start(self, _event: object) -> None:
             self.authenticated = True
-            evidence.write("authenticated", jid=args.jid, library_version=version)
+            self.authentications += 1
+            evidence.write("authenticated", jid=args.jid, library_version=version,
+                           count=self.authentications)
 
         def on_disconnected(self, _event: object) -> None:
+            self.authenticated = False
             evidence.write("disconnected")
+            delay = reconnect_delay(self.reconnect_attempts,
+                                    args.max_reconnect_attempts, self.stopping)
+            if delay is None:
+                evidence.write("reconnect_not_scheduled", stopping=self.stopping,
+                               attempts=self.reconnect_attempts)
+                return
+            self.reconnect_attempts += 1
+            evidence.write("reconnect_scheduled", attempt=self.reconnect_attempts,
+                           delay_seconds=delay)
+            self.reconnect_handle = loop.call_later(
+                delay, self.connect, args.host, args.port)
 
         def on_message(self, message: object) -> None:
             if message["type"] not in ("chat", "normal"):
@@ -171,17 +201,23 @@ def run(args: argparse.Namespace) -> None:
                 message.reply("northstar-component-echo:" + body).send()
 
     component = LabComponent()
-    loop = asyncio.get_event_loop()
     loop.call_later(args.seconds, loop.stop)
-    evidence.write("start", jid=args.jid, library_version=version, seconds=args.seconds)
+    evidence.write("start", jid=args.jid, library_version=version,
+                   seconds=args.seconds,
+                   max_reconnect_attempts=args.max_reconnect_attempts)
     try:
         component.connect()
         loop.run_forever()
         if not component.authenticated:
             raise RuntimeError("component did not authenticate within the run deadline")
     finally:
+        component.stopping = True
+        if component.reconnect_handle is not None:
+            component.reconnect_handle.cancel()
         component.disconnect()
-        evidence.write("stop", authenticated=component.authenticated)
+        evidence.write("stop", authenticated=component.authenticated,
+                       authentications=component.authentications,
+                       reconnect_attempts=component.reconnect_attempts)
         evidence.close()
 
 
@@ -197,6 +233,7 @@ def main() -> None:
     parser.add_argument("--events", type=pathlib.Path)
     parser.add_argument("--ledger", type=pathlib.Path)
     parser.add_argument("--seconds", type=int, default=600)
+    parser.add_argument("--max-reconnect-attempts", type=int, default=10)
     args = parser.parse_args()
     if args.self_test:
         self_test()

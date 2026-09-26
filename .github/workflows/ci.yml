@@ -470,6 +470,11 @@ jobs:
           python3 scripts/test-cluster-version-probes.py
           python3 scripts/test-cluster-ack-pause.py
           python3 scripts/test-cluster-takeover-expiry.py
+          python3 scripts/local-vm-lab-muc-mam.py --self-test
+          python3 scripts/local-vm-lab-soak.py --self-test
+          python3 scripts/local-vm-lab-component.py --self-test
+          python3 scripts/local-vm-lab-redis-fault.py --self-test
+          python3 scripts/local-vm-lab-redis-fault-guest.py --self-test
           bash scripts/test-listener-readiness.sh
           python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py

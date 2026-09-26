@@ -55,7 +55,11 @@ the full isolated `backup-restore-wsl.sh` drill also runs its generated SQL
 against PostgreSQL, including a SIGKILL recovery after the first new object
 move. The same drill backs up and restores exact S3 versions against a
 disposable MinIO bucket, rejects a missing version, and recovers a committed
-restore after SIGKILL. `test-restore-recovery.py` checks exact local-object
+restore after SIGKILL. It also checks encrypted S3 rollback dumps and recovery
+with a separate key. Set `NORTHSTAR_BACKUP_RESTORE_WORK_PARENT` to an existing
+directory owned by the caller with mode `0700` when `/tmp` is too small; the
+default is `/tmp`.
+`test-restore-recovery.py` checks exact local-object
 replay and rejects damaged journals without a database. `test-listener-stress-phases.py` exercises
 fixture synchronization and identity checks without starting Northstar.
 
@@ -203,6 +207,9 @@ before starting the server.
 - `local-vm-lab-component*.py`: bounded Slixmpp XEP-0114 accept and XMPP
   client probes for the isolated VM lab; see
   [component lab procedure](../docs/LOCAL_VM_COMPONENT_PROBE.md).
+- `local-vm-lab-redis-fault*.py`: bounded `ns-b` to Redis partition drill with
+  isolation checks, exact firewall cleanup and private evidence. Run its
+  offline `--self-test` first; never run the live drill during a soak.
 - `cluster-wsl.*`, `muc-cluster-wsl.sh`: experimental Redis/multi-process paths.
   `cluster-wsl.sh` accepts `NORTHSTAR_CLUSTER_DATABASE_PORT` (default `5432`)
   for a disposable PostgreSQL fixture on `127.0.0.1`; the server and all shell

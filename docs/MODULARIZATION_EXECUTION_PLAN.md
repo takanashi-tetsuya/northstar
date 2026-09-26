@@ -771,7 +771,11 @@ its source rebuild remains unqualified too. The retained npm tarball lacks the
 Argon2 WASM JSON imported by its TypeScript, its declared build script,
 and a dependency lockfile. A strict offline provenance check rejects a
 reproducibility claim until complete pinned inputs and two matching clean
-builds are available.
+builds are available. The upstream v4.12.0 tag has the missing source and
+lockfile, but its build recipe updates Alpine packages and does not identify
+the historical compiler or builder image. Rebuilds must pin those inputs and
+compare both independent outputs with the deployed bytes before this packet
+can close.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated
 S2S connection through an exact PostgreSQL occupancy transition. The

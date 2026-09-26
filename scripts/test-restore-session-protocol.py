@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import threading
@@ -84,7 +85,11 @@ class PostgresBarrierTests(unittest.TestCase):
         # its private Unix-socket-only cluster and disposable login. Refuse any
         # ambient/shared target before executing even a read-only statement.
         socket = os.environ.get("PGHOST", "")
-        self.assertRegex(socket, r"^/tmp/northstar-backup-restore\.[A-Za-z0-9]+/socket$")
+        parent = os.environ.get("NORTHSTAR_BACKUP_RESTORE_WORK_PARENT", "/tmp")
+        self.assertTrue(Path(parent).is_absolute())
+        self.assertEqual(str(Path(parent).resolve(strict=True)), parent)
+        self.assertRegex(socket,
+                         rf"^{re.escape(parent)}/northstar-backup-restore\.[A-Za-z0-9]+/socket$")
         self.assertEqual(os.environ.get("PGDATABASE"), "postgres")
         self.assertEqual(os.environ.get("PGUSER"), "northstar_test_bootstrap")
         with tempfile.TemporaryDirectory(prefix="northstar-restore-barrier-") as directory:

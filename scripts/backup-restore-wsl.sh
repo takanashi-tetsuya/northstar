@@ -14,7 +14,22 @@ for command in age age-keygen awk openssl sed sha384sum; do
     || { echo "required production backup command is unavailable: $command" >&2; exit 1; }
 done
 
-work_dir="$(mktemp -d /tmp/northstar-backup-restore.XXXXXX)"
+work_parent="${NORTHSTAR_BACKUP_RESTORE_WORK_PARENT:-/tmp}"
+[[ "$work_parent" == /* && -d "$work_parent" && ! -L "$work_parent" \
+   && "$(realpath -e -- "$work_parent")" == "$work_parent" ]] || {
+  echo 'backup/restore fixture work parent must be an existing canonical directory' >&2
+  exit 1
+}
+if [[ "$work_parent" != /tmp ]]; then
+  [[ "$(stat -c %u -- "$work_parent")" == "$(id -u)" \
+     && "$(stat -c %a -- "$work_parent")" == 700 ]] || {
+    echo 'custom backup/restore fixture work parent must be private and owned by the caller' >&2
+    exit 1
+  }
+fi
+work_parent_identity="$(stat -c %d:%i -- "$work_parent")"
+work_dir="$(mktemp -d "$work_parent/northstar-backup-restore.XXXXXX")"
+work_dir_identity="$(stat -c %d:%i -- "$work_dir")"
 data_dir="$work_dir/postgres"
 socket_dir="$work_dir/socket"
 backup_root="$work_dir/backups"
@@ -44,10 +59,19 @@ cleanup() {
     echo "preserved isolated backup/restore fixture: $work_dir" >&2
     return
   fi
-  case "$work_dir" in
-    /tmp/northstar-backup-restore.*) rm -rf -- "$work_dir" ;;
-    *) echo "refusing to clean unexpected test path: $work_dir" >&2 ;;
-  esac
+  if [[ -d "$work_parent" && ! -L "$work_parent" \
+        && "$(realpath -e -- "$work_parent")" == "$work_parent" \
+        && "$(stat -c %d:%i -- "$work_parent")" == "$work_parent_identity" \
+        && "${work_dir%/*}" == "$work_parent" \
+        && "${work_dir##*/}" =~ ^northstar-backup-restore\.[A-Za-z0-9]+$ \
+        && -d "$work_dir" && ! -L "$work_dir" \
+        && "$(stat -c %d:%i -- "$work_dir")" == "$work_dir_identity" \
+        && "$(stat -c %u -- "$work_dir")" == "$(id -u)" \
+        && "$(stat -c %a -- "$work_dir")" == 700 ]]; then
+    rm -rf -- "$work_dir"
+  else
+    echo "refusing to clean unexpected test path: $work_dir" >&2
+  fi
 }
 trap cleanup EXIT
 
@@ -658,6 +682,8 @@ PSQL
     --plaintext-staging-dir "$production_scratch" \
     --public-key-file "$production_verify_key" \
     --age-identity-file "$production_age_identity" \
+    --rollback-age-recipient-file "$rollback_recipients" \
+    --rollback-age-identity-file "$rollback_primary_identity" \
     --rollback-state-file "$s3_root/floor/current" >/dev/null
   IFS='|' read -r restored_key restored_version restored_digest restored_namespace restored_generation \
     <<<"$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
@@ -697,6 +723,8 @@ PSQL
        --plaintext-staging-dir "$production_scratch" \
        --public-key-file "$production_verify_key" \
        --age-identity-file "$production_age_identity" \
+       --rollback-age-recipient-file "$rollback_recipients" \
+       --rollback-age-identity-file "$rollback_primary_identity" \
        --rollback-state-file "$s3_root/abort-floor/current" >/dev/null 2>&1; then
     echo 'S3 pre-commit SIGKILL fixture unexpectedly completed' >&2
     exit 1
@@ -718,6 +746,7 @@ PSQL
     --backup-dir "$s3_archive" \
     --public-key-file "$production_verify_key" \
     --age-identity-file "$production_age_identity" \
+    --rollback-age-identity-file "$rollback_recovery_identity" \
     --plaintext-staging-dir "$production_scratch" \
     --confirm-stopped NORTHSTAR-RECOVER >/dev/null
   [[ "$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
@@ -744,6 +773,8 @@ PSQL
        --plaintext-staging-dir "$production_scratch" \
        --public-key-file "$production_verify_key" \
        --age-identity-file "$production_age_identity" \
+       --rollback-age-recipient-file "$rollback_recipients" \
+       --rollback-age-identity-file "$rollback_primary_identity" \
        --rollback-state-file "$s3_root/crash-floor/current" >/dev/null 2>&1; then
     echo 'S3 SIGKILL fixture unexpectedly completed' >&2
     exit 1
@@ -766,6 +797,7 @@ PSQL
     --backup-dir "$s3_archive" \
     --public-key-file "$production_verify_key" \
     --age-identity-file "$production_age_identity" \
+    --rollback-age-identity-file "$rollback_recovery_identity" \
     --plaintext-staging-dir "$production_scratch" \
     --confirm-stopped NORTHSTAR-RECOVER >/dev/null
   IFS='|' read -r crash_key crash_version crash_namespace crash_generation \
@@ -785,6 +817,25 @@ PSQL
     "$s3_root/crash-object" >/dev/null
   cmp "$s3_body" "$s3_root/crash-object"
   grep -qx 'format=northstar-restore-state-v2' "$s3_root/crash-floor/current"
+
+  local rollback_root rollback_dump
+  local -a rollback_dumps
+  for rollback_root in "$s3_root/rollback" "$s3_root/abort-rollback" \
+                       "$s3_root/crash-rollback"; do
+    mapfile -d '' -t rollback_dumps < <(find "$rollback_root" \
+      -name database-before.dump.age -type f -print0)
+    [[ "${#rollback_dumps[@]}" == 1 \
+       && -z "$(find "$rollback_root" -name database-before.dump -type f -print -quit)" ]] \
+      || { echo 'S3 restore lacks one encrypted rollback dump or retained plaintext' >&2; exit 1; }
+    rollback_dump="${rollback_dumps[0]}"
+    age --decrypt --identity "$rollback_recovery_identity" "$rollback_dump" \
+      | "$postgres_bin/pg_restore" --list >/dev/null
+    if age --decrypt --identity "$production_age_identity" "$rollback_dump" \
+       >/dev/null 2>&1; then
+      echo 'incoming backup identity decrypted an S3 rollback dump' >&2
+      exit 1
+    fi
+  done
 )
 exercise_s3_backup_restore
 

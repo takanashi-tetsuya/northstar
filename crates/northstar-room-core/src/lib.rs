@@ -160,7 +160,29 @@ pub struct MucRoom {
     pub configuration_expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MucJoinSnapshotError {
+    RoomReplaced,
+    ConfigurationChanged,
+}
+
 impl MucRoom {
+    /// A join's preliminary policy checks are valid only for the same room
+    /// incarnation and configuration. The repository still authorizes the
+    /// mutation under its own locks.
+    pub fn join_snapshot_consistency(
+        &self,
+        preliminary: &Self,
+    ) -> Result<(), MucJoinSnapshotError> {
+        if self.room_epoch != preliminary.room_epoch {
+            return Err(MucJoinSnapshotError::RoomReplaced);
+        }
+        if self.config_version != preliminary.config_version {
+            return Err(MucJoinSnapshotError::ConfigurationChanged);
+        }
+        Ok(())
+    }
+
     pub fn is_locked(&self) -> bool {
         self.configuration_owner_jid.is_some()
     }
@@ -507,6 +529,53 @@ pub struct MucRegistrationWrite<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn join_room() -> MucRoom {
+        MucRoom {
+            id: Uuid::from_u128(1),
+            room_epoch: Uuid::from_u128(2),
+            config_version: 3,
+            localpart: "room".to_owned(),
+            title: None,
+            description: None,
+            persistent: true,
+            members_only: false,
+            public: true,
+            moderated: false,
+            non_anonymous: false,
+            max_occupants: 100,
+            subject: None,
+            subject_changed_at: None,
+            allow_subject_change: true,
+            allow_invites: true,
+            allow_private_messages: true,
+            logging_enabled: true,
+            allow_registration: true,
+            password_hash: None,
+            occupant_id_secret: vec![],
+            configuration_owner_jid: None,
+            configuration_expires_at: None,
+        }
+    }
+
+    #[test]
+    fn join_snapshot_requires_the_same_room_incarnation_and_configuration() {
+        let preliminary = join_room();
+        assert_eq!(preliminary.join_snapshot_consistency(&preliminary), Ok(()));
+
+        let mut changed = preliminary.clone();
+        changed.config_version += 1;
+        assert_eq!(
+            changed.join_snapshot_consistency(&preliminary),
+            Err(MucJoinSnapshotError::ConfigurationChanged)
+        );
+
+        changed.room_epoch = Uuid::from_u128(4);
+        assert_eq!(
+            changed.join_snapshot_consistency(&preliminary),
+            Err(MucJoinSnapshotError::RoomReplaced)
+        );
+    }
 
     fn local_command() -> MucDiscussion {
         MucDiscussion {

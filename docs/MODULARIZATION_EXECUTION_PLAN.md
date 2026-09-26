@@ -261,6 +261,8 @@ under its existing transaction locks. Request-owned MUC post-commit effects
 also moved out of the protocol module into a bounded, sealed, order-preserving
 application plan. Subject, moderation/retraction, affiliation, configuration
 and registration use typed application commands and atomic service methods.
+Local and federated joins now use the same room-core snapshot check for room
+incarnation and configuration version before their existing error mapping.
 Remaining room work is to verify any residual join/leave or adapter-specific
 path against the same authority and post-commit boundaries.
 PubSub/PEP already has core/application crates, typed commands, a service and

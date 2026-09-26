@@ -19,6 +19,7 @@ use crate::state::{
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};
+use northstar_room_core::MucJoinSnapshotError;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 
@@ -1570,24 +1571,24 @@ async fn federated_muc_presence_owned(
                 "item-not-found",
             ));
         };
-        if refreshed_room.room_epoch != room.room_epoch {
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "cancel",
-                "item-not-found",
-            ));
-        }
-        if refreshed_room.config_version != room.config_version {
-            // Password verification and the rest of the preliminary policy
-            // check belonged to the old configuration. Retry rather than
-            // authorizing a join under a mixed policy snapshot.
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "wait",
-                "resource-constraint",
-            ));
+        match refreshed_room.join_snapshot_consistency(&room) {
+            Ok(()) => {}
+            Err(MucJoinSnapshotError::RoomReplaced) => {
+                return Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "cancel",
+                    "item-not-found",
+                ));
+            }
+            Err(MucJoinSnapshotError::ConfigurationChanged) => {
+                return Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "wait",
+                    "resource-constraint",
+                ));
+            }
         }
         if refreshed_room.configuration_is_expired(chrono::Utc::now())
             || (refreshed_room.is_locked()

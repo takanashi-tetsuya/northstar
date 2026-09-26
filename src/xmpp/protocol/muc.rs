@@ -25,6 +25,7 @@ use anyhow::Result;
 #[cfg(test)]
 use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
+use northstar_room_core::MucJoinSnapshotError;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 
@@ -4344,24 +4345,24 @@ impl ProtocolSession {
                 "item-not-found",
             )));
         };
-        if refreshed_room.room_epoch != room.room_epoch {
-            return Ok(Action::Send(muc_stanza_error(
-                root,
-                &full_jid,
-                "cancel",
-                "item-not-found",
-            )));
-        }
-        if refreshed_room.config_version != room.config_version {
-            // Password/policy validation above belongs to the exact config
-            // version read before the expensive password check. Ask the
-            // client to retry instead of accepting under a mixed policy.
-            return Ok(Action::Send(muc_stanza_error(
-                root,
-                &full_jid,
-                "wait",
-                "resource-constraint",
-            )));
+        match refreshed_room.join_snapshot_consistency(&room) {
+            Ok(()) => {}
+            Err(MucJoinSnapshotError::RoomReplaced) => {
+                return Ok(Action::Send(muc_stanza_error(
+                    root,
+                    &full_jid,
+                    "cancel",
+                    "item-not-found",
+                )));
+            }
+            Err(MucJoinSnapshotError::ConfigurationChanged) => {
+                return Ok(Action::Send(muc_stanza_error(
+                    root,
+                    &full_jid,
+                    "wait",
+                    "resource-constraint",
+                )));
+            }
         }
         let room = refreshed_room;
         if room.configuration_is_expired(chrono::Utc::now())

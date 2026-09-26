@@ -419,6 +419,7 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
 async fn durable_invitation_admission_is_atomic_under_injected_failures() {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
     let admin = sqlx::postgres::PgPoolOptions::new()
@@ -445,7 +446,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .unwrap();
 
     for statement in [
-        "CREATE TABLE users(id UUID PRIMARY KEY, username TEXT NOT NULL UNIQUE, is_disabled BOOLEAN NOT NULL DEFAULT FALSE)",
+        "CREATE TABLE users(id UUID PRIMARY KEY, username TEXT NOT NULL UNIQUE, is_disabled BOOLEAN NOT NULL DEFAULT FALSE, auth_generation BIGINT NOT NULL DEFAULT 0)",
         // Keep the fixture aligned with the complete retention/legal-hold
         // authority read performed by `admit_local_muc_invite`. PostgreSQL
         // resolves every relation in that statement even when this test
@@ -465,6 +466,12 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0150_auth_generation_lock_capability.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     let room_id = uuid::Uuid::new_v4();
     let recipient_id = uuid::Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username) VALUES($1,'invitee')")

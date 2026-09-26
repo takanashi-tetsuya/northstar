@@ -381,7 +381,8 @@ def run() -> None:
     group = bob.wait("MIX runtime message")
     stanza_id = re.search(r"stanza-id[^>]+id='([0-9a-f-]{36})'", group)
     check(stanza_id is not None and f"<jid>{ALICE}@{DOMAIN}</jid>" in group, f"live maybe-visible identity/stanza-id failed: {group}")
-    delivered_ids = [stanza_id.group(1)]
+    archive_id = stanza_id.group(1)
+    delivered_ids = [archive_id]
 
     for suffix in ("two", "three"):
         marker = f"MIX runtime page {suffix}"

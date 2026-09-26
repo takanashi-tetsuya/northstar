@@ -2117,6 +2117,7 @@ fn fence_local_session_if(
     true
 }
 
+#[cfg(test)]
 fn cancel_local_session_if_connection_in(
     sessions: &DashMap<String, OnlineSession>,
     full_jid: &str,

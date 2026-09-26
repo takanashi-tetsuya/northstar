@@ -1031,9 +1031,8 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         .unwrap()
         .is_empty());
 
-    // Hold the authorization table after the node read. The blocked owner
-    // query proves that its later authorization and payload use that same
-    // repeatable-read snapshot, even if the owner or node is removed meanwhile.
+    // Hold the authorization table after the node read. A committed owner
+    // revocation or node deletion must veto the older projection before reply.
     for delete_node in [false, true] {
         let race_name = format!("owner-snapshot-{}", Uuid::new_v4().simple());
         let race_node =
@@ -1086,8 +1085,8 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         }
         blocker.commit().await.unwrap();
         assert!(matches!(
-            read.await.unwrap().unwrap(),
-            PubSubOwnerRead::Configure(_)
+            (delete_node, read.await.unwrap().unwrap()),
+            (true, PubSubOwnerRead::Missing) | (false, PubSubOwnerRead::Forbidden)
         ));
         let current = service
             .owner_read(

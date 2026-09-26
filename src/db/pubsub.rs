@@ -1250,8 +1250,8 @@ pub async fn get_node(pool: &PgPool, node: &str) -> Result<Option<PubSubNode>> {
     Ok(row.as_ref().map(row_to_node))
 }
 
-/// Read one owner response from a single authorization/configuration snapshot.
-/// No owner-only projection is loaded after a failed owner check.
+/// Project one owner response from a consistent snapshot. Recheck current
+/// authority before returning so a committed revocation can veto stale data.
 pub async fn owner_read(
     pool: &PgPool,
     node_name: &str,
@@ -1326,6 +1326,21 @@ pub async fn owner_read(
         }
     };
     transaction.commit().await?;
+    let current = sqlx::query(
+        "SELECT EXISTS(SELECT 1 FROM pubsub_nodes WHERE id = $1 AND node = $2) AS node_exists, \
+                EXISTS(SELECT 1 FROM pubsub_affiliations WHERE node_id = $1 AND jid = $3 AND affiliation = 'owner') AS owner",
+    )
+    .bind(node.id)
+    .bind(node_name)
+    .bind(&requester)
+    .fetch_one(pool)
+    .await?;
+    if !current.get::<bool, _>("node_exists") {
+        return Ok(PubSubOwnerRead::Missing);
+    }
+    if !current.get::<bool, _>("owner") {
+        return Ok(PubSubOwnerRead::Forbidden);
+    }
     Ok(result)
 }
 

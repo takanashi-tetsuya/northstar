@@ -2,7 +2,39 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fixture_dir="$(mktemp -d /tmp/northstar-ocsp-stapling.XXXXXX)"
+if [[ ${1:-} == --fixtures-only ]]; then
+  [[ $# -ge 2 && $# -le 3 ]] || {
+    echo "usage: $0 --fixtures-only NEW_DIRECTORY [DNS_NAME]" >&2
+    exit 2
+  }
+  fixture_dir=$2
+  peer_name=${3:-localhost}
+  [[ ${#peer_name} -le 253 ]] || {
+    echo "invalid fixture DNS name" >&2
+    exit 2
+  }
+  IFS=. read -r -a peer_labels <<< "$peer_name"
+  for label in "${peer_labels[@]}"; do
+    [[ ${#label} -ge 1 && ${#label} -le 63 && $label =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || {
+      echo "invalid fixture DNS name" >&2
+      exit 2
+    }
+  done
+  [[ $peer_name != *. ]] || {
+    echo "invalid fixture DNS name" >&2
+    exit 2
+  }
+  mkdir -m 700 -- "$fixture_dir"
+  fixtures_only=true
+else
+  [[ $# -eq 0 ]] || {
+    echo "usage: $0 [--fixtures-only NEW_DIRECTORY [DNS_NAME]]" >&2
+    exit 2
+  }
+  fixture_dir="$(mktemp -d /tmp/northstar-ocsp-stapling.XXXXXX)"
+  peer_name=localhost
+  fixtures_only=false
+fi
 trap 'rm -rf -- "$fixture_dir"' EXIT
 umask 077
 
@@ -19,17 +51,17 @@ openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3 \
   -addext 'subjectKeyIdentifier=hash' \
   -keyout "$fixture_dir/other-root.key" -out "$fixture_dir/other-root.crt" >/dev/null 2>&1
 
-cat > "$fixture_dir/leaf.ext" <<'EOF'
+cat > "$fixture_dir/leaf.ext" <<EOF
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature
 authorityKeyIdentifier=keyid,issuer
 subjectKeyIdentifier=hash
 extendedKeyUsage=serverAuth
-subjectAltName=DNS:localhost
+subjectAltName=DNS:$peer_name
 EOF
 
 for name in leaf other; do
-  openssl req -new -newkey rsa:3072 -sha256 -nodes -subj '/CN=localhost' \
+  openssl req -new -newkey rsa:3072 -sha256 -nodes -subj "/CN=$peer_name" \
     -keyout "$fixture_dir/$name.key" -out "$fixture_dir/$name.csr" >/dev/null 2>&1
   openssl x509 -req -in "$fixture_dir/$name.csr" \
     -CA "$fixture_dir/root.crt" -CAkey "$fixture_dir/root.key" -CAcreateserial \
@@ -42,12 +74,12 @@ expiry="$(date -u -d '+2 days' +'%y%m%d%H%M%SZ')"
 revocation="$(date -u +'%y%m%d%H%M%SZ')"
 leaf_serial="$(openssl x509 -in "$fixture_dir/leaf.crt" -noout -serial | cut -d= -f2)"
 other_serial="$(openssl x509 -in "$fixture_dir/other.crt" -noout -serial | cut -d= -f2)"
-printf 'V\t%s\t\t%s\tunknown\t/CN=localhost\n' \
-  "$expiry" "$leaf_serial" > "$fixture_dir/good.index"
-printf 'R\t%s\t%s\t%s\tunknown\t/CN=localhost\n' \
-  "$expiry" "$revocation" "$leaf_serial" > "$fixture_dir/revoked.index"
-printf 'V\t%s\t\t%s\tunknown\t/CN=localhost\n' \
-  "$expiry" "$other_serial" > "$fixture_dir/other.index"
+printf 'V\t%s\t\t%s\tunknown\t/CN=%s\n' \
+  "$expiry" "$leaf_serial" "$peer_name" > "$fixture_dir/good.index"
+printf 'R\t%s\t%s\t%s\tunknown\t/CN=%s\n' \
+  "$expiry" "$revocation" "$leaf_serial" "$peer_name" > "$fixture_dir/revoked.index"
+printf 'V\t%s\t\t%s\tunknown\t/CN=%s\n' \
+  "$expiry" "$other_serial" "$peer_name" > "$fixture_dir/other.index"
 : > "$fixture_dir/empty.index"
 
 make_response() {
@@ -72,6 +104,89 @@ openssl ocsp -index "$fixture_dir/good.index" \
   -rkey "$fixture_dir/other-root.key" -issuer "$fixture_dir/other-root.crt" \
   -cert "$fixture_dir/leaf.crt" -respout "$fixture_dir/wrong-issuer.der" \
   -no_nonce -ndays 1 >/dev/null 2>&1
+
+openssl verify -x509_strict -CAfile "$fixture_dir/root.crt" \
+  "$fixture_dir/leaf.crt" >/dev/null
+if $fixtures_only; then
+  # The OpenSSL responder CLI cannot emit an already-expired, correctly
+  # signed interval. Build that one case separately, keeping the same CA.
+  python3 - "$fixture_dir" "$peer_name" <<'PY'
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import hashlib
+import json
+import subprocess
+import sys
+
+import cryptography
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.x509 import ocsp
+
+directory = Path(sys.argv[1])
+peer_name = sys.argv[2]
+issuer = x509.load_pem_x509_certificate((directory / "root.crt").read_bytes())
+leaf = x509.load_pem_x509_certificate((directory / "leaf.crt").read_bytes())
+key = serialization.load_pem_private_key((directory / "root.key").read_bytes(), None)
+now = datetime.now(timezone.utc)
+response = (
+    ocsp.OCSPResponseBuilder()
+    .add_response(
+        cert=leaf,
+        issuer=issuer,
+        algorithm=hashes.SHA1(),
+        cert_status=ocsp.OCSPCertStatus.GOOD,
+        this_update=now - timedelta(days=2),
+        next_update=now - timedelta(days=1),
+        revocation_time=None,
+        revocation_reason=None,
+    )
+    .responder_id(ocsp.OCSPResponderEncoding.NAME, issuer)
+    .sign(key, hashes.SHA256())
+)
+(directory / "stale.der").write_bytes(response.public_bytes(serialization.Encoding.DER))
+issuer.public_key().verify(
+    response.signature,
+    response.tbs_response_bytes,
+    padding.PKCS1v15(),
+    response.signature_hash_algorithm,
+)
+assert response.certificate_status == ocsp.OCSPCertStatus.GOOD
+assert response.this_update_utc < response.next_update_utc < now
+public_files = sorted(
+    path for path in directory.iterdir() if path.suffix in {".crt", ".der"}
+)
+digests = {
+    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in public_files
+}
+manifest = {
+    "schemaVersion": 1,
+    "dnsName": peer_name,
+    "generatedAtUtc": now.isoformat(),
+    "opensslVersion": subprocess.check_output(["openssl", "version"], text=True).strip(),
+    "pythonCryptographyVersion": cryptography.__version__,
+    "issuerCertificateSha256": issuer.fingerprint(hashes.SHA256()).hex(),
+    "leafCertificateSha256": leaf.fingerprint(hashes.SHA256()).hex(),
+    "staleThisUpdateUtc": response.this_update_utc.isoformat(),
+    "staleNextUpdateUtc": response.next_update_utc.isoformat(),
+    "publicFileSha256": digests,
+    "note": "Copy only required public certificates, response DER and leaf.key to an isolated peer; never copy a CA private key.",
+}
+(directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+(directory / "SHA256SUMS").write_text(
+    "".join(f"{digest}  {name}\n" for name, digest in digests.items())
+)
+PY
+  rm -f -- "$fixture_dir/root.key" "$fixture_dir/other-root.key" \
+    "$fixture_dir/other.key"
+  trap - EXIT
+  printf '%s\n' "$fixture_dir"
+  printf 'Private OCSP fixture retained (mode 0700); remove it when done: %s\n' \
+    "$fixture_dir" >&2
+  exit 0
+fi
 
 TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
   cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \

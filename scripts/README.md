@@ -238,6 +238,14 @@ before starting the server.
   digests, deliberately stage the chosen frozen versions, then compare SHA-256
   again. The controller does not overwrite existing probes. It stages only
   its new presence helper after all read-only checks pass.
+- `test-ocsp-stapling.sh --fixtures-only` creates private, short-lived OCSP
+  peer fixtures; `local-vm-lab-ocsp-peer.sh` serves one Direct TLS connection
+  on a loopback or isolated lab address. Run the
+  [OCSP lab matrix](../docs/LOCAL_VM_OCSP_MATRIX.md) only after the soak.
+- `local-alert-drill.py` exposes a loopback synthetic metric and records a
+  temporary Alertmanager webhook drill. Run `self-test` offline first; see the
+  [receiver runbook](../deploy/monitoring/ALERTING_RUNBOOK.md). It does not
+  establish delivery to a real on-call operator.
 - `cluster-wsl.*`, `muc-cluster-wsl.sh`: experimental Redis/multi-process paths.
   `cluster-wsl.sh` accepts `NORTHSTAR_CLUSTER_DATABASE_PORT` (default `5432`)
   for a disposable PostgreSQL fixture on `127.0.0.1`; the server and all shell

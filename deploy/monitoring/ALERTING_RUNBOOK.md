@@ -39,6 +39,57 @@ completed record per deployment and release candidate.
    schedule the next drill. Repeat after receiver, routing, rule or credential
    changes.
 
+### Isolated lab rehearsal
+
+After the VM soak has finished, run the script's `self-test` command on an
+isolated lab host. The script uses loopback only. Create a
+private state directory with `init`, start `serve` on `127.0.0.1:18993`, and
+point a temporary Prometheus scrape job at its `/metrics` endpoint. Use a
+temporary rule named `NorthstarAlertDeliveryDrill` with expression
+`northstar_alert_drill_active == 1`, a short `for` period, and a fixed
+`severity: critical` label. Its `drill_id` comes from the metric. Configure a
+temporary Alertmanager route to POST that alert to
+`http://127.0.0.1:18993/alertmanager` with resolved notifications enabled.
+Keep both services on loopback and use offline, version-pinned binaries; record
+their versions and configuration hashes. Do not replace the deployed rule file
+or interrupt Northstar to create this alert.
+
+```sh
+python3 scripts/local-alert-drill.py self-test
+python3 scripts/local-alert-drill.py init PRIVATE_STATE_DIR
+python3 scripts/local-alert-drill.py serve PRIVATE_STATE_DIR --port 18993
+```
+
+For this throwaway fixture, Prometheus needs a 5-second scrape and evaluation
+interval, a scrape target of `127.0.0.1:18993`, the test rule above, and an
+Alertmanager target of `127.0.0.1:19093`. Alertmanager needs one route grouped
+by `alertname`, `severity` and `drill_id`, with a short group wait, a webhook
+receiver at the URL above, and `send_resolved: true`. Use fresh, private data
+directories and ports; stop both temporary processes after collecting evidence.
+
+Run `python3 scripts/local-alert-drill.py on PRIVATE_STATE_DIR`, verify the
+alert moves from pending to firing in Prometheus, then record Alertmanager
+receipt from its own log or API. Verify the `firing_received` record, have the
+named operator inspect the notification, and run
+`python3 scripts/local-alert-drill.py ack PRIVATE_STATE_DIR --actor OPERATOR`.
+Run `python3 scripts/local-alert-drill.py off PRIVATE_STATE_DIR`, wait for
+`resolved_received`, then save the output of
+`python3 scripts/local-alert-drill.py report PRIVATE_STATE_DIR` and the private
+`events.jsonl`. Capture the UTC time of each step and the first real receiver
+notification separately. The local webhook proves the routing plumbing; it
+does not prove delivery to a pager or a person. Finish the qualification with
+the actual receiver and escalation route from the steps above.
+The report's `fixture_sequence_complete` field checks only local event order;
+it is not evidence that Prometheus or Alertmanager sent those events. Retain
+their logs or API observations with the report.
+
+This synthetic alert changes no service data, so its RTO and RPO are *not
+applicable*. In the separate restore or rollback drill, record the failure
+start and restored service time for RTO, and the latest durable write before
+failure and latest recovered write for RPO. Record both targets before the
+drill, the measured intervals and any unrecovered record IDs. Do not report
+notification latency as recovery time.
+
 ## Evidence record
 
 ```text
@@ -55,6 +106,8 @@ Receiver -> human acknowledgement latency:
 Escalation result:
 Silence actor/reason/expiry result:
 Resolved notification result:
+Service recovery target / measured RTO (or not applicable):
+Data recovery target / measured RPO (or not applicable):
 Privacy/cardinality review:
 Evidence location and approver:
 Open follow-up issues:

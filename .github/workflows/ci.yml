@@ -28,7 +28,7 @@ concurrency:
   # Every push starts CI; a newer head on the same branch supersedes its older
   # full matrix. PRs behave the same way. Manual and scheduled runs stay distinct.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.ref) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
 
 jobs:
   rust-fmt:

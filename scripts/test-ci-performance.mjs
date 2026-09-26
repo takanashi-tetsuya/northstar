@@ -22,27 +22,31 @@ function scheduling(source, github, inputs = {}) {
   return { group, cancel };
 }
 
-test('only superseded PR revisions share cancellable CI groups', () => {
+test('only superseded revisions on the same PR or branch cancel CI', () => {
   const event = (event_name, ref, run_id = 101, number = 3) => ({
     workflow: 'CI', event_name, ref, run_id, event: { pull_request: { number } },
   });
-  for (const [name, ref, cancel] of [
-    ['pull_request', 'refs/pull/3/merge', true],
-    ['push', 'refs/heads/codex/release-contract-baseline', false],
-    ['push', 'refs/heads/codex/fix', false],
-    ['push', 'refs/heads/main', false], ['push', 'refs/heads/dev', false],
-    ['push', 'refs/heads/feature', false], ['push', 'refs/tags/codex/fix', false],
-    ['push', 'refs/tags/v0.2.0', false],
-    ['schedule', 'refs/heads/main', false],
-    ['workflow_dispatch', 'refs/heads/codex/fix', false],
+  for (const [name, ref, cancel, shared] of [
+    ['pull_request', 'refs/pull/3/merge', true, true],
+    ['push', 'refs/heads/codex/release-contract-baseline', true, true],
+    ['push', 'refs/heads/codex/fix', true, true],
+    ['push', 'refs/heads/main', true, true], ['push', 'refs/heads/dev', true, true],
+    ['push', 'refs/heads/feature', true, true], ['push', 'refs/tags/codex/fix', false, true],
+    ['push', 'refs/tags/v0.2.0', false, true],
+    ['schedule', 'refs/heads/main', false, false],
+    ['workflow_dispatch', 'refs/heads/codex/fix', false, false],
   ]) {
     const first = scheduling(workflow, event(name, ref));
     const next = scheduling(workflow, event(name, ref, 102));
     assert.equal(first.cancel, cancel, `${name} ${ref}`);
-    assert.equal(first.group === next.group, cancel, `${name} ${ref}`);
+    assert.equal(first.group === next.group, shared, `${name} ${ref}`);
   }
   assert.notEqual(scheduling(workflow, event('pull_request', '', 101, 3)).group,
     scheduling(workflow, event('pull_request', '', 102, 4)).group);
+  assert.notEqual(scheduling(workflow, event('push', 'refs/heads/dev')).group,
+    scheduling(workflow, event('push', 'refs/heads/main')).group);
+  assert.notEqual(scheduling(workflow, event('push', 'refs/heads/dev')).group,
+    scheduling(workflow, event('pull_request', 'refs/pull/3/merge')).group);
 });
 
 test('every branch push and PR runs source CI; tags retain exact-source release qualification', () => {

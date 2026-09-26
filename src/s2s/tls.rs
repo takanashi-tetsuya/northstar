@@ -48,6 +48,7 @@ struct XmppPkixServerVerifier {
     public_key_pins: Vec<[u8; 32]>,
     dane_policy: Option<DanePolicy>,
     crls: Option<Arc<crate::crl::CrlSet>>,
+    ocsp_staple_required: bool,
 }
 
 impl XmppPkixServerVerifier {
@@ -56,6 +57,7 @@ impl XmppPkixServerVerifier {
         public_key_pins: &[[u8; 32]],
         dane_policy: Option<&DanePolicy>,
         crls: Option<Arc<crate::crl::CrlSet>>,
+        ocsp_staple_required: bool,
     ) -> Self {
         Self {
             roots,
@@ -64,6 +66,7 @@ impl XmppPkixServerVerifier {
             public_key_pins: public_key_pins.to_vec(),
             dane_policy: dane_policy.cloned(),
             crls,
+            ocsp_staple_required,
         }
     }
 
@@ -71,27 +74,37 @@ impl XmppPkixServerVerifier {
         &self,
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
+        ocsp_response: &[u8],
         now: UnixTime,
     ) -> std::result::Result<(), RustlsError> {
         if let Some(crls) = &self.crls {
-            return crls
-                .verify_server_chain(
-                    end_entity,
-                    intermediates,
-                    &self.roots,
-                    now,
-                    self.algorithms.all,
-                )
-                .map_err(|error| RustlsError::General(format!("{error:#}")));
+            crls.verify_server_chain(
+                end_entity,
+                intermediates,
+                &self.roots,
+                now,
+                self.algorithms.all,
+            )
+            .map_err(|error| RustlsError::General(format!("{error:#}")))?;
+        } else {
+            let parsed = ParsedCertificate::try_from(end_entity)?;
+            verify_server_cert_signed_by_trust_anchor(
+                &parsed,
+                &self.roots,
+                intermediates,
+                now,
+                self.algorithms.all,
+            )?;
         }
-        let parsed = ParsedCertificate::try_from(end_entity)?;
-        verify_server_cert_signed_by_trust_anchor(
-            &parsed,
-            &self.roots,
-            intermediates,
-            now,
-            self.algorithms.all,
-        )
+        if self.ocsp_staple_required {
+            let chain = std::iter::once(end_entity.clone())
+                .chain(intermediates.iter().cloned())
+                .collect::<Vec<_>>();
+            crate::ocsp::ValidatedOcspResponse::from_staple(ocsp_response, &chain).map_err(
+                |error| RustlsError::General(format!("outbound OCSP staple: {error:#}")),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -101,7 +114,7 @@ impl ServerCertVerifier for XmppPkixServerVerifier {
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
+        ocsp_response: &[u8],
         now: UnixTime,
     ) -> std::result::Result<ServerCertVerified, RustlsError> {
         if let Some(policy) = &self.dane_policy {
@@ -120,7 +133,7 @@ impl ServerCertVerifier for XmppPkixServerVerifier {
             }
             if matches.contains(&DaneMatch::PkixEndEntity) {
                 return self
-                    .verify_pkix(end_entity, intermediates, now)
+                    .verify_pkix(end_entity, intermediates, ocsp_response, now)
                     .map(|()| ServerCertVerified::assertion());
             }
             return Err(RustlsError::General(format!(
@@ -128,13 +141,13 @@ impl ServerCertVerifier for XmppPkixServerVerifier {
                 policy.owner()
             )));
         }
-        let pkix = self.verify_pkix(end_entity, intermediates, now);
-        if !pin_fallback_permitted(self.crls.is_some()) {
+        let pkix = self.verify_pkix(end_entity, intermediates, ocsp_response, now);
+        if !pin_fallback_permitted(self.crls.is_some() || self.ocsp_staple_required) {
             // An XEP-0487 pin is an additional discovery credential, not an
             // escape hatch from an explicitly configured CA revocation
             // policy. In particular, CertRevoked (and fail-closed CRL
-            // coverage/signature/freshness failures) must never be replaced
-            // by a successful raw SPKI pin comparison.
+            // coverage/signature/freshness failures, or a required OCSP
+            // staple) must never be replaced by an SPKI pin comparison.
             return pkix.map(|()| ServerCertVerified::assertion());
         }
         if pkix.is_ok() || pinned_certificate_valid(end_entity, &self.public_key_pins) {
@@ -167,8 +180,8 @@ impl ServerCertVerifier for XmppPkixServerVerifier {
     }
 }
 
-fn pin_fallback_permitted(crl_policy_configured: bool) -> bool {
-    !crl_policy_configured
+fn pin_fallback_permitted(revocation_policy_configured: bool) -> bool {
+    !revocation_policy_configured
 }
 
 pub(crate) fn s2s_client_config(
@@ -194,6 +207,7 @@ pub(crate) fn s2s_client_config(
             public_key_pins,
             dane_policy,
             material.crls.clone(),
+            state.s2s_ocsp_staple_required(),
         )));
     Ok((Arc::new(config), material.generation))
 }
@@ -435,6 +449,145 @@ fn xmpp_addr_matches(presented: &str, reference: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires OCSP responses generated by scripts/test-ocsp-stapling.sh"]
+    fn generated_outbound_ocsp_profile_checks_exact_status_and_pkix() {
+        use std::{fs, path::PathBuf};
+
+        let fixture = PathBuf::from(std::env::var("TEST_OCSP_FIXTURE_DIR").unwrap());
+        let certificate = |name: &str| {
+            CertificateDer::from(
+                openssl::x509::X509::from_pem(&fs::read(fixture.join(name)).unwrap())
+                    .unwrap()
+                    .to_der()
+                    .unwrap(),
+            )
+        };
+        let leaf = certificate("leaf.crt");
+        let issuer = certificate("root.crt");
+        let mut roots = RootCertStore::empty();
+        roots.add(issuer.clone()).unwrap();
+        let roots = Arc::new(roots);
+        let strict = XmppPkixServerVerifier::new(Arc::clone(&roots), &[], None, None, true);
+        let normal = XmppPkixServerVerifier::new(roots, &[], None, None, false);
+        let name = ServerName::try_from("localhost").unwrap();
+        let now = UnixTime::now();
+        let good = fs::read(fixture.join("good.der")).unwrap();
+        assert!(strict
+            .verify_server_cert(&leaf, std::slice::from_ref(&issuer), &name, &good, now)
+            .is_ok());
+        assert!(normal
+            .verify_server_cert(&leaf, std::slice::from_ref(&issuer), &name, &[], now)
+            .is_ok());
+        assert!(strict
+            .verify_server_cert(&leaf, std::slice::from_ref(&issuer), &name, &[], now)
+            .is_err());
+        assert!(strict
+            .verify_server_cert(&leaf, &[], &name, &good, now)
+            .is_err());
+        let pin = peer_public_key_pin(&leaf).unwrap();
+        let strict_pinned =
+            XmppPkixServerVerifier::new(Arc::new(RootCertStore::empty()), &[pin], None, None, true);
+        assert!(strict_pinned
+            .verify_server_cert(&leaf, std::slice::from_ref(&issuer), &name, &good, now)
+            .is_err());
+        for response in [
+            "too-long.der",
+            "revoked.der",
+            "unknown.der",
+            "wrong-leaf.der",
+            "wrong-issuer.der",
+            "bad-signature.der",
+            "no-next-update.der",
+        ] {
+            let der = fs::read(fixture.join(response)).unwrap();
+            assert!(
+                strict
+                    .verify_server_cert(&leaf, std::slice::from_ref(&issuer), &name, &der, now)
+                    .is_err(),
+                "unexpectedly accepted {response}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OCSP responses generated by scripts/test-ocsp-stapling.sh and loopback sockets"]
+    async fn generated_outbound_ocsp_staple_is_required_on_tls12_and_tls13() {
+        use crate::tls::{ReloadableTlsConfig, TlsPolicyFiles};
+        use std::{fs, path::PathBuf};
+        use tokio_rustls::{
+            rustls::version::{TLS12, TLS13},
+            TlsAcceptor, TlsConnector,
+        };
+
+        let fixture = PathBuf::from(std::env::var("TEST_OCSP_FIXTURE_DIR").unwrap());
+        let issuer = CertificateDer::from(
+            openssl::x509::X509::from_pem(&fs::read(fixture.join("root.crt")).unwrap())
+                .unwrap()
+                .to_der()
+                .unwrap(),
+        );
+        let mut roots = RootCertStore::empty();
+        roots.add(issuer).unwrap();
+        let roots = Arc::new(roots);
+        for version in [&TLS12, &TLS13] {
+            for staple_present in [false, true] {
+                let response_path = fixture.join("good.der");
+                let server = ReloadableTlsConfig::new(
+                    &fixture.join("chain.crt"),
+                    &fixture.join("leaf.key"),
+                    "localhost",
+                    TlsPolicyFiles {
+                        ocsp_response: staple_present.then_some(response_path.as_path()),
+                        ..TlsPolicyFiles::default()
+                    },
+                )
+                .unwrap();
+                let acceptor = TlsAcceptor::from(Arc::clone(&server.current().c2s_starttls));
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let provider =
+                    Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
+                let mut config = ClientConfig::builder_with_provider(provider)
+                    .with_protocol_versions(&[version])
+                    .unwrap()
+                    .with_root_certificates(roots.as_ref().clone())
+                    .with_no_client_auth();
+                config
+                    .dangerous()
+                    .set_certificate_verifier(Arc::new(XmppPkixServerVerifier::new(
+                        Arc::clone(&roots),
+                        &[],
+                        None,
+                        None,
+                        true,
+                    )));
+                let connector = TlsConnector::from(Arc::new(config));
+                let (client, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    tokio::join!(
+                        async {
+                            let socket = tokio::net::TcpStream::connect(address).await.unwrap();
+                            connector
+                                .connect(ServerName::try_from("localhost").unwrap(), socket)
+                                .await
+                        },
+                        async {
+                            let (socket, _) = listener.accept().await.unwrap();
+                            acceptor.accept(socket).await
+                        }
+                    )
+                })
+                .await
+                .expect("outbound OCSP TLS handshake timed out");
+                assert_eq!(
+                    client.is_ok(),
+                    staple_present,
+                    "{version:?} staple={staple_present}: {client:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn configured_crl_policy_cannot_be_bypassed_by_a_pin() {

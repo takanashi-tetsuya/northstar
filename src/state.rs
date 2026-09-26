@@ -2853,6 +2853,10 @@ impl AppState {
         self.config.federation_dane_mode
     }
 
+    pub(crate) fn s2s_ocsp_staple_required(&self) -> bool {
+        self.config.federation_ocsp_staple_required
+    }
+
     pub(crate) fn s2s_dns_override(&self, domain: &str) -> Option<(std::net::SocketAddr, bool)> {
         self.config
             .federation_dns_overrides

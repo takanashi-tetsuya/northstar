@@ -895,7 +895,9 @@ for restore_session_contract in \
   '&& "$anchors_closed" == true ]]; then' \
   'close_db_sessions || cleanup_ok=false' \
   'run_pg_client_without_parent_fds pg_dump' \
-  'run_pg_client_without_parent_fds pg_restore "$replacement_dump"' \
+  'stream_restore_sql "$replacement_dump" "$worker_in"' \
+  'run_pg_client_without_parent_fds pg_restore "$dump"' \
+  'age --decrypt --identity "$rollback_age_identity_file" "$dump"' \
   'primary_worker_command "$grant_check_sql" "$grant_check_output"' \
   'control_session_command "$sql_file" "$output_file"' \
   'target_coordinator_command "$barrier_sql" "$barrier_output"' \
@@ -1239,7 +1241,7 @@ current_preflight_line=$(grep -nE '^  preflight_current_database_recoverability$
    && "$primary_identity_line" -lt "$policy_lock_line" \
    && "$policy_lock_line" -lt "$current_preflight_line" ]] \
   || fail 'restore authority setup must order controller, coordinator lock, primary policy and preflight exactly'
-rollback_dump_line=$(grep -nF 'run_pg_client_without_parent_fds pg_dump' "$restore_runner" \
+rollback_dump_line=$(grep -nE '^[[:space:]]*make_rollback_dump$' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 compensation_worker_line=$(grep -nF 'start_compensation_worker' "$restore_runner" \
   | tail -n 1 | cut -d: -f1)

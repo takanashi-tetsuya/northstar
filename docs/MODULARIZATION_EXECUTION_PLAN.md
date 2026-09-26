@@ -754,16 +754,20 @@ require a fresh `good` response with `nextUpdate`, and reject invalid input
 without replacing the previous TLS snapshot. An expired response blocks new
 TLS handshakes; TLS resumption is disabled for this strict profile. The
 generated fixture exercises valid and rejected responses and TLS 1.2/1.3
-stapling. Outbound S2S staple verification and any online retrieval policy
-remain outside this first profile.
+stapling. A separate opt-in outbound S2S PKIX policy now checks the peer's
+staple against its exact leaf and issuer, fails closed on missing or bad
+responses, and prevents a key pin from bypassing the requirement. DANE-EE
+retains its DNSSEC trust path. The generated fixture covers both TLS versions;
+isolated-VM interoperability and any online retrieval policy remain open.
 
 R3 now retains the official `libomemo.js` 2.0.2 npm tarball, npm registry
 signature and upstream signed tag. Offline checks verify both signatures and
 that the packaged ESM/WASM match the deployed files. The source-to-artifact
 build is still unqualified: compiler versions, build provenance and two
 isolated matching rebuilds are missing; the signed tag and npm metadata
-`gitHead` also differ in the `chai` dev dependency. `hash-wasm` remains in the same
-provenance-only state.
+`gitHead` also differ in the `chai` dev dependency. `hash-wasm` now has a
+separately checked historical npm registry signature and deployed-byte match;
+its source rebuild remains unqualified too.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated
 S2S connection through an exact PostgreSQL occupancy transition. The

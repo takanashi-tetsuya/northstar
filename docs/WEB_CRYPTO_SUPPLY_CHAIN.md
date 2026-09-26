@@ -26,10 +26,12 @@ build; matching the published tarball is not a source rebuild.
 
 The device-transfer KDF additionally vendors the exact official npm tarball and
 deployed UMD artifact for `hash-wasm` 4.12.0, its MIT license, registry
-integrity/SHA-1 metadata, SHA-256 allowlist and CycloneDX 1.6 SBOM under
-`third_party/hash-wasm`. CI verifies those bytes offline. Reproducible source
-builds remain unavailable because the upstream compiler/bundler environment is
-not preserved. No signature attestation is retained.
+integrity/SHA-1 metadata, historical registry signature, SHA-256 allowlist and
+CycloneDX 1.6 SBOM under `third_party/hash-wasm`. CI verifies those bytes and
+the ECDSA signature offline. The old registry key is now expired; npm reports
+publication before expiry, but that date is not a signed timestamp.
+Reproducible source builds remain unavailable because the upstream
+compiler/bundler environment is not preserved.
 
 ## CI states
 

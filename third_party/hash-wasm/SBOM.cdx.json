@@ -29,6 +29,7 @@
       ],
       "properties": [
         { "name": "northstar:npm-integrity", "value": "sha512-+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==" },
+        { "name": "northstar:npm-registry-signature", "value": "third_party/hash-wasm/npm-registry-signature-4.12.0.json" },
         { "name": "northstar:rebuild-status", "value": "provenance-traced-not-reproducible" }
       ]
     },

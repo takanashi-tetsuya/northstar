@@ -13,6 +13,9 @@ Upstream release metadata recorded from the npm registry:
 - tarball: `https://registry.npmjs.org/hash-wasm/-/hash-wasm-4.12.0.tgz`
 - npm SHA-1: `f9f1a9f9121e027a9acbf6db5d59452ace1ef9bb`
 - npm integrity: `sha512-+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==`
+- npm registry signature: `npm-registry-signature-4.12.0.json`
+- registry-reported publication: 2024-11-19 19:01:58 UTC, before the signing
+  key's 2025-01-29 expiry
 - license: MIT, retained in `LICENSE`
 
 Repository allow-list hashes:
@@ -30,6 +33,15 @@ contains the Argon2 WebAssembly bytes inline; no CDN or runtime network fetch
 is used.
 
 This record establishes exact npm provenance and repository drift detection.
+Run `node scripts/check-hash-wasm-provenance.mjs --self-test` from the repository
+root to verify the vendored tarball against the pinned historical npm registry
+ECDSA key and confirm that the deployed Argon2 file matches the tarball. The
+key expired on 2025-01-29. The signature verifies cryptographically, and npm's
+packument reports publication while that key was valid. The reported date is
+unsigned registry metadata, not a trusted signing timestamp; this record does
+not assert current key validity. See npm's
+[registry signature format](https://docs.npmjs.com/about-registry-signatures/).
+
 It does **not** establish a source-reproducible build: the npm package does not
 ship a signed build attestation that proves its TypeScript/C source generated
 the published minified JavaScript and embedded WebAssembly. A later upgrade

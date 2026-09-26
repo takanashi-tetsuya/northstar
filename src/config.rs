@@ -824,6 +824,11 @@ pub struct RawConfig {
     /// authenticated federation, and by XEP-0487 HTTPS discovery.
     pub federation_crl_path: Option<PathBuf>,
 
+    /// Require a fresh, verified OCSP staple for outbound PKIX-authenticated
+    /// S2S handshakes. DANE-EE keeps its independent DNSSEC trust policy.
+    #[serde(default = "default_false")]
+    pub federation_ocsp_staple_required: bool,
+
     /// RFC 7712 DNSSEC/DANE policy: off, opportunistic, or required.
     #[serde(default = "default_federation_dane_mode")]
     pub federation_dane_mode: String,

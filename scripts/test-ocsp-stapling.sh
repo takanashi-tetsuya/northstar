@@ -81,3 +81,11 @@ TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
   cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \
     --locked --offline ocsp_staple_survives_tls12_tls13_and_rejects_bad_reload \
     -- --ignored --nocapture
+TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
+  cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \
+    --locked --offline generated_outbound_ocsp_profile_checks_exact_status_and_pkix \
+    -- --ignored --nocapture
+TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
+  cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \
+    --locked --offline generated_outbound_ocsp_staple_is_required_on_tls12_and_tls13 \
+    -- --ignored --nocapture

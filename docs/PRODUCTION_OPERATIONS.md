@@ -641,7 +641,7 @@ verify the authoritative DNSSEC chain, both XMPP SRV services, every TLSA owner,
 served certificate and IPv4/IPv6 path. Do not enable it on the strength of a
 local resolver cache or a hosts-file test.
 
-### Certificate revocation lists
+### Certificate revocation
 
 `TLS_OCSP_RESPONSE_PATH` optionally staples an operator-supplied DER OCSP
 response for Northstar's own server certificate on C2S and inbound S2S TLS
@@ -657,7 +657,15 @@ TLS reload. For Compose, put the response in `certs/trust/server.ocsp.der` and
 set `TLS_OCSP_RESPONSE_PATH=certs/trust/server.ocsp.der`; that directory is
 mounted read-only in the container.
 Northstar does not fetch OCSP responses or certificate-supplied AIA URLs.
-This setting does not verify a remote S2S peer's OCSP staple.
+This setting does not control remote S2S peers. Set
+`FEDERATION_OCSP_STAPLE_REQUIRED=true` to require a fresh, verified staple for
+outbound PKIX-authenticated S2S connections. Missing, stale, revoked, malformed
+or wrong-leaf responses fail the handshake. The peer must send its leaf issuer
+certificate in the TLS chain; no online issuer or responder lookup occurs.
+This setting also prevents an XEP-0487 key pin from bypassing PKIX revocation.
+DNSSEC-authenticated DANE-EE retains its independent trust policy and does not
+inherit CA revocation checks. The default is `false` for interoperability with
+peers that do not staple.
 
 `FEDERATION_CRL_PATH` applies one bounded local PEM CRL bundle to outbound S2S,
 inbound S2S client-certificate verification and XEP-0487 HTTPS. The separate

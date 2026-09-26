@@ -7,7 +7,7 @@ use openssl::{
     hash::MessageDigest,
     ocsp::{OcspCertId, OcspCertStatus, OcspFlag, OcspResponse, OcspResponseStatus},
     stack::Stack,
-    x509::{store::X509StoreBuilder, verify::X509VerifyFlags, X509},
+    x509::{store::X509StoreBuilder, verify::X509VerifyFlags, X509VerifyResult, X509},
 };
 use std::{fs, path::Path};
 use tokio_rustls::rustls::pki_types::CertificateDer;
@@ -40,14 +40,25 @@ impl ValidatedOcspResponse {
             "OCSP response must be a nonempty regular file within the size limit"
         );
         let der = fs::read(path).context("could not read OCSP response file")?;
-        anyhow::ensure!(
-            !der.is_empty() && der.len() as u64 <= MAX_RESPONSE_BYTES,
-            "OCSP response exceeds its size limit"
-        );
         Self::from_der(der, chain)
     }
 
-    fn from_der(der: Vec<u8>, chain: &[CertificateDer<'static>]) -> Result<Self> {
+    /// Validate a peer's handshake staple against the presented leaf and its
+    /// immediately following issuer. Callers must separately establish PKIX
+    /// trust; this method checks only the response and its exact subject.
+    pub(crate) fn from_staple(der: &[u8], chain: &[CertificateDer<'_>]) -> Result<Self> {
+        anyhow::ensure!(
+            !der.is_empty() && der.len() as u64 <= MAX_RESPONSE_BYTES,
+            "OCSP response must be nonempty and within its size limit"
+        );
+        Self::from_der(der.to_vec(), chain)
+    }
+
+    fn from_der(der: Vec<u8>, chain: &[CertificateDer<'_>]) -> Result<Self> {
+        anyhow::ensure!(
+            !der.is_empty() && der.len() as u64 <= MAX_RESPONSE_BYTES,
+            "OCSP response must be nonempty and within its size limit"
+        );
         anyhow::ensure!(
             chain.len() >= 2,
             "OCSP stapling requires the leaf and its issuing certificate in the configured chain"
@@ -55,6 +66,16 @@ impl ValidatedOcspResponse {
         let leaf = X509::from_der(chain[0].as_ref()).context("invalid OCSP leaf certificate")?;
         let issuer =
             X509::from_der(chain[1].as_ref()).context("invalid OCSP issuer certificate")?;
+        let issuer_public_key = issuer
+            .public_key()
+            .context("invalid OCSP issuer public key")?;
+        anyhow::ensure!(
+            issuer.issued(&leaf) == X509VerifyResult::OK
+                && leaf
+                    .verify(&issuer_public_key)
+                    .context("could not verify OCSP leaf issuer")?,
+            "OCSP issuer certificate did not sign the leaf"
+        );
         let response = OcspResponse::from_der(&der).context("invalid OCSP DER response")?;
         anyhow::ensure!(
             response
@@ -171,6 +192,7 @@ mod tests {
         };
         let chain = vec![certificate("leaf.crt"), certificate("root.crt")];
         let good = ValidatedOcspResponse::from_file(&root.join("good.der"), &chain).unwrap();
+        assert!(ValidatedOcspResponse::from_staple(good.der(), &chain).is_ok());
         assert!(good.fresh_now());
         assert!(!good.fresh_at(good.this_update - Duration::seconds(1)));
         assert!(!good.fresh_at(good.next_update));
@@ -193,5 +215,12 @@ mod tests {
         trailing.push(0);
         assert!(ValidatedOcspResponse::from_der(trailing, &chain).is_err());
         assert!(ValidatedOcspResponse::from_der(good.der().to_vec(), &chain[..1]).is_err());
+        assert!(ValidatedOcspResponse::from_staple(&[], &chain).is_err());
+        assert!(ValidatedOcspResponse::from_staple(&vec![0; 64 * 1024 + 1], &chain).is_err());
+        assert!(ValidatedOcspResponse::from_staple(
+            good.der(),
+            &[chain[1].clone(), chain[0].clone()]
+        )
+        .is_err());
     }
 }

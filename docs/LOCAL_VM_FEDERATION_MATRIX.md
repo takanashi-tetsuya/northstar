@@ -58,6 +58,20 @@ zone serial, wait for the previous TTL to expire, and verify the signed answer
 before sending a fresh marker. A positive usage 1 or 3 record left in the
 same RRset invalidates the negative result.
 
+After each RRset change and TTL expiry, run the read-only
+`scripts/local-vm-lab-dane-proof.py` probe against the isolated DNS server.
+For example, a usage 1 case uses `--anchor-file <lab DNSKEY file>
+--dns-server <lab DNS IPv4> --peer-domain prosody.lab.test --target
+prosody.lab.test --selected-ip <selected lab IP> --port 5269 --service
+_xmpp-server --expect-tlsa usage1 --served-cert <peer leaf PEM>
+--output-dir <new evidence directory>`. Use `wrong-digest`,
+`unsupported-only` or `absent` for the corresponding negative fixture. The
+probe saves raw `delv` transcripts and checks the signed SRV relationship,
+selected address and exact TLSA RRset shape. Its passing result establishes
+only this DNS preflight; separately retain Northstar's resolver decision,
+served certificate proof, outbox and stanza evidence for the case. The probe
+accepts only the isolated lab network and names beneath `lab.test`.
+
 Use a separately signed `fed.lab.test` child zone for negative records and
 new test peer names. Publish its DS in `lab.test`; keep PostgreSQL, Redis and
 MinIO names outside the changed child zone. Give test virtual hosts matching

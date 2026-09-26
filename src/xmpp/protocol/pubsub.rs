@@ -1,17 +1,18 @@
 use super::{Action, ProtocolSession};
 use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::pubsub::{
-    subscription_event_children, CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome,
-    PubSubConfigOutcome, PubSubConfigureNodeCommand, PubSubConfigureNodeWrite,
-    PubSubCreateNodeCommand, PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite,
-    PubSubItem, PubSubListPageQuery, PubSubNode, PubSubNodeConfig, PubSubPublishCommand,
-    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite,
-    PubSubRetractCommand, PubSubRetractOutcome, PubSubRetractWrite, PubSubRootDiscoQuery,
-    PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand,
-    PubSubSetSubscriptionsWrite, PubSubSubscribeCommand, PubSubSubscribeOutcome,
-    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeCommand,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
+    subscription_event_children, CollectionUpdateOutcome, CreateNodeOutcome, LeafDiscoItems,
+    OwnerMutationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
+    PubSubConfigureNodeWrite, PubSubCreateNodeCommand, PubSubCreateNodeWrite,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubListPageQuery, PubSubNode,
+    PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
+    PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
+    PubSubRetractWrite, PubSubRootDiscoQuery, PubSubSetAffiliationsCommand,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
+    PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
+    PubSubSubscriptionOptions, PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
@@ -211,10 +212,10 @@ pub(crate) async fn federated_disco_items(
             let Some(node) = state.pubsub_service().get_node(node_name).await? else {
                 return missing_node_reply(state, node_name).await;
             };
-            if !can_retrieve(state, &node, &requester).await? {
-                return Ok(PubSubReply::Error("forbidden"));
-            }
             if node.node_type == "collection" {
+                if !can_retrieve(state, &node, &requester).await? {
+                    return Ok(PubSubReply::Error("forbidden"));
+                }
                 for child in state.pubsub_service().collection_children(node.id).await? {
                     // XEP-0248 defines collection visibility using the
                     // collection's access model, not each child's model.
@@ -224,14 +225,29 @@ pub(crate) async fn federated_disco_items(
                         published_item: false,
                     });
                 }
-            } else {
-                for item_id in state.pubsub_service().item_ids_for_disco(node.id).await? {
+            } else if node.node_type == "leaf" {
+                let item_ids = match state
+                    .pubsub_service()
+                    .leaf_disco_items(node_name, &requester)
+                    .await?
+                {
+                    LeafDiscoItems::Items(item_ids) => item_ids,
+                    LeafDiscoItems::NotFound => {
+                        return missing_node_reply(state, node_name).await;
+                    }
+                    LeafDiscoItems::NotLeaf | LeafDiscoItems::Forbidden => {
+                        return Ok(PubSubReply::Error("forbidden"));
+                    }
+                };
+                for item_id in item_ids {
                     visible.push(DiscoItem {
                         node: item_id,
                         title: None,
                         published_item: true,
                     });
                 }
+            } else {
+                return Ok(PubSubReply::Error("forbidden"));
             }
         }
     }

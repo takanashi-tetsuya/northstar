@@ -83,16 +83,18 @@ pub trait PubSubRootDiscoveryQueryRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<PubSubRootDiscoPage>> + Send;
 }
 pub trait PubSubItemQueryRepository: Send + Sync {
+    /// Node authority and retained item IDs from one read-only statement.
+    fn leaf_disco_snapshot(
+        &self,
+        node: &str,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PubSubLeafDiscoSnapshot>>> + Send;
     fn get_items(
         &self,
         node_id: Uuid,
         item_ids: &[String],
         limit: i64,
     ) -> impl std::future::Future<Output = Result<Vec<PubSubItem>>> + Send;
-    fn item_ids_for_disco(
-        &self,
-        node_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
     fn collection_visible_items(
         &self,
         collection_id: Uuid,
@@ -105,6 +107,15 @@ pub trait PubSubItemQueryRepository: Send + Sync {
         node: &PubSubNode,
         requester: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PubSubLeafDiscoSnapshot {
+    pub node_type: String,
+    pub access_model: String,
+    pub affiliation: Option<String>,
+    pub subscribed: bool,
+    pub item_ids: Vec<String>,
 }
 pub trait PubSubItemMutationRepository: Send + Sync {
     fn purge_node_as_owner_with_outbox(

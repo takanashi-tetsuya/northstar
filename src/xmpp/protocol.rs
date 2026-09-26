@@ -460,7 +460,7 @@ pub struct ProtocolSession {
     transport: ClientTransport,
     stream_limits: Option<StreamLimits>,
     pub(crate) peer_ip: IpAddr,
-    pub(crate) connected_at: std::time::Instant,
+    connected_at: std::time::Instant,
     pub(crate) last_activity: Arc<std::sync::RwLock<std::time::Instant>>,
     /// Whether this transport has a currently open XML stream. STARTTLS and
     /// legacy SASL both invalidate it and require a fresh opening tag before
@@ -571,6 +571,17 @@ impl ProtocolSession {
     /// authenticated account or a mutable authentication capability.
     pub(crate) fn is_authenticated(&self) -> bool {
         self.authenticated.is_some()
+    }
+
+    /// The authentication clock belongs to the session. Transports keep
+    /// their own polling cadence and decide how to close an expired stream.
+    pub(crate) fn unauthenticated_timed_out(&self, now: std::time::Instant) -> bool {
+        unauthenticated_timed_out_for(
+            self.is_authenticated(),
+            self.connected_at,
+            self.state.unauthenticated_timeout(),
+            now,
+        )
     }
 
     pub(crate) fn uses_websocket_framing(&self) -> bool {
@@ -1726,6 +1737,15 @@ impl ProtocolSession {
     }
 }
 
+fn unauthenticated_timed_out_for(
+    authenticated: bool,
+    connected_at: std::time::Instant,
+    timeout: std::time::Duration,
+    now: std::time::Instant,
+) -> bool {
+    !authenticated && now.saturating_duration_since(connected_at) >= timeout
+}
+
 fn resource_bind_deadline_for(
     authenticated: bool,
     bound: bool,
@@ -2057,8 +2077,9 @@ mod legacy_sasl_wire_tests {
     use super::{
         begin_owned_session_cleanup, claim_session_cleanup, client_stream_limits_feature,
         drop_requires_local_quiesce, durable_delivery_managed_by_sm, legacy_sasl_auth,
-        legacy_sasl_payload, resource_bind_deadline_for, Action, PostActionSupervisor,
-        PostActionTelemetry, ResumePayload, SessionCleanupOwnership, StreamLimits,
+        legacy_sasl_payload, resource_bind_deadline_for, unauthenticated_timed_out_for, Action,
+        PostActionSupervisor, PostActionTelemetry, ResumePayload, SessionCleanupOwnership,
+        StreamLimits,
     };
     use roxmltree::Document;
 
@@ -2236,6 +2257,42 @@ mod legacy_sasl_wire_tests {
             None
         );
         assert_eq!(resource_bind_deadline_for(true, false, None, 30), None);
+    }
+
+    #[test]
+    fn unauthenticated_deadline_is_inclusive_and_stops_after_authentication() {
+        let connected_at = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(30);
+        assert!(!unauthenticated_timed_out_for(
+            false,
+            connected_at,
+            timeout,
+            connected_at + timeout - std::time::Duration::from_nanos(1),
+        ));
+        assert!(unauthenticated_timed_out_for(
+            false,
+            connected_at,
+            timeout,
+            connected_at + timeout,
+        ));
+        assert!(!unauthenticated_timed_out_for(
+            true,
+            connected_at,
+            timeout,
+            connected_at + timeout + std::time::Duration::from_secs(1),
+        ));
+        assert!(!unauthenticated_timed_out_for(
+            false,
+            connected_at,
+            timeout,
+            connected_at - std::time::Duration::from_secs(1),
+        ));
+        assert!(unauthenticated_timed_out_for(
+            false,
+            connected_at,
+            std::time::Duration::from_secs(5),
+            connected_at + std::time::Duration::from_secs(5),
+        ));
     }
 
     #[test]

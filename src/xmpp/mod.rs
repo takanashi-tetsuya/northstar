@@ -480,9 +480,7 @@ where
                 return Ok(DriveOutcome::Done);
             }
             _ = authentication_watch.tick(), if !session.is_authenticated() => {
-                if session.connected_at.elapsed()
-                    >= session.state.unauthenticated_timeout()
-                {
+                if session.unauthenticated_timed_out(std::time::Instant::now()) {
                     tracing::debug!(peer_ip = %session.peer_ip, "closed unauthenticated XMPP connection after deadline");
                     return Ok(DriveOutcome::Done);
                 }
@@ -1021,9 +1019,7 @@ pub async fn websocket_connection(
                 break;
             }
             _ = authentication_watch.tick(), if !session.is_authenticated() => {
-                if session.connected_at.elapsed()
-                    >= session.state.unauthenticated_timeout()
-                {
+                if session.unauthenticated_timed_out(std::time::Instant::now()) {
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
                     session.forbid_sm_resume();
                     let opening = !session.is_stream_open();

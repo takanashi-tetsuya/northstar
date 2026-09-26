@@ -473,6 +473,7 @@ jobs:
           python3 scripts/test-local-vm-lab-redis-failover-preflight.py
           python3 scripts/local-vm-lab-muc-mam.py --self-test
           python3 scripts/local-vm-lab-soak.py --self-test
+          python3 scripts/test-local-vm-lab-upload.py
           python3 scripts/local-vm-lab-active-presence.py --self-test
           python3 scripts/local-vm-lab-active-load.py --self-test
           python3 scripts/local-vm-lab-dane-fixtures.py --self-test

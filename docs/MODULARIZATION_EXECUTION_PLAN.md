@@ -286,6 +286,10 @@ Root discovery and authorized item/disco RSM page selection now project
 through the PubSub application layer. SQL transactions, audience snapshots
 and the outbox remain in the PostgreSQL adapter; the wider command/query
 boundary is still incremental.
+Leaf disco#items now reads node configuration, requester affiliation and
+subscription, and retained item IDs in one read-only PostgreSQL statement.
+The service applies the existing access rule to that snapshot before the
+protocol builds a response. Collection discovery keeps its existing path.
 Archive/MAM now resolves all referenced form and RSM IDs in one visible query
 within the page's repeatable-read snapshot. Archive core validates those
 points and plans the same count and page bounds; missing or invisible IDs
@@ -321,6 +325,9 @@ fences non-SM C2S and MIX delivery before the transport writes, and confirms
 or acknowledges only after a successful write. BOSH retains its separate
 response fence. Broad session capabilities and transport-specific
 lifetime/cancellation paths still need separation.
+The session now owns the unauthenticated deadline decision. TCP, WebSocket and
+BOSH keep their existing timer cadence and close behavior while consulting the
+same session predicate.
 
 ### Phase E — Infrastructure ports
 

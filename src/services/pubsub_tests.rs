@@ -10,16 +10,20 @@ use std::time::Duration;
 struct QueryOnlyItems;
 
 impl PubSubItemQueryRepository for QueryOnlyItems {
+    async fn leaf_disco_snapshot(
+        &self,
+        _node: &str,
+        _requester: &str,
+    ) -> Result<Option<PubSubLeafDiscoSnapshot>> {
+        Ok(None)
+    }
+
     async fn get_items(
         &self,
         _node_id: Uuid,
         _item_ids: &[String],
         _limit: i64,
     ) -> Result<Vec<PubSubItem>> {
-        Ok(Vec::new())
-    }
-
-    async fn item_ids_for_disco(&self, _node_id: Uuid) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
 

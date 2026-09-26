@@ -467,7 +467,6 @@ impl BoshActor {
     async fn run_loop(&mut self) {
         let disconnect = self.protocol.disconnect.clone();
         let backpressure_disconnect = self.protocol.outbound.backpressure_disconnect();
-        let state = Arc::clone(&self.protocol.state);
         let mut maintenance = tokio::time::interval(Duration::from_secs(1));
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut keep_running = true;
@@ -598,10 +597,7 @@ impl BoshActor {
                     keep_running = false;
                 }
                 _ = maintenance.tick() => {
-                    if !self.protocol.is_authenticated()
-                        && self.protocol.connected_at.elapsed()
-                            >= state.unauthenticated_timeout()
-                    {
+                    if self.protocol.unauthenticated_timed_out(Instant::now()) {
                         self.terminate_waiters("policy-violation");
                         keep_running = false;
                     } else if self.protocol.has_sm_session()

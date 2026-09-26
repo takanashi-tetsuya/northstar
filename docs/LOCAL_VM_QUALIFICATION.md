@@ -453,7 +453,7 @@ The [post-soak Redis failover drill](LOCAL_VM_REDIS_FAILOVER.md) records the
 additional replica, Sentinel and endpoint work needed to test a real primary
 promotion. No promotion has been run in this lab yet.
 
-## Release-profile mixed soak in progress
+## Release-profile mixed soak
 
 A 24-hour low-rate run started at 2026-09-26 14:57 UTC on the frozen
 `3dc7f9669e0af9f4ef23f0ecdf6d4e9e099a58f2` source. The release-profile
@@ -462,13 +462,21 @@ binary SHA-256 is
 on both `ns-a` and `ns-b`; this is a separate artifact from the earlier CI
 `runtime-test` binary
 `c172f20e9b8e6b73f05c0dc788e99da66c475c69a9b88a194d8480186af2436b`.
-The host's `northstar-lab-soak-release-3dc7.service` writes private evidence
+The host's `northstar-lab-soak-release-3dc7.service` wrote private evidence
 to `/tmp/northstar-lab-evidence-5865007/release-soak-3dc7-20260926T1451Z/`.
-Its verifier reported 73 passing observations through 16:10 UTC, including
-cross-node delivery, periodic Prosody/ejabberd traffic, room MAM and upload
-checks. This is an in-progress observation, not a passed 24-hour result.
-Only after the full duration and successful service exit may the finalizer
-seal and verify the raw evidence. This low-rate profile does not contain
-OMEMO, Push or sustained active load and cannot close `EXT-CAPACITY`. The
-latest `dev` changes also require a new frozen binary and affected-path
-retests; this run remains evidence only for its recorded source and binary.
+Observations 0–359 passed. At iteration 360, 20:57 UTC, the upload slot
+probe received `wait/resource-constraint` and the run stopped; the 24-hour
+gate remains open. Cross-node delivery, both federation peers and room MAM
+had passed in that observation. The database held 11 retained files (440
+bytes), no pending jobs and 11 cleanup obligations; per-user and global
+limits were far higher, and MinIO and disk had free capacity. A transient
+PostgreSQL `NOWAIT` lock conflict is plausible but the lock holder was not
+captured. The server's retryable response was valid; the lab probe treated
+its first response as fatal. The raw failed log is retained, and the probe
+now retries only that response within a 20-second, three-attempt bound. A
+fresh, separately recorded run is required.
+
+This low-rate profile does not contain OMEMO, Push or sustained active load
+and cannot close `EXT-CAPACITY`. The latest `dev` changes also require a new
+frozen binary and affected-path retests; the failed run is evidence only for
+its recorded source and binary.

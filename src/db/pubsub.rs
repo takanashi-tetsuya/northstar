@@ -3122,21 +3122,62 @@ pub async fn get_items(
         .collect())
 }
 
-/// Return the complete retained item identity sequence for disco#items.
-/// Node configuration caps persistent history at 1,000 items, so this does
-/// not need a hidden server-side truncation. Payloads are deliberately absent
-/// from the projection to keep discovery from becoming a data disclosure
-/// path.
-pub async fn item_ids_for_disco(pool: &PgPool, node_id: Uuid) -> Result<Vec<String>> {
-    sqlx::query_scalar(
-        "SELECT item_id FROM pubsub_items
-         WHERE node_id = $1
-         ORDER BY created_at DESC, id DESC",
+/// Keep leaf discovery authority and item IDs on one PostgreSQL statement
+/// snapshot. A configuration or affiliation change cannot split the access
+/// decision from the visible item list.
+pub struct LeafDiscoSnapshot {
+    pub node_type: String,
+    pub access_model: String,
+    pub affiliation: Option<String>,
+    pub subscribed: bool,
+    pub item_ids: Vec<String>,
+}
+
+pub async fn leaf_disco_snapshot(
+    pool: &PgPool,
+    node: &str,
+    requester: &str,
+) -> Result<Option<LeafDiscoSnapshot>> {
+    let requester = crate::jid::canonical_bare_key(requester)?;
+    // The SQL gate skips item aggregation for denied requests. The service
+    // still applies can_retrieve_pure to these same facts before returning IDs.
+    let row = sqlx::query(
+        "WITH authority AS MATERIALIZED (
+             SELECT n.id,n.node_type,n.access_model,
+                (SELECT a.affiliation FROM pubsub_affiliations a
+                  WHERE a.node_id=n.id AND a.jid=$2) AS affiliation,
+                EXISTS(SELECT 1 FROM pubsub_subscriptions s
+                        WHERE s.node_id=n.id
+                          AND split_part(s.jid, '/', 1)=$2
+                          AND s.state='subscribed'
+                          AND (s.expire IS NULL OR s.expire>statement_timestamp())) AS subscribed
+               FROM pubsub_nodes n WHERE n.node=$1
+         )
+         SELECT authority.node_type,authority.access_model,
+                authority.affiliation,authority.subscribed,
+                CASE WHEN authority.node_type='leaf'
+                      AND authority.affiliation IS DISTINCT FROM 'outcast'
+                      AND (authority.access_model='open'
+                           OR authority.affiliation IN ('owner','publisher','member')
+                           OR authority.subscribed)
+                     THEN ARRAY(
+                    SELECT i.item_id FROM pubsub_items i
+                     WHERE i.node_id=authority.id
+                     ORDER BY i.created_at DESC,i.id DESC
+                ) ELSE ARRAY[]::TEXT[] END AS item_ids
+           FROM authority",
     )
-    .bind(node_id)
-    .fetch_all(pool)
-    .await
-    .map_err(Into::into)
+    .bind(node)
+    .bind(requester)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| LeafDiscoSnapshot {
+        node_type: row.get("node_type"),
+        access_model: row.get("access_model"),
+        affiliation: row.get("affiliation"),
+        subscribed: row.get("subscribed"),
+        item_ids: row.get("item_ids"),
+    }))
 }
 
 #[cfg(test)]

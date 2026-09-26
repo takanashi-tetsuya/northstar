@@ -1486,6 +1486,22 @@ impl PubSubRootDiscoveryQueryRepository for PostgresPubSubRepository {
     }
 }
 impl PubSubItemQueryRepository for PostgresPubSubRepository {
+    async fn leaf_disco_snapshot(
+        &self,
+        node: &str,
+        requester: &str,
+    ) -> Result<Option<PubSubLeafDiscoSnapshot>> {
+        let snapshot = db::leaf_disco_snapshot(&self.pool, node, requester)
+            .await
+            .map_err(map_database_busy)?;
+        Ok(snapshot.map(|snapshot| PubSubLeafDiscoSnapshot {
+            node_type: snapshot.node_type,
+            access_model: snapshot.access_model,
+            affiliation: snapshot.affiliation,
+            subscribed: snapshot.subscribed,
+            item_ids: snapshot.item_ids,
+        }))
+    }
     async fn get_items(
         &self,
         node_id: Uuid,
@@ -1500,10 +1516,6 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
                 .collect())
         }
         .await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn item_ids_for_disco(&self, node_id: Uuid) -> Result<Vec<String>> {
-        let outcome: Result<_> = async { db::item_ids_for_disco(&self.pool, node_id).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn collection_visible_items(

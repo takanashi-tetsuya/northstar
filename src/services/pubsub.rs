@@ -23,7 +23,7 @@ pub(crate) use northstar_pubsub_application::{
     PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand,
     PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult, PubSubConfigureNodeCommand,
     PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubListPageQuery,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
     PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand,
     PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,
@@ -1434,6 +1434,33 @@ impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
 }
 
 impl<R: PubSubItemQueryRepository> PubSubService<R> {
+    pub(crate) async fn leaf_disco_items(
+        &self,
+        node: &str,
+        requester: &str,
+    ) -> Result<LeafDiscoItems> {
+        let Some(snapshot) = self.repository.leaf_disco_snapshot(node, requester).await? else {
+            return Ok(LeafDiscoItems::NotFound);
+        };
+        if snapshot.node_type != "leaf" {
+            return Ok(LeafDiscoItems::NotLeaf);
+        }
+        let access_model = snapshot
+            .access_model
+            .parse::<northstar_xep_0060::AccessModel>()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
+        let affiliation = snapshot
+            .affiliation
+            .as_deref()
+            .map(str::parse::<northstar_xep_0060::Affiliation>)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
+        if !northstar_xep_0060::can_retrieve_pure(access_model, affiliation, snapshot.subscribed) {
+            return Ok(LeafDiscoItems::Forbidden);
+        }
+        Ok(LeafDiscoItems::Items(snapshot.item_ids))
+    }
+
     pub(crate) async fn get_items(
         &self,
         node_id: Uuid,
@@ -1441,10 +1468,6 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
         limit: i64,
     ) -> Result<Vec<PubSubItem>> {
         self.repository.get_items(node_id, item_ids, limit).await
-    }
-
-    pub(crate) async fn item_ids_for_disco(&self, node_id: Uuid) -> Result<Vec<String>> {
-        self.repository.item_ids_for_disco(node_id).await
     }
 
     pub(crate) async fn collection_visible_items(
@@ -1462,6 +1485,14 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
     pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         self.repository.can_publish(node, requester).await
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LeafDiscoItems {
+    NotFound,
+    NotLeaf,
+    Forbidden,
+    Items(Vec<String>),
 }
 
 #[derive(Clone)]

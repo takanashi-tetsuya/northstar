@@ -1,5 +1,6 @@
 use super::*;
 use crate::db;
+use crate::services::pubsub::{LeafDiscoItems, PubSubService};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -936,6 +937,308 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn leaf_disco_uses_read_only_snapshot_and_live_subscription_scope() {
+    let (url, setup_pool) = integration_pool(4).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let node_name = format!("leaf-disco-{suffix}");
+    let owner = format!("owner-{suffix}@example.test");
+    let subscriber = format!("reader-{suffix}@example.test");
+    let config = PubSubNodeConfig {
+        access_model: "whitelist".to_owned(),
+        ..Default::default()
+    };
+    let node_id = match create_node(&setup_pool, &node_name, &owner, &config, 10)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(id) => id,
+        other => panic!("unexpected node create outcome: {other:?}"),
+    };
+    for (item_id, age) in [("older", 2_i64), ("newer", 1_i64)] {
+        sqlx::query(
+            "INSERT INTO pubsub_items(id,node_id,item_id,publisher_jid,xml_payload,created_at)
+             VALUES($1,$2,$3,$4,$5,NOW()-$6::BIGINT*INTERVAL '1 second')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(node_id)
+        .bind(item_id)
+        .bind(&owner)
+        .bind(format!("<item id='{item_id}'/>"))
+        .bind(age)
+        .execute(&setup_pool)
+        .await
+        .unwrap();
+    }
+
+    let read_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let service = PubSubService::new(read_pool, "example.test");
+    assert_eq!(
+        service.leaf_disco_items(&node_name, &owner).await.unwrap(),
+        LeafDiscoItems::Items(vec!["newer".to_owned(), "older".to_owned()])
+    );
+    assert_eq!(
+        service
+            .leaf_disco_items(&node_name, &subscriber)
+            .await
+            .unwrap(),
+        LeafDiscoItems::Forbidden
+    );
+
+    let subscriber_resource = format!("{subscriber}/Phone");
+    set_subscription(&setup_pool, node_id, &subscriber_resource, "subscribed")
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .leaf_disco_items(&node_name, &format!("{subscriber}/Tablet"))
+            .await
+            .unwrap(),
+        LeafDiscoItems::Items(vec!["newer".to_owned(), "older".to_owned()])
+    );
+    sqlx::query(
+        "UPDATE pubsub_subscriptions SET expire=NOW()-INTERVAL '1 second'
+         WHERE node_id=$1 AND jid=$2",
+    )
+    .bind(node_id)
+    .bind(&subscriber_resource)
+    .execute(&setup_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service
+            .leaf_disco_items(&node_name, &subscriber)
+            .await
+            .unwrap(),
+        LeafDiscoItems::Forbidden
+    );
+    sqlx::query("UPDATE pubsub_subscriptions SET expire=NULL WHERE node_id=$1 AND jid=$2")
+        .bind(node_id)
+        .bind(&subscriber_resource)
+        .execute(&setup_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO pubsub_affiliations(node_id,jid,affiliation)
+         VALUES($1,$2,'outcast')",
+    )
+    .bind(node_id)
+    .bind(&subscriber)
+    .execute(&setup_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        service
+            .leaf_disco_items(&node_name, &subscriber)
+            .await
+            .unwrap(),
+        LeafDiscoItems::Forbidden
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn leaf_disco_sql_gate_matches_pure_retrieval_policy() {
+    let (_, pool) = integration_pool(4).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let node_name = format!("leaf-disco-policy-{suffix}");
+    let owner = format!("owner-{suffix}@example.test");
+    let requester = format!("reader-{suffix}@example.test");
+    let subscription_jid = format!("{requester}/Phone");
+    let node = create_default_test_node(&pool, &node_name, &owner).await;
+    sqlx::query(
+        "INSERT INTO pubsub_items(id,node_id,item_id,publisher_jid,xml_payload)
+         VALUES($1,$2,'sentinel',$3,'<item id=\"sentinel\"/>')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(node.id)
+    .bind(&owner)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let service = PubSubService::new(pool.clone(), "example.test");
+
+    for access in ["open", "whitelist", "authorize"] {
+        sqlx::query("UPDATE pubsub_nodes SET access_model=$2 WHERE id=$1")
+            .bind(node.id)
+            .bind(access)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for affiliation in [
+            None,
+            Some("owner"),
+            Some("publisher"),
+            Some("member"),
+            Some("publish-only"),
+            Some("outcast"),
+        ] {
+            if let Some(affiliation) = affiliation {
+                sqlx::query(
+                    "INSERT INTO pubsub_affiliations(node_id,jid,affiliation)
+                     VALUES($1,$2,$3)
+                     ON CONFLICT(node_id,jid) DO UPDATE SET affiliation=EXCLUDED.affiliation",
+                )
+                .bind(node.id)
+                .bind(&requester)
+                .bind(affiliation)
+                .execute(&pool)
+                .await
+                .unwrap();
+            } else {
+                sqlx::query("DELETE FROM pubsub_affiliations WHERE node_id=$1 AND jid=$2")
+                    .bind(node.id)
+                    .bind(&requester)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            for subscription in ["absent", "active", "expired"] {
+                if subscription == "absent" {
+                    sqlx::query("DELETE FROM pubsub_subscriptions WHERE node_id=$1 AND jid=$2")
+                        .bind(node.id)
+                        .bind(&subscription_jid)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                } else {
+                    sqlx::query(
+                        "INSERT INTO pubsub_subscriptions(node_id,jid,state,subid,expire)
+                         VALUES($1,$2,'subscribed',$3,
+                                CASE WHEN $4 THEN NOW()-INTERVAL '1 second' ELSE NULL END)
+                         ON CONFLICT(node_id,jid) DO UPDATE SET
+                             state='subscribed',expire=EXCLUDED.expire",
+                    )
+                    .bind(node.id)
+                    .bind(&subscription_jid)
+                    .bind(Uuid::new_v4().to_string())
+                    .bind(subscription == "expired")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                }
+                let snapshot =
+                    leaf_disco_snapshot(&pool, &node_name, &format!("{requester}/Tablet"))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let expected = northstar_xep_0060::can_retrieve_pure(
+                    access.parse().unwrap(),
+                    affiliation.map(|value| value.parse().unwrap()),
+                    subscription == "active",
+                );
+                assert_eq!(
+                    snapshot.affiliation.as_deref(),
+                    affiliation,
+                    "affiliation facts changed for {access}/{affiliation:?}/{subscription}"
+                );
+                assert_eq!(
+                    snapshot.subscribed,
+                    subscription == "active",
+                    "subscription facts changed for {access}/{affiliation:?}/{subscription}"
+                );
+                assert_eq!(
+                    snapshot.item_ids == vec!["sentinel".to_owned()],
+                    expected,
+                    "SQL item gate disagrees with pure policy for {access}/{affiliation:?}/{subscription}"
+                );
+                assert_eq!(
+                    service
+                        .leaf_disco_items(&node_name, &requester)
+                        .await
+                        .unwrap(),
+                    if expected {
+                        LeafDiscoItems::Items(vec!["sentinel".to_owned()])
+                    } else {
+                        LeafDiscoItems::Forbidden
+                    },
+                    "service policy disagrees for {access}/{affiliation:?}/{subscription}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn leaf_disco_rechecks_configuration_after_stale_node_lookup() {
+    let (_, pool) = integration_pool(4).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let node_name = format!("leaf-config-race-{suffix}");
+    let owner = format!("owner-{suffix}@example.test");
+    let outsider = format!("outsider-{suffix}@example.test");
+    let stale = create_default_test_node(&pool, &node_name, &owner).await;
+    let service = PubSubService::new(pool.clone(), "example.test");
+    assert_eq!(
+        service
+            .leaf_disco_items(&node_name, &outsider)
+            .await
+            .unwrap(),
+        LeafDiscoItems::Items(Vec::new())
+    );
+
+    // The initial protocol lookup can precede a committed configuration
+    // change. The leaf query must use its own current statement snapshot.
+    let mut restricted = stale.config();
+    restricted.access_model = "whitelist".to_owned();
+    assert_eq!(
+        update_node_config_and_graph_with_outbox(
+            &pool,
+            &stale,
+            &owner,
+            &stale.config(),
+            &restricted,
+            &NoopMutationOutboxRenderer,
+        )
+        .await
+        .unwrap(),
+        PubSubConfigOutcome::Updated
+    );
+    assert_eq!(stale.node_type, "leaf");
+    assert_eq!(stale.access_model, "open");
+    assert_eq!(
+        service
+            .leaf_disco_items(&node_name, &outsider)
+            .await
+            .unwrap(),
+        LeafDiscoItems::Forbidden
+    );
+
+    let current = get_node_by_id(&pool, stale.id).await.unwrap().unwrap();
+    let mut collection = current.config();
+    collection.node_type = "collection".to_owned();
+    assert_eq!(
+        update_node_config_and_graph_with_outbox(
+            &pool,
+            &current,
+            &owner,
+            &current.config(),
+            &collection,
+            &NoopMutationOutboxRenderer,
+        )
+        .await
+        .unwrap(),
+        PubSubConfigOutcome::Updated
+    );
+    assert_eq!(
+        service.leaf_disco_items(&node_name, &owner).await.unwrap(),
+        LeafDiscoItems::NotLeaf
+    );
 }
 
 #[tokio::test]
@@ -2999,7 +3302,11 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
     let retained = get_items(&pool, leaf_id, &[], 10).await.unwrap();
     assert_eq!(retained.len(), 2);
     assert!(retained.iter().all(|item| item.item_id != "claimed"));
-    let discovered = item_ids_for_disco(&pool, leaf_id).await.unwrap();
+    let discovered = leaf_disco_snapshot(&pool, &leaf.node, &owner)
+        .await
+        .unwrap()
+        .unwrap()
+        .item_ids;
     assert_eq!(discovered.len(), 2);
     assert_eq!(
         retained

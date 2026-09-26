@@ -2485,7 +2485,7 @@ class XmppWebSocket:
         features = "".join(feature_frames)
         check("urn:xmpp:sasl:2" in features, "WebSocket did not advertise SASL2")
         encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
-        device_id = "ae2ac358-8626-43f8-94ce-c6a72d7fcbfa"
+        device_id = self.device_id or "ae2ac358-8626-43f8-94ce-c6a72d7fcbfa"
         resume_xml = ""
         if resume:
             previous_id, handled = resume
@@ -2603,6 +2603,79 @@ def bosh_sasl2_bind_conformance() -> None:
         f"rid='{rid + 2}' sid='{sid}' type='terminate'/>"
     )
     check(b"type='terminate'" in terminated, f"BOSH did not terminate cleanly: {terminated!r}")
+
+
+def bosh_sm_cross_transport_resume_conformance() -> None:
+    device_id = "88cb8cb4-206d-43e4-829a-5574a96a8f1b"
+    original = XmppWebSocket(
+        ALICE,
+        PASSWORD,
+        "Sasl2ToBosh",
+        sasl2=True,
+        initial_presence=False,
+        device_id=device_id,
+    )
+    resume_id = original.sasl2_resume_id
+    check(resume_id is not None, "WebSocket session was not resumable by BOSH")
+    original.send(
+        "<iq xmlns='jabber:client' type='get' id='sm-to-bosh-ping'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+    )
+    response, _ = original.receive_until("sm-to-bosh-ping")
+    check("type='result'" in response, f"source IQ failed: {response}")
+    original.send("<r xmlns='urn:xmpp:sm:3'/>")
+    acknowledgement, _ = original.receive_until("<a ")
+    check("h='1'" in acknowledgement, f"source SM count changed: {acknowledgement}")
+    original.abort()
+    time.sleep(0.25)
+
+    rid = int.from_bytes(os.urandom(6), "big")
+    created = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        "xmlns:xmpp='urn:xmpp:xbosh' "
+        f"rid='{rid}' to='{DOMAIN}' wait='0' hold='0' ver='1.6' xmpp:version='1.0'/>"
+    )
+    sid_match = re.search(rb"\bsid='([^']+)'", created)
+    check(sid_match is not None, f"BOSH resumption session has no SID: {created!r}")
+    sid = sid_match.group(1).decode()
+    encoded = base64.b64encode(f"\0{ALICE}\0{PASSWORD}".encode()).decode()
+    resumed = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        f"rid='{rid + 1}' sid='{sid}'>"
+        "<authenticate xmlns='urn:xmpp:sasl:2' mechanism='PLAIN'>"
+        f"<initial-response>{encoded}</initial-response>"
+        f"<user-agent id='{device_id}'>"
+        "<software>Northstar integration</software></user-agent>"
+        f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='0'/>"
+        "<bind xmlns='urn:xmpp:bind:0'><tag>IgnoredOnResume</tag>"
+        "<enable xmlns='urn:xmpp:sm:3' resume='true'/></bind>"
+        "</authenticate></body>"
+    )
+    check(
+        b"<success xmlns='urn:xmpp:sasl:2'>" in resumed
+        and b"<resumed xmlns='urn:xmpp:sm:3'" in resumed
+        and b"<bound xmlns='urn:xmpp:bind:0'>" not in resumed
+        and b"id='sm-to-bosh-ping'" in resumed
+        and b"type='result'" in resumed,
+        f"BOSH did not atomically resume and replay the WebSocket IQ: {resumed!r}",
+    )
+    acknowledged = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        f"rid='{rid + 2}' sid='{sid}'>"
+        "<a xmlns='urn:xmpp:sm:3' h='1'/></body>"
+    )
+    check(
+        b"type='terminate'" not in acknowledged,
+        f"BOSH SM ACK closed the session: {acknowledged!r}",
+    )
+    terminated = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        f"rid='{rid + 3}' sid='{sid}' type='terminate'/>"
+    )
+    check(
+        b"type='terminate'" in terminated,
+        f"BOSH SM session did not terminate: {terminated!r}",
+    )
 
 
 def websocket_sasl2_resume_conformance() -> None:
@@ -2802,6 +2875,7 @@ def run() -> None:
         tcp_sm_cross_transport_resume_conformance()
         websocket_sasl2_resume_conformance()
         bosh_sasl2_bind_conformance()
+        bosh_sm_cross_transport_resume_conformance()
         print(
             "integration: STARTTLS/Direct TLS, deferred PLAIN/SCRAM, "
             "SASL2/SCRAM-PLUS/Bind2/FAST over TCP, WebSocket and BOSH, "
@@ -2921,6 +2995,7 @@ def run() -> None:
     tcp_sm_cross_transport_resume_conformance()
     websocket_sasl2_resume_conformance()
     bosh_sasl2_bind_conformance()
+    bosh_sm_cross_transport_resume_conformance()
 
     # The SASL core fixture deliberately disables and re-enables Bob while it
     # verifies dummy-SCRAM and account-state behavior. That security transition

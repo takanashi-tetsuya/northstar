@@ -7,7 +7,7 @@ project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 binary=$project_dir/target/debug/rust-xmpp-server
 key=${NORTHSTAR_LAB_SSH_KEY:-/tmp/northstar-lab-keys/id_ed25519}
 [[ -x $binary && -f $key ]] || { echo 'candidate binary or lab SSH key missing' >&2; exit 2; }
-"$project_dir/scripts/local-vm-lab-preflight.sh" >/dev/null
+bash "$project_dir/scripts/local-vm-lab-preflight.sh" >/dev/null
 
 ssh_opts=(-i "$key" -o BatchMode=yes -o ConnectTimeout=5
   -o StrictHostKeyChecking=accept-new
@@ -47,8 +47,8 @@ for node in ns-a ns-b; do
   }
 done
 
-"$project_dir/scripts/local-vm-lab-redis.sh"
-"$project_dir/scripts/local-vm-lab-minio-bucket.sh"
+bash "$project_dir/scripts/local-vm-lab-redis.sh"
+bash "$project_dir/scripts/local-vm-lab-minio-bucket.sh"
 authority=$(ssh "${ssh_opts[@]}" "$infra" \
   'sudo -u postgres psql -d xmpp --no-psqlrc -Atqc "SELECT storage_backend FROM upload_storage_authority WHERE singleton"')
 [[ $authority == s3 ]] || { echo 'both nodes require committed S3 upload authority' >&2; exit 1; }

@@ -1058,6 +1058,101 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
+    async fn bind2_recovers_failed_pooled_transaction_before_preflight() {
+        let setup_pool = isolated_pool().await;
+        let username = format!("auth-dirty-{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let (user_id, generation) =
+            create_account(&setup_pool, &username, "dirty connection test password").await;
+        let url = std::env::var("TEST_DATABASE_URL").unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+
+        // Raw BEGIN leaves PostgreSQL in a transaction without advancing
+        // SQLx's transaction depth. A late isolation change aborts that
+        // backend transaction; the pool's Sync ping does not reset it.
+        sqlx::query("BEGIN").execute(&pool).await.unwrap();
+        sqlx::query("SELECT pg_backend_pid()")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(|database_error| database_error.code())
+                .as_deref(),
+            Some("25001")
+        );
+
+        let repository = crate::db::authentication::PostgresAuthenticationRepository::new(
+            pool.clone(),
+            Arc::new(Zeroizing::new(vec![0x5a; 32])),
+        );
+        assert!(matches!(
+            repository
+                .bind2_archive_boundaries_with_hook(user_id, generation, |_| async {})
+                .await,
+            AuthenticationResult::Authenticated((None, None))
+        ));
+        let available_backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(available_backend_pid > 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
+    async fn bind2_resets_active_pooled_transaction_before_preflight() {
+        let setup_pool = isolated_pool().await;
+        let username = format!("auth-active-{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let (user_id, generation) =
+            create_account(&setup_pool, &username, "active connection test password").await;
+        let url = std::env::var("TEST_DATABASE_URL").unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+
+        // SQLx does not track this raw BEGIN. A second BEGIN merely warns and
+        // would retain the active READ COMMITTED transaction and snapshot.
+        sqlx::query("BEGIN ISOLATION LEVEL READ COMMITTED")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let isolation: String =
+            sqlx::query_scalar("SELECT current_setting('transaction_isolation')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(isolation, "read committed");
+
+        let repository = crate::db::authentication::PostgresAuthenticationRepository::new(
+            pool.clone(),
+            Arc::new(Zeroizing::new(vec![0x5a; 32])),
+        );
+        assert!(matches!(
+            repository
+                .bind2_archive_boundaries_with_hook(user_id, generation, |_| async {})
+                .await,
+            AuthenticationResult::Authenticated((None, None))
+        ));
+        let available_backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(available_backend_pid > 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
     async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
         let pool = isolated_pool().await;
         db::reconcile_deployment_capacity(

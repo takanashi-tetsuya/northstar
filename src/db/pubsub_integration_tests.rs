@@ -330,6 +330,102 @@ async fn integration_pool(max_connections: u32) -> (String, PgPool) {
     (url, pool)
 }
 
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn timed_out_mutation_begin_rolls_back_before_releasing_connection() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let observer = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    let (released_tx, mut released_rx) = tokio::sync::mpsc::unbounded_channel();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_release(move |_, _| {
+            let released_tx = released_tx.clone();
+            Box::pin(async move {
+                let _ = released_tx.send(());
+                Ok(true)
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let mut connection = pool.acquire().await.unwrap();
+    let backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+    while released_rx.try_recv().is_ok() {}
+
+    // Force BEGIN to complete after the admission deadline without changing
+    // PostgreSQL settings or relying on a timing-sensitive server stall.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
+    let delayed_begin = async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        Transaction::begin(connection, None).await
+    };
+    let error = match finish_bounded_pubsub_begin(deadline, delayed_begin).await {
+        Ok(_) => panic!("a late BEGIN unexpectedly passed admission"),
+        Err(error) => error,
+    };
+    assert!(error.downcast_ref::<PubSubMutationBusy>().is_some());
+
+    tokio::time::timeout(Duration::from_secs(5), released_rx.recv())
+        .await
+        .expect("timed-out BEGIN did not release its connection")
+        .expect("pool release observer closed");
+    let state: String = sqlx::query_scalar("SELECT state FROM pg_stat_activity WHERE pid = $1")
+        .bind(backend_pid)
+        .fetch_one(&observer)
+        .await
+        .unwrap();
+    assert_eq!(state, "idle");
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn timed_out_mutation_acquire_leaves_no_detached_waiter() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let (released_tx, mut released_rx) = tokio::sync::mpsc::unbounded_channel();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_release(move |_, _| {
+            let released_tx = released_tx.clone();
+            Box::pin(async move {
+                let _ = released_tx.send(());
+                Ok(true)
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    // Exhausting the pool must time out at acquisition, without leaving a
+    // detached task to begin a transaction when the connection is released.
+    let held = pool.acquire().await.unwrap();
+    while released_rx.try_recv().is_ok() {}
+    let error =
+        match begin_bounded_pubsub_mutation_with_timeout(&pool, Duration::from_millis(20)).await {
+            Ok(_) => panic!("a blocked mutation unexpectedly acquired the pool"),
+            Err(error) => error,
+        };
+    assert!(error.downcast_ref::<PubSubMutationBusy>().is_some());
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(5), released_rx.recv())
+        .await
+        .expect("holder did not release its connection")
+        .expect("pool release observer closed");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), released_rx.recv())
+            .await
+            .is_err(),
+        "timed-out acquisition left a detached pool waiter"
+    );
+}
+
 async fn create_default_test_node(pool: &PgPool, node: &str, owner: &str) -> PubSubNode {
     let node_id = match create_node(pool, node, owner, &PubSubNodeConfig::default(), 10)
         .await

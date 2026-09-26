@@ -25,9 +25,22 @@ pub(crate) struct PubSubMutationBusy;
 pub(crate) async fn begin_bounded_pubsub_mutation(
     pool: &PgPool,
 ) -> Result<Transaction<'_, Postgres>> {
-    let mut transaction = tokio::time::timeout(PUBSUB_POOL_ACQUIRE_TIMEOUT, pool.begin())
+    begin_bounded_pubsub_mutation_with_timeout(pool, PUBSUB_POOL_ACQUIRE_TIMEOUT).await
+}
+
+async fn begin_bounded_pubsub_mutation_with_timeout(
+    pool: &PgPool,
+    admission_timeout: Duration,
+) -> Result<Transaction<'static, Postgres>> {
+    // Pool acquisition can be cancelled before BEGIN is sent. Once a
+    // connection is owned, let BEGIN finish in a separate task so a caller
+    // timeout cannot interrupt the wire exchange.
+    let deadline = tokio::time::Instant::now() + admission_timeout;
+    let connection = tokio::time::timeout_at(deadline, pool.acquire())
         .await
         .map_err(|_| PubSubMutationBusy)??;
+    let mut transaction =
+        finish_bounded_pubsub_begin(deadline, Transaction::begin(connection, None)).await?;
     sqlx::query("SET LOCAL lock_timeout='2s'")
         .execute(&mut *transaction)
         .await?;
@@ -35,6 +48,46 @@ pub(crate) async fn begin_bounded_pubsub_mutation(
         .execute(&mut *transaction)
         .await?;
     Ok(transaction)
+}
+
+async fn finish_bounded_pubsub_begin(
+    deadline: tokio::time::Instant,
+    begin: impl std::future::Future<
+            Output = std::result::Result<Transaction<'static, Postgres>, sqlx::Error>,
+        > + Send
+        + 'static,
+) -> Result<Transaction<'static, Postgres>> {
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let (transaction_tx, transaction_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        match begin.await {
+            Ok(transaction) => {
+                // Keep ownership until the caller confirms that its deadline
+                // has not elapsed. A late BEGIN is always explicitly rolled
+                // back, including the race at the deadline.
+                if ready_tx.send(Ok(())).is_err() || accepted_rx.await.is_err() {
+                    let _ = transaction.rollback().await;
+                } else if let Err(transaction) = transaction_tx.send(transaction) {
+                    let _ = transaction.rollback().await;
+                }
+            }
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
+            }
+        }
+    });
+    tokio::time::timeout_at(deadline, ready_rx)
+        .await
+        .map_err(|_| PubSubMutationBusy)?
+        .map_err(|_| PubSubMutationBusy)??;
+    // A completed oneshot can win a poll even after the timer deadline when
+    // this task was not scheduled promptly. Do not admit that late BEGIN.
+    if tokio::time::Instant::now() >= deadline {
+        return Err(PubSubMutationBusy.into());
+    }
+    accepted_tx.send(()).map_err(|_| PubSubMutationBusy)?;
+    Ok(transaction_rx.await.map_err(|_| PubSubMutationBusy)?)
 }
 
 const EDGE_EXCEEDS_MAX_DEPTH_SQL: &str = "WITH RECURSIVE

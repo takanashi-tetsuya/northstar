@@ -1,7 +1,7 @@
 //! Credential reads and atomic SASL/FAST generation, token and binding fences.
 use crate::{auth, db, services::authentication::*};
 use northstar_archive_core::ArchiveBoundary;
-use sqlx::{PgPool, Row};
+use sqlx::{Connection, PgPool, Row};
 use std::{future::Future, sync::Arc};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -119,59 +119,94 @@ impl PostgresAuthenticationRepository {
         F: FnOnce(AuthenticationFence) -> Fut,
         Fut: Future<Output = ()>,
     {
-        // Declare the isolation level in the BEGIN statement so the preflight
-        // cannot run a separate statement before PostgreSQL applies it.
-        let mut transaction = match self
-            .pool
-            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ")
-            .await
-        {
-            Ok(transaction) => transaction,
+        let mut connection = match self.pool.acquire().await {
+            Ok(connection) => connection,
             Err(error) => return AuthenticationResult::BackendFailure(error.into()),
         };
-        let state =
-            sqlx::query("SELECT auth_generation,is_disabled FROM users WHERE id=$1 FOR SHARE")
-                .bind(user_id)
-                .fetch_optional(&mut *transaction)
-                .await;
-        let row = match state {
-            Ok(Some(row)) => row,
-            Ok(None) => {
-                let _ = transaction.rollback().await;
-                return AuthenticationResult::StaleGeneration;
+        // A cancelled SQLx BEGIN can leave a server-side transaction that the
+        // pool does not track. Close the connection on cancellation, and reset
+        // any transaction left by an earlier borrower before starting ours.
+        // PostgreSQL accepts a nested BEGIN with only a warning, so a plain
+        // BEGIN here could silently retain READ COMMITTED isolation.
+        connection.close_on_drop();
+        let (result, clean) = async {
+            if let Err(error) = sqlx::query("ROLLBACK").execute(&mut *connection).await {
+                return (AuthenticationResult::BackendFailure(error.into()), false);
             }
-            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
-        };
-        let auth_generation = match row.try_get::<i64, _>("auth_generation") {
-            Ok(value) => value,
-            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
-        };
-        let is_disabled = match row.try_get::<bool, _>("is_disabled") {
-            Ok(value) => value,
-            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
-        };
-        if is_disabled || auth_generation != expected_auth_generation {
-            let _ = transaction.rollback().await;
-            return if is_disabled {
-                AuthenticationResult::Disabled
-            } else {
-                AuthenticationResult::StaleGeneration
+            let mut transaction = match connection
+                .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ")
+                .await
+            {
+                Ok(transaction) => transaction,
+                Err(error) => return (AuthenticationResult::BackendFailure(error.into()), false),
             };
-        }
-        after_account_locked(AuthenticationFence {
-            user_id,
-            auth_generation,
-        })
-        .await;
-        let boundaries =
-            match db::archive_boundaries_visible_in_transaction(&mut transaction, user_id).await {
+            let state = sqlx::query(
+                "SELECT auth_generation,is_disabled,current_setting('transaction_isolation') AS isolation FROM users WHERE id=$1 FOR SHARE",
+            )
+            .bind(user_id)
+            .fetch_optional(&mut *transaction)
+            .await;
+            let row = match state {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    return match transaction.rollback().await {
+                        Ok(()) => (AuthenticationResult::StaleGeneration, true),
+                        Err(error) => (AuthenticationResult::BackendFailure(error.into()), false),
+                    };
+                }
+                Err(error) => return (AuthenticationResult::BackendFailure(error.into()), false),
+            };
+            let isolation = match row.try_get::<String, _>("isolation") {
+                Ok(value) => value,
+                Err(error) => return (AuthenticationResult::BackendFailure(error.into()), false),
+            };
+            if isolation != "repeatable read" {
+                return (
+                    AuthenticationResult::BackendFailure(anyhow::anyhow!(
+                        "Bind 2 archive preflight did not enter repeatable read isolation"
+                    )),
+                    false,
+                );
+            }
+            let auth_generation = match row.try_get::<i64, _>("auth_generation") {
+                Ok(value) => value,
+                Err(error) => return (AuthenticationResult::BackendFailure(error.into()), false),
+            };
+            let is_disabled = match row.try_get::<bool, _>("is_disabled") {
+                Ok(value) => value,
+                Err(error) => return (AuthenticationResult::BackendFailure(error.into()), false),
+            };
+            if is_disabled || auth_generation != expected_auth_generation {
+                return match transaction.rollback().await {
+                    Ok(()) if is_disabled => (AuthenticationResult::Disabled, true),
+                    Ok(()) => (AuthenticationResult::StaleGeneration, true),
+                    Err(error) => (AuthenticationResult::BackendFailure(error.into()), false),
+                };
+            }
+            after_account_locked(AuthenticationFence {
+                user_id,
+                auth_generation,
+            })
+            .await;
+            let boundaries = match db::archive_boundaries_visible_in_transaction(
+                &mut transaction,
+                user_id,
+            )
+            .await
+            {
                 Ok(boundaries) => boundaries,
-                Err(error) => return AuthenticationResult::BackendFailure(error),
+                Err(error) => return (AuthenticationResult::BackendFailure(error), false),
             };
-        match transaction.commit().await {
-            Ok(()) => AuthenticationResult::Authenticated(boundaries),
-            Err(error) => AuthenticationResult::BackendFailure(error.into()),
+            match transaction.commit().await {
+                Ok(()) => (AuthenticationResult::Authenticated(boundaries), true),
+                Err(error) => (AuthenticationResult::BackendFailure(error.into()), false),
+            }
         }
+        .await;
+        if clean {
+            connection.return_to_pool().await;
+        }
+        result
     }
     pub(crate) async fn authenticate_fast_with_hook<F, Fut>(
         &self,

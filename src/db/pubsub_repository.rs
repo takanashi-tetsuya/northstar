@@ -1,6 +1,7 @@
 //! Complete PostgreSQL PubSub/PEP operations and locked audience snapshots.
 use crate::{db, services::pubsub::*};
 use anyhow::{Context, Result};
+use northstar_pubsub_core::PubSubRootDiscoPage;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;

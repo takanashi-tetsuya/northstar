@@ -716,6 +716,10 @@ exposing policy errors. The apparent base/`with_renderer` pairs in
 functions. `src/db/pubsub_repository.rs` supplies the application port and
 error mapping, not a second SQL implementation, so merging those layers would
 remove a useful boundary without eliminating production queries.
+Root PubSub discovery now projects the database's authorized count and cursor
+page in the application layer. The PostgreSQL adapter still obtains both in
+one statement snapshot; the protocol layer only renders the resulting items
+and RSM fields.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for

@@ -498,8 +498,15 @@ async fn query_ports_succeed_with_read_only_database_connections() {
     );
     assert!(
         service
-            .root_disco_page("alice@example.test", None, false, 10)
+            .discover_roots(northstar_pubsub_application::PubSubRootDiscoQuery {
+                requester: "alice@example.test",
+                cursor: None,
+                backwards: false,
+                max: Some(10),
+                rsm_requested: false,
+            },)
             .await
+            .unwrap()
             .unwrap()
             .total
             >= 1

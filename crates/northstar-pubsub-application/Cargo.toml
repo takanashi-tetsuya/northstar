@@ -13,3 +13,6 @@ northstar-pubsub-core = { path = "../northstar-pubsub-core" }
 roxmltree = "0.20"
 tokio = { version = "1.43", features = ["sync", "time"] }
 uuid = { version = "1.12", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt"] }

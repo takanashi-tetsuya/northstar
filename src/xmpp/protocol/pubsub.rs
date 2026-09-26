@@ -6,7 +6,7 @@ use crate::services::pubsub::{
     PubSubCreateNodeCommand, PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite,
     PubSubItem, PubSubNode, PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome,
     PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand,
-    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsCommand,
+    PubSubRetractOutcome, PubSubRetractWrite, PubSubRootDiscoQuery, PubSubSetAffiliationsCommand,
     PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
     PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
     PubSubSubscriptionOptions, PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome,
@@ -258,10 +258,6 @@ async fn root_disco_items(
     requester: &str,
     rsm: Option<&PubSubRsmRequest>,
 ) -> Result<PubSubReply> {
-    let max = rsm
-        .and_then(|request| request.max)
-        .unwrap_or(100)
-        .min(1_000);
     let cursor = rsm.and_then(|request| {
         request
             .after
@@ -269,22 +265,18 @@ async fn root_disco_items(
             .or_else(|| request.before.as_ref().and_then(|value| value.as_deref()))
     });
     let backwards = rsm.is_some_and(|request| request.before.is_some());
-    let mut page = state
+    let Some(page) = state
         .pubsub_service()
-        .root_disco_page(requester, cursor, backwards, max as i64)
-        .await?;
-    if !page.cursor_exists {
+        .discover_roots(PubSubRootDiscoQuery {
+            requester,
+            cursor,
+            backwards,
+            max: rsm.and_then(|request| request.max),
+            rsm_requested: rsm.is_some(),
+        })
+        .await?
+    else {
         return Ok(PubSubReply::Error("item-not-found"));
-    }
-    let total = usize::try_from(page.total)
-        .map_err(|_| anyhow::anyhow!("visible PubSub root count exceeded platform bounds"))?;
-    if backwards {
-        page.nodes.reverse();
-    }
-    let first_index = match page.nodes.first() {
-        Some(first) => usize::try_from(first.index)
-            .map_err(|_| anyhow::anyhow!("visible PubSub root index exceeded platform bounds"))?,
-        None => 0,
     };
     let visible = page
         .nodes
@@ -298,13 +290,13 @@ async fn root_disco_items(
     // A service-side default limit is always finite. If an old client omitted
     // RSM and the result was truncated, include the notation recommended by
     // XEP-0059/XEP-0060 so it can discover and continue the full set.
-    let rsm_xml = if rsm.is_some() || visible.len() < total {
+    let rsm_xml = if page.include_rsm {
         rsm_set_element(
             visible
                 .first()
-                .map(|item| (first_index, item.node.as_str())),
+                .map(|item| (page.first_index, item.node.as_str())),
             visible.last().map(|item| item.node.as_str()),
-            total,
+            page.total,
         )
         .finish()
     } else {

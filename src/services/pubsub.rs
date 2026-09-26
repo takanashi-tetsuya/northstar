@@ -26,9 +26,10 @@ pub(crate) use northstar_pubsub_application::{
     PubSubDeleteNodeCommand, PubSubDeleteNodeResult,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
     PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand,
-    PubSubRetractResult, PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult,
-    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult, PubSubSubscribeCommand,
-    PubSubSubscribeResult, PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
+    PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,
+    PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult,
+    PubSubSubscribeCommand, PubSubSubscribeResult, PubSubUnsubscribeCommand,
+    PubSubUnsubscribeResult,
 };
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 pub(crate) use northstar_pubsub_core::{
@@ -42,11 +43,11 @@ pub(crate) use northstar_pubsub_core::{
     PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
     PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubPublishOutcome,
     PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
-    PubSubRootDiscoPage, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
-    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
-    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
+    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
+    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionAuthorizationOutcome,
+    SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
 
 pub(crate) use northstar_pubsub_application::{
@@ -1358,16 +1359,11 @@ impl<R: PubSubNodeQueryRepository> PubSubService<R> {
 }
 
 impl<R: PubSubRootDiscoveryQueryRepository> PubSubService<R> {
-    pub(crate) async fn root_disco_page(
+    pub(crate) async fn discover_roots(
         &self,
-        requester: &str,
-        cursor: Option<&str>,
-        backwards: bool,
-        limit: i64,
-    ) -> Result<PubSubRootDiscoPage> {
-        self.repository
-            .root_disco_page(requester, cursor, backwards, limit)
-            .await
+        query: PubSubRootDiscoQuery<'_>,
+    ) -> Result<Option<PubSubRootDiscoResult>> {
+        northstar_pubsub_application::discover_roots(&self.repository, query).await
     }
 }
 

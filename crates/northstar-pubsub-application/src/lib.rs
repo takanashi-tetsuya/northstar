@@ -17,6 +17,8 @@ use northstar_pubsub_core::{
 };
 pub mod repository;
 pub use repository::*;
+mod root_discovery;
+pub use root_discovery::{discover_roots, PubSubRootDiscoQuery, PubSubRootDiscoResult};
 mod publish_policy;
 pub use publish_policy::{existing_node_publish_admission_outcome, publish_validation_outcome};
 use std::collections::hash_map::DefaultHasher;

@@ -89,7 +89,37 @@ def reader_selftest() -> None:
     second = take_xml_frame(value)
     check(first is not None and b"id='inner'" in first, "nested stanza was split")
     check(second == b"<iq id='next'/>", "coalesced stanza was lost")
-    print("MIX reader nesting/coalescing self-test: PASS")
+    ids = (
+        "00000000-0000-0000-0000-000000000101",
+        "00000000-0000-0000-0000-000000000102",
+    )
+
+    class FakeMamClient:
+        def __init__(self) -> None:
+            self.frames = iter([
+                f"<message><result xmlns='urn:xmpp:mam:2' id='{ids[0]}' "
+                "queryid='selftest'><body>page two</body></result></message>",
+                f"<message><result xmlns='urn:xmpp:mam:2' id='{ids[1]}' "
+                "queryid='selftest'><body>page three</body></result></message>",
+                f"<iq type='result' id='selftest'><fin xmlns='urn:xmpp:mam:2'>"
+                f"<set><first index='0'>{ids[0]}</first><last>{ids[1]}</last>"
+                "<count>2</count></set></fin></iq>",
+            ])
+
+        def send(self, _stanza: str) -> None:
+            pass
+
+        def receive(self, _timeout: float) -> str:
+            return next(self.frames)
+
+    archive_ids, count, index = mam_page(
+        Inbox(FakeMamClient()), "selftest", ("page two", "page three")
+    )
+    check(
+        archive_ids == list(ids) and count == 2 and index == 0,
+        "MAM result was mistaken for the final IQ",
+    )
+    print("MIX reader and MAM result buffering self-test: PASS")
 
 
 class Inbox:
@@ -135,18 +165,23 @@ def mam_page(
     before: str | None = None,
 ) -> tuple[list[str], int, int]:
     cursor = "<before/>" if before is None else f"<before>{before}</before>"
-    fin = iq(
-        client, query_id,
+    client.send(
+        f"<iq xmlns='jabber:client' type='set' id='{query_id}' to='{CHANNEL}'>"
         f"<query xmlns='urn:xmpp:mam:2' queryid='{query_id}'>"
         "<x xmlns='jabber:x:data' type='submit'>"
         "<field var='FORM_TYPE'><value>urn:xmpp:mam:2</value></field></x>"
         f"<set xmlns='http://jabber.org/protocol/rsm'><max>2</max>{cursor}</set>"
-        "</query>", CHANNEL,
+        "</query></iq>"
     )
+    fin = client.wait("<fin xmlns='urn:xmpp:mam:2'")
     count = re.search(r"<count>(\d+)</count>", fin)
     first = re.search(r"<first index='(\d+)'>([^<]+)</first>", fin)
     last = re.search(r"<last>([^<]+)</last>", fin)
-    check("<fin " in fin and count is not None, f"MIX MAM final page missing: {fin}")
+    check(
+        re.search(rf"<iq\b[^>]*\bid='{re.escape(query_id)}'", fin) is not None
+        and "type='result'" in fin and count is not None,
+        f"MIX MAM final page missing: {fin}",
+    )
     results = [
         frame for frame in client.pending if f"queryid='{query_id}'" in frame
     ]

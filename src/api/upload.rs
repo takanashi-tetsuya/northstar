@@ -536,8 +536,11 @@ pub async fn upload_get(
         state.get(object_key, slot.storage_object_version.as_deref()),
     )
     .await
-    .map_err(|_| AppError::Internal(anyhow::anyhow!("upload object lookup timed out")))?
-    .map_err(AppError::Internal)?
+    .map_err(|_| AppError::Unavailable("upload storage is temporarily unavailable".into()))?
+    .map_err(|error| {
+        tracing::warn!(error = %error, "upload object lookup failed");
+        AppError::Unavailable("upload storage is temporarily unavailable".into())
+    })?
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };

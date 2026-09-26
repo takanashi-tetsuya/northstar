@@ -111,8 +111,50 @@ federation still passed with both Northstar nodes active. A non-empty HTTP
 Upload created through `ns-a` was downloaded through `ns-b` with the same
 SHA-256
 (`ec1fd0735b77f0e49ad119daeede350a9ea9f7ab51e77c41b0c00386ac1fa2a6`).
-This proves shared S3 reads for that object; it does not exercise a non-empty
-migration.
+That first read proves shared S3 access, not migration. Subsequently, both
+nodes were stopped and a PostgreSQL dump plus
+the original object bytes were saved locally. An unused reservation left by a
+failed upload probe initially blocked migration. Its row had no upload, stage,
+or object key, and was removed by exact ID after the backup. S3-to-Local then
+committed generation 3 with one object (run
+`aa2472cb-676a-42d6-8969-c67b45575be8`, manifest
+`2ebe7ada55bbd2a9d6379d510a9f4e1e90d1877d87a6b81c998bacc5d99a135d`).
+The local file matched the original SHA-256. Local-to-S3 committed generation
+4 with one object (run `e92947f4-6c34-46f0-910d-05056dfe0b9b`, manifest
+`543cc058c5b1718b59a9d7088ce4d837161719a58a39ee2d1b89b56deae045f9`).
+After restart, both nodes read back the same SHA-256 and cross-node direct
+delivery still passed. This qualifies one successful non-empty round trip in
+the local topology; it does not qualify interruption recovery or an off-site
+copy.
+
+A hard `SIGKILL` of core-only `ns-b` left `ns-a` serving bidirectional traffic
+with Prosody. An immediate `ns-b` restart was rejected because the previous
+process still owned that node ID until 02:40:17 UTC. After the database lease
+expired, `ns-b` started at 02:40:36 UTC and two new cross-node direct messages
+were delivered. This checks one process-kill fence and rejoin, not a network
+partition, a durable-session replay, or a general RTO/RPO bound. A separate
+asymmetric partition dropped only `ns-b`'s outbound Redis traffic while
+`ns-a` retained access. The surviving node continued bidirectional Prosody
+traffic; a new bind on `ns-b` was closed. After removing the firewall rule,
+new cross-node direct delivery recovered without restarting either process.
+This tests a short control-plane partition, not split-brain behavior under
+all combinations of database and object-store reachability.
+
+An attempted migration `SIGKILL` drill was stopped before it created a run:
+the debug-only pause requires a loopback PostgreSQL fixture and refuses this
+VM's remote database. The authority remained `s3` generation 4, no active
+migration was left, and both nodes passed delivery and object-read checks after
+restart. The isolated database CI fixture tests this pause and resume path;
+the VM lab still needs an interruption drill that does not bypass the guard.
+
+Stopping MinIO made a committed public upload read fail while the object bytes
+remained intact. The first candidate returned HTTP 500. The corrected public
+GET handler returned HTTP 503 with a generic service-unavailable response;
+after MinIO restarted, the same object again matched SHA-256
+`ec1fd0735b77f0e49ad119daeede350a9ea9f7ab51e77c41b0c00386ac1fa2a6`.
+That corrected debug binary had SHA-256
+`765b77ea843f36aedb6add525a8bae58ec5acc442c7a00998de54dce26546fe7`.
+This is a process outage, not a disk-loss or fresh-host restore drill.
 These observations used source commit `58650079da8d21408ab6d027127796b7863ccf5c`
 and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.
@@ -130,7 +172,7 @@ and deliberately refuses to replace lost node signing keys. Run
 after copying them and `local-vm-lab-federation.py` into
 `/home/lab/northstar/`.
 
-Asymmetric network partitions, Redis failover, non-empty S3 migration and
+Database/object-store partitions, Redis failover, interrupted migration and
 restore, DNSSEC/DANE behavior inside Northstar, certificate rotation, external
 components, native clients, mixed-load soak, backup/restore and alert drills
 remain untested in these VMs.

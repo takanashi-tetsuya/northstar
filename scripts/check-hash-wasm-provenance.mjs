@@ -15,6 +15,10 @@ const expected = Object.freeze({
   version: '4.12.0',
   tarballSha256: '1db32a125fb46177932ec8ac438d3cd8214ebdfaccb5d6611b657d88eb586f92',
   artifactSha256: 'dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094',
+  embeddedWasm: {
+    argon2: { bytes: 6660, sha256: '83b5829d20b4312aca1a56819f95eef20492e058c70f282c9ed6929f579b20ed' },
+    blake2b: { bytes: 7442, sha256: 'b478c0d889d97d7a8db4d10501457ad78dd406d02dcb4c892c0d844805ef05bb' },
+  },
   registryReportedPublishedAt: '2024-11-19T19:01:58.186Z',
   keyid: 'SHA256:jl3bwswu80PjjokCgh0o2w5c2U4LhQAE57gj9cz1kzA',
   spkiDerBase64: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1Olb3zMAFFxXKHiIkQO5cJ3Yhl5i6UPp+IhuteBJbuHcA5UogKo0EWtlWwW6KSaKoTNEYL7JlCQiVnkhBktUgg==',
@@ -34,6 +38,26 @@ function base64(value, label) {
   const bytes = Buffer.from(value, 'base64');
   invariant(bytes.toString('base64') === value, `${label} has noncanonical base64 encoding`);
   return bytes;
+}
+
+function verifyEmbeddedWasm(artifact) {
+  const source = artifact.toString('utf8');
+  const modules = new Map();
+  for (const match of source.matchAll(/name:"([^"]+)",data:"([A-Za-z0-9+/=]+)"/g)) {
+    const [, name, encoded] = match;
+    invariant(!modules.has(name), `duplicate embedded WASM module: ${name}`);
+    const bytes = base64(encoded, `embedded ${name} WASM`);
+    invariant(bytes.subarray(0, 8).equals(Buffer.from('0061736d01000000', 'hex')),
+      `invalid embedded WASM header: ${name}`);
+    modules.set(name, bytes);
+  }
+  invariant(modules.size === Object.keys(expected.embeddedWasm).length,
+    'embedded WASM module count changed');
+  for (const [name, pinned] of Object.entries(expected.embeddedWasm)) {
+    const bytes = modules.get(name);
+    invariant(bytes && bytes.length === pinned.bytes && hash('sha256', bytes) === pinned.sha256,
+      `embedded ${name} WASM differs from the pinned release`);
+  }
 }
 
 function verifyEvidence(evidence, tarball, deployed, archiveArtifact, packageJson) {
@@ -74,6 +98,7 @@ function verifyEvidence(evidence, tarball, deployed, archiveArtifact, packageJso
     'deployed Argon2 artifact differs from the pinned release');
   invariant(deployed.equals(archiveArtifact),
     'deployed Argon2 artifact differs from the signed npm tarball');
+  verifyEmbeddedWasm(deployed);
 }
 
 function archiveFiles(tarball) {
@@ -160,6 +185,14 @@ if (process.argv.includes('--self-test')) {
   badArtifact[0] ^= 1;
   expectRejected('modified deployed artifact', evidence, tarball, badArtifact, archiveArtifact, packageJson);
 
+  let missingModuleRejected = false;
+  try {
+    verifyEmbeddedWasm(Buffer.from(deployed.toString('utf8').replace('name:"blake2b",data:', 'name:"removed",data:')));
+  } catch {
+    missingModuleRejected = true;
+  }
+  invariant(missingModuleRejected, 'missing BLAKE2b module passed verification');
+
   let missingSourceRejected = false;
   try {
     requireReproducibleSourceBuild(paths);
@@ -187,5 +220,5 @@ if (process.argv.includes('--self-test')) {
 if (process.argv.includes('--require-reproducible')) {
   requireReproducibleSourceBuild(paths);
 } else {
-  console.log('hash-wasm 4.12.0 historical npm signature and deployed Argon2 bytes verified; source rebuild remains unqualified');
+  console.log('hash-wasm 4.12.0 npm signature, deployed UMD and embedded Argon2/BLAKE2b WASM verified; source rebuild remains unqualified');
 }

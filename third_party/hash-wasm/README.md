@@ -26,6 +26,14 @@ Repository allow-list hashes:
 | `../../web/crypto/hash-wasm-argon2.umd.min.js` | `dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094` |
 | `LICENSE` | `c14dea172f72f2714284a0ac2ab1b00b5352a01409d58255a46227ffc541debd` |
 
+The UMD artifact embeds two WebAssembly modules. The offline verifier extracts
+both and checks their bytes separately:
+
+| Module | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `argon2` | 6,660 | `83b5829d20b4312aca1a56819f95eef20492e058c70f282c9ed6929f579b20ed` |
+| `blake2b` | 7,442 | `b478c0d889d97d7a8db4d10501457ad78dd406d02dcb4c892c0d844805ef05bb` |
+
 The retained npm tarball contains the TypeScript wrapper and C source shipped
 by upstream, including `lib/argon2.ts` and `src/argon2.c`. The deployed UMD
 file is copied byte-for-byte from `dist/argon2.umd.min.js` in that tarball and
@@ -56,5 +64,6 @@ scripts in the packaged `lib/argon2.ts` and `package.json`.
 `node scripts/check-hash-wasm-provenance.mjs --require-reproducible` deliberately
 fails after verifying the npm signature and deployed bytes. A future upgrade
 needs a pinned complete source tree, its lockfile, a digest-pinned networkless
-toolchain, and two independent clean builds matching the shipped bytes before
+toolchain, and two independent clean builds matching the shipped UMD and both
+embedded WebAssembly modules before
 Northstar can make the stronger claim.

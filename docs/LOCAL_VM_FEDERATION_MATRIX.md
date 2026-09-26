@@ -109,12 +109,20 @@ selected SRV target/address/TLSA owner, served chain, SNI/ALPN where relevant,
 Northstar and peer logs, outbox state and the received stanza marker. A
 negative case must show rejection without delivery or a PKIX/Dialback
 downgrade, followed by successful delivery after restoring the fixture.
+The current node units leave the S2S listeners on their IPv4-only defaults.
+Before an inbound IPv6 case, stage IPv6 listener bindings on both Northstar
+nodes and verify actual IPv4 and IPv6 sockets and handshakes. The federation
+helper's delivered marker proves delivery only; retain peer authentication
+logs and socket evidence for the claimed TLS mode, port and address family.
+For F5, keep the peer's C2S certificate trusted by the observation client
+while giving its S2S endpoint the otherwise untrusted DANE-EE leaf, or use a
+separately configured observation client.
 
 | Case | Direction and fixture | Expected result |
 | --- | --- | --- |
 | F1 | Northstar → Prosody and ejabberd, DANE off, valid lab CA and SAN, STARTTLS 5269, IPv4 then IPv6 | Both peers receive one fresh marker over the selected family; SASL EXTERNAL and PKIX identity are recorded. |
 | F2 | Prosody and ejabberd → Northstar, valid lab CA and SAN, STARTTLS 5269 over both families | Northstar receives the marker and authenticates the expected peer domain. |
-| F3 | Peer → Northstar Direct TLS 5270, correct SNI and `xmpp-server` ALPN; also try wrong SNI and missing ALPN | Correct handshake and stanza pass; negative handshakes fail. Record which peer actually supports Direct TLS before claiming peer-to-peer interoperability. |
+| F3 | Peer → Northstar Direct TLS 5270, correct SNI and `xmpp-server` ALPN; also try wrong SNI, an unrelated ALPN offer and no ALPN | Correct handshake and stanza pass; wrong SNI fails. Any negotiated ALPN must be `xmpp-server`. Record whether the unrelated offer is rejected or leaves ALPN unselected; absence alone may pass on this dedicated listener. Record which peer actually supports Direct TLS before claiming peer-to-peer interoperability. |
 | F4 | Northstar → each peer, DANE required, secure SRV/address/TLSA usage 1 selector 1 matching 1 and valid PKIX | Stanza passes only when the TLSA SPKI digest, CA path and XMPP identity all match. Repeat with A-only and AAAA-only targets. |
 | F5 | Northstar → each peer, DANE required, secure usage 3 selector 1 matching 1 with an otherwise untrusted but structurally valid peer leaf | Stanza passes through the DANE-EE identity path; record that this does not establish PKIX or CA revocation. |
 | F6 | Northstar → peer Direct TLS through `_xmpps-server`, if an independent peer supports it | Secure SRV/address/TLSA, SNI and ALPN select port 5270; STARTTLS must not be credited as Direct TLS. If neither peer supports it, retain this row as untested and separately test Northstar's inbound 5270. |
@@ -133,6 +141,9 @@ Only claim reverse-direction DANE if the peer is explicitly configured with a
 validated lab trust anchor and its DNSSEC/DANE decision appears in peer logs.
 The existing peer-recovery test covers a process outage; F14 must repeat it
 under the fixed DANE candidate.
+Under [XEP-0368](https://xmpp.org/extensions/xep-0368.html), sending ALPN is
+recommended; when negotiated, its S2S value must be `xmpp-server`. Its absence
+alone is not a protocol failure.
 
 ## Exit conditions
 

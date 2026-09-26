@@ -216,6 +216,10 @@ run_exact_ignored \
 run_exact_ignored \
   db::pubsub::integration_tests::node_metadata_keeps_affiliation_order_and_live_subscription_scope
 run_exact_ignored \
+  db::pubsub::integration_tests::restricted_open_publish_is_denied_by_locked_publish_and_retract
+run_exact_ignored \
+  db::pubsub::integration_tests::publish_rechecks_access_model_after_concurrent_config_change
+run_exact_ignored \
   db::pubsub::integration_tests::timed_out_mutation_begin_rolls_back_before_releasing_connection
 run_exact_ignored \
   db::pubsub::integration_tests::timed_out_mutation_acquire_leaves_no_detached_waiter

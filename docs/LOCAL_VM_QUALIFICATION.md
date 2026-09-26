@@ -53,6 +53,11 @@ only in lab guests, never in the host's general trust store.
    result, raw logs, configuration, metrics and reason for any exclusion.
    A failed run creates a fix and a new candidate; retest affected gates.
 
+The [Redis Sentinel failover drill](LOCAL_VM_REDIS_FAILOVER.md) is a separate
+post-soak experiment. Complete and seal the soak and run the same-binary active
+load before installing its replica or Sentinel voters; the general fault-test
+order above does not override that constraint.
+
 The separate `local-vm-lab-active-load.py` drill requires a sealed soak and
 the same executable SHA-256 on both running nodes. Run it after finalizing a
 successful soak and before upgrading those nodes. A later candidate needs

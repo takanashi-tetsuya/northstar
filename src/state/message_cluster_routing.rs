@@ -1,6 +1,8 @@
 //! Cluster routes for client IQs, personal messages, and their Carbons.
 
-use super::AppState;
+use super::{AppState, OnlineSession};
+use crate::outbound::DurableDelivery;
+use crate::services::messaging::{OnlineRoutePort, OnlineRouteResult};
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
@@ -8,10 +10,61 @@ use crate::xmpp::xml_util::carbon_message;
 use anyhow::Result;
 use uuid::Uuid;
 
-#[derive(Default)]
-pub(crate) struct RemotePersonalMessageDelivery {
-    pub(crate) delivered: bool,
-    pub(crate) accepted_full_jid: Option<String>,
+impl OnlineRoutePort for AppState {
+    type Session = OnlineSession;
+
+    fn try_local(
+        &self,
+        session: &Self::Session,
+        stanza: String,
+        delivery: Option<DurableDelivery>,
+    ) -> bool {
+        if let Some(delivery) = delivery {
+            session.sender.try_send_durable(stanza, delivery).is_ok()
+        } else {
+            session.sender.try_send(stanza).is_ok()
+        }
+    }
+
+    fn record_local_accept(&self, durable: bool) {
+        self.personal_message_telemetry()
+            .online_queue_result(true, durable);
+    }
+
+    async fn route_available_remote(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> bool {
+        self.route_personal_message_to_available_remote_resources(jid, stanza, delivery)
+            .await
+    }
+
+    async fn route_remote_primary(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> OnlineRouteResult {
+        self.route_personal_message_to_remote_primary(jid, stanza, delivery)
+            .await
+    }
+}
+
+/// An old cluster peer may acknowledge only with a delivered count. Accept a
+/// positive receipt rather than risk duplicating a stanza in offline storage.
+pub(super) fn accepted_cluster_message_delivery(
+    state: &AppState,
+    node_id: &str,
+    target: &str,
+    receipt: &crate::cluster::NodeDeliveryReceipt,
+) -> bool {
+    if receipt.delivered && !receipt.acknowledged {
+        state.personal_message_telemetry().cluster_legacy_accepted();
+        tracing::warn!(%node_id, %target, "accepted legacy uncorrelated cluster message delivery acknowledgement");
+    }
+    receipt.delivered
 }
 
 impl AppState {
@@ -84,7 +137,7 @@ impl AppState {
         jid: &str,
         stanza: &str,
         delivery: Option<crate::outbound::DurableDelivery>,
-    ) -> RemotePersonalMessageDelivery {
+    ) -> OnlineRouteResult {
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
             for node_id in nodes {
                 if node_id == self.cluster.node_id {
@@ -101,17 +154,15 @@ impl AppState {
                         .await
                         .unwrap_or_default()
                 };
-                if crate::xmpp::protocol::messaging::accepted_cluster_message_delivery(
-                    self, &node_id, jid, &receipt,
-                ) {
-                    return RemotePersonalMessageDelivery {
+                if accepted_cluster_message_delivery(self, &node_id, jid, &receipt) {
+                    return OnlineRouteResult {
                         delivered: true,
                         accepted_full_jid: receipt.accepted_full_jid,
                     };
                 }
             }
         }
-        RemotePersonalMessageDelivery::default()
+        OnlineRouteResult::default()
     }
 
     /// Admit the cluster mutation before constructing a direct invitation's

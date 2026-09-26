@@ -2,9 +2,9 @@ use super::{Action, ProtocolSession};
 use crate::services::messaging::{
     admit_offline_then_push, ArchiveWrite, DurableAdmissionOutcome, FederationDelivery,
     IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
-    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OutboundPolicyDecision,
-    PersonalMessageDestination, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
-    ValidatedPersonalMessage,
+    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OnlineMessageRouter,
+    OutboundPolicyDecision, PersonalMessageDestination, RemoteMucInviteAdmission,
+    RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
@@ -12,7 +12,7 @@ use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
 use crate::xmpp::xml_util::*;
 use crate::{
     abuse::{MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof},
-    state::{bare_jid, AppState},
+    state::bare_jid,
 };
 use anyhow::Result;
 pub(crate) use northstar_message_core::{
@@ -1079,58 +1079,17 @@ impl ProtocolSession {
             claim_id: None,
         });
         let deliver_all = bare_target && bare_message_route(message_type) == BareMessageRoute::All;
-        // A durable spool row has exactly one transport owner. RFC 6121
-        // multi-resource fan-out is reserved for headline stanzas, while
-        // durable direct delivery and durable MUC invitations are restricted
-        // to normal/chat. A future routing change must introduce per-resource
-        // projections instead of attaching one fence to several SM/BOSH
-        // queues.
-        debug_assert!(
-            !(live_delivery.is_some() && deliver_all),
-            "one durable C2S fence cannot be fanned out to multiple resources"
-        );
-        let mut delivered_keys = Vec::new();
-        for (key, target) in &targets {
-            let accepted = if let Some(delivery) = live_delivery {
-                target
-                    .sender
-                    .try_send_durable(recipient_delivery.clone(), delivery)
-                    .is_ok()
-            } else {
-                target.sender.try_send(recipient_delivery.clone()).is_ok()
-            };
-            if accepted {
-                self.state
-                    .personal_message_telemetry()
-                    .online_queue_result(true, live_delivery.is_some());
-                delivered_keys.push(key.clone());
-                if !deliver_all {
-                    break;
-                }
-            }
-        }
-        let mut delivered = !delivered_keys.is_empty();
-        let mut delivered_key = delivered_keys.first().cloned();
-
-        if deliver_all {
-            delivered |= self
-                .state
-                .route_personal_message_to_available_remote_resources(
-                    to,
-                    &recipient_delivery,
-                    live_delivery,
-                )
-                .await;
-        } else if !delivered {
-            let remote = self
-                .state
-                .route_personal_message_to_remote_primary(to, &recipient_delivery, live_delivery)
-                .await;
-            if remote.delivered {
-                delivered = true;
-                delivered_key = remote.accepted_full_jid;
-            }
-        }
+        let route = OnlineMessageRouter::dispatch(
+            &*self.state,
+            to,
+            &recipient_delivery,
+            live_delivery,
+            deliver_all,
+            &targets,
+        )
+        .await;
+        let mut delivered = route.delivered;
+        let mut delivered_key = route.accepted_full_jid;
 
         // RFC 6121 §8.5.3.2 lets a chat addressed to a vanished resource
         // fall back to the account's most available resource. Other message
@@ -1563,24 +1522,6 @@ pub(crate) fn direct_delivery_mode(root: Node<'_, '_>) -> DirectDeliveryMode {
         has_explicit_no_store_hint(root),
         offline_storage_permitted(root),
     )
-}
-
-/// Version 1 peers can only return an uncorrelated legacy delivered-count.
-/// Treat a positive count as accepted during rolling upgrades so a stanza
-/// that may already have reached a resource is never duplicated into offline
-/// storage. Version 2/3 peers are required by ClusterManager to return a
-/// nonce-correlated acknowledgement.
-pub(crate) fn accepted_cluster_message_delivery(
-    state: &AppState,
-    node_id: &str,
-    target: &str,
-    receipt: &crate::cluster::NodeDeliveryReceipt,
-) -> bool {
-    if receipt.delivered && !receipt.acknowledged {
-        state.personal_message_telemetry().cluster_legacy_accepted();
-        tracing::warn!(%node_id, %target, "accepted legacy uncorrelated cluster message delivery acknowledgement");
-    }
-    receipt.delivered
 }
 
 /// Return the exact client-controlled commitment used by PoW v2. Routing uses

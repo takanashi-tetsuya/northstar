@@ -893,6 +893,7 @@ fn publish_preconditions_match(expected: &PubSubNode, actual: &PubSubNode) -> bo
     expected.id == actual.id
         && expected.node == actual.node
         && expected.creator_jid == actual.creator_jid
+        && expected.access_model == actual.access_model
         && expected.publish_model == actual.publish_model
         && expected.max_items == actual.max_items
         && expected.deliver_payloads == actual.deliver_payloads
@@ -900,6 +901,54 @@ fn publish_preconditions_match(expected: &PubSubNode, actual: &PubSubNode) -> bo
         && expected.node_type == actual.node_type
         && expected.payload_type == actual.payload_type
         && expected.max_payload_size == actual.max_payload_size
+}
+
+/// Recheck publication authority after the node and notification authority
+/// locks are held. The service precheck only controls error ordering; it does
+/// not authorize a mutation against a later node or subscription state.
+async fn locked_publish_authorization(
+    transaction: &mut Transaction<'_, Postgres>,
+    node: &PubSubNode,
+    publisher_bare_jid: &str,
+    event_time: DateTime<Utc>,
+) -> Result<(bool, bool)> {
+    let row = sqlx::query(
+        "SELECT (SELECT affiliation FROM pubsub_affiliations
+                  WHERE node_id=$1 AND jid=$2) AS affiliation,
+                EXISTS(SELECT 1 FROM pubsub_subscriptions
+                        WHERE node_id=$1
+                          AND (jid=$2 OR split_part(jid, '/', 1)=$2)
+                          AND state='subscribed'
+                          AND (expire IS NULL OR expire>$3)) AS subscribed",
+    )
+    .bind(node.id)
+    .bind(publisher_bare_jid)
+    .bind(event_time)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let affiliation = row.try_get::<Option<String>, _>("affiliation")?;
+    let affiliation = affiliation
+        .as_deref()
+        .map(str::parse::<northstar_xep_0060::Affiliation>)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
+    let publish_model = node
+        .publish_model
+        .parse::<northstar_xep_0060::PublishModel>()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub publish model: {error}"))?;
+    let access_model = node
+        .access_model
+        .parse::<northstar_xep_0060::AccessModel>()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
+    Ok((
+        northstar_xep_0060::can_publish_pure(
+            publish_model,
+            access_model,
+            affiliation,
+            row.try_get("subscribed")?,
+        ),
+        affiliation == Some(northstar_xep_0060::Affiliation::Owner),
+    ))
 }
 
 async fn edge_exceeds_max_depth(
@@ -2971,43 +3020,8 @@ pub async fn publish_items_with_renderer(
         transaction.rollback().await?;
         return Ok(PublishItemsOutcome::PreconditionFailed);
     }
-    let affiliation: Option<String> = sqlx::query_scalar(
-        "SELECT affiliation FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2",
-    )
-    .bind(fresh.id)
-    .bind(&publisher_jid)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if affiliation.as_deref() == Some("outcast") {
-        transaction.rollback().await?;
-        return Ok(PublishItemsOutcome::Forbidden);
-    }
-    let privileged = matches!(
-        affiliation.as_deref(),
-        Some("owner" | "publisher" | "publish-only")
-    );
-    let authorized = match fresh.publish_model.as_str() {
-        "open" => true,
-        "publishers" => privileged,
-        "subscribers" => {
-            privileged
-                || sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(
-                         SELECT 1 FROM pubsub_subscriptions
-                          WHERE node_id = $1
-                            AND (jid = $2 OR split_part(jid, '/', 1) = $2)
-                            AND state = 'subscribed'
-                            AND (expire IS NULL OR expire > $3)
-                     )",
-                )
-                .bind(fresh.id)
-                .bind(&publisher_jid)
-                .bind(event_time)
-                .fetch_one(&mut *transaction)
-                .await?
-        }
-        _ => false,
-    };
+    let (authorized, _) =
+        locked_publish_authorization(&mut transaction, &fresh, &publisher_jid, event_time).await?;
     if !authorized {
         transaction.rollback().await?;
         return Ok(PublishItemsOutcome::Forbidden);
@@ -3163,48 +3177,12 @@ pub async fn retract_items_with_renderer(
         transaction.rollback().await?;
         return Ok(RetractItemsOutcome::NotFound);
     };
-    let affiliation: Option<String> = sqlx::query_scalar(
-        "SELECT affiliation FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2",
-    )
-    .bind(node_id)
-    .bind(&publisher_jid)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if affiliation.as_deref() == Some("outcast") {
-        transaction.rollback().await?;
-        return Ok(RetractItemsOutcome::Forbidden);
-    }
-    let privileged = matches!(
-        affiliation.as_deref(),
-        Some("owner" | "publisher" | "publish-only")
-    );
-    let can_publish = match node.publish_model.as_str() {
-        "open" => true,
-        "publishers" => privileged,
-        "subscribers" => {
-            privileged
-                || sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(
-                         SELECT 1 FROM pubsub_subscriptions
-                          WHERE node_id = $1
-                            AND (jid = $2 OR split_part(jid, '/', 1) = $2)
-                            AND state = 'subscribed'
-                            AND (expire IS NULL OR expire > $3)
-                     )",
-                )
-                .bind(node_id)
-                .bind(&publisher_jid)
-                .bind(event_time)
-                .fetch_one(&mut *transaction)
-                .await?
-        }
-        _ => false,
-    };
+    let (can_publish, can_retract_other_publishers) =
+        locked_publish_authorization(&mut transaction, &node, &publisher_jid, event_time).await?;
     if !can_publish {
         transaction.rollback().await?;
         return Ok(RetractItemsOutcome::Forbidden);
     }
-    let can_retract_other_publishers = affiliation.as_deref() == Some("owner");
     let (existing, authorized): (i64, i64) = sqlx::query_as(
         "SELECT COUNT(*), COUNT(*) FILTER (WHERE publisher_jid = $3 OR $4) FROM pubsub_items WHERE node_id = $1 AND item_id = ANY($2)",
     )

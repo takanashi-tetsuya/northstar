@@ -65,6 +65,10 @@ private-file permissions, exact ACL command/key/channel scopes, `ROLE`,
 `infra` to be the sole primary, `ejabberd` to be its healthy replica, and all
 three voters to agree on `infra`. A missing or differing observation fails the
 check. The output contains roles and hostnames, never passwords or ACL text.
+The preflight checks topology, not soak completion: verify the finalizer's
+successful report and sealed archive yourself before invoking it. Its nested
+isolation check may add missing lab SSH host keys to the private lab
+`known_hosts` file.
 
 For this check, keep the data configurations in
 `/etc/northstar-lab-redis/` on `infra` and

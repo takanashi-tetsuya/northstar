@@ -499,6 +499,262 @@ async fn node_metadata_keeps_affiliation_order_and_live_subscription_scope() {
     assert_eq!(missing.active_subscribers, 0);
 }
 
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn restricted_open_publish_is_denied_by_locked_publish_and_retract() {
+    let (_, pool) = integration_pool(4).await;
+    let owner = format!("restricted-owner-{}@example.test", Uuid::new_v4().simple());
+    let outsider = format!(
+        "restricted-outsider-{}@example.test",
+        Uuid::new_v4().simple()
+    );
+    let node_name = format!("restricted-open-{}", Uuid::new_v4().simple());
+    let mut config = PubSubNodeConfig {
+        publish_model: "open".to_owned(),
+        ..Default::default()
+    };
+    let node_id = match create_node(&pool, &node_name, &owner, &config, 10)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(id) => id,
+        other => panic!("unexpected node create outcome: {other:?}"),
+    };
+    let open_node = get_node_by_id(&pool, node_id).await.unwrap().unwrap();
+    let original_item = vec![("original".to_owned(), "<item id='original'/>".to_owned())];
+    assert_eq!(
+        publish_items(
+            &pool,
+            &open_node,
+            &outsider,
+            &original_item,
+            false,
+            1_000_000
+        )
+        .await
+        .unwrap(),
+        PublishItemsOutcome::Published
+    );
+    set_subscription(&pool, node_id, "watcher@remote.test", "subscribed")
+        .await
+        .unwrap();
+
+    config.access_model = "whitelist".to_owned();
+    assert_eq!(
+        update_node_config_and_graph(&pool, &open_node, &owner, &config)
+            .await
+            .unwrap(),
+        PubSubConfigOutcome::Updated
+    );
+    let restricted_node = get_node_by_id(&pool, node_id).await.unwrap().unwrap();
+    let renderer = crate::services::pubsub::PubSubService::new(pool.clone(), "example.test");
+    let outbox_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
+            .bind(&node_name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let forbidden_item = vec![("forbidden".to_owned(), "<item id='forbidden'/>".to_owned())];
+    assert_eq!(
+        publish_items_with_renderer(
+            &pool,
+            &restricted_node,
+            &outsider,
+            &forbidden_item,
+            false,
+            1_000_000,
+            &renderer,
+        )
+        .await
+        .unwrap(),
+        PublishItemsOutcome::Forbidden
+    );
+    assert_eq!(
+        retract_items_with_renderer(
+            &pool,
+            node_id,
+            &["original".to_owned()],
+            &outsider,
+            false,
+            &renderer,
+        )
+        .await
+        .unwrap(),
+        RetractItemsOutcome::Forbidden
+    );
+    let outbox_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
+            .bind(&node_name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(outbox_after, outbox_before);
+    assert!(get_items(&pool, node_id, &["forbidden".to_owned()], 1)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        get_items(&pool, node_id, &["original".to_owned()], 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    assert!(matches!(
+        set_affiliations(&pool, node_id, &[(outsider.clone(), "member".to_owned())])
+            .await
+            .unwrap(),
+        SetAffiliationsOutcome::Updated { .. }
+    ));
+    let item_events_before_member_publish: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pubsub_event_outbox
+          WHERE source_node=$1 AND payload_xml LIKE '%<items%'",
+    )
+    .bind(&node_name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        publish_items_with_renderer(
+            &pool,
+            &restricted_node,
+            &outsider,
+            &forbidden_item,
+            false,
+            1_000_000,
+            &renderer,
+        )
+        .await
+        .unwrap(),
+        PublishItemsOutcome::Published
+    );
+    let item_events_after_member_publish: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pubsub_event_outbox
+          WHERE source_node=$1 AND payload_xml LIKE '%<items%'",
+    )
+    .bind(&node_name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(item_events_after_member_publish > item_events_before_member_publish);
+    assert_eq!(
+        retract_items(&pool, node_id, &["original".to_owned()], &outsider, false)
+            .await
+            .unwrap(),
+        RetractItemsOutcome::Retracted
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn publish_rechecks_access_model_after_concurrent_config_change() {
+    let (url, pool) = integration_pool(10).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let owner = format!("race-owner-{suffix}@example.test");
+    let outsider = format!("race-outsider-{suffix}@example.test");
+    let mut config = PubSubNodeConfig {
+        publish_model: "open".to_owned(),
+        ..Default::default()
+    };
+    let node_id = match create_node(&pool, &format!("race-access-{suffix}"), &owner, &config, 10)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(id) => id,
+        other => panic!("unexpected node create outcome: {other:?}"),
+    };
+    let open_node = get_node_by_id(&pool, node_id).await.unwrap().unwrap();
+    set_subscription(&pool, node_id, "watcher@remote.test", "subscribed")
+        .await
+        .unwrap();
+    let expected = open_node.config();
+    config.access_model = "whitelist".to_owned();
+
+    let gate = Arc::new(RenderGate::default());
+    let (observations, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let renderer = Arc::new(RaceMutationRenderer {
+        inner: crate::services::pubsub::PubSubService::new(pool.clone(), "example.test"),
+        observations,
+        gate: Some(Arc::clone(&gate)),
+    });
+    let config_pool =
+        named_single_connection_pool(&url, &format!("ps-access-config-{}", &suffix[..10])).await;
+    let config_task = tokio::spawn({
+        let config_pool = config_pool.clone();
+        let renderer = Arc::clone(&renderer);
+        let open_node = open_node.clone();
+        let owner = owner.clone();
+        async move {
+            update_node_config_and_graph_with_outbox(
+                &config_pool,
+                &open_node,
+                &owner,
+                &expected,
+                &config,
+                &*renderer,
+            )
+            .await
+        }
+    });
+    let observation = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+        .await
+        .expect("configuration did not reach its locked renderer")
+        .expect("configuration observation channel closed");
+    assert_eq!(observation.kind, "configuration");
+    assert!(
+        crate::services::pubsub::PubSubService::new(pool.clone(), "example.test")
+            .can_publish(&open_node, &outsider)
+            .await
+            .unwrap()
+    );
+
+    let publish_application = format!("ps-access-publish-{}", &suffix[..10]);
+    let publish_pool = named_single_connection_pool(&url, &publish_application).await;
+    let publish_task = tokio::spawn({
+        let publish_pool = publish_pool.clone();
+        let open_node = open_node.clone();
+        let outsider = outsider.clone();
+        async move {
+            let renderer =
+                crate::services::pubsub::PubSubService::new(publish_pool.clone(), "example.test");
+            publish_items_with_renderer(
+                &publish_pool,
+                &open_node,
+                &outsider,
+                &[("raced".to_owned(), "<item id='raced'/>".to_owned())],
+                false,
+                1_000_000,
+                &renderer,
+            )
+            .await
+        }
+    });
+    wait_for_named_session_lock(&pool, &publish_application).await;
+    gate.release();
+    assert_eq!(
+        config_task.await.unwrap().unwrap(),
+        PubSubConfigOutcome::Updated
+    );
+    assert_eq!(
+        publish_task.await.unwrap().unwrap(),
+        PublishItemsOutcome::PreconditionFailed
+    );
+    assert!(get_items(&pool, node_id, &["raced".to_owned()], 1)
+        .await
+        .unwrap()
+        .is_empty());
+    let item_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pubsub_event_outbox
+          WHERE source_node=$1 AND payload_xml LIKE '%<items%'",
+    )
+    .bind(&open_node.node)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(item_events, 0);
+}
+
 async fn subscribe_for_race(
     pool: &PgPool,
     node: &PubSubNode,

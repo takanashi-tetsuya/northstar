@@ -82,7 +82,7 @@ impl AppState {
                         .await
                         .unwrap_or_default()
                 };
-                if crate::xmpp::protocol::messaging::accepted_cluster_message_delivery(
+                if super::message_cluster_routing::accepted_cluster_message_delivery(
                     self, &node_id, jid, &receipt,
                 ) {
                     return S2sRemotePrimaryDelivery {

@@ -241,9 +241,11 @@ service owns claim, route, settlement and telemetry order, with XML and
 transport routing in a state adapter. Local Carbon target selection, privacy
 checks, bounded fan-out and deadline accounting now belong to an application
 service; its state adapter owns live sessions, XML wrapping and cluster
-routing. Personal-message route execution and broader failure-injection
-coverage remain. The existing PostgreSQL atomic operations have deliberately
-not been split during this convergence.
+routing. The first online personal-message route now runs through an
+application service with an injected live-queue and cluster adapter. Full-JID
+fallback and broader failure-injection coverage remain. The existing
+PostgreSQL atomic operations have deliberately not been split during this
+convergence.
 
 ### Phase C — Room and PubSub command/query separation
 
@@ -745,7 +747,10 @@ C1 passed the read-only PostgreSQL fixture and full CI on `a7859ed`
 ([run 36219774226](https://github.com/takanashi-tetsuya/northstar/actions/runs/36219774226)).
 Pure publish-option and payload admission now lives in the PubSub application
 crate; the service still checks authorization first for existing nodes before
-exposing policy errors. The apparent base/`with_renderer` pairs in
+exposing policy errors. Publish and retract transactions recheck the locked
+node's access and publish models, affiliation and active subscription with the
+same local authorization policy. A concurrent access-model change invalidates
+the earlier publish snapshot. The apparent base/`with_renderer` pairs in
 `src/db/pubsub.rs` are test-only entry points over the production transaction
 functions. `src/db/pubsub_repository.rs` supplies the application port and
 error mapping, not a second SQL implementation, so merging those layers would

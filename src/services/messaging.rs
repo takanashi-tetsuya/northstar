@@ -6,6 +6,7 @@ use super::{
     retractions::FederationOutboxPolicy,
 };
 use crate::abuse::MessageDedupeIdentity;
+use crate::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_message_application::{
     CommitError, MessageApplication, PersonalMessageCommitRepository,
@@ -48,6 +49,79 @@ pub(crate) enum OfflineAdmissionOutcome {
     Replay,
     QuotaExceeded,
     RecipientUnavailable,
+}
+
+/// The first accepted online resource, if any. Cluster v1 receipts may be
+/// accepted without naming an exact full JID, so the key remains optional.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct OnlineRouteResult {
+    pub(crate) delivered: bool,
+    pub(crate) accepted_full_jid: Option<String>,
+}
+
+/// Live queues and cluster routes remain transport details. Targets arrive
+/// already privacy-filtered and ordered by the pre-admission protocol path.
+pub(crate) trait OnlineRoutePort: Sync {
+    type Session: Send + Sync;
+
+    fn try_local(
+        &self,
+        session: &Self::Session,
+        stanza: String,
+        delivery: Option<DurableDelivery>,
+    ) -> bool;
+    fn record_local_accept(&self, durable: bool);
+    fn route_available_remote(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> impl Future<Output = bool> + Send;
+    fn route_remote_primary(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> impl Future<Output = OnlineRouteResult> + Send;
+}
+
+pub(crate) struct OnlineMessageRouter;
+
+impl OnlineMessageRouter {
+    /// Route an accepted stanza without touching its transaction owner. A
+    /// durable delivery has one transport owner; headline fanout is volatile.
+    pub(crate) async fn dispatch<P: OnlineRoutePort>(
+        port: &P,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+        deliver_all: bool,
+        approved_targets: &[(String, P::Session)],
+    ) -> OnlineRouteResult {
+        debug_assert!(
+            !(delivery.is_some() && deliver_all),
+            "one durable C2S fence cannot be fanned out to multiple resources"
+        );
+        let mut result = OnlineRouteResult::default();
+        for (key, session) in approved_targets {
+            if port.try_local(session, stanza.to_owned(), delivery) {
+                port.record_local_accept(delivery.is_some());
+                if result.accepted_full_jid.is_none() {
+                    result.accepted_full_jid = Some(key.clone());
+                }
+                result.delivered = true;
+                if !deliver_all {
+                    break;
+                }
+            }
+        }
+        if deliver_all {
+            result.delivered |= port.route_available_remote(jid, stanza, delivery).await;
+        } else if !result.delivered {
+            result = port.route_remote_primary(jid, stanza, delivery).await;
+        }
+        result
+    }
 }
 
 pub(crate) struct OfflinePostCommitPush {

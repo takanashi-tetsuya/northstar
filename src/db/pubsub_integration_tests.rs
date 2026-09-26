@@ -371,6 +371,75 @@ async fn subscribe_for_race(
 
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn query_ports_succeed_with_read_only_database_connections() {
+    let (url, setup_pool) = integration_pool(2).await;
+    let node_name = format!("readonly-{}", Uuid::new_v4().simple());
+    let node = create_default_test_node(&setup_pool, &node_name, "alice@example.test").await;
+
+    let read_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let read_only: String = sqlx::query_scalar("SHOW default_transaction_read_only")
+        .fetch_one(&read_pool)
+        .await
+        .unwrap();
+    assert_eq!(read_only, "on");
+
+    let service = crate::services::pubsub::PubSubService::new(read_pool, "example.test");
+    assert_eq!(
+        service.get_node(&node_name).await.unwrap().unwrap().id,
+        node.id
+    );
+    assert!(
+        service
+            .root_disco_page("alice@example.test", None, false, 10)
+            .await
+            .unwrap()
+            .total
+            >= 1
+    );
+    assert!(service
+        .get_items(node.id, &[], 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(service
+        .get_subscription(node.id, "bob@example.test")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        service
+            .get_node_affiliation(node.id, "alice@example.test")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("owner")
+    );
+    assert!(service
+        .pep_items(Uuid::new_v4(), "urn:xmpp:avatar:data", None, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(service
+        .pep_subscribers(Uuid::new_v4(), "urn:xmpp:avatar:data")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn mutation_authority_and_stale_preconditions_are_checked_in_transaction() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");

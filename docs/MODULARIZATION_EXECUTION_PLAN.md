@@ -699,8 +699,11 @@ PEP node, item and subscription reads now have separate repository capabilities
 from their mutations. PEP access checks require only the node query capability,
 and the durable event/digest methods require the outbox capability. PubSub and
 PEP commands require their respective query and mutation ports; the obsolete
-aggregate repository trait has been removed. Concurrent authority tests remain
-before C1 can be closed.
+aggregate repository trait has been removed. The isolated PubSub fixture now
+exercises node, discovery, item, subscription, affiliation and PEP queries on a
+connection with PostgreSQL's default transaction mode set to read-only. The
+existing concurrent authority tests still apply to their mutation paths.
+C1 remains open until the read-only fixture and full CI pass on the new head.
 Pure publish-option and payload admission now lives in the PubSub application
 crate; the service still checks authorization first for existing nodes before
 exposing policy errors. The apparent base/`with_renderer` pairs in

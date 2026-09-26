@@ -212,6 +212,8 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
+  db::pubsub::integration_tests::query_ports_succeed_with_read_only_database_connections
+run_exact_ignored \
   db::pubsub::integration_tests::graph_cycle_subscription_quota_and_digest_claim_are_atomic
 run_exact_ignored \
   db::pubsub::integration_tests::digest_idle_preflight_preserves_leases_and_authority_errors

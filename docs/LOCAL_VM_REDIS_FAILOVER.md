@@ -37,8 +37,9 @@ different results and must be recorded separately.
    for the replica's DNS name and a client certificate for replication. Use
    `tls-replication yes` for the replication link and a dedicated, narrowly
    scoped replication ACL identity. Keep the Northstar namespace ACL and
-   mTLS requirement on both data nodes. Do not copy the primary's TLS private
-   key.
+   mTLS requirement on both data nodes; grant its read-only `ROLE` command so
+   the application can reject a demoted replica on pool checkout. Do not copy
+   the primary's TLS private key.
 3. Put three Sentinel voters on `infra`, `ejabberd` and `dns-ca`, with quorum
    two, separate lab-only TLS endpoints on port 26379, independent writable
    state and Sentinel-specific ACL identities. Pin their Redis version and record the

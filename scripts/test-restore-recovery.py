@@ -86,6 +86,29 @@ class JournalFixture:
 
 
 class ReplayTests(unittest.TestCase):
+    def test_encrypted_rollback_path_and_digest_are_bound(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
+            fixture = JournalFixture(Path(directory))
+            original = fixture.rollback_set / "database-before.dump"
+            encrypted = fixture.rollback_set / "database-before.dump.age"
+            original.rename(encrypted)
+            fixture.records[4][-2:] = [
+                "rollback-dump=" + str(encrypted),
+                "rollback-dump-sha256=" + recovery.sha256(encrypted),
+            ]
+            fixture.flush()
+            self.assertTrue(fixture.evidence().encrypted_rollback)
+            write(encrypted, b"changed ciphertext")
+            with self.assertRaisesRegex(recovery.RecoveryError, "dump differs"):
+                fixture.evidence()
+            fixture.records[4][-2] = "rollback-dump=" + str(fixture.rollback_set / "other.age")
+            write(fixture.rollback_set / "other.age", b"changed ciphertext")
+            fixture.records[4][-1] = "rollback-dump-sha256=" + recovery.sha256(
+                fixture.rollback_set / "other.age")
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "dump differs"):
+                fixture.evidence()
+
     def test_s3_import_intent_binds_attempts_before_database_cutover(self) -> None:
         with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
             fixture = JournalFixture(Path(directory))

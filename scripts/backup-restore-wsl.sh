@@ -357,13 +357,21 @@ production_signing_key="$production_root/signing-ed25519.pem"
 production_verify_key="$production_root/signing-ed25519.pub.pem"
 production_age_identity="$production_root/age-identity.txt"
 production_age_recipients="$production_root/age-recipients.txt"
+rollback_primary_identity="$production_root/rollback-primary-identity.txt"
+rollback_recovery_identity="$production_root/rollback-recovery-identity.txt"
+rollback_recipients="$production_root/rollback-recipients.txt"
 openssl genpkey -algorithm ED25519 -out "$production_signing_key" 2>/dev/null
 openssl pkey -in "$production_signing_key" -pubout \
   -out "$production_verify_key" 2>/dev/null
 age-keygen -o "$production_age_identity" >/dev/null 2>&1
 age-keygen -y "$production_age_identity" >"$production_age_recipients"
+age-keygen -o "$rollback_primary_identity" >/dev/null 2>&1
+age-keygen -o "$rollback_recovery_identity" >/dev/null 2>&1
+age-keygen -y "$rollback_primary_identity" >"$rollback_recipients"
+age-keygen -y "$rollback_recovery_identity" >>"$rollback_recipients"
 chmod 0600 "$production_signing_key" "$production_verify_key" \
-  "$production_age_identity" "$production_age_recipients"
+  "$production_age_identity" "$production_age_recipients" \
+  "$rollback_primary_identity" "$rollback_recovery_identity" "$rollback_recipients"
 
 create_restore_database northstar_production_restore_target
 production_backup_url_file="$production_root/backup-database-url"
@@ -403,7 +411,14 @@ BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/restore-backup.sh" 
   --plaintext-staging-dir "$production_scratch" \
   --public-key-file "$production_verify_key" \
   --age-identity-file "$production_age_identity" \
+  --rollback-age-recipient-file "$rollback_recipients" \
+  --rollback-age-identity-file "$rollback_primary_identity" \
   --rollback-state-file "$production_floor_dir/floor" >/dev/null
+production_rollback_dump="$(find "$production_rollback" -name database-before.dump.age -type f -print -quit)"
+[[ -n "$production_rollback_dump" && ! -e "${production_rollback_dump%.age}" ]] \
+  || { echo 'production restore retained a plaintext rollback database dump' >&2; exit 1; }
+age --decrypt --identity "$rollback_recovery_identity" "$production_rollback_dump" \
+  | "$postgres_bin/pg_restore" --list >/dev/null
 
 production_acl_ok="$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" \
   PGUSER="$migrator_role" PGDATABASE=northstar_production_restore_target \
@@ -453,6 +468,8 @@ if NORTHSTAR_RESTORE_TEST_KILL_POINT=after-first-new BACKUP_SECURITY_POLICY=prod
    --plaintext-staging-dir "$production_scratch" \
    --public-key-file "$production_verify_key" \
    --age-identity-file "$production_age_identity" \
+   --rollback-age-recipient-file "$rollback_recipients" \
+   --rollback-age-identity-file "$rollback_primary_identity" \
    --rollback-state-file "$recovery_floor_dir/floor" >/dev/null 2>&1; then
   echo "SIGKILL fixture unexpectedly completed the restore" >&2
   exit 1
@@ -472,6 +489,19 @@ recovery_cutover="$(find "$recovery_uploads" -mindepth 1 -maxdepth 1 \
   -type d -name '.northstar-restore-cutover-*' -print -quit)"
 [[ -n "$recovery_cutover" ]] \
   || { echo "SIGKILL fixture lost its durable cutover journal" >&2; exit 1; }
+if bash "$project_dir/scripts/recover-restore.sh" "$recovery_cutover" \
+  --database-url-file "$recovery_url_file" \
+  --upload-dir "$recovery_uploads" --rollback-dir "$recovery_rollback" \
+  --rollback-state-file "$recovery_floor_dir/floor" \
+  --backup-dir "$production_backup_dir" \
+  --public-key-file "$production_verify_key" \
+  --age-identity-file "$production_age_identity" \
+  --rollback-age-identity-file "$production_age_identity" \
+  --plaintext-staging-dir "$production_scratch" \
+  --confirm-stopped NORTHSTAR-RECOVER >/dev/null 2>&1; then
+  echo 'recovery accepted an unrelated rollback identity' >&2
+  exit 1
+fi
 bash "$project_dir/scripts/recover-restore.sh" "$recovery_cutover" \
   --database-url-file "$recovery_url_file" \
   --upload-dir "$recovery_uploads" --rollback-dir "$recovery_rollback" \
@@ -479,6 +509,7 @@ bash "$project_dir/scripts/recover-restore.sh" "$recovery_cutover" \
   --backup-dir "$production_backup_dir" \
   --public-key-file "$production_verify_key" \
   --age-identity-file "$production_age_identity" \
+  --rollback-age-identity-file "$rollback_recovery_identity" \
   --plaintext-staging-dir "$production_scratch" \
   --confirm-stopped NORTHSTAR-RECOVER >/dev/null
 [[ "$(<"$recovery_uploads/$upload_id")" == "$upload_body" ]] \
@@ -1144,10 +1175,15 @@ rollback_fault_log="$work_dir/rollback-fault.log"
 if NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES=1 DATABASE_URL="$rollback_database_url" \
   bash "$project_dir/scripts/restore-backup.sh" "$backup_dir" \
   --confirm-restore NORTHSTAR-RESTORE --upload-dir "$rollback_restore" \
-  --rollback-dir "$rollback_retention" >"$rollback_fault_log" 2>&1; then
+  --rollback-dir "$rollback_retention" \
+  --rollback-age-recipient-file "$rollback_recipients" \
+  --rollback-age-identity-file "$rollback_primary_identity" \
+  >"$rollback_fault_log" 2>&1; then
   echo "restore fault injection unexpectedly succeeded" >&2
   exit 1
 fi
+[[ -n "$(find "$rollback_retention" -name database-before.dump.age -type f -print -quit)" ]] \
+  || { echo 'encrypted rollback compensation did not retain its ciphertext dump' >&2; exit 1; }
 if ! rollback_value="$(read_canonical_probe northstar_rollback_target \
   "$rollback_probe_user_id")"; then
   echo 'rollback fault injection left the target database unavailable' >&2

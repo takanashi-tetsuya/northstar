@@ -5,18 +5,24 @@ for reproducible builds, and controls on artifact distribution.
 
 ## Current 2.0.2 decision
 
-The vendored `libomemo.js` 2.0.2 source tree, deployed JavaScript/WASM hashes,
-commit-bearing PAX archive metadata, npm distribution coordinates and
+The vendored `libomemo.js` 2.0.2 source tree, official npm tarball, deployed
+JavaScript/WASM hashes, commit-bearing PAX archive metadata and
 CycloneDX SBOM are pinned and checked offline. The lockfile supplies integrity
-for all 344 registry packages. These controls detect repository drift and make
-the asserted release origin reviewable.
+for all 344 registry packages. The npm tarball's recorded SHA-1 and SHA-512
+integrity match its retained bytes, and its ESM/WASM match the deployed files.
+The retained npm ECDSA signature verifies the distribution SRI with the
+registry's published key. The upstream annotated tag's PGP signature verifies
+with the retained GitHub-listed maintainer key. These checks make the release
+origin reviewable and detect repository drift.
 
 Version 2.0.2 is classified `provenance-traced-not-reproducible`.
 Neither the source archive nor its
 workflows record npm, Emscripten, LLVM or Binaryen versions. The WASM has no
-custom or `producers` section. The official npm tarball, signed tag object and
-registry/signature attestations are absent; registry metadata supplies only the
-npm tarball's SHA-1. These gaps prevent verification of the source-to-WASM build.
+custom or `producers` section. Independent signer identity and
+source-to-package build provenance are absent. The signed tag also differs
+from the npm metadata's `gitHead` in the changelog and `chai` development
+dependency/lockfile. These gaps prevent verification of the source-to-WASM
+build; matching the published tarball is not a source rebuild.
 
 The device-transfer KDF additionally vendors the exact official npm tarball and
 deployed UMD artifact for `hash-wasm` 4.12.0, its MIT license, registry

@@ -1544,6 +1544,14 @@ backup used age. Put the rollback root on encrypted, access-controlled storage
 or transfer the complete set into the organization's encryption system. Retain
 it until application validation succeeds.
 
+If the restore uses `--rollback-age-recipient-file` and
+`--rollback-age-identity-file`, it encrypts the pre-restore database dump before
+writing it to rollback storage. The recipient file can list a separate recovery
+key. Supply that key through `--rollback-age-identity-file` when running
+`recover-restore.sh` after a hard crash; the recovery command checks it before
+opening the target database. Keep old upload copies on encrypted storage even
+with this option, since they are not encrypted individually.
+
 Restore is intentionally not a backup-role operation: it receives the migrator
 owner URL only in this stopped, explicit profile. After a successful restore,
 run the one-shot `migrate` job and database-role audit before returning

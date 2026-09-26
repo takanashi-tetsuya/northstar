@@ -232,6 +232,7 @@ start_server() {
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
     BOSH_ENABLED=true \
+    BOSH_INACTIVITY_SECONDS=5 \
     TRUSTED_PROXY_IPS=127.0.0.1,::1 \
     WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
     UPLOAD_DIR="$runtime_dir/uploads" \

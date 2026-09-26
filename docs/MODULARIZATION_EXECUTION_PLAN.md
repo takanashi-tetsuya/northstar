@@ -757,6 +757,14 @@ generated fixture exercises valid and rejected responses and TLS 1.2/1.3
 stapling. Outbound S2S staple verification and any online retrieval policy
 remain outside this first profile.
 
+R3 now retains the official `libomemo.js` 2.0.2 npm tarball, npm registry
+signature and upstream signed tag. Offline checks verify both signatures and
+that the packaged ESM/WASM match the deployed files. The source-to-artifact
+build is still unqualified: compiler versions, build provenance and two
+isolated matching rebuilds are missing; the signed tag and npm metadata
+`gitHead` also differ in the `chai` dev dependency. `hash-wasm` remains in the same
+provenance-only state.
+
 Federated MUC now rebinds an existing local occupant to a new authenticated
 S2S connection through an exact PostgreSQL occupancy transition. The
 transaction rechecks the remote affiliation, advances the connection fence and
@@ -764,10 +772,12 @@ transfers pending delivery before the local projection changes. This covers a
 reconnect to the same owning node; cross-node recovery and third-party
 interoperability remain part of `EXT-CLUSTER` and `EXT-FEDERATION`.
 
-R1 already has a restartable local/S3 recovery command, durable XID and
-same-transaction markers, and isolated pre/post-commit hard-kill drills. Its
-remaining work is protected rollback storage, independent key/state recovery
-and target-environment drills; an expired or ambiguous XID remains fail-closed.
+R1 has a restartable local/S3 recovery command, durable XID and same-transaction
+markers, and isolated pre/post-commit hard-kill drills. An optional age profile
+now streams the pre-restore database dump into encrypted rollback storage and
+tests recovery with a separate key. Old upload copies remain plaintext, and
+the encrypted path still needs the PostgreSQL fixture and target-environment
+drills. An expired or ambiguous XID remains fail-closed.
 
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run

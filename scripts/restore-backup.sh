@@ -14,6 +14,8 @@ confirmation=""
 public_key_file="${BACKUP_VERIFY_KEY_FILE:-}"
 require_signature="${BACKUP_REQUIRE_SIGNATURE:-false}"
 age_identity_file="${BACKUP_AGE_IDENTITY_FILE:-}"
+rollback_age_recipient_file="${RESTORE_ROLLBACK_AGE_RECIPIENT_FILE:-}"
+rollback_age_identity_file="${RESTORE_ROLLBACK_AGE_IDENTITY_FILE:-}"
 rollback_state_file="${BACKUP_ROLLBACK_STATE_FILE:-}"
 allow_rollback="${BACKUP_ALLOW_ROLLBACK:-false}"
 allow_generation_change="${BACKUP_ALLOW_GENERATION_CHANGE:-false}"
@@ -49,6 +51,8 @@ Options:
   --public-key-file FILE         Trusted OpenSSL Ed25519 public key
   --require-signature            Reject unsigned and legacy backups
   --age-identity-file FILE       age private identity (file only)
+  --rollback-age-recipient-file FILE  Encrypt the pre-restore database dump for these recipients
+  --rollback-age-identity-file FILE   Identity for immediate rollback compensation
   --rollback-state-file FILE     Persistent trusted restore floor
   --allow-rollback               Deliberately restore an equal/older sequence
   --allow-generation-change      Deliberately trust a new generation
@@ -79,6 +83,8 @@ while [[ $# -gt 0 ]]; do
     --public-key-file) public_key_file="${2:?missing public key file}"; shift 2 ;;
     --require-signature) require_signature=true; shift ;;
     --age-identity-file) age_identity_file="${2:?missing age identity file}"; shift 2 ;;
+    --rollback-age-recipient-file) rollback_age_recipient_file="${2:?missing rollback recipient file}"; shift 2 ;;
+    --rollback-age-identity-file) rollback_age_identity_file="${2:?missing rollback identity file}"; shift 2 ;;
     --rollback-state-file) rollback_state_file="${2:?missing rollback state file}"; shift 2 ;;
     --allow-rollback) allow_rollback=true; shift ;;
     --allow-generation-change) allow_generation_change=true; shift ;;
@@ -124,6 +130,18 @@ parse_bool() {
 require_signature="$(parse_bool BACKUP_REQUIRE_SIGNATURE "$require_signature")"
 allow_rollback="$(parse_bool BACKUP_ALLOW_ROLLBACK "$allow_rollback")"
 allow_generation_change="$(parse_bool BACKUP_ALLOW_GENERATION_CHANGE "$allow_generation_change")"
+
+if [[ -n "$rollback_age_recipient_file" || -n "$rollback_age_identity_file" ]]; then
+  [[ -n "$rollback_age_recipient_file" && -n "$rollback_age_identity_file" ]] \
+    || { echo 'encrypted rollback requires both recipient and identity files' >&2; exit 2; }
+  [[ -f "$rollback_age_recipient_file" && ! -L "$rollback_age_recipient_file" && -r "$rollback_age_recipient_file" \
+     && -f "$rollback_age_identity_file" && ! -L "$rollback_age_identity_file" && -r "$rollback_age_identity_file" ]] \
+    || { echo 'rollback age files must be readable regular non-symlink files' >&2; exit 2; }
+  [[ "$(stat -c '%u:%g:%a:%h' "$rollback_age_identity_file")" == "$(id -u):$(id -g):600:1" ]] \
+    || { echo 'rollback age identity must be an owner-only, single-link file' >&2; exit 2; }
+  command -v age >/dev/null && command -v pg_restore >/dev/null \
+    || { echo 'encrypted rollback requires age and pg_restore' >&2; exit 1; }
+fi
 
 # Fail before database access, decryption, or plaintext materialization when a
 # production trust capability is absent.
@@ -221,6 +239,15 @@ if paths_overlap "$resolved_upload" "$resolved_rollback" \
    || paths_overlap "$resolved_rollback" "$backup_dir"; then
   echo "restore upload, rollback and backup directories must not overlap" >&2
   exit 2
+fi
+if [[ -n "$rollback_age_identity_file" ]]; then
+  rollback_age_identity_file="$(cd "$(dirname -- "$rollback_age_identity_file")" && pwd -P)/$(basename -- "$rollback_age_identity_file")"
+  if paths_overlap "$rollback_age_identity_file" "$resolved_upload" \
+     || paths_overlap "$rollback_age_identity_file" "$resolved_rollback" \
+     || paths_overlap "$rollback_age_identity_file" "$backup_dir"; then
+    echo 'rollback age identity must be outside backup, upload and rollback payload directories' >&2
+    exit 2
+  fi
 fi
 
 current_owner="$(id -u):$(id -g)"
@@ -430,6 +457,38 @@ try:
 finally:
     os.close(fd)
 PY
+}
+
+make_rollback_dump() {
+  if [[ -n "$rollback_age_recipient_file" ]]; then
+    # Keep the pre-restore dump off persistent plaintext storage. A failed
+    # producer or encryptor must fail the entire pipeline before cutover.
+    run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
+      | age --encrypt --recipients-file "$rollback_age_recipient_file" \
+      --output "$rollback_dump"
+    chmod 0600 "$rollback_dump"
+    age --decrypt --identity "$rollback_age_identity_file" "$rollback_dump" \
+      | run_pg_client_without_parent_fds pg_restore --list >/dev/null
+  else
+    run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
+      --file="$rollback_dump"
+    chmod 0600 "$rollback_dump"
+    run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
+  fi
+  fsync_path "$rollback_dump"
+  fsync_path "$rollback_set"
+}
+
+stream_restore_sql() {
+  local dump="$1" worker_in="$2"
+  if [[ "$dump" == "$rollback_set/database-before.dump.age" ]]; then
+    age --decrypt --identity "$rollback_age_identity_file" "$dump" \
+      | run_pg_client_without_parent_fds pg_restore \
+          --clean --if-exists --no-owner --no-acl --file=- >&"$worker_in"
+  else
+    run_pg_client_without_parent_fds pg_restore "$dump" \
+      --clean --if-exists --no-owner --no-acl --file=- >&"$worker_in"
+  fi
 }
 
 remove_work_dir() {
@@ -1803,8 +1862,7 @@ $northstar_restore$;
 SQL
   } >&"$worker_in" || stream_ok=false
   if [[ "$stream_ok" == true ]] \
-    && ! run_pg_client_without_parent_fds pg_restore "$replacement_dump" \
-      --clean --if-exists --no-owner --no-acl --file=- >&"$worker_in"; then
+    && ! stream_restore_sql "$replacement_dump" "$worker_in"; then
     stream_ok=false
   fi
   # pg_restore can reset search_path to empty. Rebind the restored public
@@ -2174,15 +2232,11 @@ PY
   mkdir -m 0700 "$rollback_set"
   fsync_path "$resolved_rollback"
   rollback_dump="$rollback_set/database-before.dump"
+  [[ -z "$rollback_age_recipient_file" ]] || rollback_dump+=.age
   echo 'restore phase=database-authority-preflight' >&2
   establish_restore_database_authorities
   echo 'restore phase=rollback-snapshot' >&2
-  run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
-    --file="$rollback_dump"
-  chmod 0600 "$rollback_dump"
-  run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
-  fsync_path "$rollback_dump"
-  fsync_path "$rollback_set"
+  make_rollback_dump
   journal_append rollback-ready "$rollback_set"
   rollback_state_pre_sha256=none
   if [[ -n "$rollback_state_file" && -f "$rollback_state_file" ]]; then
@@ -2494,6 +2548,7 @@ previous_uploads="$rollback_set/uploads"
 mkdir -m 0700 "$previous_uploads"
 fsync_path "$resolved_rollback"
 rollback_dump="$rollback_set/database-before.dump"
+[[ -z "$rollback_age_recipient_file" ]] || rollback_dump+=.age
 
 # The target coordinator owns the database-local advisory maintenance fence
 # shared with backup. The controller is deliberately connected elsewhere and
@@ -2503,12 +2558,7 @@ rollback_dump="$rollback_set/database-before.dump"
 echo 'restore phase=database-authority-preflight' >&2
 establish_restore_database_authorities
 echo 'restore phase=rollback-snapshot' >&2
-run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
-  --file="$rollback_dump"
-chmod 0600 "$rollback_dump"
-run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
-fsync_path "$rollback_dump"
-fsync_path "$rollback_set"
+make_rollback_dump
 journal_append rollback-ready "$rollback_set"
 rollback_state_pre_sha256=none
 if [[ -n "$rollback_state_file" && -f "$rollback_state_file" ]]; then

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "metadataUrl": "https://registry.npmjs.org/libomemo.js/2.0.2",
+  "keysUrl": "https://registry.npmjs.org/-/npm/v1/keys",
+  "retrievedAt": "2026-09-26",
+  "package": "libomemo.js",
+  "version": "2.0.2",
+  "gitHead": "31b51c5d83d63aaa027e70d1dccba7c6453616e2",
+  "distribution": {
+    "tarball": "https://registry.npmjs.org/libomemo.js/-/libomemo.js-2.0.2.tgz",
+    "sha1": "6029b4a76dda80a7e7a9ebed89a5f2943aa7527f",
+    "integrity": "sha512-Ou12YU18wq0eCvTCbKl+ivFrSp8IgOf2nmj4SpGN52vHViPn/CysAODm2eN6t20xe52vHyUI6AxlrcoJH6sePg=="
+  },
+  "signature": {
+    "sig": "MEUCICxW+cRZHoT3DfHFFSW09OaMr/gFeoHjuhDfnHoh9e3cAiEAkbmAo0is7jISuZulnflivxtx7ar3Ov2ORDy3dKr6DVM=",
+    "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+  },
+  "publicKey": {
+    "expires": null,
+    "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "keytype": "ecdsa-sha2-nistp256",
+    "scheme": "ecdsa-sha2-nistp256",
+    "key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY6Ya7W++7aUPzvMTrezH6Ycx3c+HOKYCcNGybJZSCJq/fd7Qa8uuAKtdIkUQtQiEKERhAmE5lMMJhP8OkDOa2g=="
+  }
+}

@@ -195,7 +195,23 @@ The corrected run started at 2026-09-26 04:16 UTC as
 observation passed both federation peers and cross-node delivery. The guest
 helper matched source SHA-256
 `add18a57579a5ab88625b20cb3243b12617c440775127bed8bf139e1136ce48b`;
-the binary digest below did not change. The full 24-hour result is pending.
+the binary digest below did not change. Iterations 0–419 passed, but iteration
+420 failed at 11:16 UTC, seven hours into the run. The cross-node delivery
+check passed; the Prosody-to-Northstar marker did not reach Alice's new
+resource. Prosody's debug log shows that it sent the message, then Northstar
+closed the S2S stream in the same second. Prosody reported one unacknowledged
+stanza and returned a message error to Bob. This is a failed soak, not a slow
+pass or proof that the route-readiness change was sufficient.
+
+The five-minute federation-probe interval coincides with Northstar's 300-second
+authenticated S2S idle limit. The previous Prosody message was acknowledged at
+11:11:20 UTC and the failed message was sent at 11:16:20 UTC. The idle timeout
+is a likely cause of the stream close, but Northstar's current INFO-level log
+does not identify the exact close branch. The captured evidence is read-only
+under
+`/tmp/northstar-lab-evidence-5865007/soak-route-ready-failure-20260926T111620Z/`,
+with SHA-256 checksums for the run output and surrounding service logs. A fix
+needs a targeted idle-boundary test and a new frozen-candidate soak.
 The initial federation and cluster probes used source commit
 `58650079da8d21408ab6d027127796b7863ccf5c` and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.

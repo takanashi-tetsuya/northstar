@@ -51,7 +51,7 @@ function parsePax(data) {
   return values;
 }
 
-function parseTar(gzip) {
+export function parseTar(gzip, expectedRoot = archiveRoot) {
   if (gzip.length > 32 * 1024 * 1024) throw new Error('source archive exceeds 32 MiB');
   const tar = gunzipSync(gzip, { maxOutputLength: 128 * 1024 * 1024 });
   const entries = new Map();
@@ -88,7 +88,7 @@ function parseTar(gzip) {
       path.startsWith('/') ||
       path.includes('\\') ||
       path.split('/').some((part) => part === '..') ||
-      !path.startsWith(archiveRoot)
+      !path.startsWith(expectedRoot)
     ) {
       throw new Error(`unsafe source archive path: ${path}`);
     }

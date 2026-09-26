@@ -14,17 +14,36 @@
     "archiveRoot": "libomemo.js-v2.0.2/",
     "regularFileCount": 183,
     "paxCommit": "df3d34cab03306d34d6ed0bf8b3a3db152173bb4",
-    "signedTagObject": null,
-    "detachedSignature": null,
-    "signerFingerprint": null,
+    "signedTagObject": {
+      "path": "third_party/libomemo.js/upstream-v2.0.2-tag.json",
+      "sha256": "29a93425418c9ced7192997fa21fb14a1c6af4ab6b00d16c66277b41b6d822d6"
+    },
+    "detachedSignature": {
+      "path": "third_party/libomemo.js/upstream-v2.0.2-tag-signature.asc",
+      "sha256": "209f9ffab1d0c64b68e37dc186a383243c6269361ffcf8dabce2b80f480dbd4c"
+    },
+    "signingKeyring": {
+      "path": "third_party/libomemo.js/upstream-maintainer-keyring.gpg",
+      "sha256": "3002a53374ef1366d801a7796f6999f3fc7ed6228fac4ddc52e1c70da80ab11d"
+    },
+    "signerFingerprint": "2C06722D62802D6041001B85D48D88C41B3A34E6",
     "signatureTrustRecord": null
   },
   "npmDistribution": {
     "url": "https://registry.npmjs.org/libomemo.js/-/libomemo.js-2.0.2.tgz",
+    "metadataGitHead": "31b51c5d83d63aaa027e70d1dccba7c6453616e2",
     "sha1": "6029b4a76dda80a7e7a9ebed89a5f2943aa7527f",
-    "sha256": null,
-    "vendoredTarball": null,
-    "registryAttestation": null
+    "sha256": "4838f06c90d2e611949fabf3edd45d2905bddbd657d36b5a8b9f150a09f6c31b",
+    "vendoredTarball": {
+      "path": "third_party/libomemo.js/npm-libomemo.js-2.0.2.tgz",
+      "sha256": "4838f06c90d2e611949fabf3edd45d2905bddbd657d36b5a8b9f150a09f6c31b"
+    },
+    "registrySignature": {
+      "path": "third_party/libomemo.js/npm-registry-signature.json",
+      "sha256": "91519b3171eaf7578c8bb94241674441a3d3531909562f390de50276173b1c22"
+    },
+    "registryAttestation": null,
+    "integrity": "sha512-Ou12YU18wq0eCvTCbKl+ivFrSp8IgOf2nmj4SpGN52vHViPn/CysAODm2eN6t20xe52vHyUI6AxlrcoJH6sePg=="
   },
   "javascriptBuild": {
     "node": "v24.14.0",
@@ -72,7 +91,11 @@
     "locale": null,
     "timezone": null,
     "sourceDateEpoch": null,
-    "sourceTreeMustDeleteBeforeBuild": ["build", "dist", "node_modules"],
+    "sourceTreeMustDeleteBeforeBuild": [
+      "build",
+      "dist",
+      "node_modules"
+    ],
     "independentBuildsRequired": 2,
     "expectedOutputs": {
       "dist/libomemo.esm.min.js": "29848fa0791bc07f6982e7e86a5261a3226518f581aba268ec8b030a11e30385",
@@ -83,8 +106,9 @@
   },
   "missingEvidence": [
     "exact npm executable version used for the 2.0.2 release",
-    "official npm tarball bytes or registry attestation available for offline verification",
-    "signed tag object, signature, trusted signer fingerprint and trust record",
+    "exact source tree and dependency lock used for npm publication; the signed tag and npm metadata gitHead differ",
+    "independent source-to-package provenance or registry build attestation",
+    "independent trust decision for the signed tag's maintainer key",
     "Emscripten, LLVM and Binaryen versions",
     "digest-pinned compiler image and immutable system package set",
     "release platform, locale, timezone and source-file glob ordering",

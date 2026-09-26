@@ -31,7 +31,8 @@
           "type": "distribution",
           "url": "https://registry.npmjs.org/libomemo.js/-/libomemo.js-2.0.2.tgz",
           "hashes": [
-            { "alg": "SHA-1", "content": "6029b4a76dda80a7e7a9ebed89a5f2943aa7527f" }
+            { "alg": "SHA-1", "content": "6029b4a76dda80a7e7a9ebed89a5f2943aa7527f" },
+            { "alg": "SHA-256", "content": "4838f06c90d2e611949fabf3edd45d2905bddbd657d36b5a8b9f150a09f6c31b" }
           ]
         }
       ],
@@ -40,7 +41,8 @@
         { "name": "northstar:source-archive-sha256", "value": "952172631c2e16085420779b3ea039ce59a2ac0b1b20255ff16d1941d4226343" },
         { "name": "northstar:source-archive-pax-commit", "value": "df3d34cab03306d34d6ed0bf8b3a3db152173bb4" },
         { "name": "northstar:rebuild-qualification", "value": "provenance-traced-not-reproducible" },
-        { "name": "northstar:qualification-manifest-sha256", "value": "ef20fe46c0b15b4f7fafd3c7dca76067cd98321c82a99f6fdbd91697adcb3455" },
+        { "name": "northstar:npm-registry-integrity", "value": "sha512-Ou12YU18wq0eCvTCbKl+ivFrSp8IgOf2nmj4SpGN52vHViPn/CysAODm2eN6t20xe52vHyUI6AxlrcoJH6sePg==" },
+        { "name": "northstar:qualification-manifest-sha256", "value": "718bb6d6c600f934a9d73363577eef951745c9cca6b53edd21fce92657588268" },
         { "name": "northstar:node-version", "value": "v24.14.0" },
         { "name": "northstar:npm-version", "value": "unknown-not-recorded" },
         { "name": "northstar:emscripten-version", "value": "unknown-not-recorded" },

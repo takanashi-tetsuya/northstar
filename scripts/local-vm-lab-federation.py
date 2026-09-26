@@ -29,6 +29,26 @@ def receive_until(conn: socket.socket, marker: str, timeout: int = 15) -> str:
     return collected.decode()
 
 
+def peer_reply_after_timeout(conn: socket.socket, marker: str) -> str:
+    """Keep a failed inbound check's stanza error in the soak log."""
+    deadline = time.monotonic() + 2
+    reply = bytearray()
+    while len(reply) < 8192:
+        conn.settimeout(max(0.1, deadline - time.monotonic()))
+        try:
+            chunk = conn.recv(min(4096, 8192 - len(reply)))
+        except TimeoutError:
+            break
+        if not chunk:
+            break
+        reply.extend(chunk)
+        if marker.encode() in reply and b"</message>" in reply:
+            break
+        if time.monotonic() >= deadline:
+            break
+    return reply.decode(errors="replace")
+
+
 def connect_peer(
     domain: str, user: str, password: str, *, host: str | None = None,
     resource: str = "vm-lab",
@@ -144,7 +164,14 @@ def main() -> None:
                 f"<message to='alice@{NORTHSTAR_DOMAIN}' type='chat' "
                 f"id='{inbound_marker}'><body>{inbound_marker}</body></message>".encode()
             )
-            received, _ = alice.receive_until(inbound_marker, timeout=15)
+            try:
+                received, _ = alice.receive_until(inbound_marker, timeout=15)
+            except TimeoutError as error:
+                peer_reply = peer_reply_after_timeout(peer, inbound_marker)
+                raise TimeoutError(
+                    f"Northstar did not deliver {inbound_marker}; "
+                    f"Prosody/ejabberd reply: {peer_reply!r}"
+                ) from error
             assert inbound_marker in received, received
             print(f"{args.peer} -> Northstar: delivered")
         finally:

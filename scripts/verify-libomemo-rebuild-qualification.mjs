@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { collectLibomemoEvidence } from './audit-libomemo-source.mjs';
+import { collectLibomemoEvidence, parseTar } from './audit-libomemo-source.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const qualificationPath = resolve(
@@ -16,6 +17,10 @@ const CURRENT_EXCEPTION_HASHES = Object.freeze({
   source: '952172631c2e16085420779b3ea039ce59a2ac0b1b20255ff16d1941d4226343',
   javascript: '29848fa0791bc07f6982e7e86a5261a3226518f581aba268ec8b030a11e30385',
   wasm: '3a32503ade92ed2bf522d49d51106a227dadb39c2a7b08a1023c216c7eec1286',
+  npmTarball: '4838f06c90d2e611949fabf3edd45d2905bddbd657d36b5a8b9f150a09f6c31b',
+  signerFingerprint: '2C06722D62802D6041001B85D48D88C41B3A34E6',
+  registryKeyid: 'SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U',
+  registryPublicKeySha256: 'fb190a462123443500cbcdb6519623e7179e9f38d84ad4e9362b72d2b68b62c1',
 });
 
 function invariant(condition, message) {
@@ -51,6 +56,62 @@ async function verifyEvidenceRecord(value, label) {
   return bytes;
 }
 
+function verifyRegistrySignature(record, distribution) {
+  invariant(record.schemaVersion === 1 && record.package === 'libomemo.js' &&
+    record.version === '2.0.2' &&
+    record.metadataUrl === 'https://registry.npmjs.org/libomemo.js/2.0.2' &&
+    record.keysUrl === 'https://registry.npmjs.org/-/npm/v1/keys' &&
+    record.gitHead === distribution.metadataGitHead &&
+    record.distribution.tarball === distribution.url &&
+    record.distribution.sha1 === distribution.sha1 &&
+    record.distribution.integrity === distribution.integrity,
+  'npm signature record does not bind the expected release metadata');
+  const key = record.publicKey;
+  invariant(record.signature.keyid === CURRENT_EXCEPTION_HASHES.registryKeyid &&
+    key.keyid === record.signature.keyid && key.expires === null &&
+    key.keytype === 'ecdsa-sha2-nistp256' && key.scheme === key.keytype &&
+    sha256(Buffer.from(key.key, 'base64')) === CURRENT_EXCEPTION_HASHES.registryPublicKeySha256,
+  'npm registry signing key identity changed');
+  let verified = false;
+  try {
+    verified = verify(
+      'sha256',
+      Buffer.from(`${record.package}@${record.version}:${distribution.integrity}`),
+      createPublicKey({ key: Buffer.from(key.key, 'base64'), format: 'der', type: 'spki' }),
+      Buffer.from(record.signature.sig, 'base64'),
+    );
+  } catch {
+    // Malformed keys or signatures fail the same way as a bad signature.
+  }
+  invariant(verified, 'npm registry signature verification failed');
+}
+
+async function verifySignedTag(tagBytes, signatureBytes, keyringRecord, qualification) {
+  const tag = JSON.parse(tagBytes.toString('utf8'));
+  invariant(tag.tag === qualification.release.tag &&
+    tag.sha === 'ee499d32286f49a2b98606dbe648553eeb25eea3' &&
+    tag.object?.sha === qualification.release.commit &&
+    tag.object?.type === 'commit' &&
+    tag.verification?.signature === signatureBytes.toString('utf8') &&
+    tag.verification?.payload?.startsWith(`object ${qualification.release.commit}\n`) &&
+    tag.verification.payload.includes(`\ntype commit\ntag ${qualification.release.tag}\n`),
+  'upstream signed tag does not target the qualified commit');
+  const directory = await mkdtemp(join(tmpdir(), 'northstar-libomemo-tag-'));
+  try {
+    const payloadPath = join(directory, 'tag-payload');
+    await writeFile(payloadPath, tag.verification.payload);
+    const result = spawnSync('gpgv', [
+      '--status-fd', '1', '--keyring', resolve(root, keyringRecord.path),
+      resolve(root, qualification.source.detachedSignature.path), payloadPath,
+    ], { encoding: 'utf8', windowsHide: true });
+    invariant(result.status === 0 &&
+      result.stdout.includes(`[GNUPG:] VALIDSIG ${qualification.source.signerFingerprint} `),
+    `upstream tag signature verification failed: ${result.stderr || result.error || result.status}`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 export function validateLibomemoQualification(qualification, evidence) {
   invariant(qualification.schemaVersion === 1, 'unknown libomemo rebuild qualification schema');
   invariant(
@@ -60,8 +121,16 @@ export function validateLibomemoQualification(qualification, evidence) {
   invariant(
     qualification.npmDistribution.url ===
       `https://registry.npmjs.org/libomemo.js/-/libomemo.js-${qualification.release.version}.tgz` &&
-      /^[0-9a-f]{40}$/.test(qualification.npmDistribution.sha1),
+      /^[0-9a-f]{40}$/.test(qualification.npmDistribution.sha1) &&
+      /^[0-9a-f]{64}$/.test(qualification.npmDistribution.sha256) &&
+      /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(qualification.npmDistribution.integrity),
     'official npm distribution record drifted',
+  );
+  evidenceRecord(qualification.npmDistribution.vendoredTarball, 'official npm tarball');
+  invariant(
+    qualification.npmDistribution.vendoredTarball.sha256 ===
+      qualification.npmDistribution.sha256,
+    'vendored npm tarball digest differs from the distribution record',
   );
   invariant(
     qualification.release.commit === evidence.sourceArchive.globalPax.comment,
@@ -141,8 +210,9 @@ export function validateLibomemoQualification(qualification, evidence) {
   invariant(Array.isArray(missing) && missing.length >= 8, 'missing-evidence list is incomplete');
   for (const required of [
     'npm executable version',
-    'npm tarball',
-    'signed tag object',
+    'exact source tree and dependency lock',
+    'source-to-package provenance',
+    'independent trust decision',
     'Emscripten',
     'digest-pinned compiler image',
     'two independent clean source rebuilds',
@@ -159,7 +229,15 @@ export function validateLibomemoQualification(qualification, evidence) {
     );
     invariant(
       qualification.source.sha256 === CURRENT_EXCEPTION_HASHES.source &&
-        qualification.npmDistribution.sha256 === null &&
+        qualification.npmDistribution.sha256 === CURRENT_EXCEPTION_HASHES.npmTarball &&
+        qualification.npmDistribution.metadataGitHead ===
+          '31b51c5d83d63aaa027e70d1dccba7c6453616e2' &&
+        qualification.npmDistribution.vendoredTarball.path ===
+          'third_party/libomemo.js/npm-libomemo.js-2.0.2.tgz' &&
+        qualification.npmDistribution.vendoredTarball.sha256 ===
+          CURRENT_EXCEPTION_HASHES.npmTarball &&
+        qualification.source.signerFingerprint ===
+          CURRENT_EXCEPTION_HASHES.signerFingerprint &&
         qualification.rebuild.expectedOutputs['dist/libomemo.esm.min.js'] ===
           CURRENT_EXCEPTION_HASHES.javascript &&
         qualification.rebuild.expectedOutputs['dist/curve25519_compiled.wasm'] ===
@@ -167,12 +245,15 @@ export function validateLibomemoQualification(qualification, evidence) {
       'the provenance-only exception cannot be retargeted to different bytes',
     );
     invariant(!qualification.rebuild.qualified, 'unreproducible release marked qualified');
+    for (const [label, record] of [
+      ['upstream signed tag', qualification.source.signedTagObject],
+      ['upstream detached signature', qualification.source.detachedSignature],
+      ['upstream signing keyring', qualification.source.signingKeyring],
+      ['npm registry signature', qualification.npmDistribution.registrySignature],
+    ]) evidenceRecord(record, label);
     for (const [label, value] of [
       ['npm version', qualification.javascriptBuild.npm],
-      ['signed tag object', qualification.source.signedTagObject],
-      ['tag signature', qualification.source.detachedSignature],
-      ['signer fingerprint', qualification.source.signerFingerprint],
-      ['npm tarball', qualification.npmDistribution.vendoredTarball],
+      ['independent signer trust record', qualification.source.signatureTrustRecord],
       ['Emscripten version', qualification.wasmBuild.emscripten],
       ['LLVM version', qualification.wasmBuild.llvm],
       ['Binaryen version', qualification.wasmBuild.binaryen],
@@ -270,6 +351,7 @@ export function validateLibomemoQualification(qualification, evidence) {
   );
   evidenceRecord(qualification.source.signedTagObject, 'signed tag object');
   evidenceRecord(qualification.source.detachedSignature, 'tag signature');
+  evidenceRecord(qualification.source.signingKeyring, 'tag signing keyring');
   evidenceRecord(qualification.source.signatureTrustRecord, 'signature trust record');
   evidenceRecord(qualification.npmDistribution.vendoredTarball, 'official npm tarball');
   evidenceRecord(qualification.npmDistribution.registryAttestation, 'npm registry attestation');
@@ -296,20 +378,43 @@ export async function verifyLibomemoQualification({ requireReproducible = false 
     ]);
   const qualification = JSON.parse(qualificationBytes.toString('utf8'));
   const result = validateLibomemoQualification(qualification, evidence);
+  const npmTarball = await verifyEvidenceRecord(
+    qualification.npmDistribution.vendoredTarball,
+    'official npm tarball',
+  );
+  invariant(
+    createHash('sha1').update(npmTarball).digest('hex') === qualification.npmDistribution.sha1 &&
+      `sha512-${createHash('sha512').update(npmTarball).digest('base64')}` ===
+        qualification.npmDistribution.integrity,
+    'vendored npm tarball differs from recorded registry hashes',
+  );
+  const npmEntries = parseTar(npmTarball, 'package/').entries;
+  const npmPackage = npmEntries.get('package/package.json');
+  invariant(
+    npmPackage && JSON.parse(npmPackage.toString('utf8')).version === qualification.release.version,
+    'vendored npm tarball has the wrong package version',
+  );
+  invariant(
+    npmEntries.get('package/dist/libomemo.esm.min.js')?.equals(deployedJavascript) &&
+      npmEntries.get('package/dist/curve25519_compiled.wasm')?.equals(deployedWasm),
+    'vendored npm distribution differs from deployed browser cryptography',
+  );
+  if (qualification.release.version === CURRENT_EXCEPTION_VERSION) {
+    const [registryBytes, tagBytes, signatureBytes] = await Promise.all([
+      verifyEvidenceRecord(qualification.npmDistribution.registrySignature, 'npm registry signature'),
+      verifyEvidenceRecord(qualification.source.signedTagObject, 'upstream signed tag'),
+      verifyEvidenceRecord(qualification.source.detachedSignature, 'upstream detached signature'),
+      verifyEvidenceRecord(qualification.source.signingKeyring, 'upstream signing keyring'),
+    ]);
+    verifyRegistrySignature(JSON.parse(registryBytes.toString('utf8')), qualification.npmDistribution);
+    await verifySignedTag(tagBytes, signatureBytes, qualification.source.signingKeyring, qualification);
+  }
   invariant(
     sha256(deployedJavascript) ===
       qualification.rebuild.expectedOutputs['dist/libomemo.esm.min.js'],
     'deployed libomemo JavaScript does not match the qualification record',
   );
   if (result.reproducible) {
-    const npmTarball = await verifyEvidenceRecord(
-      qualification.npmDistribution.vendoredTarball,
-      'official npm tarball',
-    );
-    invariant(
-      sha256(npmTarball) === qualification.npmDistribution.sha256,
-      'vendored npm tarball differs from the recorded official distribution',
-    );
     await Promise.all([
       verifyEvidenceRecord(qualification.source.signedTagObject, 'signed tag object'),
       verifyEvidenceRecord(qualification.source.detachedSignature, 'tag signature'),
@@ -361,7 +466,9 @@ export async function verifyLibomemoQualification({ requireReproducible = false 
     sourceArchiveHash === qualification.source.sha256 &&
       distribution?.url === qualification.npmDistribution.url &&
       distributionSha1 === qualification.npmDistribution.sha1 &&
-      distributionSha256 === qualification.npmDistribution.sha256,
+      distributionSha256 === qualification.npmDistribution.sha256 &&
+      properties.get('northstar:npm-registry-integrity') ===
+        qualification.npmDistribution.integrity,
     'SBOM source/npm distribution provenance does not match qualification',
   );
   invariant(
@@ -401,6 +508,37 @@ async function selfTest() {
     rejected = true;
   }
   invariant(rejected, 'a guessed compiler version bypassed the qualification gate');
+  const substitutedDistribution = structuredClone(qualification);
+  substitutedDistribution.npmDistribution.sha256 = '0'.repeat(64);
+  substitutedDistribution.npmDistribution.vendoredTarball.sha256 = '0'.repeat(64);
+  rejected = false;
+  try {
+    validateLibomemoQualification(substitutedDistribution, evidence);
+  } catch {
+    rejected = true;
+  }
+  invariant(rejected, 'a substituted npm distribution bypassed the 2.0.2 exception');
+  const registry = JSON.parse(await readFile(resolve(root, qualification.npmDistribution.registrySignature.path), 'utf8'));
+  registry.signature.sig = registry.signature.sig.slice(0, -4) + 'AAAA';
+  rejected = false;
+  try {
+    verifyRegistrySignature(registry, qualification.npmDistribution);
+  } catch {
+    rejected = true;
+  }
+  invariant(rejected, 'a modified npm registry signature passed verification');
+  const tagBytes = await readFile(resolve(root, qualification.source.signedTagObject.path));
+  const signatureBytes = await readFile(resolve(root, qualification.source.detachedSignature.path));
+  const alteredTag = JSON.parse(tagBytes.toString('utf8'));
+  alteredTag.verification.payload = alteredTag.verification.payload.replace('tag v2.0.2', 'tag v2.0.3');
+  rejected = false;
+  try {
+    await verifySignedTag(Buffer.from(JSON.stringify(alteredTag)), signatureBytes,
+      qualification.source.signingKeyring, qualification);
+  } catch {
+    rejected = true;
+  }
+  invariant(rejected, 'a modified signed tag payload passed verification');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

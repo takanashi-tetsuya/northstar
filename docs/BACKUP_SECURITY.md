@@ -384,10 +384,15 @@ replay command, so hard-crash recovery requires an operator-reviewed restore
 drill.
 
 The retained pre-restore database dump and old upload copies are plaintext by
-default. Put the rollback root on encrypted, access-controlled storage (or move
-the verified rollback set into the organization's encryption system after the
-restore). The age identity used to decrypt an incoming backup is not an age
-recipient and is intentionally not repurposed to invent a rollback key.
+default. To encrypt the database dump as it is created, place two independently
+held age public recipients in an owner-controlled file and pass
+`--rollback-age-recipient-file` plus a matching
+`--rollback-age-identity-file` to `restore-backup.sh`. The first identity permits
+immediate compensation; `recover-restore.sh` can use the second identity with
+`--rollback-age-identity-file` after a crash. Keep both private identities
+outside the backup, upload and rollback roots. This option encrypts only the
+database dump: old upload copies still require encrypted, access-controlled
+rollback storage. The incoming backup identity is not a rollback key.
 
 ## Generation, sequence, and rollback rules
 

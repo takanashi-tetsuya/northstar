@@ -12,6 +12,10 @@ use super::*;
 /// XEP-0478 advertisement and the actual framing limit tied to one constant.
 pub(crate) const S2S_MAX_STANZA_BYTES: usize = 1024 * 1024;
 pub(crate) const S2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+// A peer can write at the advertised boundary while TLS or socket readiness
+// needs another scheduler turn. Do not extend the activity clock; only allow
+// one bounded final read before declaring the stream idle.
+const S2S_IDLE_READ_GRACE: Duration = Duration::from_secs(1);
 
 /// Incremental input state for one S2S XML entity.
 ///
@@ -143,7 +147,11 @@ pub(crate) async fn read_frame_until_idle_deadline<S: AsyncRead + Unpin>(
         if let Some(frame) = input.framer.take_frame(&mut input.buffer)? {
             return Ok(Some(frame));
         }
-        let count = match tokio::time::timeout_at(*idle_deadline, stream.read(&mut bytes)).await {
+        let read_deadline = *idle_deadline + (idle_timeout / 10).min(S2S_IDLE_READ_GRACE);
+        if tokio::time::Instant::now() >= read_deadline {
+            return Ok(None);
+        }
+        let count = match tokio::time::timeout_at(read_deadline, stream.read(&mut bytes)).await {
             Ok(read) => read?,
             Err(_) => return Ok(None),
         };
@@ -494,6 +502,27 @@ mod stream_open_tests {
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
 
+    struct PendingOnce<S> {
+        stream: S,
+        first_poll: bool,
+    }
+
+    impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PendingOnce<S> {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            if this.first_poll {
+                this.first_poll = false;
+                cx.waker().wake_by_ref();
+                return std::task::Poll::Pending;
+            }
+            std::pin::Pin::new(&mut this.stream).poll_read(cx, buf)
+        }
+    }
+
     #[test]
     fn s2s_streams_advertise_the_dialback_prefix() {
         assert!(client_open("a.example", "b.example").contains("xmlns:db='jabber:server:dialback'"));
@@ -682,6 +711,40 @@ mod stream_open_tests {
         let (_writer, mut reader) = tokio::io::duplex(64);
         let mut input = S2sInputState::default();
         let frame = read_frame_until_idle(&mut reader, &mut input, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(frame.is_none());
+    }
+
+    #[tokio::test]
+    async fn queued_frame_survives_a_pending_read_at_the_idle_boundary() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let mut reader = PendingOnce {
+            stream: reader,
+            first_poll: true,
+        };
+        let mut input = S2sInputState::default();
+        let idle = Duration::from_secs(10);
+        let mut deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+        writer.write_all(b"<message id='boundary'/>").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert!(tokio::time::Instant::now() > deadline);
+
+        let frame = read_frame_until_idle_deadline(&mut reader, &mut input, idle, &mut deadline)
+            .await
+            .unwrap();
+        assert_eq!(frame.as_deref(), Some("<message id='boundary'/>"));
+    }
+
+    #[tokio::test]
+    async fn expired_idle_grace_does_not_admit_a_late_frame() {
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        let mut input = S2sInputState::default();
+        let idle = Duration::from_secs(10);
+        let mut deadline = tokio::time::Instant::now() - Duration::from_secs(2);
+        writer.write_all(b"<message id='late'/>").await.unwrap();
+
+        let frame = read_frame_until_idle_deadline(&mut reader, &mut input, idle, &mut deadline)
             .await
             .unwrap();
         assert!(frame.is_none());

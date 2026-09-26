@@ -273,9 +273,11 @@ class Evidence:
                 and self.rollback_set.name.endswith("-" + self.restore_id),
                 "rollback set is outside the selected retention root")
         self.rollback_dump = private(Path(binding["rollback-dump"]), directory=False)
-        require(self.rollback_dump == self.rollback_set / "database-before.dump"
+        require(self.rollback_dump in (self.rollback_set / "database-before.dump",
+                                       self.rollback_set / "database-before.dump.age")
                 and sha256(self.rollback_dump) == binding["rollback-dump-sha256"],
                 "pre-restore database dump differs from the durable binding")
+        self.encrypted_rollback = self.rollback_dump.suffix == ".age"
         if not self.s3:
             self.previous = private(self.rollback_set / "uploads", directory=True)
         require((self.backup / "manifest.txt").is_file()
@@ -587,6 +589,33 @@ def verify_backup(args: argparse.Namespace, evidence: Evidence) -> None:
                 "staged object manifest differs from the authenticated backup archive")
 
 
+def verify_encrypted_rollback(identity: Path, evidence: Evidence) -> None:
+    """Prove a supplied key can recover the bound dump before database access."""
+    require(evidence.encrypted_rollback,
+            "encrypted rollback verification requires an encrypted dump")
+    decrypt = subprocess.Popen(
+        ["age", "--decrypt", "--identity", str(identity), str(evidence.rollback_dump)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert decrypt.stdout is not None
+    try:
+        archive = subprocess.run(
+            ["pg_restore", "--list"], stdin=decrypt.stdout,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            timeout=3600, check=False,
+        )
+        decrypt.stdout.close()
+        _, decrypt_errors = decrypt.communicate(timeout=3600)
+    except BaseException:
+        decrypt.stdout.close()
+        decrypt.kill()
+        decrypt.communicate()
+        raise
+    require(decrypt.returncode == 0 and archive.returncode == 0,
+            "rollback identity cannot decrypt a valid bound database dump: "
+            + (decrypt_errors + archive.stderr).decode("utf-8", "replace")[-200:])
+
+
 def verify_s3_forward(session: TargetSession, evidence: Evidence) -> None:
     require(evidence.s3_import_verified,
             "incoming S3 restore lacks an exact verified target inventory")
@@ -622,6 +651,7 @@ def main() -> None:
     parser.add_argument("--backup-dir", required=True, type=Path)
     parser.add_argument("--public-key-file", required=True, type=Path)
     parser.add_argument("--age-identity-file", required=True, type=Path)
+    parser.add_argument("--rollback-age-identity-file", type=Path)
     parser.add_argument("--plaintext-staging-dir", required=True, type=Path)
     parser.add_argument("--confirm-stopped", required=True)
     args = parser.parse_args()
@@ -631,6 +661,17 @@ def main() -> None:
     regular_readable(args.public_key_file)
     regular_readable(args.age_identity_file)
     evidence = Evidence(args)
+    if evidence.encrypted_rollback:
+        require(args.rollback_age_identity_file is not None,
+                "encrypted rollback requires a separate rollback age identity")
+        rollback_identity = private(args.rollback_age_identity_file, directory=False)
+        require(not any(root == rollback_identity or root in rollback_identity.parents
+                        for root in (evidence.upload, evidence.rollback, evidence.backup)),
+                "rollback age identity must be outside payload and retention roots")
+        verify_encrypted_rollback(rollback_identity, evidence)
+    else:
+        require(args.rollback_age_identity_file is None,
+                "rollback age identity was supplied for a plaintext dump")
     lock_path = evidence.floor.with_name(evidence.floor.name + ".lock")
     if lock_path.exists() or lock_path.is_symlink():
         private(lock_path, directory=False)

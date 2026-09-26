@@ -2293,6 +2293,7 @@ class XmppWebSocket:
         self.resource = resource
         self.device_id = device_id
         self.sasl2_resume_id = None
+        self.sasl2_resume_outcome = None
         if sasl2:
             check(resume is None and not expect_bind_conflict, "SASL2 test client has no legacy bind mode")
             self.login_sasl2(sasl2_resume, initial_presence)
@@ -2511,6 +2512,7 @@ class XmppWebSocket:
                 and "</stream:features>" in outcome,
                 f"WebSocket SASL2 inline SM resume did not skip Bind2 or emit features: {outcome}",
             )
+            self.sasl2_resume_outcome = outcome
         else:
             check(
                 "<success xmlns='urn:xmpp:sasl:2'>" in outcome
@@ -2676,6 +2678,89 @@ def bosh_sm_cross_transport_resume_conformance() -> None:
         b"type='terminate'" in terminated,
         f"BOSH SM session did not terminate: {terminated!r}",
     )
+
+
+def bosh_to_websocket_sm_resume_conformance() -> None:
+    """BOSH's response fence survives idle transport loss and WebSocket replay."""
+
+    device_id = "3e2adf9a-c93d-4494-97c0-83ea06b87699"
+    marker = "sm-bosh-to-websocket-ping"
+    rid = int.from_bytes(os.urandom(6), "big")
+    created = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        "xmlns:xmpp='urn:xmpp:xbosh' "
+        f"rid='{rid}' to='{DOMAIN}' wait='0' hold='0' ver='1.6' xmpp:version='1.0'/>"
+    )
+    sid_match = re.search(rb"\bsid='([^']+)'", created)
+    inactivity_match = re.search(rb"\binactivity='([0-9]+)'", created)
+    check(sid_match is not None, f"BOSH source session has no SID: {created!r}")
+    check(inactivity_match is not None, f"BOSH source has no inactivity interval: {created!r}")
+    inactivity = int(inactivity_match.group(1))
+    check(inactivity == 5, f"isolated BOSH fixture must use a five-second idle timeout: {created!r}")
+    sid = sid_match.group(1).decode()
+    encoded = base64.b64encode(f"\0{ALICE}\0{PASSWORD}".encode()).decode()
+    authenticated = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        f"rid='{rid + 1}' sid='{sid}'>"
+        "<authenticate xmlns='urn:xmpp:sasl:2' mechanism='PLAIN'>"
+        f"<initial-response>{encoded}</initial-response>"
+        f"<user-agent id='{device_id}'>"
+        "<software>Northstar integration</software></user-agent>"
+        "<bind xmlns='urn:xmpp:bind:0'><tag>BoshToWebSocket</tag>"
+        "<enable xmlns='urn:xmpp:sm:3' resume='true'/></bind>"
+        "</authenticate></body>"
+    )
+    enabled = re.search(rb"<enabled xmlns='urn:xmpp:sm:3'[^>]* id='([^']+)'", authenticated)
+    check(
+        b"<success xmlns='urn:xmpp:sasl:2'>" in authenticated
+        and b"<bound xmlns='urn:xmpp:bind:0'>" in authenticated
+        and enabled is not None,
+        f"BOSH source did not enable resumable SM: {authenticated!r}",
+    )
+    resume_id = enabled.group(1).decode()
+    reply = bosh_post_xml(
+        "<body xmlns='http://jabber.org/protocol/httpbind' "
+        f"rid='{rid + 2}' sid='{sid}'>"
+        f"<iq xmlns='jabber:client' type='get' id='{marker}'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+        "<r xmlns='urn:xmpp:sm:3'/></body>"
+    )
+    check(
+        f"id='{marker}'".encode() in reply
+        and b"type='result'" in reply
+        and b"<a xmlns='urn:xmpp:sm:3' h='1'/>" in reply,
+        f"BOSH did not return the unacknowledged IQ reply and SM count: {reply!r}",
+    )
+
+    # BOSH owns the logical stream after each HTTP response. An explicit
+    # terminate forbids SM resume, so let this short-lived fixture idle out.
+    time.sleep(inactivity + 1)
+    resumed = XmppWebSocket(
+        ALICE,
+        PASSWORD,
+        "IgnoredBoshResumeBind",
+        sasl2=True,
+        sasl2_resume=(resume_id, 0),
+        initial_presence=False,
+        device_id=device_id,
+    )
+    try:
+        outcome = resumed.sasl2_resume_outcome or ""
+        if marker not in outcome:
+            replay, _ = resumed.receive_until(marker)
+            outcome += replay
+        check(
+            f"previd='{resume_id}'" in outcome
+            and outcome.count(f"id='{marker}'") == 1
+            and "type='result'" in outcome,
+            f"WebSocket did not replay BOSH's unacknowledged IQ reply: {outcome}",
+        )
+        resumed.send("<a xmlns='urn:xmpp:sm:3' h='1'/>")
+        resumed.send("<r xmlns='urn:xmpp:sm:3'/>")
+        acknowledged, _ = resumed.receive_until("<a ")
+        check("h='1'" in acknowledged, f"WebSocket did not accept replay ACK: {acknowledged}")
+    finally:
+        resumed.close()
 
 
 def websocket_sasl2_resume_conformance() -> None:
@@ -2876,6 +2961,7 @@ def run() -> None:
         websocket_sasl2_resume_conformance()
         bosh_sasl2_bind_conformance()
         bosh_sm_cross_transport_resume_conformance()
+        bosh_to_websocket_sm_resume_conformance()
         print(
             "integration: STARTTLS/Direct TLS, deferred PLAIN/SCRAM, "
             "SASL2/SCRAM-PLUS/Bind2/FAST over TCP, WebSocket and BOSH, "
@@ -2996,6 +3082,7 @@ def run() -> None:
     websocket_sasl2_resume_conformance()
     bosh_sasl2_bind_conformance()
     bosh_sm_cross_transport_resume_conformance()
+    bosh_to_websocket_sm_resume_conformance()
 
     # The SASL core fixture deliberately disables and re-enables Bob while it
     # verifies dummy-SCRAM and account-state behavior. That security transition

@@ -18,10 +18,12 @@ met. A prebuilt WASM copied into a source archive is not a source rebuild.
 
 `libomemo.js-v2.0.2-source.tar.gz` contains 183 regular files. Its SHA-256 is
 `952172631c2e16085420779b3ea039ce59a2ac0b1b20255ff16d1941d4226343`.
-The archive's global PAX `comment` is the exact commit above, which binds the
-exported tree to that commit identifier without executing archive content.
-It does **not** prove that the tag signature was valid: the signed tag object,
-detached signature, signer fingerprint and trust decision are not present.
+The archive's global PAX `comment` names that commit; it is not a cryptographic
+proof of the archive contents. The retained annotated tag points to the same
+commit. The verifier checks its PGP signature offline against the retained
+GitHub-listed maintainer key (fingerprint
+`2C06722D62802D6041001B85D48D88C41B3A34E6`). That proves key possession,
+but the maintainer's identity has not been independently established.
 
 The source tree records:
 
@@ -41,27 +43,37 @@ The deployed hashes are:
 | `web/crypto/curve25519_compiled.wasm` | `3a32503ade92ed2bf522d49d51106a227dadb39c2a7b08a1023c216c7eec1286` |
 
 The source archive's prebuilt `build/curve25519_compiled.wasm` is
-byte-identical to the deployed WASM. The official npm distribution is
-recorded as URL
-`https://registry.npmjs.org/libomemo.js/-/libomemo.js-2.0.2.tgz`, registry
-SHA-1 `6029b4a76dda80a7e7a9ebed89a5f2943aa7527f`. No trustworthy SHA-256
-is asserted: the npm tarball bytes and registry attestation are not vendored,
-so a stronger distribution digest cannot currently be re-verified from this
-repository alone.
+byte-identical to the deployed WASM. The official npm tarball is retained as
+`npm-libomemo.js-2.0.2.tgz` (578,002 bytes; SHA-256
+`4838f06c90d2e611949fabf3edd45d2905bddbd657d36b5a8b9f150a09f6c31b`).
+Its SHA-1 and SHA-512 SRI match the npm registry metadata retrieved on
+2026-09-26. The retained npm registry ECDSA signature verifies the SRI against
+the registry's published key. The verifier also checks safe tar paths, package
+version, and byte equality of the packaged ESM and WASM with the deployed
+files offline. This establishes distribution-to-deployment identity, not a
+source rebuild. The npm metadata's `gitHead` is
+`31b51c5d83d63aaa027e70d1dccba7c6453616e2`, while the signed tag targets
+`df3d34cab03306d34d6ed0bf8b3a3db152173bb4`. The
+[upstream comparison](https://github.com/conversejs/libomemo.js/compare/df3d34cab03306d34d6ed0bf8b3a3db152173bb4...31b51c5d83d63aaa027e70d1dccba7c6453616e2)
+changes the changelog date and the `chai` development dependency and lockfile.
+The registry signature authenticates the package integrity, not this `gitHead`
+field or the precise source tree used to build the package.
 
 `SBOM.cdx.json` is CycloneDX 1.6 and binds the deployed hashes, source archive,
 commit, npm distribution and `rebuild-qualification.json`.
 
 ## Evidence that is missing
 
-The archive and upstream workflows do not identify the npm executable,
+The signed tag's source tree differs from the npm metadata's `gitHead`, so the
+exact published build inputs are also unresolved. The source archive and
+upstream workflows do not identify the npm executable,
 Emscripten, LLVM or Binaryen versions. They do not pin a compiler container or
 system packages. The WASM has no custom sections at all, including no
 `producers` section from which a compiler version could be recovered. The C
 compile command uses shell globs, while the release platform, locale, timezone
 and glob ordering are unrecorded. There is no pair of independent clean
-builds, signed in-toto/SLSA provenance, signed tag object or offline npm
-attestation.
+builds, signed in-toto/SLSA build provenance, independent maintainer-key trust
+decision or proof that the source archive was used to produce the npm package.
 
 Accordingly the exact Emscripten version must remain `null` in
 `rebuild-qualification.json`. Guessing a plausible version, treating the

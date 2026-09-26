@@ -1005,11 +1005,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 149 files from `0001` through
-`0150`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 150 files from `0001` through
+`0151`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0150`, with the exact SQLx description and SHA-384 checksum, before it
+through `0151`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1027,6 +1027,9 @@ offline storage cutovers and crash recovery.
 Migration `0150` adds a generation-checked account row-lock capability for
 runtime C2S bind and message admission. Reconcile its EXECUTE grant before
 starting the new binary; runtime still has no direct account UPDATE grant.
+Migration `0151` adds an exact enabled-account name check under a row lock for
+MUC and durable delivery. Reconcile its EXECUTE grant before starting the new
+binary; runtime still has no direct `users` SELECT grant.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1200,7 +1203,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0150` manifest
+5. run the one-shot migration job through the complete `0001`-`0151` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

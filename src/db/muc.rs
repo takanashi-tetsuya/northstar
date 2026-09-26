@@ -441,19 +441,19 @@ async fn lock_muc_actor_authority(
             local_domain,
         } => {
             let local_domain = crate::jid::prepare_domainpart(local_domain)?;
-            let username: Option<String> = sqlx::query_scalar(
-                "SELECT username FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE",
-            )
-            .bind(user_id)
-            .fetch_optional(&mut **transaction)
-            .await?;
-            let principal_matches = username.is_some_and(|username| {
-                crate::jid::CanonicalJid::parse_bare(authority.actor_scope).is_ok_and(|actor| {
-                    actor.localpart() == Some(username.as_str())
-                        && actor.domainpart() == local_domain
-                        && actor.resourcepart().is_none()
-                })
-            });
+            let principal_matches = if let Ok(actor) =
+                crate::jid::CanonicalJid::parse_bare(authority.actor_scope)
+            {
+                let name_matches: bool =
+                    sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+                        .bind(user_id)
+                        .bind(actor.localpart().unwrap_or_default())
+                        .fetch_one(&mut **transaction)
+                        .await?;
+                name_matches && actor.domainpart() == local_domain && actor.resourcepart().is_none()
+            } else {
+                false
+            };
             let affiliation: Option<String> = sqlx::query_scalar(
                 "SELECT affiliation FROM muc_affiliations
                   WHERE room_id=$1 AND user_id=$2 FOR UPDATE",
@@ -1257,17 +1257,16 @@ pub async fn admit_local_muc_invite(
         return Ok(DurableMucInviteOutcome::RecipientUnavailable);
     }
     let recipient_bare_jid = crate::jid::canonicalize_bare(recipient_bare_jid)?;
-    let recipient_username = sqlx::query_scalar::<_, String>(
-        "SELECT username FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE",
-    )
-    .bind(recipient_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .context("local MUC invite recipient account is unavailable")?;
     let recipient_authority = crate::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
+    let recipient_matches: bool =
+        sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+            .bind(recipient_id)
+            .bind(recipient_authority.localpart().unwrap_or_default())
+            .fetch_one(&mut *transaction)
+            .await?;
     anyhow::ensure!(
-        recipient_authority.localpart() == Some(recipient_username.as_str()),
-        "local MUC invite recipient authority does not own recipient account"
+        recipient_matches,
+        "local MUC invite recipient account is unavailable or authority does not match"
     );
     let document = roxmltree::Document::parse(stanza)?;
     let root = document.root_element();
@@ -2721,13 +2720,13 @@ async fn lock_local_admin_principal(
     {
         return Ok(LocalAdminPrincipalCheck::Stale);
     }
-    let username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE")
-            .bind(user_id)
-            .fetch_optional(&mut **transaction)
-            .await?;
     let actor = crate::jid::CanonicalJid::parse_bare(actor_scope)?;
-    if username.as_deref() != actor.localpart()
+    let name_matches: bool = sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+        .bind(user_id)
+        .bind(actor.localpart().unwrap_or_default())
+        .fetch_one(&mut **transaction)
+        .await?;
+    if !name_matches
         || actor.domainpart() != local_domain
         || actor.resourcepart().is_some()
         || actor.to_string() != actor_scope

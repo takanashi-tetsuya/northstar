@@ -1198,6 +1198,7 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
                ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
        ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
+               ('northstar_lock_enabled_user_name(uuid,text)'),
                ('northstar_lock_auth_generation(uuid,int8)'),
        ('northstar_passkey_consume(uuid,text,bytea)'),
        ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),

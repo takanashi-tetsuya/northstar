@@ -1035,6 +1035,18 @@ BEGIN
       '11111111-1111-4111-8111-111111111150', 1) THEN
     RAISE EXCEPTION 'runtime generation lock accepted a stale generation';
   END IF;
+  IF NOT northstar_lock_enabled_user_name(
+      '11111111-1111-4111-8111-111111111150',
+      'northstar_ci_generation_lock') THEN
+    RAISE EXCEPTION 'runtime name lock rejected an enabled matching account';
+  END IF;
+  IF northstar_lock_enabled_user_name(
+      '11111111-1111-4111-8111-111111111150', 'another_user') THEN
+    RAISE EXCEPTION 'runtime name lock accepted a different account name';
+  END IF;
+  IF pg_catalog.has_table_privilege('northstar_runtime', 'users', 'SELECT') THEN
+    RAISE EXCEPTION 'runtime acquired direct account read rights';
+  END IF;
   IF pg_catalog.has_table_privilege('northstar_runtime', 'users', 'UPDATE') THEN
     RAISE EXCEPTION 'runtime acquired direct account mutation rights';
   END IF;
@@ -1049,6 +1061,11 @@ BEGIN
   IF northstar_lock_auth_generation(
       '11111111-1111-4111-8111-111111111150', 0) THEN
     RAISE EXCEPTION 'runtime generation lock accepted a disabled account';
+  END IF;
+  IF northstar_lock_enabled_user_name(
+      '11111111-1111-4111-8111-111111111150',
+      'northstar_ci_generation_lock') THEN
+    RAISE EXCEPTION 'runtime name lock accepted a disabled account';
   END IF;
 END;
 $check_disabled_generation_lock$;

@@ -215,6 +215,17 @@ tests the archive path, not end-to-end encryption. A plaintext first attempt
 correctly produced no archive row because this lab uses the default
 encrypted-only archive policy. This one personal-page check does not qualify
 MUC or MIX MAM, concurrent visibility changes, or long-term MAM load.
+The expanded personal probe at 04:26 UTC also returned the same last page via
+an `after` cursor and rejected an unknown cursor with `item-not-found`. The
+archive contained nine rows, and adjacent page indexes were 5 and 7.
+
+An exploratory room MAM probe found a runtime-role permission gap before it
+could query the archive. After creating and configuring a temporary room, its
+first group message closed the C2S stream. PostgreSQL logged `permission
+denied for table users` for a direct row-lock query in MUC admission. Migration
+`0151` and the matching application change replace that query with an exact
+enabled-account name-check capability. This source fix still needs CI and a
+fresh VM binary retest; the current soak binary is unchanged.
 
 The lab setup is repeatable in this order: provision the six guests and lab
 PKI, run `bash scripts/local-vm-lab-minio.sh` with the pinned Debian package
@@ -222,16 +233,16 @@ staged on the host, run `bash scripts/local-vm-lab-minio-bucket.sh`, complete an
 offline storage migration, then run `bash scripts/local-vm-lab-cluster.sh`.
 The latter requires committed S3 authority
 and deliberately refuses to replace lost node signing keys. Run
-`local-vm-lab-cluster-delivery.py`, `local-vm-lab-upload.py` and
-`local-vm-lab-mam.py` from `ns-a` after copying them and
+`local-vm-lab-cluster-delivery.py`, `local-vm-lab-upload.py`,
+`local-vm-lab-mam.py` and `local-vm-lab-muc-mam.py` from `ns-a` after copying
+them and
 `local-vm-lab-federation.py` into
 `/home/lab/northstar/`.
 
 Longer and combined partitions, Redis failover, interrupted migration and
 restore, DNSSEC/DANE behavior inside Northstar, certificate rotation, external
 components, native clients, MUC/MIX MAM, full mixed-load soak, backup/restore
-and alert drills
-remain untested in these VMs.
+and alert drills remain untested in these VMs.
 The independent security review and physically separate backup destination
 are unavailable. Keep all seven evidence gates open until their complete
 matrices pass; this exploratory run does not turn the cluster production-ready.

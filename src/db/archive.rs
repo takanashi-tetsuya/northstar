@@ -668,16 +668,15 @@ pub(crate) async fn insert_c2s_delivery_in_transaction(
         );
     }
     let recipient = crate::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
-    let recipient_username = sqlx::query_scalar::<_, String>(
-        "SELECT username FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE",
-    )
-    .bind(delivery.recipient_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("C2S delivery recipient account is unavailable"))?;
+    let recipient_matches: bool =
+        sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+            .bind(delivery.recipient_id)
+            .bind(recipient.localpart().unwrap_or_default())
+            .fetch_one(&mut **transaction)
+            .await?;
     anyhow::ensure!(
-        recipient.localpart() == Some(recipient_username.as_str()),
-        "C2S delivery recipient authority does not own recipient account"
+        recipient_matches,
+        "C2S delivery recipient account is unavailable or authority does not match"
     );
     // Serialize account capacity admission exactly like normal offline
     // storage. The row is a transient outbox even when the user is online.
@@ -1958,17 +1957,16 @@ async fn store_offline_idempotent_inner(
         return Ok(OfflineStoreOutcome::RecipientUnavailable);
     }
     if let Some(recipient_authority) = recipient_authority.as_ref() {
-        let recipient_username = sqlx::query_scalar::<_, String>(
-            "SELECT username FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE",
-        )
-        .bind(recipient_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("offline recipient account is unavailable"))?;
+        let recipient = crate::jid::CanonicalJid::parse_bare(recipient_authority)?;
+        let recipient_matches: bool =
+            sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+                .bind(recipient_id)
+                .bind(recipient.localpart().unwrap_or_default())
+                .fetch_one(&mut *transaction)
+                .await?;
         anyhow::ensure!(
-            crate::jid::CanonicalJid::parse_bare(recipient_authority)?.localpart()
-                == Some(recipient_username.as_str()),
-            "offline recipient authority does not own recipient account"
+            recipient_matches,
+            "offline recipient account is unavailable or authority does not match"
         );
     }
     // The global queue gate gives the administrator clear operation exact

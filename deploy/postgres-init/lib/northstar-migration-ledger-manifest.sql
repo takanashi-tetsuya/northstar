@@ -160,6 +160,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (147,'upload storage role catalog health',pg_catalog.decode('6b1fa8ddf17a9f5a092546ed5ea28c566267d98cb86a8e8893536b2bc5c4341daaedf5abfc80b6dd02af70224cb02b4e','hex')),
   (148,'cluster muc admin batch kind',pg_catalog.decode('10e068e897842f13a1c6e89ce4e49eed5ee68933694f3e5dcf7fcff24ee54cd026a0e544e3748375e6d1dc00dc33601d','hex')),
   (149,'upload storage migration journal',pg_catalog.decode('6d85a3578eaf4836cb707fc4bb88325f449c6e2c4d84a7f5f15b26887af79552412dc82c958a7510205e90d38e3ade61','hex')),
-  (150,'auth generation lock capability',pg_catalog.decode('e0df871558c18b793752cbc985a6a260f70a86b47902db1cfb11c60780feb5dd98cba5afaa74e8b34bfb4618be27e104','hex'));
+  (150,'auth generation lock capability',pg_catalog.decode('e0df871558c18b793752cbc985a6a260f70a86b47902db1cfb11c60780feb5dd98cba5afaa74e8b34bfb4618be27e104','hex')),
+  (151,'enabled user name lock capability',pg_catalog.decode('6edb945cc104f7009f79b30e9aaf15796fa5f927c6936d9a4830979599a368d82c32b0e1f396f4290ac18f39945cebc6','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

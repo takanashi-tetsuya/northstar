@@ -20,8 +20,13 @@ MAX_PAGE = 2
 
 def read_page(
     connection: socket.socket, query_id: str, before: str | None = None,
+    after: str | None = None,
 ) -> tuple[list[str], list[str], int, int]:
-    cursor = "<before/>" if before is None else f"<before>{before}</before>"
+    assert before is None or after is None
+    cursor = (
+        f"<after>{after}</after>" if after is not None else
+        "<before/>" if before is None else f"<before>{before}</before>"
+    )
     connection.sendall(
         (
             f"<iq xmlns='jabber:client' type='set' id='{query_id}'>"
@@ -33,25 +38,9 @@ def read_page(
             "</query></iq>"
         ).encode()
     )
-    response = bytearray()
-    terminal = re.compile(
-        rf"<iq\b[^>]*\bid=['\"]{re.escape(query_id)}['\"][^>]*>.*?</iq>", re.S
-    )
-    connection.settimeout(20)
-    while not terminal.search(response.decode(errors="replace")):
-        chunk = connection.recv(8192)
-        if not chunk:
-            raise RuntimeError("C2S connection closed before the MAM terminal IQ")
-        response.extend(chunk)
-        if len(response) > 2 * 1024 * 1024:
-            raise RuntimeError("MAM page response exceeded 2 MiB")
-    data = response.decode()
-    terminal_iq = terminal.search(data)
-    assert terminal_iq is not None
-    assert re.search(r"\btype=['\"]result['\"]", terminal_iq.group()), (
-        terminal_iq.group()
-    )
-    assert "<fin " in terminal_iq.group(), terminal_iq.group()
+    data, fin = receive_mam_response(connection, query_id)
+    assert re.search(r"\btype=['\"]result['\"]", fin), fin
+    assert "<fin " in fin, fin
     result_pattern = re.compile(
         rf"<result\b(?=[^>]*\bqueryid=['\"]{re.escape(query_id)}['\"])[^>]*>.*?</result>",
         re.S,
@@ -63,7 +52,6 @@ def read_page(
         match = re.search(r"\bid=['\"]([0-9a-f-]{36})['\"]", result)
         assert match, result
         ids.append(match.group(1))
-    fin = terminal_iq.group()
     count = re.search(r"<count>([0-9]+)</count>", fin)
     assert count, fin
     first_index = re.search(r"<first\s+index=['\"]([0-9]+)['\"]", fin)
@@ -75,6 +63,40 @@ def read_page(
         results, ids, int(count.group(1)),
         int(first_index.group(1)) if first_index else 0,
     )
+
+
+def expect_unknown_cursor(connection: socket.socket) -> None:
+    query_id = f"mam-invalid-{uuid.uuid4().hex[:12]}"
+    unknown = uuid.uuid4()
+    connection.sendall(
+        (
+            f"<iq xmlns='jabber:client' type='set' id='{query_id}'>"
+            f"<query xmlns='urn:xmpp:mam:2' queryid='{query_id}'>"
+            "<set xmlns='http://jabber.org/protocol/rsm'>"
+            f"<max>{MAX_PAGE}</max><after>{unknown}</after></set>"
+            "</query></iq>"
+        ).encode()
+    )
+    _, response = receive_mam_response(connection, query_id)
+    assert re.search(r"\btype=['\"]error['\"]", response), response
+    assert "<item-not-found" in response, response
+    assert "<result" not in response, response
+
+
+def receive_mam_response(connection: socket.socket, query_id: str) -> tuple[str, str]:
+    terminal = re.compile(
+        rf"<iq\b[^>]*\bid=['\"]{re.escape(query_id)}['\"][^>]*>.*?</iq>", re.S
+    )
+    response = bytearray()
+    connection.settimeout(20)
+    while not (match := terminal.search(response.decode(errors="replace"))):
+        chunk = connection.recv(8192)
+        if not chunk:
+            raise RuntimeError("C2S connection closed before the MAM terminal IQ")
+        response.extend(chunk)
+        if len(response) > 2 * 1024 * 1024:
+            raise RuntimeError("MAM response exceeded 2 MiB")
+    return response.decode(), match.group()
 
 
 def main() -> None:
@@ -130,6 +152,12 @@ def main() -> None:
         )
         assert previous and not set(ids).intersection(previous_ids), "MAM pages overlap"
         assert previous_index + len(previous) == first_index, "MAM page indexes are not adjacent"
+        forward, forward_ids, forward_total, forward_index = read_page(
+            alice, f"mam-{uuid.uuid4().hex[:12]}", after=previous_ids[-1],
+        )
+        assert forward_ids == ids, "MAM forward page did not return the reverse-page rows"
+        assert forward_total == total and forward_index == first_index
+        expect_unknown_cursor(alice)
         print(json.dumps(
             {
                 "time_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -141,6 +169,8 @@ def main() -> None:
                 "previous_rows": len(previous),
                 "previous_total": previous_total,
                 "previous_first_index": previous_index,
+                "forward_rows": len(forward),
+                "unknown_cursor": "item-not-found",
                 "marker": markers[-1],
             },
             sort_keys=True,

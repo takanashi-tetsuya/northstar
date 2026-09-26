@@ -178,9 +178,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
 - [ ] Apply migration `0150` and reconcile grants before starting runtime
   nodes. Verify the runtime role can lock a current enabled account generation
   through `northstar_lock_auth_generation` but cannot update `users` directly.
+- [ ] Apply migration `0151` and reconcile grants before starting runtime
+  nodes. Verify `northstar_lock_enabled_user_name` accepts an enabled matching
+  account and rejects a disabled or mismatched account without direct `users`
+  SELECT privilege.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 149 migrations from `0001` through the current
-  repository maximum `0150`, with `0021` as the sole intentional gap.
+  identity and verify all 150 migrations from `0001` through the current
+  repository maximum `0151`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

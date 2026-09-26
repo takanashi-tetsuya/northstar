@@ -1,7 +1,7 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-本文記錄 Northstar 的已知限制與驗收邊界。遷移鏈為 `0001`–`0150`，
-共 149 項，保留刻意缺號 `0021`。已解決問題見 [changelog](../CHANGELOG.md)。
+本文記錄 Northstar 的已知限制與驗收邊界。遷移鏈為 `0001`–`0151`，
+共 150 項，保留刻意缺號 `0021`。已解決問題見 [changelog](../CHANGELOG.md)。
 
 CI 验证隔离环境中的代码与运行行为；生产环境、公网互操作和独立安全审计
 需要各自的验收记录。手动测试方法见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。

@@ -176,13 +176,23 @@ with `ns-a`/`ns-b` RSS of 109,240/107,356 KiB and PostgreSQL WAL bytes at
 `/tmp/northstar-lab-evidence-5865007/soak-24h-retry.jsonl`.
 The earlier start hit upload `resource-constraint` immediately after a smoke
 upload; that failure is preserved in `soak-24h.jsonl`. The restarted run
-spaces upload probes 90 minutes apart. No endurance result is claimed until
-the full duration and end-state metrics are reviewed. This traffic lacks MUC,
-OMEMO, MAM and mobile push, so a pass will still not close `EXT-CAPACITY`.
+spaces upload probes 90 minutes apart. It passed through iteration 59, then
+stopped at iteration 60 (2026-09-26 04:08 UTC): cross-node delivery passed,
+but a Prosody-to-Northstar message did not reach the just-connected Alice
+resource within 15 seconds. Prosody logged a stanza error and S2S stream
+closure; both Northstar processes stayed active, and a one-off retry passed.
+The federation probe had not waited for Alice's new presence to become the
+preferred route after the immediately preceding cross-node probe closed two
+other Alice resources. The helper now uses a unique resource and waits for
+its priority-10 self-presence before sending the inbound test message. This
+addresses a plausible probe race; it does not prove the service has no stale
+route behavior. The failed JSONL and service logs remain evidence, and a new
+full-duration run is required. This traffic lacks MUC, OMEMO, sustained MAM
+and mobile push, so a pass will still not close `EXT-CAPACITY`.
 The initial federation and cluster probes used source commit
 `58650079da8d21408ab6d027127796b7863ccf5c` and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.
-The corrected upload outage and ongoing soak use the later binary SHA-256
+The corrected upload outage and soak attempts use the later binary SHA-256
 `765b77ea843f36aedb6add525a8bae58ec5acc442c7a00998de54dce26546fe7`.
 The host keeps outputs in `/tmp/northstar-lab-evidence-5865007/`. These are
 exploratory until the scripts and binary are frozen together and the same

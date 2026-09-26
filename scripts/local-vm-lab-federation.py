@@ -69,6 +69,22 @@ def connect_peer(
     return conn
 
 
+def connect_northstar_client(fixture: object, password: str):
+    resource = f"vm-lab-{time.time_ns()}"
+    alice = fixture.XmppWebSocket("alice", password, resource)
+    try:
+        # The preceding cross-node probe closes other Alice resources just
+        # before this check. Wait until this exact route is advertised as the
+        # preferred one before testing inbound federation delivery.
+        alice.send("<presence xmlns='jabber:client'><priority>10</priority></presence>")
+        presence, _ = alice.receive_until("<priority>10</priority>")
+        assert f"from='alice@{NORTHSTAR_DOMAIN}/{resource}'" in presence, presence
+        return alice
+    except Exception:
+        alice.close()
+        raise
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("peer", choices=("prosody", "ejabberd"))
@@ -99,7 +115,7 @@ def main() -> None:
             peer.close()
         return
     if args.mode == "send":
-        alice = fixture.XmppWebSocket("alice", password, "vm-lab")
+        alice = connect_northstar_client(fixture, password)
         try:
             marker = f"lab-retry-{time.time_ns()}"
             alice.send(
@@ -112,7 +128,7 @@ def main() -> None:
         return
     peer = connect_peer(domain, user, password)
     try:
-        alice = fixture.XmppWebSocket("alice", password, "vm-lab")
+        alice = connect_northstar_client(fixture, password)
         try:
             outbound_marker = f"lab-outbound-{time.time_ns()}"
             alice.send(

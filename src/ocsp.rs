@@ -174,11 +174,13 @@ mod tests {
         assert!(good.fresh_now());
         assert!(!good.fresh_at(good.this_update - Duration::seconds(1)));
         assert!(!good.fresh_at(good.next_update));
+        assert!(ValidatedOcspResponse::from_file(&root.join("missing.der"), &chain).is_err());
         for name in [
             "too-long.der",
             "revoked.der",
             "unknown.der",
             "wrong-leaf.der",
+            "wrong-issuer.der",
             "bad-signature.der",
             "no-next-update.der",
         ] {

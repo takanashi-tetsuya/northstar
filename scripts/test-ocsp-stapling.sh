@@ -12,6 +12,12 @@ openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3 \
   -addext 'keyUsage=critical,keyCertSign,cRLSign' \
   -addext 'subjectKeyIdentifier=hash' \
   -keyout "$fixture_dir/root.key" -out "$fixture_dir/root.crt" >/dev/null 2>&1
+openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3 \
+  -subj '/CN=Unrelated OCSP issuer' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' \
+  -keyout "$fixture_dir/other-root.key" -out "$fixture_dir/other-root.crt" >/dev/null 2>&1
 
 cat > "$fixture_dir/leaf.ext" <<'EOF'
 basicConstraints=critical,CA:FALSE
@@ -61,6 +67,11 @@ make_response empty leaf unknown -ndays 1
 make_response other other wrong-leaf -ndays 1
 make_response good leaf bad-signature -ndays 1 -badsig
 make_response good leaf no-next-update
+openssl ocsp -index "$fixture_dir/good.index" \
+  -CA "$fixture_dir/other-root.crt" -rsigner "$fixture_dir/other-root.crt" \
+  -rkey "$fixture_dir/other-root.key" -issuer "$fixture_dir/other-root.crt" \
+  -cert "$fixture_dir/leaf.crt" -respout "$fixture_dir/wrong-issuer.der" \
+  -no_nonce -ndays 1 >/dev/null 2>&1
 
 TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
   cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \

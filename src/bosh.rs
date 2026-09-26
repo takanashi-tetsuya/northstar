@@ -597,7 +597,7 @@ impl BoshActor {
                     keep_running = false;
                 }
                 _ = maintenance.tick() => {
-                    if self.protocol.authenticated.is_none()
+                    if !self.protocol.is_authenticated()
                         && self.protocol.connected_at.elapsed()
                             >= state.unauthenticated_timeout()
                     {
@@ -829,9 +829,7 @@ impl BoshActor {
                 .await;
             return false;
         }
-        if let Some(condition) =
-            bosh_request_shape_error(request, self.protocol.negotiation.is_open())
-        {
+        if let Some(condition) = bosh_request_shape_error(request, self.protocol.is_stream_open()) {
             let _ = self.finish_pending(pending, Some(condition), false).await;
             return false;
         }

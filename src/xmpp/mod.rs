@@ -409,17 +409,15 @@ where
     let mut pending_utf8 = Vec::new();
     let mut bytes = [0u8; 8192];
     let mut peer_idle =
-        PeerIdleTracker::new(session.authenticated.is_some(), tokio::time::Instant::now());
+        PeerIdleTracker::new(session.is_authenticated(), tokio::time::Instant::now());
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
         (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        peer_idle.synchronize_authentication(
-            session.authenticated.is_some(),
-            tokio::time::Instant::now(),
-        );
+        peer_idle
+            .synchronize_authentication(session.is_authenticated(), tokio::time::Instant::now());
         let resource_bind_deadline = session
             .resource_bind_deadline()
             .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(86_400));
@@ -439,8 +437,8 @@ where
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
                 session.forbid_sm_resume();
-                tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
-                let opening = !session.negotiation.is_open();
+                tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.is_authenticated(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
+                let opening = !session.is_stream_open();
                 let domain = session.state.local_domain().to_owned();
                 let _ = tcp_fatal_error(
                     &mut io,
@@ -450,7 +448,7 @@ where
                 ).await;
                 return Ok(DriveOutcome::Done);
             }
-            _ = authentication_watch.tick(), if session.authenticated.is_none() => {
+            _ = authentication_watch.tick(), if !session.is_authenticated() => {
                 if session.connected_at.elapsed()
                     >= session.state.unauthenticated_timeout()
                 {
@@ -463,7 +461,7 @@ where
                     tcp_internal_backend_error(
                         &mut io,
                         session,
-                        !session.negotiation.is_open(),
+                        !session.is_stream_open(),
                         "checkpoint XEP-0198 state",
                         &error,
                     ).await;
@@ -476,7 +474,7 @@ where
                 let _ = tcp_fatal_error(
                     &mut io,
                     &domain,
-                    !session.negotiation.is_open(),
+                    !session.is_stream_open(),
                     &crate::xmpp::xml_util::stream_error("policy-violation"),
                 ).await;
                 return Ok(DriveOutcome::Done);
@@ -488,14 +486,14 @@ where
                     return Ok(DriveOutcome::Done);
                 }
                 peer_idle.note_peer_traffic(
-                    session.authenticated.is_some(),
+                    session.is_authenticated(),
                     tokio::time::Instant::now(),
                 );
                 pending_utf8.extend_from_slice(&bytes[..count]);
                 if let Err(error) = append_utf8(&mut pending_utf8, &mut buffer) {
                     tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid UTF-8 in XMPP stream");
                     session.forbid_sm_resume();
-                    let opening = !session.negotiation.is_open();
+                    let opening = !session.is_stream_open();
                     tcp_fatal_error(
                         &mut io,
                         session.state.local_domain(),
@@ -520,7 +518,7 @@ where
                             if frame.len() > MAX_XMPP_FRAME_BYTES {
                                 tracing::debug!(peer_ip = %session.peer_ip, "XMPP frame exceeded 1 MiB");
                                 session.forbid_sm_resume();
-                                let opening = !session.negotiation.is_open();
+                                let opening = !session.is_stream_open();
                                 tcp_fatal_error(
                                     &mut io,
                                     session.state.local_domain(),
@@ -539,7 +537,7 @@ where
                             if buffer.len() + pending_utf8.len() > MAX_XMPP_FRAME_BYTES {
                                 tracing::debug!(peer_ip = %session.peer_ip, "incomplete XMPP frame exceeded 1 MiB");
                                 session.forbid_sm_resume();
-                                let opening = !session.negotiation.is_open();
+                                let opening = !session.is_stream_open();
                                 tcp_fatal_error(
                                     &mut io,
                                     session.state.local_domain(),
@@ -555,7 +553,7 @@ where
                             tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid XMPP framing");
                             session.forbid_sm_resume();
                             let condition = framing::stream_error_condition(&error);
-                            let opening = !session.negotiation.is_open();
+                            let opening = !session.is_stream_open();
                             tcp_fatal_error(
                                 &mut io,
                                 session.state.local_domain(),
@@ -566,8 +564,8 @@ where
                             return Ok(DriveOutcome::Done);
                         }
                     };
-                    let opening = !session.negotiation.is_open();
-                    let stream_was_open = session.negotiation.is_open();
+                    let opening = !session.is_stream_open();
+                    let stream_was_open = session.is_stream_open();
                     let action = match tokio::time::timeout(
                         C2S_BACKEND_OPERATION_TIMEOUT,
                         session.handle(&frame),
@@ -598,7 +596,7 @@ where
                             return Ok(DriveOutcome::Done);
                         }
                     };
-                    let xml_entity_restarted = stream_was_open && !session.negotiation.is_open();
+                    let xml_entity_restarted = stream_was_open && !session.is_stream_open();
                     match tcp_action::apply(&mut io, session, action, opening).await? {
                         tcp_action::TcpActionDisposition::Continue => {}
                         tcp_action::TcpActionDisposition::Close => {
@@ -629,7 +627,7 @@ where
                         &mut io,
                         session,
                         &outgoing,
-                        !session.negotiation.is_open(),
+                        !session.is_stream_open(),
                     ).await? {
                         return Ok(DriveOutcome::Done);
                     }
@@ -1049,12 +1047,12 @@ pub async fn websocket_connection(
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut peer_idle =
-        PeerIdleTracker::new(session.authenticated.is_some(), tokio::time::Instant::now());
+        PeerIdleTracker::new(session.is_authenticated(), tokio::time::Instant::now());
     let mut terminal_sequence = WebSocketTerminalSequence::default();
     let transport = AssertUnwindSafe(async {
         loop {
         peer_idle.synchronize_authentication(
-            session.authenticated.is_some(),
+            session.is_authenticated(),
             tokio::time::Instant::now(),
         );
         let resource_bind_deadline = session
@@ -1062,7 +1060,7 @@ pub async fn websocket_connection(
             .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(86_400));
         tokio::select! {
             _ = actor_shutdown.cancelled() => {
-                let opened = session.negotiation.is_open();
+                let opened = session.is_stream_open();
                 websocket_orderly_close(
                     &mut socket,
                     opened,
@@ -1076,14 +1074,14 @@ pub async fn websocket_connection(
             }
             _ = disconnect.cancelled() => {
                 session.forbid_sm_resume();
-                let opened = session.negotiation.is_open();
+                let opened = session.is_stream_open();
                 websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
                 break;
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
                 session.forbid_sm_resume();
-                tracing::debug!(%peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle WebSocket XMPP connection at the advertised XEP-0478 limit");
-                let opening = !session.negotiation.is_open();
+                tracing::debug!(%peer_ip, authenticated = session.is_authenticated(), "closed byte-idle WebSocket XMPP connection at the advertised XEP-0478 limit");
+                let opening = !session.is_stream_open();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     &mut socket,
@@ -1094,13 +1092,13 @@ pub async fn websocket_connection(
                 ).await;
                 break;
             }
-            _ = authentication_watch.tick(), if session.authenticated.is_none() => {
+            _ = authentication_watch.tick(), if !session.is_authenticated() => {
                 if session.connected_at.elapsed()
                     >= session.state.unauthenticated_timeout()
                 {
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
                     session.forbid_sm_resume();
-                    let opening = !session.negotiation.is_open();
+                    let opening = !session.is_stream_open();
                     let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
                         &mut socket,
@@ -1115,7 +1113,7 @@ pub async fn websocket_connection(
             _ = sm_lease_watch.tick(), if session.has_sm_session() => {
                 if session.checkpoint_sm().await.is_err() {
                     session.forbid_sm_resume();
-                    let opening = !session.negotiation.is_open();
+                    let opening = !session.is_stream_open();
                     let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
                         &mut socket,
@@ -1129,7 +1127,7 @@ pub async fn websocket_connection(
             }
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
                 session.forbid_sm_resume();
-                let opening = !session.negotiation.is_open();
+                let opening = !session.is_stream_open();
                 let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     &mut socket,
@@ -1143,7 +1141,7 @@ pub async fn websocket_connection(
             incoming = socket.recv() => {
                 if matches!(&incoming, Some(Ok(_))) {
                     peer_idle.note_peer_traffic(
-                        session.authenticated.is_some(),
+                        session.is_authenticated(),
                         tokio::time::Instant::now(),
                     );
                 }
@@ -1159,7 +1157,7 @@ pub async fn websocket_connection(
                                 tracing::debug!(?error, "invalid WebSocket XMPP framing");
                                 session.forbid_sm_resume();
                                 let condition = framing::stream_error_condition(&error);
-                                let opening = !session.negotiation.is_open();
+                                let opening = !session.is_stream_open();
                                 let domain = session.state.local_domain().to_owned();
                                 websocket_fatal_error(
                                     &mut socket,
@@ -1173,7 +1171,7 @@ pub async fn websocket_connection(
                         };
                         if websocket_has_invalid_stream_header_namespace(&frame) {
                             session.forbid_sm_resume();
-                            let opening = !session.negotiation.is_open();
+                            let opening = !session.is_stream_open();
                             let domain = session.state.local_domain().to_owned();
                             websocket_fatal_error(
                                 &mut socket,
@@ -1186,7 +1184,7 @@ pub async fn websocket_connection(
                         }
                         if websocket_close_has_content(&frame) {
                             session.forbid_sm_resume();
-                            let opening = !session.negotiation.is_open();
+                            let opening = !session.is_stream_open();
                             let domain = session.state.local_domain().to_owned();
                             websocket_fatal_error(
                                 &mut socket,
@@ -1197,8 +1195,8 @@ pub async fn websocket_connection(
                             ).await;
                             break;
                         }
-                        let opening = !session.negotiation.is_open();
-                        let stream_was_opened = session.negotiation.is_open();
+                        let opening = !session.is_stream_open();
+                        let stream_was_opened = session.is_stream_open();
                         let (handler_timeout, operation) = websocket_handler_timeout(&frame);
                         let handler_started = std::time::Instant::now();
                         let action = match tokio::time::timeout(
@@ -1218,8 +1216,8 @@ pub async fn websocket_connection(
                             }
                         };
                         if stream_was_opened
-                            && !session.negotiation.is_open()
-                            && session.authenticated.is_some()
+                            && !session.is_stream_open()
+                            && session.is_authenticated()
                         {
                             framer.reset_entity();
                         }
@@ -1265,7 +1263,7 @@ pub async fn websocket_connection(
                             "rejected binary WebSocket XMPP message before XML processing"
                         );
                         session.forbid_sm_resume();
-                        let opening = !session.negotiation.is_open();
+                        let opening = !session.is_stream_open();
                         let domain = session.state.local_domain().to_owned();
                         websocket_fatal_error(
                             &mut socket,
@@ -1283,7 +1281,7 @@ pub async fn websocket_connection(
                 let Some(outgoing) = outgoing else { break; };
                 let outgoing = session.csi_filter_outbound(outgoing);
                 if let Some(outgoing) = outgoing {
-                    let opening = !session.negotiation.is_open();
+                    let opening = !session.is_stream_open();
                     if !websocket_record_and_send_item(
                         &mut socket,
                         &mut session,
@@ -1314,7 +1312,7 @@ pub async fn websocket_connection(
         disconnect.is_cancelled(),
         &terminal_sequence,
     ) {
-        let opened = session.negotiation.is_open();
+        let opened = session.is_stream_open();
         websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
     }
     finish_protocol_session(&mut session, transport).await;

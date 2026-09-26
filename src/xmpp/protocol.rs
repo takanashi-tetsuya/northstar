@@ -449,15 +449,15 @@ pub struct ProtocolSession {
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
     /// never used as an authentication bypass.
     secure_transport: bool,
-    pub(crate) transport: ClientTransport,
+    transport: ClientTransport,
     pub(crate) peer_ip: IpAddr,
     pub(crate) connected_at: std::time::Instant,
     pub(crate) last_activity: Arc<std::sync::RwLock<std::time::Instant>>,
     /// Whether this transport has a currently open XML stream. STARTTLS and
     /// legacy SASL both invalidate it and require a fresh opening tag before
     /// any further negotiation or application stanza is accepted.
-    pub(crate) negotiation: northstar_session_core::StreamNegotiation,
-    pub(crate) authenticated: Option<crate::services::authentication::AuthenticatedAccount>,
+    negotiation: northstar_session_core::StreamNegotiation,
+    authenticated: Option<crate::services::authentication::AuthenticatedAccount>,
     pub(crate) authenticated_at: Option<std::time::Instant>,
     pub(crate) full_jid: Option<String>,
     pub(crate) registered_key: Option<String>,
@@ -550,6 +550,18 @@ impl ProtocolSession {
         self.client_certificate_chain = evidence.client_certificate_chain;
         self.tls_generation = evidence.generation;
         self.secure_transport = true;
+    }
+
+    /// Transport adapters may inspect stream state, but only protocol handling
+    /// may change the negotiation lifecycle.
+    pub(crate) fn is_stream_open(&self) -> bool {
+        self.negotiation.is_open()
+    }
+
+    /// Transport deadlines and response fences need only this fact, not the
+    /// authenticated account or a mutable authentication capability.
+    pub(crate) fn is_authenticated(&self) -> bool {
+        self.authenticated.is_some()
     }
 
     pub(crate) fn uses_websocket_framing(&self) -> bool {

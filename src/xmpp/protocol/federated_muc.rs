@@ -2130,7 +2130,7 @@ async fn federated_muc_message_owned(
                 if outcome == OfflineStoreOutcome::RecipientUnavailable {
                     return Ok(None);
                 }
-                if let Err(error) = super::misc::send_push_notification(state, recipient.id).await {
+                if let Err(error) = state.dispatch_push_notification(recipient.id).await {
                     tracing::warn!(?error, recipient_id = %recipient.id, %room_jid, "accepted federated offline MUC invitation decline could not trigger push notification");
                 }
             }
@@ -2797,9 +2797,7 @@ async fn federated_muc_message_owned(
                     }
                 }
                 if !delivered && request.temporary_storage {
-                    if let Err(error) =
-                        super::misc::send_push_notification(state, local_user.id).await
-                    {
+                    if let Err(error) = state.dispatch_push_notification(local_user.id).await {
                         tracing::warn!(?error, recipient_id = %local_user.id, %room_jid, "accepted federated offline mediated MUC invitation could not trigger push notification");
                     }
                 }

@@ -50,6 +50,32 @@ pub(crate) enum OfflineAdmissionOutcome {
     RecipientUnavailable,
 }
 
+pub(crate) struct OfflinePostCommitPush {
+    pub(crate) admission: OfflineAdmissionOutcome,
+    pub(crate) push_error: Option<anyhow::Error>,
+}
+
+/// An offline claim or its MAM recovery must commit before Push can call an
+/// external provider. A replay is already accepted but must not notify twice.
+pub(crate) async fn admit_offline_then_push<A, P>(
+    admission: A,
+    history_committed: bool,
+    push: P,
+) -> Result<OfflinePostCommitPush>
+where
+    A: Future<Output = Result<OfflineAdmissionOutcome>>,
+    P: Future<Output = Result<()>>,
+{
+    let admission = admission.await?;
+    let notify = matches!(admission, OfflineAdmissionOutcome::Stored)
+        || (history_committed && matches!(admission, OfflineAdmissionOutcome::QuotaExceeded));
+    let push_error = if notify { push.await.err() } else { None };
+    Ok(OfflinePostCommitPush {
+        admission,
+        push_error,
+    })
+}
+
 pub(crate) struct RemoteMucInviteAdmission<'a> {
     pub(crate) local_actor_id: Uuid,
     pub(crate) identity: Option<MessageIdentity<'a>>,
@@ -276,3 +302,7 @@ impl<R: MessageRepository> MessageService<R> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "messaging_tests.rs"]
+mod post_commit_tests;

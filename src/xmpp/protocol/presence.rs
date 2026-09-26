@@ -1116,9 +1116,7 @@ impl ProtocolSession {
             LocalPresenceEffect::Forward => {}
         }
         if kind == "subscribe" && self.state.sessions_for(&target_jid).is_empty() {
-            if let Err(error) =
-                crate::xmpp::protocol::misc::send_push_notification(&self.state, target.id).await
-            {
+            if let Err(error) = self.state.dispatch_push_notification(target.id).await {
                 tracing::warn!(target = %target.username, ?error, "failed to send post-commit subscription notification");
             }
         }

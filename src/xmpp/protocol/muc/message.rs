@@ -160,9 +160,7 @@ impl ProtocolSession {
                 if outcome == OfflineStoreOutcome::RecipientUnavailable {
                     return Ok(Action::None);
                 }
-                if let Err(error) =
-                    super::super::misc::send_push_notification(&self.state, recipient.id).await
-                {
+                if let Err(error) = self.state.dispatch_push_notification(recipient.id).await {
                     tracing::warn!(?error, recipient_id = %recipient.id, %room_jid, "accepted offline MUC invitation decline could not trigger push notification");
                 }
             }
@@ -990,11 +988,8 @@ impl ProtocolSession {
                                 }
                             }
                             if !delivered && temporary_storage {
-                                if let Err(error) = super::super::misc::send_push_notification(
-                                    &self.state,
-                                    recipient.id,
-                                )
-                                .await
+                                if let Err(error) =
+                                    self.state.dispatch_push_notification(recipient.id).await
                                 {
                                     tracing::warn!(?error, recipient_id = %recipient.id, %room_jid, "accepted offline mediated MUC invitation could not trigger push notification");
                                 }

@@ -56,6 +56,40 @@ different results and must be recorded separately.
    mode-0700 private evidence, with no passwords in command-line arguments or
    shared logs.
 
+The read-only pre-fault check is
+`python3 scripts/local-vm-lab-redis-failover-preflight.py`. Run it **only after
+the soak is sealed** and the replica/Sentinel services are installed. It first
+checks the isolated six-VM network, then uses SSH to inspect TLS certificates,
+private-file permissions, exact ACL command/key/channel scopes, `ROLE`,
+`INFO replication`, each Sentinel's `CKQUORUM` and replica view. It requires
+`infra` to be the sole primary, `ejabberd` to be its healthy replica, and all
+three voters to agree on `infra`. A missing or differing observation fails the
+check. The output contains roles and hostnames, never passwords or ACL text.
+
+For this check, keep the data configurations in
+`/etc/northstar-lab-redis/` on `infra` and
+`/etc/northstar-lab-redis-replica/` on `ejabberd`, each with `redis.conf`,
+`users.acl`, `password` and `sentinel-control-password`. The replica's
+`masterauth` must match its `replication` ACL password; configure
+`masteruser replication`, `masterauth` and `tls-replication yes` on **both**
+data nodes so the old primary can rejoin safely as a replica. Set
+`replica-announce-ip` to each node's `*.lab.test` name and
+`replica-announce-port 6379`; Sentinel must discover the replica by the
+same hostname used for TLS. Store each
+Sentinel's writable `sentinel.conf`, `users.acl`, `data-password`,
+`peer-password` and `observer-password` under
+`/etc/northstar-lab-sentinel/`. Use the unit names
+`northstar-lab-redis-replica.service` and `northstar-lab-sentinel.service`.
+The three Sentinels must use `resolve-hostnames yes`, `announce-hostnames yes`,
+`sentinel announce-ip` with their own `*.lab.test` names,
+`sentinel announce-port 26379`, quorum two, mTLS on port 26379 and
+`tls-replication yes`. Their data ACL user
+has access only to `__sentinel__:hello` and the Redis-documented control
+commands; the Northstar user never has access to that channel. Install all
+secrets and writable Sentinel state with no world access. This contract is
+deliberately strict: adapt the checker and review the configuration together
+if the pinned Redis build requires a different safe layout.
+
 This layout proves a Redis process failover. It does **not** remove the
 `infra` guest as an application dependency: that guest also holds PostgreSQL
 and MinIO. Stopping the whole guest would mix three faults and cannot isolate
@@ -85,6 +119,10 @@ exact commands to stop the Northstar units before injecting the fault.
    primary is stopped and the promoted replica reports `role:master` and
    accepts the disposable lab write. An `OK` reply to a trigger or one
    Sentinel address alone is insufficient proof of completed promotion.
+   The pre-fault helper is not a post-failover verifier: its expected
+   `infra`-primary roles intentionally fail after promotion. Capture fresh
+   `ROLE`, replication offsets, Sentinel addresses and ACL/TLS evidence for
+   the promoted topology before proceeding.
 4. **Current implementation: operator recovery only.** Stop both Northstar
    services, point their secret-backed Redis URLs at the promoted primary's
    certificate-matching DNS name, and start the nodes one at a time. Do not

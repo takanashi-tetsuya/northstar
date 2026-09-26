@@ -2079,9 +2079,7 @@ pub(crate) async fn route_inbound_presence(
             && transition.effect == crate::services::presence::InboundRemotePresenceEffect::Forward
             && state.sessions_for(&recipient_bare).is_empty()
         {
-            if let Err(error) =
-                crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
-            {
+            if let Err(error) = state.dispatch_push_notification(recipient.id).await {
                 state.s2s_inbound_delivery_telemetry().post_accept_failed();
                 tracing::warn!(?error, recipient_id = %recipient.id, contact = %contact, "federated subscription was committed but push notification failed");
             }
@@ -3501,9 +3499,7 @@ pub(crate) async fn route_inbound_message(
         return Ok(None);
     }
     if durable_c2s_delivery.is_some() {
-        if let Err(error) =
-            crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
-        {
+        if let Err(error) = state.dispatch_push_notification(recipient.id).await {
             state.s2s_inbound_delivery_telemetry().post_accept_failed();
             tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "durable inbound C2S message was accepted but push notification failed");
         }
@@ -3542,9 +3538,7 @@ pub(crate) async fn route_inbound_message(
         }
         if offline_outcome == OfflineAdmissionOutcome::QuotaExceeded {
             if history_committed {
-                if let Err(error) =
-                    crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
-                {
+                if let Err(error) = state.dispatch_push_notification(recipient.id).await {
                     state.s2s_inbound_delivery_telemetry().post_accept_failed();
                     tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "MAM-backed inbound message was accepted but offline quota and push delivery both failed");
                 }
@@ -3569,9 +3563,7 @@ pub(crate) async fn route_inbound_message(
             )
             .await;
         }
-        if let Err(error) =
-            crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
-        {
+        if let Err(error) = state.dispatch_push_notification(recipient.id).await {
             state.s2s_inbound_delivery_telemetry().post_accept_failed();
             tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "inbound offline message was accepted but push notification failed");
         }

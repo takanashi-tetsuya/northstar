@@ -955,7 +955,7 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn notify_push(&self, recipient_id: uuid::Uuid) -> Result<()> {
-        send_push_notification(&self.state, recipient_id).await
+        self.state.dispatch_push_notification(recipient_id).await
     }
 
     pub(crate) async fn handle_push_response(
@@ -978,95 +978,6 @@ impl ProtocolSession {
     ) -> Result<bool> {
         handle_push_disable(&self.state, root, from, to).await
     }
-}
-
-pub(crate) async fn send_push_notification(
-    state: &crate::state::AppState,
-    recipient_id: uuid::Uuid,
-) -> Result<()> {
-    if !state.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
-        return Ok(());
-    }
-    let batch = state.push_service().claim_batch(recipient_id).await?;
-    for subscription in batch.deliveries {
-        let request_id = format!("push-{}", subscription.request_id);
-        let summary = northstar_xep_0357::PushSummary::new()
-            .with_message_count(batch.message_count as u64)
-            .with_pending_subscription_count(batch.pending_subscription_count as u64);
-        let notification = northstar_xep_0357::build_notification_iq(
-            state.local_domain(),
-            &subscription.service_jid,
-            &request_id,
-            (!subscription.node.is_empty()).then_some(subscription.node.as_str()),
-            &summary,
-            subscription.options.as_deref(),
-        )?;
-        let mut delivered = false;
-        let service = crate::jid::CanonicalJid::parse_bare(&subscription.service_jid).ok();
-        if service
-            .as_ref()
-            .is_some_and(|jid| jid.domainpart() == state.local_domain())
-        {
-            let mut local_targets = state.session_entries_for(&subscription.service_jid);
-            // A local bare push-service JID follows the same RFC 6121 routing
-            // rule as any other IQ addressed to a local account: unavailable
-            // and negative-priority resources are ineligible, and the
-            // highest-priority available resource wins.  The full JID is a
-            // stable tie-breaker so routing does not depend on DashMap order.
-            local_targets.retain(|(_, session)| {
-                session.available.load(Ordering::Relaxed)
-                    && session.priority.load(Ordering::Relaxed) >= 0
-            });
-            local_targets.sort_by(|(left_jid, left), (right_jid, right)| {
-                right
-                    .priority
-                    .load(Ordering::Relaxed)
-                    .cmp(&left.priority.load(Ordering::Relaxed))
-                    .then_with(|| left_jid.cmp(right_jid))
-            });
-            let local_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-            for (_, target) in local_targets {
-                if tokio::time::timeout_at(local_deadline, target.sender.send(notification.clone()))
-                    .await
-                    .is_ok_and(|result| result.is_ok())
-                {
-                    delivered = true;
-                    break;
-                }
-            }
-            if !delivered {
-                delivered = state
-                    .route_push_service_notification_remote(
-                        &subscription.service_jid,
-                        &notification,
-                    )
-                    .await;
-            }
-        } else if let Some(domain) = service.as_ref().map(|jid| jid.domainpart()) {
-            if state.federation_domain_allowed(domain) {
-                delivered = state
-                    .federation_outbox()
-                    .send(domain, notification.clone(), None)
-                    .await;
-            }
-        }
-        if !delivered {
-            state
-                .push_service()
-                .mark_unroutable(subscription.request_id)
-                .await?;
-            state.push_delivery_telemetry().failed();
-            tracing::debug!(
-                service = %subscription.service_jid,
-                has_options = subscription.options.is_some(),
-                "push service could not be routed"
-            );
-        } else {
-            state.push_delivery_telemetry().routed();
-        }
-        state.push_delivery_telemetry().attempted();
-    }
-    Ok(())
 }
 
 /// Consume a local or federated Push Service IQ response.  PostgreSQL is the

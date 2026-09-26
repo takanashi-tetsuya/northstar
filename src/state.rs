@@ -125,6 +125,7 @@ impl axum::extract::FromRef<Arc<AppState>> for ReportContext {
     }
 }
 pub(crate) mod omemo_poll;
+mod push_notification_delivery;
 pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
     db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
 >;

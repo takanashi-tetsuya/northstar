@@ -1798,6 +1798,17 @@ fn claim_session_cleanup(lifecycle: &AtomicU8) -> SessionCleanupOwnership {
     }
 }
 
+fn begin_owned_session_cleanup(
+    disconnect: &tokio_util::sync::CancellationToken,
+    resume_allowed: bool,
+) -> bool {
+    // Cleanup also cancels this token. Preserve whether the connection had
+    // already been revoked; ordinary transport loss must remain resumable.
+    let may_resume = resume_allowed && !disconnect.is_cancelled();
+    disconnect.cancel();
+    may_resume
+}
+
 #[derive(Debug)]
 pub(crate) enum SessionFinalizationOutcome {
     Completed(crate::services::session_cleanup::CleanupReport),
@@ -1876,7 +1887,9 @@ impl ProtocolSession {
             SessionCleanupOwnership::Acquired => {}
         }
 
-        self.disconnect.cancel();
+        // The old SM owner took the other branch above. This branch must
+        // sample external revocation before it cancels its own workers.
+        let resume_allowed = begin_owned_session_cleanup(&self.disconnect, self.sm.resume_allowed);
         let active_privacy_list = self
             .privacy_active
             .read()
@@ -1891,7 +1904,7 @@ impl ProtocolSession {
 
         let sm_session_id = self.sm.db_id.take();
         let resumable = self.sm.enabled
-            && self.sm.resume_allowed
+            && resume_allowed
             && self.registered_key.is_some()
             && sm_session_id.is_some()
             && account.is_some()
@@ -2042,9 +2055,10 @@ fn durable_delivery_managed_by_sm(
 #[cfg(test)]
 mod legacy_sasl_wire_tests {
     use super::{
-        client_stream_limits_feature, drop_requires_local_quiesce, durable_delivery_managed_by_sm,
-        legacy_sasl_auth, legacy_sasl_payload, resource_bind_deadline_for, Action,
-        PostActionSupervisor, PostActionTelemetry, ResumePayload, StreamLimits,
+        begin_owned_session_cleanup, claim_session_cleanup, client_stream_limits_feature,
+        drop_requires_local_quiesce, durable_delivery_managed_by_sm, legacy_sasl_auth,
+        legacy_sasl_payload, resource_bind_deadline_for, Action, PostActionSupervisor,
+        PostActionTelemetry, ResumePayload, SessionCleanupOwnership, StreamLimits,
     };
     use roxmltree::Document;
 
@@ -2133,6 +2147,29 @@ mod legacy_sasl_wire_tests {
         assert!(!drop_requires_local_quiesce(true, 1));
         // State 2 belongs exclusively to the exact SM claimant.
         assert!(!drop_requires_local_quiesce(false, 2));
+    }
+
+    #[test]
+    fn external_disconnect_revokes_sm_resume_but_transport_loss_preserves_it() {
+        let transport_loss = tokio_util::sync::CancellationToken::new();
+        assert!(begin_owned_session_cleanup(&transport_loss, true));
+        assert!(transport_loss.is_cancelled());
+
+        let revoked = tokio_util::sync::CancellationToken::new();
+        revoked.cancel(); // Revocation arrived while the transport was still active.
+        assert!(!begin_owned_session_cleanup(&revoked, true));
+
+        let nonresumable = tokio_util::sync::CancellationToken::new();
+        assert!(!begin_owned_session_cleanup(&nonresumable, false));
+
+        // An exact SM takeover owns the old lifecycle even though it also
+        // cancels the old transport; that finalizer must not plan another SM
+        // suspension or revoke the replacement's lease.
+        let superseded = std::sync::atomic::AtomicU8::new(2);
+        assert_eq!(
+            claim_session_cleanup(&superseded),
+            SessionCleanupOwnership::SupersededBySm
+        );
     }
 
     #[test]

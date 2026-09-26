@@ -3,14 +3,14 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    decide_mam_room_read, finish_mam_page, mam_referenced_ids, MamQueryBounds, MamQueryPlan,
-    MamRoomReadDecision, ResolvedMamRsmPage,
+    decide_mam_room_read, finish_mam_page, mam_referenced_ids, resolve_mam_query, MamQueryBounds,
+    MamRoomReadDecision,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::{pool::PoolConnection, Acquire, PgPool, Postgres, QueryBuilder, Row, Transaction};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -1175,26 +1175,6 @@ fn push_mam_scope(
     }
 }
 
-async fn mam_archive_point(
-    transaction: &mut Transaction<'_, Postgres>,
-    source: MamArchiveSource,
-    blocked_patterns: &[MamBlockedPattern],
-    id: Uuid,
-) -> Result<Option<DateTime<Utc>>> {
-    let mut builder = QueryBuilder::<Postgres>::new("SELECT created_at FROM ");
-    builder.push(source.table());
-    // XEP-0313 requires a referenced UID to be present in the archive. It
-    // does not require the cursor itself to satisfy the query's independent
-    // `with`, time or `ids` filters. Resolve the opaque chronological point
-    // in the same visibility snapshot, then apply filters to returned rows.
-    push_mam_archive_base(&mut builder, source, blocked_patterns);
-    builder.push(" AND id = ").push_bind(id);
-    Ok(builder
-        .build_query_scalar()
-        .fetch_optional(&mut **transaction)
-        .await?)
-}
-
 async fn mam_archive_page_for(
     pool: &PgPool,
     source: MamArchiveSource,
@@ -1219,48 +1199,26 @@ async fn mam_archive_page_for_in_transaction(
 ) -> Result<Option<ArchivePage>> {
     let blocked_patterns = mam_blocked_patterns(transaction, viewer_id).await?;
 
-    // Every UID referenced by the extended form or RSM must exist in this
-    // archive. The repeatable-read snapshot prevents a concurrent deletion
-    // from changing validation, count and page selection midway through the
-    // response.
+    // Resolve all referenced UIDs against the same visible archive scope.
+    // The cursor itself need not match the form's independent filters.
     let requested_ids = mam_referenced_ids(query);
+    let mut visible_points = HashMap::with_capacity(requested_ids.len());
     if !requested_ids.is_empty() {
-        let mut builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM ");
+        let mut builder = QueryBuilder::<Postgres>::new("SELECT id, created_at FROM ");
         builder.push(source.table());
         push_mam_archive_base(&mut builder, source, &blocked_patterns);
         builder
             .push(" AND id = ANY(")
-            .push_bind(requested_ids.clone())
+            .push_bind(requested_ids)
             .push(")");
-        let found: i64 = builder
-            .build_query_scalar()
-            .fetch_one(&mut **transaction)
-            .await?;
-        if found != requested_ids.len() as i64 {
-            return Ok(None);
+        for row in builder.build().fetch_all(&mut **transaction).await? {
+            visible_points.insert(row.try_get("id")?, row.try_get("created_at")?);
         }
     }
-
-    let form_after = match query.after_id {
-        Some(id) => Some((
-            mam_archive_point(transaction, source, &blocked_patterns, id)
-                .await?
-                .expect("validated MAM id disappeared from repeatable-read snapshot"),
-            id,
-        )),
-        None => None,
+    let Some(resolved) = resolve_mam_query(query, &visible_points) else {
+        return Ok(None);
     };
-    let form_before = match query.before_id {
-        Some(id) => Some((
-            mam_archive_point(transaction, source, &blocked_patterns, id)
-                .await?
-                .expect("validated MAM id disappeared from repeatable-read snapshot"),
-            id,
-        )),
-        None => None,
-    };
-
-    let plan = MamQueryPlan::from_form_points(form_after, form_before);
+    let plan = resolved.plan;
     let mut count_builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM ");
     count_builder.push(source.table());
     push_mam_scope(
@@ -1275,26 +1233,8 @@ async fn mam_archive_page_for_in_transaction(
         .fetch_one(&mut **transaction)
         .await?;
 
-    let resolved_page = match query.page {
-        MamRsmPage::First => ResolvedMamRsmPage::First,
-        MamRsmPage::Last => ResolvedMamRsmPage::Last,
-        MamRsmPage::Index(index) => ResolvedMamRsmPage::Index(index),
-        MamRsmPage::After(id) => ResolvedMamRsmPage::After((
-            mam_archive_point(transaction, source, &blocked_patterns, id)
-                .await?
-                .expect("validated MAM RSM id disappeared"),
-            id,
-        )),
-        MamRsmPage::Before(id) => ResolvedMamRsmPage::Before((
-            mam_archive_point(transaction, source, &blocked_patterns, id)
-                .await?
-                .expect("validated MAM RSM id disappeared"),
-            id,
-        )),
-    };
-
     let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
-    let page = plan.page_window(resolved_page, max);
+    let page = plan.page_window(resolved.page, max);
 
     let mut page_builder = QueryBuilder::<Postgres>::new("SELECT ");
     page_builder
@@ -4418,6 +4358,46 @@ mod history_identity_pg_tests {
         )
         .await
         .unwrap();
+
+        let mut duplicate_reference = page_query();
+        duplicate_reference.ids = vec![bob_id, bob_id];
+        let duplicate_page = mam_user_archive_page(&pool, owner_id, &duplicate_reference)
+            .await
+            .unwrap()
+            .expect("a duplicated visible UID remains one valid reference");
+        assert_eq!(duplicate_page.total, 1);
+        assert_eq!(duplicate_page.rows[0].id, bob_id);
+
+        let mut missing_reference = duplicate_reference;
+        missing_reference.ids.push(Uuid::new_v4());
+        assert!(mam_user_archive_page(&pool, owner_id, &missing_reference)
+            .await
+            .unwrap()
+            .is_none());
+
+        let other_owner_id = Uuid::new_v4();
+        archive_message(
+            &pool,
+            other_owner_id,
+            recipient_owner_id,
+            "bob@example.test/Phone",
+            "<message id='other-owner'/>",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut other_owner_cursor = page_query();
+        other_owner_cursor.page = MamRsmPage::After(other_owner_id);
+        assert!(mam_user_archive_page(&pool, owner_id, &other_owner_cursor)
+            .await
+            .unwrap()
+            .is_none());
+        sqlx::query("DELETE FROM message_archive WHERE id=$1")
+            .bind(other_owner_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let mut wrong_filter_cursor = page_query();
         wrong_filter_cursor.with_jid = Some("bob@example.test".to_owned());

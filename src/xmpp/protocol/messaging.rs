@@ -1,9 +1,10 @@
 use super::{Action, ProtocolSession};
 use crate::services::messaging::{
-    ArchiveWrite, DurableAdmissionOutcome, FederationDelivery, IdentityAuthority, LocalDelivery,
-    LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-    OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
-    RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
+    admit_offline_then_push, ArchiveWrite, DurableAdmissionOutcome, FederationDelivery,
+    IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
+    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OutboundPolicyDecision,
+    PersonalMessageDestination, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
+    ValidatedPersonalMessage,
 };
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
@@ -1348,28 +1349,31 @@ impl ProtocolSession {
                             chrono::Utc::now(),
                             Some(self.state.local_domain()),
                         );
-                        let offline_outcome = self
-                            .state
-                            .message_service()
-                            .store_offline(crate::services::messaging::OfflineMessageAdmission {
-                                recipient_id: recipient.id,
-                                recipient_bare_jid: &recipient_by,
-                                sender_jid: from,
-                                stanza: &delayed,
-                                encrypted,
-                                mam_backed: recipient_history_enabled,
-                                identity: message_admission_lease
-                                    .as_ref()
-                                    .map(|lease| &lease.offline_dedupe),
-                            })
-                            .await?;
-                        match offline_outcome {
+                        let offline = admit_offline_then_push(
+                            self.state.message_service().store_offline(
+                                crate::services::messaging::OfflineMessageAdmission {
+                                    recipient_id: recipient.id,
+                                    recipient_bare_jid: &recipient_by,
+                                    sender_jid: from,
+                                    stanza: &delayed,
+                                    encrypted,
+                                    mam_backed: recipient_history_enabled,
+                                    identity: message_admission_lease
+                                        .as_ref()
+                                        .map(|lease| &lease.offline_dedupe),
+                                },
+                            ),
+                            history_committed,
+                            self.state.dispatch_push_notification(recipient.id),
+                        )
+                        .await?;
+                        match offline.admission {
                             OfflineAdmissionOutcome::QuotaExceeded if history_committed => {
                                 // A pre-admitted recipient MAM row is durable
                                 // recovery. Returning an error here would invite a
                                 // duplicate retry after the server already
                                 // accepted the origin-id.
-                                if let Err(error) = self.notify_push(recipient.id).await {
+                                if let Some(error) = offline.push_error {
                                     self.state.personal_message_telemetry().post_accept_failed();
                                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "MAM-backed message was accepted but offline quota and push delivery both failed");
                                 }
@@ -1380,7 +1384,7 @@ impl ProtocolSession {
                             }
                             OfflineAdmissionOutcome::Stored => {
                                 stored_offline = true;
-                                if let Err(error) = self.notify_push(recipient.id).await {
+                                if let Some(error) = offline.push_error {
                                     self.state.personal_message_telemetry().post_accept_failed();
                                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "offline message was accepted but push notification failed");
                                 }

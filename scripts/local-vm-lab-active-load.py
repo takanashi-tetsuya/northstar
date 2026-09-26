@@ -136,8 +136,12 @@ def parse_soak(path: Path, expected_sha: str) -> dict[str, Any]:
         raise RuntimeError("soak ran for less than 24 hours")
     if finished > dt.datetime.now(dt.timezone.utc):
         raise RuntimeError("soak evidence ends in the future")
+    # A soak observation is timestamped before its probes run. The following
+    # observation (or the end attestation) is the first recorded time known to
+    # be after an upload finished, so use that upper bound for the cooldown.
     last_upload = max(
-        (dt.datetime.fromisoformat(row["time_utc"]) for row in checks if "upload" in row),
+        (dt.datetime.fromisoformat(records[index + 2]["time_utc"])
+         for index, row in enumerate(checks) if "upload" in row),
         default=None,
     )
     return {
@@ -296,7 +300,7 @@ stat = (root / 'stat').read_text().rpartition(') ')[2].split()
 cpu_ticks = int(stat[11]) + int(stat[12])
 available = int(next(x.split()[1] for x in pathlib.Path('/proc/meminfo').read_text().splitlines() if x.startswith('MemAvailable:')))
 token = pathlib.Path('/home/lab/northstar/secrets/metrics_bearer_token').read_text().strip()
-request = urllib.request.Request('http://127.0.0.1:8080/metrics',
+request = urllib.request.Request('http://127.0.0.1:9091/metrics',
                                  headers={'Authorization': 'Bearer ' + token})
 raw = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
     request, timeout=5).read(2 * 1024 * 1024).decode()
@@ -591,6 +595,11 @@ def self_test() -> None:
                      "expected_binary_sha256": sha})
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
         assert parse_soak(path, sha)["minute_checks"] == 1440
+        rows[1351]["upload"] = "verified upload"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        assert parse_soak(path, sha)["last_upload_utc"] == (
+            started + dt.timedelta(minutes=1351)
+        ).isoformat()
         rows[600]["status"] = "failed"
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
         try:

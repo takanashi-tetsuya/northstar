@@ -1,9 +1,10 @@
 //! XEP-0357 application boundary.
 //!
 //! Exposes subscription authorization, delivery claims and response correlation
-//! through typed repository operations. The protocol adapter owns XML and routing.
+//! through typed repository operations. A transport adapter owns XML and routing.
 
 use anyhow::Result;
+use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +27,25 @@ pub(crate) struct PushBatch {
     pub(crate) message_count: i64,
     pub(crate) pending_subscription_count: i64,
     pub(crate) deliveries: Vec<PushDelivery>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PushNotificationCounts {
+    pub(crate) message_count: i64,
+    pub(crate) pending_subscription_count: i64,
+}
+
+/// Transport-specific routing and telemetry for a claimed Push notification.
+/// The application service owns claim, settlement and per-item ordering.
+pub(crate) trait PushNotificationRouter: Send + Sync {
+    fn route(
+        &self,
+        delivery: &PushDelivery,
+        counts: PushNotificationCounts,
+    ) -> impl Future<Output = Result<bool>> + Send;
+    fn routed(&self);
+    fn failed(&self);
+    fn attempted(&self);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,11 +124,34 @@ impl<R: PushRepository> PushService<R> {
     ) -> Result<u64> {
         self.repository.disable(user_id, service_jid, node).await
     }
-    pub(crate) async fn claim_batch(&self, user_id: Uuid) -> Result<PushBatch> {
-        self.repository.claim_batch(user_id).await
-    }
-    pub(crate) async fn mark_unroutable(&self, request_id: Uuid) -> Result<()> {
-        self.repository.mark_unroutable(request_id).await
+    /// Dispatch only after the originating message has been accepted. A route
+    /// failure is settled before the next claimed subscription is attempted;
+    /// persistence errors stop the batch just as they did in the wire adapter.
+    pub(crate) async fn dispatch_after_commit<T: PushNotificationRouter>(
+        &self,
+        user_id: Uuid,
+        router: &T,
+    ) -> Result<()> {
+        let batch = self.repository.claim_batch(user_id).await?;
+        let counts = PushNotificationCounts {
+            message_count: batch.message_count,
+            pending_subscription_count: batch.pending_subscription_count,
+        };
+        for delivery in batch.deliveries {
+            if router.route(&delivery, counts).await? {
+                router.routed();
+            } else {
+                self.repository.mark_unroutable(delivery.request_id).await?;
+                router.failed();
+                tracing::debug!(
+                    service = %delivery.service_jid,
+                    has_options = delivery.options.is_some(),
+                    "push service could not be routed"
+                );
+            }
+            router.attempted();
+        }
+        Ok(())
     }
     pub(crate) async fn complete_response(
         &self,
@@ -131,3 +174,7 @@ impl<R: PushRepository> PushService<R> {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "push_tests.rs"]
+mod post_commit_tests;

@@ -234,10 +234,14 @@ adapter, while the application library validates cross-adapter authority
 before invoking it. Local durable delivery and federation outbox remain
 distinct typed destinations and produce explicit post-commit plans. A
 failure-injection test now checks that a federation outbox wake occurs only
-after a stored commit, never on commit failure or replay. Remaining work is
-failure-injection coverage for the other provider effects and moving Carbon,
-Push and route execution out of the protocol adapter; the existing PostgreSQL
-atomic operations have deliberately not been split during this convergence.
+after a stored commit, never on commit failure or replay. Offline Push
+admission likewise dispatches only after a stored row or committed MAM
+recovery; a failed transaction or replay does not notify again. The Push
+service owns claim, route, settlement and telemetry order, with XML and
+transport routing in a state adapter. Carbon and personal-message route
+execution, plus failure-injection coverage for their effects, remain to be
+moved out of protocol handlers. The existing PostgreSQL atomic operations
+have deliberately not been split during this convergence.
 
 ### Phase C — Room and PubSub command/query separation
 
@@ -275,6 +279,11 @@ Root discovery and authorized item/disco RSM page selection now project
 through the PubSub application layer. SQL transactions, audience snapshots
 and the outbox remain in the PostgreSQL adapter; the wider command/query
 boundary is still incremental.
+Archive/MAM now resolves all referenced form and RSM IDs in one visible query
+within the page's repeatable-read snapshot. Archive core validates those
+points and plans the same count and page bounds; missing or invisible IDs
+still reject the page before counting. This narrows the adapter's query
+decision without changing its authorization or transaction owner.
 
 ### Phase D — Session kernel and transport ports
 

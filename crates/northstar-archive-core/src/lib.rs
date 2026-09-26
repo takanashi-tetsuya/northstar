@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -209,6 +209,42 @@ pub fn mam_referenced_ids(query: &MamArchiveQuery) -> Vec<Uuid> {
         .collect::<HashSet<_>>()
         .into_iter()
         .collect()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedMamQuery {
+    pub plan: MamQueryPlan,
+    pub page: ResolvedMamRsmPage,
+}
+
+/// Resolve every referenced UID from points visible in the same archive
+/// snapshot. Cursors need not match the form filters, but each must be visible
+/// to the reader before it can bound the page.
+pub fn resolve_mam_query(
+    query: &MamArchiveQuery,
+    visible_points: &HashMap<Uuid, DateTime<Utc>>,
+) -> Option<ResolvedMamQuery> {
+    if !mam_referenced_ids(query)
+        .iter()
+        .all(|id| visible_points.contains_key(id))
+    {
+        return None;
+    }
+
+    let point = |id: Uuid| Some((*visible_points.get(&id)?, id));
+    let form_after = query.after_id.and_then(point);
+    let form_before = query.before_id.and_then(point);
+    let page = match query.page {
+        MamRsmPage::First => ResolvedMamRsmPage::First,
+        MamRsmPage::Last => ResolvedMamRsmPage::Last,
+        MamRsmPage::Index(index) => ResolvedMamRsmPage::Index(index),
+        MamRsmPage::After(id) => ResolvedMamRsmPage::After(point(id)?),
+        MamRsmPage::Before(id) => ResolvedMamRsmPage::Before(point(id)?),
+    };
+    Some(ResolvedMamQuery {
+        plan: MamQueryPlan::from_form_points(form_after, form_before),
+        page,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -550,6 +586,49 @@ mod tests {
         }
         query.page = MamRsmPage::Before(rsm_id);
         assert_eq!(mam_referenced_ids(&query), vec![rsm_id]);
+    }
+
+    #[test]
+    fn query_resolution_requires_every_visible_reference_before_paging() {
+        let earlier = Uuid::from_u128(1);
+        let cursor = Uuid::from_u128(2);
+        let later = Uuid::from_u128(3);
+        let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let query = MamArchiveQuery {
+            with_jid: Some("alice@example.test".to_owned()),
+            start: Some(timestamp + chrono::Duration::days(1)),
+            end: None,
+            before_id: Some(later),
+            after_id: Some(earlier),
+            ids: vec![earlier, later],
+            page: MamRsmPage::After(cursor),
+            max: 20,
+        };
+        // The cursor is outside the form's time filter. Its authorized
+        // archive point is still valid, and equal timestamps use the ID to
+        // choose the page boundary.
+        let mut visible = HashMap::from([
+            (earlier, timestamp),
+            (cursor, timestamp),
+            (later, timestamp),
+        ]);
+        let resolved = resolve_mam_query(&query, &visible).unwrap();
+        assert_eq!(resolved.plan.count_bounds.after, Some((timestamp, earlier)));
+        assert_eq!(resolved.plan.count_bounds.before, Some((timestamp, later)));
+        assert_eq!(
+            resolved
+                .plan
+                .page_window(resolved.page, query.max)
+                .bounds()
+                .after,
+            Some((timestamp, cursor))
+        );
+
+        visible.remove(&cursor);
+        assert!(resolve_mam_query(&query, &visible).is_none());
+        visible.insert(cursor, timestamp);
+        visible.remove(&later);
+        assert!(resolve_mam_query(&query, &visible).is_none());
     }
 
     #[test]

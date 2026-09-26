@@ -1525,7 +1525,8 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
     }
     async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         let outcome: Result<_> = async {
-            let affiliation = db::get_node_affiliation(&self.pool, node.id, requester).await?;
+            let (affiliation, subscribed) =
+                db::publish_authorization_facts(&self.pool, node.id, requester).await?;
             let affiliation = affiliation
                 .as_deref()
                 .map(str::parse::<northstar_xep_0060::Affiliation>)
@@ -1539,7 +1540,6 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
                 .access_model
                 .parse::<northstar_xep_0060::AccessModel>()
                 .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
-            let subscribed = db::is_subscribed(&self.pool, node.id, requester).await?;
             Ok(northstar_xep_0060::can_publish_pure(
                 publish_model,
                 access_model,

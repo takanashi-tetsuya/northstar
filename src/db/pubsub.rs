@@ -1878,6 +1878,33 @@ pub async fn is_subscribed(pool: &PgPool, node_id: Uuid, jid: &str) -> Result<bo
     .map_err(Into::into)
 }
 
+/// Read the two mutable inputs to a publish precheck from one statement
+/// snapshot. The publication transaction still makes the authoritative
+/// decision under its existing locks.
+pub(crate) async fn publish_authorization_facts(
+    pool: &PgPool,
+    node_id: Uuid,
+    requester: &str,
+) -> Result<(Option<String>, bool)> {
+    let full = crate::jid::canonicalize(requester)?;
+    let bare = crate::jid::canonical_bare_key(&full)?;
+    let row = sqlx::query(
+        "SELECT (SELECT affiliation FROM pubsub_affiliations \
+                 WHERE node_id = $1 AND jid = $2) AS affiliation, \
+                EXISTS(SELECT 1 FROM pubsub_subscriptions \
+                       WHERE node_id = $1 \
+                         AND (jid = $3 OR split_part(jid, '/', 1) = $2) \
+                         AND state = 'subscribed' \
+                         AND (expire IS NULL OR expire > NOW())) AS subscribed",
+    )
+    .bind(node_id)
+    .bind(bare)
+    .bind(full)
+    .fetch_one(pool)
+    .await?;
+    Ok((row.try_get("affiliation")?, row.try_get("subscribed")?))
+}
+
 pub async fn subscriptions_for_jid(
     pool: &PgPool,
     jid: &str,

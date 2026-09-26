@@ -264,7 +264,9 @@ path against the same authority and post-commit boundaries.
 PubSub/PEP already has core/application crates, typed commands, a service and
 repository ports. Its remaining work is a complete command/query boundary and
 consolidation of the PostgreSQL adapter, while preserving the transactional
-audience snapshot and outbox.
+audience snapshot and outbox. The publish precheck now reads affiliation and
+active subscription in one read-only statement snapshot; the mutation
+transaction still makes the authoritative decision.
 
 ### Phase D — Session kernel and transport ports
 

@@ -427,6 +427,62 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         Some("owner")
     );
     assert!(service
+        .can_publish(&node, "alice@example.test/Phone")
+        .await
+        .unwrap());
+    let mut subscriber_node = node.clone();
+    subscriber_node.publish_model = "subscribers".to_owned();
+    assert!(!service
+        .can_publish(&subscriber_node, "bob@example.test/Phone")
+        .await
+        .unwrap());
+    sqlx::query(
+        "INSERT INTO pubsub_subscriptions(node_id, jid, state, subid) \
+         VALUES ($1, $2, 'subscribed', $3)",
+    )
+    .bind(node.id)
+    .bind("bob@example.test")
+    .bind(Uuid::new_v4().to_string())
+    .execute(&setup_pool)
+    .await
+    .unwrap();
+    assert!(service
+        .can_publish(&subscriber_node, "bob@example.test/Phone")
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE pubsub_subscriptions SET expire = NOW() - INTERVAL '1 second' \
+         WHERE node_id = $1 AND jid = $2",
+    )
+    .bind(node.id)
+    .bind("bob@example.test")
+    .execute(&setup_pool)
+    .await
+    .unwrap();
+    assert!(!service
+        .can_publish(&subscriber_node, "bob@example.test/Phone")
+        .await
+        .unwrap());
+    sqlx::query("UPDATE pubsub_subscriptions SET expire = NULL WHERE node_id = $1 AND jid = $2")
+        .bind(node.id)
+        .bind("bob@example.test")
+        .execute(&setup_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO pubsub_affiliations(node_id, jid, affiliation) \
+         VALUES ($1, $2, 'outcast')",
+    )
+    .bind(node.id)
+    .bind("bob@example.test")
+    .execute(&setup_pool)
+    .await
+    .unwrap();
+    assert!(!service
+        .can_publish(&subscriber_node, "bob@example.test/Phone")
+        .await
+        .unwrap());
+    assert!(service
         .pep_items(Uuid::new_v4(), "urn:xmpp:avatar:data", None, 10)
         .await
         .unwrap()

@@ -104,6 +104,18 @@ pub fn plan_mam_page(
     }
 }
 
+/// Turn the extra fetched row into the RSM completion flag and restore wire
+/// order for backward pages. The SQL adapters still choose rows in one snapshot.
+pub fn finish_mam_page<T>(mut rows: Vec<T>, max: i64, descending: bool) -> (Vec<T>, bool) {
+    let limit = usize::try_from(max.max(0)).unwrap_or(usize::MAX);
+    let complete = rows.len() <= limit;
+    rows.truncate(limit);
+    if descending {
+        rows.reverse();
+    }
+    (rows, complete)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MamRoomReadDecision {
     Forbidden,
@@ -409,6 +421,16 @@ mod tests {
         let indexed = plan_mam_page(None, None, ResolvedMamRsmPage::Index(7), 20);
         assert_eq!(indexed.offset, Some(7));
         assert_eq!(indexed.fetch_limit, 21);
+    }
+
+    #[test]
+    fn page_completion_and_wire_order_share_one_policy() {
+        assert_eq!(finish_mam_page(vec![3, 2, 1], 2, true), (vec![2, 3], false));
+        assert_eq!(finish_mam_page(vec![1, 2], 2, false), (vec![1, 2], true));
+        assert_eq!(
+            finish_mam_page(vec![1], 0, false),
+            (Vec::<i32>::new(), false)
+        );
     }
 
     #[test]

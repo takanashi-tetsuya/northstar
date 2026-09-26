@@ -714,10 +714,12 @@ remove a useful boundary without eliminating production queries.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for
-personal, MUC and MIX queries. Cursor resolution, authorization, counting and
-page execution remain in the same database snapshot. Archive queries,
-preference updates and atomic federated outbox admission now require separate
-repository capabilities. Local and federated room readers share a pure
+personal, MUC and MIX queries and applies one completion/order rule to their
+fetched pages. MIX uses the selected row's timestamp and ID to compute its
+first index without re-reading that row. Cursor resolution, authorization,
+counting and page execution remain in the same database snapshot. Archive
+queries, preference updates and atomic federated outbox admission now require
+separate repository capabilities. Local and federated room readers share a pure
 visibility decision while retaining their distinct locks. Legacy room reads
 can still initialize a missing occupant-ID secret; the query capability is
 therefore not a claim that every SQL statement is read-only.

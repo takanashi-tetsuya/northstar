@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    decide_mam_room_read, plan_mam_page, MamRoomReadDecision, ResolvedMamRsmPage,
+    decide_mam_room_read, finish_mam_page, plan_mam_page, MamRoomReadDecision, ResolvedMamRsmPage,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
@@ -1330,14 +1330,11 @@ async fn mam_archive_page_for_in_transaction(
         page_builder.push(" OFFSET ").push_bind(index);
     }
     let fetched = page_builder.build().fetch_all(&mut **transaction).await?;
-    let mut rows = fetched.iter().map(archive_from_row).collect::<Vec<_>>();
-    let has_more = rows.len() > max as usize;
-    if has_more {
-        rows.truncate(max as usize);
-    }
-    if window.descending {
-        rows.reverse();
-    }
+    let (rows, complete) = finish_mam_page(
+        fetched.iter().map(archive_from_row).collect(),
+        max,
+        window.descending,
+    );
 
     let first_index = if let Some(first) = rows.first() {
         let mut index_builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM ");
@@ -1367,7 +1364,7 @@ async fn mam_archive_page_for_in_transaction(
         rows,
         total,
         first_index,
-        complete: !has_more,
+        complete,
     }))
 }
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
-use northstar_archive_core::{plan_mam_page, ResolvedMamRsmPage};
+use northstar_archive_core::{finish_mam_page, plan_mam_page, ResolvedMamRsmPage};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::{
@@ -4966,27 +4966,20 @@ async fn mix_mam_page_for(
         page_builder.push(" OFFSET ").push_bind(index);
     }
     let rows = page_builder.build().fetch_all(&mut *transaction).await?;
-    let mut events = rows
-        .iter()
-        .map(|row| MixEvent {
-            id: row.get("id"),
-            item_id: row.get("item_id"),
-            payload: row.get("payload"),
-            created_at: row.get("created_at"),
-        })
-        .collect::<Vec<_>>();
-    let has_more = events.len() > max as usize;
-    if has_more {
-        events.truncate(max as usize);
-    }
-    if window.descending {
-        events.reverse();
-    }
+    let (events, complete) = finish_mam_page(
+        rows.iter()
+            .map(|row| MixEvent {
+                id: row.get("id"),
+                item_id: row.get("item_id"),
+                payload: row.get("payload"),
+                created_at: row.get("created_at"),
+            })
+            .collect(),
+        max,
+        window.descending,
+    );
 
     let first_index = if let Some(first) = events.first() {
-        let first_point = mix_mam_point(&mut transaction, channel_id, &blocked_patterns, first.id)
-            .await?
-            .expect("selected MIX MAM result disappeared from repeatable-read snapshot");
         let mut index_builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM mix_events");
         push_mix_mam_scope(
             &mut index_builder,
@@ -4998,9 +4991,9 @@ async fn mix_mam_page_for(
         );
         index_builder
             .push(" AND (created_at, id) < (")
-            .push_bind(first_point.0)
+            .push_bind(first.created_at)
             .push(", ")
-            .push_bind(first_point.1)
+            .push_bind(first.id)
             .push(")");
         index_builder
             .build_query_scalar()
@@ -5014,7 +5007,7 @@ async fn mix_mam_page_for(
         events,
         total,
         first_index,
-        complete: !has_more,
+        complete,
     }))
 }
 

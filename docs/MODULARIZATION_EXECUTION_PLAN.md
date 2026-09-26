@@ -730,11 +730,12 @@ direct TLS share the TCP adapter; both adapters retain their existing write,
 authentication-publication and SM replay order. BOSH still executes its
 transport-specific actions in its own adapter module, with RID ordering and
 response fences retained by the actor. CSI now owns its state machine and
-deferred outbound queue as one private session substate. SM counters, leases and
-resumption state are private to the protocol module; transport adapters can
-forbid resumption or check whether an SM session exists without editing those
-fields directly. Direct TLS and STARTTLS now build channel-binding and client
-certificate evidence before atomically activating the secure session state.
+deferred outbound queue as one private session substate. SM counters, leases,
+the replay queue and resumption state share a private session substate.
+Transport adapters can forbid resumption or check whether an SM session exists
+without editing those fields directly. Direct TLS and STARTTLS now build
+channel-binding and client-certificate evidence before atomically activating
+the secure session state.
 These are completed slices, not packet exit claims.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated

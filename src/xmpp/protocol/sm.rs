@@ -159,11 +159,11 @@ impl ProtocolSession {
     /// A fatal or explicit terminal transport outcome cannot leave this
     /// connection eligible for stream resumption.
     pub(crate) fn forbid_sm_resume(&mut self) {
-        self.sm_resume_allowed = false;
+        self.sm.resume_allowed = false;
     }
 
     pub(crate) fn has_sm_session(&self) -> bool {
-        self.sm_db_id.is_some()
+        self.sm.db_id.is_some()
     }
 
     /// Enables XEP-0198 as an inline Bind 2 feature and returns the exact XML
@@ -174,7 +174,7 @@ impl ProtocolSession {
         resume: bool,
         requested_max: Option<u64>,
     ) -> std::result::Result<String, &'static str> {
-        if self.full_jid.is_none() || self.sm_enabled {
+        if self.full_jid.is_none() || self.sm.enabled {
             return Err("unexpected-request");
         }
         // XEP-0388 supplies a stable user-agent UUID, while legacy SASL has no
@@ -188,13 +188,13 @@ impl ProtocolSession {
             self.state.sm_session_policy().require_same_device,
             self.user_agent_id.is_some(),
         );
-        self.sm_enabled = true;
-        self.sm_resume_allowed = resume;
-        self.sm_inbound_h = 0;
-        self.sm_outbound_h = 0;
-        self.sm_acked_h = 0;
-        self.sm_unacked.clear();
-        self.sm_db_id = None;
+        self.sm.enabled = true;
+        self.sm.resume_allowed = resume;
+        self.sm.inbound_h = 0;
+        self.sm.outbound_h = 0;
+        self.sm.acked_h = 0;
+        self.sm.unacked.clear();
+        self.sm.db_id = None;
 
         let Some(user) = self.authenticated.as_ref() else {
             self.reset_sm();
@@ -244,7 +244,7 @@ impl ProtocolSession {
                 return Err("resource-constraint");
             }
         };
-        self.sm_capacity = Some(capacity);
+        self.sm.capacity = Some(capacity);
         match self
             .live_session_ownership
             .attempt(
@@ -268,10 +268,11 @@ impl ProtocolSession {
             .await
         {
             Ok(SmSessionCreationOutcome::Created { id, ownership }) => {
-                self.sm_db_id = Some(id);
+                self.sm.db_id = Some(id);
                 self.apply_sm_ownership_resolution(&ownership);
                 *self
-                    .sm_session_id_shared
+                    .sm
+                    .session_id_shared
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(id);
                 self.state
@@ -282,7 +283,7 @@ impl ProtocolSession {
                         &self.joined_rooms,
                     )
                     .await;
-                self.sm_resume_timeout_seconds = negotiated_max;
+                self.sm.resume_timeout_seconds = negotiated_max;
                 if resume {
                     Ok(northstar_xep_0198::build_enabled(
                         Some(resume_id.as_str()),
@@ -323,13 +324,13 @@ impl ProtocolSession {
                         .unwrap_or_else(sm_failed),
                 ))
             }
-            "r" if self.sm_enabled => {
+            "r" if self.sm.enabled => {
                 if northstar_xep_0198::parse_r(root).is_err() {
                     return Ok(Action::Send(sm_failed("bad-request")));
                 }
-                Ok(Action::Send(northstar_xep_0198::build_a(self.sm_inbound_h)))
+                Ok(Action::Send(northstar_xep_0198::build_a(self.sm.inbound_h)))
             }
-            "a" if self.sm_enabled => {
+            "a" if self.sm.enabled => {
                 let h = match northstar_xep_0198::parse_a(root) {
                     Ok(answer) => answer.h.get(),
                     Err(_) => {
@@ -337,22 +338,23 @@ impl ProtocolSession {
                     }
                 };
                 if !self.acknowledge(h).await? {
-                    self.sm_resume_allowed = false;
-                    if let Some(id) = self.sm_db_id.take() {
+                    self.sm.resume_allowed = false;
+                    if let Some(id) = self.sm.db_id.take() {
                         // Preserve and durably lease the availability/MUC
                         // snapshot until teardown completes. A direct DELETE
                         // here creates a process-crash window with permanent
                         // ghost presence or occupants.
                         self.state.revoke_sm_session_with_teardown(id).await?;
                         *self
-                            .sm_session_id_shared
+                            .sm
+                            .session_id_shared
                             .write()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
                     }
                     return Ok(Action::CloseWith(
                         northstar_xep_0198::build_handled_count_too_high_stream_error(
                             h,
-                            self.sm_outbound_h,
+                            self.sm.outbound_h,
                         ),
                     ));
                 }
@@ -399,7 +401,7 @@ impl ProtocolSession {
         Action,
         Option<crate::services::authentication::IssuedFastToken>,
     )> {
-        if self.sm_enabled || self.full_jid.is_some() {
+        if self.sm.enabled || self.full_jid.is_some() {
             return Ok((Action::Send(sm_failed("unexpected-request")), None));
         }
         let Some(current_user) = self.authenticated.clone() else {
@@ -1082,16 +1084,16 @@ impl ProtocolSession {
         // so caps effects must recheck and will skip it.
         self.user_agent_id = effective_user_agent;
         self.user_agent_epoch = None;
-        self.sm_enabled = true;
-        self.sm_db_id = Some(claim.session_id);
-        self.sm_session_id_shared = sm_session_id_shared;
-        self.sm_resume_allowed = true;
-        self.sm_capacity = Some(claim_capacity.clone());
-        self.sm_resume_timeout_seconds = claim.resume_timeout_seconds;
-        self.sm_inbound_h = claim.inbound_h;
-        self.sm_outbound_h = activated.outbound_h;
-        self.sm_acked_h = client_h;
-        self.sm_unacked = remaining;
+        self.sm.enabled = true;
+        self.sm.db_id = Some(claim.session_id);
+        self.sm.session_id_shared = sm_session_id_shared;
+        self.sm.resume_allowed = true;
+        self.sm.capacity = Some(claim_capacity.clone());
+        self.sm.resume_timeout_seconds = claim.resume_timeout_seconds;
+        self.sm.inbound_h = claim.inbound_h;
+        self.sm.outbound_h = activated.outbound_h;
+        self.sm.acked_h = client_h;
+        self.sm.unacked = remaining;
         let restored_muc = self
             .state
             .restore_local_muc_occupants(crate::state::RestoreLocalMucOccupantsRequest {
@@ -1100,8 +1102,8 @@ impl ProtocolSession {
                 connection_id: self.connection_id,
                 sm_session_id: claim.session_id,
                 memberships: &claim.joined_rooms,
-                base_stanzas: self.sm_unacked.len(),
-                base_bytes: self.sm_unacked.iter().map(|entry| entry.stanza.len()).sum(),
+                base_stanzas: self.sm.unacked.len(),
+                base_bytes: self.sm.unacked.iter().map(|entry| entry.stanza.len()).sum(),
             })
             .await;
         let planned_muc = restored_muc.planned_memberships();
@@ -1130,15 +1132,15 @@ impl ProtocolSession {
             bytes > self.state.sm_buffer_limits().max_snapshot_bytes
                 || claim_capacity.try_grow_to(bytes).is_err()
         }) {
-            self.sm_resume_allowed = false;
+            self.sm.resume_allowed = false;
             self.state
                 .abort_local_muc_resume(&restored_muc, false)
                 .await;
             anyhow::bail!("resumed MUC traffic exceeds process SM memory capacity");
         }
         let Some((staged_unacked, staged_outbound_h)) = stage_muc_replay_suffix(
-            &self.sm_unacked,
-            self.sm_outbound_h,
+            &self.sm.unacked,
+            self.sm.outbound_h,
             muc_replay_suffix,
             self.state.sm_buffer_limits().max_unacked_stanzas,
             self.state.sm_buffer_limits().max_unacked_bytes,
@@ -1148,24 +1150,24 @@ impl ProtocolSession {
                 .await;
             anyhow::bail!("resumed MUC traffic exceeds the global SM replay budget");
         };
-        self.sm_unacked = staged_unacked;
-        self.sm_outbound_h = staged_outbound_h;
+        self.sm.unacked = staged_unacked;
+        self.sm.outbound_h = staged_outbound_h;
         // Reserve the process-wide transient budget before cloning the replay
         // FIFO for the transport action. This action can otherwise coexist for
         // every concurrently resuming stream and bypass the live snapshot
         // lease by another full replay copy per connection.
         let resume_control =
-            northstar_xep_0198::build_resumed(previd.as_str(), self.sm_inbound_h, None);
+            northstar_xep_0198::build_resumed(previd.as_str(), self.sm.inbound_h, None);
         let resume_payload = match super::ResumePayload::from_sm_unacked(
             self.state.sm_memory_governor(),
             resume_control,
             Vec::new(),
-            &self.sm_unacked,
+            &self.sm.unacked,
             !defer_visibility,
         ) {
             Ok(payload) => payload,
             Err(error) => {
-                self.sm_resume_allowed = false;
+                self.sm.resume_allowed = false;
                 self.state
                     .abort_local_muc_resume(&restored_muc, false)
                     .await;
@@ -1192,7 +1194,7 @@ impl ProtocolSession {
                 claim.session_id,
                 self.connection_id,
                 &staged_snapshot,
-                self.sm_resume_timeout_seconds,
+                self.sm.resume_timeout_seconds,
                 self.state.sm_session_policy().live_lease_seconds,
                 self.state.sm_buffer_limits().max_unacked_stanzas,
                 self.state.sm_buffer_limits().max_unacked_bytes,
@@ -1348,22 +1350,24 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn acknowledge(&mut self, h: u32) -> Result<bool> {
-        let Some(delta) = acknowledgement_delta(self.sm_acked_h, h, self.sm_unacked.len()) else {
+        let Some(delta) = acknowledgement_delta(self.sm.acked_h, h, self.sm.unacked.len()) else {
             return Ok(false);
         };
         let acknowledged = self
-            .sm_unacked
+            .sm
+            .unacked
             .iter()
             .take(delta)
             .cloned()
             .collect::<Vec<_>>();
         let mut remaining = self
-            .sm_unacked
+            .sm
+            .unacked
             .iter()
             .skip(delta)
             .cloned()
             .collect::<VecDeque<_>>();
-        if let Some(id) = self.sm_db_id {
+        if let Some(id) = self.sm.db_id {
             let clone_bytes = self
                 .sm_resident_bytes()
                 .ok_or_else(|| anyhow::anyhow!("XEP-0198 live resident-size overflow"))?;
@@ -1381,7 +1385,7 @@ impl ProtocolSession {
                     self.connection_id,
                     &snapshot,
                     &acknowledged,
-                    self.sm_resume_timeout_seconds,
+                    self.sm.resume_timeout_seconds,
                     self.state.sm_session_policy().live_lease_seconds,
                     self.state.sm_buffer_limits().max_unacked_stanzas,
                     self.state.sm_buffer_limits().max_unacked_bytes,
@@ -1407,32 +1411,33 @@ impl ProtocolSession {
                 anyhow::anyhow!("delivery acknowledgement database operation timed out")
             })??;
         }
-        self.sm_unacked = remaining;
-        self.sm_acked_h = h;
+        self.sm.unacked = remaining;
+        self.sm.acked_h = h;
         let live_bytes = self
             .sm_resident_bytes()
             .ok_or_else(|| anyhow::anyhow!("XEP-0198 live resident-size overflow"))?;
-        if let Some(capacity) = &self.sm_capacity {
+        if let Some(capacity) = &self.sm.capacity {
             capacity.shrink_to(live_bytes)?;
         }
         Ok(true)
     }
 
     pub(crate) fn reset_sm(&mut self) {
-        self.sm_enabled = false;
+        self.sm.enabled = false;
         self.resumed_caps_presence = None;
-        self.sm_db_id = None;
+        self.sm.db_id = None;
         *self
-            .sm_session_id_shared
+            .sm
+            .session_id_shared
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        self.sm_resume_allowed = false;
-        self.sm_resume_timeout_seconds = 0;
-        self.sm_inbound_h = 0;
-        self.sm_outbound_h = 0;
-        self.sm_acked_h = 0;
-        self.sm_unacked.clear();
-        self.sm_capacity = None;
+        self.sm.resume_allowed = false;
+        self.sm.resume_timeout_seconds = 0;
+        self.sm.inbound_h = 0;
+        self.sm.outbound_h = 0;
+        self.sm.acked_h = 0;
+        self.sm.unacked.clear();
+        self.sm.capacity = None;
     }
 }
 

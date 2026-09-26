@@ -104,7 +104,7 @@ impl ProtocolSession {
                             self.state.muc_cluster_node_id(),
                             None,
                             None,
-                            self.sm_db_id,
+                            self.sm.db_id,
                             std::time::Duration::from_secs(90),
                         )
                         .await?

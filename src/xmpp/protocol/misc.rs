@@ -656,7 +656,7 @@ impl ProtocolSession {
                 ip: Some(self.peer_ip),
                 resource: resource.clone(),
                 user_agent_id: self.user_agent_id,
-                sm_session_id: Arc::clone(&self.sm_session_id_shared),
+                sm_session_id: Arc::clone(&self.sm.session_id_shared),
                 muc_memberships: Arc::clone(&self.joined_rooms),
                 connected_at: std::time::Instant::now(),
                 last_activity: Arc::clone(&self.last_activity),

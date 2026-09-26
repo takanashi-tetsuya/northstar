@@ -4459,7 +4459,7 @@ impl ProtocolSession {
             occupant_id: muc_occupant_id(&room.occupant_id_secret, bare_jid(&full_jid)),
             cluster_epoch: uuid::Uuid::new_v4(),
             connection_id: self.connection_id,
-            sm_session_id: self.sm_db_id,
+            sm_session_id: self.sm.db_id,
             payload,
         };
         let serializable = crate::state::SerializableMucOccupant::from(&occupant);
@@ -4487,7 +4487,7 @@ impl ProtocolSession {
                     owner_node_id: self.state.muc_cluster_node_id(),
                     connection_uuid: self.connection_id,
                     connection_epoch: 1,
-                    sm_session_id: self.sm_db_id,
+                    sm_session_id: self.sm.db_id,
                     occupant_incarnation: occupant.cluster_epoch,
                     presence_payload: &occupant.payload,
                     lease: std::time::Duration::from_secs(90),

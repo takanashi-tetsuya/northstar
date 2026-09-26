@@ -38,7 +38,7 @@ impl ProtocolSession {
             return Ok(Action::Send(self.open_stream()));
         }
         if is_stream_close(xml) {
-            self.sm_resume_allowed = false;
+            self.sm.resume_allowed = false;
             self.negotiation.close();
             return Ok(Action::Close);
         }
@@ -58,7 +58,7 @@ impl ProtocolSession {
         if root.tag_name().name() == "close"
             && root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-framing")
         {
-            self.sm_resume_allowed = false;
+            self.sm.resume_allowed = false;
             self.negotiation.close();
             return Ok(Action::Close);
         }
@@ -80,7 +80,7 @@ impl ProtocolSession {
                 // terminal stream close. A stanza-style nested condition is
                 // not part of this protocol and continuing would permit
                 // negotiation state confusion.
-                self.sm_resume_allowed = false;
+                self.sm.resume_allowed = false;
                 self.negotiation.close();
                 return Ok(Action::SendManyAndClose(vec![tls_failure()]));
             }
@@ -309,8 +309,8 @@ impl ProtocolSession {
         } else {
             action
         };
-        if counted && self.sm_enabled {
-            self.sm_inbound_h = self.sm_inbound_h.wrapping_add(1);
+        if counted && self.sm.enabled {
+            self.sm.inbound_h = self.sm.inbound_h.wrapping_add(1);
             self.checkpoint_sm().await?;
         }
         Ok(action)

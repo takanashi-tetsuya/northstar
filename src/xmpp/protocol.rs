@@ -407,6 +407,24 @@ impl LiveSessionOwnership {
     }
 }
 
+/// Transport-independent XEP-0198 state owned by one protocol session.
+/// Keeping the counters, durable identity and capacity lease together makes
+/// replacement and finalization update the same session substate.
+#[derive(Default)]
+struct SmSubstate {
+    enabled: bool,
+    db_id: Option<uuid::Uuid>,
+    session_id_shared: Arc<std::sync::RwLock<Option<uuid::Uuid>>>,
+    resume_allowed: bool,
+    resume_timeout_seconds: u64,
+    inbound_h: u32,
+    outbound_h: u32,
+    acked_h: u32,
+    unacked: VecDeque<crate::outbound::SmUnackedStanza>,
+    /// Process-local bytes retained for a resumable XEP-0198 epoch.
+    capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
+}
+
 pub struct ProtocolSession {
     pub(crate) state: Arc<AppState>,
     pub(crate) outbound: crate::outbound::OutboundSender,
@@ -468,18 +486,7 @@ pub struct ProtocolSession {
     /// Bind 2 clients catch up through MAM metadata and must never receive the
     /// legacy offline queue again on their initial presence.
     pub(crate) bind2_mam_catchup: bool,
-    sm_enabled: bool,
-    sm_db_id: Option<uuid::Uuid>,
-    sm_session_id_shared: Arc<std::sync::RwLock<Option<uuid::Uuid>>>,
-    sm_resume_allowed: bool,
-    sm_resume_timeout_seconds: u64,
-    sm_inbound_h: u32,
-    sm_outbound_h: u32,
-    sm_acked_h: u32,
-    sm_unacked: VecDeque<crate::outbound::SmUnackedStanza>,
-    /// Process-local bytes retained for a resumable XEP-0198 epoch. The same
-    /// RAII lease is transferred into exact disconnect recovery.
-    sm_capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
+    sm: SmSubstate,
     pub(crate) sasl_state: Option<Box<dyn crate::auth::SaslMechanism>>,
     /// Exact account incarnation which supplied the verifier for the current
     /// SCRAM exchange. `Some(None)` records a dummy verifier for an unknown or
@@ -593,16 +600,7 @@ impl ProtocolSession {
             joined_rooms: Arc::new(dashmap::DashMap::new()),
             csi: csi::CsiSubstate::default(),
             bind2_mam_catchup: false,
-            sm_enabled: false,
-            sm_db_id: None,
-            sm_session_id_shared: Arc::new(std::sync::RwLock::new(None)),
-            sm_resume_allowed: false,
-            sm_resume_timeout_seconds: 0,
-            sm_inbound_h: 0,
-            sm_outbound_h: 0,
-            sm_acked_h: 0,
-            sm_unacked: VecDeque::new(),
-            sm_capacity: None,
+            sm: SmSubstate::default(),
             sasl_state: None,
             sasl_scram_fence: None,
             legacy_sasl_awaiting_initial_response: false,
@@ -680,7 +678,7 @@ impl ProtocolSession {
                         connection_id = %self.connection_id,
                         "could not publish transport-confirmed authentication epoch"
                     );
-                    self.sm_resume_allowed = false;
+                    self.sm.resume_allowed = false;
                     return false;
                 }
                 crate::services::authentication::AuthenticationResult::IntegrityFailure => {
@@ -689,7 +687,7 @@ impl ProtocolSession {
                         connection_id = %self.connection_id,
                         "authentication publication integrity failure"
                     );
-                    self.sm_resume_allowed = false;
+                    self.sm.resume_allowed = false;
                     return false;
                 }
                 _ => {
@@ -697,7 +695,7 @@ impl ProtocolSession {
                         connection_id = %self.connection_id,
                         "transport-confirmed authentication publication fence was lost"
                     );
-                    self.sm_resume_allowed = false;
+                    self.sm.resume_allowed = false;
                     return false;
                 }
             }
@@ -721,7 +719,7 @@ impl ProtocolSession {
             published_epoch,
         );
         if !route_is_current || !self.activate_committed_route() {
-            self.sm_resume_allowed = false;
+            self.sm.resume_allowed = false;
             return false;
         }
 
@@ -819,7 +817,7 @@ impl ProtocolSession {
             "outbound item has an invalid durable source/hand-off shape"
         );
         let managed_by_sm = durable_delivery_managed_by_sm(
-            self.sm_enabled && self.sm_db_id.is_some(),
+            self.sm.enabled && self.sm.db_id.is_some(),
             &item.stanza,
             item.durable_source.is_some(),
         );
@@ -828,7 +826,8 @@ impl ProtocolSession {
         if managed_by_sm {
             if item.mix_delivery().is_some() {
                 let session_id = self
-                    .sm_db_id
+                    .sm
+                    .db_id
                     .context("XEP-0198 MIX ownership was not persisted")?;
                 item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SmPersisted {
                     session_id,
@@ -846,17 +845,18 @@ impl ProtocolSession {
         durable_source: Option<crate::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
         self.state.outbound_stanza_telemetry().recorded();
-        if self.sm_enabled && is_counted_stanza(stanza) {
+        if self.sm.enabled && is_counted_stanza(stanza) {
             let next_bytes = self
-                .sm_unacked
+                .sm
+                .unacked
                 .iter()
                 .map(|entry| entry.stanza.len())
                 .sum::<usize>()
                 .saturating_add(stanza.len());
-            if self.sm_unacked.len() >= self.state.sm_buffer_limits().max_unacked_stanzas
+            if self.sm.unacked.len() >= self.state.sm_buffer_limits().max_unacked_stanzas
                 || next_bytes > self.state.sm_buffer_limits().max_unacked_bytes
             {
-                self.sm_resume_allowed = false;
+                self.sm.resume_allowed = false;
                 anyhow::bail!("XEP-0198 unacknowledged queue capacity reached");
             }
             let projected = self
@@ -869,15 +869,17 @@ impl ProtocolSession {
                 .context("XEP-0198 projected resident-size overflow")?;
             if projected > self.state.sm_buffer_limits().max_snapshot_bytes
                 || self
-                    .sm_capacity
+                    .sm
+                    .capacity
                     .as_ref()
                     .is_none_or(|lease| lease.try_grow_to(projected).is_err())
             {
-                self.sm_resume_allowed = false;
+                self.sm.resume_allowed = false;
                 anyhow::bail!("XEP-0198 process memory capacity reached");
             }
-            self.sm_outbound_h = self.sm_outbound_h.wrapping_add(1);
-            self.sm_unacked
+            self.sm.outbound_h = self.sm.outbound_h.wrapping_add(1);
+            self.sm
+                .unacked
                 .push_back(crate::outbound::SmUnackedStanza::with_source(
                     stanza.to_owned(),
                     durable_source,
@@ -888,7 +890,7 @@ impl ProtocolSession {
             // completed at the transport write boundary. Non-counted control
             // elements always use that path as well. Only an active SM session
             // can take ownership of a counted stanza's durable fence.
-            debug_assert!(!self.sm_enabled || !is_counted_stanza(stanza));
+            debug_assert!(!self.sm.enabled || !is_counted_stanza(stanza));
         }
         Ok(())
     }
@@ -898,7 +900,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn sm_snapshot(&self) -> crate::services::sm::SmSessionSnapshot {
-        self.sm_snapshot_with_unacked(self.sm_unacked.iter().cloned().collect())
+        self.sm_snapshot_with_unacked(self.sm.unacked.iter().cloned().collect())
     }
 
     fn sm_snapshot_with_unacked(
@@ -906,9 +908,9 @@ impl ProtocolSession {
         unacked: Vec<crate::outbound::SmUnackedStanza>,
     ) -> crate::services::sm::SmSessionSnapshot {
         crate::services::sm::SmSessionSnapshot {
-            inbound_h: self.sm_inbound_h,
-            outbound_h: self.sm_outbound_h,
-            acked_h: self.sm_acked_h,
+            inbound_h: self.sm.inbound_h,
+            outbound_h: self.sm.outbound_h,
+            acked_h: self.sm.acked_h,
             available: self
                 .available
                 .as_ref()
@@ -951,7 +953,7 @@ impl ProtocolSession {
     /// must not clone a full per-stream snapshot while the live actor still
     /// owns the same bytes; all remaining metadata is independently bounded.
     fn take_sm_snapshot(&mut self) -> crate::services::sm::SmSessionSnapshot {
-        let unacked = std::mem::take(&mut self.sm_unacked).into();
+        let unacked = std::mem::take(&mut self.sm.unacked).into();
         self.sm_snapshot_with_unacked(unacked)
     }
 
@@ -996,17 +998,18 @@ impl ProtocolSession {
             add(jid.key().len())?;
         }
         add(self
-            .sm_unacked
+            .sm
+            .unacked
             .len()
             .checked_mul(std::mem::size_of::<crate::outbound::SmUnackedStanza>())?)?;
-        for stanza in &self.sm_unacked {
+        for stanza in &self.sm.unacked {
             add(stanza.stanza.len())?;
         }
         Some(bytes)
     }
 
     pub(crate) async fn checkpoint_sm(&mut self) -> Result<()> {
-        let Some(id) = self.sm_db_id else {
+        let Some(id) = self.sm.db_id else {
             return Ok(());
         };
         let live_bytes = self
@@ -1023,11 +1026,12 @@ impl ProtocolSession {
             .context("XEP-0198 snapshot resident-size overflow")?;
         if snapshot_bytes > self.state.sm_buffer_limits().max_snapshot_bytes
             || self
-                .sm_capacity
+                .sm
+                .capacity
                 .as_ref()
                 .is_none_or(|lease| lease.try_grow_to(snapshot_bytes).is_err())
         {
-            self.sm_resume_allowed = false;
+            self.sm.resume_allowed = false;
             anyhow::bail!("XEP-0198 process memory capacity reached");
         }
         let outcome = tokio::time::timeout(
@@ -1036,7 +1040,7 @@ impl ProtocolSession {
                 id,
                 self.connection_id,
                 &snapshot,
-                self.sm_resume_timeout_seconds,
+                self.sm.resume_timeout_seconds,
                 self.state.sm_session_policy().live_lease_seconds,
                 self.state.sm_buffer_limits().max_unacked_stanzas,
                 self.state.sm_buffer_limits().max_unacked_bytes,
@@ -1057,7 +1061,7 @@ impl ProtocolSession {
         &mut self,
         resolution: &crate::services::sm::SmQueueOwnershipResolution,
     ) {
-        Self::apply_sm_ownership_resolution_to_unacked(&mut self.sm_unacked, resolution);
+        Self::apply_sm_ownership_resolution_to_unacked(&mut self.sm.unacked, resolution);
     }
 
     pub(crate) fn apply_sm_ownership_resolution_to_unacked(
@@ -1113,7 +1117,7 @@ impl ProtocolSession {
                 );
             }
             features.push_child(XmlElement::namespaced("ver", "urn:xmpp:features:rosterver"));
-            if !self.sm_enabled
+            if !self.sm.enabled
                 && self
                     .state
                     .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
@@ -1839,8 +1843,8 @@ impl ProtocolSession {
                 self.registered_key = None;
                 self.full_jid = None;
                 self.available = None;
-                self.sm_db_id = None;
-                self.sm_capacity = None;
+                self.sm.db_id = None;
+                self.sm.capacity = None;
                 self._certificate_session = None;
                 self.local_quiesced = true;
                 let telemetry = self.state.c2s_post_action_telemetry();
@@ -1870,21 +1874,22 @@ impl ProtocolSession {
             .collect::<Vec<_>>();
         self.directed_presence.clear();
 
-        let sm_session_id = self.sm_db_id.take();
-        let resumable = self.sm_enabled
-            && self.sm_resume_allowed
+        let sm_session_id = self.sm.db_id.take();
+        let resumable = self.sm.enabled
+            && self.sm.resume_allowed
             && self.registered_key.is_some()
             && sm_session_id.is_some()
             && account.is_some()
-            && self.sm_capacity.is_some();
+            && self.sm.capacity.is_some();
         let sm = if resumable {
             let snapshot = self.take_sm_snapshot();
             crate::services::session_cleanup::SessionSmCleanup::Suspend {
                 session_id: sm_session_id.expect("resumable session has an SM id"),
                 snapshot,
-                ttl_seconds: self.sm_resume_timeout_seconds.max(1),
+                ttl_seconds: self.sm.resume_timeout_seconds.max(1),
                 capacity: self
-                    .sm_capacity
+                    .sm
+                    .capacity
                     .take()
                     .expect("resumable session owns its SM capacity lease"),
             }
@@ -1893,9 +1898,9 @@ impl ProtocolSession {
         } else {
             crate::services::session_cleanup::SessionSmCleanup::None
         };
-        self.sm_resume_allowed = false;
+        self.sm.resume_allowed = false;
         if !resumable {
-            self.sm_capacity = None;
+            self.sm.capacity = None;
         }
 
         let plan = crate::services::session_cleanup::SessionCleanupPlan {
@@ -1971,7 +1976,7 @@ impl ProtocolSession {
             .privacy_active
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        self.sm_db_id = None;
+        self.sm.db_id = None;
         tracing::error!(
             connection_id = %self.connection_id,
             "ProtocolSession reached Drop without awaited finalization; local ownership was quiesced and durable leases must recover by expiry/reconciliation"
@@ -2005,7 +2010,7 @@ impl Drop for ProtocolSession {
                 self.joined_rooms.clear();
                 self.registered_key = None;
                 self.full_jid = None;
-                self.sm_db_id = None;
+                self.sm.db_id = None;
             }
         }
     }

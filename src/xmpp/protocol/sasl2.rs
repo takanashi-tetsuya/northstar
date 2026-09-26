@@ -1282,7 +1282,7 @@ impl ProtocolSession {
                         envelope_capacity,
                     )?;
                     if self.disconnect.is_cancelled() {
-                        self.sm_resume_allowed = false;
+                        self.sm.resume_allowed = false;
                         self.sasl_state = None;
                         return Ok(Action::Close);
                     }
@@ -1313,7 +1313,7 @@ impl ProtocolSession {
                         user_id = %user.id,
                         "inline SM resumption failed after credential commit; closing"
                     );
-                    self.sm_resume_allowed = false;
+                    self.sm.resume_allowed = false;
                     self.sasl_state = None;
                     return Ok(Action::Close);
                 }
@@ -1458,7 +1458,7 @@ impl ProtocolSession {
             &[&resume_xml, &bound_xml, &token_xml],
         )?;
         if self.disconnect.is_cancelled() {
-            self.sm_resume_allowed = false;
+            self.sm.resume_allowed = false;
             self.sasl_state = None;
             return Ok(Action::Close);
         }

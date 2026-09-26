@@ -215,8 +215,11 @@ before starting the server.
   the same binary. The controller verifies the soak log, binary SHA-256,
   read-only isolation/memory preflight and existing guest-helper digests before
   staging the new presence helper. It caps concurrency at three and records
-  per-lane sample counts, qualified latency percentiles, RSS, CPU, FDs,
-  queue metrics and PostgreSQL WAL/IO counters. The single upload observation
+  per-lane sample counts and end-to-end probe duration percentiles, plus
+  separately measured self-presence acknowledgement percentiles. The presence
+  probe checks the parsed stanza type, exact sender resource and priority.
+  It also records RSS, CPU, FDs, queue metrics and PostgreSQL WAL/IO counters.
+  The single upload observation
   has no meaningful p95/p99; OMEMO and Push remain untested without clients.
   Run `python3 scripts/local-vm-lab-active-load.py --self-test` offline first.
   After `finalize-soak.sh` has sealed the evidence, record the archive's

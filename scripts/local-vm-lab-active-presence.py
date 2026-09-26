@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import time
 import uuid
+from xml.etree import ElementTree as ET
 
 
 DOMAIN = "ns-a.lab.test"
@@ -18,8 +19,15 @@ def measure(client: object, resource: str) -> float:
     started = time.monotonic_ns()
     client.send("<presence xmlns='jabber:client'><priority>10</priority></presence>")
     reply, _ = client.receive_until("<priority>10</priority>", timeout=20)
-    expected = f"from='alice@{DOMAIN}/{resource}'"
-    if expected not in reply:
+    try:
+        stanza = ET.fromstring(reply)
+    except ET.ParseError as error:
+        raise RuntimeError("self-presence reply is not a complete XML stanza") from error
+    if (stanza.tag not in ("presence", "{jabber:client}presence")
+            or stanza.get("from") != f"alice@{DOMAIN}/{resource}"
+            or stanza.get("type") is not None
+            or not any(child.tag in ("priority", "{jabber:client}priority")
+                       and child.text == "10" for child in stanza)):
         raise RuntimeError("self-presence did not acknowledge the exact resource")
     return (time.monotonic_ns() - started) / 1_000_000
 
@@ -43,6 +51,34 @@ def self_test() -> None:
         pass
     else:
         raise AssertionError("wrong resource was accepted")
+    class WrongStanza(FakeClient):
+        def receive_until(self, marker: str, timeout: int) -> tuple[str, list[str]]:
+            return (
+                "<message from='alice@ns-a.lab.test/active-test'>"
+                "<body>&lt;priority&gt;10&lt;/priority&gt;</body>"
+                "<priority>10</priority></message>", []
+            )
+
+    try:
+        measure(WrongStanza(), "active-test")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("non-presence stanza was accepted")
+    class NestedFrom(FakeClient):
+        def receive_until(self, marker: str, timeout: int) -> tuple[str, list[str]]:
+            return (
+                "<presence from='mallory@ns-a.lab.test/other'>"
+                "<x from='alice@ns-a.lab.test/active-test'/>"
+                "<priority>10</priority></presence>", []
+            )
+
+    try:
+        measure(NestedFrom(), "active-test")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("nested identity was accepted")
     print("local-vm-lab-active-presence self-test passed")
 
 

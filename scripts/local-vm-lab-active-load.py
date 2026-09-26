@@ -94,6 +94,20 @@ def latency_summary(values: list[float]) -> dict[str, Any]:
     }
 
 
+def presence_ack_ms(report: Any, outer_duration_ms: float) -> float:
+    """Accept only the helper's measured self-presence acknowledgement."""
+    if (not isinstance(report, dict) or report.get("status") != "passed"
+            or report.get("probe") != "self-presence"
+            or not isinstance(report.get("resource"), str)
+            or not re.fullmatch(r"active-[0-9a-f]{12}", report["resource"])):
+        raise RuntimeError("presence probe did not report a valid self-presence result")
+    value = report.get("ack_ms")
+    if (type(value) not in (int, float) or not math.isfinite(value)
+            or value < 0 or value > outer_duration_ms):
+        raise RuntimeError("presence acknowledgement latency is invalid")
+    return float(value)
+
+
 def parse_soak(path: Path, expected_sha: str) -> dict[str, Any]:
     records = []
     with path.open(encoding="utf-8") as source:
@@ -479,6 +493,8 @@ class Lab:
             parsed = json.loads(output.splitlines()[-1])
             if parsed.get("status") != "passed":
                 raise RuntimeError(f"{lane} probe did not report success")
+            if lane == "presence":
+                presence_ack_ms(parsed, result["duration_ms"])
             result["probe"] = parsed
         return result
 
@@ -536,6 +552,17 @@ def self_test() -> None:
     assert latency_summary([1.0])["p99_ms"] is None
     assert latency_summary([1.0])["insufficient_for"] == ["p50", "p95", "p99"]
     assert latency_summary([float(i) for i in range(1, 21)])["p95_ms"] == 19
+    report = {"status": "passed", "probe": "self-presence",
+              "resource": "active-0123456789ab", "ack_ms": 12.5}
+    assert presence_ack_ms(report, 100.0) == 12.5
+    for invalid in ({**report, "probe": "other"}, {**report, "ack_ms": float("nan")},
+                    {**report, "ack_ms": 101.0}, {**report, "resource": "other"}):
+        try:
+            presence_ack_ms(invalid, 100.0)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("invalid presence acknowledgement was accepted")
     sample = {
         "pid": 42, "rss_kib": 100, "fds": 10, "mem_available_kib": 1000,
         "cpu_ticks": 10, "clock_ticks_per_second": 100,
@@ -681,6 +708,7 @@ def main() -> None:
     controller_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     latencies: dict[str, list[float]] = {name: [] for name in (*LANES, "upload")}
+    presence_acks: list[float] = []
     failures: list[str] = []
     samples = [baseline]
     started = time.monotonic()
@@ -734,6 +762,10 @@ def main() -> None:
                                     )
                                 )
                             latencies[name].append(result["duration_ms"])
+                            if name == "presence":
+                                presence_acks.append(presence_ack_ms(
+                                    result["probe"], result["duration_ms"]
+                                ))
                             write_event(log, {"event": "probe_passed", "time_utc": utc_now(), **result})
                         if name != "upload":
                             next_due[name] = max(next_due[name] + intervals[name],
@@ -801,6 +833,7 @@ def main() -> None:
             "sealed_soak_archive_sha256": sealed["archive_sha256"],
             "submitted": submitted, "latency_ms": {name: latency_summary(values) for name, values
                                                in latencies.items() if values},
+            "presence_ack_latency_ms": latency_summary(presence_acks) if presence_acks else None,
             "resource_samples": len(samples), "sampled_elapsed_seconds": elapsed_seconds,
             "peak_rss_kib": {name: max(item[name]["rss_kib"] for item in samples)
                              for name in ("ns-a", "ns-b")},

@@ -518,4 +518,4 @@ current authentication generation inside a transaction. It avoids granting
 runtime account UPDATE privilege for C2S bind and message admission.
 Migration `0151` checks an exact enabled account name under a row lock for MUC
 and durable delivery. The runtime role receives EXECUTE on the narrow
-capability, not SELECT on `users`.
+capability, not UPDATE on `users`.

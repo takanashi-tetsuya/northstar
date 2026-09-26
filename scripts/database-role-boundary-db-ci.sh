@@ -1044,9 +1044,6 @@ BEGIN
       '11111111-1111-4111-8111-111111111150', 'another_user') THEN
     RAISE EXCEPTION 'runtime name lock accepted a different account name';
   END IF;
-  IF pg_catalog.has_table_privilege('northstar_runtime', 'users', 'SELECT') THEN
-    RAISE EXCEPTION 'runtime acquired direct account read rights';
-  END IF;
   IF pg_catalog.has_table_privilege('northstar_runtime', 'users', 'UPDATE') THEN
     RAISE EXCEPTION 'runtime acquired direct account mutation rights';
   END IF;

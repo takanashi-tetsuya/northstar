@@ -181,7 +181,7 @@ and Docker artifacts and their provenance. They do not repeat source CI.
 - [ ] Apply migration `0151` and reconcile grants before starting runtime
   nodes. Verify `northstar_lock_enabled_user_name` accepts an enabled matching
   account and rejects a disabled or mismatched account without direct `users`
-  SELECT privilege.
+  UPDATE privilege.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
   identity and verify all 150 migrations from `0001` through the current
   repository maximum `0151`, with `0021` as the sole intentional gap.

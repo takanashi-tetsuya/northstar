@@ -472,6 +472,12 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0151_enabled_user_name_lock_capability.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     let room_id = uuid::Uuid::new_v4();
     let recipient_id = uuid::Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username) VALUES($1,'invitee')")

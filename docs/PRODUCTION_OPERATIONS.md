@@ -1029,7 +1029,7 @@ runtime C2S bind and message admission. Reconcile its EXECUTE grant before
 starting the new binary; runtime still has no direct account UPDATE grant.
 Migration `0151` adds an exact enabled-account name check under a row lock for
 MUC and durable delivery. Reconcile its EXECUTE grant before starting the new
-binary; runtime still has no direct `users` SELECT grant.
+binary; runtime still has no direct `users` UPDATE grant.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does

@@ -1,5 +1,5 @@
 -- Bind a JID to an enabled account under the caller's transaction without
--- granting the runtime role SELECT on the users table.
+-- granting the runtime role UPDATE for a direct SELECT FOR SHARE row lock.
 CREATE FUNCTION northstar_lock_enabled_user_name(
     requested_user UUID,
     expected_username TEXT

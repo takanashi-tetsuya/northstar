@@ -285,9 +285,11 @@ fields. Durable delivery fences, SM unacked entries and recipient-authority
 recovery are in a transport-neutral delivery library. The session-facing
 sender now owns an injected `OrderedOutboundSink` rather than a concrete Tokio
 channel; the Tokio queue is a transport adapter and returns every rejected or
-stale item through the loss-explicit port. Resume-store orchestration,
-transport action execution, SM/CSI substate isolation and the remaining broad
-`ProtocolSession` capability set still need separation.
+stale item through the loss-explicit port. TCP and WebSocket have separate
+action executors, while BOSH retains its own RID and response fences. SM and
+CSI are private session substates, and secure-channel evidence is activated as
+one state transition. The remaining broad `ProtocolSession` capabilities and
+transport-specific lifetime/cancellation paths still need separation.
 
 ### Phase E — Infrastructure ports
 

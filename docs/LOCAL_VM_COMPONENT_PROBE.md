@@ -1,8 +1,8 @@
 # Local VM external-component probe
 
-This probe uses an independent XEP-0114 implementation on the isolated lab
-network. Run it only after the release candidate, guest packages, and binary
-hashes are frozen, and after any running soak has stopped. Keep the existing
+These probes use independent XEP-0114 and XEP-0225 components on the isolated
+lab network. Run them only after the release candidate, guest packages, and
+binary hashes are frozen, and after any running soak has stopped. Keep the existing
 network isolation preflight and save its result alongside this probe's output.
 
 ## XEP-0114 accept: Slixmpp component
@@ -115,12 +115,77 @@ connect-mode authentication/reconnection only. The repository's strict
 connect-mode fixture still covers routing, forged origins, and durable
 delivery; independent end-to-end connect-mode gateway delivery remains open.
 
-## XEP-0225 boundary
+## XEP-0225 accept: Tigase as an independent component
 
-[Prosody's support matrix](https://prosody.im/doc/xeplist) says it does not
-support XEP-0225. Slixmpp's documented `ComponentXMPP` implements the
-XEP-0114 component path. The current strict peer fixture exercises Northstar's
-XEP-0225 STARTTLS, SASL PLAIN, hostname bind/unbind, restart, and malformed
-requests, but is not independent interoperability evidence. Keep this part of
-`EXT-COMPONENT` open until a version-pinned independent XEP-0225 component is
-available and run in the isolated lab.
+Northstar accepts XEP-0225 connections; it does not initiate them. Its
+configuration rejects `connection: "connect"` with `modern_0225: true`. The
+XEP-0114 connect test above is a different protocol. Prosody and Slixmpp do
+not supply this XEP-0225 peer, but [Tigase documents XEP-0225 external
+component mode](https://docs.tigase.net/en/latest/Tigase_Administration/Components/_Components.html),
+including a component that initiates a connection to another server. Tigase
+is therefore a candidate independent peer, not yet a passed test.
+
+After the soak ends, reuse the isolated `ejabberd` guest with ejabberd stopped
+for this separate run. Pin the Tigase package, Java runtime and database
+versions and record their digests before detaching the provisioning interface.
+Repeat the six-guest isolation preflight. On `ns-a`, generate a fresh secret
+with at least 32 random bytes (for example, `openssl rand -hex 32`), save it
+in an owner-only file, and use an owner-only configuration containing only
+this modern accept credential:
+
+```json
+{"components":[{"jid":"muc.ns-a.lab.test","secret_file":"/home/lab/northstar/secrets/tigase-component.secret","connection":"accept","legacy_0114":false,"modern_0225":true}]}
+```
+
+Set `COMPONENTS_ENABLED=true`, `COMPONENTS_CONFIG_FILE` to that file and
+`COMPONENT_BIND` to `ns-a`'s `192.168.197.0/24` address on port 5347. Do not
+combine this run with the loopback-only XEP-0114 accept credential: Northstar
+rejects a non-loopback listener whenever a plaintext XEP-0114 accept profile
+is present. Limit the VM firewall to the Tigase guest. Tigase must validate
+the `ns-a.lab.test` certificate against the isolated lab CA; do not disable
+peer-certificate or hostname verification. Record the truststore and selected
+TLS version without copying private keys into evidence.
+
+In Tigase's version-pinned `component` deployment, enable its MUC component
+and `ext () {}` external-component connector. Use a separate local database;
+Tigase's `ext-man` setup assumes a shared Tigase main-server database and
+does not apply to Northstar. Configure `muc.ns-a.lab.test` as a `connect`
+external component targeting `ns-a.lab.test:5347`, with protocol
+`XEP-0225: Component Connections` and the same secret. Tigase's documented
+one-time `etc/externalComponentItems` form uses `client` for this protocol:
+
+```text
+muc.ns-a.lab.test:<same-hex-secret>:connect:5347:ns-a.lab.test:client
+```
+
+Tigase imports and removes that one-time file at startup. It contains the
+secret; keep it owner-only, use Tigase's supported configuration path for the
+pinned version, and preserve a redacted copy in evidence before starting
+Tigase. Do not assume the deployment worked just because both processes
+started. Require Tigase's authenticated/bound session, Northstar's
+`XEP-0225 component authenticated; hostname binding required` log, and a
+fresh C2S response from the bound Tigase MUC domain. Copy
+`scripts/local-vm-lab-component-0225-client.py` and the matching
+`scripts/integration-wsl.py` to `ns-a`, create the evidence directory with
+`install -d -m 700 /home/lab/northstar/component-0225-evidence`, then run:
+
+```sh
+python3 local-vm-lab-component-0225-client.py --self-test
+python3 local-vm-lab-component-0225-client.py \
+  --component-domain muc.ns-a.lab.test \
+  --password-file /home/lab/northstar/secrets/prosody-test-password \
+  --fixture /home/lab/northstar/integration-wsl.py \
+  --events /home/lab/northstar/component-0225-evidence/client.jsonl
+```
+
+The observer sends one XEP-0030 query through a real Northstar C2S session
+and requires an IQ result from the exact component domain advertising a MUC
+identity and feature. It does not implement the component handshake itself.
+Save the Tigase and Northstar logs, redacted configurations, TLS certificate
+chain, package and binary hashes, preflight, UTC times and raw client JSONL.
+Then test wrong-secret rejection with the valid peer stopped, plus component
+and Northstar restarts followed by new successful queries. Stop Tigase,
+restore the original Northstar component configuration and listener, and
+repeat the isolation preflight. Multi-hostname bind/unbind and sustained
+delivery under backpressure remain separate cases. Until this VM run is
+recorded, the independent XEP-0225 interoperability gate stays open.

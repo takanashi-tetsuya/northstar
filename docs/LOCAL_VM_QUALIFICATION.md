@@ -315,8 +315,8 @@ The raw JSONL, SHA-256 sidecars, limited packet captures, peer logs, Northstar
 journals, migration record, and machine-readable summary are under
 `/tmp/northstar-lab-evidence-5865007/s2s-idle-boundary-3dc7f966-36242007596/`;
 `SHA256SUMS` covers the saved files. This qualifies the 300.05-second S2S
-edge for these two peers on this candidate. The failed seven-hour soak still
-requires a new full-duration run on a fixed candidate, and the wider
+edge for these two peers on this candidate. A new full-duration soak has
+started but is not complete, and the wider
 federation and capacity matrices remain open.
 
 ## XEP-0114 component and room MAM narrow run
@@ -435,3 +435,23 @@ the separate 31-file post-check is under
 This measures one short `ns-b`→Redis control-plane partition. It does not
 cover Redis failover, PostgreSQL partition, combined faults or the full
 `EXT-CLUSTER` matrix.
+
+## Release-profile mixed soak in progress
+
+A 24-hour low-rate run started at 2026-09-26 14:57 UTC on the frozen
+`3dc7f9669e0af9f4ef23f0ecdf6d4e9e099a58f2` source. The release-profile
+binary SHA-256 is
+`2ae19035fedb46de6c7d4d69f0cb7f4ba7bc50d20b276f55a736f5510df1a6ba`
+on both `ns-a` and `ns-b`; this is a separate artifact from the earlier CI
+`runtime-test` binary
+`c172f20e9b8e6b73f05c0dc788e99da66c475c69a9b88a194d8480186af2436b`.
+The host's `northstar-lab-soak-release-3dc7.service` writes private evidence
+to `/tmp/northstar-lab-evidence-5865007/release-soak-3dc7-20260926T1451Z/`.
+Its verifier reported 73 passing observations through 16:10 UTC, including
+cross-node delivery, periodic Prosody/ejabberd traffic, room MAM and upload
+checks. This is an in-progress observation, not a passed 24-hour result.
+Only after the full duration and successful service exit may the finalizer
+seal and verify the raw evidence. This low-rate profile does not contain
+OMEMO, Push or sustained active load and cannot close `EXT-CAPACITY`. The
+latest `dev` changes also require a new frozen binary and affected-path
+retests; this run remains evidence only for its recorded source and binary.

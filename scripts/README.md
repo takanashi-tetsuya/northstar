@@ -204,8 +204,8 @@ before starting the server.
 - `integration-wsl.*`: broad C2S/REST/XMPP integration.
 - `federation-wsl.*`, `s2s-db-wsl.sh`: two-domain federation and outbox.
 - `component-runtime-wsl.*`: XEP-0114/XEP-0225 component profiles.
-- `local-vm-lab-component*.py`: bounded Slixmpp XEP-0114 accept and XMPP
-  client probes for the isolated VM lab; see
+- `local-vm-lab-component*.py`: bounded Slixmpp XEP-0114 accept probe and
+  C2S observers for independent XEP-0114/XEP-0225 components; see
   [component lab procedure](../docs/LOCAL_VM_COMPONENT_PROBE.md).
 - `local-vm-lab-redis-fault*.py`: bounded `ns-b` to Redis partition drill with
   isolation checks, exact firewall cleanup and private evidence. Run its

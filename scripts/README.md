@@ -184,6 +184,7 @@ before starting the server.
   `local-vm-lab-minio.sh`, `local-vm-lab-minio-bucket.sh`,
   `local-vm-lab-redis.sh`, `local-vm-lab-cluster.sh`,
   `local-vm-lab-cluster-delivery.py`, `local-vm-lab-upload.py`,
+  `local-vm-lab-soak.py`,
   `local-vm-lab-federation.py` and
   `local-vm-lab-peer-recovery.sh`: create and check the non-forwarding libvirt
   network, checksum-pinned Debian guests, signed lab DNS zone, lab PKI,

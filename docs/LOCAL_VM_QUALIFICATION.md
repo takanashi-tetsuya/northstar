@@ -167,6 +167,18 @@ Blocking only `ns-b`'s MinIO port left `ns-a` able to read the object. The
 partitioned node returned HTTP 503 after its configured 30-second object-read
 timeout (30.17 seconds observed); after connectivity returned, it read the
 same SHA-256. This does not test partial writes or provider failover.
+
+A 24-hour low-rate mixed smoke soak was started as the host's transient
+`northstar-lab-soak-retry.service`. Its first completed observation at
+2026-09-26 03:08 UTC passed cross-node delivery and both federation peers,
+with `ns-a`/`ns-b` RSS of 109,240/107,356 KiB and PostgreSQL WAL bytes at
+46,375,619. The JSONL log is
+`/tmp/northstar-lab-evidence-5865007/soak-24h-retry.jsonl`.
+The earlier start hit upload `resource-constraint` immediately after a smoke
+upload; that failure is preserved in `soak-24h.jsonl`. The restarted run
+spaces upload probes 90 minutes apart. No endurance result is claimed until
+the full duration and end-state metrics are reviewed. This traffic lacks MUC,
+OMEMO, MAM and mobile push, so a pass will still not close `EXT-CAPACITY`.
 These observations used source commit `58650079da8d21408ab6d027127796b7863ccf5c`
 and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.

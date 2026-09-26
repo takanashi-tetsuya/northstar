@@ -210,6 +210,34 @@ before starting the server.
 - `local-vm-lab-redis-fault*.py`: bounded `ns-b` to Redis partition drill with
   isolation checks, exact firewall cleanup and private evidence. Run its
   offline `--self-test` first; never run the live drill during a soak.
+- `local-vm-lab-active-load.py` and `local-vm-lab-active-presence.py`: after a
+  completed, failure-free 24-hour lab soak, run a 5–30 minute active window on
+  the same binary. The controller verifies the soak log, binary SHA-256,
+  read-only isolation/memory preflight and existing guest-helper digests before
+  staging the new presence helper. It caps concurrency at three and records
+  per-lane sample counts, qualified latency percentiles, RSS, CPU, FDs,
+  queue metrics and PostgreSQL WAL/IO counters. The single upload observation
+  has no meaningful p95/p99; OMEMO and Push remain untested without clients.
+  Run `python3 scripts/local-vm-lab-active-load.py --self-test` offline first.
+  After `finalize-soak.sh` has sealed the evidence, record the archive's
+  SHA-256 outside its mutable directory. Use `--soak-evidence PATH
+  --sealed-archive-sha256 ARCHIVE-SHA256 --expected-binary-sha256 BINARY-SHA256
+  --output PRIVATE-NEW-PATH`. The controller checks the pinned tar archive,
+  completed verifier report, successful unit status, manifest and raw MUC
+  evidence before any guest write. A failed or interrupted run keeps private
+  JSONL, summary and SHA-256 evidence; it does not establish a capacity SLA.
+  The read-only preflight checks system and `systemctl --user` soak units; both
+  queries must work. The `lab` account must be able to read its own Northstar
+  `/proc/$pid/exe`, `/proc/$pid/fd`, `/proc/$pid/stat` and the local metrics
+  bearer-token file. Verify these permissions without writing to the guest
+  before starting the test. Existing guest probes must match the host sources
+  byte-for-byte: compare `sha256sum scripts/integration-wsl.py
+  scripts/local-vm-lab-{federation,mam,muc-mam,upload}.py` with the same
+  filenames under `/home/lab/northstar/` on `ns-a`. If any differ, stop;
+  after the soak has ended and the isolation preflight passes, record both
+  digests, deliberately stage the chosen frozen versions, then compare SHA-256
+  again. The controller does not overwrite existing probes. It stages only
+  its new presence helper after all read-only checks pass.
 - `cluster-wsl.*`, `muc-cluster-wsl.sh`: experimental Redis/multi-process paths.
   `cluster-wsl.sh` accepts `NORTHSTAR_CLUSTER_DATABASE_PORT` (default `5432`)
   for a disposable PostgreSQL fixture on `127.0.0.1`; the server and all shell

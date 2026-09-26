@@ -746,6 +746,9 @@ channel-binding and client-certificate evidence before atomically activating
 the secure session state. The C2S wire suite checks SM replay of an
 unacknowledged IQ reply in both directions between Direct TLS and STARTTLS,
 and from WebSocket to BOSH with an SM acknowledgment following replay.
+Transport adapters now read stream-open and authenticated status through
+explicit methods; the negotiation, account and transport fields are private
+to the protocol module.
 These are completed slices, not packet exit claims.
 
 R2 now has an opt-in, operator-supplied OCSP staple for Northstar's own server
@@ -789,10 +792,13 @@ markers, and isolated pre/post-commit hard-kill drills. An optional age profile
 now streams the pre-restore database dump into encrypted rollback storage and
 tests recovery with a separate key. The PostgreSQL restore fixture passed in
 [CI run 36239326965](https://github.com/takanashi-tetsuya/northstar/actions/runs/36239326965).
-Old upload copies in the cutover and rollback directories remain plaintext;
-those filesystems need encryption and independent recovery keys. A hard-kill
-drill on the target storage layout is still required. An expired or ambiguous
-XID remains fail-closed.
+The isolated VM lab also passed local and exact-version S3 restore drills at
+three SIGKILL points; a separate recovery key decrypted the age-protected S3
+rollback dumps. The raw evidence is recorded in
+[LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md). Old upload copies in
+the cutover and rollback directories remain plaintext; those filesystems need
+encryption and independent recovery keys. A drill on the eventual deployment's
+storage layout is still required. An expired or ambiguous XID remains fail-closed.
 
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run
@@ -851,7 +857,8 @@ of affected gates. Run the federation and infrastructure tests on an isolated
 libvirt network with no route to the public Internet. Use separate VMs for
 Northstar nodes and independently implemented XMPP peers; two Northstar VMs
 alone do not establish interoperability. The lab layout and evidence format
-are in [LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md). Close each of
+are in [LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md), and the DNSSEC/DANE
+cases are in [LOCAL_VM_FEDERATION_MATRIX.md](LOCAL_VM_FEDERATION_MATRIX.md). Close each of
 the seven existing evidence rows only for the tested lab profile:
 
 | Gate | Required target-environment evidence |

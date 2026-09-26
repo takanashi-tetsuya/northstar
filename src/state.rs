@@ -4123,10 +4123,22 @@ impl AppState {
         .with_options(resolver_options)
         .build()
         .context("failed to initialize the asynchronous DNS resolver")?;
+        let lab_dnssec_anchor = config
+            .federation_dnssec_lab_trust_anchor_path
+            .as_deref()
+            .map(crate::s2s::lab_dnssec::load_anchor)
+            .transpose()?;
         let s2s_dnssec_resolver = (config.federation_dane_mode != crate::s2s::dane::DaneMode::Off)
             .then(|| {
-                TokioResolver::builder_with_config(resolver_config, TokioRuntimeProvider::default())
-                    .with_options(dnssec_options)
+                let mut builder = TokioResolver::builder_with_config(
+                    resolver_config,
+                    TokioRuntimeProvider::default(),
+                )
+                .with_options(dnssec_options);
+                if let Some(anchor) = lab_dnssec_anchor {
+                    builder = builder.with_trust_anchor(Arc::new(anchor));
+                }
+                builder
                     .build()
                     .context("failed to initialize the locally validating DNSSEC resolver")
             })

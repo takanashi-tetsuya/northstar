@@ -2,6 +2,7 @@ pub(crate) mod dane;
 pub mod dialback;
 pub mod dns;
 pub mod inbound;
+pub(crate) mod lab_dnssec;
 pub mod outbound;
 mod registry;
 mod resume;

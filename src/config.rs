@@ -833,6 +833,10 @@ pub struct RawConfig {
     #[serde(default = "default_federation_dane_mode")]
     pub federation_dane_mode: String,
 
+    /// Explicit lab.test DNSKEY trust anchor for isolated required-DANE tests.
+    /// Ordinary federation always uses the resolver's default root anchors.
+    pub federation_dnssec_lab_trust_anchor_path: Option<PathBuf>,
+
     #[serde(default = "default_log_dir")]
     pub log_dir: PathBuf,
 
@@ -2882,6 +2886,15 @@ impl Config {
                 direct_tls,
             ));
         }
+        crate::s2s::lab_dnssec::validate_settings(
+            raw.federation_dnssec_lab_trust_anchor_path.as_deref(),
+            federation_dane_mode,
+            &domain,
+            raw.federation_enabled,
+            raw.federation_allow_private_ips,
+            &federation_allowlist,
+            federation_dns_overrides.len(),
+        )?;
         let stun_service = raw
             .stun_server
             .as_deref()

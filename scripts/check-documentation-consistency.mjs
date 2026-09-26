@@ -23,6 +23,7 @@ const currentDocuments = [
   'docs/OMEMO_DEVICE_TRANSFER.md',
   'docs/RELEASE_CHECKLIST.md',
   'docs/CLUSTERING.md',
+  'docs/LOCAL_VM_FEDERATION_MATRIX.md',
   'docs/ABUSE_AND_MODERATION_PRODUCTION_AUDIT.md',
   'docs/DATA_LIFECYCLE.md',
   'docs/WEB_CRYPTO_SUPPLY_CHAIN.md',

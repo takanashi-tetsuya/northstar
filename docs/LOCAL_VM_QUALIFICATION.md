@@ -188,19 +188,32 @@ The host keeps outputs in `/tmp/northstar-lab-evidence-5865007/`. These are
 exploratory until the scripts and binary are frozen together and the same
 cases rerun with raw logs.
 
+`local-vm-lab-mam.py` also exercised a personal MAM query through a real C2S
+session while the soak ran. Alice sent three opaque encrypted-envelope fixtures
+to the Prosody peer and queried adjacent archive pages. The 2026-09-26 04:04
+UTC probe returned two distinct rows per page, including the newest stanza,
+with indexes 2 and 4 and `count=6`. Its raw result is in
+`/tmp/northstar-lab-evidence-5865007/mam-personal-smoke.jsonl`. The fixture
+tests the archive path, not end-to-end encryption. A plaintext first attempt
+correctly produced no archive row because this lab uses the default
+encrypted-only archive policy. This one personal-page check does not qualify
+MUC or MIX MAM, concurrent visibility changes, or long-term MAM load.
+
 The lab setup is repeatable in this order: provision the six guests and lab
 PKI, run `bash scripts/local-vm-lab-minio.sh` with the pinned Debian package
 staged on the host, run `bash scripts/local-vm-lab-minio-bucket.sh`, complete an
 offline storage migration, then run `bash scripts/local-vm-lab-cluster.sh`.
 The latter requires committed S3 authority
 and deliberately refuses to replace lost node signing keys. Run
-`local-vm-lab-cluster-delivery.py` and `local-vm-lab-upload.py` from `ns-a`
-after copying them and `local-vm-lab-federation.py` into
+`local-vm-lab-cluster-delivery.py`, `local-vm-lab-upload.py` and
+`local-vm-lab-mam.py` from `ns-a` after copying them and
+`local-vm-lab-federation.py` into
 `/home/lab/northstar/`.
 
 Longer and combined partitions, Redis failover, interrupted migration and
 restore, DNSSEC/DANE behavior inside Northstar, certificate rotation, external
-components, native clients, mixed-load soak, backup/restore and alert drills
+components, native clients, MUC/MIX MAM, full mixed-load soak, backup/restore
+and alert drills
 remain untested in these VMs.
 The independent security review and physically separate backup destination
 are unavailable. Keep all seven evidence gates open until their complete

@@ -2275,6 +2275,10 @@
       ],
       [
         "northstar-pubsub-application",
+        "roxmltree"
+      ],
+      [
+        "northstar-pubsub-application",
         "tokio"
       ],
       [

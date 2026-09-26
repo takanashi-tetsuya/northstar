@@ -1024,6 +1024,7 @@ digraph compile_time {
   "northstar-protocol-runtime" -> "uuid";
   "northstar-pubsub-application" -> "anyhow";
   "northstar-pubsub-application" -> "northstar-pubsub-core";
+  "northstar-pubsub-application" -> "roxmltree";
   "northstar-pubsub-application" -> "tokio";
   "northstar-pubsub-application" -> "uuid";
   "northstar-pubsub-core" -> "anyhow";

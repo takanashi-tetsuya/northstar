@@ -4016,10 +4016,13 @@ impl AppState {
             &config.tls_cert_path,
             &config.tls_key_path,
             &config.domain,
-            config.federation_extra_root_cert_path.as_deref(),
-            config.c2s_client_trust_root_cert_path.as_deref(),
-            config.federation_crl_path.as_deref(),
-            config.c2s_client_crl_path.as_deref(),
+            crate::tls::TlsPolicyFiles {
+                extra_root: config.federation_extra_root_cert_path.as_deref(),
+                c2s_client_trust_root: config.c2s_client_trust_root_cert_path.as_deref(),
+                federation_crl: config.federation_crl_path.as_deref(),
+                c2s_client_crl: config.c2s_client_crl_path.as_deref(),
+                ocsp_response: config.tls_ocsp_response_path.as_deref(),
+            },
         )
         .context("failed to load and validate TLS identity")?;
         let open_registration = config.open_registration;

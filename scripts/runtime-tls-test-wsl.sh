@@ -114,3 +114,5 @@ run_crl_case valid-server.pem expired-crl.pem server false
 run_crl_case valid-server.pem unknown-issuer-crl.pem server false
 run_crl_case valid-server.pem crl.pem client false
 run_crl_case valid-client.pem crl.pem server false
+
+bash scripts/test-ocsp-stapling.sh

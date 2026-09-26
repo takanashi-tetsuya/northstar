@@ -464,6 +464,10 @@ pub struct RawConfig {
     #[serde(default = "default_tls_key_path")]
     pub tls_key_path: PathBuf,
 
+    /// Pre-fetched DER OCSP response for the configured server certificate.
+    /// When present, an expired response closes new TLS handshakes until reload.
+    pub tls_ocsp_response_path: Option<PathBuf>,
+
     /// Dedicated PKIX roots for optional C2S client-certificate
     /// authentication. System/federation roots are intentionally not reused.
     pub c2s_client_trust_root_cert_path: Option<PathBuf>,
@@ -2105,6 +2109,7 @@ impl Config {
             .take()
             .filter(|path| !path.as_os_str().is_empty());
         raw.federation_crl_path = non_empty_path(raw.federation_crl_path.take());
+        raw.tls_ocsp_response_path = non_empty_path(raw.tls_ocsp_response_path.take());
         raw.c2s_client_trust_root_cert_path = raw
             .c2s_client_trust_root_cert_path
             .take()

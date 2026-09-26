@@ -16,8 +16,9 @@ use tokio_rustls::rustls::{
     pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName, UnixTime},
     server::{
         danger::{ClientCertVerified, ClientCertVerifier},
-        WebPkiClientVerifier,
+        ClientHello, NoServerSessionStorage, ResolvesServerCert, WebPkiClientVerifier,
     },
+    sign::CertifiedKey,
     version::{TLS12, TLS13},
     ClientConfig, RootCertStore, ServerConfig,
 };
@@ -858,22 +859,59 @@ fn validate_server_chain(
     Ok(not_after)
 }
 
+struct FreshOcspResolver {
+    key: Arc<CertifiedKey>,
+    response: Arc<crate::ocsp::ValidatedOcspResponse>,
+}
+
+impl std::fmt::Debug for FreshOcspResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("FreshOcspResolver").finish()
+    }
+}
+
+impl ResolvesServerCert for FreshOcspResolver {
+    fn resolve(&self, _hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        self.response.fresh_now().then(|| Arc::clone(&self.key))
+    }
+}
+
 fn server_config(
     chain: &[CertificateDer<'static>],
     key: &PrivateKeyDer<'static>,
     client_verifier: Option<Arc<dyn ClientCertVerifier>>,
+    ocsp: Option<&Arc<crate::ocsp::ValidatedOcspResponse>>,
     alpn: Option<&'static [u8]>,
 ) -> Result<Arc<ServerConfig>> {
     let builder = ServerConfig::builder_with_provider(crypto_provider())
         .with_protocol_versions(TLS_VERSIONS)
         .context("configured TLS versions are not supported by the crypto provider")?;
-    let mut config = match client_verifier {
+    let builder = match client_verifier {
         Some(verifier) => builder.with_client_cert_verifier(verifier),
         None => builder.with_no_client_auth(),
-    }
-    .with_single_cert(chain.to_vec(), key.clone_key())
-    .context("TLS certificate and private key do not match")?;
+    };
+    let mut config = if let Some(ocsp) = ocsp {
+        let mut certified_key =
+            CertifiedKey::from_der(chain.to_vec(), key.clone_key(), builder.crypto_provider())
+                .context("TLS certificate and private key do not match")?;
+        certified_key.ocsp = Some(ocsp.der().to_vec());
+        builder.with_cert_resolver(Arc::new(FreshOcspResolver {
+            key: Arc::new(certified_key),
+            response: Arc::clone(ocsp),
+        }))
+    } else {
+        builder
+            .with_single_cert(chain.to_vec(), key.clone_key())
+            .context("TLS certificate and private key do not match")?
+    };
     config.require_ems = true;
+    if ocsp.is_some() {
+        // A resumed TLS session can bypass certificate selection entirely.
+        // Disable both server-side cache and TLS 1.3 tickets while strict
+        // stapling is enabled, so every new connection crosses the expiry gate.
+        config.session_storage = Arc::new(NoServerSessionStorage {});
+        config.send_tls13_tickets = 0;
+    }
     if let Some(alpn) = alpn {
         config.alpn_protocols = vec![alpn.to_vec()];
     }
@@ -907,6 +945,7 @@ struct TlsMaterialInput<'a> {
     c2s_client_trust_root_path: Option<&'a Path>,
     federation_crl_path: Option<&'a Path>,
     c2s_client_crl_path: Option<&'a Path>,
+    ocsp_response_path: Option<&'a Path>,
     generation: u64,
 }
 
@@ -919,6 +958,7 @@ fn tls_material(input: TlsMaterialInput<'_>) -> Result<Arc<TlsMaterial>> {
         c2s_client_trust_root_path,
         federation_crl_path,
         c2s_client_crl_path,
+        ocsp_response_path,
         generation,
     } = input;
     let development = development_certificate_domain(domain);
@@ -940,15 +980,36 @@ fn tls_material(input: TlsMaterialInput<'_>) -> Result<Arc<TlsMaterial>> {
     )?;
     let federation_crls = crl_set(federation_crl_path, "federation CRL file")?;
     let c2s_client_crls = crl_set(c2s_client_crl_path, "C2S client CRL file")?;
+    let ocsp = ocsp_response_path
+        .map(|path| crate::ocsp::ValidatedOcspResponse::from_file(path, &chain).map(Arc::new))
+        .transpose()?;
     let s2s_verifier: Arc<dyn ClientCertVerifier> = Arc::new(PresentedServerCertificate::new());
     let (c2s_verifier, c2s_client_roots) =
         c2s_client_verifier(c2s_client_trust_root_path, c2s_client_crls.as_deref())?;
 
     Ok(Arc::new(TlsMaterial {
-        c2s_starttls: server_config(&chain, &key, c2s_verifier.clone(), None)?,
-        c2s_direct: server_config(&chain, &key, c2s_verifier, Some(b"xmpp-client"))?,
-        s2s_starttls: server_config(&chain, &key, Some(Arc::clone(&s2s_verifier)), None)?,
-        s2s_direct: server_config(&chain, &key, Some(s2s_verifier), Some(b"xmpp-server"))?,
+        c2s_starttls: server_config(&chain, &key, c2s_verifier.clone(), ocsp.as_ref(), None)?,
+        c2s_direct: server_config(
+            &chain,
+            &key,
+            c2s_verifier,
+            ocsp.as_ref(),
+            Some(b"xmpp-client"),
+        )?,
+        s2s_starttls: server_config(
+            &chain,
+            &key,
+            Some(Arc::clone(&s2s_verifier)),
+            ocsp.as_ref(),
+            None,
+        )?,
+        s2s_direct: server_config(
+            &chain,
+            &key,
+            Some(s2s_verifier),
+            ocsp.as_ref(),
+            Some(b"xmpp-server"),
+        )?,
         s2s_client_starttls: client_config(&chain, &key, roots.clone(), None)?,
         s2s_client_direct: client_config(&chain, &key, roots.clone(), Some(b"xmpp-server"))?,
         federation_roots: Arc::new(roots),
@@ -1171,9 +1232,19 @@ pub struct ReloadableTlsConfig {
     c2s_client_trust_root_path: Option<PathBuf>,
     federation_crl_path: Option<PathBuf>,
     c2s_client_crl_path: Option<PathBuf>,
+    ocsp_response_path: Option<PathBuf>,
     reload_lock: Mutex<()>,
     activation_lock: Mutex<()>,
     certificate_sessions: Arc<CertificateSessionRegistry>,
+}
+
+#[derive(Default)]
+pub struct TlsPolicyFiles<'a> {
+    pub extra_root: Option<&'a Path>,
+    pub c2s_client_trust_root: Option<&'a Path>,
+    pub federation_crl: Option<&'a Path>,
+    pub c2s_client_crl: Option<&'a Path>,
+    pub ocsp_response: Option<&'a Path>,
 }
 
 impl ReloadableTlsConfig {
@@ -1181,11 +1252,15 @@ impl ReloadableTlsConfig {
         cert_path: &Path,
         key_path: &Path,
         domain: &str,
-        extra_root_path: Option<&Path>,
-        c2s_client_trust_root_path: Option<&Path>,
-        federation_crl_path: Option<&Path>,
-        c2s_client_crl_path: Option<&Path>,
+        files: TlsPolicyFiles<'_>,
     ) -> Result<Arc<Self>> {
+        let TlsPolicyFiles {
+            extra_root: extra_root_path,
+            c2s_client_trust_root: c2s_client_trust_root_path,
+            federation_crl: federation_crl_path,
+            c2s_client_crl: c2s_client_crl_path,
+            ocsp_response: ocsp_response_path,
+        } = files;
         let material = tls_material(TlsMaterialInput {
             cert_path,
             key_path,
@@ -1194,6 +1269,7 @@ impl ReloadableTlsConfig {
             c2s_client_trust_root_path,
             federation_crl_path,
             c2s_client_crl_path,
+            ocsp_response_path,
             generation: 1,
         })?;
         Ok(Arc::new(Self {
@@ -1205,6 +1281,7 @@ impl ReloadableTlsConfig {
             c2s_client_trust_root_path: c2s_client_trust_root_path.map(Path::to_path_buf),
             federation_crl_path: federation_crl_path.map(Path::to_path_buf),
             c2s_client_crl_path: c2s_client_crl_path.map(Path::to_path_buf),
+            ocsp_response_path: ocsp_response_path.map(Path::to_path_buf),
             reload_lock: Mutex::new(()),
             activation_lock: Mutex::new(()),
             certificate_sessions: Arc::new(CertificateSessionRegistry::default()),
@@ -1280,6 +1357,7 @@ impl ReloadableTlsConfig {
             c2s_client_trust_root_path: self.c2s_client_trust_root_path.as_deref(),
             federation_crl_path: self.federation_crl_path.as_deref(),
             c2s_client_crl_path: self.c2s_client_crl_path.as_deref(),
+            ocsp_response_path: self.ocsp_response_path.as_deref(),
             generation: self
                 .current()
                 .generation
@@ -1719,7 +1797,7 @@ mod tests {
         }
 
         let reloadable =
-            ReloadableTlsConfig::new(&certificate, &key, "localhost", None, None, None, None)
+            ReloadableTlsConfig::new(&certificate, &key, "localhost", TlsPolicyFiles::default())
                 .unwrap();
         let initial = reloadable.current();
         let context = TlsContext::new(Arc::clone(&reloadable));
@@ -1807,10 +1885,7 @@ mod tests {
             &PathBuf::from(std::env::var("TEST_TLS_CERT_PATH").unwrap()),
             &PathBuf::from(std::env::var("TEST_TLS_KEY_PATH").unwrap()),
             "localhost",
-            None,
-            None,
-            None,
-            None,
+            TlsPolicyFiles::default(),
         )
         .unwrap();
         for (version, without_ems, accepted) in [
@@ -1857,6 +1932,74 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore = "requires OCSP responses generated by scripts/test-ocsp-stapling.sh and loopback sockets"]
+    async fn ocsp_staple_survives_tls12_tls13_and_rejects_bad_reload() {
+        use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion, StatusType};
+        install_crypto_provider();
+        let fixture = PathBuf::from(std::env::var("TEST_OCSP_FIXTURE_DIR").unwrap());
+        let response_path = fixture.join("active.der");
+        let expected = fs::read(fixture.join("good.der")).unwrap();
+        fs::write(&response_path, &expected).unwrap();
+        let reloadable = ReloadableTlsConfig::new(
+            &fixture.join("chain.crt"),
+            &fixture.join("leaf.key"),
+            "localhost",
+            TlsPolicyFiles {
+                ocsp_response: Some(&response_path),
+                ..TlsPolicyFiles::default()
+            },
+        )
+        .unwrap();
+        let initial = reloadable.current();
+        fs::write(
+            &response_path,
+            fs::read(fixture.join("revoked.der")).unwrap(),
+        )
+        .unwrap();
+        assert!(reloadable.reload().is_err());
+        assert!(Arc::ptr_eq(&initial, &reloadable.current()));
+
+        for version in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(&initial.c2s_starttls));
+            let client = tokio::task::spawn_blocking(move || {
+                let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+                connector.set_min_proto_version(Some(version)).unwrap();
+                connector.set_max_proto_version(Some(version)).unwrap();
+                connector.set_verify(SslVerifyMode::NONE);
+                let mut configured = connector.build().configure().unwrap();
+                configured.set_status_type(StatusType::OCSP).unwrap();
+                let budget = std::time::Duration::from_secs(5);
+                let socket = std::net::TcpStream::connect_timeout(&endpoint, budget).unwrap();
+                socket.set_read_timeout(Some(budget)).unwrap();
+                socket.set_write_timeout(Some(budget)).unwrap();
+                configured
+                    .connect("localhost", socket)
+                    .unwrap()
+                    .ssl()
+                    .ocsp_status()
+                    .map(ToOwned::to_owned)
+            });
+            let (received, server) =
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    tokio::join!(client, async {
+                        let (socket, _) = listener.accept().await.unwrap();
+                        acceptor.accept(socket).await
+                    })
+                })
+                .await
+                .expect("stapled TLS handshake timed out");
+            server.unwrap();
+            assert_eq!(received.unwrap().as_deref(), Some(expected.as_slice()));
+        }
+
+        fs::write(&response_path, &expected).unwrap();
+        reloadable.reload().unwrap();
+        assert!(!Arc::ptr_eq(&initial, &reloadable.current()));
+    }
+
     #[test]
     #[ignore = "requires generated C2S client-certificate fixtures outside the repository"]
     fn generated_c2s_external_accepts_only_local_xmppaddr_sans_and_never_cn() {
@@ -1897,10 +2040,10 @@ mod tests {
             &server_certificate,
             &server_key,
             "localhost",
-            None,
-            Some(&client_ca),
-            None,
-            None,
+            TlsPolicyFiles {
+                c2s_client_trust_root: Some(&client_ca),
+                ..TlsPolicyFiles::default()
+            },
         )
         .unwrap()
         .current();
@@ -1941,10 +2084,10 @@ mod tests {
             &certificate,
             &key,
             &domain,
-            Some(&trust_root),
-            None,
-            None,
-            None,
+            TlsPolicyFiles {
+                extra_root: Some(&trust_root),
+                ..TlsPolicyFiles::default()
+            }
         )
         .is_err());
         fs::set_permissions(&certificate, fs::Permissions::from_mode(0o644)).unwrap();
@@ -1953,24 +2096,25 @@ mod tests {
             &certificate,
             &key,
             &domain,
-            Some(&trust_root),
-            None,
-            None,
-            None,
+            TlsPolicyFiles {
+                extra_root: Some(&trust_root),
+                ..TlsPolicyFiles::default()
+            }
         )
         .is_err());
         fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(
-            ReloadableTlsConfig::new(&certificate, &key, &domain, None, None, None, None).is_err()
+            ReloadableTlsConfig::new(&certificate, &key, &domain, TlsPolicyFiles::default())
+                .is_err()
         );
         assert!(ReloadableTlsConfig::new(
             &certificate,
             &key,
             "wrong.runtime.northstar.internal",
-            Some(&trust_root),
-            None,
-            None,
-            None,
+            TlsPolicyFiles {
+                extra_root: Some(&trust_root),
+                ..TlsPolicyFiles::default()
+            }
         )
         .is_err());
 
@@ -1978,10 +2122,10 @@ mod tests {
             &certificate,
             &key,
             &domain,
-            Some(&trust_root),
-            None,
-            None,
-            None,
+            TlsPolicyFiles {
+                extra_root: Some(&trust_root),
+                ..TlsPolicyFiles::default()
+            },
         )
         .unwrap();
         let initial = reloadable.current();
@@ -2023,10 +2167,11 @@ mod tests {
             &certificate,
             &key,
             "server.example.test",
-            Some(&root),
-            None,
-            Some(&reload_crl),
-            None,
+            TlsPolicyFiles {
+                extra_root: Some(&root),
+                federation_crl: Some(&reload_crl),
+                ..TlsPolicyFiles::default()
+            },
         )
         .unwrap();
         let initial = reloadable.current();

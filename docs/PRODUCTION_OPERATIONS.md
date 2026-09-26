@@ -643,6 +643,20 @@ local resolver cache or a hosts-file test.
 
 ### Certificate revocation lists
 
+`TLS_OCSP_RESPONSE_PATH` optionally staples an operator-supplied DER OCSP
+response for Northstar's own server certificate on C2S and inbound S2S TLS
+listeners. The configured chain must include the leaf's issuer. Loading checks
+the responder's signature and authority against that issuer, the exact leaf
+identity, `good` status, `thisUpdate`, `nextUpdate`, and a maximum seven-day
+validity interval. An invalid file fails startup or reload; a rejected reload
+keeps the previous TLS snapshot. Once its staple expires, that snapshot refuses
+new handshakes until a valid response is loaded. TLS session resumption is
+disabled while this strict profile is active so it cannot bypass the expiry
+check. Renew the local response before `nextUpdate`, then use the authenticated
+TLS reload. Mount the response file into the container if using Docker.
+Northstar does not fetch OCSP responses or certificate-supplied AIA URLs.
+This setting does not verify a remote S2S peer's OCSP staple.
+
 `FEDERATION_CRL_PATH` applies one bounded local PEM CRL bundle to outbound S2S,
 inbound S2S client-certificate verification and XEP-0487 HTTPS. The separate
 `C2S_CLIENT_CRL_PATH` protects SASL EXTERNAL client certificates and requires
@@ -653,8 +667,7 @@ fails that chain closed. Malformed, duplicate, same-issuer ambiguous or oversize
 PEM/DER is rejected at load: publish exactly one current full CRL per issuer.
 The bundle is limited to 64 CRLs and an 8 MiB file.
 
-Northstar never downloads a certificate-supplied CRL URL and does not implement
-OCSP or AIA fetching. Replace CRLs as protected regular files and invoke the
+Northstar never downloads a certificate-supplied CRL or AIA URL. Replace CRLs as protected regular files and invoke the
 same authenticated atomic TLS reload used for certificate rotation. A rejected
 reload leaves the complete prior TLS/CRL snapshot active; an accepted reload
 increments a process-local monotonic TLS generation and gives all new handshakes

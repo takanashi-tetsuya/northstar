@@ -748,6 +748,15 @@ unacknowledged IQ reply in both directions between Direct TLS and STARTTLS,
 and from WebSocket to BOSH with an SM acknowledgment following replay.
 These are completed slices, not packet exit claims.
 
+R2 now has an opt-in, operator-supplied OCSP staple for Northstar's own server
+certificate. Startup and reload verify responder authority and the exact leaf,
+require a fresh `good` response with `nextUpdate`, and reject invalid input
+without replacing the previous TLS snapshot. An expired response blocks new
+TLS handshakes; TLS resumption is disabled for this strict profile. The
+generated fixture exercises valid and rejected responses and TLS 1.2/1.3
+stapling. Outbound S2S staple verification and any online retrieval policy
+remain outside this first profile.
+
 Federated MUC now rebinds an existing local occupant to a new authenticated
 S2S connection through an exact PostgreSQL occupancy transition. The
 transaction rechecks the remote affiliation, advances the connection fence and

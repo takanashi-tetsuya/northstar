@@ -19,6 +19,7 @@ mod jid;
 mod logging;
 mod mam_pubsub_parsing;
 mod metrics;
+mod ocsp;
 mod operation_runtime;
 mod outbound;
 mod password_work;

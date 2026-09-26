@@ -207,6 +207,10 @@ before starting the server.
 - `local-vm-lab-component*.py`: bounded Slixmpp XEP-0114 accept probe and
   C2S observers for independent XEP-0114/XEP-0225 components; see
   [component lab procedure](../docs/LOCAL_VM_COMPONENT_PROBE.md).
+- `local-vm-client-inventory.py`: read-only Debian package, tool and artifact
+  digest inventory for the isolated client matrix. It does not test a client
+  connection or VM isolation; see
+  [client matrix](../docs/LOCAL_VM_CLIENT_MATRIX.md).
 - `local-vm-lab-redis-fault*.py`: bounded `ns-b` to Redis partition drill with
   isolation checks, exact firewall cleanup and private evidence. Run its
   offline `--self-test` first; never run the live drill during a soak.

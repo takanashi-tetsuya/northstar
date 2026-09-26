@@ -32,6 +32,39 @@ never in the host's general trust store. Keep that environment on
 `northstar-lab` only, with no default route.
 Do not change the six running guests during the soak.
 
+## Record prerequisites
+
+After the soak, collect a read-only inventory on the host and again inside
+each dedicated client VM. Keep the JSON with the private test evidence. The
+script records exact installed Debian package versions, available client
+commands, the source commit and SHA-256 of explicitly named artifacts:
+
+```sh
+umask 077
+python3 scripts/local-vm-client-inventory.py \
+  --role host-preflight \
+  --artifact northstar-binary=/path/to/frozen/xmpp-server \
+  --artifact lab-ca=/path/to/lab-ca.pem \
+  > /path/to/private-evidence/host-client-inventory.json
+```
+
+Run the same script with `--role isolated-client-vm` from a copy of the
+checkout inside the client VM. Add `client-image`, `browser-binary`,
+`playwright-package` or `android-apk` artifact paths only when those files
+exist. The inventory performs no connection or isolation test: separately
+record the VM's interface and route check, lab DNS answer, CA trust, browser
+version and actual negotiated features. In particular, the host's Gajim
+package does not qualify a client VM run, and the host's Firefox Debian
+launcher version does not identify the installed browser build.
+
+Use a version-pinned client VM image. Configure its Gajim account with a
+documented `ns-a.lab.test` or `ns-b.lab.test` endpoint until client SRV
+records are published. Verify the server certificate name and lab CA; do not
+disable certificate checks to make a connection succeed. Browser testing
+requires a pinned browser/Playwright installation and a lab HTTPS origin
+whose certificate the browser trusts. An absent Android APK/emulator or Apple
+device remains an unrun case, even if server-side fixtures pass.
+
 ## Minimum run after the soak
 
 Use fresh test accounts and two resources for one account. Pin the Northstar

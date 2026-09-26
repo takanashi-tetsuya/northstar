@@ -29,13 +29,16 @@ def receive_until(conn: socket.socket, marker: str, timeout: int = 15) -> str:
     return collected.decode()
 
 
-def connect_peer(domain: str, user: str, password: str) -> ssl.SSLSocket:
+def connect_peer(
+    domain: str, user: str, password: str, *, host: str | None = None,
+    resource: str = "vm-lab",
+) -> ssl.SSLSocket:
     stream_open = (
         "<stream:stream xmlns='jabber:client' "
         "xmlns:stream='http://etherx.jabber.org/streams' "
         f"to='{domain}' version='1.0'>"
     ).encode()
-    raw = socket.create_connection((domain, 5222), timeout=10)
+    raw = socket.create_connection((host or domain, 5222), timeout=10)
     raw.sendall(stream_open)
     features = receive_until(raw, "</stream:features>")
     assert "urn:ietf:params:xml:ns:xmpp-tls" in features, features
@@ -55,8 +58,8 @@ def connect_peer(domain: str, user: str, password: str) -> ssl.SSLSocket:
     features = receive_until(conn, "</stream:features>")
     assert "urn:ietf:params:xml:ns:xmpp-bind" in features, features
     conn.sendall(
-        b"<iq type='set' id='lab-bind'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>"
-        b"<resource>vm-lab</resource></bind></iq>"
+        ("<iq type='set' id='lab-bind'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>"
+         f"<resource>{resource}</resource></bind></iq>").encode()
     )
     bind = receive_until(conn, "lab-bind")
     if "type='result'" not in bind and 'type="result"' not in bind:

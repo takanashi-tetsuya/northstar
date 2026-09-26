@@ -86,7 +86,26 @@ fi
 echo 'Northstar database grants reconciled.'
 GUEST
 
-ssh "${ssh_opts[@]}" "$node" 'sudo tee /etc/systemd/system/northstar-lab.service >/dev/null' <<'UNIT'
+storage_backend=$(ssh "${ssh_opts[@]}" "$infra" \
+  'sudo -u postgres psql -d xmpp --no-psqlrc -Atqc "SELECT storage_backend FROM upload_storage_authority WHERE singleton"')
+[[ -z $storage_backend || $storage_backend == local || $storage_backend == s3 ]] || {
+  echo "unexpected upload storage authority: $storage_backend" >&2
+  exit 1
+}
+if [[ $storage_backend == s3 ]]; then
+  ssh "${ssh_opts[@]}" "$infra" 'sudo python3 - <<'"'"'PY'"'"'
+import json
+from pathlib import Path
+root = Path("/etc/northstar-lab-minio")
+print(json.dumps({"generation": 1, "access_key_id": (root / "access-key").read_text().strip(),
+    "secret_access_key": (root / "secret-key").read_text().strip()}))
+PY' | ssh "${ssh_opts[@]}" "$node" \
+    'umask 077; cat > /home/lab/northstar/secrets/s3-credentials.json'
+fi
+
+unit_file=$(mktemp)
+trap 'rm -f "$unit_file"' EXIT
+cat >"$unit_file" <<'UNIT'
 [Unit]
 Description=Northstar isolated VM lab
 After=network-online.target
@@ -113,9 +132,25 @@ Environment=API_CONTROL_SECRET_FILE=/home/lab/northstar/secrets/api_control_secr
 Environment=METRICS_BEARER_TOKEN_FILE=/home/lab/northstar/secrets/metrics_bearer_token
 Environment=DATABASE_MAX_CONNECTIONS=10
 Environment=DATABASE_MIN_CONNECTIONS=2
+UNIT
+if [[ $storage_backend == s3 ]]; then
+  cat >>"$unit_file" <<'UNIT'
+Environment=UPLOAD_STORAGE_BACKEND=s3
+Environment=UPLOAD_S3_ENDPOINT=https://infra.lab.test:9000
+Environment=UPLOAD_S3_BUCKET=northstar-lab-uploads
+Environment=UPLOAD_S3_REGION=us-east-1
+Environment=UPLOAD_S3_PREFIX=lab/uploads
+Environment=UPLOAD_S3_PATH_STYLE=true
+Environment=UPLOAD_S3_CREDENTIAL_MODE=files
+Environment=UPLOAD_S3_CREDENTIAL_BUNDLE_FILE=/home/lab/northstar/secrets/s3-credentials.json
+UNIT
+fi
+cat >>"$unit_file" <<'UNIT'
 ExecStart=/home/lab/northstar/rust-xmpp-server serve standalone
 Restart=no
 UNIT
+ssh "${ssh_opts[@]}" "$node" \
+  'sudo tee /etc/systemd/system/northstar-lab.service >/dev/null' <"$unit_file"
 ssh "${ssh_opts[@]}" "$node" \
   'sudo systemctl daemon-reload; sudo systemctl start northstar-lab.service; sleep 2; sudo systemctl is-active northstar-lab.service'
 sha256sum "$binary"

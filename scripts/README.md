@@ -180,11 +180,16 @@ before starting the server.
   `local-vm-lab-install-package.sh`, `local-vm-lab-dns.sh`,
   `local-vm-lab-client-dns.sh`, `local-vm-lab-certs.sh`,
   `local-vm-lab-database.sh`, `local-vm-lab-node.sh`,
-  `local-vm-lab-peers.sh`, `local-vm-lab-preflight.sh` and
-  `local-vm-lab-federation.py`, `local-vm-lab-peer-recovery.sh`: create and check the non-forwarding libvirt
+  `local-vm-lab-peers.sh`, `local-vm-lab-preflight.sh`,
+  `local-vm-lab-minio.sh`, `local-vm-lab-minio-bucket.sh`,
+  `local-vm-lab-redis.sh`, `local-vm-lab-cluster.sh`,
+  `local-vm-lab-cluster-delivery.py`, `local-vm-lab-upload.py`,
+  `local-vm-lab-federation.py` and
+  `local-vm-lab-peer-recovery.sh`: create and check the non-forwarding libvirt
   network, checksum-pinned Debian guests, signed lab DNS zone, lab PKI,
-  PostgreSQL roles and standalone server, then send bidirectional messages
-  to fixed Prosody and ejabberd peers. See
+  PostgreSQL roles, versioned S3 storage and signed two-node Redis control
+  plane; then send messages across nodes and to fixed Prosody and ejabberd
+  peers. See
   [the VM qualification guide](../docs/LOCAL_VM_QUALIFICATION.md) for the
   sequence and evidence limits. The guest helper requires a lab-only SSH
   public key and leaves existing VMs untouched. Package installation uses a

@@ -92,12 +92,47 @@ marker reached a client after the peer restarted. This covers one peer-process
 outage and retry path, not an asymmetric network partition. The run found and fixed a
 runtime-role row-lock gap during C2S bind/message admission and a stream-open
 interoperability gap: RFC 6120 requires receivers to ignore an initiator's
-`id`, including Prosody's empty value. Those fixes must pass CI and be frozen
-in a commit before this run can be cited as release-candidate evidence.
+`id`, including Prosody's empty value. Both fixes are in the tested source
+commit; a separate CI fixture correction is in `c36af2f`.
 
-Redis, MinIO, the second Northstar node, cluster faults, DNSSEC/DANE behavior
-inside Northstar, certificate rotation, external components, native clients,
-mixed-load soak, backup/restore and alert drills remain untested in these VMs.
+The infra guest now runs Redis 8.0.2 with mandatory mutual TLS and a
+deployment-scoped ACL. A dedicated 10 GiB virtual disk hosts HTTPS MinIO with
+bucket versioning. After stopping the standalone node, an exploratory
+Local-to-S3 migration committed the upload authority to S3; the manifest had
+**zero objects**, so this did not test copying or verifying real uploads.
+`scripts/local-vm-lab-cluster.sh` then started `ns-a` as the sole maintenance
+owner and `ns-b` as core-only, with separate Ed25519 signing identities and
+shared PostgreSQL, Redis and S3. The `local-vm-lab-cluster-delivery.py` probe
+delivered direct messages in both directions between resources connected to
+different nodes. With Redis stopped, a new session was closed at bind rather
+than admitted without cluster authority. After Redis restarted, the probe
+recovered and both delivery paths passed. Prosody and ejabberd bidirectional
+federation still passed with both Northstar nodes active. A non-empty HTTP
+Upload created through `ns-a` was downloaded through `ns-b` with the same
+SHA-256
+(`ec1fd0735b77f0e49ad119daeede350a9ea9f7ab51e77c41b0c00386ac1fa2a6`).
+This proves shared S3 reads for that object; it does not exercise a non-empty
+migration.
+These observations used source commit `58650079da8d21408ab6d027127796b7863ccf5c`
+and binary SHA-256
+`b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.
+The host keeps outputs in `/tmp/northstar-lab-evidence-5865007/`. These are
+exploratory until the scripts and binary are frozen together and the same
+cases rerun with raw logs.
+
+The lab setup is repeatable in this order: provision the six guests and lab
+PKI, run `local-vm-lab-minio.sh` with the pinned Debian package staged on the
+host, run `local-vm-lab-minio-bucket.sh`, complete an offline storage migration,
+then run `local-vm-lab-cluster.sh`. The latter requires committed S3 authority
+and deliberately refuses to replace lost node signing keys. Run
+`local-vm-lab-cluster-delivery.py` and `local-vm-lab-upload.py` from `ns-a`
+after copying them and `local-vm-lab-federation.py` into
+`/home/lab/northstar/`.
+
+Asymmetric network partitions, Redis failover, non-empty S3 migration and
+restore, DNSSEC/DANE behavior inside Northstar, certificate rotation, external
+components, native clients, mixed-load soak, backup/restore and alert drills
+remain untested in these VMs.
 The independent security review and physically separate backup destination
 are unavailable. Keep all seven evidence gates open until their complete
 matrices pass; this exploratory run does not turn the cluster production-ready.

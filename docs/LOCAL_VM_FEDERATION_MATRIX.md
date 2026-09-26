@@ -67,7 +67,9 @@ _xmpp-server --expect-tlsa usage1 --served-cert <peer leaf PEM>
 --output-dir <new evidence directory>`. Use `wrong-digest`,
 `unsupported-only` or `absent` for the corresponding negative fixture. The
 probe saves raw `delv` transcripts and checks the signed SRV relationship,
-selected address and exact TLSA RRset shape. Its passing result establishes
+selected address and exact TLSA RRset shape. The probe selects `lab.test.` as
+the trust root so `delv` uses the supplied lab DNSKEY anchor. Its passing
+result establishes
 only this DNS preflight; separately retain Northstar's resolver decision,
 served certificate proof, outbox and stanza evidence for the case. The probe
 accepts only the isolated lab network and names beneath `lab.test`.

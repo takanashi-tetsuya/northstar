@@ -140,10 +140,18 @@ def certificate_spki(cert: Path) -> tuple[str, str]:
     return hashlib.sha256(leaf).hexdigest(), hashlib.sha256(spki).hexdigest()
 
 
+def query_args(server: str, anchor: Path, owner: str, kind: str) -> list[str]:
+    # A non-root trust anchor is ignored unless delv selects its root name.
+    return [
+        "delv", "-a", str(anchor), f"@{server}", "+root=lab.test.",
+        "+dnssec", "+trust", owner, kind,
+    ]
+
+
 def query(server: str, anchor: Path, owner: str, kind: str) -> tuple[int, str]:
     try:
         result = subprocess.run(
-            ["delv", "-a", str(anchor), f"@{server}", "+dnssec", "+trust", owner, kind],
+            query_args(server, anchor, owner, kind),
             capture_output=True, text=True, timeout=15, check=False,
             env={**os.environ, "LC_ALL": "C"},
         )
@@ -156,6 +164,9 @@ def query(server: str, anchor: Path, owner: str, kind: str) -> tuple[int, str]:
 
 
 def self_test() -> None:
+    args = query_args("192.168.197.7", Path("anchor.key"), "prosody.lab.test.", "A")
+    assert args[args.index("-a") + 1] == "anchor.key"
+    assert "+root=lab.test." in args
     digest = "a" * 64
     domain = "prosody.lab.test."
     target = domain

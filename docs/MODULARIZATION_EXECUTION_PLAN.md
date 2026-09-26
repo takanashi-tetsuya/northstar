@@ -718,12 +718,16 @@ service and PostgreSQL adapter. Archive core now plans the RSM window for
 personal, MUC and MIX queries and applies one completion/order rule to their
 fetched pages. MIX uses the selected row's timestamp and ID to compute its
 first index without re-reading that row. Cursor resolution, authorization,
-counting and page execution remain in the same database snapshot. Archive
-queries, preference updates and atomic federated outbox admission now require
-separate repository capabilities. Local and federated room readers share a pure
-visibility decision while retaining their distinct locks. Legacy room reads
+counting and page execution remain in the same database snapshot. MIX cursors,
+ordering and first-index comparisons use the authoritative stanza ID even
+when events share a timestamp. Archive queries, preference updates and atomic
+federated outbox admission now require separate repository capabilities. Local
+and federated room readers share a pure visibility decision while retaining
+their distinct locks. Legacy room reads
 can still initialize a missing occupant-ID secret; the query capability is
 therefore not a claim that every SQL statement is read-only.
+The MIX wire fixture checks two adjacent MAM pages, stable count/index values
+and disjoint archive IDs after three delivered group messages.
 D1 no longer stores a second WebSocket flag alongside the transport kind. The
 TCP and WebSocket action executors now have separate adapters. Plain TCP and
 direct TLS share the TCP adapter; both adapters retain their existing write,

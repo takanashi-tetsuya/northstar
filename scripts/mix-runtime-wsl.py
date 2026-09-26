@@ -130,6 +130,48 @@ def iq(client: Inbox, stanza_id: str, payload: str, to: str, kind: str = "set") 
     return client.wait(f"id='{stanza_id}'")
 
 
+def mam_page(
+    client: Inbox, query_id: str, expected_markers: tuple[str, ...],
+    before: str | None = None,
+) -> tuple[list[str], int, int]:
+    cursor = "<before/>" if before is None else f"<before>{before}</before>"
+    fin = iq(
+        client, query_id,
+        f"<query xmlns='urn:xmpp:mam:2' queryid='{query_id}'>"
+        "<x xmlns='jabber:x:data' type='submit'>"
+        "<field var='FORM_TYPE'><value>urn:xmpp:mam:2</value></field></x>"
+        f"<set xmlns='http://jabber.org/protocol/rsm'><max>2</max>{cursor}</set>"
+        "</query>", CHANNEL,
+    )
+    count = re.search(r"<count>(\d+)</count>", fin)
+    first = re.search(r"<first index='(\d+)'>([^<]+)</first>", fin)
+    last = re.search(r"<last>([^<]+)</last>", fin)
+    check("<fin " in fin and count is not None, f"MIX MAM final page missing: {fin}")
+    results = [
+        frame for frame in client.pending if f"queryid='{query_id}'" in frame
+    ]
+    client.pending = [
+        frame for frame in client.pending if f"queryid='{query_id}'" not in frame
+    ]
+    check(len(results) == len(expected_markers), f"MIX MAM page size is wrong: {fin} {results}")
+    ids = []
+    for result, marker in zip(results, expected_markers):
+        match = re.search(r"<result\b[^>]*\bid='([0-9a-f-]{36})'", result)
+        check(match is not None, f"MIX MAM result has no archive ID: {result}")
+        check(marker in result, f"MIX MAM result has the wrong group message: {result}")
+        check(
+            f"{ALICE}@{DOMAIN}" not in result,
+            f"maybe-visible MAM leaked a real JID: {result}",
+        )
+        ids.append(match.group(1))
+    check(first is not None and last is not None, f"MIX MAM omitted RSM bounds: {fin}")
+    check(
+        first.group(2) == ids[0] and last.group(1) == ids[-1],
+        f"MIX MAM RSM bounds do not match the page: {fin} {ids}",
+    )
+    return ids, int(count.group(1)), int(first.group(1))
+
+
 def preference_form(jid: str, private: str, vcard: str = "block", presence: str = "share") -> str:
     return (
         "<x xmlns='jabber:x:data' type='submit'>"
@@ -304,17 +346,38 @@ def run() -> None:
     group = bob.wait("MIX runtime message")
     stanza_id = re.search(r"stanza-id[^>]+id='([0-9a-f-]{36})'", group)
     check(stanza_id is not None and f"<jid>{ALICE}@{DOMAIN}</jid>" in group, f"live maybe-visible identity/stanza-id failed: {group}")
-    archive_id = stanza_id.group(1)
+    delivered_ids = [stanza_id.group(1)]
 
-    mam = iq(
-        bob,
-        "mam",
-        "<query xmlns='urn:xmpp:mam:2' queryid='mix-runtime'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>urn:xmpp:mam:2</value></field></x><set xmlns='http://jabber.org/protocol/rsm'><max>10</max></set></query>",
-        CHANNEL,
+    for suffix in ("two", "three"):
+        marker = f"MIX runtime page {suffix}"
+        alice.send_message(
+            f"<message xmlns='jabber:client' type='groupchat' id='group-{suffix}' to='{CHANNEL}'><body>{marker}</body></message>",
+            alice_token,
+        )
+        delivered = bob.wait(marker)
+        delivered_id = re.search(r"stanza-id[^>]+id='([0-9a-f-]{36})'", delivered)
+        check(
+            "type='groupchat'" in delivered and delivered_id is not None,
+            f"MIX page fixture {suffix} was not delivered: {delivered}",
+        )
+        delivered_ids.append(delivered_id.group(1))
+    latest_ids, total, latest_index = mam_page(
+        bob, "mix-runtime-latest", ("MIX runtime page two", "MIX runtime page three")
     )
-    check("<fin " in mam and "<count>" in mam, f"MIX MAM final page missing: {mam}")
-    archived = bob.wait("queryid='mix-runtime'")
-    check("MIX runtime message" in archived and f"{ALICE}@{DOMAIN}" not in archived, f"maybe-visible MAM leaked real JID: {archived}")
+    previous_ids, previous_total, previous_index = mam_page(
+        bob, "mix-runtime-previous", ("MIX runtime message",), before=latest_ids[0]
+    )
+    check(
+        total == 3 and previous_total == total
+        and latest_index + len(latest_ids) == total
+        and previous_index + len(previous_ids) == latest_index
+        and not set(latest_ids).intersection(previous_ids),
+        "MIX MAM adjacent pages have inconsistent count, index or IDs",
+    )
+    check(
+        previous_ids + latest_ids == delivered_ids,
+        "MIX MAM pages do not match the delivered group messages",
+    )
 
     jidmap_owner = iq(alice, "jidmap-owner", f"<pubsub xmlns='{PUBSUB}'><items node='urn:xmpp:mix:nodes:jidmap'/></pubsub>", CHANNEL, "get")
     check("type='result'" in jidmap_owner and f"{BOB}@{DOMAIN}" in jidmap_owner, f"owner jidmap failed: {jidmap_owner}")

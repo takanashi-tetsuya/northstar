@@ -64,8 +64,8 @@ versioned loopback MinIO bucket from `lib/isolated-minio-fixture.sh` to check
 both migration directions and interruption recovery. `test-backup-inventory.py`
 checks the S3 backup inventory and fresh restore locator mapping offline.
 
-`listener-readiness-stress-wsl.sh` runs 5 × 50 for PRs and `main`, and 20 × 50
-for weekly or manual CI. Select `extended_stress` when dispatching CI to run
+`listener-readiness-stress-wsl.sh` runs 2 × 50 for pushes, PRs and ordinary
+manual CI, and 20 × 50 for scheduled CI. Select `extended_stress` to run
 100 × 50. Every round exercises the complete fixture at 50-pair concurrency;
 round counts control repetition rather than protocol coverage. The regular
 matrix retains its PostgreSQL observer and verifies the diagnostic artifacts.

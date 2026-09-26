@@ -48,17 +48,19 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let second = Uuid::parse_str("00000000-0000-0000-0000-000000000102").unwrap();
     let third = Uuid::parse_str("00000000-0000-0000-0000-000000000103").unwrap();
     let fourth = Uuid::parse_str("00000000-0000-0000-0000-000000000104").unwrap();
-    for (id, storage_id, publisher, second_offset) in [
-        (first, Uuid::new_v4(), "alice@example.test", 1_i64),
-        (second, Uuid::new_v4(), "bob@example.test", 2),
-        (third, Uuid::new_v4(), "alice@example.test", 3),
-        (fourth, Uuid::new_v4(), "bob@example.test", 4),
+    // All rows share one timestamp. Storage IDs intentionally sort opposite
+    // to the authoritative IDs used by MAM cursors and stanza-id values.
+    for (id, storage_id, publisher) in [
+        (first, Uuid::from_u128(0x204), "alice@example.test"),
+        (second, Uuid::from_u128(0x203), "bob@example.test"),
+        (third, Uuid::from_u128(0x202), "alice@example.test"),
+        (fourth, Uuid::from_u128(0x201), "bob@example.test"),
     ] {
         sqlx::query(
             "INSERT INTO mix_events
                  (id, channel_id, node, item_id, publisher_jid, payload, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6,
-                         TIMESTAMPTZ '2026-01-01 00:00:00Z' + ($7 * INTERVAL '1 second'))",
+                         TIMESTAMPTZ '2026-01-01 00:00:00Z')",
         )
         .bind(storage_id)
         .bind(channel_id)
@@ -66,7 +68,6 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
         .bind(id.to_string())
         .bind(publisher)
         .bind(format!("<message id='{id}'/>"))
-        .bind(second_offset)
         .execute(&pool)
         .await
         .unwrap();

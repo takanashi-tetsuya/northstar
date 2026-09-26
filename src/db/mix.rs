@@ -4764,7 +4764,7 @@ fn push_mix_mam_scope(
     }
     if let Some((created_at, id)) = after_point {
         query_builder
-            .push(" AND (created_at, id) > (")
+            .push(" AND (created_at, authoritative_id) > (")
             .push_bind(created_at)
             .push(", ")
             .push_bind(id)
@@ -4772,7 +4772,7 @@ fn push_mix_mam_scope(
     }
     if let Some((created_at, id)) = before_point {
         query_builder
-            .push(" AND (created_at, id) < (")
+            .push(" AND (created_at, authoritative_id) < (")
             .push_bind(created_at)
             .push(", ")
             .push_bind(id)
@@ -4792,7 +4792,8 @@ async fn mix_mam_point(
     blocked_patterns: &[MixMamBlockedPattern],
     id: Uuid,
 ) -> Result<Option<(DateTime<Utc>, Uuid)>> {
-    let mut builder = QueryBuilder::<Postgres>::new("SELECT created_at, id FROM mix_events");
+    let mut builder =
+        QueryBuilder::<Postgres>::new("SELECT created_at, authoritative_id FROM mix_events");
     // Cursor existence is evaluated only inside the caller's immutable base
     // visibility. Query filters select results; they must not redefine which
     // otherwise-visible archive item is a valid RSM/form cursor.
@@ -4957,9 +4958,9 @@ async fn mix_mam_page_for(
         window.before,
     );
     page_builder.push(if window.descending {
-        " ORDER BY created_at DESC, id DESC LIMIT "
+        " ORDER BY created_at DESC, authoritative_id DESC LIMIT "
     } else {
-        " ORDER BY created_at ASC, id ASC LIMIT "
+        " ORDER BY created_at ASC, authoritative_id ASC LIMIT "
     });
     page_builder.push_bind(window.fetch_limit);
     if let Some(index) = window.offset {
@@ -4990,7 +4991,7 @@ async fn mix_mam_page_for(
             form_before,
         );
         index_builder
-            .push(" AND (created_at, id) < (")
+            .push(" AND (created_at, authoritative_id) < (")
             .push_bind(first.created_at)
             .push(", ")
             .push_bind(first.id)
@@ -5061,7 +5062,7 @@ pub async fn mix_mam_boundaries(
     let first = sqlx::query(
         "SELECT authoritative_id AS id, created_at FROM mix_events
          WHERE channel_id = $1 AND node = $2
-         ORDER BY created_at ASC, id ASC LIMIT 1",
+         ORDER BY created_at ASC, authoritative_id ASC LIMIT 1",
     )
     .bind(channel_id)
     .bind(NODE_MESSAGES)
@@ -5070,7 +5071,7 @@ pub async fn mix_mam_boundaries(
     let last = sqlx::query(
         "SELECT authoritative_id AS id, created_at FROM mix_events
          WHERE channel_id = $1 AND node = $2
-         ORDER BY created_at DESC, id DESC LIMIT 1",
+         ORDER BY created_at DESC, authoritative_id DESC LIMIT 1",
     )
     .bind(channel_id)
     .bind(NODE_MESSAGES)
@@ -5113,7 +5114,7 @@ pub async fn authorized_mix_mam_boundaries(
     let mut first_builder =
         QueryBuilder::<Postgres>::new("SELECT authoritative_id AS id,created_at FROM mix_events");
     push_mix_mam_archive_base(&mut first_builder, channel_id, &blocked_patterns);
-    first_builder.push(" ORDER BY created_at ASC,id ASC LIMIT 1");
+    first_builder.push(" ORDER BY created_at ASC,authoritative_id ASC LIMIT 1");
     let first = first_builder
         .build()
         .fetch_optional(&mut *transaction)
@@ -5121,7 +5122,7 @@ pub async fn authorized_mix_mam_boundaries(
     let mut last_builder =
         QueryBuilder::<Postgres>::new("SELECT authoritative_id AS id,created_at FROM mix_events");
     push_mix_mam_archive_base(&mut last_builder, channel_id, &blocked_patterns);
-    last_builder.push(" ORDER BY created_at DESC,id DESC LIMIT 1");
+    last_builder.push(" ORDER BY created_at DESC,authoritative_id DESC LIMIT 1");
     let last = last_builder
         .build()
         .fetch_optional(&mut *transaction)

@@ -161,6 +161,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (148,'cluster muc admin batch kind',pg_catalog.decode('10e068e897842f13a1c6e89ce4e49eed5ee68933694f3e5dcf7fcff24ee54cd026a0e544e3748375e6d1dc00dc33601d','hex')),
   (149,'upload storage migration journal',pg_catalog.decode('6d85a3578eaf4836cb707fc4bb88325f449c6e2c4d84a7f5f15b26887af79552412dc82c958a7510205e90d38e3ade61','hex')),
   (150,'auth generation lock capability',pg_catalog.decode('e0df871558c18b793752cbc985a6a260f70a86b47902db1cfb11c60780feb5dd98cba5afaa74e8b34bfb4618be27e104','hex')),
-  (151,'enabled user name lock capability',pg_catalog.decode('8f29b6efa5f1fb683ed76787616f2aeb9fccbb2272d01c235cf419d2126e9d603e158660e1545baf9a80aa34996525b0','hex'));
+  (151,'enabled user name lock capability',pg_catalog.decode('8f29b6efa5f1fb683ed76787616f2aeb9fccbb2272d01c235cf419d2126e9d603e158660e1545baf9a80aa34996525b0','hex')),
+  (152,'mix mam authoritative page index',pg_catalog.decode('4b454f796eb4e0fd521f88d0dfa1512e3d27ecf461bb75dee7a471fcef697e547a446d827c11ab0664950ac1307fe613','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

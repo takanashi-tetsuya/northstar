@@ -7,6 +7,9 @@ use std::{sync::Mutex, time::Instant};
 pub(crate) struct ClusterMaintenanceContext {
     pub(crate) control: cluster::ClusterMaintenanceControl,
     pub(crate) redis: cluster::ClusterMaintenanceRedis,
+    pub(crate) session_routes: services::session_route_maintenance::SessionRouteRenewalService<
+        cluster::ClusterMaintenanceRedis,
+    >,
     pub(crate) locals: ClusterMaintenanceLocals,
     pub(crate) session_authority: services::session_authority_sweep::SessionAuthoritySweepService<
         db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
@@ -51,6 +54,8 @@ impl AppState {
         let (control, redis) = self.cluster_maintenance_handles();
         ClusterMaintenanceContext {
             control,
+            session_routes:
+                services::session_route_maintenance::SessionRouteRenewalService::new(redis.clone()),
             redis,
             locals: self.cluster_maintenance_locals(),
             session_authority: services::session_authority_sweep::SessionAuthoritySweepService::new(

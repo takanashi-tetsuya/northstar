@@ -1,10 +1,11 @@
 use super::{Action, ProtocolSession};
 use crate::services::messaging::{
     admit_offline_then_push, ArchiveWrite, DurableAdmissionOutcome, FederationDelivery,
-    IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
-    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OnlineMessageRouter,
-    OutboundPolicyDecision, PersonalMessageDestination, RemoteMucInviteAdmission,
-    RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
+    FullJidFallback, FullJidFallbackResult, IdentityAuthority, LocalDelivery,
+    LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+    OfflineAdmissionOutcome, OnlineMessageRouter, OutboundPolicyDecision,
+    PersonalMessageDestination, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
+    ValidatedPersonalMessage,
 };
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
@@ -1091,13 +1092,24 @@ impl ProtocolSession {
         let mut delivered = route.delivered;
         let mut delivered_key = route.accepted_full_jid;
 
-        // RFC 6121 §8.5.3.2 lets a chat addressed to a vanished resource
-        // fall back to the account's most available resource. Other message
-        // types addressed to a non-matching full JID are never stored as if
-        // they had been sent to the bare account.
+        // RFC 6121 §8.5.3.2 permits chat fallback after an exact resource
+        // disappears. The service preserves post-commit privacy/error behavior.
         if !delivered && !bare_target {
-            let allow_bare_fallback = match full_no_match_route(message_type) {
-                FullNoMatchRoute::Ignore => {
+            match OnlineMessageRouter::full_jid_fallback(
+                &*self.state,
+                FullJidFallback {
+                    message_type,
+                    full_target: to,
+                    bare_target: &recipient_by,
+                    sender: from,
+                    recipient_id: recipient.id,
+                    stanza: &recipient_delivery,
+                    delivery: live_delivery,
+                },
+            )
+            .await?
+            {
+                FullJidFallbackResult::Dropped => {
                     self.finalize_message_admission(
                         &mut message_admission_lease,
                         "full-target-drop",
@@ -1105,95 +1117,13 @@ impl ProtocolSession {
                     .await;
                     return Ok(Action::None);
                 }
-                FullNoMatchRoute::Reject
-                    if durable_full_no_match_recovers(message_type, live_delivery.is_some()) =>
-                {
-                    self.state.personal_message_telemetry().post_accept_failed();
-                    tracing::warn!(
-                        recipient_id = %recipient.id,
-                        target = %to,
-                        "exact full-JID route disappeared after durable admission; resource-affine row remains replayable"
-                    );
-                    false
-                }
-                FullNoMatchRoute::Reject => {
+                FullJidFallbackResult::Rejected => {
                     return Ok(message_error(root, "cancel", "service-unavailable"));
                 }
-                FullNoMatchRoute::FallbackChat => true,
-            };
-
-            if allow_bare_fallback {
-                let mut fallback_targets = self.state.session_entries_for(&recipient_by);
-                fallback_targets.retain(|(_, session)| {
-                    session.available.load(Ordering::Relaxed)
-                        && session.priority.load(Ordering::Relaxed) >= 0
-                });
-                fallback_targets.sort_by(|(left_jid, left), (right_jid, right)| {
-                    right
-                        .priority
-                        .load(Ordering::Relaxed)
-                        .cmp(&left.priority.load(Ordering::Relaxed))
-                        .then_with(|| left_jid.cmp(right_jid))
-                });
-                let mut allowed_fallback = Vec::with_capacity(fallback_targets.len());
-                for target in fallback_targets {
-                    match self
-                        .state
-                        .privacy_allows_session(&target.1, from, PrivacyStanzaKind::Message)
-                        .await
-                    {
-                        Ok(true) => allowed_fallback.push(target),
-                        Ok(false) => {}
-                        Err(error) if live_delivery.is_some() => {
-                            // The durable C2S/invitation projection was committed
-                            // before attempting the exact full-JID route. A
-                            // transient privacy backend failure while considering
-                            // RFC 6121 chat fallback must fail closed for this
-                            // resource, but it must not turn the already accepted
-                            // message into a client-visible failure and invite a
-                            // duplicate retry.
-                            self.state.personal_message_telemetry().post_accept_failed();
-                            tracing::warn!(
-                                ?error,
-                                target = %target.0,
-                                recipient_id = %recipient.id,
-                                "privacy policy failed closed during post-admission full-JID fallback"
-                            );
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
-                for (key, target) in allowed_fallback {
-                    let accepted = if let Some(delivery) = live_delivery {
-                        target
-                            .sender
-                            .try_send_durable(recipient_delivery.clone(), delivery)
-                            .is_ok()
-                    } else {
-                        target.sender.try_send(recipient_delivery.clone()).is_ok()
-                    };
-                    if accepted {
-                        self.state
-                            .personal_message_telemetry()
-                            .online_queue_result(true, live_delivery.is_some());
-                        delivered_key = Some(key);
-                        delivered = true;
-                        break;
-                    }
-                }
-                if !delivered {
-                    let remote = self
-                        .state
-                        .route_personal_message_to_remote_primary(
-                            &recipient_by,
-                            &recipient_delivery,
-                            live_delivery,
-                        )
-                        .await;
-                    if remote.delivered {
-                        delivered = true;
-                        delivered_key = remote.accepted_full_jid;
-                    }
+                FullJidFallbackResult::Undelivered => {}
+                FullJidFallbackResult::Delivered(key) => {
+                    delivered = true;
+                    delivered_key = key;
                 }
             }
         }

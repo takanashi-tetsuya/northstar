@@ -243,7 +243,10 @@ checks, bounded fan-out and deadline accounting now belong to an application
 service; its state adapter owns live sessions, XML wrapping and cluster
 routing. The first online personal-message route now runs through an
 application service with an injected live-queue and cluster adapter. Full-JID
-fallback and broader failure-injection coverage remain. The existing
+fallback now uses the same service boundary: it preserves the existing
+resource-priority order, checks privacy before enqueue, and keeps committed
+messages replayable when a later privacy lookup fails. Broader
+failure-injection coverage remains. The existing
 PostgreSQL atomic operations have deliberately not been split during this
 convergence.
 
@@ -309,11 +312,15 @@ channel; the Tokio queue is a transport adapter and returns every rejected or
 stale item through the loss-explicit port. TCP and WebSocket have separate
 action executors, while BOSH retains its own RID and response fences. SM and
 CSI are private session substates, and secure-channel evidence is activated as
-one state transition. The remaining broad `ProtocolSession` capabilities and
-transport-specific lifetime/cancellation paths still need separation.
+one state transition.
 Native stream-limit advertisement now receives the TCP/WebSocket frame and idle
 policy from those adapters; BOSH supplies no native limit advertisement and
 continues to negotiate its HTTP binding limits independently.
+TCP and WebSocket now share a direct-write lease that records SM ownership,
+fences non-SM C2S and MIX delivery before the transport writes, and confirms
+or acknowledges only after a successful write. BOSH retains its separate
+response fence. Broad session capabilities and transport-specific
+lifetime/cancellation paths still need separation.
 
 ### Phase E — Infrastructure ports
 
@@ -336,8 +343,13 @@ remain separate optional products. Cluster MUC maintenance now calls an
 injectable soft-state projection service for room join, exact occupant refresh
 and room reconciliation. It keeps PostgreSQL as the authority and classifies
 Redis failure or identity rejection without marking reconciliation ready.
-Other Redis call paths still need the same narrow capability and degradation
-review; these slices do not complete Phase E.
+Clustered C2S route renewal now has an injectable service boundary around the
+PostgreSQL authority check, exact Redis projection and compensating release.
+The release uses the instance epoch captured by the successful authority
+renewal; a lost route cancels only its matching local connection, while a Redis
+error stops the pass so readiness remains degraded. Other Redis call paths
+still need the same narrow capability and degradation review; these slices do
+not complete Phase E.
 
 ### Phase F — Final composition and release evidence
 

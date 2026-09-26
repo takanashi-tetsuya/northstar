@@ -3577,12 +3577,29 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
 const clusterSource = read('src/cluster.rs');
 const clusterMaintenance = structBody(clusterSource, 'async fn maintenance_once(');
 const clusterRedisMaintenance = structBody(clusterSource, 'struct ClusterMaintenanceRedis');
+const sessionRouteMaintenanceSource = read('src/services/session_route_maintenance.rs');
+const sessionRoutePort = structBody(sessionRouteMaintenanceSource, 'pub(crate) trait SessionRouteRenewalPort');
+const sessionRouteService = structBody(sessionRouteMaintenanceSource, 'impl<P: SessionRouteRenewalPort> SessionRouteRenewalService<P>');
+const sessionRouteRedisAdapter = structBody(clusterSource, 'impl crate::services::session_route_maintenance::SessionRouteRenewalPort');
+const sessionRouteRelease = structBody(clusterSource, 'async fn release_session_authority(');
 const mucSoftStatePort = structBody(mucServiceSource, 'pub(crate) trait MucSoftStateProjectionPort');
 const mucSoftStateService = structBody(mucServiceSource, 'impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P>');
 const mucRedisAdapter = structBody(clusterSource, 'impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
 if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || /\b(?:signer|pubsub|publisher|delivery_route)\s*:/.test(clusterRedisMaintenance)
-    || !/\bredis\s*\.\s*refresh_session\s*\(/.test(clusterMaintenance)
+    || !sessionRoutePort.includes('fn renew_authority(')
+    || !sessionRoutePort.includes('fn refresh_projection(')
+    || !sessionRoutePort.includes('fn release_authority(')
+    || !sessionRouteService.includes('.renew_authority(')
+    || !sessionRouteService.includes('.refresh_projection(')
+    || !sessionRouteService.includes('.release_authority(')
+    || !sessionRouteRedisAdapter.includes('self.renew_session_authority(full_jid, connection_id)')
+    || !sessionRouteRedisAdapter.includes('self.refresh_session_projection(full_jid, activity_age_seconds, connection_id)')
+    || !sessionRouteRedisAdapter.includes('self.release_session_authority(full_jid, connection_id, token)')
+    || !sessionRouteRelease.includes('} = token')
+    || /self\.instance_epoch\.load\(/.test(sessionRouteRelease)
+    || !clusterMaintenance.includes('context.session_routes.renew_all(sessions).await?')
+    || /\bredis\s*\.\s*refresh_session\s*\(/.test(clusterMaintenance)
     || !clusterMaintenance.includes('MucSoftStateProjectionService::new(redis)')
     || !/\bsoft_state\s*\.\s*refresh\s*\(/.test(clusterMaintenance)
     || !/\bsoft_state\s*\.\s*reconcile_room\s*\(/.test(clusterMaintenance)

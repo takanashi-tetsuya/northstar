@@ -1,6 +1,6 @@
 use super::{
-    admit_offline_then_push, OfflineAdmissionOutcome, OnlineMessageRouter, OnlineRoutePort,
-    OnlineRouteResult,
+    admit_offline_then_push, FullJidFallback, FullJidFallbackPort, FullJidFallbackResult,
+    OfflineAdmissionOutcome, OnlineMessageRouter, OnlineRoutePort, OnlineRouteResult,
 };
 use crate::outbound::DurableDelivery;
 use std::sync::{
@@ -8,9 +8,20 @@ use std::sync::{
     Mutex,
 };
 
+#[derive(Clone, Copy)]
+enum Privacy {
+    Allow,
+    Deny,
+    Error,
+}
+
+#[derive(Clone)]
 struct Target {
     name: &'static str,
     accepts: bool,
+    available: bool,
+    priority: i16,
+    privacy: Privacy,
 }
 
 struct RoutePort {
@@ -18,6 +29,7 @@ struct RoutePort {
     remote_primary_accepts: bool,
     remote_primary_key: Option<&'static str>,
     remote_available_accepts: bool,
+    fallback: Vec<(String, Target)>,
 }
 
 impl RoutePort {
@@ -27,6 +39,7 @@ impl RoutePort {
             remote_primary_accepts,
             remote_primary_key: None,
             remote_available_accepts,
+            fallback: Vec::new(),
         }
     }
 
@@ -72,8 +85,52 @@ impl OnlineRoutePort for RoutePort {
     }
 }
 
+impl FullJidFallbackPort for RoutePort {
+    fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
+        self.events.lock().unwrap().push(format!("lookup:{bare}"));
+        self.fallback.clone()
+    }
+
+    fn available_priority(&self, session: &Self::Session) -> Option<i16> {
+        (session.available && session.priority >= 0).then_some(session.priority)
+    }
+
+    fn priority(&self, session: &Self::Session) -> i16 {
+        session.priority
+    }
+
+    async fn privacy_allows_fallback(
+        &self,
+        session: &Self::Session,
+        _: &str,
+    ) -> anyhow::Result<bool> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("privacy:{}", session.name));
+        match session.privacy {
+            Privacy::Allow => Ok(true),
+            Privacy::Deny => Ok(false),
+            Privacy::Error => anyhow::bail!("injected privacy failure"),
+        }
+    }
+
+    fn post_accept_failed(&self) {
+        self.events.lock().unwrap().push("postacceptfailed".into());
+    }
+}
+
 fn target(name: &'static str, accepts: bool) -> (String, Target) {
-    (name.to_owned(), Target { name, accepts })
+    (
+        name.to_owned(),
+        Target {
+            name,
+            accepts,
+            available: true,
+            priority: 0,
+            privacy: Privacy::Allow,
+        },
+    )
 }
 
 fn durable_delivery() -> DurableDelivery {
@@ -82,6 +139,25 @@ fn durable_delivery() -> DurableDelivery {
         message_id: uuid::Uuid::new_v4(),
         claim_id: None,
     }
+}
+
+fn fallback_target(
+    name: &'static str,
+    priority: i16,
+    available: bool,
+    privacy: Privacy,
+    accepts: bool,
+) -> (String, Target) {
+    (
+        name.to_owned(),
+        Target {
+            name,
+            accepts,
+            available,
+            priority,
+            privacy,
+        },
+    )
 }
 
 #[tokio::test]
@@ -200,6 +276,234 @@ async fn legacy_remote_acceptance_without_resource_key_prevents_duplicate_fallba
         }
     );
     assert_eq!(port.events(), ["remote:primary"]);
+}
+
+#[tokio::test]
+async fn full_jid_chat_fallback_checks_privacy_before_priority_ordered_enqueue() {
+    let port = RoutePort {
+        fallback: vec![
+            fallback_target("alice@example.test/low", 1, true, Privacy::Allow, true),
+            fallback_target("alice@example.test/z", 5, true, Privacy::Allow, true),
+            fallback_target("alice@example.test/blocked", 7, true, Privacy::Deny, true),
+            fallback_target("alice@example.test/a", 5, true, Privacy::Allow, true),
+            fallback_target(
+                "alice@example.test/unavailable",
+                9,
+                false,
+                Privacy::Allow,
+                true,
+            ),
+            fallback_target(
+                "alice@example.test/negative",
+                -1,
+                true,
+                Privacy::Allow,
+                true,
+            ),
+        ],
+        ..RoutePort::new(true, false)
+    };
+    let outcome = OnlineMessageRouter::full_jid_fallback(
+        &port,
+        FullJidFallback {
+            message_type: "chat",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message/>",
+            delivery: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcome,
+        FullJidFallbackResult::Delivered(Some("alice@example.test/a".into()))
+    );
+    assert_eq!(
+        port.events(),
+        [
+            "lookup:alice@example.test",
+            "privacy:alice@example.test/blocked",
+            "privacy:alice@example.test/a",
+            "privacy:alice@example.test/z",
+            "privacy:alice@example.test/low",
+            "local:alice@example.test/a",
+            "accepted:false",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn committed_full_jid_chat_privacy_error_fails_closed_without_rejecting() {
+    let port = RoutePort {
+        fallback: vec![
+            fallback_target("alice@example.test/high", 5, true, Privacy::Error, true),
+            fallback_target("alice@example.test/low", 1, true, Privacy::Allow, true),
+        ],
+        ..RoutePort::new(false, false)
+    };
+    let outcome = OnlineMessageRouter::full_jid_fallback(
+        &port,
+        FullJidFallback {
+            message_type: "chat",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message/>",
+            delivery: Some(durable_delivery()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcome,
+        FullJidFallbackResult::Delivered(Some("alice@example.test/low".into()))
+    );
+    assert_eq!(
+        port.events(),
+        [
+            "lookup:alice@example.test",
+            "privacy:alice@example.test/high",
+            "postacceptfailed",
+            "privacy:alice@example.test/low",
+            "local:alice@example.test/low",
+            "accepted:true",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn volatile_full_jid_chat_privacy_error_prevents_any_fallback_enqueue() {
+    let port = RoutePort {
+        fallback: vec![
+            fallback_target("alice@example.test/high", 5, true, Privacy::Allow, true),
+            fallback_target("alice@example.test/low", 1, true, Privacy::Error, true),
+        ],
+        ..RoutePort::new(true, false)
+    };
+    assert!(OnlineMessageRouter::full_jid_fallback(
+        &port,
+        FullJidFallback {
+            message_type: "chat",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message/>",
+            delivery: None,
+        },
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        port.events(),
+        [
+            "lookup:alice@example.test",
+            "privacy:alice@example.test/high",
+            "privacy:alice@example.test/low",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn full_jid_mismatch_preserves_durable_recovery_and_volatile_rejection() {
+    let durable = RoutePort::new(true, false);
+    let outcome = OnlineMessageRouter::full_jid_fallback(
+        &durable,
+        FullJidFallback {
+            message_type: "normal",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message/>",
+            delivery: Some(durable_delivery()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, FullJidFallbackResult::Undelivered);
+    assert_eq!(durable.events(), ["postacceptfailed"]);
+
+    let volatile = RoutePort::new(true, false);
+    let outcome = OnlineMessageRouter::full_jid_fallback(
+        &volatile,
+        FullJidFallback {
+            message_type: "normal",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message/>",
+            delivery: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, FullJidFallbackResult::Rejected);
+    assert!(volatile.events().is_empty());
+}
+
+#[tokio::test]
+async fn full_jid_error_stanza_is_dropped_without_fallback_effects() {
+    let port = RoutePort::new(true, true);
+    let outcome = OnlineMessageRouter::full_jid_fallback(
+        &port,
+        FullJidFallback {
+            message_type: "error",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message type='error'/>",
+            delivery: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, FullJidFallbackResult::Dropped);
+    assert!(port.events().is_empty());
+}
+
+#[tokio::test]
+async fn full_jid_chat_queue_failure_tries_bare_remote_primary() {
+    let port = RoutePort {
+        fallback: vec![fallback_target(
+            "alice@example.test/full",
+            1,
+            true,
+            Privacy::Allow,
+            false,
+        )],
+        ..RoutePort::new(true, false)
+    };
+    let outcome = OnlineMessageRouter::full_jid_fallback(
+        &port,
+        FullJidFallback {
+            message_type: "chat",
+            full_target: "alice@example.test/gone",
+            bare_target: "alice@example.test",
+            sender: "bob@example.test/phone",
+            recipient_id: uuid::Uuid::nil(),
+            stanza: "<message/>",
+            delivery: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, FullJidFallbackResult::Delivered(None));
+    assert_eq!(
+        port.events(),
+        [
+            "lookup:alice@example.test",
+            "privacy:alice@example.test/full",
+            "local:alice@example.test/full",
+            "remote:primary",
+        ]
+    );
 }
 
 #[tokio::test]

@@ -7,6 +7,7 @@ use crate::services::node_message_contract_verifier::{
     NodeMessageContractVerifier, NodeMessageProjectionRepository, RequestedNodeMessageProjection,
     VerifiedNodeMessageProjection,
 };
+use crate::services::session_route_maintenance::SessionRouteAuthorityToken;
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use bb8::Pool;
@@ -2112,22 +2113,21 @@ impl ClusterMaintenanceRedis {
         Ok(())
     }
 
-    async fn refresh_session(
+    async fn renew_session_authority(
         &self,
         full_jid: &str,
-        activity_age_seconds: u64,
         connection_id: uuid::Uuid,
-    ) -> Result<bool> {
-        let (full_jid, bare) = session_route_keys(full_jid)?;
-        let Some(pool) = &self.pool else {
-            return Ok(true);
-        };
+    ) -> Result<Option<SessionRouteAuthorityToken>> {
+        let (full_jid, _) = session_route_keys(full_jid)?;
+        if self.pool.is_none() {
+            return Ok(Some(SessionRouteAuthorityToken::NoCluster));
+        }
         let authority_pool = self
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
         let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        if !crate::db::refresh_cluster_session_route(
+        let renewed = crate::db::refresh_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,
@@ -2137,10 +2137,22 @@ impl ClusterMaintenanceRedis {
             connection_id,
             Duration::from_secs(SESSION_TTL_SECONDS),
         )
-        .await?
-        {
-            return Ok(false);
-        }
+        .await?;
+        Ok(renewed.then_some(SessionRouteAuthorityToken::Exact {
+            owner_instance_epoch,
+        }))
+    }
+
+    async fn refresh_session_projection(
+        &self,
+        full_jid: &str,
+        activity_age_seconds: u64,
+        connection_id: uuid::Uuid,
+    ) -> Result<bool> {
+        let (full_jid, bare) = session_route_keys(full_jid)?;
+        let Some(pool) = &self.pool else {
+            return Ok(true);
+        };
         let mut conn = pool.get().await?;
         let full_key = self.key(format!("session:{full_jid}"));
         let bare_key = self.key(format!("user_sessions:{bare}"));
@@ -2171,36 +2183,45 @@ impl ClusterMaintenanceRedis {
             .arg(activity_age_seconds.min(SESSION_TTL_SECONDS))
             .arg(connection_id.to_string())
             .invoke_async::<i32>(&mut *conn)
-            .await;
-        match refreshed {
-            Ok(1) => Ok(true),
-            Ok(_) => {
-                let _ = crate::db::release_cluster_session_route(
-                    authority_pool,
-                    &self.namespace,
-                    &full_jid,
-                    &self.node_id,
-                    self.connection_uuid,
-                    owner_instance_epoch,
-                    connection_id,
-                )
-                .await;
-                Ok(false)
-            }
-            Err(error) => {
-                let _ = crate::db::release_cluster_session_route(
-                    authority_pool,
-                    &self.namespace,
-                    &full_jid,
-                    &self.node_id,
-                    self.connection_uuid,
-                    owner_instance_epoch,
-                    connection_id,
-                )
-                .await;
-                Err(error.into())
-            }
+            .await?;
+        Ok(refreshed == 1)
+    }
+
+    async fn release_session_authority(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        token: SessionRouteAuthorityToken,
+    ) -> Result<()> {
+        let (full_jid, _) = session_route_keys(full_jid)?;
+        if self.pool.is_none() {
+            anyhow::ensure!(
+                token == SessionRouteAuthorityToken::NoCluster,
+                "unexpected PostgreSQL session-route authority token without Redis"
+            );
+            return Ok(());
         }
+        let SessionRouteAuthorityToken::Exact {
+            owner_instance_epoch,
+        } = token
+        else {
+            anyhow::bail!("cluster session-route release lacks the original instance epoch");
+        };
+        let authority_pool = self
+            .authority_pool
+            .get()
+            .context("cluster session authority pool is unavailable")?;
+        crate::db::release_cluster_session_route(
+            authority_pool,
+            &self.namespace,
+            &full_jid,
+            &self.node_id,
+            self.connection_uuid,
+            owner_instance_epoch,
+            connection_id,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn reconcile_muc_soft_state(&self, room_jid: &str) -> Result<()> {
@@ -2323,6 +2344,38 @@ impl ClusterMaintenanceRedis {
             .invoke_async(&mut *conn)
             .await?;
         Ok(())
+    }
+}
+
+impl crate::services::session_route_maintenance::SessionRouteRenewalPort
+    for ClusterMaintenanceRedis
+{
+    async fn renew_authority(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> Result<Option<SessionRouteAuthorityToken>> {
+        self.renew_session_authority(full_jid, connection_id).await
+    }
+
+    async fn refresh_projection(
+        &self,
+        full_jid: &str,
+        activity_age_seconds: u64,
+        connection_id: uuid::Uuid,
+    ) -> Result<bool> {
+        self.refresh_session_projection(full_jid, activity_age_seconds, connection_id)
+            .await
+    }
+
+    async fn release_authority(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        token: SessionRouteAuthorityToken,
+    ) -> Result<()> {
+        self.release_session_authority(full_jid, connection_id, token)
+            .await
     }
 }
 
@@ -6686,22 +6739,19 @@ async fn maintenance_once(
         .await?;
     let _redis_timer = locals.redis_operation_timer();
     redis.touch_node().await?;
-    let sessions = locals.session_lease_snapshots();
-    for snapshot in sessions {
-        let full_jid = &snapshot.full_jid;
-        let connection_id = snapshot.connection_id;
-        if !redis
-            .refresh_session(full_jid, snapshot.activity_age_seconds, connection_id)
-            .await?
-        {
-            // Redis compares both node and immutable connection UUID. If a
-            // failover or newer bind owns this route, leaving the old local
-            // stream routable creates split brain. Disconnect it; its exact
-            // UUID-guarded unregister/Drop cannot erase the replacement.
-            tracing::warn!(%full_jid, %connection_id, "disconnecting local session that lost its Redis routing lease");
-            snapshot.disconnect.cancel();
-        }
-    }
+    let sessions = locals
+        .session_lease_snapshots()
+        .into_iter()
+        .map(
+            |snapshot| crate::services::session_route_maintenance::SessionRouteLease {
+                full_jid: snapshot.full_jid,
+                activity_age_seconds: snapshot.activity_age_seconds,
+                connection_id: snapshot.connection_id,
+                disconnect: snapshot.disconnect,
+            },
+        )
+        .collect();
+    context.session_routes.renew_all(sessions).await?;
     // PostgreSQL, not Redis, owns clustered MUC occupancy. Refresh the
     // complete node snapshot once, then require each local actor to match its
     // exact incarnation and connection fence. Redis is repopulated only as a

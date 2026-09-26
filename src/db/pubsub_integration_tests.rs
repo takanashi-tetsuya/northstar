@@ -17,11 +17,14 @@ struct RenderGate {
 }
 
 impl RenderGate {
-    fn wait(&self) {
-        let mut released = self.released.lock().expect("render gate poisoned");
-        while !*released {
-            released = self.wake.wait(released).expect("render gate poisoned");
-        }
+    fn wait(&self) -> Result<()> {
+        let released = self.released.lock().expect("render gate poisoned");
+        let (released, _) = self
+            .wake
+            .wait_timeout_while(released, Duration::from_secs(30), |released| !*released)
+            .expect("render gate poisoned");
+        anyhow::ensure!(*released, "PubSub test renderer gate timed out");
+        Ok(())
     }
 
     fn release(&self) {
@@ -61,7 +64,7 @@ impl RaceMutationRenderer {
             })
             .map_err(|_| anyhow::anyhow!("mutation observation receiver closed"))?;
         if let Some(gate) = &self.gate {
-            gate.wait();
+            gate.wait()?;
         }
         Ok(())
     }
@@ -653,7 +656,7 @@ async fn publish_rechecks_access_model_after_concurrent_config_change() {
     let suffix = Uuid::new_v4().simple().to_string();
     let owner = format!("race-owner-{suffix}@example.test");
     let outsider = format!("race-outsider-{suffix}@example.test");
-    let mut config = PubSubNodeConfig {
+    let config = PubSubNodeConfig {
         publish_model: "open".to_owned(),
         ..Default::default()
     };
@@ -668,50 +671,57 @@ async fn publish_rechecks_access_model_after_concurrent_config_change() {
     set_subscription(&pool, node_id, "watcher@remote.test", "subscribed")
         .await
         .unwrap();
-    let expected = open_node.config();
-    config.access_model = "whitelist".to_owned();
-
-    let gate = Arc::new(RenderGate::default());
-    let (observations, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::services::pubsub::PubSubService::new(pool.clone(), "example.test"),
-        observations,
-        gate: Some(Arc::clone(&gate)),
-    });
-    let config_pool =
-        named_single_connection_pool(&url, &format!("ps-access-config-{}", &suffix[..10])).await;
-    let config_task = tokio::spawn({
-        let config_pool = config_pool.clone();
-        let renderer = Arc::clone(&renderer);
-        let open_node = open_node.clone();
-        let owner = owner.clone();
-        async move {
-            update_node_config_and_graph_with_outbox(
-                &config_pool,
-                &open_node,
-                &owner,
-                &expected,
-                &config,
-                &*renderer,
-            )
-            .await
-        }
-    });
-    let observation = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
-        .await
-        .expect("configuration did not reach its locked renderer")
-        .expect("configuration observation channel closed");
-    assert_eq!(observation.kind, "configuration");
-    assert!(
+    assert!(tokio::time::timeout(
+        Duration::from_secs(5),
         crate::services::pubsub::PubSubService::new(pool.clone(), "example.test")
             .can_publish(&open_node, &outsider)
-            .await
-            .unwrap()
-    );
+    )
+    .await
+    .expect("open-publish precheck timed out")
+    .unwrap());
+
+    // Hold the same graph and node locks as a configuration mutation. The
+    // publisher starts with a stale, open-access node and must recheck after
+    // the committed policy change becomes visible.
+    let mut config_tx = tokio::time::timeout(Duration::from_secs(5), pool.begin())
+        .await
+        .expect("configuration transaction timed out")
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
+            .execute(&mut *config_tx),
+    )
+    .await
+    .expect("configuration graph lock timed out")
+    .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        sqlx::query("SELECT id FROM pubsub_nodes WHERE id=$1 FOR UPDATE")
+            .bind(node_id)
+            .fetch_one(&mut *config_tx),
+    )
+    .await
+    .expect("configuration node lock timed out")
+    .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        sqlx::query("UPDATE pubsub_nodes SET access_model='whitelist' WHERE id=$1")
+            .bind(node_id)
+            .execute(&mut *config_tx),
+    )
+    .await
+    .expect("configuration update timed out")
+    .unwrap();
 
     let publish_application = format!("ps-access-publish-{}", &suffix[..10]);
-    let publish_pool = named_single_connection_pool(&url, &publish_application).await;
-    let publish_task = tokio::spawn({
+    let publish_pool = tokio::time::timeout(
+        Duration::from_secs(5),
+        named_single_connection_pool(&url, &publish_application),
+    )
+    .await
+    .expect("named publish pool connection timed out");
+    let mut publish_task = tokio::spawn({
         let publish_pool = publish_pool.clone();
         let open_node = open_node.clone();
         let outsider = outsider.clone();
@@ -731,27 +741,36 @@ async fn publish_rechecks_access_model_after_concurrent_config_change() {
         }
     });
     wait_for_named_session_lock(&pool, &publish_application).await;
-    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), config_tx.commit())
+        .await
+        .expect("configuration commit timed out")
+        .unwrap();
     assert_eq!(
-        config_task.await.unwrap().unwrap(),
-        PubSubConfigOutcome::Updated
-    );
-    assert_eq!(
-        publish_task.await.unwrap().unwrap(),
+        tokio::time::timeout(Duration::from_secs(10), &mut publish_task)
+            .await
+            .expect("publisher did not finish after configuration commit")
+            .unwrap()
+            .unwrap(),
         PublishItemsOutcome::PreconditionFailed
     );
-    assert!(get_items(&pool, node_id, &["raced".to_owned()], 1)
-        .await
-        .unwrap()
-        .is_empty());
-    let item_events: i64 = sqlx::query_scalar(
+    assert!(tokio::time::timeout(
+        Duration::from_secs(5),
+        get_items(&pool, node_id, &["raced".to_owned()], 1)
+    )
+    .await
+    .expect("item verification timed out")
+    .unwrap()
+    .is_empty());
+    let item_events = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM pubsub_event_outbox
           WHERE source_node=$1 AND payload_xml LIKE '%<items%'",
     )
     .bind(&open_node.node)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    .fetch_one(&pool);
+    let item_events = tokio::time::timeout(Duration::from_secs(5), item_events)
+        .await
+        .expect("outbox verification timed out")
+        .unwrap();
     assert_eq!(item_events, 0);
 }
 

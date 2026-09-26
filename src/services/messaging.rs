@@ -85,6 +85,38 @@ pub(crate) trait OnlineRoutePort: Sync {
     ) -> impl Future<Output = OnlineRouteResult> + Send;
 }
 
+/// The exact-resource route is already gone. Fallback snapshots are separate
+/// because privacy failures after a durable commit cannot reject the stanza.
+pub(crate) trait FullJidFallbackPort: OnlineRoutePort {
+    fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)>;
+    fn available_priority(&self, session: &Self::Session) -> Option<i16>;
+    fn priority(&self, session: &Self::Session) -> i16;
+    fn privacy_allows_fallback(
+        &self,
+        session: &Self::Session,
+        sender: &str,
+    ) -> impl Future<Output = Result<bool>> + Send;
+    fn post_accept_failed(&self);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FullJidFallbackResult {
+    Dropped,
+    Rejected,
+    Undelivered,
+    Delivered(Option<String>),
+}
+
+pub(crate) struct FullJidFallback<'a> {
+    pub(crate) message_type: &'a str,
+    pub(crate) full_target: &'a str,
+    pub(crate) bare_target: &'a str,
+    pub(crate) sender: &'a str,
+    pub(crate) recipient_id: Uuid,
+    pub(crate) stanza: &'a str,
+    pub(crate) delivery: Option<DurableDelivery>,
+}
+
 pub(crate) struct OnlineMessageRouter;
 
 impl OnlineMessageRouter {
@@ -121,6 +153,82 @@ impl OnlineMessageRouter {
             result = port.route_remote_primary(jid, stanza, delivery).await;
         }
         result
+    }
+
+    /// RFC 6121 full-JID mismatch handling after the exact route declined.
+    /// Privacy for every candidate is checked before any fallback enqueue.
+    pub(crate) async fn full_jid_fallback<P: FullJidFallbackPort>(
+        port: &P,
+        request: FullJidFallback<'_>,
+    ) -> Result<FullJidFallbackResult> {
+        use northstar_message_core::{
+            durable_full_no_match_recovers, full_no_match_route, FullNoMatchRoute,
+        };
+        let FullJidFallback {
+            message_type,
+            full_target,
+            bare_target,
+            sender,
+            recipient_id,
+            stanza,
+            delivery,
+        } = request;
+
+        match full_no_match_route(message_type) {
+            FullNoMatchRoute::Ignore => return Ok(FullJidFallbackResult::Dropped),
+            FullNoMatchRoute::Reject
+                if durable_full_no_match_recovers(message_type, delivery.is_some()) =>
+            {
+                port.post_accept_failed();
+                tracing::warn!(
+                    %recipient_id,
+                    target = %full_target,
+                    "exact full-JID route disappeared after durable admission; resource-affine row remains replayable"
+                );
+                return Ok(FullJidFallbackResult::Undelivered);
+            }
+            FullNoMatchRoute::Reject => return Ok(FullJidFallbackResult::Rejected),
+            FullNoMatchRoute::FallbackChat => {}
+        }
+
+        let mut candidates = port.fallback_sessions(bare_target);
+        candidates.retain(|(_, session)| port.available_priority(session).is_some());
+        candidates.sort_by(|(left_jid, left), (right_jid, right)| {
+            port.priority(right)
+                .cmp(&port.priority(left))
+                .then_with(|| left_jid.cmp(right_jid))
+        });
+        let mut allowed = Vec::with_capacity(candidates.len());
+        for (key, session) in candidates {
+            match port.privacy_allows_fallback(&session, sender).await {
+                Ok(true) => allowed.push((key, session)),
+                Ok(false) => {}
+                Err(error) if delivery.is_some() => {
+                    port.post_accept_failed();
+                    tracing::warn!(
+                        ?error,
+                        target = %key,
+                        %recipient_id,
+                        "privacy policy failed closed during post-admission full-JID fallback"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        for (key, session) in allowed {
+            if port.try_local(&session, stanza.to_owned(), delivery) {
+                port.record_local_accept(delivery.is_some());
+                return Ok(FullJidFallbackResult::Delivered(Some(key)));
+            }
+        }
+        let remote = port
+            .route_remote_primary(bare_target, stanza, delivery)
+            .await;
+        if remote.delivered {
+            Ok(FullJidFallbackResult::Delivered(remote.accepted_full_jid))
+        } else {
+            Ok(FullJidFallbackResult::Undelivered)
+        }
     }
 }
 

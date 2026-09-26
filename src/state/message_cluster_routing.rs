@@ -2,12 +2,14 @@
 
 use super::{AppState, OnlineSession};
 use crate::outbound::DurableDelivery;
-use crate::services::messaging::{OnlineRoutePort, OnlineRouteResult};
+use crate::services::messaging::{FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult};
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
+use crate::services::privacy::PrivacyStanzaKind;
 use crate::xmpp::xml_util::carbon_message;
 use anyhow::Result;
+use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 impl OnlineRoutePort for AppState {
@@ -49,6 +51,33 @@ impl OnlineRoutePort for AppState {
     ) -> OnlineRouteResult {
         self.route_personal_message_to_remote_primary(jid, stanza, delivery)
             .await
+    }
+}
+
+impl FullJidFallbackPort for AppState {
+    fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
+        self.session_entries_for(bare)
+    }
+
+    fn available_priority(&self, session: &Self::Session) -> Option<i16> {
+        if !session.available.load(Ordering::Relaxed) {
+            return None;
+        }
+        let priority = session.priority.load(Ordering::Relaxed);
+        (priority >= 0).then_some(priority)
+    }
+
+    fn priority(&self, session: &Self::Session) -> i16 {
+        session.priority.load(Ordering::Relaxed)
+    }
+
+    async fn privacy_allows_fallback(&self, session: &Self::Session, sender: &str) -> Result<bool> {
+        self.privacy_allows_session(session, sender, PrivacyStanzaKind::Message)
+            .await
+    }
+
+    fn post_accept_failed(&self) {
+        self.personal_message_telemetry().post_accept_failed();
     }
 }
 

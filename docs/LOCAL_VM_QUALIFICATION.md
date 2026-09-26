@@ -53,6 +53,11 @@ only in lab guests, never in the host's general trust store.
    result, raw logs, configuration, metrics and reason for any exclusion.
    A failed run creates a fix and a new candidate; retest affected gates.
 
+The separate `local-vm-lab-active-load.py` drill requires a sealed soak and
+the same executable SHA-256 on both running nodes. Run it after finalizing a
+successful soak and before upgrading those nodes. A later candidate needs
+its own full soak before this drill can qualify its load behavior.
+
 An independent security review requires an independent reviewer even when
 the penetration test runs inside this lab. A second VM on the same physical
 host is not an off-site backup. Monal requires a compatible Apple device on

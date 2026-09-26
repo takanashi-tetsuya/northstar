@@ -105,6 +105,29 @@ async fn bounded_carbon_fanout(
     summary
 }
 
+/// An outbox wake is only a hint to process a row that has already committed.
+/// A failed or replayed admission must never send a new wake to the worker.
+async fn wake_federation_outbox_after_commit<F, W>(
+    commit: F,
+    wake: W,
+) -> Result<DurableAdmissionOutcome>
+where
+    F: Future<Output = Result<DurableAdmissionOutcome>>,
+    W: FnOnce(),
+{
+    let outcome = commit.await?;
+    if matches!(
+        outcome,
+        DurableAdmissionOutcome::Stored {
+            post_commit: MessagePostCommit::WakeFederationOutbox,
+            ..
+        }
+    ) {
+        wake();
+    }
+    Ok(outcome)
+}
+
 impl ProtocolSession {
     pub(crate) async fn message(
         &self,
@@ -557,17 +580,16 @@ impl ProtocolSession {
                         limits: self.state.federation_outbox().outbox_policy(),
                     }),
                 };
-                match self
-                    .state
-                    .message_service()
-                    .admit_personal_message(&admission)
-                    .await
+                match wake_federation_outbox_after_commit(
+                    self.state
+                        .message_service()
+                        .admit_personal_message(&admission),
+                    || self.state.federation_outbox().wake_outbox(),
+                )
+                .await
                 {
                     Ok(DurableAdmissionOutcome::Stored { post_commit, .. }) => {
                         debug_assert_eq!(post_commit, MessagePostCommit::WakeFederationOutbox);
-                        if post_commit == MessagePostCommit::WakeFederationOutbox {
-                            self.state.federation_outbox().wake_outbox();
-                        }
                     }
                     Ok(DurableAdmissionOutcome::Replay) => {
                         self.finalize_message_admission(
@@ -1828,8 +1850,9 @@ mod tests {
         carbon_resource_selected, direct_delivery_mode, durable_direct_delivery_allowed,
         durable_full_no_match_recovers, full_no_match_route, message_pow_intent_payload,
         missing_user_message_should_error, mixes_personal_retraction_and_direct_invite,
-        offline_storage_eligible, undelivered_disposition, BareMessageRoute, CarbonFanoutAttempt,
-        CarbonFanoutFuture, DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
+        offline_storage_eligible, undelivered_disposition, wake_federation_outbox_after_commit,
+        BareMessageRoute, CarbonFanoutAttempt, CarbonFanoutFuture, DirectDeliveryMode,
+        DurableAdmissionOutcome, FullNoMatchRoute, MessagePostCommit, UndeliveredDisposition,
     };
     use crate::{
         abuse::{AbuseAction, PowIntent},
@@ -1860,6 +1883,68 @@ mod tests {
             false,
             &[]
         ));
+    }
+
+    #[tokio::test]
+    async fn federation_outbox_wake_waits_for_durable_commit() {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let wake_count = Arc::clone(&wakes);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            wake_federation_outbox_after_commit(
+                async move {
+                    started_tx.send(()).unwrap();
+                    commit_rx.await.unwrap()
+                },
+                move || {
+                    wake_count.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await
+        });
+
+        started_rx.await.unwrap();
+        assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        commit_tx
+            .send(Ok(DurableAdmissionOutcome::Stored {
+                archive_written: true,
+                post_commit: MessagePostCommit::WakeFederationOutbox,
+            }))
+            .unwrap();
+        assert!(matches!(
+            task.await.unwrap().unwrap(),
+            DurableAdmissionOutcome::Stored { .. }
+        ));
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn federation_outbox_wake_ignores_failed_and_non_stored_commits() {
+        let wakes = AtomicUsize::new(0);
+        let outcomes = [
+            (Err(anyhow::anyhow!("injected commit failure")), true),
+            (Ok(DurableAdmissionOutcome::Replay), false),
+            (Ok(DurableAdmissionOutcome::AccountUnavailable), false),
+            (
+                Ok(DurableAdmissionOutcome::Stored {
+                    archive_written: false,
+                    post_commit: MessagePostCommit::RouteLocalDelivery {
+                        delivery_id: uuid::Uuid::nil(),
+                        recipient_id: uuid::Uuid::nil(),
+                    },
+                }),
+                false,
+            ),
+        ];
+        for (outcome, expected_error) in outcomes {
+            let result = wake_federation_outbox_after_commit(std::future::ready(outcome), || {
+                wakes.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+            assert_eq!(result.is_err(), expected_error);
+            assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]

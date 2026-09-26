@@ -653,7 +653,9 @@ keeps the previous TLS snapshot. Once its staple expires, that snapshot refuses
 new handshakes until a valid response is loaded. TLS session resumption is
 disabled while this strict profile is active so it cannot bypass the expiry
 check. Renew the local response before `nextUpdate`, then use the authenticated
-TLS reload. Mount the response file into the container if using Docker.
+TLS reload. For Compose, put the response in `certs/trust/server.ocsp.der` and
+set `TLS_OCSP_RESPONSE_PATH=certs/trust/server.ocsp.der`; that directory is
+mounted read-only in the container.
 Northstar does not fetch OCSP responses or certificate-supplied AIA URLs.
 This setting does not verify a remote S2S peer's OCSP staple.
 

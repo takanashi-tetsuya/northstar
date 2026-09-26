@@ -179,9 +179,11 @@ upload; that failure is preserved in `soak-24h.jsonl`. The restarted run
 spaces upload probes 90 minutes apart. No endurance result is claimed until
 the full duration and end-state metrics are reviewed. This traffic lacks MUC,
 OMEMO, MAM and mobile push, so a pass will still not close `EXT-CAPACITY`.
-These observations used source commit `58650079da8d21408ab6d027127796b7863ccf5c`
-and binary SHA-256
+The initial federation and cluster probes used source commit
+`58650079da8d21408ab6d027127796b7863ccf5c` and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.
+The corrected upload outage and ongoing soak use the later binary SHA-256
+`765b77ea843f36aedb6add525a8bae58ec5acc442c7a00998de54dce26546fe7`.
 The host keeps outputs in `/tmp/northstar-lab-evidence-5865007/`. These are
 exploratory until the scripts and binary are frozen together and the same
 cases rerun with raw logs.

@@ -697,10 +697,17 @@ caller. Service prechecks and the PostgreSQL transaction share subscription
 admission policy; the transaction still re-reads affiliation before commit.
 PEP node, item and subscription reads now have separate repository capabilities
 from their mutations. PEP access checks require only the node query capability,
-and the durable event/digest methods require the outbox capability rather than
-the aggregate PubSub repository. The command paths still use the aggregate
-capability; adapter consolidation and concurrent authority tests remain before
-C1 can be closed.
+and the durable event/digest methods require the outbox capability. PubSub and
+PEP commands require their respective query and mutation ports; the obsolete
+aggregate repository trait has been removed. Concurrent authority tests remain
+before C1 can be closed.
+Pure publish-option and payload admission now lives in the PubSub application
+crate; the service still checks authorization first for existing nodes before
+exposing policy errors. The apparent base/`with_renderer` pairs in
+`src/db/pubsub.rs` are test-only entry points over the production transaction
+functions. `src/db/pubsub_repository.rs` supplies the application port and
+error mapping, not a second SQL implementation, so merging those layers would
+remove a useful boundary without eliminating production queries.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for

@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
 
-//! Application-level PubSub mutation admission and concurrency gate.
-//!
-//! This crate owns only non-database backpressure behavior:
-//! owner-serialized mutation stripes, optional graph gate, and bounded
-//! wait semantics plus admission counters.
+//! PubSub commands, repository capabilities, publication policy and bounded
+//! mutation admission. Database transactions stay in the PostgreSQL adapter.
 
 use anyhow::{Error, Result};
 use northstar_pubsub_core::{
@@ -20,6 +17,8 @@ use northstar_pubsub_core::{
 };
 pub mod repository;
 pub use repository::*;
+mod publish_policy;
+pub use publish_policy::{existing_node_publish_admission_outcome, publish_validation_outcome};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};

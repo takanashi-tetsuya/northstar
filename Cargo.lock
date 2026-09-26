@@ -2095,6 +2095,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "northstar-pubsub-core",
+ "roxmltree",
  "tokio",
  "uuid",
 ]

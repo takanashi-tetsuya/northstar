@@ -4,7 +4,21 @@ use super::{
 };
 use anyhow::{Context, Result};
 use bb8::Pool;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Value};
+
+pub(super) fn redis_role_is_master(value: &Value) -> bool {
+    let Value::Array(fields) = value else {
+        return false;
+    };
+    if fields.len() < 3 {
+        return false;
+    }
+    match &fields[0] {
+        Value::BulkString(role) => role == b"master",
+        Value::SimpleString(role) => role == "master",
+        _ => false,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct RedisConnectionManager {
@@ -28,13 +42,15 @@ impl bb8::ManageConnection for RedisConnectionManager {
         &self,
         connection: &mut Self::Connection,
     ) -> std::result::Result<(), Self::Error> {
-        let pong: String = redis::cmd("PING").query_async(connection).await?;
-        if pong == "PONG" {
+        // bb8 checks this on each checkout. PING would also succeed on a
+        // demoted replica, which cannot serve the cluster's write protocol.
+        let role: Value = redis::cmd("ROLE").query_async(connection).await?;
+        if redis_role_is_master(&role) {
             Ok(())
         } else {
             Err((
                 redis::ErrorKind::Extension,
-                "Redis PING returned an invalid response",
+                "Redis endpoint is not a writable primary",
             )
                 .into())
         }
@@ -48,6 +64,7 @@ impl bb8::ManageConnection for RedisConnectionManager {
 pub(super) fn cluster_pool_builder<M: bb8::ManageConnection>() -> bb8::Builder<M> {
     Pool::<M>::builder()
         .max_size(CLUSTER_REDIS_POOL_MAX_SIZE)
+        .test_on_check_out(true)
         .connection_timeout(REDIS_IO_TIMEOUT)
         .retry_connection(false)
 }

@@ -20,11 +20,13 @@ file-only Ed25519 signing key, and an explicit peer public-key/command ACL file.
 TLS and Redis ACLs remain required deployment controls, but they are not treated
 as application authentication.
 
-The Redis command ACL must include `SCARD` within the cluster namespace, in
-addition to the existing set and publication commands. MUC routing checks at
-most 128 peer nodes plus the local node before reading the set; missing this
-read permission fails the routing operation. Keep the key and channel scopes
-restricted to the deployment namespace. The disposable fixture in
+The Redis command ACL must include `ROLE` and `SCARD`, in addition to the
+existing namespaced set and publication commands. The pool checks `ROLE` on
+each checkout and rejects a replica; it does not discover a promoted primary
+or prove that an old primary has lost write authority during a partition.
+MUC routing checks at most 128 peer nodes plus the local node before reading
+the set; missing this read permission fails the routing operation. Keep key
+and channel scopes restricted to the deployment namespace. The disposable fixture in
 `scripts/cluster-wsl.sh` checks that namespaced cardinality reads succeed while
 out-of-namespace reads and administrative commands remain denied.
 

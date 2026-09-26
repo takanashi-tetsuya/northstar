@@ -232,8 +232,10 @@ component-originated personal messages construct the same
 result. A capability-injected repository port owns the atomic PostgreSQL
 adapter, while the application library validates cross-adapter authority
 before invoking it. Local durable delivery and federation outbox remain
-distinct typed destinations and produce explicit post-commit plans. Remaining
-work is failure-injection coverage for provider execution and moving Carbon,
+distinct typed destinations and produce explicit post-commit plans. A
+failure-injection test now checks that a federation outbox wake occurs only
+after a stored commit, never on commit failure or replay. Remaining work is
+failure-injection coverage for the other provider effects and moving Carbon,
 Push and route execution out of the protocol adapter; the existing PostgreSQL
 atomic operations have deliberately not been split during this convergence.
 

@@ -951,6 +951,33 @@ impl bb8::ManageConnection for NeverConnectManager {
     }
 }
 
+#[test]
+fn redis_pool_checkout_accepts_only_a_master_role_response() {
+    use redis::Value;
+
+    assert!(pool::redis_role_is_master(&Value::Array(vec![
+        Value::BulkString(b"master".to_vec()),
+        Value::Int(0),
+        Value::Array(vec![]),
+    ])));
+    for response in [
+        Value::Array(vec![
+            Value::BulkString(b"slave".to_vec()),
+            Value::BulkString(b"primary.internal".to_vec()),
+            Value::Int(6379),
+        ]),
+        Value::Array(vec![
+            Value::SimpleString("sentinel".to_owned()),
+            Value::Array(vec![]),
+            Value::Array(vec![]),
+        ]),
+        Value::Array(vec![Value::BulkString(b"master".to_vec())]),
+        Value::SimpleString("master".to_owned()),
+    ] {
+        assert!(!pool::redis_role_is_master(&response));
+    }
+}
+
 #[tokio::test]
 async fn three_failed_cluster_pool_acquisitions_finish_inside_two_seconds() {
     let manager = NeverConnectManager::default();

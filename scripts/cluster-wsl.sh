@@ -209,7 +209,7 @@ save ""
 appendonly no
 protected-mode yes
 user default off
-user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +scard +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
+user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +role +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +scard +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
 EOF
 chmod 600 "$redis_tmp/redis.conf"
 
@@ -274,6 +274,9 @@ chmod 600 "$redis_tmp/redis.url"
 REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
   --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
   --user northstar -h localhost -p "$redis_required_tls_port" ping | grep -q PONG
+REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls --cacert "$redis_tmp/redis-ca.crt" \
+  --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
+  --user northstar -h localhost -p "$redis_required_tls_port" role | sed -n '1p' | grep -qx master
 REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
   --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
   --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \

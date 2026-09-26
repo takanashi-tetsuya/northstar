@@ -34,7 +34,7 @@ install -o root -g redis -m 640 \
   /etc/northstar-lab-pki/ca.pem /etc/northstar-lab-redis/ca.pem
 cat >/etc/northstar-lab-redis/users.acl <<ACL
 user default off
-user northstar on >$password ~northstar:ns-a.lab.test:* &northstar:ns-a.lab.test:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +scard +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
+user northstar on >$password ~northstar:ns-a.lab.test:* &northstar:ns-a.lab.test:* +ping +role +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +scard +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
 ACL
 chown root:redis /etc/northstar-lab-redis/users.acl
 chmod 640 /etc/northstar-lab-redis/users.acl
@@ -89,6 +89,11 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 [[ $ready == true ]] || { echo 'Redis mTLS endpoint did not become ready' >&2; exit 1; }
+role=$(REDISCLI_AUTH="$password" redis-cli --raw --tls \
+  --cacert /etc/northstar-lab-redis/ca.pem \
+  --cert /etc/northstar-lab-pki/infra.pem --key /etc/northstar-lab-pki/infra.key \
+  --sni infra.lab.test --user northstar -h "$infra_ip" -p 6379 role)
+[[ ${role%%$'\n'*} == master ]] || { echo 'Redis ACL denied ROLE or endpoint is not primary' >&2; exit 1; }
 allowed=$(REDISCLI_AUTH="$password" redis-cli --tls \
   --cacert /etc/northstar-lab-redis/ca.pem \
   --cert /etc/northstar-lab-pki/infra.pem --key /etc/northstar-lab-pki/infra.key \

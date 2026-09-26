@@ -730,6 +730,12 @@ hostname verification. `REDIS_TLS_CA_CERT_PATH` installs a bounded private CA;
 a pair when mTLS is required. URL fragments, insecure remote schemes and TLS
 files paired with a non-TLS URL are rejected at startup.
 
+Grant the Redis application ACL `+role` as well as the namespaced command set.
+The connection pool checks `ROLE` on every checkout and rejects a reachable
+replica. This check does not select a new primary; the endpoint remains the
+configured `REDIS_URL`, and a split-brain old primary can still report itself
+as writable. Keep cluster mode experimental until the failover gate is proven.
+
 TLS authenticates and encrypts the Redis connection; it does not authenticate
 the process which authored a Pub/Sub value and does not make Pub/Sub durable.
 Redis mode therefore also requires a stable `CLUSTER_NODE_ID`, a protected

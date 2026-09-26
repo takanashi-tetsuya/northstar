@@ -358,6 +358,16 @@ pub(crate) enum ClientTransport {
     Bosh,
 }
 
+/// Limits the owning transport can actually enforce on a native XML stream.
+/// HTTP binding leaves this absent because its request and inactivity limits
+/// are negotiated independently by XEP-0124.
+#[derive(Clone, Copy)]
+pub(crate) struct StreamLimits {
+    pub max_bytes: usize,
+    pub negotiation_idle: std::time::Duration,
+    pub authenticated_idle: std::time::Duration,
+}
+
 pub(crate) struct TlsSessionEvidence {
     pub channel_bindings: Option<crate::auth::ChannelBindings>,
     pub client_certificate_identities: Vec<String>,
@@ -365,29 +375,23 @@ pub(crate) struct TlsSessionEvidence {
     pub generation: u64,
 }
 
-fn client_stream_limits_feature(transport: ClientTransport, authenticated: bool) -> String {
-    match transport {
-        // BOSH has request-body overhead plus independently configurable
-        // request and inactivity bounds. Advertising the native-stream values
-        // would promise a stanza size or idle window that the HTTP binding may
-        // not accept, so XEP-0124 remains authoritative for this transport.
-        ClientTransport::Bosh => String::new(),
-        ClientTransport::Tcp | ClientTransport::WebSocket => {
-            XmlElement::namespaced("limits", "urn:xmpp:stream-limits:0")
-                .child(XmlElement::new("max-bytes").text(super::MAX_XMPP_FRAME_BYTES.to_string()))
-                .child(
-                    XmlElement::new("idle-seconds").text(
-                        if authenticated {
-                            super::C2S_AUTHENTICATED_IDLE_TIMEOUT.as_secs()
-                        } else {
-                            super::C2S_NEGOTIATION_IDLE_TIMEOUT.as_secs()
-                        }
-                        .to_string(),
-                    ),
-                )
-                .finish()
-        }
-    }
+fn client_stream_limits_feature(limits: Option<StreamLimits>, authenticated: bool) -> String {
+    let Some(limits) = limits else {
+        return String::new();
+    };
+    XmlElement::namespaced("limits", "urn:xmpp:stream-limits:0")
+        .child(XmlElement::new("max-bytes").text(limits.max_bytes.to_string()))
+        .child(
+            XmlElement::new("idle-seconds").text(
+                if authenticated {
+                    limits.authenticated_idle.as_secs()
+                } else {
+                    limits.negotiation_idle.as_secs()
+                }
+                .to_string(),
+            ),
+        )
+        .finish()
 }
 
 /// Ownership evidence survives a failed or cancelled database reply.
@@ -450,6 +454,7 @@ pub struct ProtocolSession {
     /// never used as an authentication bypass.
     secure_transport: bool,
     transport: ClientTransport,
+    stream_limits: Option<StreamLimits>,
     pub(crate) peer_ip: IpAddr,
     pub(crate) connected_at: std::time::Instant,
     pub(crate) last_activity: Arc<std::sync::RwLock<std::time::Instant>>,
@@ -573,6 +578,7 @@ impl ProtocolSession {
         outbound: crate::outbound::OutboundSender,
         secure_transport: bool,
         transport: ClientTransport,
+        stream_limits: Option<StreamLimits>,
         peer_ip: IpAddr,
     ) -> Self {
         Self {
@@ -580,6 +586,7 @@ impl ProtocolSession {
             outbound,
             secure_transport,
             transport,
+            stream_limits,
             peer_ip,
             connected_at: std::time::Instant::now(),
             last_activity: Arc::new(std::sync::RwLock::new(std::time::Instant::now())),
@@ -1107,7 +1114,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn features(&self) -> String {
-        let limits = client_stream_limits_feature(self.transport, self.authenticated.is_some());
+        let limits = client_stream_limits_feature(self.stream_limits, self.authenticated.is_some());
         if self.authenticated.is_some() {
             let mut features = stream_features_element();
             if self.full_jid.is_none() {
@@ -2032,8 +2039,8 @@ fn durable_delivery_managed_by_sm(
 mod legacy_sasl_wire_tests {
     use super::{
         client_stream_limits_feature, drop_requires_local_quiesce, durable_delivery_managed_by_sm,
-        legacy_sasl_auth, legacy_sasl_payload, resource_bind_deadline_for, Action, ClientTransport,
-        PostActionSupervisor, PostActionTelemetry, ResumePayload,
+        legacy_sasl_auth, legacy_sasl_payload, resource_bind_deadline_for, Action,
+        PostActionSupervisor, PostActionTelemetry, ResumePayload, StreamLimits,
     };
     use roxmltree::Document;
 
@@ -2191,21 +2198,21 @@ mod legacy_sasl_wire_tests {
     }
 
     #[test]
-    fn stream_limits_match_each_transport_and_authentication_phase() {
-        for transport in [ClientTransport::Tcp, ClientTransport::WebSocket] {
-            assert_eq!(
-                client_stream_limits_feature(transport, false),
-                "<limits xmlns='urn:xmpp:stream-limits:0'><max-bytes>1048576</max-bytes><idle-seconds>15</idle-seconds></limits>"
-            );
-            assert_eq!(
-                client_stream_limits_feature(transport, true),
-                "<limits xmlns='urn:xmpp:stream-limits:0'><max-bytes>1048576</max-bytes><idle-seconds>300</idle-seconds></limits>"
-            );
-        }
+    fn stream_limits_use_transport_supplied_policy() {
+        let limits = Some(StreamLimits {
+            max_bytes: 1024 * 1024,
+            negotiation_idle: std::time::Duration::from_secs(15),
+            authenticated_idle: std::time::Duration::from_secs(300),
+        });
         assert_eq!(
-            client_stream_limits_feature(ClientTransport::Bosh, true),
-            ""
+            client_stream_limits_feature(limits, false),
+            "<limits xmlns='urn:xmpp:stream-limits:0'><max-bytes>1048576</max-bytes><idle-seconds>15</idle-seconds></limits>"
         );
+        assert_eq!(
+            client_stream_limits_feature(limits, true),
+            "<limits xmlns='urn:xmpp:stream-limits:0'><max-bytes>1048576</max-bytes><idle-seconds>300</idle-seconds></limits>"
+        );
+        assert_eq!(client_stream_limits_feature(None, true), "");
     }
 
     fn resume_test_governor(

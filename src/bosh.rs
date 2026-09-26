@@ -277,6 +277,7 @@ impl BoshManager {
             crate::outbound::OutboundSender::new(outbound_tx),
             true,
             ClientTransport::Bosh,
+            None,
             peer_ip,
         );
         capture_bosh_stream(

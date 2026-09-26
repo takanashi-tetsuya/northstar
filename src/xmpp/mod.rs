@@ -37,6 +37,14 @@ const WEBSOCKET_TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const C2S_NEGOTIATION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) const C2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+fn native_stream_limits() -> protocol::StreamLimits {
+    protocol::StreamLimits {
+        max_bytes: MAX_XMPP_FRAME_BYTES,
+        negotiation_idle: C2S_NEGOTIATION_IDLE_TIMEOUT,
+        authenticated_idle: C2S_AUTHENTICATED_IDLE_TIMEOUT,
+    }
+}
+
 #[derive(Debug)]
 struct PeerIdleTracker {
     authenticated: bool,
@@ -237,6 +245,7 @@ async fn xmpps_tcp_connection(
         crate::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
+        Some(native_stream_limits()),
         peer.ip(),
     );
     session.activate_tls(tls_session_evidence(
@@ -270,6 +279,7 @@ async fn tcp_connection(
         crate::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
+        Some(native_stream_limits()),
         peer.ip(),
     );
     let transport = AssertUnwindSafe(async {
@@ -1027,6 +1037,7 @@ pub async fn websocket_connection(
         crate::outbound::OutboundSender::new(tx),
         true,
         protocol::ClientTransport::WebSocket,
+        Some(native_stream_limits()),
         peer_ip,
     );
     let mut framer = XmlEntityFramer::default();

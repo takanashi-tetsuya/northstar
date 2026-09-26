@@ -290,6 +290,9 @@ action executors, while BOSH retains its own RID and response fences. SM and
 CSI are private session substates, and secure-channel evidence is activated as
 one state transition. The remaining broad `ProtocolSession` capabilities and
 transport-specific lifetime/cancellation paths still need separation.
+Native stream-limit advertisement now receives the TCP/WebSocket frame and idle
+policy from those adapters; BOSH supplies no native limit advertisement and
+continues to negotiate its HTTP binding limits independently.
 
 ### Phase E — Infrastructure ports
 

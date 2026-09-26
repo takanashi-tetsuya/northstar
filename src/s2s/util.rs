@@ -337,7 +337,6 @@ fn supported_stream_version(version: &str) -> bool {
 pub(crate) struct S2sStreamOpening {
     pub from: String,
     pub to: String,
-    pub id: Option<String>,
 }
 
 pub(crate) fn parse_s2s_stream_opening(
@@ -406,17 +405,9 @@ pub(crate) fn parse_s2s_stream_opening(
     };
     let from = parse_domain("from")?;
     let to = parse_domain("to")?;
-    let id = root
-        .attribute("id")
-        .map(|value| {
-            if value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control) {
-                Err("invalid-id")
-            } else {
-                Ok(value.to_owned())
-            }
-        })
-        .transpose()?;
-    Ok(S2sStreamOpening { from, to, id })
+    // RFC 6120 §4.7.3 requires receivers to ignore an initiator's stream id,
+    // including an empty one.
+    Ok(S2sStreamOpening { from, to })
 }
 
 /// Recover only a syntactically safe initiating domain for the `to` attribute
@@ -546,7 +537,14 @@ mod stream_open_tests {
         .unwrap();
         assert_eq!(opening.from, "remote.test");
         assert_eq!(opening.to, "bücher.example");
-        assert_eq!(opening.id.as_deref(), Some("Opaque-ID"));
+        assert_eq!(
+            parse_s2s_stream_opening(
+                "<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server' from='a.test' to='b.test' id='' version='1.0'>"
+            )
+            .unwrap()
+            .from,
+            "a.test"
+        );
         for (invalid, condition) in [
             (
                 "<s:stream xmlns:s='http://etherx.jabber.org/streams' xmlns='jabber:server' from='a.test' to='b.test' version='1.0'>",

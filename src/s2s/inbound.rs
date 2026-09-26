@@ -153,6 +153,7 @@ async fn read_s2s_opening<S: AsyncRead + AsyncWrite + Unpin + Send>(
     let frame = match timed_read_frame(stream, input).await {
         Ok(frame) => frame,
         Err(error) => {
+            tracing::debug!(?error, "could not read initial S2S stream opening");
             if let Some(condition) = s2s_read_stream_error_condition(&error) {
                 let _ = send_initial_stream_error(stream, local_domain, None, condition).await;
             }
@@ -162,6 +163,7 @@ async fn read_s2s_opening<S: AsyncRead + AsyncWrite + Unpin + Send>(
     match parse_s2s_stream_opening(&frame) {
         Ok(opening) => Ok(Some(opening)),
         Err(condition) => {
+            tracing::debug!(%condition, "rejected initial S2S stream opening");
             let remote_domain = stream_opening_remote_domain(&frame);
             send_initial_stream_error(stream, local_domain, remote_domain.as_deref(), condition)
                 .await?;

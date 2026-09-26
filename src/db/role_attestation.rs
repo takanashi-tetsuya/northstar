@@ -1198,6 +1198,7 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
                ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
        ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
+               ('northstar_lock_auth_generation(uuid,int8)'),
        ('northstar_passkey_consume(uuid,text,bytea)'),
        ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
        ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)'),
@@ -1695,8 +1696,8 @@ mod tests {
         // The ledger has one intentional historical gap (0021).  Keep this
         // assertion exact so adding a migration requires reviewing both the
         // embedded capability manifest and its attestation expectation.
-        assert_eq!(manifest.versions.last(), Some(&149));
-        assert_eq!(manifest.versions.len(), 148);
+        assert_eq!(manifest.versions.last(), Some(&150));
+        assert_eq!(manifest.versions.len(), 149);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

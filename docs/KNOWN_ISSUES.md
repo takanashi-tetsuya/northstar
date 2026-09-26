@@ -1,7 +1,7 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-本文記錄 Northstar 的已知限制與驗收邊界。遷移鏈為 `0001`–`0149`，
-共 148 項，保留刻意缺號 `0021`。已解決問題見 [changelog](../CHANGELOG.md)。
+本文記錄 Northstar 的已知限制與驗收邊界。遷移鏈為 `0001`–`0150`，
+共 149 項，保留刻意缺號 `0021`。已解決問題見 [changelog](../CHANGELOG.md)。
 
 CI 验证隔离环境中的代码与运行行为；生产环境、公网互操作和独立安全审计
 需要各自的验收记录。手动测试方法见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
@@ -59,9 +59,10 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 | OPS-BACKUP-COMPAT | 回滾制品可能是明文，且保留 `development-legacy` 模式 | 維運取捨 | **仍需收緊** | 生產備份預設要求 Ed25519 簽名、age 加密及可信還原代際。還原使用停止寫入的窗口、私有 journal、資料庫 XID 與同交易標記。切換前註冊並核驗四個後端 PID：維護控制、目標協調、主替換與補償；封鎖新連線後，目標庫只允許後三個已登記 PID。`recover-restore.sh` 可在 `SIGKILL` 後核驗證據並繼續或補償。證據衝突、過舊而無法判定的 XID，或缺失的物件版本都會保留連線 fence。回滾目錄預設仍可能保存明文 dump 與物件 | 將回滾目錄放在加密儲存，離機保存密鑰與可信狀態，並在目標環境演練硬中斷復原；過舊 XID 的不確定情況仍須人工處理。相容期結束後移除 `development-legacy` |
 | EXT-CLUSTER | 集群、CLU-MUC、capacity ledger 和 shared storage 尚缺完整目标环境验收 | 仅缺运行证据 | **执行后可关闭证据项** | 隔离 PostgreSQL/Redis 回归已在下述源提交的常规 CI 中通过；非对称分区、lease loss、SM race、混合版本、managed Redis failover、S3/MinIO crash/restore 和 provider lifecycle 仍需完整目标环境矩阵 | 在固定 release commit 上完成隔离 PostgreSQL/Redis/MinIO、网络分区和 kill-point 矩阵，保存配置、日志、版本、结果和 RPO/RTO。完成前多节点仍为 `Experimental` |
 | EXT-CAPACITY | `1,000-session` 测试不是 1,000 名同时活跃用户的生产 SLA | 仅缺目标环境证据 | **目标硬件验收后可关闭证据项** | 现有脚本主要验证认证连接和调度，未完整模拟 initial presence、roster、MUC、OMEMO、MAM、upload、push 与 federation 混合负载 | 在目标 Linux 主机执行代表性账号/资源和业务混合、冷/热启动及 24–72 小时 soak，记录 CPU、RSS、FD、Tokio、PostgreSQL WAL/IOPS、网络和 p50/p95/p99；结论只适用于被测 commit/配置/硬件 |
-| EXT-FEDERATION | 公网 DNSSEC/SRV/TLSA、IPv4/IPv6、DANE、PKIX/本地 CRL 轮换和多个独立 peer 尚未形成当前 release 证据 | 外部环境＋仅缺运行证据 | **执行后可关闭证据项** | 本地 resolver、TLS policy 和 CRL 测试不能证明公共 DNS、CA 路径或第三方服务器行为；在线撤销能力缺口另由 `PROFILE-REVOCATION` 记录，不能用互操作测试代替实现 | 在公网 staging 对 Prosody/ejabberd/Openfire 等独立实现记录完整矩阵、DNS chain、证书指纹、版本、CRL reload/drain 和故障结果 |
+| EXT-FEDERATION | 隔離 VM 的基本雙向訊息與對端停機恢復已通過，完整聯邦矩陣仍未完成 | 僅缺實驗證據 | **完整本地矩陣通過後才可關閉** | 2026-09-26 在無公網路由的 VM 網路中，Northstar 分別與固定版本 Prosody、ejabberd 雙向送達訊息，重建 Northstar 節點後再次通過；兩個對端各自停機時保留出站佇列，重啟後送達。結果屬未凍結候選版本的探索性驗證，詳見 `LOCAL_VM_QUALIFICATION.md`。在線撤銷缺口另見 `PROFILE-REVOCATION` | 在固定提交上補齊 DNSSEC/SRV/TLSA、DANE、IPv4/IPv6、憑證輪換、失敗分支與重連，保存版本、設定、DNS 鏈與原始日誌。公網部署邊界另見 `DEPLOY-PUBLIC` |
+| DEPLOY-PUBLIC | 隔離 VM 實驗無法驗證公網部署 | 本輪刻意排除 | **不以本地實驗關閉** | 本地 DNSSEC、私有 CA 與虛擬網路不能證明公網 DNS 傳播、公共 CA 信任鏈、實際 IPv4/IPv6 路由或跨營運商故障行為 | 若日後需要宣稱公網生產資格，另行安排公網驗收；本輪只宣稱已測 VM 拓撲 |
 | EXT-COMPONENT | 真实第三方 external component/gateway 互操作证据不足 | 仅缺运行证据＋第三方差异 | **执行后可关闭证据项** | 2026-08-27 的 isolated strict mock peer 覆盖了本地 runtime 形状，但不能代替真实 XEP-0114 accept/connect 或 XEP-0225 component；标准缺少应用 ACK 的永久边界仍由 `STD-FINAL-ACK` 保留 | 使用固定版本的真实组件分别验证两种 XEP-0114 方向，以及 XEP-0225 STARTTLS、SASL、bind/unbind、重连、Northstar/component restart、背压、稳定 ID 重试和组件侧去重，并保存证据 |
-| EXT-CLIENT | 网页、Gajim 和其他原生客户端互操作证据不足 | 仅缺运行证据＋客户端差异 | **执行后可关闭证据项** | 现有人工证据只有一次未记录 Gajim 版本的 localhost 加密 MUC；Northstar browser transfer 仍需真实双浏览器、崩溃边界和 PostgreSQL race 验证。Conversations、Dino、Monal 等只属于标准 XMPP/OMEMO wire 互操作范围，不承诺导入其私有密钥或 ratchet 数据库 | 使用最终 release binary、可信公网 TLS、固定客户端版本，执行登录、OMEMO 单聊/群聊、多设备、trust、MAM、Carbons、CSI/SM 和重连矩阵；browser-to-browser transfer 单独执行迁移/崩溃测试。若将来要导入第三方私有状态，必须另建产品与密码学设计项 |
+| EXT-CLIENT | 網頁、Gajim 和其他原生客戶端互操作證據不足 | 僅缺運行證據＋客戶端差異 | **逐客戶端記錄結果** | 現有人工證據只有一次未記錄 Gajim 版本的 localhost 加密 MUC；Northstar browser transfer 仍需雙瀏覽器、崩潰邊界和 PostgreSQL race 驗證。一般客戶端互通不包含匯入私有 ratchet 資料庫 | 使用最終候選 binary、受信任的實驗室 CA 與固定客戶端版本，在 VM 網路執行登入、OMEMO、多設備、trust、MAM、Carbons、CSI/SM 與重連矩陣；另測 browser transfer。Conversations 需 Android VM；Monal 若沒有可接入隔離網路的 Apple 裝置，須明記未測 |
 | EXT-SECURITY | 尚无独立 RFC/XEP 审查、安全审计和渗透测试 | 外部资格 | **第三方完成后可关闭证据项** | 内部静态检查、单元测试和自审不能构成认证，也不能证明不存在未知漏洞 | 固定 release commit、binary digest、SBOM、部署拓扑和 threat model，委托独立方审查 XML/state machine、REST/WebSocket/BOSH/S2S/component、Redis/object store、浏览器密码学和权限模型。高风险公网部署前必须完成 |
 | EXT-OPERATIONS | 真实告警接收、升级/静默/恢复、离机备份和灾难恢复尚缺目标部署演练 | 外部运维证据 | **演练后可关闭证据项** | 仓库有 metrics、Prometheus rules、Grafana 和 runbook，但阈值与通知链没有目标流量基线；代码不能证明值班人员或备份目的地有效 | 完成通知演练、恢复演练、容量阈值校准和定期 restore drill，记录负责人、时间、RTO/RPO 和失败处置 |
 
@@ -80,7 +81,7 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 ## 发布解释
 
 - 当前没有记录为“已复现且尚未修复”的 P0/P1 代码漏洞；这不等于经过独立审计，也不等于生产资格已经完成。
-- 单节点模式不受 Redis 集群架构债务直接阻断，但仍必须完成目标硬件、备份恢复、证书、公网互操作、客户端和安全审计门禁后，才能作高风险公网生产声明。
+- 單節點模式不受 Redis 集群架構債務直接阻斷。隔離 VM 驗收只適用於被測拓撲；高風險公網生產聲明仍需另行驗證公網部署、離機備份、目標硬體、客戶端與獨立安全審查。
 - 多节点模式只有在 `EXT-CLUSTER` 关闭后才可考虑从 `Experimental` 晋升；通过基本两节点用例不足以证明共识或任意分区安全。
 - “标准限制”“刻意设计”和“平台限制”行不能因测试通过而删除，只能在产品不再支持对应协议/客户端形态，或底层标准和平台发生实质变化时重审。
 - `Partial`、`Pass-through` 和 `Experimental` 的逐协议范围以 [XEP_MATRIX.md](XEP_MATRIX.md) 为准；本表不重复宣称完整支持所有可选 XEP 行为。

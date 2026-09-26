@@ -1016,6 +1016,45 @@ bash scripts/reconcile-database-roles.sh --apply \
 MIGRATOR_DATABASE_URL_FILE="$migrator_url_file" \
   bash scripts/reconcile-database-grants.sh
 
+# Runtime cannot take a row lock on users directly. Its narrow generation
+# capability must hold the current transaction's lock and reject stale or
+# disabled accounts without giving runtime UPDATE on the account table.
+control_psql --dbname="$database_name" <<'PSQL'
+BEGIN;
+INSERT INTO users (id, username, password_hash)
+VALUES ('11111111-1111-4111-8111-111111111150',
+        'northstar_ci_generation_lock', 'ci-only-placeholder');
+SET LOCAL ROLE northstar_runtime;
+DO $check_generation_lock$
+BEGIN
+  IF NOT northstar_lock_auth_generation(
+      '11111111-1111-4111-8111-111111111150', 0) THEN
+    RAISE EXCEPTION 'runtime generation lock rejected an enabled account';
+  END IF;
+  IF northstar_lock_auth_generation(
+      '11111111-1111-4111-8111-111111111150', 1) THEN
+    RAISE EXCEPTION 'runtime generation lock accepted a stale generation';
+  END IF;
+  IF pg_catalog.has_table_privilege('northstar_runtime', 'users', 'UPDATE') THEN
+    RAISE EXCEPTION 'runtime acquired direct account mutation rights';
+  END IF;
+END;
+$check_generation_lock$;
+RESET ROLE;
+UPDATE users SET is_disabled = TRUE
+WHERE id = '11111111-1111-4111-8111-111111111150';
+SET LOCAL ROLE northstar_runtime;
+DO $check_disabled_generation_lock$
+BEGIN
+  IF northstar_lock_auth_generation(
+      '11111111-1111-4111-8111-111111111150', 0) THEN
+    RAISE EXCEPTION 'runtime generation lock accepted a disabled account';
+  END IF;
+END;
+$check_disabled_generation_lock$;
+ROLLBACK;
+PSQL
+
 protected_membership_removed=$(control_psql --dbname="$database_name" \
   --tuples-only --no-align <<'PSQL'
 SELECT NOT EXISTS (

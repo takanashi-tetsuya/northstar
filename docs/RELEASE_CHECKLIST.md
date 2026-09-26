@@ -175,9 +175,12 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   and runtime, storage and command roles cannot access them. Confirm storage
   cutover requires stopped nodes
   and drained upload work; backup must reject an active migration run.
+- [ ] Apply migration `0150` and reconcile grants before starting runtime
+  nodes. Verify the runtime role can lock a current enabled account generation
+  through `northstar_lock_auth_generation` but cannot update `users` directly.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 148 migrations from `0001` through the current
-  repository maximum `0149`, with `0021` as the sole intentional gap.
+  identity and verify all 149 migrations from `0001` through the current
+  repository maximum `0150`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

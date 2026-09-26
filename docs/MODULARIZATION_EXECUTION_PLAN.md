@@ -777,26 +777,34 @@ advertising support. See [RFC 6960](https://www.rfc-editor.org/rfc/rfc6960),
 [RFC 6066](https://www.rfc-editor.org/rfc/rfc6066) and
 [RFC 7673](https://www.rfc-editor.org/rfc/rfc7673).
 
-### 8.2 External qualification on a frozen release candidate
+### 8.2 Isolated VM qualification on a frozen release candidate
 
 Freeze the candidate commit and record the binary/container digest, schema,
 configuration, topology, dependency/client versions and raw logs for every
 run. Set pass thresholds and RPO/RTO targets before running tests. A failure
 creates a code or operations packet, followed by a new candidate and a rerun
-of affected gates. Close each of the seven existing evidence rows individually:
+of affected gates. Run the federation and infrastructure tests on an isolated
+libvirt network with no route to the public Internet. Use separate VMs for
+Northstar nodes and independently implemented XMPP peers; two Northstar VMs
+alone do not establish interoperability. The lab layout and evidence format
+are in [LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md). Close each of
+the seven existing evidence rows only for the tested lab profile:
 
 | Gate | Required target-environment evidence |
 | --- | --- |
 | `EXT-CLUSTER` | PostgreSQL, Redis and S3/MinIO multi-node tests with asymmetric partition, failover, lease loss, rolling upgrade and hard-kill; verify MUC occupancy, presence, delivery and measured RPO/RTO. Keep multi-node `Experimental` until this passes. |
-| `EXT-FEDERATION` | Public staging DNSSEC/SRV/TLSA, PKIX/DANE, IPv4/IPv6 and bidirectional S2S with fixed Prosody/ejabberd versions; record certificate rotation and negative cases. |
+| `EXT-FEDERATION` | In isolated VMs, run an authoritative DNSSEC/SRV/TLSA zone, an IPv4/IPv6 network and a lab PKI; test PKIX/DANE and bidirectional S2S against fixed Prosody and ejabberd versions, including certificate rotation and negative cases. |
 | `EXT-COMPONENT` | Real XEP-0114 accept/connect and XEP-0225 peers; exercise STARTTLS where applicable, restart, backpressure, retries and duplicate boundaries. |
-| `EXT-CLIENT` | Fixed Gajim, Conversations, Dino and Monal versions plus browser clients; check supported login, OMEMO 2/trust, Carbons, CSI/SM and MAM with explicit expected deviations. |
-| `EXT-OPERATIONS` | Alert delivery/on-call, off-site encrypted backup, restore, upgrade and rollback drills with named operators and measured recovery times. |
-| `EXT-CAPACITY` | Representative presence, OMEMO, MUC, MAM, upload, Push and S2S workload on target hardware, including 24–72 hour soak; capture RSS, queue lag, database WAL/IOPS, p95/p99 and saturation limits. |
-| `EXT-SECURITY` | Independent review and penetration test of the frozen candidate, threat model, privileges, browser crypto and exposed protocols; triage and retest findings. |
+| `EXT-CLIENT` | Run fixed browser, Gajim and Dino versions on the lab network with a trusted lab CA. Run Conversations in an Android VM if available. Record Monal as untested until an Apple device can join the isolated network; check supported login, OMEMO 2/trust, Carbons, CSI/SM and MAM with explicit deviations. |
+| `EXT-OPERATIONS` | Exercise alert delivery, encrypted backup, restore, upgrade and rollback in the lab with named operators and measured recovery times. A backup on another VM on the same host is not off-site evidence. |
+| `EXT-CAPACITY` | Run representative presence, OMEMO, MUC, MAM, upload, Push and S2S workloads in the lab, including a 24–72 hour soak; capture RSS, queue lag, database WAL/IOPS, p95/p99 and saturation limits. Qualify only this host and VM allocation. |
+| `EXT-SECURITY` | Give an independent reviewer the frozen candidate, threat model, privileges, browser crypto and exposed protocol topology for review and a lab penetration test; triage and retest findings. Internal tests do not close this gate. |
 
-These gates qualify only the tested topology and feature profile. Closure of
-all seven does not silently close separate product gaps such as
+These gates qualify only the tested VM topology and feature profile. The lab
+does not validate public DNS propagation, public CA issuance, Internet routing
+or real off-site disaster independence. Record these as untested deployment
+boundaries, not as failed lab tests or completed production evidence. Closure
+of all seven does not silently close separate product gaps such as
 `PROFILE-REVOCATION`, `SUPPLY-WASM`, `OPS-BACKUP-COMPAT` or provider-specific S3
 limits. A production-readiness claim must name its supported deployment mode
 and remaining exceptions.

@@ -176,6 +176,19 @@ before starting the server.
 
 ## Isolated database/runtime families
 
+- `local-vm-lab-network.sh`, `local-vm-lab-guest.sh`,
+  `local-vm-lab-install-package.sh`, `local-vm-lab-dns.sh`,
+  `local-vm-lab-client-dns.sh`, `local-vm-lab-certs.sh`,
+  `local-vm-lab-database.sh`, `local-vm-lab-node.sh`,
+  `local-vm-lab-peers.sh`, `local-vm-lab-preflight.sh` and
+  `local-vm-lab-federation.py`, `local-vm-lab-peer-recovery.sh`: create and check the non-forwarding libvirt
+  network, checksum-pinned Debian guests, signed lab DNS zone, lab PKI,
+  PostgreSQL roles and standalone server, then send bidirectional messages
+  to fixed Prosody and ejabberd peers. See
+  [the VM qualification guide](../docs/LOCAL_VM_QUALIFICATION.md) for the
+  sequence and evidence limits. The guest helper requires a lab-only SSH
+  public key and leaves existing VMs untouched. Package installation uses a
+  temporary NAT interface that is removed before qualification.
 - `*-db-wsl.sh`: PostgreSQL-backed domain invariants using an isolated database
   or random schema.
 - `integration-wsl.*`: broad C2S/REST/XMPP integration.

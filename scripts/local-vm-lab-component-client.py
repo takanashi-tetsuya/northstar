@@ -12,9 +12,55 @@ import pathlib
 import re
 import secrets
 import time
+import xml.etree.ElementTree as ET
 
 
-ECHO = re.compile(r"northstar-component-echo:(component-lab-[0-9a-f]{16,64})")
+CLIENT_NS = "jabber:client"
+ECHO = re.compile(r"northstar-component-echo:(component-lab-[0-9a-f]{16,64})\Z")
+
+
+def component_echo(frame: str, component_domain: str) -> str | None:
+    """Accept only a reply in the direct body of the configured component."""
+    root = ET.fromstring(frame)
+    if root.tag not in ("message", f"{{{CLIENT_NS}}}message"):
+        return None
+    if root.get("type") == "error":
+        raise ValueError("component message returned an XMPP error")
+    bodies = [child for child in root if child.tag in ("body", f"{{{CLIENT_NS}}}body")]
+    if len(bodies) != 1 or len(bodies[0]) != 0:
+        return None
+    body = bodies[0].text or ""
+    match = ECHO.fullmatch(body)
+    if match is None:
+        return None
+    if root.get("from") != f"echo@{component_domain}":
+        raise ValueError("component echo sender was not the configured domain")
+    return match.group(1)
+
+
+def self_test() -> None:
+    domain = "gateway.ns-a.lab.test"
+    marker = "component-lab-0123456789abcdef"
+    valid = (
+        f"<message xmlns='{CLIENT_NS}' from='echo@{domain}' type='chat'>"
+        f"<body>northstar-component-echo:{marker}</body></message>"
+    )
+    assert component_echo(valid, domain) == marker
+    assert component_echo(valid.replace("<body>", "<subject>").replace("</body>", "</subject>"), domain) is None
+    assert component_echo(f"<iq xmlns='{CLIENT_NS}' id='{marker}'/>", domain) is None
+    assert component_echo(valid.replace(f"{marker}</body>", f"{marker}suffix</body>"), domain) is None
+    assert component_echo(valid.replace("</body>", "<extra/></body>"), domain) is None
+    for bad in (
+        valid.replace(f"echo@{domain}'", "echo@forged.lab.test'"),
+        valid.replace("type='chat'", "type='error'"),
+    ):
+        try:
+            component_echo(bad, domain)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid component echo was accepted")
+    print("XEP-0114 C2S observer parser self-test passed")
 
 
 def main() -> None:
@@ -22,13 +68,19 @@ def main() -> None:
     parser.add_argument("--component-domain", default="gateway.ns-a.lab.test")
     parser.add_argument("--server-domain", default="ns-a.lab.test")
     parser.add_argument("--username", default="alice")
-    parser.add_argument("--password-file", type=pathlib.Path, required=True)
-    parser.add_argument("--fixture", type=pathlib.Path, required=True)
+    parser.add_argument("--password-file", type=pathlib.Path)
+    parser.add_argument("--fixture", type=pathlib.Path)
     parser.add_argument("--http-port", type=int, default=8080)
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=120)
-    parser.add_argument("--events", type=pathlib.Path, required=True)
+    parser.add_argument("--events", type=pathlib.Path)
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return
+    if args.password_file is None or args.fixture is None or args.events is None:
+        parser.error("--password-file, --fixture and --events are required")
     if not 1 <= args.count <= 64 or not 1 <= args.timeout <= 300:
         parser.error("count must be 1..64 and timeout 1..300 seconds")
     domain_pattern = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
@@ -93,19 +145,16 @@ def main() -> None:
                 continue
             if len(frame) > 1024 * 1024:
                 raise RuntimeError("component reply exceeded 1 MiB")
-            match = ECHO.search(frame)
-            if match is None:
-                if "type='error'" in frame or 'type="error"' in frame:
-                    record("error", frame=frame)
-                    raise RuntimeError("component message returned an XMPP error")
+            try:
+                marker = component_echo(frame, args.component_domain)
+            except ValueError as error:
+                record("invalid_reply", error=str(error), frame=frame)
+                raise
+            if marker is None:
                 continue
-            marker = match.group(1)
             if marker not in pending:
                 record("unexpected_or_duplicate_reply", marker=marker, frame=frame)
                 raise RuntimeError("unexpected or duplicate component echo")
-            if f"from='echo@{args.component_domain}'" not in frame and f'from="echo@{args.component_domain}"' not in frame:
-                record("wrong_sender", marker=marker, frame=frame)
-                raise RuntimeError("component echo sender was not the configured domain")
             pending.remove(marker)
             record("received", marker=marker, frame=frame)
         print(json.dumps({"status": "passed", "count": len(markers), "events": str(args.events)}))

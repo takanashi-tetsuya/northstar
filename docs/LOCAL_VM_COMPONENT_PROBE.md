@@ -61,6 +61,7 @@ second `ns-a` shell, send one marker through a real XMPP client connection:
 
 ```sh
 cd /home/lab/northstar
+python3 local-vm-lab-component-client.py --self-test
 python3 local-vm-lab-component-client.py \
   --component-domain gateway.ns-a.lab.test \
   --password-file /home/lab/northstar/secrets/prosody-test-password \
@@ -69,7 +70,9 @@ python3 local-vm-lab-component-client.py \
 ```
 
 The client must receive the matching echo from
-`echo@gateway.ns-a.lab.test`. Retain both JSONL files, the SQLite ledger,
+`echo@gateway.ns-a.lab.test`. The observer accepts the marker only in the
+direct message body from that exact sender; a matching string elsewhere in
+the XML is not delivery evidence. Retain both JSONL files, the SQLite ledger,
 Northstar logs, the exact component configuration with secret values redacted,
 binary and package hashes, UTC start/end times, and preflight output. Use a
 different secret on a separate run and require authentication to fail before

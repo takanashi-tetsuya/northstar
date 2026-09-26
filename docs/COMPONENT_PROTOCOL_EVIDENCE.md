@@ -102,7 +102,9 @@ and left zero `component_runtime_%` PostgreSQL schemas.
 
 The isolated-VM [third-party component probe](LOCAL_VM_COMPONENT_PROBE.md)
 defines the Slixmpp XEP-0114 accept run and Prosody connect handshake run.
-It has not yet been executed on a frozen lab candidate.
+The Slixmpp accept run passed on the frozen `3dc7f966` lab candidate; the
+bounded result is recorded in [local VM qualification](LOCAL_VM_QUALIFICATION.md).
+The Prosody connect run and independent XEP-0225 run remain open.
 
 - XEP-0114 remains a plaintext shared-secret protocol even though both of its
   historical connection directions are implemented.

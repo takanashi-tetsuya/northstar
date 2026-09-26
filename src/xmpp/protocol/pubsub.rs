@@ -5,14 +5,14 @@ use crate::services::pubsub::{
     LeafDiscoItems, OwnerMutationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
     PubSubConfigureNodeWrite, PubSubCreateNodeCommand, PubSubCreateNodeWrite,
     PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubListPageQuery, PubSubNode,
-    PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
-    PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
-    PubSubRetractWrite, PubSubRootDiscoQuery, PubSubSetAffiliationsCommand,
-    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
-    PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
-    PubSubSubscriptionOptions, PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome,
-    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-    SubscriptionOptionsOutcome,
+    PubSubNodeConfig, PubSubOwnerRead, PubSubOwnerReadKind, PubSubPublishCommand,
+    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite,
+    PubSubRetractCommand, PubSubRetractOutcome, PubSubRetractWrite, PubSubRootDiscoQuery,
+    PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand,
+    PubSubSetSubscriptionsWrite, PubSubSubscribeCommand, PubSubSubscribeOutcome,
+    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeCommand,
+    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
+    SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
@@ -1550,32 +1550,32 @@ async fn handle_owner_get(
         Ok(node) => node,
         Err(reply) => return Ok(reply),
     };
-    let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-        return missing_node_reply(state, node_name).await;
+    let name = operation.tag_name().name();
+    let valid_body = has_only_attributes(operation, &["node"]) && has_no_element_content(operation);
+    let kind = if valid_body {
+        match name {
+            "configure" => PubSubOwnerReadKind::Configure,
+            "subscriptions" => PubSubOwnerReadKind::Subscriptions,
+            "affiliations" => PubSubOwnerReadKind::Affiliations,
+            _ => PubSubOwnerReadKind::CheckOnly,
+        }
+    } else {
+        PubSubOwnerReadKind::CheckOnly
     };
-    if !is_owner(state, node.id, &requester).await? {
-        return Ok(PubSubReply::Error("forbidden"));
+    let snapshot = match state
+        .pubsub_service()
+        .owner_read(node_name, &requester, kind)
+        .await?
+    {
+        PubSubOwnerRead::Missing => return missing_node_reply(state, node_name).await,
+        PubSubOwnerRead::Forbidden => return Ok(PubSubReply::Error("forbidden")),
+        snapshot => snapshot,
+    };
+    if !valid_body && matches!(name, "configure" | "subscriptions" | "affiliations") {
+        return Ok(PubSubReply::Error("bad-request"));
     }
-    match operation.tag_name().name() {
-        "configure" => {
-            if !has_only_attributes(operation, &["node"]) || !has_no_element_content(operation) {
-                return Ok(PubSubReply::Error("bad-request"));
-            }
-            let mut config = node.config();
-            config.collections = state
-                .pubsub_service()
-                .collection_parents(node.id)
-                .await?
-                .into_iter()
-                .map(|node| node.node)
-                .collect();
-            config.children = state
-                .pubsub_service()
-                .collection_children(node.id)
-                .await?
-                .into_iter()
-                .map(|node| node.node)
-                .collect();
+    match snapshot {
+        PubSubOwnerRead::Configure(config) => {
             let form = node_config_form(&config, "form");
             let mut configure = XmlElement::new("configure").attr("node", node_name);
             configure.push_validated_fragment(&form)?;
@@ -1585,11 +1585,7 @@ async fn handle_owner_get(
                     .finish(),
             ))
         }
-        "subscriptions" => {
-            if !has_only_attributes(operation, &["node"]) || !has_no_element_content(operation) {
-                return Ok(PubSubReply::Error("bad-request"));
-            }
-            let subscriptions = state.pubsub_service().node_subscriptions(node.id).await?;
+        PubSubOwnerRead::Subscriptions(subscriptions) => {
             let mut entries = XmlElement::new("subscriptions").attr("node", node_name);
             for subscription in &subscriptions {
                 entries.push_child(
@@ -1609,11 +1605,7 @@ async fn handle_owner_get(
                     .finish(),
             ))
         }
-        "affiliations" => {
-            if !has_only_attributes(operation, &["node"]) || !has_no_element_content(operation) {
-                return Ok(PubSubReply::Error("bad-request"));
-            }
-            let affiliations = state.pubsub_service().node_affiliations(node.id).await?;
+        PubSubOwnerRead::Affiliations(affiliations) => {
             let mut entries = XmlElement::new("affiliations").attr("node", node_name);
             for affiliation in &affiliations {
                 entries.push_child(
@@ -1628,7 +1620,10 @@ async fn handle_owner_get(
                     .finish(),
             ))
         }
-        _ => Ok(PubSubReply::Error("feature-not-implemented")),
+        PubSubOwnerRead::Authorized => Ok(PubSubReply::Error("feature-not-implemented")),
+        PubSubOwnerRead::Missing | PubSubOwnerRead::Forbidden => Err(anyhow::anyhow!(
+            "PubSub owner read returned an inconsistent result"
+        )),
     }
 }
 

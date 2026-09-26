@@ -25,12 +25,12 @@ pub(crate) use northstar_pubsub_application::{
     PubSubCollectionDiscoSnapshot, PubSubConfigureNodeCommand, PubSubConfigureNodeResult,
     PubSubCreateNodeCommand, PubSubCreateNodeResult, PubSubDeleteNodeCommand,
     PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
-    PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
-    PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand,
-    PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,
-    PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult,
-    PubSubSubscribeCommand, PubSubSubscribeResult, PubSubUnsubscribeCommand,
-    PubSubUnsubscribeResult,
+    PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubOwnerRead, PubSubOwnerReadKind,
+    PubSubPublishCommand, PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult,
+    PubSubRetractCommand, PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult,
+    PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand,
+    PubSubSetSubscriptionsResult, PubSubSubscribeCommand, PubSubSubscribeResult,
+    PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
 };
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 pub(crate) use northstar_pubsub_core::{
@@ -1338,6 +1338,15 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 }
 
 impl<R: PubSubNodeQueryRepository> PubSubService<R> {
+    pub(crate) async fn owner_read(
+        &self,
+        node: &str,
+        requester: &str,
+        kind: PubSubOwnerReadKind,
+    ) -> Result<PubSubOwnerRead> {
+        self.repository.owner_read(node, requester, kind).await
+    }
+
     pub(crate) async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
         self.repository.get_node(node).await
     }
@@ -1388,10 +1397,6 @@ impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
     ) -> Result<Vec<PubSubAffiliation>> {
         self.repository.affiliations_for_jid(jid, node).await
     }
-
-    pub(crate) async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
-        self.repository.node_affiliations(node_id).await
-    }
 }
 
 impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
@@ -1416,13 +1421,6 @@ impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
         self.repository
             .subscriptions_addressing_jid_page(jid, after, limit)
             .await
-    }
-
-    pub(crate) async fn node_subscriptions(
-        &self,
-        node_id: Uuid,
-    ) -> Result<Vec<PubSubSubscription>> {
-        self.repository.node_subscriptions(node_id).await
     }
 
     pub(crate) async fn get_subscription(

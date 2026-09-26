@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_pubsub_application::{PubSubOwnerRead, PubSubOwnerReadKind};
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -471,6 +472,14 @@ pub struct PubSubAffiliation {
     pub node: String,
     pub jid: String,
     pub affiliation: String,
+}
+
+fn row_to_affiliation(row: &sqlx::postgres::PgRow) -> PubSubAffiliation {
+    PubSubAffiliation {
+        node: row.get("node"),
+        jid: row.get("jid"),
+        affiliation: row.get("affiliation"),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1238,32 +1247,86 @@ pub async fn get_node(pool: &PgPool, node: &str) -> Result<Option<PubSubNode>> {
         .fetch_optional(pool)
         .await?;
 
-    Ok(row.map(|row| PubSubNode {
-        id: row.get("id"),
-        node: row.get("node"),
-        creator_jid: row.get("creator_jid"),
-        access_model: row.get("access_model"),
-        publish_model: row.get("publish_model"),
-        max_items: row.get("max_items"),
-        title: row.get("title"),
-        description: row.get("description"),
-        deliver_payloads: row.get("deliver_payloads"),
-        notify_delete: row.get("notify_delete"),
-        notify_retract: row.get("notify_retract"),
-        persist_items: row.get("persist_items"),
-        send_last_published_item: row.get("send_last_published_item"),
-        node_type: row.get("node_type"),
-        deliver_notifications: row.get("deliver_notifications"),
-        notify_config: row.get("notify_config"),
-        notify_sub: row.get("notify_sub"),
-        language: row.get("language"),
-        payload_type: row.get("payload_type"),
-        max_payload_size: row.get("max_payload_size"),
-        children_max: row.get("children_max"),
-        children_association_policy: row.get("children_association_policy"),
-        children_association_whitelist: row.get("children_association_whitelist"),
-        created_at: row.get("created_at"),
-    }))
+    Ok(row.as_ref().map(row_to_node))
+}
+
+/// Read one owner response from a single authorization/configuration snapshot.
+/// No owner-only projection is loaded after a failed owner check.
+pub async fn owner_read(
+    pool: &PgPool,
+    node_name: &str,
+    requester: &str,
+    kind: PubSubOwnerReadKind,
+) -> Result<PubSubOwnerRead> {
+    let requester = crate::jid::canonical_bare_key(requester)?;
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    let row = sqlx::query("SELECT id, node, creator_jid, access_model, publish_model, max_items, title, description, deliver_payloads, notify_delete, notify_retract, persist_items, send_last_published_item, node_type, deliver_notifications, notify_config, notify_sub, language, payload_type, max_payload_size, children_max, children_association_policy, children_association_whitelist, created_at FROM pubsub_nodes WHERE node = $1")
+        .bind(node_name)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let Some(node) = row.as_ref().map(row_to_node) else {
+        transaction.commit().await?;
+        return Ok(PubSubOwnerRead::Missing);
+    };
+    let owner: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2 AND affiliation = 'owner')",
+    )
+    .bind(node.id)
+    .bind(&requester)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !owner {
+        transaction.commit().await?;
+        return Ok(PubSubOwnerRead::Forbidden);
+    }
+    let result = match kind {
+        PubSubOwnerReadKind::CheckOnly => PubSubOwnerRead::Authorized,
+        PubSubOwnerReadKind::Configure => {
+            let mut config = node.config();
+            config.collections = sqlx::query_scalar(
+                "SELECT n.node FROM pubsub_collection_members e JOIN pubsub_nodes n ON n.id = e.collection_node_id WHERE e.child_node_id = $1 ORDER BY n.node",
+            )
+            .bind(node.id)
+            .fetch_all(&mut *transaction)
+            .await?;
+            config.children = sqlx::query_scalar(
+                "SELECT n.node FROM pubsub_collection_members e JOIN pubsub_nodes n ON n.id = e.child_node_id WHERE e.collection_node_id = $1 ORDER BY n.node LIMIT 1000",
+            )
+            .bind(node.id)
+            .fetch_all(&mut *transaction)
+            .await?;
+            PubSubOwnerRead::Configure(Box::new(config))
+        }
+        PubSubOwnerReadKind::Subscriptions => {
+            let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE s.node_id = $1 AND (s.expire IS NULL OR s.expire > NOW()) ORDER BY s.jid")
+                .bind(node.id)
+                .fetch_all(&mut *transaction)
+                .await?;
+            PubSubOwnerRead::Subscriptions(
+                rows.iter()
+                    .map(row_to_subscription)
+                    .map(Into::into)
+                    .collect(),
+            )
+        }
+        PubSubOwnerReadKind::Affiliations => {
+            let rows = sqlx::query("SELECT n.node, a.jid, a.affiliation FROM pubsub_affiliations a JOIN pubsub_nodes n ON n.id = a.node_id WHERE a.node_id = $1 AND a.affiliation <> 'none' ORDER BY a.jid")
+                .bind(node.id)
+                .fetch_all(&mut *transaction)
+                .await?;
+            PubSubOwnerRead::Affiliations(
+                rows.iter()
+                    .map(row_to_affiliation)
+                    .map(Into::into)
+                    .collect(),
+            )
+        }
+    };
+    transaction.commit().await?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -1735,29 +1798,7 @@ pub async fn affiliations_for_jid(
         .bind(node)
         .fetch_all(pool)
         .await?;
-    Ok(rows
-        .iter()
-        .map(|row| PubSubAffiliation {
-            node: row.get("node"),
-            jid: row.get("jid"),
-            affiliation: row.get("affiliation"),
-        })
-        .collect())
-}
-
-pub async fn node_affiliations(pool: &PgPool, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
-    let rows = sqlx::query("SELECT n.node, a.jid, a.affiliation FROM pubsub_affiliations a JOIN pubsub_nodes n ON n.id = a.node_id WHERE a.node_id = $1 AND a.affiliation <> 'none' ORDER BY a.jid")
-        .bind(node_id)
-        .fetch_all(pool)
-        .await?;
-    Ok(rows
-        .iter()
-        .map(|row| PubSubAffiliation {
-            node: row.get("node"),
-            jid: row.get("jid"),
-            affiliation: row.get("affiliation"),
-        })
-        .collect())
+    Ok(rows.iter().map(row_to_affiliation).collect())
 }
 
 #[cfg(test)]
@@ -2040,14 +2081,6 @@ pub async fn subscriptions_addressing_jid_page(
         .bind(after_node)
         .bind(after_jid)
         .bind(limit.clamp(1, 100))
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.iter().map(row_to_subscription).collect())
-}
-
-pub async fn node_subscriptions(pool: &PgPool, node_id: Uuid) -> Result<Vec<PubSubSubscription>> {
-    let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE s.node_id = $1 AND (s.expire IS NULL OR s.expire > NOW()) ORDER BY s.jid")
-        .bind(node_id)
         .fetch_all(pool)
         .await?;
     Ok(rows.iter().map(row_to_subscription).collect())

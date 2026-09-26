@@ -59,8 +59,8 @@ an infrastructure adapter.
 
 ### Completed foundation and XEP integration
 
-The root workspace now consumes all 38 `northstar-*` libraries. Completed
-cohorts are:
+The workspace contains 51 `northstar-*` crates. The server directly depends on
+50; `northstar-test-harness` is used only by tests. Completed cohorts are:
 
 - foundations: XEP core, XMPP types, XML framing, authentication core, abuse
   policy and web-surface capability resolution;
@@ -201,7 +201,7 @@ and cannot share the public browser-session audience.
 
 ## 5. Ordered execution
 
-### Phase A — Stabilize the integrated leaf graph (current pass)
+### Phase A — Stabilize the integrated leaf graph (maintained foundation)
 
 - keep every leaf crate in the root workspace and lockfile;
 - make every registered optional XEP operator-selectable;

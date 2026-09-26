@@ -1437,6 +1437,17 @@ impl PubSubNodeMutationRepository for PostgresPubSubRepository {
     }
 }
 impl PubSubNodeQueryRepository for PostgresPubSubRepository {
+    async fn owner_read(
+        &self,
+        node: &str,
+        requester: &str,
+        kind: PubSubOwnerReadKind,
+    ) -> Result<PubSubOwnerRead> {
+        db::pubsub::owner_read(&self.pool, node, requester, kind)
+            .await
+            .map_err(map_database_busy)
+    }
+
     async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
         db::get_node(&self.pool, node)
             .await
@@ -1692,17 +1703,6 @@ impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-    async fn node_subscriptions(&self, node_id: Uuid) -> Result<Vec<PubSubSubscription>> {
-        let outcome: Result<_> = async {
-            Ok(db::node_subscriptions(&self.pool, node_id)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
     async fn get_subscription(
         &self,
         node_id: Uuid,
@@ -1857,17 +1857,6 @@ impl PubSubAffiliationQueryRepository for PostgresPubSubRepository {
     ) -> Result<Vec<PubSubAffiliation>> {
         let outcome: Result<_> = async {
             Ok(db::affiliations_for_jid(&self.pool, jid, node)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
-        let outcome: Result<_> = async {
-            Ok(db::node_affiliations(&self.pool, node_id)
                 .await?
                 .into_iter()
                 .map(Into::into)

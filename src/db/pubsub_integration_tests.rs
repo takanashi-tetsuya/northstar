@@ -836,6 +836,71 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         service.get_node(&node_name).await.unwrap().unwrap().id,
         node.id
     );
+    use northstar_pubsub_application::{PubSubOwnerRead, PubSubOwnerReadKind};
+    match service
+        .owner_read(
+            &node_name,
+            "alice@example.test",
+            PubSubOwnerReadKind::Configure,
+        )
+        .await
+        .unwrap()
+    {
+        PubSubOwnerRead::Configure(config) => {
+            assert!(config.collections.is_empty());
+            assert!(config.children.is_empty());
+        }
+        other => panic!("unexpected owner configuration: {other:?}"),
+    }
+    assert!(matches!(
+        service
+            .owner_read(
+                &node_name,
+                "bob@example.test",
+                PubSubOwnerReadKind::Configure
+            )
+            .await
+            .unwrap(),
+        PubSubOwnerRead::Forbidden
+    ));
+    assert!(matches!(
+        service
+            .owner_read(
+                "missing-node",
+                "alice@example.test",
+                PubSubOwnerReadKind::CheckOnly
+            )
+            .await
+            .unwrap(),
+        PubSubOwnerRead::Missing
+    ));
+    assert!(matches!(
+        service
+            .owner_read(
+                &node_name,
+                "alice@example.test",
+                PubSubOwnerReadKind::CheckOnly
+            )
+            .await
+            .unwrap(),
+        PubSubOwnerRead::Authorized
+    ));
+    match service
+        .owner_read(
+            &node_name,
+            "alice@example.test",
+            PubSubOwnerReadKind::Affiliations,
+        )
+        .await
+        .unwrap()
+    {
+        PubSubOwnerRead::Affiliations(entries) => {
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].jid, "alice@example.test");
+            assert_eq!(entries[0].affiliation, "owner");
+        }
+        other => panic!("unexpected owner affiliations: {other:?}"),
+    }
     assert_eq!(
         service.node_metadata(node.id).await.unwrap().owners,
         ["alice@example.test"]
@@ -893,6 +958,21 @@ async fn query_ports_succeed_with_read_only_database_connections() {
     .execute(&setup_pool)
     .await
     .unwrap();
+    match service
+        .owner_read(
+            &node_name,
+            "alice@example.test",
+            PubSubOwnerReadKind::Subscriptions,
+        )
+        .await
+        .unwrap()
+    {
+        PubSubOwnerRead::Subscriptions(entries) => {
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].jid, "bob@example.test");
+        }
+        other => panic!("unexpected owner subscriptions: {other:?}"),
+    }
     assert!(service
         .can_publish(&subscriber_node, "bob@example.test/Phone")
         .await
@@ -906,6 +986,17 @@ async fn query_ports_succeed_with_read_only_database_connections() {
     .execute(&setup_pool)
     .await
     .unwrap();
+    assert!(matches!(
+        service
+            .owner_read(
+                &node_name,
+                "alice@example.test",
+                PubSubOwnerReadKind::Subscriptions
+            )
+            .await
+            .unwrap(),
+        PubSubOwnerRead::Subscriptions(entries) if entries.is_empty()
+    ));
     assert!(!service
         .can_publish(&subscriber_node, "bob@example.test/Phone")
         .await
@@ -939,6 +1030,78 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         .await
         .unwrap()
         .is_empty());
+
+    // Hold the authorization table after the node read. The blocked owner
+    // query proves that its later authorization and payload use that same
+    // repeatable-read snapshot, even if the owner or node is removed meanwhile.
+    for delete_node in [false, true] {
+        let race_name = format!("owner-snapshot-{}", Uuid::new_v4().simple());
+        let race_node =
+            create_default_test_node(&setup_pool, &race_name, "alice@example.test").await;
+        let mut blocker = setup_pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE pubsub_affiliations IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let reader = service.clone();
+        let read_name = race_name.clone();
+        let read = tokio::spawn(async move {
+            reader
+                .owner_read(
+                    &read_name,
+                    "alice@example.test",
+                    PubSubOwnerReadKind::Configure,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'SELECT EXISTS(SELECT 1 FROM pubsub_affiliations WHERE node_id =%')",
+                )
+                .fetch_one(&setup_pool)
+                .await
+                .unwrap();
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("owner read did not reach the blocked authorization query");
+        if delete_node {
+            sqlx::query("DELETE FROM pubsub_nodes WHERE id = $1")
+                .bind(race_node.id)
+                .execute(&mut *blocker)
+                .await
+                .unwrap();
+        } else {
+            sqlx::query("UPDATE pubsub_affiliations SET affiliation = 'none' WHERE node_id = $1 AND jid = $2")
+                .bind(race_node.id)
+                .bind("alice@example.test")
+                .execute(&mut *blocker)
+                .await
+                .unwrap();
+        }
+        blocker.commit().await.unwrap();
+        assert!(matches!(
+            read.await.unwrap().unwrap(),
+            PubSubOwnerRead::Configure(_)
+        ));
+        let current = service
+            .owner_read(
+                &race_name,
+                "alice@example.test",
+                PubSubOwnerReadKind::Configure,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            (delete_node, current),
+            (true, PubSubOwnerRead::Missing) | (false, PubSubOwnerRead::Forbidden)
+        ));
+    }
 }
 
 #[tokio::test]

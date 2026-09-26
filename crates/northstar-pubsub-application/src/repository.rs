@@ -33,6 +33,30 @@ pub trait PubSubNodeQueryRepository: Send + Sync {
         &self,
         node_id: Uuid,
     ) -> impl std::future::Future<Output = Result<PubSubNodeMetadata>> + Send;
+    fn owner_read(
+        &self,
+        node: &str,
+        requester: &str,
+        kind: PubSubOwnerReadKind,
+    ) -> impl std::future::Future<Output = Result<PubSubOwnerRead>> + Send;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PubSubOwnerReadKind {
+    CheckOnly,
+    Configure,
+    Subscriptions,
+    Affiliations,
+}
+
+#[derive(Clone, Debug)]
+pub enum PubSubOwnerRead {
+    Missing,
+    Forbidden,
+    Authorized,
+    Configure(Box<PubSubNodeConfig>),
+    Subscriptions(Vec<PubSubSubscription>),
+    Affiliations(Vec<PubSubAffiliation>),
 }
 
 pub trait PubSubNodeMutationRepository: Send + Sync {
@@ -176,10 +200,6 @@ pub trait PubSubSubscriptionQueryRepository: Send + Sync {
         after: Option<(&str, &str)>,
         limit: i64,
     ) -> impl std::future::Future<Output = Result<Vec<PubSubSubscription>>> + Send;
-    fn node_subscriptions(
-        &self,
-        node_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Vec<PubSubSubscription>>> + Send;
     fn get_subscription(
         &self,
         node_id: Uuid,
@@ -240,10 +260,6 @@ pub trait PubSubAffiliationQueryRepository: Send + Sync {
         &self,
         jid: &str,
         node: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<Vec<PubSubAffiliation>>> + Send;
-    fn node_affiliations(
-        &self,
-        node_id: Uuid,
     ) -> impl std::future::Future<Output = Result<Vec<PubSubAffiliation>>> + Send;
 }
 pub trait PubSubAffiliationMutationRepository: Send + Sync {

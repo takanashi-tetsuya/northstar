@@ -3,7 +3,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    decide_mam_room_read, finish_mam_page, plan_mam_page, MamRoomReadDecision, ResolvedMamRsmPage,
+    decide_mam_room_read, finish_mam_page, mam_referenced_ids, plan_mam_page, MamRoomReadDecision,
+    ResolvedMamRsmPage,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
@@ -1223,18 +1224,7 @@ async fn mam_archive_page_for_in_transaction(
     // archive. The repeatable-read snapshot prevents a concurrent deletion
     // from changing validation, count and page selection midway through the
     // response.
-    let mut requested_ids = query.ids.clone();
-    requested_ids.extend(query.before_id);
-    requested_ids.extend(query.after_id);
-    match query.page {
-        MamRsmPage::Before(id) | MamRsmPage::After(id) => requested_ids.push(id),
-        MamRsmPage::First | MamRsmPage::Last | MamRsmPage::Index(_) => {}
-    }
-    let requested_ids = requested_ids
-        .into_iter()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let requested_ids = mam_referenced_ids(query);
     if !requested_ids.is_empty() {
         let mut builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM ");
         builder.push(source.table());

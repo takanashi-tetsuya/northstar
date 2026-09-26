@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -152,6 +153,22 @@ pub struct MamArchiveQuery {
     pub ids: Vec<Uuid>,
     pub page: MamRsmPage,
     pub max: i64,
+}
+
+/// IDs whose existence and visibility must be checked before a MAM page is
+/// selected. A cursor is valid independently of the query's other filters.
+pub fn mam_referenced_ids(query: &MamArchiveQuery) -> Vec<Uuid> {
+    let mut ids = query.ids.clone();
+    ids.extend(query.before_id);
+    ids.extend(query.after_id);
+    match query.page {
+        MamRsmPage::Before(id) | MamRsmPage::After(id) => ids.push(id),
+        MamRsmPage::First | MamRsmPage::Last | MamRsmPage::Index(_) => {}
+    }
+    ids.into_iter()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -431,6 +448,38 @@ mod tests {
             finish_mam_page(vec![1], 0, false),
             (Vec::<i32>::new(), false)
         );
+    }
+
+    #[test]
+    fn page_references_include_each_distinct_form_and_rsm_id() {
+        let filter_id = Uuid::from_u128(1);
+        let form_id = Uuid::from_u128(2);
+        let rsm_id = Uuid::from_u128(3);
+        let mut query = MamArchiveQuery {
+            with_jid: None,
+            start: None,
+            end: None,
+            before_id: Some(form_id),
+            after_id: Some(filter_id),
+            ids: vec![filter_id, form_id],
+            page: MamRsmPage::After(rsm_id),
+            max: 20,
+        };
+        let references = mam_referenced_ids(&query);
+        assert_eq!(references.len(), 3);
+        for id in [filter_id, form_id, rsm_id] {
+            assert!(references.contains(&id));
+        }
+
+        query.ids.clear();
+        query.before_id = None;
+        query.after_id = None;
+        for page in [MamRsmPage::First, MamRsmPage::Last, MamRsmPage::Index(5)] {
+            query.page = page;
+            assert!(mam_referenced_ids(&query).is_empty());
+        }
+        query.page = MamRsmPage::Before(rsm_id);
+        assert_eq!(mam_referenced_ids(&query), vec![rsm_id]);
     }
 
     #[test]

@@ -436,6 +436,10 @@ This measures one short `ns-b`→Redis control-plane partition. It does not
 cover Redis failover, PostgreSQL partition, combined faults or the full
 `EXT-CLUSTER` matrix.
 
+The [post-soak Redis failover drill](LOCAL_VM_REDIS_FAILOVER.md) records the
+additional replica, Sentinel and endpoint work needed to test a real primary
+promotion. No promotion has been run in this lab yet.
+
 ## Release-profile mixed soak in progress
 
 A 24-hour low-rate run started at 2026-09-26 14:57 UTC on the frozen

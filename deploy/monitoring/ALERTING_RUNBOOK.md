@@ -41,39 +41,59 @@ completed record per deployment and release candidate.
 
 ### Isolated lab rehearsal
 
-After the VM soak has finished, run the script's `self-test` command on an
-isolated lab host. The script uses loopback only. Create a
-private state directory with `init`, start `serve` on `127.0.0.1:18993`, and
-point a temporary Prometheus scrape job at its `/metrics` endpoint. Use a
-temporary rule named `NorthstarAlertDeliveryDrill` with expression
-`northstar_alert_drill_active == 1`, a short `for` period, and a fixed
-`severity: critical` label. Its `drill_id` comes from the metric. Configure a
-temporary Alertmanager route to POST that alert to
-`http://127.0.0.1:18993/alertmanager` with resolved notifications enabled.
-Keep both services on loopback and use offline, version-pinned binaries; record
-their versions and configuration hashes. Do not replace the deployed rule file
+If a VM soak is active, wait for it to finish before changing lab processes.
+Run the script's `self-test` command on an isolated lab host. The script uses
+loopback only. Create a
+private state directory with `init`, then generate three temporary configs
+with `config`. They scrape the fixture on `127.0.0.1:18993`, evaluate
+`NorthstarAlertDeliveryDrill` every five seconds with a ten-second `for`, and
+route firing and resolved notifications to the fixture's loopback webhook.
+The metric supplies the unique `drill_id`; the rule adds only the fixed
+`severity: critical` label. Keep Prometheus and Alertmanager on loopback and
+use offline, version-pinned binaries. Do not replace the deployed rule file
 or interrupt Northstar to create this alert.
 
 ```sh
 python3 scripts/local-alert-drill.py self-test
 python3 scripts/local-alert-drill.py init PRIVATE_STATE_DIR
+python3 scripts/local-alert-drill.py config PRIVATE_STATE_DIR
 python3 scripts/local-alert-drill.py serve PRIVATE_STATE_DIR --port 18993
 ```
 
-For this throwaway fixture, Prometheus needs a 5-second scrape and evaluation
-interval, a scrape target of `127.0.0.1:18993`, the test rule above, and an
-Alertmanager target of `127.0.0.1:19093`. Alertmanager needs one route grouped
-by `alertname`, `severity` and `drill_id`, with a short group wait, a webhook
-receiver at the URL above, and `send_resolved: true`. Use fresh, private data
-directories and ports; stop both temporary processes after collecting evidence.
+Use `promtool check config PRIVATE_STATE_DIR/prometheus.yml`,
+`promtool check rules PRIVATE_STATE_DIR/drill-rules.yml`, and
+`amtool check-config PRIVATE_STATE_DIR/alertmanager.yml` from the pinned
+binaries. Start the temporary Prometheus with those files and an isolated
+storage path under `PRIVATE_STATE_DIR`, listening on `127.0.0.1:19090`; start
+Alertmanager with its generated file and a separate storage path, listening on
+`127.0.0.1:19093`. Start `serve` first, then each of these in a separate
+terminal:
+
+```sh
+prometheus --config.file=PRIVATE_STATE_DIR/prometheus.yml \
+  --storage.tsdb.path=PRIVATE_STATE_DIR/prometheus-data \
+  --web.listen-address=127.0.0.1:19090
+alertmanager --config.file=PRIVATE_STATE_DIR/alertmanager.yml \
+  --storage.path=PRIVATE_STATE_DIR/alertmanager-data \
+  --web.listen-address=127.0.0.1:19093
+```
+
+If another
+loopback process owns a port, create a fresh drill directory and pass distinct
+port numbers to `config`; use the same fixture port for `serve`. Stop all three
+temporary processes after collecting evidence. The `config` output and report
+contain the config SHA-256 hashes; record binary versions and process commands
+as well.
 
 Run `python3 scripts/local-alert-drill.py on PRIVATE_STATE_DIR`, verify the
-alert moves from pending to firing in Prometheus, then record Alertmanager
-receipt from its own log or API. Verify the `firing_received` record, have the
+alert moves from pending to firing at Prometheus `/api/v1/alerts`, then record
+Alertmanager receipt at `/api/v2/alerts` or in its own log. Save both API
+responses or redacted logs with UTC timestamps and the same `drill_id`.
+Verify the `firing_received` record, have the
 named operator inspect the notification, and run
 `python3 scripts/local-alert-drill.py ack PRIVATE_STATE_DIR --actor OPERATOR`.
 Run `python3 scripts/local-alert-drill.py off PRIVATE_STATE_DIR`, wait for
-`resolved_received`, then save the output of
+the Prometheus alert to clear and for `resolved_received`, then save the output of
 `python3 scripts/local-alert-drill.py report PRIVATE_STATE_DIR` and the private
 `events.jsonl`. Capture the UTC time of each step and the first real receiver
 notification separately. The local webhook proves the routing plumbing; it

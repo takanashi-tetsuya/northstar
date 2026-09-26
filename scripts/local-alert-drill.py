@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -25,6 +26,7 @@ ALERT = "NorthstarAlertDeliveryDrill"
 MAX_BODY = 65536
 HEX = re.compile(r"[0-9a-f]{16,64}")
 ACTOR = re.compile(r"[A-Za-z0-9_.@-]{1,80}")
+CONFIG_FILES = ("prometheus.yml", "drill-rules.yml", "alertmanager.yml")
 
 
 def now() -> str:
@@ -117,6 +119,86 @@ def initialize(directory: Path) -> str:
     save_state(directory, {"drill_id": drill_id, "active": False})
     append(directory, {"event": "initialized", "drill_id": drill_id})
     return drill_id
+
+
+def write_configs(directory: Path, fixture_port: int, prometheus_port: int,
+                  alertmanager_port: int) -> dict[str, str]:
+    directory = private_dir(directory)
+    read_state(directory)
+    ports = (fixture_port, prometheus_port, alertmanager_port)
+    if any(not 1 <= port <= 65535 for port in ports) or len(set(ports)) != 3:
+        raise ValueError("fixture, Prometheus and Alertmanager need distinct valid ports")
+    configs = {
+        "prometheus.yml": (
+            "global:\n"
+            "  scrape_interval: 5s\n"
+            "  evaluation_interval: 5s\n"
+            "rule_files:\n"
+            f"  - {json.dumps(str(directory / 'drill-rules.yml'))}\n"
+            "alerting:\n"
+            "  alertmanagers:\n"
+            "    - static_configs:\n"
+            f"        - targets: ['127.0.0.1:{alertmanager_port}']\n"
+            "scrape_configs:\n"
+            "  - job_name: northstar-alert-drill\n"
+            "    static_configs:\n"
+            f"      - targets: ['127.0.0.1:{fixture_port}']\n"
+        ),
+        "drill-rules.yml": (
+            "groups:\n"
+            "  - name: northstar-alert-drill\n"
+            "    rules:\n"
+            f"      - alert: {ALERT}\n"
+            "        expr: northstar_alert_drill_active == 1\n"
+            "        for: 10s\n"
+            "        labels:\n"
+            "          severity: critical\n"
+            "        annotations:\n"
+            "          summary: Isolated Northstar alert delivery drill\n"
+        ),
+        "alertmanager.yml": (
+            "route:\n"
+            "  receiver: northstar-loopback-drill\n"
+            "  group_by: ['alertname', 'severity', 'drill_id']\n"
+            "  group_wait: 1s\n"
+            "  group_interval: 5s\n"
+            "  repeat_interval: 1m\n"
+            "receivers:\n"
+            "  - name: northstar-loopback-drill\n"
+            "    webhook_configs:\n"
+            f"      - url: http://127.0.0.1:{fixture_port}/alertmanager\n"
+            "        send_resolved: true\n"
+        ),
+    }
+    if any((directory / name).exists() or (directory / name).is_symlink()
+           for name in CONFIG_FILES):
+        raise ValueError("temporary configuration already exists; use a fresh drill directory")
+    created = []
+    try:
+        for name, content in configs.items():
+            path = directory / name
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created.append(path)
+            with os.fdopen(descriptor, "w", encoding="ascii") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+    except OSError:
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
+    return config_hashes(directory)
+
+
+def config_hashes(directory: Path) -> dict[str, str]:
+    directory = private_dir(directory)
+    hashes = {}
+    for name in CONFIG_FILES:
+        path = directory / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
 
 
 def set_condition(directory: Path, active: bool) -> None:
@@ -230,6 +312,7 @@ def report(directory: Path) -> dict:
                 == first["resolved_received"].get("severity"))
     return {
         "drill_id": state["drill_id"],
+        "temporary_config_sha256": config_hashes(directory),
         "timestamps_utc": timestamps,
         "condition_to_notification_seconds": seconds(timestamps["condition_on"],
                                                       timestamps["firing_received"]),
@@ -249,6 +332,17 @@ def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="northstar-alert-drill-") as temporary:
         directory = Path(temporary) / "state"
         drill_id = initialize(directory)
+        hashes = write_configs(directory, 18993, 19090, 19093)
+        assert set(hashes) == set(CONFIG_FILES)
+        assert json.dumps(str(directory / "drill-rules.yml")) in (
+            directory / "prometheus.yml").read_text(encoding="ascii")
+        assert all((directory / name).stat().st_mode & 0o077 == 0
+                   for name in CONFIG_FILES)
+        try:
+            write_configs(directory, 18993, 19090, 19093)
+            raise AssertionError("configuration unexpectedly overwritten")
+        except ValueError:
+            pass
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler(directory))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -270,6 +364,7 @@ def self_test() -> None:
                     headers={"Content-Type": "application/json"}, method="POST")
                 assert urllib.request.urlopen(request, timeout=5).status == 204
             assert report(directory)["fixture_sequence_complete"]
+            assert report(directory)["temporary_config_sha256"] == hashes
         finally:
             server.shutdown()
             server.server_close()
@@ -280,19 +375,31 @@ def self_test() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "on", "off", "ack", "report", "serve"):
+    for name in ("init", "config", "on", "off", "ack", "report", "serve"):
         command = commands.add_parser(name)
         command.add_argument("state_dir", type=Path)
         if name == "ack":
             command.add_argument("--actor", required=True)
         if name == "serve":
             command.add_argument("--port", type=int, default=18993)
+        if name == "config":
+            command.add_argument("--fixture-port", type=int, default=18993)
+            command.add_argument("--prometheus-port", type=int, default=19090)
+            command.add_argument("--alertmanager-port", type=int, default=19093)
     commands.add_parser("self-test")
     args = parser.parse_args()
     if args.command == "self-test":
         self_test()
     elif args.command == "init":
         print(initialize(args.state_dir))
+    elif args.command == "config":
+        hashes = write_configs(args.state_dir, args.fixture_port,
+                               args.prometheus_port, args.alertmanager_port)
+        print(json.dumps({"sha256": hashes,
+                          "listen": {"fixture": f"127.0.0.1:{args.fixture_port}",
+                                     "prometheus": f"127.0.0.1:{args.prometheus_port}",
+                                     "alertmanager": f"127.0.0.1:{args.alertmanager_port}"}},
+                         indent=2, sort_keys=True))
     elif args.command == "on":
         set_condition(args.state_dir, True)
     elif args.command == "off":

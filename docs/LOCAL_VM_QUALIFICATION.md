@@ -44,8 +44,11 @@ only in lab guests, never in the host's general trust store.
 4. Run asymmetric partitions, Redis failover, lease loss, process hard-kill,
    certificate rotation and negative DNS/TLS cases. Check exact occupancy,
    delivery and authorization invariants after recovery.
-5. Run restore, encrypted rollback and alert drills. Then run the fixed mixed
-   load and 24–72 hour soak without changing the candidate or VM allocations.
+5. Run restore, encrypted rollback and the
+   [isolated alert drill](../deploy/monitoring/ALERTING_RUNBOOK.md#isolated-lab-rehearsal).
+   Preserve the generated config hashes, Prometheus/Alertmanager observations
+   and webhook record. Then run the fixed mixed load and 24–72 hour soak
+   without changing the candidate or VM allocations.
 6. For each gate, save the command, UTC start/end, expected and observed
    result, raw logs, configuration, metrics and reason for any exclusion.
    A failed run creates a fix and a new candidate; retest affected gates.

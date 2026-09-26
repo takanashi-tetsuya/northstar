@@ -24,8 +24,25 @@ normal CI test path does not. The output directory is mode 0700 and its only
 retained private key, `leaf.key`, is mode 0600. CA private keys are removed.
 `manifest.json` records the OpenSSL and cryptography versions, certificate
 fingerprints, and public response hashes. Check `SHA256SUMS` before copying the
-public files and the peer leaf key to the isolated VM. Stage them in a private
-directory, then install them as the user running the peer:
+public files and the peer leaf key to the isolated VM. Save the independent
+fixture preflight result with the staging evidence:
+
+```sh
+python3 scripts/verify-ocsp-fixture.py target/qualification/ocsp-peer-fresh \
+  > target/qualification/ocsp-fixture-preflight.json
+```
+
+The fixture generator runs this preflight itself; repeat it when staging to
+record the exact inputs. It checks signatures, certificate IDs, response
+statuses and update times without a network request. In particular,
+`wrong-issuer.der` is a signed **good** status for the right leaf under the
+unrelated issuer, so that case isolates issuer binding. The JSON proves only
+what the fixture contains; record the Northstar handshake and peer logs
+separately for each VM row. A fresh `good.der` expires after one day, so
+regenerate the fixture if the drill is delayed.
+
+Stage the files in a private directory, then install them as the user running
+the peer:
 
 ```sh
 install -d -m 700 "$HOME/ocsp-fixture"
@@ -79,7 +96,7 @@ reuse a live S2S connection or queued retry as evidence for a new row.
 | `stale.der` | Reject | Signed good status with expired `nextUpdate` |
 | `missing` | Reject | No staple returned |
 | `wrong-leaf.der` | Reject | Status belongs to another leaf |
-| `wrong-issuer.der` | Reject | Wrong responder/issuer authority |
+| `wrong-issuer.der` | Reject | Signed good status for this leaf under an unrelated issuer |
 
 With strict OCSP disabled, the `missing` case should reach XMPP; that control
 rules out a broken route or certificate chain. With strict OCSP enabled, a

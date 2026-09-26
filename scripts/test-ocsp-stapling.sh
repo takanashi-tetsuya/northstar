@@ -129,23 +129,42 @@ peer_name = sys.argv[2]
 issuer = x509.load_pem_x509_certificate((directory / "root.crt").read_bytes())
 leaf = x509.load_pem_x509_certificate((directory / "leaf.crt").read_bytes())
 key = serialization.load_pem_private_key((directory / "root.key").read_bytes(), None)
+unrelated_issuer = x509.load_pem_x509_certificate((directory / "other-root.crt").read_bytes())
+unrelated_key = serialization.load_pem_private_key((directory / "other-root.key").read_bytes(), None)
 now = datetime.now(timezone.utc)
-response = (
-    ocsp.OCSPResponseBuilder()
-    .add_response(
-        cert=leaf,
-        issuer=issuer,
-        algorithm=hashes.SHA1(),
-        cert_status=ocsp.OCSPCertStatus.GOOD,
-        this_update=now - timedelta(days=2),
-        next_update=now - timedelta(days=1),
-        revocation_time=None,
-        revocation_reason=None,
+
+
+def signed_good_response(cert, signing_issuer, signing_key, this_update, next_update):
+    return (
+        ocsp.OCSPResponseBuilder()
+        .add_response(
+            cert=cert,
+            issuer=signing_issuer,
+            algorithm=hashes.SHA1(),
+            cert_status=ocsp.OCSPCertStatus.GOOD,
+            this_update=this_update,
+            next_update=next_update,
+            revocation_time=None,
+            revocation_reason=None,
+        )
+        .responder_id(ocsp.OCSPResponderEncoding.NAME, signing_issuer)
+        .sign(signing_key, hashes.SHA256())
     )
-    .responder_id(ocsp.OCSPResponderEncoding.NAME, issuer)
-    .sign(key, hashes.SHA256())
+
+
+response = signed_good_response(
+    leaf, issuer, key, now - timedelta(days=2), now - timedelta(days=1)
 )
 (directory / "stale.der").write_bytes(response.public_bytes(serialization.Encoding.DER))
+# The OpenSSL responder produces UNKNOWN when given a leaf from another CA.
+# Sign a GOOD status for that leaf with the unrelated issuer instead, so the
+# negative VM case isolates the issuer binding rather than the status check.
+wrong_issuer = signed_good_response(
+    leaf, unrelated_issuer, unrelated_key, now - timedelta(seconds=1), now + timedelta(days=1)
+)
+(directory / "wrong-issuer.der").write_bytes(
+    wrong_issuer.public_bytes(serialization.Encoding.DER)
+)
 issuer.public_key().verify(
     response.signature,
     response.tbs_response_bytes,
@@ -181,6 +200,7 @@ manifest = {
 PY
   rm -f -- "$fixture_dir/root.key" "$fixture_dir/other-root.key" \
     "$fixture_dir/other.key"
+  python3 "$project_dir/scripts/verify-ocsp-fixture.py" "$fixture_dir" >&2
   trap - EXIT
   printf '%s\n' "$fixture_dir"
   printf 'Private OCSP fixture retained (mode 0700); remove it when done: %s\n' \

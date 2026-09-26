@@ -695,6 +695,12 @@ capabilities from their mutations, and service reads require only those query
 capabilities. Subscription expiry policy receives the observation time from its
 caller. Service prechecks and the PostgreSQL transaction share subscription
 admission policy; the transaction still re-reads affiliation before commit.
+PEP node, item and subscription reads now have separate repository capabilities
+from their mutations. PEP access checks require only the node query capability,
+and the durable event/digest methods require the outbox capability rather than
+the aggregate PubSub repository. The command paths still use the aggregate
+capability; adapter consolidation and concurrent authority tests remain before
+C1 can be closed.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for

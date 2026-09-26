@@ -52,6 +52,53 @@ async fn item_queries_do_not_require_mutation_repository_capability() {
         .is_empty());
 }
 
+struct QueryOnlyPepItems;
+
+impl PepItemQueryRepository for QueryOnlyPepItems {
+    async fn pep_items(
+        &self,
+        _owner_id: Uuid,
+        _node: &str,
+        _item_id: Option<&str>,
+        _limit: i64,
+    ) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
+    async fn pep_items_by_ids(
+        &self,
+        _owner_id: Uuid,
+        _node: &str,
+        _item_ids: &[&str],
+        _limit: i64,
+    ) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
+    async fn pep_items_with_timestamp(
+        &self,
+        _owner_id: Uuid,
+        _node: &str,
+        _limit: i64,
+    ) -> Result<Vec<PepItem>> {
+        Ok(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn pep_item_queries_do_not_require_mutation_repository_capability() {
+    let service = PubSubService::new_with_durable_outbox_database_admission(
+        QueryOnlyPepItems,
+        2,
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+    );
+    assert!(service
+        .pep_items(Uuid::new_v4(), "urn:xmpp:avatar:data", None, 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 #[tokio::test]
 async fn injected_durable_outbox_admission_stays_separate_from_foreground_mutations() {
     let pool = sqlx::postgres::PgPoolOptions::new()

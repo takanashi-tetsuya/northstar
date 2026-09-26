@@ -49,11 +49,12 @@ pub(crate) use northstar_pubsub_core::{
 };
 
 pub(crate) use northstar_pubsub_application::{
-    PepAffiliationRepository, PepItemRepository, PepNodeRepository, PepSubscriptionRepository,
-    PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
-    PubSubItemMutationRepository, PubSubItemQueryRepository, PubSubNodeMutationRepository,
-    PubSubNodeQueryRepository, PubSubOutboxRepository, PubSubRepository,
-    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
+    PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,
+    PepNodeMutationRepository, PepNodeQueryRepository, PepSubscriptionMutationRepository,
+    PepSubscriptionQueryRepository, PubSubAffiliationMutationRepository,
+    PubSubAffiliationQueryRepository, PubSubItemMutationRepository, PubSubItemQueryRepository,
+    PubSubNodeMutationRepository, PubSubNodeQueryRepository, PubSubOutboxRepository,
+    PubSubRepository, PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
     PubSubSubscriptionQueryRepository,
 };
 pub(crate) use northstar_pubsub_core::{
@@ -621,6 +622,9 @@ impl<R: PubSubRepository> PubSubService<R> {
             .await?;
         Ok(PepSetAffiliationsResult { outcome })
     }
+}
+
+impl<R: PepNodeQueryRepository> PubSubService<R> {
     pub(crate) async fn pep_node(
         &self,
         owner_id: Uuid,
@@ -628,6 +632,9 @@ impl<R: PubSubRepository> PubSubService<R> {
     ) -> Result<Option<PepNodeConfig>> {
         self.repository.pep_node(owner_id, node).await
     }
+}
+
+impl<R: PepItemQueryRepository> PubSubService<R> {
     pub(crate) async fn pep_items(
         &self,
         owner_id: Uuid,
@@ -660,9 +667,15 @@ impl<R: PubSubRepository> PubSubService<R> {
             .pep_items_with_timestamp(owner_id, node, limit)
             .await
     }
+}
+
+impl<R: PepNodeQueryRepository> PubSubService<R> {
     pub(crate) async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
         self.repository.pep_nodes(owner_id).await
     }
+}
+
+impl<R: PepSubscriptionQueryRepository> PubSubService<R> {
     pub(crate) async fn pep_subscribers(
         &self,
         owner_id: Uuid,
@@ -686,6 +699,9 @@ impl<R: PubSubRepository> PubSubService<R> {
             .pep_owner_usernames_for_presence_subscriber(subscriber_bare)
             .await
     }
+}
+
+impl<R: PepNodeQueryRepository> PubSubService<R> {
     pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
         self.repository.find_enabled_user(username).await
     }
@@ -715,6 +731,9 @@ impl<R: PubSubRepository> PubSubService<R> {
             .roster_group_allowed(owner_id, jid, groups)
             .await
     }
+}
+
+impl<R: PubSubRepository> PubSubService<R> {
     pub(crate) async fn create_pep_node(
         &self,
         owner_id: Uuid,
@@ -888,6 +907,9 @@ impl<R: PubSubRepository> PubSubService<R> {
             .await?;
         self.repository.publish_pep_items(command, factory).await
     }
+}
+
+impl<R: PubSubOutboxRepository> PubSubService<R> {
     pub(crate) async fn outbox_get_subscription(
         &self,
         node_id: Uuid,
@@ -897,6 +919,9 @@ impl<R: PubSubRepository> PubSubService<R> {
 
         self.repository.outbox_get_subscription(node_id, jid).await
     }
+}
+
+impl<R: PubSubRepository> PubSubService<R> {
     pub(crate) async fn update_subscription_options_checked(
         &self,
         node_id: Uuid,
@@ -1113,6 +1138,9 @@ impl<R: PubSubRepository> PubSubService<R> {
             .resolve_pending_subscription(node_id, requester, subscriber_jid, expected_subid, allow)
             .await
     }
+}
+
+impl<R: PubSubOutboxRepository> PubSubService<R> {
     pub(crate) async fn local_account_blocks_pubsub(
         &self,
         username: &str,

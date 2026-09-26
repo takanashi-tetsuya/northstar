@@ -2214,7 +2214,7 @@ fn pep_config_form(config: &PepNodeConfig, kind: &str) -> String {
 }
 
 pub(crate) async fn pep_access_allowed(
-    service: &PubSubService<impl crate::services::pubsub::PubSubRepository>,
+    service: &PubSubService<impl crate::services::pubsub::PepNodeQueryRepository>,
     owner: &crate::services::pubsub::PubSubAccount,
     domain: &str,
     node: &str,
@@ -2232,7 +2232,7 @@ pub(crate) async fn pep_access_allowed(
 }
 
 async fn pep_access_allowed_for_owner(
-    service: &PubSubService<impl crate::services::pubsub::PubSubRepository>,
+    service: &PubSubService<impl crate::services::pubsub::PepNodeQueryRepository>,
     owner_id: uuid::Uuid,
     owner_username: &str,
     domain: &str,
@@ -2262,7 +2262,7 @@ async fn pep_access_allowed_for_owner(
 }
 
 async fn pep_access_allowed_with_config(
-    service: &PubSubService<impl crate::services::pubsub::PubSubRepository>,
+    service: &PubSubService<impl crate::services::pubsub::PepNodeQueryRepository>,
     owner_id: uuid::Uuid,
     owner_username: &str,
     domain: &str,

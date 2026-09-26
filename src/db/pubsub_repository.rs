@@ -2355,7 +2355,7 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 }
-impl PepNodeRepository for PostgresPubSubRepository {
+impl PepNodeQueryRepository for PostgresPubSubRepository {
     async fn roster_item(
         &self,
         owner_id: Uuid,
@@ -2413,6 +2413,8 @@ impl PepNodeRepository for PostgresPubSubRepository {
             async { db::roster_group_allowed(&self.pool, owner_id, jid, groups).await }.await;
         outcome.map_err(map_database_busy)
     }
+}
+impl PepNodeMutationRepository for PostgresPubSubRepository {
     async fn create_pep_node(
         &self,
         owner_id: Uuid,
@@ -2568,7 +2570,7 @@ impl PepNodeRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 }
-impl PepItemRepository for PostgresPubSubRepository {
+impl PepItemQueryRepository for PostgresPubSubRepository {
     async fn pep_items(
         &self,
         owner_id: Uuid,
@@ -2609,7 +2611,8 @@ impl PepItemRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-
+}
+impl PepItemMutationRepository for PostgresPubSubRepository {
     async fn retract_pep_items(
         &self,
         owner: &PubSubAccount,
@@ -2870,7 +2873,7 @@ impl PepItemRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 }
-impl PepSubscriptionRepository for PostgresPubSubRepository {
+impl PepSubscriptionQueryRepository for PostgresPubSubRepository {
     async fn pep_subscribers(&self, owner_id: Uuid, node: &str) -> Result<Vec<PepSubscription>> {
         let outcome: Result<_> = async {
             Ok(db::pep_subscribers(&self.pool, owner_id, node)
@@ -2908,6 +2911,8 @@ impl PepSubscriptionRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
+}
+impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
     async fn subscribe_pep_node(
         &self,
         command: PepSubscribeCommand<'_>,

@@ -325,7 +325,7 @@ pub trait PubSubOutboxRepository: Send + Sync {
         ids: &[Uuid],
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
-pub trait PepNodeRepository: Send + Sync {
+pub trait PepNodeQueryRepository: Send + Sync {
     fn roster_item(
         &self,
         owner_id: Uuid,
@@ -360,6 +360,8 @@ pub trait PepNodeRepository: Send + Sync {
         jid: &str,
         groups: &[String],
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+pub trait PepNodeMutationRepository: Send + Sync {
     fn create_pep_node(
         &self,
         owner_id: Uuid,
@@ -391,7 +393,7 @@ pub trait PepNodeRepository: Send + Sync {
         factory: &dyn PepOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
 }
-pub trait PepItemRepository: Send + Sync {
+pub trait PepItemQueryRepository: Send + Sync {
     fn pep_items(
         &self,
         owner_id: Uuid,
@@ -412,7 +414,8 @@ pub trait PepItemRepository: Send + Sync {
         node: &str,
         limit: i64,
     ) -> impl std::future::Future<Output = Result<Vec<PepItem>>> + Send;
-
+}
+pub trait PepItemMutationRepository: Send + Sync {
     fn retract_pep_items(
         &self,
         owner: &PubSubAccount,
@@ -440,7 +443,7 @@ pub trait PepItemRepository: Send + Sync {
         factory: &dyn PepOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepPublishItemsResult>> + Send;
 }
-pub trait PepSubscriptionRepository: Send + Sync {
+pub trait PepSubscriptionQueryRepository: Send + Sync {
     fn pep_subscribers(
         &self,
         owner_id: Uuid,
@@ -454,6 +457,8 @@ pub trait PepSubscriptionRepository: Send + Sync {
         &self,
         subscriber_bare: &str,
     ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+}
+pub trait PepSubscriptionMutationRepository: Send + Sync {
     fn subscribe_pep_node(
         &self,
         command: PepSubscribeCommand<'_>,
@@ -494,9 +499,12 @@ pub trait PubSubRepository:
     + PubSubAffiliationQueryRepository
     + PubSubAffiliationMutationRepository
     + PubSubOutboxRepository
-    + PepNodeRepository
-    + PepItemRepository
-    + PepSubscriptionRepository
+    + PepNodeQueryRepository
+    + PepNodeMutationRepository
+    + PepItemQueryRepository
+    + PepItemMutationRepository
+    + PepSubscriptionQueryRepository
+    + PepSubscriptionMutationRepository
     + PepAffiliationRepository
 {
 }
@@ -511,9 +519,12 @@ impl<T> PubSubRepository for T where
         + PubSubAffiliationQueryRepository
         + PubSubAffiliationMutationRepository
         + PubSubOutboxRepository
-        + PepNodeRepository
-        + PepItemRepository
-        + PepSubscriptionRepository
+        + PepNodeQueryRepository
+        + PepNodeMutationRepository
+        + PepItemQueryRepository
+        + PepItemMutationRepository
+        + PepSubscriptionQueryRepository
+        + PepSubscriptionMutationRepository
         + PepAffiliationRepository
 {
 }

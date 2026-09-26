@@ -42,8 +42,19 @@ unsigned registry metadata, not a trusted signing timestamp; this record does
 not assert current key validity. See npm's
 [registry signature format](https://docs.npmjs.com/about-registry-signatures/).
 
-It does **not** establish a source-reproducible build: the npm package does not
-ship a signed build attestation that proves its TypeScript/C source generated
-the published minified JavaScript and embedded WebAssembly. A later upgrade
-must use a digest-pinned, networkless toolchain and two independent clean
-builders before Northstar can make that stronger claim.
+It does **not** establish a source-reproducible build. The npm package includes
+`lib/argon2.ts` and `src/argon2.c`, but `lib/argon2.ts` imports
+`../wasm/argon2.wasm.json`, which the package does not contain. Its `build`
+script invokes `./scripts/build.sh`, also absent from the package. There is no
+dependency lockfile. The retained tarball therefore cannot serve as a complete
+source-build input, and it has no signed build attestation linking its source
+to the published minified JavaScript and embedded WebAssembly. These absences
+can be checked offline with
+`tar -tzf third_party/hash-wasm/hash-wasm-4.12.0.tgz` and the imports and
+scripts in the packaged `lib/argon2.ts` and `package.json`.
+
+`node scripts/check-hash-wasm-provenance.mjs --require-reproducible` deliberately
+fails after verifying the npm signature and deployed bytes. A future upgrade
+needs a pinned complete source tree, its lockfile, a digest-pinned networkless
+toolchain, and two independent clean builds matching the shipped bytes before
+Northstar can make the stronger claim.

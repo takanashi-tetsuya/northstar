@@ -767,7 +767,11 @@ build is still unqualified: compiler versions, build provenance and two
 isolated matching rebuilds are missing; the signed tag and npm metadata
 `gitHead` also differ in the `chai` dev dependency. `hash-wasm` now has a
 separately checked historical npm registry signature and deployed-byte match;
-its source rebuild remains unqualified too.
+its source rebuild remains unqualified too. The retained npm tarball lacks the
+Argon2 WASM JSON imported by its TypeScript, its declared build script,
+and a dependency lockfile. A strict offline provenance check rejects a
+reproducibility claim until complete pinned inputs and two matching clean
+builds are available.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated
 S2S connection through an exact PostgreSQL occupancy transition. The

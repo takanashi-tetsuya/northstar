@@ -199,8 +199,10 @@ def run(args: argparse.Namespace) -> None:
                         f"boundary timing missed: {actual_gap / 1e9:.6f}s; "
                         "result is inconclusive"
                     )
-                outbound(round_number)
                 previous_sent = current_sent
+            # An outbound stanza between inbound rounds would refresh the S2S
+            # stream's idle timer and make the 300-second boundary inconclusive.
+            outbound(args.rounds)
             emit("result", status="passed", verified_boundaries=args.rounds)
         except Exception as error:
             emit("result", status="failed", error_type=type(error).__name__, error=str(error))

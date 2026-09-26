@@ -200,6 +200,9 @@ before starting the server.
 - `integration-wsl.*`: broad C2S/REST/XMPP integration.
 - `federation-wsl.*`, `s2s-db-wsl.sh`: two-domain federation and outbox.
 - `component-runtime-wsl.*`: XEP-0114/XEP-0225 component profiles.
+- `local-vm-lab-component*.py`: bounded Slixmpp XEP-0114 accept and XMPP
+  client probes for the isolated VM lab; see
+  [component lab procedure](../docs/LOCAL_VM_COMPONENT_PROBE.md).
 - `cluster-wsl.*`, `muc-cluster-wsl.sh`: experimental Redis/multi-process paths.
   `cluster-wsl.sh` accepts `NORTHSTAR_CLUSTER_DATABASE_PORT` (default `5432`)
   for a disposable PostgreSQL fixture on `127.0.0.1`; the server and all shell

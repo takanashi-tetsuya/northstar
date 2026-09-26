@@ -82,6 +82,7 @@ function archiveFiles(tarball) {
   const bytes = gunzipSync(tarball, { maxOutputLength: 4 * 1024 * 1024 });
   const wanted = new Set(['package/package.json', 'package/dist/argon2.umd.min.js']);
   const found = new Map();
+  const paths = new Set();
   for (let offset = 0; offset + 512 <= bytes.length;) {
     const header = bytes.subarray(offset, offset + 512);
     if (header.every((byte) => byte === 0)) break;
@@ -91,6 +92,7 @@ function archiveFiles(tarball) {
     const size = Number.parseInt(sizeText, 8);
     const dataStart = offset + 512;
     invariant(dataStart + size <= bytes.length, `truncated tar entry: ${path}`);
+    if (header[156] === 0 || header[156] === 0x30) paths.add(path);
     if (wanted.has(path)) {
       invariant(!found.has(path) && (header[156] === 0 || header[156] === 0x30),
         `duplicate or non-file tar entry: ${path}`);
@@ -99,7 +101,21 @@ function archiveFiles(tarball) {
     offset = dataStart + Math.ceil(size / 512) * 512;
   }
   for (const path of wanted) invariant(found.has(path), `npm tarball lacks ${path}`);
-  return found;
+  return { found, paths };
+}
+
+function requireReproducibleSourceBuild(paths) {
+  const missing = [
+    'package/wasm/argon2.wasm.json',
+    'package/scripts/build.sh',
+  ].filter((path) => !paths.has(path));
+  if (!['package/package-lock.json', 'package/npm-shrinkwrap.json',
+    'package/yarn.lock', 'package/pnpm-lock.yaml'].some((path) => paths.has(path))) {
+    missing.push('a dependency lockfile');
+  }
+  invariant(missing.length === 0,
+    `hash-wasm 4.12.0 source rebuild is unqualified: npm package lacks ${missing.join(', ')}`);
+  throw new Error('hash-wasm 4.12.0 source rebuild is unqualified: two independent clean builds and toolchain evidence are missing');
 }
 
 function expectRejected(label, evidence, tarball, deployed, archiveArtifact, packageJson) {
@@ -118,7 +134,7 @@ const [evidenceBytes, tarball, deployed] = await Promise.all([
   readFile(deployedPath),
 ]);
 const evidence = JSON.parse(evidenceBytes.toString('utf8'));
-const files = archiveFiles(tarball);
+const { found: files, paths } = archiveFiles(tarball);
 const archiveArtifact = files.get('package/dist/argon2.umd.min.js');
 const packageJson = JSON.parse(files.get('package/package.json').toString('utf8'));
 verifyEvidence(evidence, tarball, deployed, archiveArtifact, packageJson);
@@ -143,6 +159,33 @@ if (process.argv.includes('--self-test')) {
   const badArtifact = Buffer.from(deployed);
   badArtifact[0] ^= 1;
   expectRejected('modified deployed artifact', evidence, tarball, badArtifact, archiveArtifact, packageJson);
+
+  let missingSourceRejected = false;
+  try {
+    requireReproducibleSourceBuild(paths);
+  } catch (error) {
+    missingSourceRejected = String(error.message).includes('package/wasm/argon2.wasm.json') &&
+      String(error.message).includes('package/scripts/build.sh') &&
+      String(error.message).includes('a dependency lockfile');
+  }
+  invariant(missingSourceRejected, 'incomplete npm source passed reproducible-build qualification');
+
+  let missingBuildEvidenceRejected = false;
+  try {
+    requireReproducibleSourceBuild(new Set([...paths,
+      'package/wasm/argon2.wasm.json',
+      'package/scripts/build.sh',
+      'package/package-lock.json',
+    ]));
+  } catch (error) {
+    missingBuildEvidenceRejected = String(error.message).includes('two independent clean builds');
+  }
+  invariant(missingBuildEvidenceRejected,
+    'source files alone bypassed reproducible-build qualification');
 }
 
-console.log('hash-wasm 4.12.0 historical npm signature and deployed Argon2 bytes verified; source rebuild remains unqualified');
+if (process.argv.includes('--require-reproducible')) {
+  requireReproducibleSourceBuild(paths);
+} else {
+  console.log('hash-wasm 4.12.0 historical npm signature and deployed Argon2 bytes verified; source rebuild remains unqualified');
+}

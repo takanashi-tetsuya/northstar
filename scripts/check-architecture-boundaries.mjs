@@ -2062,14 +2062,52 @@ if (!/if matches!\(outcome, FederatedMamAdmissionOutcome::Queued\)\s*\{[\s\S]*?s
   throw new Error('MamService must wake delivery only after a successful outbox commit');
 }
 const archiveSource = read('src/db/archive.rs');
-for (const invariant of [
-  'WHERE localpart=$1 AND destroyed_at IS NULL\n          FOR SHARE',
-  'pg_advisory_xact_lock(hashtextextended($1::TEXT, 29))',
-  'muc_external_affiliations\n          WHERE room_id=$1 AND jid=$2 FOR SHARE',
-]) {
-  if (!archiveSource.includes(invariant)) {
-    throw new Error(`federated MAM repository lost policy/identity lock: ${invariant}`);
+const roomGuardAcquire = structBody(archiveSource, 'pub(crate) async fn acquire(');
+const lockSteps = [
+  'pool.acquire().await?',
+  'SELECT id FROM muc_rooms WHERE localpart=$1 AND destroyed_at IS NULL',
+  'maybe_held: true',
+  'pg_advisory_lock(hashtextextended($1::TEXT, 29))',
+  '.execute(&mut *guard.connection)',
+];
+let previousLockStep = -1;
+for (const step of lockSteps) {
+  const position = roomGuardAcquire.indexOf(step);
+  if (position <= previousLockStep) {
+    throw new Error(`federated MAM room guard lost lock ordering: ${step}`);
   }
+  previousLockStep = position;
+}
+const roomGuardSnapshot = structBody(archiveSource, 'pub(crate) async fn begin_snapshot(');
+if (!/self\.connection\.begin\(\)\.await\?[\s\S]*SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/.test(roomGuardSnapshot)) {
+  throw new Error('federated MAM opens its repeatable-read snapshot before the room lock');
+}
+const roomAuthorization = structBody(
+  archiveSource, 'async fn authorize_federated_mam_room_in_transaction(',
+);
+if (!/WHERE localpart=\$1 AND id=\$2 AND destroyed_at IS NULL\s+FOR SHARE/.test(roomAuthorization)
+  || !roomAuthorization.includes('muc_external_affiliations\n          WHERE room_id=$1 AND jid=$2 FOR SHARE')) {
+  throw new Error('federated MAM lost its exact-room and affiliation checks inside the snapshot');
+}
+const roomGuardDrop = structBody(archiveSource, 'impl Drop for FederatedMamRoomGuard');
+if (!/if self\.maybe_held[\s\S]*self\.connection\.close_on_drop\(\)/.test(roomGuardDrop)) {
+  throw new Error('cancelled federated MAM reads can return a locked connection to the pool');
+}
+const federatedStreamAdmission = structBody(mamRepositorySource, 'async fn admit_federated_room_stream<');
+let previousFederatedMamAdmissionStep = -1;
+for (const invariant of [
+  'FederatedMamRoomGuard::acquire(&self.pool, request.localpart)',
+  'let room_id = guard.room_id()',
+  'guard.begin_snapshot().await?',
+  'mam_federated_room_archive_page_authorized_in_transaction(',
+  'transaction.commit().await?',
+  'guard.release().await',
+]) {
+  const position = federatedStreamAdmission.indexOf(invariant);
+  if (position <= previousFederatedMamAdmissionStep) {
+    throw new Error(`federated MAM outbox lost its guarded snapshot: ${invariant}`);
+  }
+  previousFederatedMamAdmissionStep = position;
 }
 
 for (const [name, accessor, forbiddenAuthority] of [

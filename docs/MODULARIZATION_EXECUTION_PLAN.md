@@ -857,9 +857,11 @@ of affected gates. Run the federation and infrastructure tests on an isolated
 libvirt network with no route to the public Internet. Use separate VMs for
 Northstar nodes and independently implemented XMPP peers; two Northstar VMs
 alone do not establish interoperability. The lab layout and evidence format
-are in [LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md), and the DNSSEC/DANE
-cases are in [LOCAL_VM_FEDERATION_MATRIX.md](LOCAL_VM_FEDERATION_MATRIX.md). Close each of
-the seven existing evidence rows only for the tested lab profile:
+are in [LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md). The DNSSEC/DANE
+cases are in [LOCAL_VM_FEDERATION_MATRIX.md](LOCAL_VM_FEDERATION_MATRIX.md);
+available client versions and limits are in
+[LOCAL_VM_CLIENT_MATRIX.md](LOCAL_VM_CLIENT_MATRIX.md). Close each of the seven
+existing evidence rows only for the tested lab profile:
 
 | Gate | Required target-environment evidence |
 | --- | --- |

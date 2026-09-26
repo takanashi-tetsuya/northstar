@@ -65,11 +65,13 @@ def check_host(host: str) -> str:
 
 
 def openssl(*args: str, input_bytes: bytes | None = None) -> bytes:
+    environment = {**os.environ, "LC_ALL": "C"}
     result = subprocess.run(
         ["openssl", *args],
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
         check=False,
         timeout=10,
     )
@@ -79,8 +81,16 @@ def openssl(*args: str, input_bytes: bytes | None = None) -> bytes:
     return result.stdout
 
 
+def require_hostname_match(report: bytes, host: str) -> None:
+    # Some OpenSSL releases exit successfully even when -checkhost reports a
+    # mismatch. Require the affirmative result as well as a successful call.
+    if report.decode("utf-8", "replace").strip() != f"Hostname {host} does match certificate":
+        raise ValueError("certificate does not match the requested peer host")
+
+
 def peer_spki(cert: Path, host: str) -> tuple[str, str]:
-    openssl("x509", "-in", str(cert), "-noout", "-checkhost", host)
+    match = openssl("x509", "-in", str(cert), "-noout", "-checkhost", host)
+    require_hostname_match(match, host)
     certificate = openssl("x509", "-in", str(cert), "-outform", "DER")
     public_key = openssl("x509", "-in", str(cert), "-pubkey", "-noout")
     spki = openssl("pkey", "-pubin", "-outform", "DER", input_bytes=public_key)
@@ -129,6 +139,15 @@ def make_fixtures(dnskey: Path, cert: Path, host: str, port: int, ttl: int, outp
 
 
 def self_test() -> None:
+    try:
+        require_hostname_match(
+            b"Hostname ejabberd.lab.test does NOT match certificate\n",
+            "ejabberd.lab.test",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("OpenSSL's zero-exit mismatch report was accepted")
     with tempfile.TemporaryDirectory(prefix="northstar-lab-dane-") as directory:
         root = Path(directory)
         key = root / "lab.key"

@@ -147,6 +147,14 @@ migration was left, and both nodes passed delivery and object-read checks after
 restart. The isolated database CI fixture tests this pause and resume path;
 the VM lab still needs an interruption drill that does not bypass the guard.
 
+Blocking only `ns-b`'s PostgreSQL port caused its runtime-control worker to
+exceed the heartbeat budget and shut down the process. `ns-a` continued
+bidirectional Prosody traffic. Once the firewall rule was removed, the lab's
+`Restart=no` unit required a manual `ns-b` start. The first direct-delivery
+probe after restart timed out, and the next passed both directions; this
+reconciliation delay is part of the observed result. No automatic recovery
+claim is made for a production service manager.
+
 Stopping MinIO made a committed public upload read fail while the object bytes
 remained intact. The first candidate returned HTTP 500. The corrected public
 GET handler returned HTTP 503 with a generic service-unavailable response;
@@ -155,6 +163,10 @@ after MinIO restarted, the same object again matched SHA-256
 That corrected debug binary had SHA-256
 `765b77ea843f36aedb6add525a8bae58ec5acc442c7a00998de54dce26546fe7`.
 This is a process outage, not a disk-loss or fresh-host restore drill.
+Blocking only `ns-b`'s MinIO port left `ns-a` able to read the object. The
+partitioned node returned HTTP 503 after its configured 30-second object-read
+timeout (30.17 seconds observed); after connectivity returned, it read the
+same SHA-256. This does not test partial writes or provider failover.
 These observations used source commit `58650079da8d21408ab6d027127796b7863ccf5c`
 and binary SHA-256
 `b6e898154af264a8e38065d94f340b900be2d5e7b8ed2a1107bd7136e1316ae3`.
@@ -172,7 +184,7 @@ and deliberately refuses to replace lost node signing keys. Run
 after copying them and `local-vm-lab-federation.py` into
 `/home/lab/northstar/`.
 
-Database/object-store partitions, Redis failover, interrupted migration and
+Longer and combined partitions, Redis failover, interrupted migration and
 restore, DNSSEC/DANE behavior inside Northstar, certificate rotation, external
 components, native clients, mixed-load soak, backup/restore and alert drills
 remain untested in these VMs.

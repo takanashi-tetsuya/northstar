@@ -390,9 +390,36 @@ held age public recipients in an owner-controlled file and pass
 `--rollback-age-identity-file` to `restore-backup.sh`. The first identity permits
 immediate compensation; `recover-restore.sh` can use the second identity with
 `--rollback-age-identity-file` after a crash. Keep both private identities
-outside the backup, upload and rollback roots. This option encrypts only the
-database dump: old upload copies still require encrypted, access-controlled
-rollback storage. The incoming backup identity is not a rollback key.
+outside the backup, upload and rollback roots. The incoming backup identity is
+not a rollback key.
+
+**Rollback upload storage still needs filesystem encryption.** The age option
+above encrypts only the database dump. Before a production restore, the
+operator must place both the upload root (including its cutover directory) and
+the dedicated rollback root on encrypted, access-controlled filesystems whose
+unlock keys can be recovered independently of the host. The cutover directory
+holds the old upload objects in plaintext while it is the exact compensation
+source; the rollback root receives plaintext copies before the forward decision.
+An interrupted restore or retained recovery journal may keep the cutover copy
+after the database reopens. The private plaintext staging root also needs an
+encrypted filesystem or tmpfs. Directory mode `0700` restricts access but does
+not supply encryption at rest. Verify that all three mounts are unlocked and
+usable before starting restore, and preserve their recovery keys separately
+from the rollback age identities. Do not move or delete an old cutover object
+merely because a rollback copy exists: recovery must first prove which exact
+copy is authoritative from the journal and the old-object size/digest manifest.
+
+Native age encryption of retained uploads is not yet implemented. Its safe
+cutover would bind the public recipient set to the journal before database
+replacement, publish each `UUID.age` through a private temporary file, verify
+decryption against the old-object size/digest manifest, and fsync the ciphertext
+and retention directory before `rollback-uploads-verified`. Recovery must be
+able to resume a partially written copy from an exact old cutover object and
+decrypt a verified retained copy when the old cutover object is missing.
+Malformed ciphertext, a mismatched recipient set, or loss of both exact copies
+must keep the database fence closed. Hard-kill drills are required before this
+mode can replace filesystem encryption for retained uploads; it would still
+leave the temporary cutover plaintext on the upload filesystem.
 
 ## Generation, sequence, and rollback rules
 

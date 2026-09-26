@@ -66,8 +66,9 @@ chmod 600 "$test_dir/server.key" "$test_dir/public.key" "$test_dir/root.key" \
 
 # The broad `tls::tests::generated_` filter also includes the atomic CRL
 # reload regression. Generate that fixture before invoking the filter and pass
-# every external path it requires; otherwise the ignored test is selected but
-# fails before exercising reload behavior.
+# every external path it requires. Exclude S2S TLS tests here: their module
+# path contains the same substring, but they need the separate OCSP fixture
+# supplied by test-ocsp-stapling.sh below.
 crl_fixture="$(bash scripts/generate-crl-fixture-wsl.sh "$test_dir")"
 TEST_TLS_CERT_PATH="$test_dir/server.crt" \
 TEST_TLS_KEY_PATH="$test_dir/server.key" \
@@ -86,7 +87,7 @@ TEST_TLS_RELOAD_CRL_PATH="$crl_fixture/crl.pem" \
 TEST_TLS_RELOAD_RENEWED_CRL_PATH="$crl_fixture/renewed-crl.pem" \
   cargo test --locked \
   tls::tests::generated_ \
-  -- --ignored --nocapture
+  -- --ignored --nocapture --skip s2s::tls::tests::generated_
 
 # Exercise the real OpenSSL-issued CRL fixtures as part of the normal TLS
 # runtime gate. The Rust test remains #[ignore] because it requires external

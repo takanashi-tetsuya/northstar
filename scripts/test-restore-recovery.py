@@ -154,6 +154,23 @@ class ReplayTests(unittest.TestCase):
             recovery.compensate_uploads(evidence)
             recovery.verify_namespace(evidence, evidence.old)
 
+    def test_compensation_requires_an_exact_old_object_when_stage_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
+            fixture = JournalFixture(Path(directory))
+            write(fixture.upload / fixture.new_id, fixture.new_content)
+            retained = fixture.previous / fixture.old_id
+            write(retained, fixture.old_content)
+            evidence = fixture.evidence()
+            recovery.compensate_uploads(evidence)
+            recovery.verify_namespace(evidence, evidence.old)
+            self.assertEqual((fixture.upload / fixture.old_id).read_bytes(), fixture.old_content)
+
+            (fixture.upload / fixture.old_id).unlink()
+            write(retained, b"tampered retained object")
+            with self.assertRaisesRegex(recovery.RecoveryError, "exact recovery copy source differs"):
+                recovery.compensate_uploads(evidence)
+            self.assertFalse((fixture.upload / fixture.old_id).exists())
+
     def test_tampered_object_manifest_blocks_replay(self) -> None:
         with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
             fixture = JournalFixture(Path(directory))

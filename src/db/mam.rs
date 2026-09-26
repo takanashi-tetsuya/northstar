@@ -224,12 +224,16 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
     where
         F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *transaction)
-            .await?;
+        let Some(mut guard) =
+            db::FederatedMamRoomGuard::acquire(&self.pool, request.localpart).await?
+        else {
+            return Ok(FederatedMamAdmissionOutcome::Missing);
+        };
+        let room_id = guard.room_id();
+        let mut transaction = guard.begin_snapshot().await?;
         let page = match db::mam_federated_room_archive_page_authorized_in_transaction(
             &mut transaction,
+            room_id,
             request.localpart,
             request.viewer_bare_jid,
             request.currently_joined,
@@ -243,14 +247,17 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
             } => map_federated_stream_page(access, page),
             db::MamRoomReadOutcome::Allowed { value: None, .. } => {
                 transaction.commit().await?;
+                guard.release().await;
                 return Ok(FederatedMamAdmissionOutcome::PageMissing);
             }
             db::MamRoomReadOutcome::Missing => {
                 transaction.commit().await?;
+                guard.release().await;
                 return Ok(FederatedMamAdmissionOutcome::Missing);
             }
             db::MamRoomReadOutcome::Forbidden => {
                 transaction.commit().await?;
+                guard.release().await;
                 return Ok(FederatedMamAdmissionOutcome::Forbidden);
             }
         };
@@ -259,11 +266,13 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
             Ok(responses) => responses,
             Err(error) => {
                 transaction.rollback().await?;
+                guard.release().await;
                 return Err(error);
             }
         };
         if responses.is_empty() {
             transaction.rollback().await?;
+            guard.release().await;
             anyhow::bail!("federated MAM renderer omitted the terminal response");
         }
         let policy = db::S2sOutboxPolicy {
@@ -283,6 +292,7 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
             .await
             {
                 transaction.rollback().await?;
+                guard.release().await;
                 tracing::warn!(
                     domain = request.target_domain,
                     room = request.localpart,
@@ -293,6 +303,7 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
             }
         }
         transaction.commit().await?;
+        guard.release().await;
         Ok(FederatedMamAdmissionOutcome::Queued)
     }
 }

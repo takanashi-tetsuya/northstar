@@ -8,7 +8,7 @@ use northstar_archive_core::{
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
+use sqlx::{pool::PoolConnection, Acquire, PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::collections::HashSet;
 #[cfg(test)]
 use std::time::Duration;
@@ -1444,8 +1444,87 @@ async fn authorize_mam_room_in_transaction(
     })
 }
 
+/// Hold the MUC affiliation lock before opening the repeatable-read snapshot.
+/// MUC writers acquire namespace 29 before room rows, so taking a room row
+/// first here can deadlock. The lookup only selects the lock key; authorization
+/// rechecks the exact room identity after the lock has been acquired.
+pub(crate) struct FederatedMamRoomGuard {
+    connection: PoolConnection<Postgres>,
+    room_id: Uuid,
+    maybe_held: bool,
+}
+
+impl FederatedMamRoomGuard {
+    pub(crate) async fn acquire(pool: &PgPool, localpart: &str) -> Result<Option<Self>> {
+        let mut connection = pool.acquire().await?;
+        let room_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM muc_rooms WHERE localpart=$1 AND destroyed_at IS NULL",
+        )
+        .bind(localpart)
+        .fetch_optional(&mut *connection)
+        .await?;
+        let Some(room_id) = room_id else {
+            return Ok(None);
+        };
+        // A cancelled lock request can have completed on the server. Mark the
+        // connection before awaiting it so Drop never returns that session to
+        // the pool with an advisory lock still held.
+        let mut guard = Self {
+            connection,
+            room_id,
+            maybe_held: true,
+        };
+        sqlx::query("SELECT pg_advisory_lock(hashtextextended($1::TEXT, 29))")
+            .bind(room_id.to_string())
+            .execute(&mut *guard.connection)
+            .await?;
+        Ok(Some(guard))
+    }
+
+    pub(crate) fn room_id(&self) -> Uuid {
+        self.room_id
+    }
+
+    pub(crate) async fn begin_snapshot(&mut self) -> Result<Transaction<'_, Postgres>> {
+        let mut transaction = self.connection.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *transaction)
+            .await?;
+        Ok(transaction)
+    }
+
+    pub(crate) async fn release(mut self) {
+        let unlocked = sqlx::query_scalar::<_, bool>(
+            "SELECT pg_advisory_unlock(hashtextextended($1::TEXT, 29))",
+        )
+        .bind(self.room_id.to_string())
+        .fetch_one(&mut *self.connection)
+        .await;
+        match unlocked {
+            Ok(true) => self.maybe_held = false,
+            Ok(false) => {
+                tracing::warn!(room_id = %self.room_id, "federated MAM room lock was not held at release")
+            }
+            Err(error) => {
+                tracing::warn!(room_id = %self.room_id, ?error, "federated MAM room lock release failed")
+            }
+        }
+        // On failure Drop closes the session. Once the transaction committed,
+        // an unlock failure must not report a failed read or outbox admission.
+    }
+}
+
+impl Drop for FederatedMamRoomGuard {
+    fn drop(&mut self) {
+        if self.maybe_held {
+            self.connection.close_on_drop();
+        }
+    }
+}
+
 async fn authorize_federated_mam_room_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
+    expected_room_id: Uuid,
     localpart: &str,
     viewer_bare_jid: &str,
     currently_joined: bool,
@@ -1458,10 +1537,11 @@ async fn authorize_federated_mam_room_in_transaction(
         "SELECT id,localpart,members_only,non_anonymous,password_hash,
                 occupant_id_secret
            FROM muc_rooms
-          WHERE localpart=$1 AND destroyed_at IS NULL
+          WHERE localpart=$1 AND id=$2 AND destroyed_at IS NULL
           FOR SHARE",
     )
     .bind(localpart)
+    .bind(expected_room_id)
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(row) = row else {
@@ -1469,15 +1549,8 @@ async fn authorize_federated_mam_room_in_transaction(
     };
     let room_id: Uuid = row.try_get("id")?;
 
-    // Legacy affiliation writers serialize on this advisory lock while the
-    // clustered writers lock the room row above.  Taking both, in the same
-    // order used by this read capability, makes either mutation family wait
-    // until the authorized projection commits.  Read the affiliation only
-    // after the advisory lock so a waiter observes the winning mutation.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 29))")
-        .bind(room_id.to_string())
-        .execute(&mut **transaction)
-        .await?;
+    // The caller already holds namespace 29 on this same session. Its fresh
+    // transaction snapshot sees affiliation changes committed while it waited.
     let affiliation: Option<String> = sqlx::query_scalar(
         "SELECT affiliation FROM muc_external_affiliations
           WHERE room_id=$1 AND jid=$2 FOR SHARE",
@@ -1544,18 +1617,21 @@ pub async fn authorize_federated_mam_room(
         viewer_bare_jid.localpart().is_some(),
         "federated MAM viewer must be a user bare JID"
     );
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *transaction)
-        .await?;
+    let Some(mut guard) = FederatedMamRoomGuard::acquire(pool, localpart).await? else {
+        return Ok(MamRoomReadOutcome::Missing);
+    };
+    let room_id = guard.room_id();
+    let mut transaction = guard.begin_snapshot().await?;
     let outcome = authorize_federated_mam_room_in_transaction(
         &mut transaction,
+        room_id,
         localpart,
         &viewer_bare_jid.to_string(),
         currently_joined,
     )
     .await?;
     transaction.commit().await?;
+    guard.release().await;
     Ok(outcome)
 }
 
@@ -1652,36 +1728,35 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
         viewer_bare_jid.localpart().is_some(),
         "federated MAM viewer must be a user bare JID"
     );
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *transaction)
-        .await?;
-    let access = match authorize_federated_mam_room_in_transaction(
+    let Some(mut guard) = FederatedMamRoomGuard::acquire(pool, localpart).await? else {
+        return Ok(MamRoomReadOutcome::Missing);
+    };
+    let room_id = guard.room_id();
+    let mut transaction = guard.begin_snapshot().await?;
+    let outcome = match authorize_federated_mam_room_in_transaction(
         &mut transaction,
+        room_id,
         localpart,
         &viewer_bare_jid.to_string(),
         currently_joined,
     )
     .await?
     {
-        MamRoomReadOutcome::Allowed { access, .. } => access,
-        MamRoomReadOutcome::Missing => {
-            transaction.commit().await?;
-            return Ok(MamRoomReadOutcome::Missing);
+        MamRoomReadOutcome::Allowed { access, .. } => {
+            let value = archive_boundaries_for_in_transaction(
+                &mut transaction,
+                MamArchiveSource::Muc(access.room_id),
+                None,
+            )
+            .await?;
+            MamRoomReadOutcome::Allowed { access, value }
         }
-        MamRoomReadOutcome::Forbidden => {
-            transaction.commit().await?;
-            return Ok(MamRoomReadOutcome::Forbidden);
-        }
+        MamRoomReadOutcome::Missing => MamRoomReadOutcome::Missing,
+        MamRoomReadOutcome::Forbidden => MamRoomReadOutcome::Forbidden,
     };
-    let value = archive_boundaries_for_in_transaction(
-        &mut transaction,
-        MamArchiveSource::Muc(access.room_id),
-        None,
-    )
-    .await?;
     transaction.commit().await?;
-    Ok(MamRoomReadOutcome::Allowed { access, value })
+    guard.release().await;
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -1692,12 +1767,14 @@ pub async fn mam_federated_room_archive_page_authorized(
     currently_joined: bool,
     query: &MamArchiveQuery,
 ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *transaction)
-        .await?;
+    let Some(mut guard) = FederatedMamRoomGuard::acquire(pool, localpart).await? else {
+        return Ok(MamRoomReadOutcome::Missing);
+    };
+    let room_id = guard.room_id();
+    let mut transaction = guard.begin_snapshot().await?;
     let outcome = mam_federated_room_archive_page_authorized_in_transaction(
         &mut transaction,
+        room_id,
         localpart,
         viewer_bare_jid,
         currently_joined,
@@ -1705,14 +1782,18 @@ pub async fn mam_federated_room_archive_page_authorized(
     )
     .await?;
     transaction.commit().await?;
+    guard.release().await;
     Ok(outcome)
 }
 
 /// Resolve federated room authority and page its archive inside a transaction
 /// owned by the application service.  The caller may append a durable
-/// response projection before commit without reopening a TOCTOU window.
+/// response projection before commit without reopening a TOCTOU window. The
+/// transaction must come from `FederatedMamRoomGuard::begin_snapshot` on the
+/// same connection, and `expected_room_id` must come from that guard.
 pub(crate) async fn mam_federated_room_archive_page_authorized_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
+    expected_room_id: Uuid,
     localpart: &str,
     viewer_bare_jid: &str,
     currently_joined: bool,
@@ -1725,6 +1806,7 @@ pub(crate) async fn mam_federated_room_archive_page_authorized_in_transaction(
     );
     let access = match authorize_federated_mam_room_in_transaction(
         transaction,
+        expected_room_id,
         localpart,
         &viewer_bare_jid.to_string(),
         currently_joined,
@@ -3378,14 +3460,16 @@ mod history_identity_pg_tests {
             MamRoomReadOutcome::Forbidden
         ));
 
-        let mut federated_snapshot = pool.begin().await.unwrap();
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *federated_snapshot)
+        let mut federated_guard = FederatedMamRoomGuard::acquire(&pool, "snapshot-room")
             .await
+            .unwrap()
             .unwrap();
+        let federated_room_id = federated_guard.room_id();
+        let mut federated_snapshot = federated_guard.begin_snapshot().await.unwrap();
         let (federated_access, federated_page) =
             match mam_federated_room_archive_page_authorized_in_transaction(
                 &mut federated_snapshot,
+                federated_room_id,
                 "snapshot-room",
                 "remote@remote.test",
                 false,
@@ -3419,6 +3503,7 @@ mod history_identity_pg_tests {
         assert_eq!(federated_access.room_id, room_id);
         assert_eq!(federated_page.rows[0].id, message_id);
         federated_snapshot.commit().await.unwrap();
+        federated_guard.release().await;
         affiliation_writer.await.unwrap().unwrap();
         assert!(matches!(
             mam_federated_room_archive_page_authorized(
@@ -3441,6 +3526,133 @@ mod history_identity_pg_tests {
         .execute(&pool)
         .await
         .unwrap();
+
+        // A MUC writer takes namespace 29 before its room row. A waiting MAM
+        // read must hold neither that row nor a repeatable-read snapshot: the
+        // writer must finish, and the reader must see the new outcast row.
+        let race_room_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO muc_rooms(id,localpart,owner_id,members_only,occupant_id_secret)
+             VALUES($1,'race-room',$2,FALSE,$3)",
+        )
+        .bind(race_room_id)
+        .bind(viewer_id)
+        .bind(vec![9_u8; 32])
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut authority_writer = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 29))")
+            .bind(race_room_id.to_string())
+            .execute(&mut *authority_writer)
+            .await
+            .unwrap();
+        let writer_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *authority_writer)
+            .await
+            .unwrap();
+        let reader_pool = pool.clone();
+        let waiting_read = tokio::spawn(async move {
+            authorize_federated_mam_room(&reader_pool, "race-room", "new@remote.test", false).await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM pg_locks held
+                         JOIN pg_locks waiting
+                           ON waiting.locktype='advisory'
+                          AND waiting.classid=held.classid
+                          AND waiting.objid=held.objid
+                          AND waiting.objsubid=held.objsubid
+                          AND NOT waiting.granted
+                        WHERE held.locktype='advisory'
+                          AND held.pid=$1 AND held.granted
+                     )",
+                )
+                .bind(writer_pid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("federated MAM read did not wait for the writer's advisory lock");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            sqlx::query("UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1")
+                .bind(race_room_id)
+                .execute(&mut *authority_writer)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO muc_external_affiliations(room_id,jid,affiliation)
+                 VALUES($1,'new@remote.test','outcast')",
+            )
+            .bind(race_room_id)
+            .execute(&mut *authority_writer)
+            .await
+            .unwrap();
+            authority_writer.commit().await.unwrap();
+        })
+        .await
+        .expect("room writer blocked behind a waiting MAM read");
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), waiting_read)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            MamRoomReadOutcome::Forbidden
+        ));
+
+        // Dropping an admitted task must close its locked PostgreSQL session,
+        // not hand that session back to the pool with namespace 29 held.
+        let mut probe = pool.acquire().await.unwrap();
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let cancelled_pool = pool.clone();
+        let held_read = tokio::spawn(async move {
+            let _guard = FederatedMamRoomGuard::acquire(&cancelled_pool, "race-room")
+                .await
+                .unwrap()
+                .unwrap();
+            let _ = locked_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        tokio::time::timeout(Duration::from_secs(5), locked_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        held_read.abort();
+        let _ = held_read.await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let acquired: bool = sqlx::query_scalar(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1::TEXT, 29))",
+                )
+                .bind(race_room_id.to_string())
+                .fetch_one(&mut *probe)
+                .await
+                .unwrap();
+                if acquired {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled MAM task retained a session advisory lock");
+        let unlocked: bool =
+            sqlx::query_scalar("SELECT pg_advisory_unlock(hashtextextended($1::TEXT, 29))")
+                .bind(race_room_id.to_string())
+                .fetch_one(&mut *probe)
+                .await
+                .unwrap();
+        assert!(unlocked);
+        drop(probe);
 
         // Rejecting the terminal response rolls back the prefix and must not
         // wake delivery. Exercise the application port as well as the SQL.
@@ -3557,13 +3769,15 @@ mod history_identity_pg_tests {
         // The exact room UUID remains fenced until the authorized projection
         // ends. A destroy plus same-localpart recreation cannot redirect the
         // in-flight read to the replacement room.
-        let mut identity_fence = pool.begin().await.unwrap();
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *identity_fence)
+        let mut identity_guard = FederatedMamRoomGuard::acquire(&pool, "snapshot-room")
             .await
+            .unwrap()
             .unwrap();
+        let identity_room_id = identity_guard.room_id();
+        let mut identity_fence = identity_guard.begin_snapshot().await.unwrap();
         let access = match mam_federated_room_archive_page_authorized_in_transaction(
             &mut identity_fence,
+            identity_room_id,
             "snapshot-room",
             "remote@remote.test",
             false,
@@ -3609,6 +3823,7 @@ mod history_identity_pg_tests {
             "destroy/recreate must wait for the exact authorized room snapshot"
         );
         identity_fence.commit().await.unwrap();
+        identity_guard.release().await;
         replacement.await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, Uuid>(

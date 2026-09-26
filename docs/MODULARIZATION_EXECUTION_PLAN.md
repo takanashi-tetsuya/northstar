@@ -779,9 +779,12 @@ interoperability remain part of `EXT-CLUSTER` and `EXT-FEDERATION`.
 R1 has a restartable local/S3 recovery command, durable XID and same-transaction
 markers, and isolated pre/post-commit hard-kill drills. An optional age profile
 now streams the pre-restore database dump into encrypted rollback storage and
-tests recovery with a separate key. Old upload copies remain plaintext, and
-the encrypted path still needs the PostgreSQL fixture and target-environment
-drills. An expired or ambiguous XID remains fail-closed.
+tests recovery with a separate key. The PostgreSQL restore fixture passed in
+[CI run 36239326965](https://github.com/takanashi-tetsuya/northstar/actions/runs/36239326965).
+Old upload copies in the cutover and rollback directories remain plaintext;
+those filesystems need encryption and independent recovery keys. A hard-kill
+drill on the target storage layout is still required. An expired or ambiguous
+XID remains fail-closed.
 
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run

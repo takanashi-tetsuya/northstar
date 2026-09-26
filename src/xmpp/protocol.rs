@@ -425,6 +425,23 @@ struct SmSubstate {
     capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
 }
 
+/// Presence epochs stay with the protocol session across transport changes.
+/// The shared gate and generation counters are also published to the live
+/// route, so an SM replacement must inherit the exact same instances.
+#[derive(Default)]
+struct PresenceSubstate {
+    /// Serializes MIX presence changes with exact-route replacement and cleanup.
+    mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Prevents an older caps job from recreating a retracted directed item.
+    mix_presence_fallback_suppressed: Arc<DashSet<String>>,
+    /// Advances on each local XEP-0115 observation, independently of availability.
+    caps_observation_generation: Arc<AtomicU64>,
+    /// Broadcast presence restored only after the resumed route is active.
+    resumed_caps_presence: Option<String>,
+    /// Cancels replay work from an older available/unavailable transition.
+    availability_generation: Arc<AtomicU64>,
+}
+
 pub struct ProtocolSession {
     pub(crate) state: Arc<AppState>,
     pub(crate) outbound: crate::outbound::OutboundSender,
@@ -445,28 +462,7 @@ pub struct ProtocolSession {
     pub(crate) full_jid: Option<String>,
     pub(crate) registered_key: Option<String>,
     pub(crate) available: Option<Arc<AtomicBool>>,
-    /// Exact resource-scoped MIX presence epoch gate. It is copied into the
-    /// published `OnlineSession`, transferred across a live SM replacement,
-    /// and crossed by finalization after route removal before suspension or
-    /// unavailable publication can proceed.
-    pub(crate) mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
-    /// Latest-wins state for explicitly directed MIX presence. A caps job may
-    /// fill an uninitialised presence item, but must not recreate one that the
-    /// same live resource deliberately retracted.
-    pub(crate) mix_presence_fallback_suppressed: Arc<DashSet<String>>,
-    /// Exact generation of the latest local XEP-0115 observation. This is
-    /// separate from availability generation because a client may replace its
-    /// caps advertisement while remaining available.
-    pub(crate) caps_observation_generation: Arc<AtomicU64>,
-    /// Authoritative broadcast presence restored by a successful XEP-0198
-    /// claim. It remains inert while the replacement route is staged and is
-    /// rebound to the new connection epoch only after the transport confirms
-    /// `<resumed/>` and activates that exact route.
-    pub(crate) resumed_caps_presence: Option<String>,
-    /// Changes on every unavailable/available transition. Deferred replay
-    /// workers use it to stop an older availability epoch without affecting a
-    /// later reconnect on the same transport.
-    pub(crate) availability_generation: Arc<AtomicU64>,
+    presence: PresenceSubstate,
     pub(crate) carbons: Arc<AtomicBool>,
     pub(crate) priority: Arc<AtomicI16>,
     pub(crate) show: Arc<AtomicU8>,
@@ -581,11 +577,7 @@ impl ProtocolSession {
             full_jid: None,
             registered_key: None,
             available: None,
-            mix_presence_gate: Arc::new(tokio::sync::Mutex::new(())),
-            mix_presence_fallback_suppressed: Arc::new(DashSet::new()),
-            caps_observation_generation: Arc::new(AtomicU64::new(0)),
-            resumed_caps_presence: None,
-            availability_generation: Arc::new(AtomicU64::new(0)),
+            presence: PresenceSubstate::default(),
             carbons: Arc::new(AtomicBool::new(false)),
             priority: Arc::new(AtomicI16::new(0)),
             show: Arc::new(AtomicU8::new(0)),
@@ -1906,7 +1898,7 @@ impl ProtocolSession {
         let plan = crate::services::session_cleanup::SessionCleanupPlan {
             connection_id: self.connection_id,
             may_own_live_session: self.live_session_ownership.may_own(),
-            mix_presence_gate: Arc::clone(&self.mix_presence_gate),
+            mix_presence_gate: Arc::clone(&self.presence.mix_presence_gate),
             account,
             registered_key: self.registered_key.take(),
             full_jid: self.full_jid.take(),

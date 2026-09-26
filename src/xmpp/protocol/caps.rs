@@ -480,7 +480,7 @@ impl ProtocolSession {
     /// fresh `(connection_id,generation)` epoch and sends any disco query to
     /// the replacement transport.
     pub(crate) async fn rebind_resumed_caps_observation(&mut self) {
-        let Some(raw_presence) = self.resumed_caps_presence.take() else {
+        let Some(raw_presence) = self.presence.resumed_caps_presence.take() else {
             return;
         };
         let Some(full_jid) = self.registered_key.clone() else {
@@ -502,11 +502,13 @@ impl ProtocolSession {
             return;
         }
 
-        let _resource_epoch = Arc::clone(&self.mix_presence_gate).lock_owned().await;
+        let _resource_epoch = Arc::clone(&self.presence.mix_presence_gate)
+            .lock_owned()
+            .await;
         let route_is_current = self.state.local_caps_observer_connection_is_current(
             &full_jid,
             self.connection_id,
-            &self.mix_presence_gate,
+            &self.presence.mix_presence_gate,
         );
         if route_is_current {
             self.commit_caps_observation(presence, &full_jid);
@@ -563,13 +565,15 @@ impl ProtocolSession {
         let connection_is_current = self.state.local_caps_observer_connection_is_current(
             &full_jid,
             self.connection_id,
-            &self.mix_presence_gate,
+            &self.presence.mix_presence_gate,
         );
         if !connection_is_current {
             return;
         }
-        let epoch =
-            allocate_local_caps_epoch(self.connection_id, &self.caps_observation_generation);
+        let epoch = allocate_local_caps_epoch(
+            self.connection_id,
+            &self.presence.caps_observation_generation,
+        );
         let _observation_fence = LocalCapsObservationFence {
             state: &self.state,
             full_jid: &full_jid,
@@ -623,7 +627,9 @@ impl ProtocolSession {
             );
             return false;
         };
-        let _epoch_guard = Arc::clone(&self.mix_presence_gate).lock_owned().await;
+        let _epoch_guard = Arc::clone(&self.presence.mix_presence_gate)
+            .lock_owned()
+            .await;
         if epoch.connection_id != self.connection_id
             || !local_caps_epoch_is_current(&self.state, &pending.full_jid, epoch)
         {

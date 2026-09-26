@@ -736,6 +736,10 @@ transport-specific actions in its own adapter module, with RID ordering and
 response fences retained by the actor. CSI now owns its state machine and
 deferred outbound queue as one private session substate. SM counters, leases,
 the replay queue and resumption state share a private session substate.
+Presence and caps epoch gates, suppression and replay generations now share a
+private session substate as well; live SM replacement retains the same shared
+gate and counters used by the published route. This narrows direct access to
+the session without changing presence delivery or resume ordering.
 Transport adapters can forbid resumption or check whether an SM session exists
 without editing those fields directly. Direct TLS and STARTTLS now build
 channel-binding and client-certificate evidence before atomically activating

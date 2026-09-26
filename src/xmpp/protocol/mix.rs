@@ -3344,12 +3344,14 @@ impl ProtocolSession {
         // error response must not suppress later initialisation. The set is
         // resource-owned and therefore disappears with the session rather
         // than accumulating in a process-global keyed lock/tombstone map.
-        let mix_presence_epoch = Arc::clone(&self.mix_presence_gate).lock_owned().await;
+        let mix_presence_epoch = Arc::clone(&self.presence.mix_presence_gate)
+            .lock_owned()
+            .await;
         if !mix_presence_route_is_current(
             &self.state,
             full_jid,
             self.connection_id,
-            &self.mix_presence_gate,
+            &self.presence.mix_presence_gate,
             false,
         ) {
             return Ok(Some(Action::None));
@@ -3359,10 +3361,14 @@ impl ProtocolSession {
             let target = CanonicalJid::parse_bare(to)?.to_string();
             match root.attribute("type").unwrap_or("available") {
                 "unavailable" => {
-                    self.mix_presence_fallback_suppressed.insert(target);
+                    self.presence
+                        .mix_presence_fallback_suppressed
+                        .insert(target);
                 }
                 "available" => {
-                    self.mix_presence_fallback_suppressed.remove(&target);
+                    self.presence
+                        .mix_presence_fallback_suppressed
+                        .remove(&target);
                 }
                 _ => {}
             }

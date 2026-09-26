@@ -577,13 +577,13 @@ impl ProtocolSession {
                 // available remains authoritative for its addressed channel,
                 // but deliberately does not re-enable fallback elsewhere.
                 (
-                    Arc::clone(&self.mix_presence_gate),
+                    Arc::clone(&self.presence.mix_presence_gate),
                     {
                         let suppressed = Arc::new(dashmap::DashSet::new());
                         suppressed.insert("*".to_owned());
                         suppressed
                     },
-                    Arc::clone(&self.caps_observation_generation),
+                    Arc::clone(&self.presence.caps_observation_generation),
                 )
             });
         let mut mix_presence_epoch = match lock_mix_presence_gate_for_claim(
@@ -1061,10 +1061,10 @@ impl ProtocolSession {
         self.full_jid = Some(key.clone());
         self.registered_key = Some(key.clone());
         self.available = Some(available);
-        self.mix_presence_gate = mix_presence_gate;
-        self.mix_presence_fallback_suppressed = mix_presence_fallback_suppressed;
-        self.caps_observation_generation = caps_observation_generation;
-        self.resumed_caps_presence = claim
+        self.presence.mix_presence_gate = mix_presence_gate;
+        self.presence.mix_presence_fallback_suppressed = mix_presence_fallback_suppressed;
+        self.presence.caps_observation_generation = caps_observation_generation;
+        self.presence.resumed_caps_presence = claim
             .available
             .then(|| claim.last_presence.clone())
             .flatten();
@@ -1330,7 +1330,7 @@ impl ProtocolSession {
                 .as_ref()
                 .expect("a resumed bound resource has availability state")
                 .clone();
-            let replay_availability_generation = self.availability_generation.clone();
+            let replay_availability_generation = self.presence.availability_generation.clone();
             let replay_expected_generation = replay_availability_generation.load(Ordering::Acquire);
             self.defer_after_transport("resumed-offline-replay", async move {
                 super::replay::replay_resumed_offline(
@@ -1424,7 +1424,7 @@ impl ProtocolSession {
 
     pub(crate) fn reset_sm(&mut self) {
         self.sm.enabled = false;
-        self.resumed_caps_presence = None;
+        self.presence.resumed_caps_presence = None;
         self.sm.db_id = None;
         *self
             .sm

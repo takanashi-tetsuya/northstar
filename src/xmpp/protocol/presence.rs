@@ -439,12 +439,14 @@ impl ProtocolSession {
             // side effect. Serialize the database projection with the exact
             // in-memory availability/generation transition, then release the
             // per-resource gate before roster, federation and replay work.
-            let mix_presence_epoch = Arc::clone(&self.mix_presence_gate).lock_owned().await;
+            let mix_presence_epoch = Arc::clone(&self.presence.mix_presence_gate)
+                .lock_owned()
+                .await;
             if !super::mix::mix_presence_route_is_current(
                 &self.state,
                 &from,
                 self.connection_id,
-                &self.mix_presence_gate,
+                &self.presence.mix_presence_gate,
                 false,
             ) {
                 return Ok(Action::None);
@@ -455,7 +457,7 @@ impl ProtocolSession {
             if matches!(kind, "available" | "unavailable") {
                 // A broadcast transition supersedes every earlier directed
                 // per-channel suppression for this resource.
-                self.mix_presence_fallback_suppressed.clear();
+                self.presence.mix_presence_fallback_suppressed.clear();
             }
             let user = self.authenticated.as_ref().expect("authenticated session");
             let now_available = kind == "available";
@@ -466,9 +468,14 @@ impl ProtocolSession {
             let first_available = now_available && !was_available;
             let previous_priority = self.priority.load(Ordering::Relaxed);
             let availability_generation = if was_available != now_available {
-                self.availability_generation.fetch_add(1, Ordering::AcqRel) + 1
+                self.presence
+                    .availability_generation
+                    .fetch_add(1, Ordering::AcqRel)
+                    + 1
             } else {
-                self.availability_generation.load(Ordering::Acquire)
+                self.presence
+                    .availability_generation
+                    .load(Ordering::Acquire)
             };
             if let Some(available) = &self.available {
                 available.store(now_available, Ordering::Release);
@@ -743,7 +750,7 @@ impl ProtocolSession {
                     .as_ref()
                     .expect("a bound resource has availability state")
                     .clone();
-                let generation = self.availability_generation.clone();
+                let generation = self.presence.availability_generation.clone();
                 let recipient_id = user.id;
                 let full_jid = from.clone();
                 let account = account.clone();
@@ -785,7 +792,7 @@ impl ProtocolSession {
                     .as_ref()
                     .expect("a bound resource has availability state")
                     .clone();
-                let generation = self.availability_generation.clone();
+                let generation = self.presence.availability_generation.clone();
                 let recipient_id = user.id;
                 let full_jid = from.clone();
                 let offline_replay_cutoff = offline_replay_cutoff

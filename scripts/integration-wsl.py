@@ -1667,6 +1667,75 @@ def sasl2_plain_bind(
     return result, token_match.group(1).decode() if token_match else None
 
 
+def tcp_sm_cross_transport_resume_conformance() -> None:
+    """A pending SM reply survives a TCP TLS transport replacement."""
+
+    for source_name, source, replacement in (
+        ("direct", open_direct_tls_stream, open_starttls_stream),
+        ("starttls", open_starttls_stream, open_direct_tls_stream),
+    ):
+        device_id = "9f64996b-2e12-4b70-9361-6a08f49bbbf6"
+        marker = f"sm-{source_name}-ping"
+        original = source(f"{ALICE}@{DOMAIN}")
+        try:
+            bound, _ = sasl2_plain_bind(original, f"Sm{source_name}", device_id)
+            enabled = re.search(rb"<enabled xmlns='urn:xmpp:sm:3'[^>]* id='([^']+)'", bound)
+            check(enabled is not None, f"{source_name} did not issue an SM resume ID")
+            original.sendall(
+                (f"<iq xmlns='jabber:client' type='get' id='{marker}'>"
+                 "<ping xmlns='urn:xmpp:ping'/></iq>").encode()
+            )
+            reply = read_until(original, b"</iq>")
+            check(
+                f"id='{marker}'".encode() in reply and b"type='result'" in reply,
+                f"{source_name} did not produce the reply to be replayed: {reply!r}",
+            )
+            original.sendall(b"<r xmlns='urn:xmpp:sm:3'/>")
+            handled = read_until(original, b"/>")
+            check(
+                b"<a xmlns='urn:xmpp:sm:3' h='1'/>" in handled,
+                f"{source_name} did not count the pending IQ: {handled!r}",
+            )
+        finally:
+            # Do not send a stream close: the replacement must claim the
+            # suspended session and its unacknowledged reply.
+            original.close()
+
+        resumed = replacement(f"{ALICE}@{DOMAIN}")
+        try:
+            initial = base64.b64encode(f"\0{ALICE}\0{PASSWORD}".encode()).decode()
+            resumed.sendall(
+                ("<authenticate xmlns='urn:xmpp:sasl:2' mechanism='PLAIN'>"
+                 f"<initial-response>{initial}</initial-response>"
+                 f"<user-agent id='{device_id}'><software>Northstar integration</software></user-agent>"
+                 f"<resume xmlns='urn:xmpp:sm:3' previd='{enabled.group(1).decode()}' h='0'/>"
+                 "<bind xmlns='urn:xmpp:bind:0'><tag>unused-on-resume</tag>"
+                 "<enable xmlns='urn:xmpp:sm:3' resume='true'/></bind>"
+                 "</authenticate>").encode()
+            )
+            outcome = read_until(resumed, b"</stream:features>")
+            check(
+                b"<success xmlns='urn:xmpp:sasl:2'>" in outcome
+                and b"<resumed xmlns='urn:xmpp:sm:3'" in outcome
+                and b"<bound xmlns='urn:xmpp:bind:0'>" not in outcome,
+                f"{source_name} SM resume failed across TCP TLS transports: {outcome!r}",
+            )
+            if b"</iq>" not in outcome:
+                outcome += read_until(resumed, b"</iq>")
+            check(
+                f"id='{marker}'".encode() in outcome and b"type='result'" in outcome,
+                f"{source_name} SM resume did not replay the pending reply: {outcome!r}",
+            )
+            resumed.sendall(b"<a xmlns='urn:xmpp:sm:3' h='1'/>")
+            resumed.sendall(b"<r xmlns='urn:xmpp:sm:3'/>")
+            check(
+                b"<a xmlns='urn:xmpp:sm:3'" in read_until(resumed, b"/>"),
+                f"{source_name} did not process the resumed acknowledgement",
+            )
+        finally:
+            resumed.close()
+
+
 def sasl2_fast_authenticate_xml(
     token: str,
     device_id: str,
@@ -2730,6 +2799,7 @@ def run() -> None:
         tcp_c2s_external_conformance()
         tcp_sasl_core_conformance()
         tcp_sasl2_bind2_fast_conformance()
+        tcp_sm_cross_transport_resume_conformance()
         websocket_sasl2_resume_conformance()
         bosh_sasl2_bind_conformance()
         print(
@@ -2848,6 +2918,7 @@ def run() -> None:
     tcp_c2s_external_conformance()
     tcp_sasl_core_conformance()
     tcp_sasl2_bind2_fast_conformance()
+    tcp_sm_cross_transport_resume_conformance()
     websocket_sasl2_resume_conformance()
     bosh_sasl2_bind_conformance()
 

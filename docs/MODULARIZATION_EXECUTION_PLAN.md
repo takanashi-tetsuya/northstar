@@ -735,7 +735,8 @@ the replay queue and resumption state share a private session substate.
 Transport adapters can forbid resumption or check whether an SM session exists
 without editing those fields directly. Direct TLS and STARTTLS now build
 channel-binding and client-certificate evidence before atomically activating
-the secure session state.
+the secure session state. The C2S wire suite checks SM replay of an
+unacknowledged IQ reply in both directions between Direct TLS and STARTTLS.
 These are completed slices, not packet exit claims.
 
 Federated MUC now rebinds an existing local occupant to a new authenticated

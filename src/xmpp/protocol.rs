@@ -361,11 +361,21 @@ pub(crate) enum ClientTransport {
 /// Limits the owning transport can actually enforce on a native XML stream.
 /// HTTP binding leaves this absent because its request and inactivity limits
 /// are negotiated independently by XEP-0124.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct StreamLimits {
     pub max_bytes: usize,
     pub negotiation_idle: std::time::Duration,
     pub authenticated_idle: std::time::Duration,
+}
+
+impl StreamLimits {
+    pub(crate) fn idle_timeout(self, authenticated: bool) -> std::time::Duration {
+        if authenticated {
+            self.authenticated_idle
+        } else {
+            self.negotiation_idle
+        }
+    }
 }
 
 pub(crate) struct TlsSessionEvidence {
@@ -382,14 +392,8 @@ fn client_stream_limits_feature(limits: Option<StreamLimits>, authenticated: boo
     XmlElement::namespaced("limits", "urn:xmpp:stream-limits:0")
         .child(XmlElement::new("max-bytes").text(limits.max_bytes.to_string()))
         .child(
-            XmlElement::new("idle-seconds").text(
-                if authenticated {
-                    limits.authenticated_idle.as_secs()
-                } else {
-                    limits.negotiation_idle.as_secs()
-                }
-                .to_string(),
-            ),
+            XmlElement::new("idle-seconds")
+                .text(limits.idle_timeout(authenticated).as_secs().to_string()),
         )
         .finish()
 }
@@ -2213,6 +2217,15 @@ mod legacy_sasl_wire_tests {
             "<limits xmlns='urn:xmpp:stream-limits:0'><max-bytes>1048576</max-bytes><idle-seconds>300</idle-seconds></limits>"
         );
         assert_eq!(client_stream_limits_feature(None, true), "");
+        let custom = StreamLimits {
+            max_bytes: 128,
+            negotiation_idle: std::time::Duration::from_secs(2),
+            authenticated_idle: std::time::Duration::from_secs(7),
+        };
+        assert!(client_stream_limits_feature(Some(custom), false)
+            .contains("<idle-seconds>2</idle-seconds>"));
+        assert!(client_stream_limits_feature(Some(custom), true)
+            .contains("<idle-seconds>7</idle-seconds>"));
     }
 
     fn resume_test_governor(

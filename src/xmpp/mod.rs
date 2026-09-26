@@ -47,36 +47,30 @@ fn native_stream_limits() -> protocol::StreamLimits {
 
 #[derive(Debug)]
 struct PeerIdleTracker {
+    limits: protocol::StreamLimits,
     authenticated: bool,
     deadline: tokio::time::Instant,
 }
 
 impl PeerIdleTracker {
-    fn new(authenticated: bool, now: tokio::time::Instant) -> Self {
+    fn new(limits: protocol::StreamLimits, authenticated: bool, now: tokio::time::Instant) -> Self {
         Self {
+            limits,
             authenticated,
-            deadline: now + c2s_idle_timeout(authenticated),
+            deadline: now + limits.idle_timeout(authenticated),
         }
     }
 
     fn synchronize_authentication(&mut self, authenticated: bool, now: tokio::time::Instant) {
         if self.authenticated != authenticated {
             self.authenticated = authenticated;
-            self.deadline = now + c2s_idle_timeout(authenticated);
+            self.deadline = now + self.limits.idle_timeout(authenticated);
         }
     }
 
     fn note_peer_traffic(&mut self, authenticated: bool, now: tokio::time::Instant) {
         self.authenticated = authenticated;
-        self.deadline = now + c2s_idle_timeout(authenticated);
-    }
-}
-
-fn c2s_idle_timeout(authenticated: bool) -> Duration {
-    if authenticated {
-        C2S_AUTHENTICATED_IDLE_TIMEOUT
-    } else {
-        C2S_NEGOTIATION_IDLE_TIMEOUT
+        self.deadline = now + self.limits.idle_timeout(authenticated);
     }
 }
 
@@ -240,12 +234,13 @@ async fn xmpps_tcp_connection(
         anyhow::bail!("client selected an invalid ALPN protocol");
     }
     let (tx, mut rx) = mpsc::channel(512);
+    let stream_limits = native_stream_limits();
     let mut session = ProtocolSession::new(
         state.clone(),
         crate::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
-        Some(native_stream_limits()),
+        Some(stream_limits),
         peer.ip(),
     );
     session.activate_tls(tls_session_evidence(
@@ -255,9 +250,15 @@ async fn xmpps_tcp_connection(
         state.local_domain(),
     )?);
     tracing::debug!(%peer, "XMPPS connection established");
-    let transport = AssertUnwindSafe(drive_io(secure, &mut session, &mut rx, &actor_shutdown))
-        .catch_unwind()
-        .await;
+    let transport = AssertUnwindSafe(drive_io(
+        secure,
+        &mut session,
+        &mut rx,
+        &actor_shutdown,
+        stream_limits,
+    ))
+    .catch_unwind()
+    .await;
     finish_protocol_session(&mut session, transport)
         .await
         .map(|_| ())
@@ -274,16 +275,24 @@ async fn tcp_connection(
 ) -> Result<()> {
     stream.set_nodelay(true)?;
     let (tx, mut rx) = mpsc::channel(512);
+    let stream_limits = native_stream_limits();
     let mut session = ProtocolSession::new(
         state.clone(),
         crate::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
-        Some(native_stream_limits()),
+        Some(stream_limits),
         peer.ip(),
     );
     let transport = AssertUnwindSafe(async {
-        let outcome = drive_io(stream, &mut session, &mut rx, &actor_shutdown).await?;
+        let outcome = drive_io(
+            stream,
+            &mut session,
+            &mut rx,
+            &actor_shutdown,
+            stream_limits,
+        )
+        .await?;
         let DriveOutcome::Upgrade(mut plain) = outcome else {
             return Ok(());
         };
@@ -308,7 +317,14 @@ async fn tcp_connection(
             state.local_domain(),
         )?);
         tracing::debug!(%peer, "XMPP connection upgraded to TLS");
-        let _ = drive_io(secure, &mut session, &mut rx, &actor_shutdown).await?;
+        let _ = drive_io(
+            secure,
+            &mut session,
+            &mut rx,
+            &actor_shutdown,
+            stream_limits,
+        )
+        .await?;
         Ok(())
     })
     .catch_unwind()
@@ -404,6 +420,7 @@ async fn drive_io<S>(
     session: &mut ProtocolSession,
     rx: &mut mpsc::Receiver<crate::outbound::OutboundItem>,
     actor_shutdown: &tokio_util::sync::CancellationToken,
+    stream_limits: protocol::StreamLimits,
 ) -> Result<DriveOutcome<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -418,8 +435,11 @@ where
     let mut framer = XmlEntityFramer::default();
     let mut pending_utf8 = Vec::new();
     let mut bytes = [0u8; 8192];
-    let mut peer_idle =
-        PeerIdleTracker::new(session.is_authenticated(), tokio::time::Instant::now());
+    let mut peer_idle = PeerIdleTracker::new(
+        stream_limits,
+        session.is_authenticated(),
+        tokio::time::Instant::now(),
+    );
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
         (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
@@ -1032,12 +1052,13 @@ pub async fn websocket_connection(
 ) {
     state.record_c2s_websocket_connection();
     let (tx, mut rx) = mpsc::channel(512);
+    let stream_limits = native_stream_limits();
     let mut session = ProtocolSession::new(
         state,
         crate::outbound::OutboundSender::new(tx),
         true,
         protocol::ClientTransport::WebSocket,
-        Some(native_stream_limits()),
+        Some(stream_limits),
         peer_ip,
     );
     let mut framer = XmlEntityFramer::default();
@@ -1057,8 +1078,11 @@ pub async fn websocket_connection(
         (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut peer_idle =
-        PeerIdleTracker::new(session.is_authenticated(), tokio::time::Instant::now());
+    let mut peer_idle = PeerIdleTracker::new(
+        stream_limits,
+        session.is_authenticated(),
+        tokio::time::Instant::now(),
+    );
     let mut terminal_sequence = WebSocketTerminalSequence::default();
     let transport = AssertUnwindSafe(async {
         loop {
@@ -1521,7 +1545,8 @@ mod tests {
     #[test]
     fn peer_idle_deadline_changes_only_for_peer_traffic_or_authentication() {
         let started = tokio::time::Instant::now();
-        let mut tracker = PeerIdleTracker::new(false, started);
+        let limits = native_stream_limits();
+        let mut tracker = PeerIdleTracker::new(limits, false, started);
         assert_eq!(tracker.deadline, started + C2S_NEGOTIATION_IDLE_TIMEOUT);
 
         // Local queue/timer selection does not call either mutating method.
@@ -1540,6 +1565,22 @@ mod tests {
             tracker.deadline,
             authenticated_at + C2S_AUTHENTICATED_IDLE_TIMEOUT
         );
+    }
+
+    #[test]
+    fn peer_idle_deadline_uses_transport_supplied_limits() {
+        let limits = protocol::StreamLimits {
+            max_bytes: 128,
+            negotiation_idle: Duration::from_secs(2),
+            authenticated_idle: Duration::from_secs(7),
+        };
+        let started = tokio::time::Instant::now();
+        let mut tracker = PeerIdleTracker::new(limits, false, started);
+        assert_eq!(tracker.deadline, started + Duration::from_secs(2));
+        tracker.synchronize_authentication(true, started + Duration::from_secs(1));
+        assert_eq!(tracker.deadline, started + Duration::from_secs(8));
+        tracker.note_peer_traffic(true, started + Duration::from_secs(3));
+        assert_eq!(tracker.deadline, started + Duration::from_secs(10));
     }
 
     #[test]

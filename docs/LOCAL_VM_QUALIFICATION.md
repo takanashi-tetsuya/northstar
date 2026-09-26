@@ -224,8 +224,11 @@ could query the archive. After creating and configuring a temporary room, its
 first group message closed the C2S stream. PostgreSQL logged `permission
 denied for table users` for a direct row-lock query in MUC admission. Migration
 `0151` and the matching application change replace that query with an exact
-enabled-account name-check capability. This source fix still needs CI and a
-fresh VM binary retest; the current soak binary is unchanged.
+enabled-account name-check capability. The MUC batch affiliation path now
+uses the same capability. Affiliation listing still locks the membership rows,
+but no longer attempts to lock `users`, whose names are immutable. The initial
+`0151` change passed CI on `a7859ed`; the follow-up MUC paths and a fresh VM
+binary still need validation. The current soak binary is unchanged.
 
 The lab setup is repeatable in this order: provision the six guests and lab
 PKI, run `bash scripts/local-vm-lab-minio.sh` with the pinned Debian package

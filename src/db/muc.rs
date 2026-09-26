@@ -2365,8 +2365,7 @@ pub async fn set_muc_affiliations_batch(
         let (key, target, current) = match &change.target {
             MucAffiliationTarget::LocalUsername(username) => {
                 let user_id: Option<Uuid> = sqlx::query_scalar(
-                    "SELECT id FROM users
-                          WHERE username=$1 AND NOT is_disabled FOR SHARE",
+                    "SELECT id FROM users WHERE username=$1 AND NOT is_disabled",
                 )
                 .bind(username)
                 .fetch_optional(&mut *transaction)
@@ -2375,6 +2374,16 @@ pub async fn set_muc_affiliations_batch(
                     transaction.rollback().await?;
                     return Ok(MucAffiliationBatchOutcome::MissingTarget);
                 };
+                let name_matches: bool =
+                    sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+                        .bind(user_id)
+                        .bind(username)
+                        .fetch_one(&mut *transaction)
+                        .await?;
+                if !name_matches {
+                    transaction.rollback().await?;
+                    return Ok(MucAffiliationBatchOutcome::MissingTarget);
+                }
                 let current: Option<String> = sqlx::query_scalar(
                     "SELECT affiliation FROM muc_affiliations
                       WHERE room_id=$1 AND user_id=$2 FOR UPDATE",
@@ -2964,7 +2973,7 @@ pub async fn authorized_muc_admin_affiliation_list(
         "SELECT users.username FROM muc_affiliations affiliation
           JOIN users ON users.id=affiliation.user_id
          WHERE affiliation.room_id=$1 AND affiliation.affiliation=$2
-         ORDER BY users.username FOR SHARE OF affiliation,users",
+         ORDER BY users.username FOR SHARE OF affiliation",
     )
     .bind(room_id)
     .bind(requested_affiliation)

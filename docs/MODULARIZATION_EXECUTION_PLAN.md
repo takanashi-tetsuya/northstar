@@ -703,7 +703,8 @@ aggregate repository trait has been removed. The isolated PubSub fixture now
 exercises node, discovery, item, subscription, affiliation and PEP queries on a
 connection with PostgreSQL's default transaction mode set to read-only. The
 existing concurrent authority tests still apply to their mutation paths.
-C1 remains open until the read-only fixture and full CI pass on the new head.
+C1 passed the read-only PostgreSQL fixture and full CI on `a7859ed`
+([run 36219774226](https://github.com/takanashi-tetsuya/northstar/actions/runs/36219774226)).
 Pure publish-option and payload admission now lives in the PubSub application
 crate; the service still checks authorization first for existing nodes before
 exposing policy errors. The apparent base/`with_renderer` pairs in

@@ -1047,6 +1047,12 @@ BEGIN
   IF pg_catalog.has_table_privilege('northstar_runtime', 'users', 'UPDATE') THEN
     RAISE EXCEPTION 'runtime acquired direct account mutation rights';
   END IF;
+  -- Room admin lists lock affiliations, while the immutable account name is
+  -- read through the runtime role's SELECT grant.
+  PERFORM users.username FROM muc_affiliations AS affiliation
+    JOIN users ON users.id=affiliation.user_id
+   WHERE affiliation.room_id='00000000-0000-0000-0000-000000000000'
+   ORDER BY users.username FOR SHARE OF affiliation;
 END;
 $check_generation_lock$;
 RESET ROLE;

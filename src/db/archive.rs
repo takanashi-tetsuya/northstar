@@ -3,8 +3,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    decide_mam_room_read, finish_mam_page, mam_referenced_ids, plan_mam_page, MamRoomReadDecision,
-    ResolvedMamRsmPage,
+    decide_mam_room_read, finish_mam_page, mam_referenced_ids, MamQueryBounds, MamQueryPlan,
+    MamRoomReadDecision, ResolvedMamRsmPage,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
@@ -1124,8 +1124,7 @@ fn push_mam_scope(
     source: MamArchiveSource,
     query: &MamArchiveQuery,
     blocked_patterns: &[MamBlockedPattern],
-    after_point: Option<(DateTime<Utc>, Uuid)>,
-    before_point: Option<(DateTime<Utc>, Uuid)>,
+    bounds: MamQueryBounds,
 ) {
     push_mam_archive_base(query_builder, source, blocked_patterns);
     if let Some(with_jid) = &query.with_jid {
@@ -1152,7 +1151,7 @@ fn push_mam_scope(
     if let Some(end) = query.end {
         query_builder.push(" AND created_at <= ").push_bind(end);
     }
-    if let Some((created_at, id)) = after_point {
+    if let Some((created_at, id)) = bounds.after {
         query_builder
             .push(" AND (created_at, id) > (")
             .push_bind(created_at)
@@ -1160,7 +1159,7 @@ fn push_mam_scope(
             .push_bind(id)
             .push(")");
     }
-    if let Some((created_at, id)) = before_point {
+    if let Some((created_at, id)) = bounds.before {
         query_builder
             .push(" AND (created_at, id) < (")
             .push_bind(created_at)
@@ -1261,6 +1260,7 @@ async fn mam_archive_page_for_in_transaction(
         None => None,
     };
 
+    let plan = MamQueryPlan::from_form_points(form_after, form_before);
     let mut count_builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM ");
     count_builder.push(source.table());
     push_mam_scope(
@@ -1268,8 +1268,7 @@ async fn mam_archive_page_for_in_transaction(
         source,
         query,
         &blocked_patterns,
-        form_after,
-        form_before,
+        plan.count_bounds,
     );
     let total: i64 = count_builder
         .build_query_scalar()
@@ -1295,7 +1294,8 @@ async fn mam_archive_page_for_in_transaction(
     };
 
     let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
-    let window = plan_mam_page(form_after, form_before, resolved_page, max);
+    let page = plan.page_window(resolved_page, max);
+
     let mut page_builder = QueryBuilder::<Postgres>::new("SELECT ");
     page_builder
         .push(source.select_columns())
@@ -1306,23 +1306,22 @@ async fn mam_archive_page_for_in_transaction(
         source,
         query,
         &blocked_patterns,
-        window.after,
-        window.before,
+        page.bounds(),
     );
-    page_builder.push(if window.descending {
+    page_builder.push(if page.descending {
         " ORDER BY created_at DESC, id DESC LIMIT "
     } else {
         " ORDER BY created_at ASC, id ASC LIMIT "
     });
-    page_builder.push_bind(window.fetch_limit);
-    if let Some(index) = window.offset {
+    page_builder.push_bind(page.fetch_limit);
+    if let Some(index) = page.offset {
         page_builder.push(" OFFSET ").push_bind(index);
     }
     let fetched = page_builder.build().fetch_all(&mut **transaction).await?;
     let (rows, complete) = finish_mam_page(
         fetched.iter().map(archive_from_row).collect(),
         max,
-        window.descending,
+        page.descending,
     );
 
     let first_index = if let Some(first) = rows.first() {
@@ -1333,8 +1332,7 @@ async fn mam_archive_page_for_in_transaction(
             source,
             query,
             &blocked_patterns,
-            form_after,
-            form_before,
+            plan.count_bounds,
         );
         index_builder
             .push(" AND (created_at, id) < (")
@@ -2875,8 +2873,10 @@ mod mam_query_tests {
             MamArchiveSource::User(owner),
             &query("bob@example.test"),
             &[],
-            None,
-            None,
+            MamQueryBounds {
+                after: None,
+                before: None,
+            },
         );
         assert!(bare.sql().contains("peer_jid ="));
         assert!(!bare.sql().contains("lower(peer_jid)"));
@@ -2888,8 +2888,10 @@ mod mam_query_tests {
             MamArchiveSource::User(owner),
             &query("bob@example.test/phone"),
             &[],
-            None,
-            None,
+            MamQueryBounds {
+                after: None,
+                before: None,
+            },
         );
         assert!(full.sql().contains("peer_full_jid ="));
         assert!(!full.sql().contains("lower(peer_full_jid)"));
@@ -2908,8 +2910,10 @@ mod mam_query_tests {
             MamArchiveSource::User(owner),
             &query("mallory@example.test/' OR true --"),
             &[],
-            Some(anchor),
-            None,
+            MamQueryBounds {
+                after: Some(anchor),
+                before: None,
+            },
         );
         let sql = builder.sql();
         assert!(!sql.contains("mallory"));

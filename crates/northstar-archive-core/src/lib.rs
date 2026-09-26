@@ -74,12 +74,52 @@ pub enum ResolvedMamRsmPage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MamQueryBounds {
+    pub after: Option<ArchivePoint>,
+    pub before: Option<ArchivePoint>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MamPageWindow {
     pub after: Option<ArchivePoint>,
     pub before: Option<ArchivePoint>,
     pub descending: bool,
     pub offset: Option<i64>,
     pub fetch_limit: i64,
+}
+
+impl MamPageWindow {
+    pub fn bounds(self) -> MamQueryBounds {
+        MamQueryBounds {
+            after: self.after,
+            before: self.before,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MamQueryPlan {
+    /// The form filters define the total and the first result's index. RSM
+    /// cursors narrow only the selected page.
+    pub count_bounds: MamQueryBounds,
+}
+
+impl MamQueryPlan {
+    pub fn from_form_points(
+        form_after: Option<ArchivePoint>,
+        form_before: Option<ArchivePoint>,
+    ) -> Self {
+        Self {
+            count_bounds: MamQueryBounds {
+                after: form_after,
+                before: form_before,
+            },
+        }
+    }
+
+    pub fn page_window(self, page: ResolvedMamRsmPage, max: i64) -> MamPageWindow {
+        plan_mam_page(self.count_bounds.after, self.count_bounds.before, page, max)
+    }
 }
 
 /// Intersect form and RSM bounds without changing the authorized SQL snapshot.
@@ -438,6 +478,36 @@ mod tests {
         let indexed = plan_mam_page(None, None, ResolvedMamRsmPage::Index(7), 20);
         assert_eq!(indexed.offset, Some(7));
         assert_eq!(indexed.fetch_limit, 21);
+    }
+
+    #[test]
+    fn query_plan_keeps_total_and_index_outside_rsm_cursor() {
+        let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let point = |id| (timestamp, Uuid::from_u128(id));
+        let form_after = Some(point(10));
+        let form_before = Some(point(50));
+
+        let plan = MamQueryPlan::from_form_points(form_after, form_before);
+        assert_eq!(plan.count_bounds.after, form_after);
+        assert_eq!(plan.count_bounds.before, form_before);
+
+        let after = plan.page_window(ResolvedMamRsmPage::After(point(20)), 3);
+        assert_eq!(after.bounds().after, Some(point(20)));
+        assert_eq!(after.bounds().before, form_before);
+        assert_eq!(after.fetch_limit, 4);
+
+        let before = plan.page_window(ResolvedMamRsmPage::Before(point(40)), 3);
+        assert_eq!(before.bounds().after, form_after);
+        assert_eq!(before.bounds().before, Some(point(40)));
+        assert!(before.descending);
+
+        for page in [
+            ResolvedMamRsmPage::First,
+            ResolvedMamRsmPage::Last,
+            ResolvedMamRsmPage::Index(7),
+        ] {
+            assert_eq!(plan.page_window(page, 3).bounds(), plan.count_bounds);
+        }
     }
 
     #[test]

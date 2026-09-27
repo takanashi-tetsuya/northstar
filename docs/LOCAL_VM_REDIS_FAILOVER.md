@@ -61,10 +61,15 @@ The read-only pre-fault check is
 the soak is sealed** and the replica/Sentinel services are installed. It first
 checks the isolated six-VM network, then uses SSH to inspect TLS certificates,
 private-file permissions, exact ACL command/key/channel scopes, `ROLE`,
-`INFO replication`, each Sentinel's `CKQUORUM` and replica view. It requires
+`INFO replication`, each Sentinel's `CKQUORUM`, `SENTINEL MASTER` epoch and
+flags, and replica view. Give the `sentinel-observer` ACL the read-only
+`+sentinel|master` command alongside its existing discovery commands; the
+preflight rejects broader observer command grants. It requires
 `infra` to be the sole primary, `ejabberd` to be its healthy replica, and all
 three voters to agree on `infra`. A missing or differing observation fails the
-check. The output contains roles and hostnames, never passwords or ACL text.
+check. The output contains roles, hostnames and epochs, never passwords or ACL
+text. This pre-fault check does not compare epochs across voters or qualify
+unattended application recovery.
 The preflight checks topology, not soak completion: verify the finalizer's
 successful report and sealed archive yourself before invoking it. Its nested
 isolation check may add missing lab SSH host keys to the private lab

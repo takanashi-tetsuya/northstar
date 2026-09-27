@@ -41,6 +41,10 @@ SENTINEL_DATA_COMMANDS = {
     "script|kill",
 }
 REPLICATION_COMMANDS = {"psync", "replconf", "ping"}
+SENTINEL_OBSERVER_COMMANDS = {
+    "ping", "role", "sentinel|get-master-addr-by-name",
+    "sentinel|master", "sentinel|ckquorum", "sentinel|replicas",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -158,9 +162,7 @@ def check_acl(path: Path, *, data: bool) -> None:
         require("+@all" in peer and "allchannels" in peer,
                 "Sentinel peer cannot coordinate with voters")
         observer = acl_line(path, "sentinel-observer")
-        observer_commands = {"ping", "role", "sentinel|get-master-addr-by-name",
-                             "sentinel|ckquorum", "sentinel|replicas"}
-        scoped_acl(observer, "sentinel-observer", observer_commands,
+        scoped_acl(observer, "sentinel-observer", SENTINEL_OBSERVER_COMMANDS,
                    {"reset", "resetchannels"})
 
 
@@ -235,6 +237,19 @@ def flat_reply_fields(reply: str) -> dict[str, str]:
         require(key not in fields, "unexpected duplicate Sentinel field")
         fields[key] = value
     return fields
+
+
+def checked_master_view(reply: str, address: list[str]) -> int:
+    master = flat_reply_fields(reply)
+    flags = set(master.get("flags", "").split(","))
+    epoch = master.get("config-epoch", "")
+    require(master.get("ip") == address[0] and master.get("port") == address[1] and
+            "master" in flags and
+            not flags.intersection({"s_down", "o_down", "disconnected",
+                                    "failover_in_progress"}) and
+            re.fullmatch(r"[0-9]+", epoch) is not None,
+            "Sentinel master view is unhealthy or differs from its address")
+    return int(epoch)
 
 
 def inspect_data(guest: str) -> dict[str, object]:
@@ -342,6 +357,10 @@ def inspect_sentinel(guest: str) -> dict[str, object]:
     require(len(address) == 2 and address[1] == "6379" and
             address[0] in {"infra.lab.test", "ejabberd.lab.test"},
             "Sentinel returned an unexpected primary")
+    master_epoch = checked_master_view(redis_cli(
+        guest, config, "sentinel-observer",
+        SENTINEL_DIR / "observer-password", 26379,
+        "SENTINEL", "MASTER", "northstar"), address)
     quorum = redis_cli(guest, config, "sentinel-observer",
                        SENTINEL_DIR / "observer-password", 26379,
                        "SENTINEL", "CKQUORUM", "northstar")
@@ -356,7 +375,7 @@ def inspect_sentinel(guest: str) -> dict[str, object]:
             not flags.intersection({"s_down", "o_down", "disconnected", "master"}),
             "Sentinel does not see a healthy expected replica")
     return {"guest": guest, "role": role, "master": address[0],
-            "quorum": quorum}
+            "master_epoch": master_epoch, "quorum": quorum}
 
 
 def main() -> None:

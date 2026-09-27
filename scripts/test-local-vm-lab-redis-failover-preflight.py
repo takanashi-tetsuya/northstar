@@ -64,7 +64,7 @@ def sentinel_acl_file(directory: Path, peer_extra: str = "") -> Path:
     path.write_text("user default off\n"
                     f"user sentinel-peer on >test-password allchannels +@all {peer_extra}\n"
                     "user sentinel-observer on >observer-password +ping +role "
-                    "+sentinel|get-master-addr-by-name +sentinel|ckquorum "
+                    "+sentinel|get-master-addr-by-name +sentinel|master +sentinel|ckquorum "
                     "+sentinel|replicas\n")
     path.chmod(0o600)
     return path
@@ -77,6 +77,19 @@ class RedisFailoverPreflightTests(unittest.TestCase):
             {"ip": "ejabberd.lab.test", "port": "6379", "flags": "slave"})
         with self.assertRaises(ValueError):
             guest.flat_reply_fields("ip\nejabberd.lab.test\nport")
+
+    def test_sentinel_master_view(self):
+        reply = ("ip\ninfra.lab.test\nport\n6379\nflags\nmaster\n"
+                 "config-epoch\n7")
+        self.assertEqual(guest.checked_master_view(
+            reply, ["infra.lab.test", "6379"]), 7)
+        for bad in (
+            reply.replace("config-epoch\n7", "config-epoch\nunknown"),
+            reply.replace("flags\nmaster", "flags\nmaster,s_down"),
+            reply.replace("ip\ninfra.lab.test", "ip\nejabberd.lab.test"),
+        ):
+            with self.subTest(reply=bad), self.assertRaises(ValueError):
+                guest.checked_master_view(bad, ["infra.lab.test", "6379"])
 
     def test_initial_topology(self):
         self.assertEqual(host.verify(snapshots())["phase"], "pre-fault-only")
@@ -123,6 +136,16 @@ class RedisFailoverPreflightTests(unittest.TestCase):
                 guest.check_acl(sentinel_acl_file(Path(directory)), data=False)
                 with self.assertRaises(ValueError):
                     guest.check_acl(sentinel_acl_file(Path(directory), "nopass"), data=False)
+
+    def test_sentinel_observer_needs_only_master_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(guest.pwd, "getpwnam", return_value=SimpleNamespace(
+                    pw_uid=os.getuid(), pw_gid=os.getgid())):
+                path = sentinel_acl_file(Path(directory))
+                guest.check_acl(path, data=False)
+                path.write_text(path.read_text().replace("+sentinel|master ", ""))
+                with self.assertRaises(ValueError):
+                    guest.check_acl(path, data=False)
 
 
 if __name__ == "__main__":

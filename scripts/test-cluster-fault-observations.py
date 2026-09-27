@@ -41,6 +41,63 @@ class RejectionObservationTests(unittest.TestCase):
     def observe(self, offset=0):
         return cluster.authentication_rejection_since(self.path, offset)
 
+    def test_fail_closed_observation_waits_for_staggered_nodes(self):
+        now = [0.0]
+
+        def state(port, name, timeout):
+            self.assertEqual(name, "xmpp_cluster_operational_state")
+            self.assertGreater(timeout, 0)
+            return 3 if port == 2 or now[0] >= 12 else 2
+
+        def advance(duration):
+            now[0] += duration
+
+        with patch.object(cluster.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(cluster, "metric_value", side_effect=state), \
+                patch.object(cluster.time, "sleep", side_effect=advance):
+            states = cluster.wait_for_cluster_fail_closed((1, 2), 70.0)
+        self.assertEqual(states, (3, 3))
+        self.assertGreaterEqual(now[0], 12)
+        self.assertLess(now[0], 70)
+
+    def test_fail_closed_observation_stops_at_deadline_with_one_healthy_node(self):
+        now = [0.0]
+        samples = []
+
+        def state(port, name, timeout):
+            self.assertEqual(name, "xmpp_cluster_operational_state")
+            self.assertLess(now[0], 0.25)
+            self.assertLessEqual(timeout, 0.25 - now[0])
+            samples.append(port)
+            return 2 if port == 1 else 3
+
+        def advance(duration):
+            now[0] += duration
+
+        with patch.object(cluster.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(cluster, "metric_value", side_effect=state), \
+                patch.object(cluster.time, "sleep", side_effect=advance):
+            states = cluster.wait_for_cluster_fail_closed((1, 2), 0.25)
+        self.assertEqual(states, (2, 3))
+        self.assertAlmostEqual(now[0], 0.25)
+        self.assertEqual(len(samples), 6)
+
+    def test_fail_closed_observation_rejects_a_late_complete_snapshot(self):
+        now = [0.0]
+
+        def state(port, _name, timeout):
+            self.assertGreater(timeout, 0)
+            if port == 2:
+                now[0] = 0.31
+            return 3
+
+        with patch.object(cluster.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(cluster, "metric_value", side_effect=state), \
+                patch.object(cluster.time, "sleep") as sleep:
+            states = cluster.wait_for_cluster_fail_closed((1, 2), 0.3)
+        self.assertEqual(states, (None, None))
+        sleep.assert_not_called()
+
     def test_fail_closed_socket_probe_checks_every_frame_for_every_marker(self):
         class Client:
             def __init__(self, frames):

@@ -555,6 +555,30 @@ def wait_for_cluster_recovery(ports: tuple[int, ...], deadline: float) -> bool:
     return False
 
 
+def wait_for_cluster_fail_closed(ports: tuple[int, ...], deadline: float) -> tuple[int | None, ...]:
+    """Observe every node's fail-closed state within one bounded Redis pause."""
+    fixture.check(bool(ports) and all(port > 0 for port in ports), "cluster metrics listeners are not configured")
+    states: tuple[int | None, ...] = (None,) * len(ports)
+    while time.monotonic() < deadline:
+        observed = []
+        for port in ports:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return states
+            observed.append(
+                metric_value(port, "xmpp_cluster_operational_state", timeout=min(1, remaining))
+            )
+        if time.monotonic() >= deadline:
+            return states
+        states = tuple(observed)
+        if all(state == 3 for state in states):
+            return states
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.1, remaining))
+    return states
+
+
 def subscriber_envelope(process: subprocess.Popen[bytes], timeout: float = 5) -> dict:
     assert process.stdout is not None
     ready, _, _ = select.select([process.stdout], [], [], timeout)
@@ -1567,16 +1591,11 @@ def run_faults() -> None:
         # The no-store request may be the first command to notice the outage.
         # Wait for the actual fail-closed health decision on both nodes before
         # asserting the admission policy for an ordinary direct message.
-        fenced_deadline = time.monotonic() + 10
-        fenced_states = (None, None)
-        while time.monotonic() < fenced_deadline:
-            fenced_states = tuple(
-                metric_value(port, "xmpp_cluster_operational_state", timeout=1)
-                for port in (METRICS_A, METRICS_B)
-            )
-            if fenced_states == (3, 3):
-                break
-            time.sleep(0.1)
+        # PubSub may fence one node first; the other can observe the outage on
+        # its 30-second maintenance tick, whose pass has a 25-second budget.
+        fenced_states = wait_for_cluster_fail_closed(
+            (METRICS_A, METRICS_B), time.monotonic() + 70
+        )
         fixture.check(
             fenced_states == (3, 3),
             f"both nodes did not enter FailClosed while Redis was stopped: {fenced_states}",

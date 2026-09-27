@@ -480,6 +480,8 @@ jobs:
           python3 scripts/local-vm-lab-active-presence.py --self-test
           python3 scripts/local-vm-lab-active-load.py --self-test
           python3 scripts/local-vm-lab-dane-fixtures.py --self-test
+          python3 scripts/local-vm-lab-dane-proof.py --self-test
+          python3 scripts/local-vm-lab-dane-zone.py --self-test
           python3 scripts/local-vm-lab-component.py --self-test
           python3 scripts/local-vm-lab-redis-fault.py --self-test
           python3 scripts/local-vm-lab-redis-fault-guest.py --self-test

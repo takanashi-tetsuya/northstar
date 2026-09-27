@@ -58,6 +58,14 @@ zone serial, wait for the previous TTL to expire, and verify the signed answer
 before sending a fresh marker. A positive usage 1 or 3 record left in the
 same RRset invalidates the negative result.
 
+To prepare each replacement, save the current unsigned zone, pin its SHA-256,
+then run `scripts/local-vm-lab-dane-zone.py` with `--base-zone`,
+`--expected-base-sha256`, `--owner`, `--records` and a new `--output` path.
+Omit `--records` to stage an absent TLSA RRset. The tool replaces only that
+owner's RRset and increments the SOA serial. Check the staged file with
+`named-checkzone` before installing it. Always stage from the current zone;
+files prepared from an earlier serial must not be installed after another case.
+
 After each RRset change and TTL expiry, run the read-only
 `scripts/local-vm-lab-dane-proof.py` probe against the isolated DNS server.
 For example, a usage 1 case uses `--anchor-file <lab DNSKEY file>

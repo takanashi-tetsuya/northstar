@@ -135,6 +135,14 @@ Environment=CLUSTER_PEER_KEYS_FILE=/home/lab/northstar/secrets/cluster-peers.jso
 Environment=CLUSTER_SIGNING_KEY_EPOCH=1
 Environment=CLUSTER_FAILURE_POLICY=fail_closed
 Environment=CLUSTER_SAFETY_LEASE_SECONDS=120
+Environment=UPLOAD_STORAGE_BACKEND=s3
+Environment=UPLOAD_S3_ENDPOINT=https://infra.lab.test:9000
+Environment=UPLOAD_S3_BUCKET=northstar-lab-uploads
+Environment=UPLOAD_S3_REGION=us-east-1
+Environment=UPLOAD_S3_PREFIX=lab/uploads
+Environment=UPLOAD_S3_PATH_STYLE=true
+Environment=UPLOAD_S3_CREDENTIAL_MODE=files
+Environment=UPLOAD_S3_CREDENTIAL_BUNDLE_FILE=/home/lab/northstar/secrets/s3-credentials.json
 UNIT
 systemctl daemon-reload
 GUEST

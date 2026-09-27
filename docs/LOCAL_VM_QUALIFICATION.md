@@ -514,3 +514,30 @@ six-guest route/interface preflight. Package provisioning and candidate
 qualification are still in progress. A new 24-hour soak must start from the
 frozen, CI-verified candidate and complete without interruption before it can
 count as a pass.
+
+The rebuilt guests completed 20 package installs with temporary provisioning
+interfaces removed after each install; the final six-guest isolation preflight
+passed. The lab CA's node certificates passed strict OpenSSL verification, and
+the internal `lab.test` zone serves signed A records. PostgreSQL 17 was
+initialized with separate workload roles, Redis 8 with mutual TLS and a
+namespaced ACL, and a versioned MinIO bucket on a dedicated persistent disk.
+The first database setup attempt stopped before initialization because `age`
+was missing; installing it and rerunning the isolation preflight allowed the
+setup to complete.
+
+On the current release-profile binary, SHA-256
+`a73aa56296980ae7b24bdb9d3ddb76058365f7005a633cbaf38be7a59bbf4945`,
+standalone Northstar exchanged messages in both directions with Prosody and
+ejabberd. A local upload was read back with SHA-256
+`1ed93a7caae8e210693ab05393ec4264460bdeb8459c89fc98b55b4f5859f479`.
+With both Northstar processes stopped, Local-to-S3 migration committed that
+one object as generation 2, manifest
+`6d691bbad3c0ba27389c037e5baf0d977f43618f9cd6340dade1e48aa7857ee0`.
+Both cluster nodes then read back the same object hash, delivered direct
+messages in both directions across nodes, and passed both bidirectional
+federation probes again. The first cluster startup exposed a lab script gap:
+it omitted S3 service settings after the offline cutover. The script now sets
+them for both nodes; the rerun passed. These are baseline observations for
+this VM topology. Fault injection, sustained load and a complete soak remain
+open, and the binary must be tied to a fully green CI candidate before those
+results can qualify a release.

@@ -25,7 +25,8 @@ infra=lab@$(lease_ip infra)
 
 # Persist identity across reruns. A new key must not silently replace the
 # PostgreSQL signing authority for a live node.
-keys=/tmp/northstar-lab/cluster-keys
+lab_dir=${NORTHSTAR_LAB_DIR:-/tmp/northstar-lab}
+keys=$lab_dir/cluster-keys
 mkdir -p "$keys"
 chmod 700 "$keys"
 for node in ns-a ns-b; do

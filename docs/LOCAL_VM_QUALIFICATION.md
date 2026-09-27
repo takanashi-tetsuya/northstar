@@ -275,6 +275,20 @@ them and
 `local-vm-lab-federation.py` into
 `/home/lab/northstar/`.
 
+For a new qualification run, choose a unique directory on persistent storage,
+such as `target/vm-lab/<run-id>/`, and keep it out of automated cleanup. Set
+`NORTHSTAR_LAB_DIR` to its disk directory, `NORTHSTAR_LAB_BASE_IMAGE` to the
+checksum-verified Debian image there, `NORTHSTAR_LAB_SSH_KEY` to a private key
+there, and `NORTHSTAR_LAB_MINIO_DEB` to the pinned package there. The MinIO
+disk and cluster signing keys then stay under `NORTHSTAR_LAB_DIR`. Before
+creating guests, check path traversal and disk read/write access as the actual
+libvirt QEMU account; the operator's access alone does not establish this.
+Keep the SSH key and evidence directories private, and pass a new path under
+the run's evidence directory to the soak's `--output` option. Save the unit
+status and raw logs there as well. A host reboot interrupts the timed soak;
+record that attempt as interrupted and start a full-duration run with a new
+run ID and frozen candidate, rather than resuming its old evidence.
+
 Longer and combined partitions, Redis failover, interrupted migration,
 DNSSEC/DANE behavior inside Northstar, certificate rotation, native clients,
 full mixed-load soak and alert drills remain untested in these VMs. The narrow

@@ -1947,6 +1947,18 @@ if (/AuthenticationResult\s*<\s*(?:crate::)?db::User\s*>/.test(authenticationSer
   throw new Error('AuthenticationService must never return the credential-bearing db::User DTO');
 }
 const legacyAuthProtocolSource = read('src/xmpp/protocol.rs');
+const protocolSessionBody = structBody(legacyAuthProtocolSource, 'pub struct ProtocolSession');
+if (!/^\s*state\s*:\s*Arc<AppState>\s*,?\s*$/m.test(protocolSessionBody)) {
+  throw new Error('ProtocolSession must keep AppState private to its protocol implementation');
+}
+for (const transport of ['src/bosh.rs', 'src/xmpp/mod.rs', 'src/xmpp/tcp_action.rs', 'src/xmpp/websocket_action.rs']) {
+  if (/\b(?:session|protocol)\s*\.\s*state\b/.test(read(transport))) {
+    throw new Error(`${transport} traverses ProtocolSession into global state`);
+  }
+}
+if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/direct_delivery.rs'))) {
+  throw new Error('direct delivery traverses ProtocolSession into global state');
+}
 if (!/authenticated\s*:\s*\r?\n?\s*Option<crate::services::authentication::AuthenticatedAccount>/.test(legacyAuthProtocolSource)) {
   throw new Error('ProtocolSession must retain only the least-authority AuthenticatedAccount DTO');
 }

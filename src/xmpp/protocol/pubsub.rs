@@ -2,16 +2,18 @@ use super::{Action, ProtocolSession};
 use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::pubsub::{
     subscription_event_children, CollectionDiscoItems, CollectionUpdateOutcome, CreateNodeOutcome,
-    LeafDiscoItems, OwnerMutationOutcome, PubSubAuthorizeSubscriptionCommand, PubSubConfigOutcome,
-    PubSubConfigureNodeCommand, PubSubConfigureNodeWrite, PubSubCreateNodeCommand,
-    PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem,
-    PubSubListPageQuery, PubSubNode, PubSubNodeConfig, PubSubOwnerRead, PubSubOwnerReadKind,
-    PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeCommand,
-    PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome, PubSubRetractWrite,
-    PubSubRootDiscoQuery, PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite,
-    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite, PubSubSubscribeCommand,
-    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
-    PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
+    LeafDiscoItems, OwnerMutationOutcome, PubSubAuthorizeSubscriptionCommand,
+    PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult,
+    PubSubConfigOutcome, PubSubConfigureNodeCommand, PubSubConfigureNodeWrite,
+    PubSubCreateNodeCommand, PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite,
+    PubSubItem, PubSubListPageQuery, PubSubNode, PubSubNodeConfig, PubSubOwnerRead,
+    PubSubOwnerReadKind, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
+    PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
+    PubSubRetractWrite, PubSubRootDiscoQuery, PubSubSetAffiliationsCommand,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
+    PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
+    PubSubSubscriptionOptions, PubSubSubscriptionOptionsRead, PubSubUnsubscribeCommand,
+    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PubSubUpdateSubscriptionOptionsCommand,
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
@@ -967,32 +969,28 @@ async fn handle_entity_set(
             if normalized_bare(&requested_jid)? != requester {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-                return missing_node_reply(state, node_name).await;
-            };
-            let Some(subscription) = state
+            let (node, subscription) = match state
                 .pubsub_service()
-                .get_subscription(node.id, &requested_jid)
+                .subscription_options_read(node_name, &requested_jid, primary.attribute("subid"))
                 .await?
-            else {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "unexpected-request",
-                    "not-subscribed",
-                )));
+            {
+                PubSubSubscriptionOptionsRead::MissingNode => {
+                    return missing_node_reply(state, node_name).await;
+                }
+                PubSubSubscriptionOptionsRead::NotSubscribed => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "unexpected-request",
+                        "not-subscribed",
+                    )));
+                }
+                PubSubSubscriptionOptionsRead::InvalidSubid => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "not-acceptable",
+                        "invalid-subid",
+                    )));
+                }
+                PubSubSubscriptionOptionsRead::Ready { node, subscription } => (node, subscription),
             };
-            if subscription.is_expired_at(chrono::Utc::now()) {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "unexpected-request",
-                    "not-subscribed",
-                )));
-            }
-            let expected_subid = primary.attribute("subid");
-            if expected_subid.is_some_and(|subid| subid != subscription.subid) {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-acceptable",
-                    "invalid-subid",
-                )));
-            }
             let form = single_element_child(primary)
                 .expect("subscription options structure was validated above");
             if form.attribute("type") == Some("cancel") {
@@ -1019,14 +1017,17 @@ async fn handle_entity_set(
             }
             match state
                 .pubsub_service()
-                .update_subscription_options_checked(
-                    node.id,
-                    &requester,
-                    &requested_jid,
-                    expected_subid,
-                    &options,
+                .execute_pubsub_update_subscription_options(
+                    PubSubUpdateSubscriptionOptionsCommand {
+                        node_id: node.id,
+                        requester: &requester,
+                        subscriber_jid: &requested_jid,
+                        expected_subid: &subscription.subid,
+                        options: &options,
+                    },
                 )
                 .await?
+                .outcome
             {
                 SubscriptionOptionsOutcome::Updated => {}
                 SubscriptionOptionsOutcome::NotFound => {
@@ -1040,6 +1041,9 @@ async fn handle_entity_set(
                         "not-acceptable",
                         "invalid-subid",
                     )));
+                }
+                SubscriptionOptionsOutcome::InvalidOptions => {
+                    return Ok(invalid_subscription_options());
                 }
                 SubscriptionOptionsOutcome::Forbidden => {
                     return Ok(PubSubReply::Error("forbidden"));
@@ -1694,59 +1698,21 @@ async fn handle_owner_set(
             Ok(node) => node,
             Err(reply) => return Ok(reply),
         };
-        let Some(child_node) = state.pubsub_service().get_node(child_name).await? else {
-            return Ok(PubSubReply::Error("item-not-found"));
-        };
-        let outcome = if action.tag_name().name() == "associate" {
-            state
-                .pubsub_service()
-                .associate_collection_child(&node, &child_node, &requester)
-                .await?
+        let operation = if action.tag_name().name() == "associate" {
+            PubSubCollectionEdgeOperation::Associate
         } else {
-            state
-                .pubsub_service()
-                .dissociate_collection_child(&node, &child_node, &requester)
-                .await?
+            PubSubCollectionEdgeOperation::Dissociate
         };
-        match outcome {
-            CollectionUpdateOutcome::Updated => {}
-            CollectionUpdateOutcome::NotFound => {
-                return Ok(PubSubReply::Error("item-not-found"));
-            }
-            CollectionUpdateOutcome::NotAssociated => {
-                // XEP-0248 section 7.6.3.1 uses bad-request when both nodes
-                // exist but the requested edge does not.
-                return Ok(PubSubReply::Error("bad-request"));
-            }
-            CollectionUpdateOutcome::NotCollection => {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-allowed",
-                    "invalid-options",
-                )));
-            }
-            CollectionUpdateOutcome::Forbidden => {
-                return Ok(PubSubReply::Error("forbidden"));
-            }
-            CollectionUpdateOutcome::LimitExceeded => {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-allowed",
-                    "max-nodes-exceeded",
-                )));
-            }
-            CollectionUpdateOutcome::DepthExceeded => {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-allowed",
-                    "invalid-options",
-                )));
-            }
-            CollectionUpdateOutcome::Cycle => {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-allowed",
-                    "invalid-options",
-                )));
-            }
-        }
-        return Ok(PubSubReply::Result(String::new()));
+        let result = state
+            .pubsub_service()
+            .execute_pubsub_collection_edge(PubSubCollectionEdgeCommand {
+                requester: &requester,
+                collection: &node,
+                child: child_name,
+                operation,
+            })
+            .await?;
+        return Ok(collection_edge_reply(result));
     }
     if !is_owner(state, node.id, &requester).await? {
         return Ok(PubSubReply::Error("forbidden"));
@@ -2062,6 +2028,33 @@ async fn handle_owner_set(
         _ => return Ok(PubSubReply::Error("feature-not-implemented")),
     }
     Ok(PubSubReply::Result(String::new()))
+}
+
+fn collection_edge_reply(result: PubSubCollectionEdgeResult) -> PubSubReply {
+    match result {
+        PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::Updated) => {
+            PubSubReply::Result(String::new())
+        }
+        PubSubCollectionEdgeResult::MissingChild
+        | PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::NotFound) => {
+            PubSubReply::Error("item-not-found")
+        }
+        // XEP-0248 section 7.6.3.1 uses bad-request for a missing edge.
+        PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::NotAssociated) => {
+            PubSubReply::Error("bad-request")
+        }
+        PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::NotCollection)
+        | PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::DepthExceeded)
+        | PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::Cycle) => {
+            PubSubReply::ExtendedError(PubSubError::new("not-allowed", "invalid-options"))
+        }
+        PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::Forbidden) => {
+            PubSubReply::Error("forbidden")
+        }
+        PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::LimitExceeded) => {
+            PubSubReply::ExtendedError(PubSubError::new("not-allowed", "max-nodes-exceeded"))
+        }
+    }
 }
 
 pub(crate) async fn handle_authorization_response(
@@ -3251,19 +3244,82 @@ fn serialize_pubsub_item(node: Node<'_, '_>, item_id: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_equivalent, data_form_fields, disco_item_xml, disco_rsm_page, error_condition,
-        item_retrieval_access, node_config_form, normalized_bare, parse_node_config,
-        parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
+        collection_edge_reply, config_equivalent, data_form_fields, disco_item_xml, disco_rsm_page,
+        error_condition, item_retrieval_access, node_config_form, normalized_bare,
+        parse_node_config, parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
         publish_batch_size_allowed, pubsub_policy_suppression_is_terminal, pubsub_rsm_page,
         reply_error, serialize_pubsub_item, subscription_options_form, subscription_payload,
         valid_item_id, valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS,
         NODE_CONFIG_FORM, PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
     };
     use crate::services::pubsub::{
-        PubSubItem, PubSubNodeConfig, PubSubSubscription, PubSubSubscriptionOptions,
+        CollectionUpdateOutcome, PubSubCollectionEdgeResult, PubSubItem, PubSubNodeConfig,
+        PubSubSubscription, PubSubSubscriptionOptions,
     };
     use chrono::Utc;
     use roxmltree::Document;
+
+    #[test]
+    fn collection_edge_results_preserve_xep_0248_errors() {
+        assert!(matches!(
+            collection_edge_reply(PubSubCollectionEdgeResult::Mutation(
+                CollectionUpdateOutcome::Updated
+            )),
+            PubSubReply::Result(value) if value.is_empty()
+        ));
+        for (result, condition, pubsub_condition) in [
+            (
+                PubSubCollectionEdgeResult::MissingChild,
+                "item-not-found",
+                None,
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::NotFound),
+                "item-not-found",
+                None,
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::NotAssociated),
+                "bad-request",
+                None,
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::NotCollection),
+                "not-allowed",
+                Some("invalid-options"),
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::Forbidden),
+                "forbidden",
+                None,
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::LimitExceeded),
+                "not-allowed",
+                Some("max-nodes-exceeded"),
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::DepthExceeded),
+                "not-allowed",
+                Some("invalid-options"),
+            ),
+            (
+                PubSubCollectionEdgeResult::Mutation(CollectionUpdateOutcome::Cycle),
+                "not-allowed",
+                Some("invalid-options"),
+            ),
+        ] {
+            let reply = collection_edge_reply(result);
+            assert_eq!(error_condition(&reply), Some(condition));
+            match reply {
+                PubSubReply::ExtendedError(error) => {
+                    assert_eq!(error.pubsub_condition, pubsub_condition);
+                }
+                PubSubReply::Error(_) => assert_eq!(pubsub_condition, None),
+                PubSubReply::Result(_) => panic!("an error result became success"),
+            }
+        }
+    }
 
     #[test]
     fn atom_event_body_limit_never_splits_a_utf8_character() {

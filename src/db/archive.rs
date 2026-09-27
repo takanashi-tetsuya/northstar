@@ -3,8 +3,9 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    decide_mam_archive_admission, decide_mam_room_read, finish_mam_page, mam_referenced_ids,
-    resolve_mam_query, MamArchiveAdmissionFacts, MamQueryBounds, MamRoomReadDecision,
+    classify_mam_blocked_jids, decide_mam_archive_admission, decide_mam_room_read, finish_mam_page,
+    mam_referenced_ids, resolve_mam_query, MamArchiveAdmissionFacts, MamBlockedIdentitySource,
+    MamBlockedPattern, MamQueryBounds, MamRoomReadDecision,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
@@ -986,13 +987,6 @@ impl MamArchiveSource {
     }
 }
 
-#[derive(Clone, Debug)]
-enum MamBlockedPattern {
-    Full(String),
-    Bare(String),
-    Domain(String),
-}
-
 async fn mam_blocked_patterns(
     transaction: &mut Transaction<'_, Postgres>,
     viewer_id: Option<Uuid>,
@@ -1006,19 +1000,10 @@ async fn mam_blocked_patterns(
     .bind(viewer_id)
     .fetch_all(&mut **transaction)
     .await?;
-    Ok(patterns
-        .into_iter()
-        .filter_map(|value| {
-            let jid = crate::jid::CanonicalJid::parse(&value).ok()?;
-            if jid.resourcepart().is_some() {
-                Some(MamBlockedPattern::Full(jid.to_string()))
-            } else if jid.localpart().is_some() {
-                Some(MamBlockedPattern::Bare(jid.bare()))
-            } else {
-                Some(MamBlockedPattern::Domain(jid.domainpart().to_owned()))
-            }
-        })
-        .collect())
+    Ok(classify_mam_blocked_jids(
+        patterns,
+        MamBlockedIdentitySource::ResourceAware,
+    ))
 }
 
 fn push_mam_visibility(

@@ -796,7 +796,15 @@ XEP-0060 subscription authorization replies now use a typed PubSub command.
 The service owns the read precheck, while the existing locked PostgreSQL
 transaction remains authoritative for owner, pending-state and SubID checks
 and writes the outbox atomically. Other command and query paths remain under
-C1 review.
+C1 review. XEP-0248 collection edges and XEP-0060 subscription-options writes
+now enter through typed service commands. The collection transaction still
+owns graph locks and audience/outbox writes. The options service preserves
+node, subscription and SubID error precedence; its mutation carries the
+observed SubID into the locked transaction even when the client omitted it.
+The transaction now rechecks node type, payload type and the current
+subscription under its existing locks, rejecting stale form options after a
+concurrent node reconfiguration. The new lock-wait fixture is wired into the
+PostgreSQL CI job and must pass with the other PubSub authority tests.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for
@@ -815,8 +823,14 @@ The MIX wire fixture checks two adjacent MAM pages, stable count/index values
 and disjoint archive IDs after three delivered group messages.
 Personal MAM archive admission now reads full-JID, bare-JID, default-policy
 and roster facts in one PostgreSQL statement, then applies the preference
-precedence in archive core. The remaining MAM scope and paging paths still
-require C2 review.
+precedence in archive core. Personal, MUC and MIX MAM now share pure blocked-JID
+classification while preserving MIX's bare-publisher behavior. SQL visibility
+and the query snapshot remain in their PostgreSQL adapters. The remaining MAM
+scope and paging paths still require C2 review. MIX now resolves referenced
+IDs and RSM/form cursors with the archive core in one repeatable-read
+transaction. Item IDs must match the form filter; cursors only need to be
+visible in the base archive scope. The existing PostgreSQL fixture now tests
+both cases.
 D1 no longer stores a second WebSocket flag alongside the transport kind. The
 TCP and WebSocket action executors now have separate adapters. Plain TCP and
 direct TLS share the TCP adapter; both adapters retain their existing write,
@@ -837,7 +851,12 @@ unacknowledged IQ reply in both directions between Direct TLS and STARTTLS,
 and from WebSocket to BOSH with an SM acknowledgment following replay.
 Transport adapters now read stream-open and authenticated status through
 explicit methods; the negotiation, account and transport fields are private
-to the protocol module.
+to the protocol module. `ProtocolSession.state` is now private as well. BOSH
+retains only its replay, MIX delivery and SM memory capabilities, while TCP and
+WebSocket use the state passed at their entry points. Direct delivery reaches
+fence and acknowledgment operations through narrow session methods; an
+architecture gate rejects renewed transport access to the session's global
+state. This is an access-boundary step, not the complete session-port split.
 These are completed slices, not packet exit claims.
 
 R2 now has an opt-in, operator-supplied OCSP staple for Northstar's own server
@@ -859,7 +878,9 @@ build is still unqualified: compiler versions, build provenance and two
 isolated matching rebuilds are missing; the signed tag and npm metadata
 `gitHead` also differ in the `chai` dev dependency. `hash-wasm` now has a
 separately checked historical npm registry signature and deployed-byte match;
-its source rebuild remains unqualified too. The retained npm tarball lacks the
+its source rebuild remains unqualified too. A pinned upstream source archive
+reproduces its Git tree, and the npm package's 64 shared source files match
+that tree byte for byte. The retained npm tarball lacks the
 Argon2 WASM JSON imported by its TypeScript, its declared build script,
 and a dependency lockfile. A strict offline provenance check rejects a
 reproducibility claim until complete pinned inputs and two matching clean
@@ -891,9 +912,11 @@ storage layout is still required. An expired XID without its exact committed
 marker, or any ambiguous outcome, remains fail-closed.
 The recovery journal parser now rejects conflicting decisions, mismatched
 transaction outcomes and rollback intents without a committed incoming
-predecessor. The disposable restore fixture includes four additional
-recovery-process SIGKILL points, but their full PostgreSQL/MinIO re-entry run
-is pending; hook self-tests alone do not close R1.
+predecessor. Four additional recovery-process SIGKILL and re-entry points
+passed the local/S3 PostgreSQL/MinIO restore job in
+[CI run 36285156049](https://github.com/takanashi-tetsuya/northstar/actions/runs/36285156049).
+R1 still needs a drill on the final candidate and deployment storage layout;
+CI fixtures do not qualify the isolated VM's storage or independent key recovery.
 
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run

@@ -564,6 +564,7 @@ pub enum SubscriptionOptionsOutcome {
     Updated,
     NotFound,
     InvalidSubid,
+    InvalidOptions,
     Forbidden,
 }
 
@@ -2860,18 +2861,18 @@ pub async fn update_subscription_options_checked(
         return Ok(SubscriptionOptionsOutcome::Forbidden);
     }
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
-    if sqlx::query_scalar::<_, Uuid>("SELECT id FROM pubsub_nodes WHERE id = $1 FOR UPDATE")
-        .bind(node_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .is_none()
-    {
+    let node =
+        sqlx::query("SELECT node_type, payload_type FROM pubsub_nodes WHERE id = $1 FOR UPDATE")
+            .bind(node_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+    let Some(node) = node else {
         transaction.rollback().await?;
         return Ok(SubscriptionOptionsOutcome::NotFound);
-    }
+    };
     let event_time = locked_event_time(&mut transaction).await?;
-    let actual_subid: Option<String> = sqlx::query_scalar(
-        "SELECT subid
+    let current = sqlx::query(
+        "SELECT subid, subscription_depth
            FROM pubsub_subscriptions
           WHERE node_id = $1 AND jid = $2
             AND (expire IS NULL OR expire > $3)
@@ -2882,13 +2883,26 @@ pub async fn update_subscription_options_checked(
     .bind(event_time)
     .fetch_optional(&mut *transaction)
     .await?;
-    let Some(actual_subid) = actual_subid else {
+    let Some(current) = current else {
         transaction.rollback().await?;
         return Ok(SubscriptionOptionsOutcome::NotFound);
     };
+    let actual_subid: String = current.get("subid");
     if expected_subid.is_some_and(|expected| expected != actual_subid) {
         transaction.rollback().await?;
         return Ok(SubscriptionOptionsOutcome::InvalidSubid);
+    }
+    let node_type: String = node.get("node_type");
+    let payload_type: Option<String> = node.get("payload_type");
+    let core_options: northstar_pubsub_core::PubSubSubscriptionOptions = options.clone().into();
+    if !northstar_pubsub_core::subscription_options_match_node_policy(
+        &node_type,
+        payload_type.as_deref(),
+        current.get("subscription_depth"),
+        &core_options,
+    ) {
+        transaction.rollback().await?;
+        return Ok(SubscriptionOptionsOutcome::InvalidOptions);
     }
     let result = sqlx::query("UPDATE pubsub_subscriptions SET deliver = $3, digest = $4, digest_frequency = $5, expire = $6, include_body = $7, show_values = $8, subscription_type = $9, subscription_depth = $10, updated_at = $12 WHERE node_id = $1 AND jid = $2 AND ($11::TEXT IS NULL OR subid = $11)")
         .bind(node_id)

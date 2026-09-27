@@ -253,6 +253,7 @@ async fn xmpps_tcp_connection(
     tracing::debug!(%peer, "XMPPS connection established");
     let transport = AssertUnwindSafe(drive_io(
         secure,
+        &state,
         &mut session,
         &mut rx,
         &actor_shutdown,
@@ -288,6 +289,7 @@ async fn tcp_connection(
     let transport = AssertUnwindSafe(async {
         let outcome = drive_io(
             stream,
+            &state,
             &mut session,
             &mut rx,
             &actor_shutdown,
@@ -320,6 +322,7 @@ async fn tcp_connection(
         tracing::debug!(%peer, "XMPP connection upgraded to TLS");
         let _ = drive_io(
             secure,
+            &state,
             &mut session,
             &mut rx,
             &actor_shutdown,
@@ -418,6 +421,7 @@ impl Drop for BackpressureDisconnectMetric {
 
 async fn drive_io<S>(
     mut io: S,
+    state: &Arc<AppState>,
     session: &mut ProtocolSession,
     rx: &mut mpsc::Receiver<crate::outbound::OutboundItem>,
     actor_shutdown: &tokio_util::sync::CancellationToken,
@@ -428,7 +432,7 @@ where
 {
     let signals = session.termination_signals();
     let _backpressure_metric = BackpressureDisconnectMetric {
-        state: Arc::clone(&session.state),
+        state: Arc::clone(state),
         signals: signals.clone(),
     };
     let mut buffer = String::new();
@@ -442,7 +446,7 @@ where
     );
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
-        (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
+        (state.sm_session_policy().live_lease_seconds / 3).max(1),
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -469,7 +473,7 @@ where
                 session.forbid_sm_resume();
                 tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.is_authenticated(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.is_stream_open();
-                let domain = session.state.local_domain().to_owned();
+                let domain = state.local_domain().to_owned();
                 let _ = tcp_fatal_error(
                     &mut io,
                     &domain,
@@ -498,7 +502,7 @@ where
             }
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
                 session.forbid_sm_resume();
-                let domain = session.state.local_domain().to_owned();
+                let domain = state.local_domain().to_owned();
                 let _ = tcp_fatal_error(
                     &mut io,
                     &domain,
@@ -524,7 +528,7 @@ where
                     let opening = !session.is_stream_open();
                     tcp_fatal_error(
                         &mut io,
-                        session.state.local_domain(),
+                        state.local_domain(),
                         opening,
                         &crate::xmpp::xml_util::stream_error("unsupported-encoding"),
                     )
@@ -549,7 +553,7 @@ where
                                 let opening = !session.is_stream_open();
                                 tcp_fatal_error(
                                     &mut io,
-                                    session.state.local_domain(),
+                                    state.local_domain(),
                                     opening,
                                     &crate::xmpp::xml_util::stream_error("policy-violation"),
                                 )
@@ -568,7 +572,7 @@ where
                                 let opening = !session.is_stream_open();
                                 tcp_fatal_error(
                                     &mut io,
-                                    session.state.local_domain(),
+                                    state.local_domain(),
                                     opening,
                                     &crate::xmpp::xml_util::stream_error("policy-violation"),
                                 )
@@ -584,7 +588,7 @@ where
                             let opening = !session.is_stream_open();
                             tcp_fatal_error(
                                 &mut io,
-                                session.state.local_domain(),
+                                state.local_domain(),
                                 opening,
                                 &crate::xmpp::xml_util::stream_error(condition),
                             )
@@ -604,7 +608,7 @@ where
                             session.forbid_sm_resume();
                             tcp_fatal_error(
                                 &mut io,
-                                session.state.local_domain(),
+                                state.local_domain(),
                                 opening,
                                 &crate::xmpp::xml_util::stream_error("internal-server-error"),
                             )
@@ -921,7 +925,7 @@ async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
 ) {
     tracing::error!(?error, operation, peer_ip = %session.peer_ip, "XMPP transport/backend failure");
     session.forbid_sm_resume();
-    let domain = session.state.local_domain().to_owned();
+    let domain = session.local_domain().to_owned();
     // The original backend error is authoritative; a broken or stalled peer
     // must not keep the task alive while the terminal response is attempted.
     let _ = tcp_fatal_error(
@@ -943,7 +947,7 @@ pub async fn websocket_connection(
     let (tx, mut rx) = mpsc::channel(512);
     let stream_limits = native_stream_limits();
     let mut session = ProtocolSession::new(
-        state,
+        Arc::clone(&state),
         crate::outbound::OutboundSender::new(tx),
         true,
         protocol::ClientTransport::WebSocket,
@@ -957,12 +961,12 @@ pub async fn websocket_connection(
         signals: &signals,
     };
     let _backpressure_metric = BackpressureDisconnectMetric {
-        state: Arc::clone(&session.state),
+        state: Arc::clone(&state),
         signals: signals.clone(),
     };
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));
     let mut sm_lease_watch = tokio::time::interval(Duration::from_secs(
-        (session.state.sm_session_policy().live_lease_seconds / 3).max(1),
+        (state.sm_session_policy().live_lease_seconds / 3).max(1),
     ));
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut peer_idle = PeerIdleTracker::new(
@@ -1004,7 +1008,7 @@ pub async fn websocket_connection(
                 session.forbid_sm_resume();
                 tracing::debug!(%peer_ip, authenticated = session.is_authenticated(), "closed byte-idle WebSocket XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.is_stream_open();
-                let domain = session.state.local_domain().to_owned();
+                let domain = state.local_domain().to_owned();
                 websocket_fatal_error(
                     &mut socket,
                     &domain,
@@ -1019,7 +1023,7 @@ pub async fn websocket_connection(
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
                     session.forbid_sm_resume();
                     let opening = !session.is_stream_open();
-                    let domain = session.state.local_domain().to_owned();
+                    let domain = state.local_domain().to_owned();
                     websocket_fatal_error(
                         &mut socket,
                         &domain,
@@ -1034,7 +1038,7 @@ pub async fn websocket_connection(
                 if session.checkpoint_sm().await.is_err() {
                     session.forbid_sm_resume();
                     let opening = !session.is_stream_open();
-                    let domain = session.state.local_domain().to_owned();
+                    let domain = state.local_domain().to_owned();
                     websocket_fatal_error(
                         &mut socket,
                         &domain,
@@ -1048,7 +1052,7 @@ pub async fn websocket_connection(
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
                 session.forbid_sm_resume();
                 let opening = !session.is_stream_open();
-                let domain = session.state.local_domain().to_owned();
+                let domain = state.local_domain().to_owned();
                 websocket_fatal_error(
                     &mut socket,
                     &domain,
@@ -1078,7 +1082,7 @@ pub async fn websocket_connection(
                                 session.forbid_sm_resume();
                                 let condition = framing::stream_error_condition(&error);
                                 let opening = !session.is_stream_open();
-                                let domain = session.state.local_domain().to_owned();
+                                let domain = state.local_domain().to_owned();
                                 websocket_fatal_error(
                                     &mut socket,
                                     &domain,
@@ -1092,7 +1096,7 @@ pub async fn websocket_connection(
                         if websocket_has_invalid_stream_header_namespace(&frame) {
                             session.forbid_sm_resume();
                             let opening = !session.is_stream_open();
-                            let domain = session.state.local_domain().to_owned();
+                            let domain = state.local_domain().to_owned();
                             websocket_fatal_error(
                                 &mut socket,
                                 &domain,
@@ -1105,7 +1109,7 @@ pub async fn websocket_connection(
                         if websocket_close_has_content(&frame) {
                             session.forbid_sm_resume();
                             let opening = !session.is_stream_open();
-                            let domain = session.state.local_domain().to_owned();
+                            let domain = state.local_domain().to_owned();
                             websocket_fatal_error(
                                 &mut socket,
                                 &domain,
@@ -1184,7 +1188,7 @@ pub async fn websocket_connection(
                         );
                         session.forbid_sm_resume();
                         let opening = !session.is_stream_open();
-                        let domain = session.state.local_domain().to_owned();
+                        let domain = state.local_domain().to_owned();
                         websocket_fatal_error(
                             &mut socket,
                             &domain,
@@ -1251,7 +1255,7 @@ async fn websocket_record_and_send_item(
         Err(error) => {
             tracing::error!(?error, "failed to prepare durable WebSocket write");
             session.forbid_sm_resume();
-            let domain = session.state.local_domain().to_owned();
+            let domain = session.local_domain().to_owned();
             websocket_fatal_error(
                 socket,
                 &domain,

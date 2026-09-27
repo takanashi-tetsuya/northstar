@@ -4769,6 +4769,140 @@ async fn subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
     pool.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn subscription_options_recheck_node_policy_after_lock_wait() {
+    let (url, pool) = integration_pool(8).await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let owner = format!("options-owner-{suffix}@example.test");
+    let subscriber = format!("options-reader-{suffix}@example.test/phone");
+    let requester = crate::jid::canonical_bare_key(&subscriber).unwrap();
+    let node = create_default_test_node(&pool, &format!("options-{suffix}"), &owner).await;
+    let atom = "http://www.w3.org/2005/Atom";
+    sqlx::query("UPDATE pubsub_nodes SET payload_type=$2 WHERE id=$1")
+        .bind(node.id)
+        .bind(atom)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let original =
+        set_subscription_limited_with_options(&pool, node.id, &subscriber, "subscribed", 100, None)
+            .await
+            .unwrap()
+            .unwrap();
+    let node_id = node.id;
+
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("UPDATE pubsub_nodes SET payload_type=NULL WHERE id=$1")
+        .bind(node.id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let application = format!("ps-options-policy-{}", &suffix[..8]);
+    let retry_pool = named_single_connection_pool(&url, &application).await;
+    let mut requested = PubSubSubscriptionOptions::for_node_type("leaf");
+    requested.include_body = true;
+    let task = tokio::spawn({
+        let retry_pool = retry_pool.clone();
+        let requester = requester.clone();
+        let subscriber = subscriber.clone();
+        let subid = original.subid.clone();
+        let requested = requested.clone();
+        async move {
+            update_subscription_options_checked(
+                &retry_pool,
+                node_id,
+                &requester,
+                &subscriber,
+                Some(&subid),
+                &requested,
+            )
+            .await
+        }
+    });
+    wait_for_named_session_lock(&pool, &application).await;
+    blocker.commit().await.unwrap();
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        SubscriptionOptionsOutcome::InvalidOptions
+    );
+    assert_eq!(
+        update_subscription_options_checked(
+            &pool,
+            node.id,
+            &requester,
+            &subscriber,
+            Some("stale-subid"),
+            &requested,
+        )
+        .await
+        .unwrap(),
+        SubscriptionOptionsOutcome::InvalidSubid,
+        "a stale SubID must still take precedence over changed node policy"
+    );
+    let include_body: bool = sqlx::query_scalar(
+        "SELECT include_body FROM pubsub_subscriptions WHERE node_id=$1 AND jid=$2",
+    )
+    .bind(node.id)
+    .bind(&subscriber)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!include_body);
+
+    sqlx::query("UPDATE pubsub_nodes SET node_type='collection' WHERE id=$1")
+        .bind(node.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("UPDATE pubsub_nodes SET node_type='leaf' WHERE id=$1")
+        .bind(node.id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let application = format!("ps-options-type-{}", &suffix[..8]);
+    let type_pool = named_single_connection_pool(&url, &application).await;
+    requested.include_body = false;
+    requested.subscription_type = "nodes".to_owned();
+    let task = tokio::spawn({
+        let type_pool = type_pool.clone();
+        let requester = requester.clone();
+        let subscriber = subscriber.clone();
+        let subid = original.subid.clone();
+        async move {
+            update_subscription_options_checked(
+                &type_pool,
+                node_id,
+                &requester,
+                &subscriber,
+                Some(&subid),
+                &requested,
+            )
+            .await
+        }
+    });
+    wait_for_named_session_lock(&pool, &application).await;
+    blocker.commit().await.unwrap();
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        SubscriptionOptionsOutcome::InvalidOptions
+    );
+    let subscription_type: String = sqlx::query_scalar(
+        "SELECT subscription_type FROM pubsub_subscriptions WHERE node_id=$1 AND jid=$2",
+    )
+    .bind(node.id)
+    .bind(&subscriber)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(subscription_type, "items");
+
+    retry_pool.close().await;
+    type_pool.close().await;
+    pool.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose() {

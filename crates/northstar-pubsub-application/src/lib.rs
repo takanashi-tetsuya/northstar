@@ -5,15 +5,16 @@
 
 use anyhow::{Error, Result};
 use northstar_pubsub_core::{
-    CreateNodeOutcome, OwnerMutationOutcome, PepConfigureNodeWrite, PepDeleteNodeWrite,
-    PepOwnerMutationOutcome, PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite,
-    PepRetractWrite, PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeWrite,
-    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubConfigOutcome, PubSubConfigureNodeWrite,
-    PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubPublishOutcome, PubSubPublishWrite,
-    PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
-    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscriptionAuthorizationOutcome,
+    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PepConfigureNodeWrite,
+    PepDeleteNodeWrite, PepOwnerMutationOutcome, PepPublishOutcome, PepPublishWrite,
+    PepPurgeNodeWrite, PepRetractWrite, PepSetAffiliationsWrite, PepSubscribeOutcome,
+    PepSubscribeWrite, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubConfigOutcome,
+    PubSubConfigureNodeWrite, PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubPublishOutcome,
+    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
+    PubSubSubscribeWrite, PubSubSubscriptionOptions, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
 };
 pub mod repository;
 pub use repository::*;
@@ -238,6 +239,60 @@ pub struct PubSubAuthorizeSubscriptionCommand<'a> {
 #[derive(Debug)]
 pub struct PubSubAuthorizeSubscriptionResult {
     pub outcome: SubscriptionAuthorizationOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PubSubCollectionEdgeOperation {
+    Associate,
+    Dissociate,
+}
+
+#[derive(Clone, Copy)]
+pub struct PubSubCollectionEdgeCommand<'a> {
+    pub requester: &'a str,
+    pub collection: &'a northstar_pubsub_core::PubSubNode,
+    pub child: &'a str,
+    pub operation: PubSubCollectionEdgeOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PubSubCollectionEdgeResult {
+    MissingChild,
+    Mutation(CollectionUpdateOutcome),
+}
+
+pub struct PubSubUpdateSubscriptionOptionsCommand<'a> {
+    pub node_id: Uuid,
+    pub requester: &'a str,
+    pub subscriber_jid: &'a str,
+    pub expected_subid: &'a str,
+    pub options: &'a PubSubSubscriptionOptions,
+}
+
+#[derive(Debug)]
+pub struct PubSubUpdateSubscriptionOptionsResult {
+    pub outcome: SubscriptionOptionsOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PubSubSubscriptionOptionsPrecheck {
+    Ready,
+    NotSubscribed,
+    InvalidSubid,
+}
+
+pub fn subscription_options_precheck(
+    expired: bool,
+    current_subid: &str,
+    echoed_subid: Option<&str>,
+) -> PubSubSubscriptionOptionsPrecheck {
+    if expired {
+        PubSubSubscriptionOptionsPrecheck::NotSubscribed
+    } else if echoed_subid.is_some_and(|subid| subid != current_subid) {
+        PubSubSubscriptionOptionsPrecheck::InvalidSubid
+    } else {
+        PubSubSubscriptionOptionsPrecheck::Ready
+    }
 }
 
 /// A read snapshot only filters invalid authorization forms. The repository
@@ -731,6 +786,33 @@ pub fn validate_pubsub_authorize_subscription_command(
     Ok(())
 }
 
+pub fn validate_pubsub_collection_edge_command(
+    command: &PubSubCollectionEdgeCommand<'_>,
+) -> Result<()> {
+    if command.requester.trim().is_empty()
+        || command.collection.node.trim().is_empty()
+        || command.child.trim().is_empty()
+    {
+        return Err(anyhow::anyhow!("invalid PubSub collection edge"));
+    }
+    Ok(())
+}
+
+pub fn validate_pubsub_update_subscription_options_command(
+    command: &PubSubUpdateSubscriptionOptionsCommand<'_>,
+) -> Result<()> {
+    if command.node_id.is_nil()
+        || command.requester.trim().is_empty()
+        || command.subscriber_jid.trim().is_empty()
+        || command.expected_subid.is_empty()
+    {
+        return Err(anyhow::anyhow!(
+            "invalid PubSub subscription options command"
+        ));
+    }
+    Ok(())
+}
+
 pub fn validate_pubsub_retract_command(command: &PubSubRetractCommand<'_>) -> Result<()> {
     if command.write.requester.trim().is_empty() {
         return Err(anyhow::anyhow!("requester must not be empty"));
@@ -1053,6 +1135,95 @@ mod tests {
             authorization_precheck("pending", "current", Some(""), true),
             Some(SubscriptionAuthorizationOutcome::Stale)
         );
+    }
+
+    #[test]
+    fn collection_edge_command_requires_named_child_and_requester() {
+        let collection = northstar_pubsub_core::PubSubNode {
+            id: Uuid::new_v4(),
+            node: "parent".to_owned(),
+            creator_jid: "owner@example.test".to_owned(),
+            access_model: "open".to_owned(),
+            publish_model: "publishers".to_owned(),
+            max_items: 100,
+            title: None,
+            description: None,
+            deliver_payloads: true,
+            notify_delete: true,
+            notify_retract: true,
+            persist_items: true,
+            send_last_published_item: "never".to_owned(),
+            node_type: "collection".to_owned(),
+            deliver_notifications: true,
+            notify_config: true,
+            notify_sub: true,
+            language: None,
+            payload_type: None,
+            max_payload_size: 1_048_576,
+            children_max: 100,
+            children_association_policy: "owner".to_owned(),
+            children_association_whitelist: Vec::new(),
+            created_at: std::time::UNIX_EPOCH.into(),
+        };
+        let valid = PubSubCollectionEdgeCommand {
+            requester: "owner@example.test",
+            collection: &collection,
+            child: "child",
+            operation: PubSubCollectionEdgeOperation::Associate,
+        };
+        assert!(validate_pubsub_collection_edge_command(&valid).is_ok());
+        for invalid in [
+            PubSubCollectionEdgeCommand {
+                requester: " ",
+                ..valid
+            },
+            PubSubCollectionEdgeCommand { child: "", ..valid },
+        ] {
+            assert!(validate_pubsub_collection_edge_command(&invalid).is_err());
+        }
+        assert!(
+            validate_pubsub_collection_edge_command(&PubSubCollectionEdgeCommand {
+                operation: PubSubCollectionEdgeOperation::Dissociate,
+                ..valid
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn subscription_options_precheck_keeps_expiry_before_subid_errors() {
+        assert_eq!(
+            subscription_options_precheck(false, "current", None),
+            PubSubSubscriptionOptionsPrecheck::Ready,
+        );
+        assert_eq!(
+            subscription_options_precheck(false, "current", Some("stale")),
+            PubSubSubscriptionOptionsPrecheck::InvalidSubid,
+        );
+        assert_eq!(
+            subscription_options_precheck(true, "current", Some("stale")),
+            PubSubSubscriptionOptionsPrecheck::NotSubscribed,
+        );
+    }
+
+    #[test]
+    fn subscription_options_update_requires_a_snapshot_subid() {
+        let options = PubSubSubscriptionOptions::for_node_type("leaf");
+        let valid = PubSubUpdateSubscriptionOptionsCommand {
+            node_id: Uuid::new_v4(),
+            requester: "owner@example.test",
+            subscriber_jid: "owner@example.test/phone",
+            expected_subid: "current",
+            options: &options,
+        };
+        assert!(validate_pubsub_update_subscription_options_command(&valid).is_ok());
+        assert!(validate_pubsub_update_subscription_options_command(
+            &PubSubUpdateSubscriptionOptionsCommand {
+                expected_subid: "",
+                ..valid
+            }
+        )
+        .is_err());
     }
 
     #[test]

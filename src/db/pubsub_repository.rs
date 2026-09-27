@@ -672,6 +672,7 @@ impl From<db::SubscriptionOptionsOutcome> for SubscriptionOptionsOutcome {
             db::SubscriptionOptionsOutcome::Updated => Self::Updated,
             db::SubscriptionOptionsOutcome::NotFound => Self::NotFound,
             db::SubscriptionOptionsOutcome::InvalidSubid => Self::InvalidSubid,
+            db::SubscriptionOptionsOutcome::InvalidOptions => Self::InvalidOptions,
             db::SubscriptionOptionsOutcome::Forbidden => Self::Forbidden,
         }
     }

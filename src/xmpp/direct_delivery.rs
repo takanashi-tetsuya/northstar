@@ -32,7 +32,7 @@ impl DirectWritePort for ProtocolSession {
     async fn fence_c2s(&self, delivery: DurableDelivery) -> Result<DurableDelivery> {
         tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
-            self.state.replay_service().fence_socket_write(delivery),
+            self.fence_c2s_socket_write(delivery),
         )
         .await
         .context("C2S socket-write fence timed out")?
@@ -41,7 +41,7 @@ impl DirectWritePort for ProtocolSession {
     async fn fence_mix(&self, delivery: MixDelivery) -> Result<MixDelivery> {
         tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
-            self.state.mix_service().fence_mix_socket_write(delivery),
+            self.fence_mix_socket_write(delivery),
         )
         .await
         .context("MIX socket-write fence timed out")?
@@ -50,9 +50,7 @@ impl DirectWritePort for ProtocolSession {
     async fn acknowledge_c2s(&self, delivery: DurableDelivery) -> Result<()> {
         tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
-            self.state
-                .replay_service()
-                .acknowledge_socket_write(delivery),
+            self.acknowledge_c2s_socket_write(delivery),
         )
         .await
         .context("C2S socket-write acknowledgement timed out")?
@@ -61,16 +59,14 @@ impl DirectWritePort for ProtocolSession {
     async fn acknowledge_mix(&self, delivery: MixDelivery) -> Result<bool> {
         tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
-            self.state
-                .mix_service()
-                .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+            self.acknowledge_mix_socket_write(delivery),
         )
         .await
         .context("MIX socket-write acknowledgement timed out")?
     }
 
     fn connection_id(&self) -> Uuid {
-        self.connection_id
+        self.route_connection_id()
     }
 }
 

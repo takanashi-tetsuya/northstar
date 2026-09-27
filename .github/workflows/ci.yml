@@ -414,6 +414,7 @@ jobs:
           node --check scripts/web-e2e.cjs
           node --check scripts/audit-libomemo-source.mjs
           node --check scripts/check-hash-wasm-provenance.mjs
+          node --check scripts/check-hash-wasm-source.mjs
           node --check scripts/verify-libomemo-rebuild-qualification.mjs
           node --check scripts/rebuild-libomemo-hermetic.mjs
           node --check scripts/generate-locales.mjs
@@ -422,6 +423,7 @@ jobs:
           node scripts/audit-libomemo-source.mjs > /dev/null
           node scripts/verify-libomemo-rebuild-qualification.mjs --self-test --ci
           node scripts/check-hash-wasm-provenance.mjs --self-test
+          node scripts/check-hash-wasm-source.mjs --self-test
           node scripts/verify-crypto-artifacts.mjs
           node scripts/verify-swagger-ui-artifacts.mjs
           node scripts/check-abuse.mjs

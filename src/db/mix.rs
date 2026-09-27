@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
-use northstar_archive_core::{finish_mam_page, plan_mam_page, ResolvedMamRsmPage};
+use northstar_archive_core::{
+    classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, resolve_mam_query,
+    MamBlockedIdentitySource, MamBlockedPattern,
+};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::{
@@ -4682,16 +4685,10 @@ pub async fn retract_mix_avatar(
     Ok(true)
 }
 
-#[derive(Clone, Debug)]
-enum MixMamBlockedPattern {
-    Bare(String),
-    Domain(String),
-}
-
 async fn mix_mam_blocked_patterns(
     transaction: &mut Transaction<'_, Postgres>,
     viewer_id: Option<Uuid>,
-) -> Result<Vec<MixMamBlockedPattern>> {
+) -> Result<Vec<MamBlockedPattern>> {
     let Some(viewer_id) = viewer_id else {
         return Ok(Vec::new());
     };
@@ -4701,25 +4698,16 @@ async fn mix_mam_blocked_patterns(
     .bind(viewer_id)
     .fetch_all(&mut **transaction)
     .await?;
-    Ok(patterns
-        .into_iter()
-        .filter_map(|value| {
-            let jid = crate::jid::CanonicalJid::parse(&value).ok()?;
-            if jid.resourcepart().is_some() {
-                None
-            } else if jid.localpart().is_some() {
-                Some(MixMamBlockedPattern::Bare(jid.bare()))
-            } else {
-                Some(MixMamBlockedPattern::Domain(jid.domainpart().to_owned()))
-            }
-        })
-        .collect())
+    Ok(classify_mam_blocked_jids(
+        patterns,
+        MamBlockedIdentitySource::BarePublisher,
+    ))
 }
 
 fn push_mix_mam_archive_base(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     channel_id: Uuid,
-    blocked_patterns: &[MixMamBlockedPattern],
+    blocked_patterns: &[MamBlockedPattern],
 ) {
     query_builder
         .push(" WHERE channel_id = ")
@@ -4728,12 +4716,13 @@ fn push_mix_mam_archive_base(
         .push_bind(NODE_MESSAGES);
     for pattern in blocked_patterns {
         match pattern {
-            MixMamBlockedPattern::Bare(value) => {
+            MamBlockedPattern::Full(_) => {}
+            MamBlockedPattern::Bare(value) => {
                 query_builder
                     .push(" AND publisher_jid <> ")
                     .push_bind(value.clone());
             }
-            MixMamBlockedPattern::Domain(value) => {
+            MamBlockedPattern::Domain(value) => {
                 query_builder
                     .push(" AND CASE WHEN position('@' in publisher_jid) > 0 THEN split_part(publisher_jid, '@', 2) ELSE publisher_jid END <> ")
                     .push_bind(value.clone());
@@ -4746,7 +4735,7 @@ fn push_mix_mam_scope(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     channel_id: Uuid,
     query: &super::MamArchiveQuery,
-    blocked_patterns: &[MixMamBlockedPattern],
+    blocked_patterns: &[MamBlockedPattern],
     after_point: Option<(DateTime<Utc>, Uuid)>,
     before_point: Option<(DateTime<Utc>, Uuid)>,
 ) {
@@ -4786,25 +4775,6 @@ fn push_mix_mam_scope(
     }
 }
 
-async fn mix_mam_point(
-    transaction: &mut Transaction<'_, Postgres>,
-    channel_id: Uuid,
-    blocked_patterns: &[MixMamBlockedPattern],
-    id: Uuid,
-) -> Result<Option<(DateTime<Utc>, Uuid)>> {
-    let mut builder =
-        QueryBuilder::<Postgres>::new("SELECT created_at, authoritative_id FROM mix_events");
-    // Cursor existence is evaluated only inside the caller's immutable base
-    // visibility. Query filters select results; they must not redefine which
-    // otherwise-visible archive item is a valid RSM/form cursor.
-    push_mix_mam_archive_base(&mut builder, channel_id, blocked_patterns);
-    builder.push(" AND authoritative_id = ").push_bind(id);
-    Ok(builder
-        .build_query_as()
-        .fetch_optional(&mut **transaction)
-        .await?)
-}
-
 /// Query a MIX channel's mandatory messages archive using one repeatable-read
 /// snapshot. Cursor validation, the result count, page rows and first index
 /// therefore cannot disagree if retention runs concurrently.
@@ -4840,16 +4810,12 @@ async fn mix_mam_page_for(
     }
     let blocked_patterns = mix_mam_blocked_patterns(&mut transaction, viewer_id).await?;
 
-    let requested_ids = query.ids.clone();
-    let mut cursor_ids = Vec::new();
-    cursor_ids.extend(query.before_id);
-    cursor_ids.extend(query.after_id);
-    match query.page {
-        super::MamRsmPage::Before(id) | super::MamRsmPage::After(id) => cursor_ids.push(id),
-        super::MamRsmPage::First | super::MamRsmPage::Last | super::MamRsmPage::Index(_) => {}
-    }
-    let requested_ids = requested_ids
-        .into_iter()
+    // Item IDs must match the form filters. Form/RSM cursors need only be
+    // visible in the channel's base scope, independently of those filters.
+    let requested_ids = query
+        .ids
+        .iter()
+        .copied()
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
@@ -4876,44 +4842,26 @@ async fn mix_mam_page_for(
             return Ok(MixReadOutcome::NotFound);
         }
     }
-    let cursor_ids = cursor_ids
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if !cursor_ids.is_empty() {
-        let mut builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM mix_events");
+    let referenced_ids = mam_referenced_ids(query);
+    let mut visible_points = std::collections::HashMap::with_capacity(referenced_ids.len());
+    if !referenced_ids.is_empty() {
+        let mut builder =
+            QueryBuilder::<Postgres>::new("SELECT authoritative_id, created_at FROM mix_events");
         push_mix_mam_archive_base(&mut builder, channel_id, &blocked_patterns);
         builder
             .push(" AND authoritative_id = ANY(")
-            .push_bind(cursor_ids.clone())
+            .push_bind(referenced_ids)
             .push(")");
-        let found: i64 = builder
-            .build_query_scalar()
-            .fetch_one(&mut *transaction)
-            .await?;
-        if found != cursor_ids.len() as i64 {
-            transaction.rollback().await?;
-            return Ok(MixReadOutcome::NotFound);
+        for row in builder.build().fetch_all(&mut *transaction).await? {
+            visible_points.insert(row.try_get("authoritative_id")?, row.try_get("created_at")?);
         }
     }
-
-    let form_after = match query.after_id {
-        Some(id) => Some(
-            mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
-                .await?
-                .expect("validated MIX MAM id disappeared from repeatable-read snapshot"),
-        ),
-        None => None,
+    let Some(resolved) = resolve_mam_query(query, &visible_points) else {
+        transaction.rollback().await?;
+        return Ok(MixReadOutcome::NotFound);
     };
-    let form_before = match query.before_id {
-        Some(id) => Some(
-            mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
-                .await?
-                .expect("validated MIX MAM id disappeared from repeatable-read snapshot"),
-        ),
-        None => None,
-    };
+    let form_after = resolved.plan.count_bounds.after;
+    let form_before = resolved.plan.count_bounds.before;
 
     let mut count_builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM mix_events");
     push_mix_mam_scope(
@@ -4929,23 +4877,8 @@ async fn mix_mam_page_for(
         .fetch_one(&mut *transaction)
         .await?;
 
-    let resolved_page = match query.page {
-        super::MamRsmPage::First => ResolvedMamRsmPage::First,
-        super::MamRsmPage::Last => ResolvedMamRsmPage::Last,
-        super::MamRsmPage::Index(index) => ResolvedMamRsmPage::Index(index),
-        super::MamRsmPage::After(id) => ResolvedMamRsmPage::After(
-            mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
-                .await?
-                .expect("validated MIX MAM after cursor disappeared"),
-        ),
-        super::MamRsmPage::Before(id) => ResolvedMamRsmPage::Before(
-            mix_mam_point(&mut transaction, channel_id, &blocked_patterns, id)
-                .await?
-                .expect("validated MIX MAM before cursor disappeared"),
-        ),
-    };
     let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
-    let window = plan_mam_page(form_after, form_before, resolved_page, max);
+    let window = resolved.plan.page_window(resolved.page, max);
     let mut page_builder = QueryBuilder::<Postgres>::new(
         "SELECT authoritative_id AS id, item_id, payload, created_at FROM mix_events",
     );

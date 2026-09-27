@@ -75,6 +75,43 @@ pub fn decide_mam_archive_admission(facts: MamArchiveAdmissionFacts<'_>) -> bool
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MamBlockedIdentitySource {
+    /// Personal and MUC rows retain the sender's resource for exact blocks.
+    ResourceAware,
+    /// MIX messages store a bare publisher JID, so a resource block cannot match.
+    BarePublisher,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MamBlockedPattern {
+    Full(String),
+    Bare(String),
+    Domain(String),
+}
+
+/// Classify stored XEP-0191 JIDs before building an authorized MAM query.
+/// Invalid legacy entries keep their existing non-matching behavior.
+pub fn classify_mam_blocked_jids(
+    values: impl IntoIterator<Item = String>,
+    source: MamBlockedIdentitySource,
+) -> Vec<MamBlockedPattern> {
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let jid = northstar_xmpp_types::CanonicalJid::parse(&value).ok()?;
+            if jid.resourcepart().is_some() {
+                (source == MamBlockedIdentitySource::ResourceAware)
+                    .then(|| MamBlockedPattern::Full(jid.to_string()))
+            } else if jid.localpart().is_some() {
+                Some(MamBlockedPattern::Bare(jid.bare()))
+            } else {
+                Some(MamBlockedPattern::Domain(jid.domainpart().to_owned()))
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MamRsmPage {
     First,
     Last,
@@ -512,6 +549,32 @@ mod tests {
         assert!(!decide_mam_archive_admission(facts));
         facts.default_policy = None;
         assert!(decide_mam_archive_admission(facts));
+    }
+
+    #[test]
+    fn blocked_jids_use_the_source_identity_scope() {
+        let values = [
+            "alice@example.test/Phone",
+            "bob@example.test",
+            "example.test",
+            "a@@example.test",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            classify_mam_blocked_jids(values.clone(), MamBlockedIdentitySource::ResourceAware),
+            vec![
+                MamBlockedPattern::Full("alice@example.test/Phone".to_owned()),
+                MamBlockedPattern::Bare("bob@example.test".to_owned()),
+                MamBlockedPattern::Domain("example.test".to_owned()),
+            ]
+        );
+        assert_eq!(
+            classify_mam_blocked_jids(values, MamBlockedIdentitySource::BarePublisher),
+            vec![
+                MamBlockedPattern::Bare("bob@example.test".to_owned()),
+                MamBlockedPattern::Domain("example.test".to_owned()),
+            ]
+        );
     }
 
     #[test]

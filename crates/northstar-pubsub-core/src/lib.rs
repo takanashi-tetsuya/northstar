@@ -488,6 +488,79 @@ impl PubSubSubscriptionOptions {
     }
 }
 
+/// Recheck the node-dependent part of an options form after locking the node.
+/// A leaf may retain a legacy depth value when the form does not change it;
+/// clients cannot set a new depth on a leaf.
+pub fn subscription_options_match_node_policy(
+    node_type: &str,
+    payload_type: Option<&str>,
+    current_depth: Option<i32>,
+    options: &PubSubSubscriptionOptions,
+) -> bool {
+    if options.include_body && payload_type != Some("http://www.w3.org/2005/Atom") {
+        return false;
+    }
+    match node_type {
+        "collection" => {
+            matches!(
+                options.subscription_type.as_str(),
+                "items" | "nodes" | "all"
+            ) && options.subscription_depth.is_none_or(|depth| depth >= 0)
+        }
+        "leaf" => {
+            options.subscription_type == "items" && options.subscription_depth == current_depth
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod options_policy_tests {
+    use super::*;
+
+    #[test]
+    fn locked_node_policy_rejects_stale_type_and_payload_options() {
+        let atom = "http://www.w3.org/2005/Atom";
+        let mut options = PubSubSubscriptionOptions::for_node_type("leaf");
+        options.include_body = true;
+        assert!(subscription_options_match_node_policy(
+            "leaf",
+            Some(atom),
+            Some(1),
+            &options,
+        ));
+        assert!(!subscription_options_match_node_policy(
+            "leaf",
+            None,
+            Some(1),
+            &options,
+        ));
+
+        options.include_body = false;
+        options.subscription_type = "nodes".to_owned();
+        assert!(subscription_options_match_node_policy(
+            "collection",
+            None,
+            Some(1),
+            &options,
+        ));
+        assert!(!subscription_options_match_node_policy(
+            "leaf",
+            None,
+            Some(1),
+            &options,
+        ));
+        options.subscription_type = "items".to_owned();
+        options.subscription_depth = Some(2);
+        assert!(!subscription_options_match_node_policy(
+            "leaf",
+            None,
+            Some(1),
+            &options,
+        ));
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PubSubAffiliation {
     pub node: String,
@@ -666,6 +739,7 @@ pub enum SubscriptionOptionsOutcome {
     Updated,
     NotFound,
     InvalidSubid,
+    InvalidOptions,
     Forbidden,
 }
 

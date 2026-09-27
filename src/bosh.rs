@@ -168,6 +168,11 @@ struct BoshActor {
     manager: BoshManager,
     session_key: [u8; 32],
     protocol: ProtocolSession,
+    replay_service: crate::services::replay::ReplayService<
+        crate::db::replay_repository::PostgresReplayRepository,
+    >,
+    mix_service: crate::services::mix::MixService<crate::db::mix_repository::PostgresMixRepository>,
+    sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
     commands: mpsc::Receiver<BoshCommand>,
     outbound: mpsc::Receiver<crate::outbound::OutboundItem>,
     next_rid: u64,
@@ -314,6 +319,9 @@ impl BoshManager {
         let actor = BoshActor {
             manager: self.clone(),
             session_key,
+            replay_service: state.replay_service().clone(),
+            mix_service: state.mix_service().clone(),
+            sm_memory_governor: Arc::clone(state.sm_memory_governor()),
             protocol,
             commands: command_rx,
             outbound: outbound_rx,
@@ -612,9 +620,8 @@ impl BoshActor {
     }
 
     async fn finish(&mut self) {
-        let state = Arc::clone(&self.protocol.state);
         if self.protocol.termination_signals().is_backpressured() {
-            state.record_c2s_backpressure_disconnect();
+            self.protocol.record_backpressure_disconnect();
         }
         // Stop admitting HTTP requests before durable/session finalization.
         // Every terminate, timeout, command-channel and backpressure exit
@@ -622,8 +629,7 @@ impl BoshActor {
         self.manager.remove(&self.session_key);
         match tokio::time::timeout(
             BOSH_BACKEND_OPERATION_TIMEOUT,
-            state
-                .replay_service()
+            self.replay_service
                 .release_bosh_fences(self.delivery_session_id),
         )
         .await
@@ -640,7 +646,7 @@ impl BoshActor {
         // handoff already did; recoverable cleanup failures are observed by
         // ProtocolSession::finalize itself.
         let _ = self.protocol.finalize().await;
-        state.record_bosh_session_closed();
+        self.protocol.record_bosh_session_closed();
     }
 
     async fn accept_request(
@@ -855,7 +861,7 @@ impl BoshActor {
                     "ignored payloads attached to a BOSH stream restart"
                 );
             }
-            let domain = self.protocol.state.local_domain().to_owned();
+            let domain = self.protocol.local_domain().to_owned();
             let restart_to = match validated_bosh_restart_target(request.to.as_deref(), &domain) {
                 Ok(target) => target,
                 Err(condition) => {
@@ -971,9 +977,7 @@ impl BoshActor {
         &self,
         expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
     ) -> anyhow::Result<()> {
-        self.protocol
-            .state
-            .replay_service()
+        self.replay_service
             .renew_bosh_fences(
                 self.delivery_session_id,
                 expected_response,
@@ -988,9 +992,7 @@ impl BoshActor {
         // same offline row.
         self.renew_delivery_fences(None).await?;
         if let Some(ack) = ack {
-            self.protocol
-                .state
-                .replay_service()
+            self.replay_service
                 .acknowledge_bosh_responses(self.delivery_session_id, ack)
                 .await?;
             while self.replay.front().is_some_and(|cached| cached.rid <= ack) {
@@ -1027,9 +1029,7 @@ impl BoshActor {
                 return false;
             }
             let transferred = match self
-                .protocol
-                .state
-                .mix_service()
+                .mix_service
                 .transfer_mix_delivery_to_bosh(
                     source,
                     self.delivery_session_id,
@@ -1177,9 +1177,7 @@ impl BoshActor {
             let now = Instant::now();
             if bosh_unacknowledged_limit_exceeded(&self.replay, response_bytes, now) {
                 let _ = self
-                    .protocol
-                    .state
-                    .replay_service()
+                    .replay_service
                     .release_bosh_fences(self.delivery_session_id)
                     .await;
                 let terminal =
@@ -1194,9 +1192,7 @@ impl BoshActor {
             crate::outbound::BoshResponseOwnership::default()
         } else {
             match self
-                .protocol
-                .state
-                .replay_service()
+                .replay_service
                 .bind_bosh_response_sources(
                     self.delivery_session_id,
                     rid,
@@ -1281,7 +1277,7 @@ impl BoshActor {
             &mut self.output,
             &mut self.output_bytes,
             self.max_response_bytes,
-            self.protocol.state.sm_memory_governor(),
+            &self.sm_memory_governor,
         )?;
         let body = bosh_body_element(
             condition,

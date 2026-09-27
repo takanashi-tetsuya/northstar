@@ -188,6 +188,40 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     assert_eq!(filtered_cursor.total, 2);
     assert!(filtered_cursor.complete);
 
+    let mut filtered_form_cursor = query(super::super::MamRsmPage::First, 10);
+    filtered_form_cursor.with_jid = Some("bob@example.test".to_owned());
+    filtered_form_cursor.after_id = Some(first);
+    let filtered_form_cursor = mix_mam_page(&pool, channel_id, &filtered_form_cursor)
+        .await
+        .unwrap()
+        .expect("a visible form cursor need not match the publisher filter");
+    assert_eq!(
+        filtered_form_cursor
+            .events
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>(),
+        vec![second, fourth]
+    );
+
+    let mut filtered_item_id = query(super::super::MamRsmPage::First, 10);
+    filtered_item_id.with_jid = Some("bob@example.test".to_owned());
+    filtered_item_id.ids = vec![first];
+    assert!(
+        mix_mam_page(&pool, channel_id, &filtered_item_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "an item ID must match the publisher filter"
+    );
+    filtered_item_id.ids = vec![second, second];
+    let duplicate_item_id = mix_mam_page(&pool, channel_id, &filtered_item_id)
+        .await
+        .unwrap()
+        .expect("duplicate visible item IDs denote one reference");
+    assert_eq!(duplicate_item_id.total, 1);
+    assert_eq!(duplicate_item_id.events[0].id, second);
+
     let viewer_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO users(id,username,password_hash)
@@ -233,6 +267,30 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
         .unwrap()
         .is_none(),
         "a blocked MIX publisher cannot be used as a cursor oracle"
+    );
+    sqlx::query("INSERT INTO blocked_jids(owner_id,blocked_jid) VALUES($1,$2)")
+        .bind(viewer_id)
+        .bind("alice@example.test/Phone")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let visible_with_full_jid_block = mix_mam_page_visible(
+        &pool,
+        channel_id,
+        viewer_id,
+        &query(super::super::MamRsmPage::First, 10),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        visible_with_full_jid_block
+            .events
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>(),
+        vec![first, third],
+        "MIX stores bare publishers, so a resource-specific block cannot hide them"
     );
 
     let zero = mix_mam_page(

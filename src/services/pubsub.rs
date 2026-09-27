@@ -9,21 +9,24 @@ pub(crate) use northstar_pubsub_application::{
     pubsub_mutation_admission_active as pubsub_mutation_admission_active_core,
     pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
     pubsub_mutation_admission_waiters as pubsub_mutation_admission_waiters_core,
-    validate_pep_configure_node_command, validate_pep_delete_node_command,
-    validate_pep_publish_command, validate_pep_purge_node_command, validate_pep_retract_command,
+    subscription_options_precheck, validate_pep_configure_node_command,
+    validate_pep_delete_node_command, validate_pep_publish_command,
+    validate_pep_purge_node_command, validate_pep_retract_command,
     validate_pep_set_affiliations_command, validate_pep_subscribe_command,
     validate_pep_unsubscribe_command, validate_pubsub_authorize_subscription_command,
-    validate_pubsub_configure_node_command, validate_pubsub_create_node_command,
-    validate_pubsub_delete_node_command, validate_pubsub_publish_command,
-    validate_pubsub_purge_node_command, validate_pubsub_retract_command,
-    validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
-    validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
+    validate_pubsub_collection_edge_command, validate_pubsub_configure_node_command,
+    validate_pubsub_create_node_command, validate_pubsub_delete_node_command,
+    validate_pubsub_publish_command, validate_pubsub_purge_node_command,
+    validate_pubsub_retract_command, validate_pubsub_set_affiliations_command,
+    validate_pubsub_set_subscriptions_command, validate_pubsub_subscribe_command,
+    validate_pubsub_unsubscribe_command, validate_pubsub_update_subscription_options_command,
     PepConfigureNodeCommand, PepConfigureNodeResult, PepDeleteNodeCommand, PepDeleteNodeResult,
     PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult, PepPurgeNodeCommand,
     PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
     PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeCommand,
     PepUnsubscribeResult, PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
-    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubConfigureNodeCommand,
+    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubCollectionEdgeCommand,
+    PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult, PubSubConfigureNodeCommand,
     PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
     PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubOwnerRead, PubSubOwnerReadKind,
@@ -31,7 +34,8 @@ pub(crate) use northstar_pubsub_application::{
     PubSubRetractCommand, PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult,
     PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand,
     PubSubSetSubscriptionsResult, PubSubSubscribeCommand, PubSubSubscribeResult,
-    PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
+    PubSubSubscriptionOptionsPrecheck, PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
+    PubSubUpdateSubscriptionOptionsCommand, PubSubUpdateSubscriptionOptionsResult,
 };
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 pub(crate) use northstar_pubsub_core::{
@@ -1009,6 +1013,108 @@ impl<
     }
 }
 
+impl<R: PubSubNodeQueryRepository + PubSubNodeMutationRepository> PubSubService<R> {
+    pub(crate) async fn execute_pubsub_collection_edge(
+        &self,
+        command: PubSubCollectionEdgeCommand<'_>,
+    ) -> Result<PubSubCollectionEdgeResult> {
+        validate_pubsub_collection_edge_command(&command)?;
+        let collection = command.collection;
+        let Some(child) = self.get_node(command.child).await? else {
+            return Ok(PubSubCollectionEdgeResult::MissingChild);
+        };
+        let collection_key = collection.id.to_string();
+        let child_key = child.id.to_string();
+        let _permit = self
+            .admit_mutation(&[command.requester, &collection_key, &child_key], true)
+            .await?;
+        // Node snapshots here identify graph endpoints only. The PostgreSQL
+        // adapter locks the graph, reloads policy and ownership, and commits
+        // its audience snapshot with the edge change and outbox entries.
+        let outcome = match command.operation {
+            PubSubCollectionEdgeOperation::Associate => {
+                self.repository
+                    .associate_collection_child(collection, &child, command.requester)
+                    .await?
+            }
+            PubSubCollectionEdgeOperation::Dissociate => {
+                self.repository
+                    .dissociate_collection_child(collection, &child, command.requester)
+                    .await?
+            }
+        };
+        Ok(PubSubCollectionEdgeResult::Mutation(outcome))
+    }
+}
+
+pub(crate) enum PubSubSubscriptionOptionsRead {
+    MissingNode,
+    NotSubscribed,
+    InvalidSubid,
+    Ready {
+        node: PubSubNode,
+        subscription: PubSubSubscription,
+    },
+}
+
+impl<R: PubSubNodeQueryRepository + PubSubSubscriptionQueryRepository> PubSubService<R> {
+    pub(crate) async fn subscription_options_read(
+        &self,
+        node_name: &str,
+        subscriber_jid: &str,
+        echoed_subid: Option<&str>,
+    ) -> Result<PubSubSubscriptionOptionsRead> {
+        let Some(node) = self.get_node(node_name).await? else {
+            return Ok(PubSubSubscriptionOptionsRead::MissingNode);
+        };
+        let Some(subscription) = self.get_subscription(node.id, subscriber_jid).await? else {
+            return Ok(PubSubSubscriptionOptionsRead::NotSubscribed);
+        };
+        match subscription_options_precheck(
+            subscription.is_expired_at(chrono::Utc::now()),
+            &subscription.subid,
+            echoed_subid,
+        ) {
+            PubSubSubscriptionOptionsPrecheck::Ready => {
+                Ok(PubSubSubscriptionOptionsRead::Ready { node, subscription })
+            }
+            PubSubSubscriptionOptionsPrecheck::NotSubscribed => {
+                Ok(PubSubSubscriptionOptionsRead::NotSubscribed)
+            }
+            PubSubSubscriptionOptionsPrecheck::InvalidSubid => {
+                Ok(PubSubSubscriptionOptionsRead::InvalidSubid)
+            }
+        }
+    }
+}
+
+impl<R: PubSubSubscriptionMutationRepository> PubSubService<R> {
+    pub(crate) async fn execute_pubsub_update_subscription_options(
+        &self,
+        command: PubSubUpdateSubscriptionOptionsCommand<'_>,
+    ) -> Result<PubSubUpdateSubscriptionOptionsResult> {
+        validate_pubsub_update_subscription_options_command(&command)?;
+        let node_key = command.node_id.to_string();
+        let _permit = self
+            .admit_mutation(
+                &[command.requester, command.subscriber_jid, &node_key],
+                false,
+            )
+            .await?;
+        let outcome = self
+            .repository
+            .update_subscription_options_checked(
+                command.node_id,
+                command.requester,
+                command.subscriber_jid,
+                Some(command.expected_subid),
+                command.options,
+            )
+            .await?;
+        Ok(PubSubUpdateSubscriptionOptionsResult { outcome })
+    }
+}
+
 impl<
         R: PubSubNodeMutationRepository
             + PubSubItemMutationRepository
@@ -1016,28 +1122,6 @@ impl<
             + PubSubAffiliationMutationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn update_subscription_options_checked(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: Option<&str>,
-        options: &PubSubSubscriptionOptions,
-    ) -> Result<SubscriptionOptionsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
-            .await?;
-        self.repository
-            .update_subscription_options_checked(
-                node_id,
-                requester,
-                subscriber_jid,
-                expected_subid,
-                options,
-            )
-            .await
-    }
     pub(crate) async fn create_node(
         &self,
         node: &str,
@@ -1124,36 +1208,6 @@ impl<
             .await?;
         self.repository
             .retract_items(node_id, item_ids, publisher_jid, force_notification)
-            .await
-    }
-    pub(crate) async fn associate_collection_child(
-        &self,
-        collection: &PubSubNode,
-        child: &PubSubNode,
-        requester: &str,
-    ) -> Result<CollectionUpdateOutcome> {
-        let collection_key = collection.id.to_string();
-        let child_key = child.id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, &collection_key, &child_key], true)
-            .await?;
-        self.repository
-            .associate_collection_child(collection, child, requester)
-            .await
-    }
-    pub(crate) async fn dissociate_collection_child(
-        &self,
-        collection: &PubSubNode,
-        child: &PubSubNode,
-        requester: &str,
-    ) -> Result<CollectionUpdateOutcome> {
-        let collection_key = collection.id.to_string();
-        let child_key = child.id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, &collection_key, &child_key], true)
-            .await?;
-        self.repository
-            .dissociate_collection_child(collection, child, requester)
             .await
     }
     pub(crate) async fn update_node_config_and_graph_with_outbox(

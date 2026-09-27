@@ -31,9 +31,12 @@ CycloneDX 1.6 SBOM under `third_party/hash-wasm`. CI verifies those bytes and
 the ECDSA signature offline. It also pins the two WebAssembly modules embedded
 in the UMD file, Argon2 and BLAKE2b, as separate future rebuild targets. The
 old registry key is now expired; npm reports
-publication before expiry, but that date is not a signed timestamp.
-Reproducible source builds remain unavailable because the upstream
-compiler/bundler environment is not preserved.
+publication before expiry, but that date is not a signed timestamp. The
+retained upstream source archive reproduces the Git tree of the pinned commit,
+and all 64 source files shared with the npm package match. This checks
+source/package consistency; the upstream tag is unsigned and the historical
+compiler/bundler environment is not preserved, so generated JS/WASM remains
+unqualified for a source-reproducible claim.
 
 ## CI states
 

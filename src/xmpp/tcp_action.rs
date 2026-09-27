@@ -82,7 +82,7 @@ pub(super) async fn apply<S: AsyncWrite + Unpin>(
         Action::StartTls => return Ok(TcpActionDisposition::Upgrade),
         Action::CloseWith(reply) => {
             session.forbid_sm_resume();
-            tcp_fatal_error(io, session.state.local_domain(), opening, &reply).await?;
+            tcp_fatal_error(io, session.local_domain(), opening, &reply).await?;
             return Ok(TcpActionDisposition::Close);
         }
         Action::Close => {

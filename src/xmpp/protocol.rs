@@ -478,7 +478,7 @@ impl SessionTerminationSignals {
 }
 
 pub struct ProtocolSession {
-    pub(crate) state: Arc<AppState>,
+    state: Arc<AppState>,
     outbound: crate::outbound::OutboundSender,
     /// Authoritative transport-security decision. Native TLS and trusted
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
@@ -580,6 +580,62 @@ pub struct ProtocolSession {
 }
 
 impl ProtocolSession {
+    pub(crate) fn local_domain(&self) -> &str {
+        self.state.local_domain()
+    }
+
+    pub(crate) fn record_bosh_session_closed(&self) {
+        self.state.record_bosh_session_closed();
+    }
+
+    pub(crate) fn record_backpressure_disconnect(&self) {
+        self.state.record_c2s_backpressure_disconnect();
+    }
+
+    pub(super) async fn fence_c2s_socket_write(
+        &self,
+        delivery: crate::outbound::DurableDelivery,
+    ) -> Result<crate::outbound::DurableDelivery> {
+        self.state
+            .replay_service()
+            .fence_socket_write(delivery)
+            .await
+    }
+
+    pub(super) async fn fence_mix_socket_write(
+        &self,
+        delivery: crate::outbound::MixDelivery,
+    ) -> Result<crate::outbound::MixDelivery> {
+        self.state
+            .mix_service()
+            .fence_mix_socket_write(delivery)
+            .await
+    }
+
+    pub(super) async fn acknowledge_c2s_socket_write(
+        &self,
+        delivery: crate::outbound::DurableDelivery,
+    ) -> Result<()> {
+        self.state
+            .replay_service()
+            .acknowledge_socket_write(delivery)
+            .await
+    }
+
+    pub(super) async fn acknowledge_mix_socket_write(
+        &self,
+        delivery: crate::outbound::MixDelivery,
+    ) -> Result<bool> {
+        self.state
+            .mix_service()
+            .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token)
+            .await
+    }
+
+    pub(super) fn route_connection_id(&self) -> uuid::Uuid {
+        self.connection_id
+    }
+
     pub(crate) fn activate_tls(&mut self, evidence: TlsSessionEvidence) {
         self.channel_bindings = evidence.channel_bindings;
         self.client_certificate_identities = evidence.client_certificate_identities;

@@ -14,6 +14,9 @@ Upstream release metadata recorded from the npm registry:
 - npm SHA-1: `f9f1a9f9121e027a9acbf6db5d59452ace1ef9bb`
 - npm integrity: `sha512-+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==`
 - npm registry signature: `npm-registry-signature-4.12.0.json`
+- upstream source: `hash-wasm-4.12.0-source.tar.gz`, downloaded from
+  <https://api.github.com/repos/Daninet/hash-wasm/tarball/373b796205ab55fb4a657374dad6ea589bf75815>
+- upstream Git tree: `12ac3ceecea81077e6de47fa07f118d35608d787`
 - registry-reported publication: 2024-11-19 19:01:58 UTC, before the signing
   key's 2025-01-29 expiry
 - license: MIT, retained in `LICENSE`
@@ -23,6 +26,7 @@ Repository allow-list hashes:
 | File | SHA-256 |
 | --- | --- |
 | `hash-wasm-4.12.0.tgz` | `1db32a125fb46177932ec8ac438d3cd8214ebdfaccb5d6611b657d88eb586f92` |
+| `hash-wasm-4.12.0-source.tar.gz` | `ae1a62afe48be3f1fdf355c8e349f5d5c7f1e469e47794718a72ec626df1cf71` |
 | `../../web/crypto/hash-wasm-argon2.umd.min.js` | `dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094` |
 | `LICENSE` | `c14dea172f72f2714284a0ac2ab1b00b5352a01409d58255a46227ffc541debd` |
 
@@ -50,20 +54,29 @@ unsigned registry metadata, not a trusted signing timestamp; this record does
 not assert current key validity. See npm's
 [registry signature format](https://docs.npmjs.com/about-registry-signatures/).
 
+`node scripts/check-hash-wasm-source.mjs --self-test` checks the retained source
+archive against the pinned upstream Git tree and verifies that all 64 files
+shared by that tree and the npm package have identical bytes. This includes the
+Argon2/BLAKE2b C and TypeScript sources, package metadata and bundler config.
+The upstream tag is unsigned; the Git tree check identifies exact source bytes
+but does not authenticate a publisher or link the generated UMD/WASM back to a
+particular compiler run.
+
 It does **not** establish a source-reproducible build. The npm package includes
 `lib/argon2.ts` and `src/argon2.c`, but `lib/argon2.ts` imports
 `../wasm/argon2.wasm.json`, which the package does not contain. Its `build`
 script invokes `./scripts/build.sh`, also absent from the package. There is no
-dependency lockfile. The retained tarball therefore cannot serve as a complete
-source-build input, and it has no signed build attestation linking its source
-to the published minified JavaScript and embedded WebAssembly. These absences
-can be checked offline with
+dependency lockfile. The retained npm tarball therefore cannot serve as a
+complete source-build input. The separate upstream source archive has the
+build script and lockfile; the missing WASM JSON is generated during the build.
+Its Dockerfile installs unpinned Alpine packages and does not record the
+historical compiler versions. No signed build attestation links the source to
+the published minified JavaScript and embedded WebAssembly. Check the npm
+package's omissions with
 `tar -tzf third_party/hash-wasm/hash-wasm-4.12.0.tgz` and the imports and
 scripts in the packaged `lib/argon2.ts` and `package.json`.
 
 `node scripts/check-hash-wasm-provenance.mjs --require-reproducible` deliberately
-fails after verifying the npm signature and deployed bytes. A future upgrade
-needs a pinned complete source tree, its lockfile, a digest-pinned networkless
-toolchain, and two independent clean builds matching the shipped UMD and both
-embedded WebAssembly modules before
-Northstar can make the stronger claim.
+fails after verifying the npm signature and deployed bytes. A future
+qualification needs a digest-pinned networkless toolchain and two independent
+clean builds matching the shipped UMD and both embedded WebAssembly modules.

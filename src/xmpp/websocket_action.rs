@@ -21,7 +21,7 @@ pub(super) async fn apply(
         Ok(Action::Send(reply)) => {
             if session.record_outbound(&reply).await.is_err() {
                 session.forbid_sm_resume();
-                let domain = session.state.local_domain().to_owned();
+                let domain = session.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
                     &domain,
@@ -41,7 +41,7 @@ pub(super) async fn apply(
             for reply in replies {
                 if session.record_outbound(&reply).await.is_err() {
                     session.forbid_sm_resume();
-                    let domain = session.state.local_domain().to_owned();
+                    let domain = session.local_domain().to_owned();
                     websocket_fatal_error(
                         socket,
                         &domain,
@@ -106,7 +106,7 @@ pub(super) async fn apply(
             } = payload.into_transport_parts();
             if session.record_outbound(&control).await.is_err() {
                 session.forbid_sm_resume();
-                let domain = session.state.local_domain().to_owned();
+                let domain = session.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
                     &domain,
@@ -151,7 +151,7 @@ pub(super) async fn apply(
         }
         Ok(Action::CloseWith(reply)) => {
             session.forbid_sm_resume();
-            let domain = session.state.local_domain().to_owned();
+            let domain = session.local_domain().to_owned();
             websocket_fatal_error(socket, &domain, opening, reply, terminal_sequence).await;
             return false;
         }
@@ -168,7 +168,7 @@ pub(super) async fn apply(
         Err(error) => {
             tracing::debug!(?error, "invalid WebSocket XMPP stanza");
             session.forbid_sm_resume();
-            let domain = session.state.local_domain().to_owned();
+            let domain = session.local_domain().to_owned();
             websocket_fatal_error(
                 socket,
                 &domain,

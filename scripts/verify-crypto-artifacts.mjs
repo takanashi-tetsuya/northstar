@@ -14,6 +14,7 @@ const expected = new Map([
   ['third_party/libomemo.js/npm-libomemo.js-2.0.2.tgz', '4838f06c90d2e611949fabf3edd45d2905bddbd657d36b5a8b9f150a09f6c31b'],
   ['web/crypto/hash-wasm-argon2.umd.min.js', 'dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094'],
   ['third_party/hash-wasm/hash-wasm-4.12.0.tgz', '1db32a125fb46177932ec8ac438d3cd8214ebdfaccb5d6611b657d88eb586f92'],
+  ['third_party/hash-wasm/hash-wasm-4.12.0-source.tar.gz', 'ae1a62afe48be3f1fdf355c8e349f5d5c7f1e469e47794718a72ec626df1cf71'],
   ['third_party/hash-wasm/LICENSE', 'c14dea172f72f2714284a0ac2ab1b00b5352a01409d58255a46227ffc541debd'],
 ]);
 

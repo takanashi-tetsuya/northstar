@@ -68,7 +68,8 @@ _xmpp-server --expect-tlsa usage1 --served-cert <peer leaf PEM>
 `unsupported-only` or `absent` for the corresponding negative fixture. The
 probe saves raw `delv` transcripts and checks the signed SRV relationship,
 selected address and exact TLSA RRset shape. The probe selects `lab.test.` as
-the trust root so `delv` uses the supplied lab DNSKEY anchor. Its passing
+the trust root and writes a BIND `trust-anchors` configuration from the supplied
+public DNSKEY, since `delv -a` does not accept a DNSKEY record directly. Its passing
 result establishes
 only this DNS preflight; separately retain Northstar's resolver decision,
 served certificate proof, outbox and stanza evidence for the case. The probe

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import ipaddress
 import json
@@ -53,8 +55,33 @@ def answer_records(transcript: str, owner: str, kind: str) -> list[str]:
 
 def secure_answer(exit_code: int, transcript: str) -> bool:
     return exit_code == 0 and re.search(
-        r"(?im)^;+\s*fully validated\s*$", transcript
+        r"(?im)^;+\s*(?:negative response,\s*)?fully validated\s*$", transcript
     ) is not None
+
+
+def delv_anchor_config(content: str) -> str:
+    lines = [line.strip() for line in content.splitlines() if line.strip() and not line.lstrip().startswith(";")]
+    if len(lines) != 1:
+        raise ValueError("expected one public lab.test DNSKEY record")
+    fields = lines[0].split()
+    if len(fields) >= 2 and fields[1].upper() == "IN":
+        fields.insert(1, "300")
+    if (
+        len(fields) < 8
+        or fields[0].lower() != "lab.test."
+        or [field.upper() for field in fields[2:4]] != ["IN", "DNSKEY"]
+        or fields[4:7] != ["257", "3", "13"]
+    ):
+        raise ValueError("expected a lab.test KSK DNSKEY with algorithm 13")
+    try:
+        ttl = int(fields[1])
+        key = base64.b64decode("".join(fields[7:]), validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("invalid DNSKEY TTL or public key") from error
+    if not 1 <= ttl <= 3600 or len(key) != 64:
+        raise ValueError("invalid DNSKEY TTL or public key length")
+    encoded = base64.b64encode(key).decode("ascii")
+    return f'trust-anchors {{ lab.test. static-key 257 3 13 "{encoded}"; }};\n'
 
 
 def check_answers(
@@ -164,9 +191,20 @@ def query(server: str, anchor: Path, owner: str, kind: str) -> tuple[int, str]:
 
 
 def self_test() -> None:
-    args = query_args("192.168.197.7", Path("anchor.key"), "prosody.lab.test.", "A")
-    assert args[args.index("-a") + 1] == "anchor.key"
+    args = query_args("192.168.197.7", Path("anchor.conf"), "prosody.lab.test.", "A")
+    assert args[args.index("-a") + 1] == "anchor.conf"
     assert "+root=lab.test." in args
+    key = base64.b64encode(bytes(range(64))).decode("ascii")
+    assert delv_anchor_config(f"lab.test. 300 IN DNSKEY 257 3 13 {key}\n") == (
+        f'trust-anchors {{ lab.test. static-key 257 3 13 "{key}"; }};\n'
+    )
+    assert delv_anchor_config(f"lab.test. IN DNSKEY 257 3 13 {key[:64]} {key[64:]}\n")
+    try:
+        delv_anchor_config(f"evil.test. 300 IN DNSKEY 257 3 13 {key}\n")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("wrong-owner trust anchor accepted")
     digest = "a" * 64
     domain = "prosody.lab.test."
     target = domain
@@ -189,7 +227,7 @@ def self_test() -> None:
     assert check_answers(source, domain, target, ip, 5269, "_xmpp-server", "wrong-digest", digest)["dns_preflight_passed"]
     source["TLSA"] = (0, source["TLSA"][1] + f"_5269._tcp.{target} 300 IN TLSA 1 1 1 {digest}\n")
     assert not check_answers(source, domain, target, ip, 5269, "_xmpp-server", "wrong-digest", digest)["dns_preflight_passed"]
-    source["TLSA"] = (0, ";; fully validated\n")
+    source["TLSA"] = (0, "; negative response, fully validated\n")
     assert check_answers(source, domain, target, ip, 5269, "_xmpp-server", "absent", None)["dns_preflight_passed"]
     source["TLSA"] = (0, ";; unsigned answer\n")
     assert not check_answers(source, domain, target, ip, 5269, "_xmpp-server", "absent", None)["dns_preflight_passed"]
@@ -240,11 +278,14 @@ def main() -> int:
     if anchor.is_symlink() or not anchor.is_file() or anchor.stat().st_size > 8192:
         parser.error("anchor must be a regular file of at most 8192 bytes")
     anchor_content = anchor.read_text(encoding="ascii")
-    if not any(re.match(r"^lab\.test\.\s+(?:\d+\s+)?IN\s+DNSKEY\s+257\s+3\s+13\s+", line, re.I) for line in anchor_content.splitlines()):
-        parser.error("anchor must contain the lab.test. KSK DNSKEY")
+    config = delv_anchor_config(anchor_content)
     cert_hash, spki_hash = certificate_spki(args.served_cert) if args.served_cert else (None, None)
     output = args.output_dir
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
+    delv_anchor = output / "delv-anchor.conf"
+    fd = os.open(delv_anchor, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="ascii") as stream:
+        stream.write(config)
     started_at = datetime.now(timezone.utc).isoformat()
     requests = {
         "SRV": f"{args.service}._tcp.{domain}",
@@ -253,7 +294,7 @@ def main() -> int:
     }
     transcripts: dict[str, tuple[int, str]] = {}
     for kind, owner in requests.items():
-        transcripts[kind] = query(str(server), anchor, owner, kind)
+        transcripts[kind] = query(str(server), delv_anchor, owner, kind)
         (output / f"{kind.lower()}.delv.txt").write_text(transcripts[kind][1], encoding="utf-8")
     checks = check_answers(
         transcripts, domain, target, address, args.port, args.service, args.expect_tlsa, spki_hash,
@@ -263,6 +304,7 @@ def main() -> int:
         "started_at_utc": started_at,
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
         "dns_server": str(server), "anchor_sha256": hashlib.sha256(anchor_content.encode()).hexdigest(),
+        "delv_anchor_sha256": hashlib.sha256(config.encode()).hexdigest(),
         "peer_domain": domain, "target": target, "selected_ip": str(address),
         "port": args.port, "service": args.service, "expected_tlsa": args.expect_tlsa,
         "served_certificate_sha256": cert_hash, "served_spki_sha256": spki_hash,

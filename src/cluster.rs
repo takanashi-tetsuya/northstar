@@ -881,7 +881,7 @@ fn admit_health(health: &ClusterHealth, operation: ClusterOperation) -> Result<(
             "cluster control plane is degraded; only PostgreSQL-spooled direct messages are accepted"
         ),
         CLUSTER_FAIL_CLOSED => anyhow::bail!("cluster control plane is unavailable"),
-        CLUSTER_SHUTDOWN_REQUIRED => anyhow::bail!("cluster safety lease expired"),
+        CLUSTER_SHUTDOWN_REQUIRED => anyhow::bail!("cluster shutdown is required"),
         _ => anyhow::bail!("cluster control plane is in an invalid state"),
     }
 }
@@ -3015,14 +3015,21 @@ fn record_cluster_failure(
     if health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED {
         return;
     }
-    let degraded = match policy {
-        Some(crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly) => {
-            CLUSTER_DURABLE_DIRECT_ONLY
+    // PostgreSQL owns the key and process-instance fences required even by
+    // durable-direct fallback. Losing that authority cannot enter a mode
+    // which still accepts new spool rows while the supervisor is waking up.
+    let failed_state = if matches!(class, ClusterFailureClass::PostgreSqlAuthority) {
+        CLUSTER_SHUTDOWN_REQUIRED
+    } else {
+        match policy {
+            Some(crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly) => {
+                CLUSTER_DURABLE_DIRECT_ONLY
+            }
+            _ => CLUSTER_FAIL_CLOSED,
         }
-        _ => CLUSTER_FAIL_CLOSED,
     };
-    let previous = health.state.swap(degraded, Ordering::AcqRel);
-    if previous != degraded {
+    let previous = health.state.swap(failed_state, Ordering::AcqRel);
+    if previous != failed_state {
         health.degraded_transitions.fetch_add(1, Ordering::Relaxed);
     }
     let next_listener = health
@@ -3044,7 +3051,7 @@ fn record_cluster_failure(
         ?error,
         ?class,
         ?policy,
-        "cluster control plane entered a degraded state"
+        "cluster control plane entered a fenced failure state"
     );
 }
 
@@ -3242,7 +3249,7 @@ fn cluster_readiness_error(health: &ClusterHealth) -> Option<String> {
             Some("cluster is degraded to PostgreSQL-spooled direct messages".into())
         }
         CLUSTER_FAIL_CLOSED => Some("cluster control plane is fail-closed".into()),
-        CLUSTER_SHUTDOWN_REQUIRED => Some("cluster safety lease expired".into()),
+        CLUSTER_SHUTDOWN_REQUIRED => Some("cluster shutdown is required".into()),
         _ => Some("cluster control plane has an invalid state".into()),
     }
 }

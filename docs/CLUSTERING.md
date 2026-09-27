@@ -132,7 +132,10 @@ recovery is an explicit out-of-band operation and is not automated by Northstar.
 
 ## Failure-policy state machine
 
-`CLUSTER_FAILURE_POLICY` is required to be one of the following values:
+`CLUSTER_FAILURE_POLICY` selects the intended admission policy below. Local
+durable C2S and authenticated S2S messages do not yet take a cluster admission
+fence before committing to PostgreSQL, so the degraded direct-message cells
+remain unqualified. See [ARCH-CLU-DEGRADE](KNOWN_ISSUES.md).
 
 | State/policy | New bind/resume | MUC join or mutation | Admin mutation/control | `no-store`/transient | Storage-eligible direct message | Readiness | Shutdown |
 | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -203,7 +203,7 @@ async fn account_revocation_identity_snapshots_instance_epoch() {
 }
 
 #[tokio::test]
-async fn revocation_authority_failure_fences_the_shared_cluster_health() {
+async fn revocation_authority_failure_requires_immediate_shutdown() {
     let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
         .await
         .unwrap();
@@ -218,7 +218,7 @@ async fn revocation_authority_failure_fences_the_shared_cluster_health() {
     authority.record_failure(&anyhow::anyhow!("authority unavailable"));
     assert_eq!(
         cluster.health.state.load(Ordering::Acquire),
-        CLUSTER_FAIL_CLOSED
+        CLUSTER_SHUTDOWN_REQUIRED
     );
     assert_eq!(
         cluster.health.degraded_transitions.load(Ordering::Relaxed),
@@ -239,6 +239,116 @@ async fn revocation_authority_failure_fences_the_shared_cluster_health() {
         1
     );
     assert!(cluster.health.failure_since.lock().unwrap().is_some());
+    assert!(cluster.admit(ClusterOperation::DurableDirect).is_err());
+}
+
+#[tokio::test]
+async fn postgres_authority_failure_is_terminal_from_healthy_and_degraded_under_both_policies() {
+    use crate::cluster_security::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
+
+    for policy in [FailClosed, DurableDirectOnly] {
+        for already_degraded in [false, true] {
+            let manager = listener_health_manager();
+            manager.note_listener_generation();
+            if already_degraded {
+                record_cluster_failure(
+                    &manager.health,
+                    &manager.listener_rotation,
+                    true,
+                    Some(policy),
+                    ClusterFailureClass::RedisCommand,
+                    &anyhow::anyhow!("Redis unavailable"),
+                );
+                assert_eq!(
+                    manager.health.state.load(Ordering::Acquire),
+                    match policy {
+                        FailClosed => CLUSTER_FAIL_CLOSED,
+                        DurableDirectOnly => CLUSTER_DURABLE_DIRECT_ONLY,
+                    }
+                );
+            }
+
+            let previous_epoch = manager
+                .health
+                .listener_rotation_epoch
+                .load(Ordering::Acquire);
+            let previous_transitions = manager.health.degraded_transitions.load(Ordering::Acquire);
+            let previous_failure_since = *manager.health.failure_since.lock().unwrap();
+            let rotation = manager.listener_rotation.notified();
+            tokio::pin!(rotation);
+            rotation.as_mut().enable();
+
+            record_cluster_failure(
+                &manager.health,
+                &manager.listener_rotation,
+                true,
+                Some(policy),
+                ClusterFailureClass::PostgreSqlAuthority,
+                &anyhow::anyhow!("PostgreSQL authority unavailable"),
+            );
+            tokio::time::timeout(Duration::from_millis(100), &mut rotation)
+                .await
+                .expect("authority failure did not rotate the listener");
+            assert_eq!(
+                manager.health.state.load(Ordering::Acquire),
+                CLUSTER_SHUTDOWN_REQUIRED
+            );
+            assert_eq!(
+                manager.health.degraded_transitions.load(Ordering::Acquire),
+                previous_transitions + 1
+            );
+            assert_eq!(
+                manager
+                    .health
+                    .listener_rotation_epoch
+                    .load(Ordering::Acquire),
+                previous_epoch + 1
+            );
+            assert_eq!(
+                manager
+                    .health
+                    .required_listener_generation
+                    .load(Ordering::Acquire),
+                manager.health.listener_generation.load(Ordering::Acquire) + 1
+            );
+            let failure_since = *manager.health.failure_since.lock().unwrap();
+            assert!(failure_since.is_some());
+            if already_degraded {
+                assert_eq!(failure_since, previous_failure_since);
+            }
+            assert!(manager.admit(ClusterOperation::DurableDirect).is_err());
+            assert!(manager.begin_reconciliation().is_err());
+            assert!(manager.complete_reconciliation(previous_epoch).is_err());
+            let (candidate, epoch) = manager.health.begin_listener_attempt();
+            assert!(manager
+                .confirm_listener_generation(candidate, epoch)
+                .is_err());
+
+            record_cluster_failure(
+                &manager.health,
+                &manager.listener_rotation,
+                true,
+                Some(policy),
+                ClusterFailureClass::RedisCommand,
+                &anyhow::anyhow!("late Redis error"),
+            );
+            assert_eq!(
+                manager.health.state.load(Ordering::Acquire),
+                CLUSTER_SHUTDOWN_REQUIRED
+            );
+            assert_eq!(
+                manager.health.degraded_transitions.load(Ordering::Acquire),
+                previous_transitions + 1
+            );
+            assert_eq!(
+                manager
+                    .health
+                    .listener_rotation_epoch
+                    .load(Ordering::Acquire),
+                previous_epoch + 1
+            );
+        }
+    }
 }
 
 #[tokio::test]

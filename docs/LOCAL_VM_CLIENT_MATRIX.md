@@ -32,6 +32,15 @@ never in the host's general trust store. Keep that environment on
 `northstar-lab` only, with no default route.
 Do not change the six running guests during the soak.
 
+The frozen R2 host preflight has a pinned checksum index in
+[`docs/evidence/baselines/client-component-fc4f2c8-r2.sha256`](evidence/baselines/client-component-fc4f2c8-r2.sha256).
+Before using its scripts for VM acceptance, read that index hash from the
+exact reviewed Git commit, verify `SHA256SUMS.r2` against it, then check all
+files listed in the index and run the frozen `host-preflight-r2.py`. The
+sidecar beside the private `/tmp` bundle is not an independent checksum.
+This host preflight confirms file integrity only; client and component wire
+results still require the isolated VM runs.
+
 ## Record prerequisites
 
 After the soak, collect a read-only inventory on the host and again inside

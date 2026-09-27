@@ -87,6 +87,7 @@ pub(crate) struct AdminCommandReplayRecord<'a> {
 pub(crate) enum AdminCommandRoute {
     TlsReload,
     PanicDisconnect,
+    Registration,
 }
 
 impl AdminCommandRoute {
@@ -94,6 +95,21 @@ impl AdminCommandRoute {
         match self {
             Self::TlsReload => "/api/v1/admin/tls/reload",
             Self::PanicDisconnect => "/api/v1/admin/panic_disconnect",
+            Self::Registration => "/api/v1/admin/registration",
+        }
+    }
+
+    pub(crate) fn target_scope(self) -> &'static [u8] {
+        match self {
+            Self::Registration => b"registration_closed",
+            Self::TlsReload | Self::PanicDisconnect => b"",
+        }
+    }
+
+    pub(crate) fn response_status(self) -> u16 {
+        match self {
+            Self::Registration => 200,
+            Self::TlsReload | Self::PanicDisconnect => 202,
         }
     }
 }
@@ -172,7 +188,7 @@ impl ApiControlKeyring {
             }) && request.principal_kind.as_str() == "admin"
                 && request.method == "POST"
                 && request.route == route.path()
-                && request.target_scope.is_empty(),
+                && request.target_scope == route.target_scope(),
             "administrator command idempotency request has an invalid identity"
         );
         let (current_scope, previous_scope) = self.scope_hashes(request);
@@ -191,9 +207,13 @@ impl ApiControlKeyring {
 
     pub(crate) fn open_admin_command_replay(
         &self,
+        route: AdminCommandRoute,
         record: AdminCommandReplayRecord<'_>,
     ) -> Result<IdempotentResponse> {
-        anyhow::ensure!(record.status == 202, "stored command status is invalid");
+        anyhow::ensure!(
+            u16::try_from(record.status).ok() == Some(route.response_status()),
+            "stored command status is invalid"
+        );
         let scope_hash: &[u8; 32] = record
             .scope_hash
             .try_into()
@@ -213,13 +233,18 @@ impl ApiControlKeyring {
         open_replay(
             key,
             nonce,
-            replay_aad(record.record_id, scope_hash, fingerprint, 202),
+            replay_aad(
+                record.record_id,
+                scope_hash,
+                fingerprint,
+                route.response_status(),
+            ),
             &mut ciphertext,
         )?;
         let (headers, body) = decode_replay_envelope(&ciphertext)?;
         Ok(IdempotentResponse {
             request_id: record.request_id,
-            status: 202,
+            status: route.response_status(),
             headers,
             body,
         })
@@ -227,6 +252,7 @@ impl ApiControlKeyring {
 
     pub(crate) fn seal_admin_command_response(
         &self,
+        route: AdminCommandRoute,
         record_id: Uuid,
         scope_hash: &[u8; 32],
         fingerprint: &[u8; 32],
@@ -243,7 +269,7 @@ impl ApiControlKeyring {
         seal_replay(
             &self.current,
             nonce,
-            replay_aad(record_id, scope_hash, fingerprint, 202),
+            replay_aad(record_id, scope_hash, fingerprint, route.response_status()),
             &mut ciphertext,
         )?;
         Ok(SealedAdminReplay {

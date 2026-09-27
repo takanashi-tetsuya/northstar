@@ -1421,7 +1421,7 @@ pub async fn attest_storage_role(pool: &PgPool) -> Result<()> {
 }
 
 /// Proves that the isolated command login has no relation access and can
-/// execute only the eight XEP-0133 session commands and six REST command
+/// execute only the eight XEP-0133 session commands and nine REST command
 /// capabilities. Neither workload can mint administrative authority through
 /// arbitrary table access.
 pub async fn attest_admin_command_role(pool: &PgPool) -> Result<()> {
@@ -1443,7 +1443,10 @@ pub async fn attest_admin_command_role(pool: &PgPool) -> Result<()> {
                ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
                ('northstar_admin_panic_disconnect_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
                ('northstar_admin_panic_disconnect_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
-               ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)')
+               ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
+               ('northstar_admin_registration_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
+               ('northstar_admin_registration_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
+               ('northstar_admin_registration_commit(uuid,uuid,uuid,int8,bytea,bool,text,bytea,bytea,int8)')
            ), resolved AS (
              SELECT signature,
                     pg_catalog.to_regprocedure('public.' || signature) AS oid
@@ -1709,8 +1712,8 @@ mod tests {
         // The ledger has one intentional historical gap (0021).  Keep this
         // assertion exact so adding a migration requires reviewing both the
         // embedded capability manifest and its attestation expectation.
-        assert_eq!(manifest.versions.last(), Some(&155));
-        assert_eq!(manifest.versions.len(), 154);
+        assert_eq!(manifest.versions.last(), Some(&156));
+        assert_eq!(manifest.versions.len(), 155);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

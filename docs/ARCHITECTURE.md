@@ -304,7 +304,7 @@ shared-authority exceptions visible.
 | Federation/components | remote identity, discovery/TLS/Dialback and durable outbox ownership | authenticated streams, domain checks and durable repositories | S2S/component code remains in the same binary and runtime role |
 | Cluster control plane | signed node envelopes, leases, socket hints and degraded state | envelope verification plus PostgreSQL authority; Redis is non-authoritative | multi-node mode remains experimental and shares the server process |
 | Background workers | registered lifecycle, heartbeat and restart/fail-fast policy | worker registry and readiness/fatal cancellation | ordinary operation claims and effects are scoped, but some worker entry points still assemble them from broad state |
-| REST/admin operation runtime | API authentication, idempotency, command authorization and recovery | API middleware, operation journal and scoped command-role routines for TLS reload | Other REST mutations still use runtime-role transactions and need narrower capabilities; REST and XMPP share one process |
+| REST/admin operation runtime | API authentication, idempotency, command authorization and recovery | API middleware, operation journal and scoped command-role routines for TLS reload, panic disconnect and registration policy | Other REST mutations still use runtime-role transactions and need narrower capabilities; REST and XMPP share one process |
 | Browser cryptography | endpoint OMEMO key/session operations | browser code and no server private-key API | same-origin frontend delivery remains in the E2EE trust/supply-chain boundary |
 
 The production database identities are intentionally non-interchangeable:

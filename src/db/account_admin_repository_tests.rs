@@ -57,6 +57,17 @@ impl<'a> Request<'a> {
             },
         }
     }
+    fn registration_admission(&self, enabled: bool) -> AdminMutationAdmission<'_> {
+        let mut admission = self.admission();
+        let body: &[u8] = if enabled {
+            br#"{"enabled":true}"#
+        } else {
+            br#"{"enabled":false}"#
+        };
+        admission.idempotency.request_fingerprint =
+            api_request_fingerprint("application/json", body);
+        admission
+    }
 }
 async fn fixture() -> (PgPool, AdminMutationStore, Uuid, String) {
     let pool = db::test_support::operation_mutation_pool().await;
@@ -94,6 +105,137 @@ fn operation_id(response: &StoredApiResponse) -> Uuid {
 async fn assert_unretained(pool: &PgPool, request_id: Uuid) {
     assert!(!sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM api_idempotency_records WHERE request_id=$1) OR EXISTS(SELECT 1 FROM api_operation_journal WHERE request_id=$1) OR EXISTS(SELECT 1 FROM audit_log WHERE request_id=$1)")
         .bind(request_id).fetch_one(pool).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn registration_command_repository_commits_200_and_replays_without_reapplying_policy() {
+    let (pool, _, actor, session) = fixture().await;
+    db::initialize_admin_runtime_settings(&pool, false, false, false)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO admin_runtime_settings(key,enabled)
+         VALUES('registration_closed',FALSE)
+         ON CONFLICT(key) DO UPDATE SET enabled=FALSE",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cluster =
+        crate::cluster::ClusterManager::new(None, "registration.test", None, None, None, None)
+            .await
+            .unwrap();
+    let secret = Uuid::new_v4().simple().to_string();
+    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let repository = PostgresRegistrationAdminRepository::new(
+        AdminCommandStore::new(pool.clone(), keyring, cluster.admission()),
+        pool.clone(),
+    );
+    let close = Request::new(
+        &actor,
+        &session,
+        "POST",
+        "/api/v1/admin/registration",
+        b"registration_closed",
+    );
+    let response = committed(
+        repository
+            .set_registration(close.registration_admission(false), false)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&response.body).unwrap(),
+        json!({"open_registration": false})
+    );
+    let stored = sqlx::query(
+        "SELECT state,response_status,response_ciphertext FROM api_idempotency_records
+         WHERE request_id=$1",
+    )
+    .bind(close.request_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.get::<String, _>("state"), "completed");
+    assert_eq!(stored.get::<i16, _>("response_status"), 200);
+    assert!(
+        !String::from_utf8_lossy(&stored.get::<Vec<u8>, _>("response_ciphertext"))
+            .contains("open_registration")
+    );
+    let closed_revision: i64 = sqlx::query_scalar(
+        "SELECT revision FROM admin_runtime_settings WHERE key='registration_closed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(repository.current_registration_closed().await.unwrap());
+    let ApiMutationOutcome::Replay(replay) = repository
+        .set_registration(close.registration_admission(false), false)
+        .await
+        .unwrap()
+    else {
+        panic!("same registration request must replay")
+    };
+    assert_eq!(
+        (replay.status, &replay.headers, &replay.body),
+        (response.status, &response.headers, &response.body)
+    );
+    assert_eq!(replay.request_id, close.request_id);
+    let open = Request::new(
+        &actor,
+        &session,
+        "POST",
+        "/api/v1/admin/registration",
+        b"registration_closed",
+    );
+    let open_response = committed(
+        repository
+            .set_registration(open.registration_admission(true), true)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(open_response.status, 200);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&open_response.body).unwrap(),
+        json!({"open_registration": true})
+    );
+    assert!(!repository.current_registration_closed().await.unwrap());
+    let open_revision: i64 = sqlx::query_scalar(
+        "SELECT revision FROM admin_runtime_settings WHERE key='registration_closed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(open_revision, closed_revision + 1);
+    let ApiMutationOutcome::Replay(historical) = repository
+        .set_registration(close.registration_admission(false), false)
+        .await
+        .unwrap()
+    else {
+        panic!("historical registration request must replay")
+    };
+    assert_eq!(historical.body, response.body);
+    assert!(!repository.current_registration_closed().await.unwrap());
+    let final_revision: i64 = sqlx::query_scalar(
+        "SELECT revision FROM admin_runtime_settings WHERE key='registration_closed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(final_revision, open_revision);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE request_id=$1
+             AND action='admin.runtime_setting.set' AND target='registration_closed'",
+        )
+        .bind(close.request_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]

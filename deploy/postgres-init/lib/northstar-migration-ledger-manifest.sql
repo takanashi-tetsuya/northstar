@@ -165,6 +165,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (152,'mix mam authoritative page index',pg_catalog.decode('4b454f796eb4e0fd521f88d0dfa1512e3d27ecf461bb75dee7a471fcef697e547a446d827c11ab0664950ac1307fe613','hex')),
   (153,'admin tls reload command capability',pg_catalog.decode('cc67f828d181ab7c71f84d0b40f2e48288552fc813e919b0936b516bd6fa0a24de778e46bccb8d6ae1275ae88a2ddc33','hex')),
   (154,'admin panic disconnect command capability',pg_catalog.decode('9146749e040022dd7fe9c843403c66488f72835d9c326c7ed11094719b6c5c84434ca8c6490555b5e67e783e838699ba','hex')),
-  (155,'direct spool revision wakes',pg_catalog.decode('e45d7d4f5e74bc5b87c04a88b75f6b297ae7eac964aa2d68e6a8c70b3350781f776a8972347959a9d019ca9a861e20f0','hex'));
+  (155,'direct spool revision wakes',pg_catalog.decode('e45d7d4f5e74bc5b87c04a88b75f6b297ae7eac964aa2d68e6a8c70b3350781f776a8972347959a9d019ca9a861e20f0','hex')),
+  (156,'admin registration command capability',pg_catalog.decode('3803e8e6483e2f6283b634607914da533eb0cc03e2f6c3cd62160e4b2d5e5d40f61082b119855ba924cfecb46d7db2fc','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

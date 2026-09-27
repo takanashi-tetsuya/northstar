@@ -774,7 +774,10 @@ SELECT pg_catalog.format(
        ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
        ('northstar_admin_panic_disconnect_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
        ('northstar_admin_panic_disconnect_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
-       ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)')
+       ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
+       ('northstar_admin_registration_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
+       ('northstar_admin_registration_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
+       ('northstar_admin_registration_commit(uuid,uuid,uuid,int8,bytea,bool,text,bytea,bytea,int8)')
       ) AS allowed(signature)
    ON routine.oid = pg_catalog.to_regprocedure('public.' || allowed.signature)
  WHERE namespace.nspname = 'public'
@@ -1543,7 +1546,10 @@ SELECT NOT EXISTS (
                ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
        ('northstar_admin_panic_disconnect_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
        ('northstar_admin_panic_disconnect_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
-       ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)')
+       ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
+       ('northstar_admin_registration_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
+       ('northstar_admin_registration_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
+       ('northstar_admin_registration_commit(uuid,uuid,uuid,int8,bytea,bool,text,bytea,bytea,int8)')
              ) allowed(signature)
              WHERE pg_catalog.to_regprocedure('public.' || allowed.signature)=routine.oid
            )
@@ -1562,7 +1568,10 @@ SELECT NOT EXISTS (
            ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
        ('northstar_admin_panic_disconnect_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
        ('northstar_admin_panic_disconnect_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
-       ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)')
+       ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)'),
+       ('northstar_admin_registration_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
+       ('northstar_admin_registration_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
+       ('northstar_admin_registration_commit(uuid,uuid,uuid,int8,bytea,bool,text,bytea,bytea,int8)')
          ) allowed(signature)
          LEFT JOIN pg_catalog.pg_proc routine
            ON routine.oid=pg_catalog.to_regprocedure('public.' || allowed.signature)

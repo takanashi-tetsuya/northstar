@@ -195,9 +195,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   nodes. Verify direct-spool wakes commit with their messages, remain pending
   when no eligible route exists, and are acknowledged only after the recipient
   spool is empty. Runtime must not access the wake table directly.
+- [ ] Apply migration `0156` and reconcile grants before starting the server.
+  Verify only the command role can execute the three registration functions;
+  a successful request commits `registration_closed`, one audit entry and an
+  encrypted 200 replay together.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 154 migrations from `0001` through the current
-  repository maximum `0155`, with `0021` as the sole intentional gap.
+  identity and verify all 155 migrations from `0001` through the current
+  repository maximum `0156`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

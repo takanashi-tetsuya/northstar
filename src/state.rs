@@ -4589,7 +4589,11 @@ impl AppState {
         let registration_admin_service =
             crate::services::account_admin::RegistrationAdminService::new(
                 db::account_admin_repository::PostgresRegistrationAdminRepository::new(
-                    admin_mutations.clone(),
+                    db::admin_dispatch_repository::AdminCommandStore::new(
+                        command_pool.clone(),
+                        Arc::clone(&api_control),
+                        cluster.admission(),
+                    ),
                     pool.clone(),
                 ),
                 account_admin::LocalRegistrationCache::new(

@@ -59,6 +59,7 @@ MIGRATIONS = {
     "0153": ROOT / "migrations/0153_admin_tls_reload_command_capability.sql",
     "0154": ROOT / "migrations/0154_admin_panic_disconnect_command_capability.sql",
     "0155": ROOT / "migrations/0155_direct_spool_revision_wakes.sql",
+    "0156": ROOT / "migrations/0156_admin_registration_command_capability.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -111,7 +112,7 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|storage|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -861,7 +862,7 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156")
 }
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows

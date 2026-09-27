@@ -127,6 +127,7 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
     let headers = crate::services::api_mutations::json_replay_headers();
     let old_sealed = old
         .seal_admin_command_response(
+            AdminCommandRoute::TlsReload,
             record_id,
             &old_hashes.current_scope,
             &old_hashes.current_fingerprint,
@@ -146,20 +147,24 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         Some(old_hashes.current_fingerprint)
     );
     let replay = rotating
-        .open_admin_command_replay(AdminCommandReplayRecord {
-            record_id,
-            request_id: request.request_id,
-            scope_hash: &old_hashes.current_scope,
-            fingerprint: &old_hashes.current_fingerprint,
-            status: 202,
-            key_id: &old_sealed.key_id,
-            nonce: &old_sealed.nonce,
-            ciphertext: old_sealed.ciphertext,
-        })
+        .open_admin_command_replay(
+            AdminCommandRoute::TlsReload,
+            AdminCommandReplayRecord {
+                record_id,
+                request_id: request.request_id,
+                scope_hash: &old_hashes.current_scope,
+                fingerprint: &old_hashes.current_fingerprint,
+                status: 202,
+                key_id: &old_sealed.key_id,
+                nonce: &old_sealed.nonce,
+                ciphertext: old_sealed.ciphertext,
+            },
+        )
         .unwrap();
     assert_eq!(replay.body, response);
     let new_sealed = rotating
         .seal_admin_command_response(
+            AdminCommandRoute::TlsReload,
             record_id,
             &new_hashes.current_scope,
             &new_hashes.current_fingerprint,
@@ -169,28 +174,34 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         .unwrap();
     let current_only = ApiControlKeyring::new(new_secret, None).unwrap();
     assert!(current_only
-        .open_admin_command_replay(AdminCommandReplayRecord {
-            record_id,
-            request_id: request.request_id,
-            scope_hash: &new_hashes.current_scope,
-            fingerprint: &new_hashes.current_fingerprint,
-            status: 202,
-            key_id: &new_sealed.key_id,
-            nonce: &new_sealed.nonce,
-            ciphertext: new_sealed.ciphertext.clone(),
-        })
+        .open_admin_command_replay(
+            AdminCommandRoute::TlsReload,
+            AdminCommandReplayRecord {
+                record_id,
+                request_id: request.request_id,
+                scope_hash: &new_hashes.current_scope,
+                fingerprint: &new_hashes.current_fingerprint,
+                status: 202,
+                key_id: &new_sealed.key_id,
+                nonce: &new_sealed.nonce,
+                ciphertext: new_sealed.ciphertext.clone(),
+            }
+        )
         .is_ok());
     assert!(current_only
-        .open_admin_command_replay(AdminCommandReplayRecord {
-            record_id,
-            request_id: request.request_id,
-            scope_hash: &old_hashes.current_scope,
-            fingerprint: &new_hashes.current_fingerprint,
-            status: 202,
-            key_id: &new_sealed.key_id,
-            nonce: &new_sealed.nonce,
-            ciphertext: new_sealed.ciphertext,
-        })
+        .open_admin_command_replay(
+            AdminCommandRoute::TlsReload,
+            AdminCommandReplayRecord {
+                record_id,
+                request_id: request.request_id,
+                scope_hash: &old_hashes.current_scope,
+                fingerprint: &new_hashes.current_fingerprint,
+                status: 202,
+                key_id: &new_sealed.key_id,
+                nonce: &new_sealed.nonce,
+                ciphertext: new_sealed.ciphertext,
+            }
+        )
         .is_err());
 
     let mut bad_request = request;
@@ -228,6 +239,75 @@ fn panic_disconnect_command_identity_is_route_bound() {
     request.target_scope = b"another-target";
     assert!(keys
         .admin_command_hashes(&request, AdminCommandRoute::PanicDisconnect)
+        .is_err());
+}
+
+#[test]
+fn registration_command_replay_is_route_and_status_bound() {
+    let keys = ApiControlKeyring::new(b"registration-command-control-secret-000001", None).unwrap();
+    let actor = Uuid::new_v4();
+    let mut request = admin_request(
+        &actor,
+        "registration-command-key-0001",
+        b"registration_closed",
+        "POST",
+        "/api/v1/admin/registration",
+        br#"{"open_registration":false}"#,
+    );
+    let hashes = keys
+        .admin_command_hashes(&request, AdminCommandRoute::Registration)
+        .unwrap();
+    assert!(keys
+        .admin_command_hashes(&request, AdminCommandRoute::TlsReload)
+        .is_err());
+    let record_id = Uuid::new_v4();
+    let headers = crate::services::api_mutations::json_replay_headers();
+    let body = br#"{"open_registration":false}"#;
+    let sealed = keys
+        .seal_admin_command_response(
+            AdminCommandRoute::Registration,
+            record_id,
+            &hashes.current_scope,
+            &hashes.current_fingerprint,
+            &headers,
+            body,
+        )
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&sealed.ciphertext).contains("open_registration"));
+    let replay = keys
+        .open_admin_command_replay(
+            AdminCommandRoute::Registration,
+            AdminCommandReplayRecord {
+                record_id,
+                request_id: request.request_id,
+                scope_hash: &hashes.current_scope,
+                fingerprint: &hashes.current_fingerprint,
+                status: 200,
+                key_id: &sealed.key_id,
+                nonce: &sealed.nonce,
+                ciphertext: sealed.ciphertext.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(replay.body, body);
+    assert!(keys
+        .open_admin_command_replay(
+            AdminCommandRoute::TlsReload,
+            AdminCommandReplayRecord {
+                record_id,
+                request_id: request.request_id,
+                scope_hash: &hashes.current_scope,
+                fingerprint: &hashes.current_fingerprint,
+                status: 202,
+                key_id: &sealed.key_id,
+                nonce: &sealed.nonce,
+                ciphertext: sealed.ciphertext,
+            }
+        )
+        .is_err());
+    request.target_scope = b"island_mode";
+    assert!(keys
+        .admin_command_hashes(&request, AdminCommandRoute::Registration)
         .is_err());
 }
 
@@ -1693,141 +1773,6 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         ("cache-control".to_owned(), "no-store, max-age=0".to_owned()),
         ("content-type".to_owned(), "application/json".to_owned()),
     ]);
-
-    // Registration toggle: bearer reauthorization, setting, audit and
-    // replay response share one transaction and one request UUID.
-    let close_body = br#"{"enabled":false}"#;
-    let close_request = admin_request(
-        &admin_id,
-        "admin-registration-close-0001",
-        b"registration_closed",
-        "POST",
-        "/api/v1/admin/registration",
-        close_body,
-    );
-    let mut close_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut close_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
-    let close_lease = acquired(
-        acquire_idempotency_in_tx(&keys, &mut close_tx, &close_request)
-            .await
-            .unwrap(),
-    );
-    let close_request_id = close_lease.request_id;
-    crate::db::set_admin_runtime_setting_in_tx(
-        &mut close_tx,
-        admin_id,
-        "registration_closed",
-        true,
-        Some(close_request_id),
-    )
-    .await
-    .unwrap();
-    assert!(complete_idempotency_in_tx(
-        &keys,
-        &mut close_tx,
-        &close_lease,
-        200,
-        &headers,
-        br#"{"open_registration":false}"#,
-    )
-    .await
-    .unwrap());
-    close_tx.commit().await.unwrap();
-    assert!(sqlx::query_scalar::<_, bool>(
-        "SELECT enabled FROM admin_runtime_settings WHERE key='registration_closed'"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap());
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM audit_log
-             WHERE request_id=$1 AND action='admin.runtime_setting.set'"
-        )
-        .bind(close_request_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap(),
-        1
-    );
-    let mut close_replay_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut close_replay_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
-    assert!(matches!(
-        acquire_idempotency_in_tx(&keys, &mut close_replay_tx, &close_request)
-            .await
-            .unwrap(),
-        IdempotencyAcquire::Replay(IdempotentResponse { status: 200, .. })
-    ));
-    close_replay_tx.commit().await.unwrap();
-
-    // A later request reopens registration. Replaying the historical
-    // close cannot mutate the durable setting again.
-    let open_request = admin_request(
-        &admin_id,
-        "admin-registration-open-0002",
-        b"registration_closed",
-        "POST",
-        "/api/v1/admin/registration",
-        br#"{"enabled":true}"#,
-    );
-    let mut open_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut open_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
-    let open_lease = acquired(
-        acquire_idempotency_in_tx(&keys, &mut open_tx, &open_request)
-            .await
-            .unwrap(),
-    );
-    crate::db::set_admin_runtime_setting_in_tx(
-        &mut open_tx,
-        admin_id,
-        "registration_closed",
-        false,
-        Some(open_lease.request_id),
-    )
-    .await
-    .unwrap();
-    assert!(complete_idempotency_in_tx(
-        &keys,
-        &mut open_tx,
-        &open_lease,
-        200,
-        &headers,
-        br#"{"open_registration":true}"#,
-    )
-    .await
-    .unwrap());
-    open_tx.commit().await.unwrap();
-    let mut historical_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut historical_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
-    assert!(matches!(
-        acquire_idempotency_in_tx(&keys, &mut historical_tx, &close_request)
-            .await
-            .unwrap(),
-        IdempotencyAcquire::Replay(_)
-    ));
-    historical_tx.commit().await.unwrap();
-    assert!(!sqlx::query_scalar::<_, bool>(
-        "SELECT enabled FROM admin_runtime_settings WHERE key='registration_closed'"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap());
 
     // The raw invitation secret is only present in the AEAD response.
     // Its replay lifetime is capped by PostgreSQL's resource expiry and

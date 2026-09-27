@@ -1,7 +1,8 @@
-//! Account status, cleanup intents, registration settings and replay commit together.
+//! Account status and cleanup intents share their durable admission transaction.
 use crate::{
     db::{
         self,
+        admin_dispatch_repository::AdminCommandStore,
         admin_mutations::{
             enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore,
             AdminOperationIntent,
@@ -122,13 +123,13 @@ impl AccountAdminRepository for PostgresAccountAdminRepository {
 
 #[derive(Clone)]
 pub(crate) struct PostgresRegistrationAdminRepository {
-    mutations: AdminMutationStore,
+    command: AdminCommandStore,
     settings_pool: PgPool,
 }
 impl PostgresRegistrationAdminRepository {
-    pub(crate) fn new(mutations: AdminMutationStore, settings_pool: PgPool) -> Self {
+    pub(crate) fn new(command: AdminCommandStore, settings_pool: PgPool) -> Self {
         Self {
-            mutations,
+            command,
             settings_pool,
         }
     }
@@ -139,20 +140,13 @@ impl RegistrationAdminRepository for PostgresRegistrationAdminRepository {
         admission: AdminMutationAdmission<'_>,
         enabled: bool,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
-        let (mut tx, lease) = match self.mutations.start(&admission).await? {
-            AdminMutationStart::Ready(tx, lease) => (tx, lease),
-            AdminMutationStart::Finished(outcome) => return Ok(outcome),
-        };
-        db::set_admin_runtime_setting_in_tx(
-            &mut tx,
-            admission.authority.user_id,
-            "registration_closed",
-            !enabled,
-            Some(lease.request_id),
-        )
-        .await?;
-        let response = StoredApiResponse::json(200, json!({"open_registration":enabled}))?;
-        self.mutations.finish(tx, &lease, response).await
+        self.command
+            .dispatch(
+                admission,
+                db::api_control::AdminCommandRoute::Registration,
+                Some(enabled),
+            )
+            .await
     }
     async fn current_registration_closed(&self) -> Result<bool> {
         let (_, closed) = db::admin_runtime_settings(&self.settings_pool).await?;

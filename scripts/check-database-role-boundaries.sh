@@ -17,6 +17,8 @@ backup_image="$project_dir/deploy/backup.Dockerfile"
 backup_runner="$project_dir/scripts/backup.sh"
 postgres_runner="$project_dir/scripts/run-postgres.py"
 role_attestation="$project_dir/src/db/role_attestation.rs"
+registration_repository="$project_dir/src/db/account_admin_repository.rs"
+admin_dispatch_repository="$project_dir/src/db/admin_dispatch_repository.rs"
 db_module="$project_dir/src/db/mod.rs"
 main_source="$project_dir/src/main.rs"
 state_source="$project_dir/src/state.rs"
@@ -33,6 +35,7 @@ omemo_recovery_source="$project_dir/src/db/omemo_recovery.rs"
 user_capability_migration="$project_dir/migrations/0108_user_command_capabilities.sql"
 admin_tls_reload_migration="$project_dir/migrations/0153_admin_tls_reload_command_capability.sql"
 admin_panic_disconnect_migration="$project_dir/migrations/0154_admin_panic_disconnect_command_capability.sql"
+admin_registration_migration="$project_dir/migrations/0156_admin_registration_command_capability.sql"
 admin_cleanup_migration="$project_dir/migrations/0111_admin_session_cleanup_effects.sql"
 cluster_authority_migration="$project_dir/migrations/0112_cluster_runtime_capacity_and_authority.sql"
 upload_authority_migration="$project_dir/migrations/0113_upload_authority_capabilities.sql"
@@ -89,12 +92,14 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$capability_manifest" "$migration_ledger_manifest" \
   "$migration_ledger_generator" "$capability_manifest_check" \
   "$grant_runner" "$grant_image" "$backup_image" "$backup_runner" "$postgres_runner" \
-  "$role_attestation" "$db_module" "$main_source" "$state_source" "$pie_source" \
+  "$role_attestation" "$registration_repository" "$admin_dispatch_repository" \
+  "$db_module" "$main_source" "$state_source" "$pie_source" \
   "$users_source" "$admin_commands_source" "$roster_source" "$mix_source" \
   "$muc_source" "$muc_test_source" "$muc_protocol_source" \
   "$muc_protocol_test_source" "$omemo_recovery_source" \
   "$user_capability_migration" "$admin_cleanup_migration" \
   "$admin_tls_reload_migration" "$admin_panic_disconnect_migration" \
+  "$admin_registration_migration" \
   "$cluster_authority_migration" "$upload_authority_migration" \
   "$session_authority_migration" \
   "$admin_cleanup_fixture" \
@@ -699,6 +704,26 @@ for capability in northstar_admin_panic_disconnect_admit \
   require_literal "$role_attestation" "$capability" \
     "command role attestation is missing panic-disconnect capability: $capability"
 done
+for capability in northstar_admin_registration_admit \
+  northstar_admin_registration_rekey northstar_admin_registration_commit; do
+  require_literal "$admin_registration_migration" "CREATE FUNCTION $capability" \
+    "migration 0156 is missing registration command capability: $capability"
+  require_literal "$grant_apply" "$capability" \
+    "command role allowlist is missing registration capability: $capability"
+  [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
+    fail "registration capability must appear in grant and both exact role audits: $capability"
+  require_literal "$role_attestation" "$capability" \
+    "command role attestation is missing registration capability: $capability"
+done
+require_literal "$registration_repository" 'db::api_control::AdminCommandRoute::Registration,' \
+  'REST registration mutation must dispatch through the command store'
+require_literal "$registration_repository" 'Some(enabled),' \
+  'REST registration command must carry the requested policy value'
+require_literal "$admin_dispatch_repository" 'self.command_pool.begin().await?' \
+  'REST command store must transact on the isolated command pool'
+if grep -Fq 'set_admin_runtime_setting_in_tx' "$registration_repository"; then
+  fail 'REST registration mutation still writes through the runtime pool'
+fi
 if grep -Eiq 'EXECUTE[[:space:]]+[^;]*(requested_|caller_)|format\([^)]*(requested_|caller_)|current_setting\(.northstar\..*authority' \
   "$user_capability_migration"; then
   fail 'user command capabilities must not use caller-directed SQL or custom-GUC authority'

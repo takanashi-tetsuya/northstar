@@ -22,7 +22,7 @@ pub(crate) struct PostgresAdminDispatchRepository {
 }
 
 #[derive(Clone)]
-struct AdminCommandStore {
+pub(crate) struct AdminCommandStore {
     command_pool: PgPool,
     keyring: Arc<db::ApiControlKeyring>,
     cluster: crate::cluster::ClusterAdmission,
@@ -61,11 +61,29 @@ impl PostgresAdminDispatchRepository {
 }
 
 impl AdminCommandStore {
-    async fn dispatch(
+    pub(crate) fn new(
+        command_pool: PgPool,
+        keyring: Arc<db::ApiControlKeyring>,
+        cluster: crate::cluster::ClusterAdmission,
+    ) -> Self {
+        Self {
+            command_pool,
+            keyring,
+            cluster,
+        }
+    }
+
+    pub(crate) async fn dispatch(
         &self,
         admission: AdminMutationAdmission<'_>,
         route: db::api_control::AdminCommandRoute,
+        registration_enabled: Option<bool>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
+        anyhow::ensure!(
+            matches!(route, db::api_control::AdminCommandRoute::Registration)
+                == registration_enabled.is_some(),
+            "administrator command payload does not match route"
+        );
         let hashes = self
             .keyring
             .admin_command_hashes(&admission.idempotency, route)?;
@@ -91,6 +109,8 @@ impl AdminCommandStore {
                 "SELECT * FROM northstar_admin_tls_reload_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
             db::api_control::AdminCommandRoute::PanicDisconnect =>
                 "SELECT * FROM northstar_admin_panic_disconnect_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            db::api_control::AdminCommandRoute::Registration =>
+                "SELECT * FROM northstar_admin_registration_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
         };
         let row = sqlx::query(admit_sql)
             .bind(actor_id)
@@ -118,16 +138,27 @@ impl AdminCommandStore {
             "acquired" => {
                 let record_id: Uuid = row.try_get("record_id")?;
                 let lease_token: Uuid = row.try_get("lease_token")?;
-                let operation_id = Uuid::new_v4();
-                let response = StoredApiResponse::json(
-                    202,
-                    json!({"operation_id":operation_id,"status":"pending"}),
-                )?
-                .with_header(
-                    "location",
-                    format!("/api/v1/admin/operations/{operation_id}"),
-                );
+                let operation_id = if registration_enabled.is_some() {
+                    None
+                } else {
+                    Some(Uuid::new_v4())
+                };
+                let response = match operation_id {
+                    Some(operation_id) => StoredApiResponse::json(
+                        202,
+                        json!({"operation_id":operation_id,"status":"pending"}),
+                    )?
+                    .with_header(
+                        "location",
+                        format!("/api/v1/admin/operations/{operation_id}"),
+                    ),
+                    None => StoredApiResponse::json(
+                        200,
+                        json!({"open_registration":registration_enabled.expect("checked route")}),
+                    )?,
+                };
                 let sealed = self.keyring.seal_admin_command_response(
+                    route,
                     record_id,
                     &hashes.current_scope,
                     &hashes.current_fingerprint,
@@ -139,14 +170,20 @@ impl AdminCommandStore {
                         "SELECT northstar_admin_tls_reload_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
                     db::api_control::AdminCommandRoute::PanicDisconnect =>
                         "SELECT northstar_admin_panic_disconnect_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                    db::api_control::AdminCommandRoute::Registration =>
+                        "SELECT northstar_admin_registration_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
                 };
-                let committed: bool = sqlx::query_scalar(commit_sql)
+                let commit = sqlx::query_scalar(commit_sql)
                     .bind(record_id)
                     .bind(lease_token)
                     .bind(actor_id)
                     .bind(auth_generation)
-                    .bind(session_hash.as_slice())
-                    .bind(operation_id)
+                    .bind(session_hash.as_slice());
+                let commit = match operation_id {
+                    Some(operation_id) => commit.bind(operation_id),
+                    None => commit.bind(registration_enabled.expect("checked route")),
+                };
+                let committed: bool = commit
                     .bind(&sealed.key_id)
                     .bind(sealed.nonce.as_slice())
                     .bind(&sealed.ciphertext)
@@ -170,6 +207,7 @@ impl AdminCommandStore {
                 let response_nonce: Vec<u8> = row.try_get("response_nonce")?;
                 let response_ciphertext: Vec<u8> = row.try_get("response_ciphertext")?;
                 let replay = self.keyring.open_admin_command_replay(
+                    route,
                     db::api_control::AdminCommandReplayRecord {
                         record_id,
                         request_id,
@@ -183,6 +221,7 @@ impl AdminCommandStore {
                 )?;
                 if row.try_get::<bool, _>("needs_rotation")? {
                     let sealed = self.keyring.seal_admin_command_response(
+                        route,
                         record_id,
                         &hashes.current_scope,
                         &hashes.current_fingerprint,
@@ -194,6 +233,8 @@ impl AdminCommandStore {
                             "SELECT northstar_admin_tls_reload_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
                         db::api_control::AdminCommandRoute::PanicDisconnect =>
                             "SELECT northstar_admin_panic_disconnect_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                        db::api_control::AdminCommandRoute::Registration =>
+                            "SELECT northstar_admin_registration_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
                     };
                     let changed: bool = sqlx::query_scalar(rekey_sql)
                         .bind(record_id)
@@ -249,7 +290,11 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
         admission: AdminMutationAdmission<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         self.command
-            .dispatch(admission, db::api_control::AdminCommandRoute::TlsReload)
+            .dispatch(
+                admission,
+                db::api_control::AdminCommandRoute::TlsReload,
+                None,
+            )
             .await
     }
     async fn panic_disconnect(
@@ -260,6 +305,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
             .dispatch(
                 admission,
                 db::api_control::AdminCommandRoute::PanicDisconnect,
+                None,
             )
             .await
     }

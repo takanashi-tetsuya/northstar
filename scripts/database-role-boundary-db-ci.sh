@@ -2583,12 +2583,21 @@ expect_insufficient_privilege "$command_role" "$command_password" \
 expect_insufficient_privilege "$command_role" "$command_password" \
   'command issuer direct user read' \
   'SELECT id FROM public.users LIMIT 1'
+expect_insufficient_privilege "$command_role" "$command_password" \
+  'command issuer direct registration setting update' \
+  "UPDATE public.admin_runtime_settings SET enabled=FALSE WHERE key='registration_closed'"
+expect_insufficient_privilege "$command_role" "$command_password" \
+  'command issuer direct registration audit insert' \
+  "INSERT INTO public.audit_log(actor_id,action,target,details) VALUES('00000000-0000-0000-0000-000000000012','admin.runtime_setting.set','registration_closed','{}'::jsonb)"
 expect_insufficient_privilege "$runtime_role" "$runtime_password" \
   'runtime REST TLS reload command' \
   "SELECT * FROM public.northstar_admin_tls_reload_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('a1',32),'hex'),NULL,decode(repeat('b1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000116',180,3600)"
 expect_insufficient_privilege "$runtime_role" "$runtime_password" \
   'runtime REST panic-disconnect command' \
   "SELECT * FROM public.northstar_admin_panic_disconnect_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('e1',32),'hex'),NULL,decode(repeat('f1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000126',180,3600)"
+expect_insufficient_privilege "$runtime_role" "$runtime_password" \
+  'runtime REST registration command' \
+  "SELECT * FROM public.northstar_admin_registration_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('91',32),'hex'),NULL,decode(repeat('92',32),'hex'),NULL,decode(repeat('93',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000136',180,3600)"
 expect_insufficient_privilege "$command_role" "$command_password" \
   'command issuer cleanup effect direct read' \
   'SELECT id FROM public.admin_session_cleanup_effects LIMIT 1'
@@ -2873,6 +2882,117 @@ PSQL
 psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
 DELETE FROM public.api_operation_journal WHERE id='00000000-0000-0000-0000-000000000127';
 DELETE FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000126';
+PSQL
+
+# Registration changes one fixed setting and records its audit and encrypted
+# 200 replay in the same command-role transaction.
+psql_as "$command_role" "$command_password" --quiet >/dev/null <<'PSQL'
+BEGIN;
+DO $registration_command$
+DECLARE admitted RECORD; replayed RECORD; conflict RECORD;
+BEGIN
+    SELECT * INTO admitted FROM public.northstar_admin_registration_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('91',32),'hex'),NULL,
+        decode(repeat('92',32),'hex'),NULL,decode(repeat('93',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000136',180,3600
+    );
+    IF admitted.outcome<>'acquired' OR admitted.record_id IS NULL OR
+       admitted.lease_token IS NULL THEN
+        RAISE EXCEPTION 'registration command did not reserve a request';
+    END IF;
+    IF NOT public.northstar_admin_registration_commit(
+        admitted.record_id,admitted.lease_token,
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),FALSE,
+        '0123456789abcdef',decode(repeat('09',12),'hex'),
+        decode(repeat('0a',32),'hex'),3600
+    ) THEN
+        RAISE EXCEPTION 'registration setting and replay did not commit';
+    END IF;
+    SELECT * INTO replayed FROM public.northstar_admin_registration_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('91',32),'hex'),NULL,
+        decode(repeat('92',32),'hex'),NULL,decode(repeat('93',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000137',180,3600
+    );
+    IF replayed.outcome<>'replay' OR replayed.request_id<>admitted.request_id
+       OR replayed.response_status<>200 OR
+       replayed.response_ciphertext<>decode(repeat('0a',32),'hex') THEN
+        RAISE EXCEPTION 'registration command lost its 200 replay';
+    END IF;
+    SELECT * INTO conflict FROM public.northstar_admin_tls_reload_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('91',32),'hex'),NULL,
+        decode(repeat('92',32),'hex'),NULL,decode(repeat('93',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000138',180,3600
+    );
+    IF conflict.outcome<>'idempotency_conflict' THEN
+        RAISE EXCEPTION 'registration replay crossed the TLS command boundary';
+    END IF;
+END;
+$registration_command$;
+COMMIT;
+PSQL
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome FROM public.northstar_admin_registration_admit('00000000-0000-0000-0000-000000000012',1,decode(repeat('c1',32),'hex'),decode(repeat('94',32),'hex'),NULL,decode(repeat('95',32),'hex'),NULL,decode(repeat('96',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000139',180,3600)")" == 'forbidden' ]] \
+  || fail 'stale administrator generation reserved a registration command'
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome FROM public.northstar_admin_registration_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c2',32),'hex'),decode(repeat('94',32),'hex'),NULL,decode(repeat('95',32),'hex'),NULL,decode(repeat('96',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000139',180,3600)")" == 'forbidden' ]] \
+  || fail 'invalid administrator bearer reserved a registration command'
+[[ "$(control_psql --dbname="$database_name" --tuples-only --no-align \
+  --command="SELECT (SELECT enabled FROM public.admin_runtime_settings WHERE key='registration_closed') AND (SELECT count(*) FROM public.audit_log WHERE request_id='00000000-0000-0000-0000-000000000136' AND action='admin.runtime_setting.set' AND target='registration_closed' AND details->>'enabled'='true')=1 AND (SELECT count(*) FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000136' AND state='completed' AND response_status=200)=1")" == 't' ]] \
+  || fail 'registration command did not atomically persist setting, audit and 200 replay'
+psql_as "$command_role" "$command_password" --quiet >/dev/null <<'PSQL'
+BEGIN;
+DO $registration_rotation$
+DECLARE replayed RECORD;
+BEGIN
+    SELECT * INTO replayed FROM public.northstar_admin_registration_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('97',32),'hex'),
+        decode(repeat('91',32),'hex'),decode(repeat('98',32),'hex'),
+        decode(repeat('92',32),'hex'),decode(repeat('99',32),'hex'),
+        decode(repeat('93',32),'hex'),'fedcba9876543210',
+        '00000000-0000-0000-0000-000000000140',180,3600
+    );
+    IF replayed.outcome<>'replay' OR NOT replayed.needs_rotation OR
+       replayed.response_status<>200 OR
+       replayed.request_id<>'00000000-0000-0000-0000-000000000136'::uuid THEN
+        RAISE EXCEPTION 'registration replay did not request key rotation';
+    END IF;
+    IF public.northstar_admin_registration_rekey(
+        replayed.record_id,'00000000-0000-0000-0000-000000000012',1,
+        decode(repeat('c1',32),'hex'),replayed.stored_scope_hash,
+        replayed.stored_fingerprint,decode(repeat('97',32),'hex'),
+        decode(repeat('98',32),'hex'),decode(repeat('99',32),'hex'),
+        'fedcba9876543210',decode(repeat('0b',12),'hex'),
+        decode(repeat('0c',32),'hex')
+    ) THEN
+        RAISE EXCEPTION 'stale generation rekeyed registration replay';
+    END IF;
+    IF NOT public.northstar_admin_registration_rekey(
+        replayed.record_id,'00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),replayed.stored_scope_hash,
+        replayed.stored_fingerprint,decode(repeat('97',32),'hex'),
+        decode(repeat('98',32),'hex'),decode(repeat('99',32),'hex'),
+        'fedcba9876543210',decode(repeat('0b',12),'hex'),
+        decode(repeat('0c',32),'hex')
+    ) THEN
+        RAISE EXCEPTION 'authorized registration replay rekey was rejected';
+    END IF;
+END;
+$registration_rotation$;
+COMMIT;
+PSQL
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome || ':' || needs_rotation::text || ':' || response_status::text || ':' || response_key_id FROM public.northstar_admin_registration_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('97',32),'hex'),decode(repeat('91',32),'hex'),decode(repeat('98',32),'hex'),decode(repeat('92',32),'hex'),decode(repeat('99',32),'hex'),decode(repeat('93',32),'hex'),'fedcba9876543210','00000000-0000-0000-0000-000000000141',180,3600)")" == 'replay:false:200:fedcba9876543210' ]] \
+  || fail 'registration 200 replay rotation did not survive a new transaction'
+[[ "$(control_psql --dbname="$database_name" --tuples-only --no-align \
+  --command="SELECT (SELECT enabled FROM public.admin_runtime_settings WHERE key='registration_closed') AND (SELECT count(*) FROM public.audit_log WHERE request_id='00000000-0000-0000-0000-000000000136' AND action='admin.runtime_setting.set')=1")" == 't' ]] \
+  || fail 'registration replay rotation changed the durable setting or duplicated its audit'
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+DELETE FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000136';
 PSQL
 
 # A legacy or partially recovered snapshot may have no stored peer address.

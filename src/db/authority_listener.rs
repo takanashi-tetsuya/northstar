@@ -23,6 +23,7 @@ async fn run_database_authority_listener(
     authority: Arc<SmAuthorityBroker>,
     mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
     account_revocations: Arc<tokio::sync::Notify>,
+    direct_spool_wake: Arc<tokio::sync::Notify>,
     cancel: tokio_util::sync::CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -54,6 +55,7 @@ async fn run_database_authority_listener(
             SM_AUTHORITY_NOTIFICATION_CHANNEL,
             MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL,
             "northstar_account_revocations",
+            "northstar_direct_spool_wake_v1",
         ])
         .await
         .context("could not subscribe to PostgreSQL authority notifications")?;
@@ -63,6 +65,7 @@ async fn run_database_authority_listener(
     authority.publish_listener_transition();
     mix_delivery_wake.publish_listener_transition();
     account_revocations.notify_one();
+    direct_spool_wake.notify_one();
     heartbeat.ok();
     let mut liveness = tokio::time::interval(Duration::from_secs(5));
     liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -74,6 +77,7 @@ async fn run_database_authority_listener(
                 authority.publish_listener_transition();
                 mix_delivery_wake.publish_listener_transition();
                 account_revocations.notify_one();
+                direct_spool_wake.notify_one();
                 return Ok(());
             }
             _ = liveness.tick() => {
@@ -113,7 +117,13 @@ async fn run_database_authority_listener(
                                 if notification.payload() != authority.schema() {
                                     continue;
                                 }
-                                                    account_revocations.notify_one();
+                                account_revocations.notify_one();
+                            }
+                            "northstar_direct_spool_wake_v1" => {
+                                if notification.payload() != authority.schema() {
+                                    continue;
+                                }
+                                direct_spool_wake.notify_one();
                             }
                             _ => continue,
                         }
@@ -127,12 +137,14 @@ async fn run_database_authority_listener(
                         authority.publish_listener_transition();
                         mix_delivery_wake.publish_listener_transition();
                         account_revocations.notify_one();
+                        direct_spool_wake.notify_one();
                         heartbeat.ok();
                     }
                     Err(error) => {
                         authority.publish_listener_transition();
                         mix_delivery_wake.publish_listener_transition();
                         account_revocations.notify_one();
+                        direct_spool_wake.notify_one();
                         return Err(error).context("SM authority notification listener failed");
                     }
                 }
@@ -149,6 +161,7 @@ pub(crate) fn start_database_authority_listener(
     authority: Arc<SmAuthorityBroker>,
     mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
     account_revocations: Arc<tokio::sync::Notify>,
+    direct_spool_wake: Arc<tokio::sync::Notify>,
     connect_options: PgConnectOptions,
     registry: Arc<crate::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
@@ -163,6 +176,7 @@ pub(crate) fn start_database_authority_listener(
             let authority = Arc::clone(&authority);
             let mix_delivery_wake = Arc::clone(&mix_delivery_wake);
             let account_revocations = Arc::clone(&account_revocations);
+            let direct_spool_wake = Arc::clone(&direct_spool_wake);
             let connect_options = connect_options.clone();
             let cancel = cancel.clone();
             async move {
@@ -171,6 +185,7 @@ pub(crate) fn start_database_authority_listener(
                     authority,
                     mix_delivery_wake,
                     account_revocations,
+                    direct_spool_wake,
                     cancel,
                     heartbeat,
                 )

@@ -1073,6 +1073,7 @@ pub struct ClusterManager {
     publication_gate: Arc<tokio::sync::RwLock<()>>,
     muc_outbox_notify: Arc<tokio::sync::Notify>,
     account_revocation_notify: Arc<tokio::sync::Notify>,
+    direct_spool_notify: Arc<tokio::sync::Notify>,
     listener_rotation: Arc<tokio::sync::Notify>,
     pending_ack_slots: Arc<tokio::sync::Semaphore>,
     pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
@@ -1403,6 +1404,7 @@ pub(crate) struct ClusterMaintenanceControl {
     peer_authority: ClusterFailureSupervisorAuthority,
     health: Arc<ClusterHealth>,
     listener_rotation: Arc<tokio::sync::Notify>,
+    direct_spool_notify: Arc<tokio::sync::Notify>,
     failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
 }
 
@@ -4031,6 +4033,7 @@ impl ClusterManager {
                 publication_gate: Arc::new(tokio::sync::RwLock::new(())),
                 muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
                 account_revocation_notify: Arc::new(tokio::sync::Notify::new()),
+                direct_spool_notify: Arc::new(tokio::sync::Notify::new()),
                 listener_rotation: Arc::new(tokio::sync::Notify::new()),
                 pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
                 pending_acks: Arc::new(dashmap::DashMap::new()),
@@ -4104,6 +4107,7 @@ impl ClusterManager {
             publication_gate: Arc::new(tokio::sync::RwLock::new(())),
             muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
             account_revocation_notify: Arc::new(tokio::sync::Notify::new()),
+            direct_spool_notify: Arc::new(tokio::sync::Notify::new()),
             listener_rotation: Arc::new(tokio::sync::Notify::new()),
             pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
             pending_acks: Arc::new(dashmap::DashMap::new()),
@@ -4114,6 +4118,10 @@ impl ClusterManager {
 
     pub(crate) fn account_revocation_notify(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.account_revocation_notify)
+    }
+
+    pub(crate) fn direct_spool_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.direct_spool_notify)
     }
 
     pub(crate) fn account_revocation_authority(&self) -> ClusterRevocationAuthority {
@@ -4163,6 +4171,7 @@ impl ClusterManager {
             peer_authority: self.failure_supervisor_authority(),
             health: Arc::clone(&self.health),
             listener_rotation: Arc::clone(&self.listener_rotation),
+            direct_spool_notify: Arc::clone(&self.direct_spool_notify),
             failure_policy: self.failure_policy(),
         }
     }
@@ -7043,6 +7052,80 @@ pub(crate) async fn run_account_revocations<
 }
 
 pub(crate) async fn run_maintenance(
+    context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
+    cancel: CancellationToken,
+    heartbeat: crate::workers::WorkerHeartbeat,
+) -> Result<()> {
+    let wake_context = Arc::clone(&context);
+    let wake_cancel = cancel.clone();
+    tokio::try_join!(
+        run_maintenance_passes(context, cancel, heartbeat),
+        run_direct_spool_wake_loop(wake_context, wake_cancel),
+    )?;
+    Ok(())
+}
+
+async fn run_direct_spool_wake_loop(
+    context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cleanup = tokio::time::interval(Duration::from_secs(300));
+    cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let control = &context.control;
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            _ = cleanup.tick() => {
+                match tokio::time::timeout(Duration::from_secs(5), context.direct_spool_wake.cleanup()).await {
+                    Ok(Ok(_)) => {},
+                    error => {
+                        context.locals.record_background_failure();
+                        tracing::warn!(?error, "direct spool wake cleanup deferred");
+                    }
+                }
+                continue;
+            },
+            _ = interval.tick() => {},
+            _ = control.direct_spool_notify.notified() => {},
+        }
+        // Notifications are hints only. A missed LISTEN event or a process
+        // restart is covered by the one-second indexed PostgreSQL poll.
+        if control.readiness_error().is_some() {
+            continue;
+        }
+        let Some(authority) = control.peer_authority.readiness_snapshot() else {
+            continue;
+        };
+        let attempt = tokio::time::timeout(
+            Duration::from_secs(10),
+            context.direct_spool_wake.drive_once(&authority, || {
+                control
+                    .health
+                    .recovery_wake_sequence
+                    .fetch_add(1, Ordering::AcqRel)
+                    .saturating_add(1)
+            }),
+        )
+        .await;
+        let failure = match attempt {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(_) => Some(anyhow::anyhow!(
+                "direct spool wake pass exceeded its time budget"
+            )),
+        };
+        if let Some(error) = failure {
+            control.record_control_plane_failure(&error);
+            context.locals.record_background_failure();
+            tracing::warn!(?error, "direct spool wake will retry from PostgreSQL");
+        }
+    }
+}
+
+async fn run_maintenance_passes(
     context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,

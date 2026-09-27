@@ -375,6 +375,8 @@ async fn admit_personal_history_inner(
 )> {
     let mut transaction = pool.begin().await?;
     if let Some((cluster, eligibility)) = cluster {
+        super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
+            .await?;
         if let Some(authority) = cluster.check_direct_eligibility(eligibility)? {
             super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
                 .await?;
@@ -398,6 +400,15 @@ async fn admit_personal_history_inner(
         if let Some(authority) = authority {
             super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
                 .await?;
+            if let (PersonalHistoryAdmission::Stored(_), Some(delivery)) = (&outcome, c2s_delivery)
+            {
+                super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+                    &mut transaction,
+                    &authority.key_identity.xmpp_domain,
+                    delivery.recipient_id,
+                )
+                .await?;
+            }
         }
         transaction.commit().await?;
         let admitted_mode = turn.finish();
@@ -2052,6 +2063,8 @@ async fn store_offline_idempotent_inner(
     }
     let mut transaction = pool.begin().await?;
     if let Some(cluster) = cluster {
+        super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
+            .await?;
         if let Some(authority) =
             cluster.check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
         {
@@ -2127,7 +2140,7 @@ async fn store_offline_idempotent_inner(
                         )
                 });
             anyhow::ensure!(exact, "conflicting offline message identity");
-            commit_live_direct_offline_transaction(transaction, cluster).await?;
+            commit_live_direct_offline_transaction(transaction, cluster, None).await?;
             return Ok(OfflineStoreOutcome::Replay);
         }
     }
@@ -2264,13 +2277,14 @@ async fn store_offline_idempotent_inner(
     sqlx::query("INSERT INTO offline_messages (id, recipient_id, sender_jid, stanza, target_resource, encrypted, mam_backed) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(offline_message_id).bind(recipient_id).bind(sender_jid).bind(stanza).bind(target_resource).bind(encrypted).bind(policy.mam_backed)
         .execute(&mut *transaction).await?;
-    commit_live_direct_offline_transaction(transaction, cluster).await?;
+    commit_live_direct_offline_transaction(transaction, cluster, Some(recipient_id)).await?;
     Ok(OfflineStoreOutcome::Stored)
 }
 
 async fn commit_live_direct_offline_transaction(
     mut transaction: sqlx::Transaction<'_, sqlx::Postgres>,
     cluster: Option<&crate::cluster::ClusterAdmission>,
+    wake_recipient: Option<Uuid>,
 ) -> Result<()> {
     if let Some(cluster) = cluster {
         let (turn, authority) =
@@ -2278,6 +2292,14 @@ async fn commit_live_direct_offline_transaction(
         if let Some(authority) = authority {
             super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
                 .await?;
+            if let Some(recipient_id) = wake_recipient {
+                super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+                    &mut transaction,
+                    &authority.key_identity.xmpp_domain,
+                    recipient_id,
+                )
+                .await?;
+            }
         }
         transaction.commit().await?;
         // This legacy offline API has no postcommit mode. Its callers must

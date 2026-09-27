@@ -14,7 +14,7 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','storage','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
@@ -36,6 +36,12 @@ VALUES
   ('northstar_pending_account_revocations(text,text,uuid,int8,int4)','runtime','0144'),
   ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])','runtime','0144'),
   ('northstar_cleanup_account_revocations(int4)','runtime','0144'),
+  ('northstar_record_direct_spool_wake(text,uuid)','runtime','0155'),
+  ('northstar_claim_direct_spool_wakes(text,text,uuid,int8,int4)','runtime','0155'),
+  ('northstar_direct_spool_routes_page(text,text,uuid,int8,uuid,text,int4)','runtime','0155'),
+  ('northstar_ack_direct_spool_wake_if_empty(text,text,uuid,int8,uuid,uuid,uuid)','runtime','0155'),
+  ('northstar_defer_direct_spool_wake(text,text,uuid,int8,uuid,uuid,uuid,int4)','runtime','0155'),
+  ('northstar_cleanup_direct_spool_wakes(int4)','runtime','0155'),
   ('offline_upgrade_upload_storage_authority_v1_to_v2(text,bytea,bytea,text)','private','baseline-0111'),
   ('account_upload_storage_job_capacity()','private','baseline-0111'),
   ('account_upload_cleanup_capacity()','private','baseline-0111'),
@@ -220,6 +226,7 @@ VALUES
   ('webauthn_credentials',TRUE,FALSE,FALSE,FALSE,'0145'),
   ('webauthn_challenges',FALSE,FALSE,FALSE,FALSE,'0145'),
   ('account_revocation_outbox',FALSE,FALSE,FALSE,FALSE,'0144'),
+  ('direct_spool_wake_outbox',FALSE,FALSE,FALSE,FALSE,'0155'),
   ('users',TRUE,FALSE,FALSE,FALSE,'0001'),
   ('api_sessions',TRUE,TRUE,TRUE,TRUE,'0001'),
   ('roster_items',TRUE,TRUE,TRUE,TRUE,'0001'),

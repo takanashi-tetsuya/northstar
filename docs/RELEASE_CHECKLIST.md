@@ -191,9 +191,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
 - [ ] Apply migration `0154` and reconcile grants before starting the server.
   Verify the command role can execute the fixed panic-disconnect functions,
   while runtime has no access to them or their underlying tables.
+- [ ] Apply migration `0155` and reconcile grants before starting cluster
+  nodes. Verify direct-spool wakes commit with their messages, remain pending
+  when no eligible route exists, and are acknowledged only after the recipient
+  spool is empty. Runtime must not access the wake table directly.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 153 migrations from `0001` through the current
-  repository maximum `0154`, with `0021` as the sole intentional gap.
+  identity and verify all 154 migrations from `0001` through the current
+  repository maximum `0155`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

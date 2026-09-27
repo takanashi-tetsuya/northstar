@@ -241,9 +241,13 @@ PostgreSQL authority check and acknowledged commit, deferring process-local
 health publication while that turn is active. Recovery takes a database-clock
 cutoff after locking this node's key and instance authority, then wakes exact
 eligible local resources through paged, capacity-limited replay with retries.
-This remains a partial Packet 6 result: another node can commit after this
-cutoff, cancelled database commits have an uncertain outcome window, and the
-transition/replay behavior still needs isolated VM fault and scale evidence.
+A committed spool write also records a coalesced wake for each live node in
+the same PostgreSQL transaction. Each node claims its own revision, retries
+ineligible routes, and acknowledges only after the recipient spool is empty;
+NOTIFY is backed by a one-second poll. This covers a different node's late
+commit after the recovery cutoff. Packet 6 remains partial: a cancelled
+database commit has an uncertain caller outcome, and the transition and replay
+behavior still need isolated VM fault and scale evidence.
 
 ### Packet 7 — Administration and final composition
 

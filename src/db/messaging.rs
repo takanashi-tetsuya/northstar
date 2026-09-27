@@ -179,12 +179,21 @@ impl PostgresMessageRepository {
     async fn commit_live_invite(
         &self,
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        wake_recipient: Option<Uuid>,
     ) -> Result<()> {
         if let Some(cluster) = self.cluster.as_ref() {
             let (turn, authority) =
                 cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
             if let Some(authority) = authority {
                 db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
+                if let Some(recipient_id) = wake_recipient {
+                    db::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+                        &mut tx,
+                        &authority.key_identity.xmpp_domain,
+                        recipient_id,
+                    )
+                    .await?;
+                }
             }
             tx.commit().await?;
             let _mode = turn.finish();
@@ -376,7 +385,7 @@ impl MessageRepository for PostgresMessageRepository {
             // No room mutation has happened yet. Commit so a migration-0104
             // legacy digest upgrade performed by the history repository is
             // durable; a keyed replay commits only read locks.
-            self.commit_live_invite(transaction).await?;
+            self.commit_live_invite(transaction, None).await?;
             return Ok(RemoteMucInviteAdmissionOutcome::Replay);
         }
         let cluster_authority = request.cluster_authority.map(Into::into);
@@ -396,7 +405,7 @@ impl MessageRepository for PostgresMessageRepository {
         };
         let outcome = match affiliation {
             db::FederatedMucInviteAffiliationOutcome::Stored => {
-                self.commit_live_invite(transaction).await?;
+                self.commit_live_invite(transaction, None).await?;
                 RemoteMucInviteAdmissionOutcome::Stored
             }
             db::FederatedMucInviteAffiliationOutcome::Replay => {
@@ -446,6 +455,10 @@ impl MessageRepository for PostgresMessageRepository {
             policy: self.offline_policy(request.mam_backed),
         };
         let mut transaction = self.pool.begin().await?;
+        if self.cluster.is_some() {
+            db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
+                .await?;
+        }
         self.fence_live_invite(&mut transaction).await?;
         let history = match db::admit_personal_history_in_transaction(
             &mut transaction,
@@ -473,7 +486,7 @@ impl MessageRepository for PostgresMessageRepository {
         if matches!(history, db::PersonalHistoryAdmission::Replay(_)) {
             // The affiliation path has not run, so the only possible write is
             // a safe legacy-content-evidence upgrade.
-            self.commit_live_invite(transaction).await?;
+            self.commit_live_invite(transaction, None).await?;
             return Ok(DurableMucInviteOutcome::Replay {
                 id: request.delivery_id,
             });
@@ -497,7 +510,8 @@ impl MessageRepository for PostgresMessageRepository {
         };
         match affiliation {
             db::DurableMucInviteOutcome::Stored { .. } => {
-                self.commit_live_invite(transaction).await?;
+                self.commit_live_invite(transaction, Some(request.recipient_id))
+                    .await?;
             }
             db::DurableMucInviteOutcome::Replay { .. }
             | db::DurableMucInviteOutcome::QuotaExceeded

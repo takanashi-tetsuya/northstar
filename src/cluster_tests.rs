@@ -443,6 +443,7 @@ pub(super) fn verification_manager(
         publication_gate: Arc::new(tokio::sync::RwLock::new(())),
         muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
         account_revocation_notify: Arc::new(tokio::sync::Notify::new()),
+        direct_spool_notify: Arc::new(tokio::sync::Notify::new()),
         listener_rotation: Arc::new(tokio::sync::Notify::new()),
         pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
         pending_acks: Arc::new(dashmap::DashMap::new()),

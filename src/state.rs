@@ -181,6 +181,7 @@ pub(crate) mod cluster_recovery_replay;
 pub(crate) mod cluster_routing;
 mod cluster_shutdown;
 mod cluster_teardown;
+pub(crate) mod direct_spool_wake;
 pub(crate) mod federated_muc_cluster_effects;
 mod locked_muc_expiry;
 mod message_carbon_delivery;
@@ -4899,6 +4900,7 @@ impl AppState {
             state.sm_service().authority_broker(),
             state.mix_service().delivery_wake_broker(),
             state.cluster.account_revocation_notify(),
+            state.cluster.direct_spool_notify(),
             sm_authority_connect_options,
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),

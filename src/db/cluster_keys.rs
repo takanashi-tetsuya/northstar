@@ -222,8 +222,22 @@ mod replay_schema_tests {
     }
 }
 
-const CLUSTER_KEY_AUTHORITY_LOCK: i64 = 4_741_070_036_074_865_762;
+pub(crate) const CLUSTER_KEY_AUTHORITY_LOCK: i64 = 4_741_070_036_074_865_762;
 const KEY_ROTATION_GRACE_SECONDS: i64 = 20;
+
+/// Direct spool producers take the shared claim fence before acquiring the
+/// key and instance row locks. A replacement instance takes the exclusive
+/// lock first, so a committed wake targets either the old or the new stable
+/// node slot without an inverse row/advisory lock cycle.
+pub(crate) async fn lock_direct_spool_instance_claims_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock_shared($1)")
+        .bind(CLUSTER_KEY_AUTHORITY_LOCK)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClusterKeyDeploymentIdentity {

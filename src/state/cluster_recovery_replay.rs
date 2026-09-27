@@ -155,6 +155,39 @@ fn recovery_route_page_after(
 }
 
 impl ClusterRecoveryReplayWake {
+    pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
+        self.admission.direct_mode()
+    }
+
+    /// A database route candidate is not itself a delivery capability. Match
+    /// its recipient to the exact local session before interpreting an epoch.
+    pub(crate) fn recipient_completion_state(
+        &self,
+        recipient_id: Uuid,
+        full_jid: &str,
+        connection_id: Uuid,
+        recovery_epoch: u64,
+    ) -> RecoveryReplayStatus {
+        self.completion_state_checked(full_jid, connection_id, recovery_epoch, Some(recipient_id))
+    }
+
+    pub(crate) fn request_for_recipient(
+        &self,
+        recipient_id: Uuid,
+        full_jid: &str,
+        connection_id: Uuid,
+        cutoff: DateTime<Utc>,
+        recovery_epoch: u64,
+    ) -> bool {
+        self.request_checked(
+            full_jid,
+            connection_id,
+            cutoff,
+            recovery_epoch,
+            Some(recipient_id),
+        )
+    }
+
     /// Observe one exact route after a prior `request`. Maintenance retains
     /// InFlight/Retryable entries. An exact unavailable/negative-priority
     /// Bind2 route awaits a bounded future sweep; other such routes use their
@@ -165,10 +198,22 @@ impl ClusterRecoveryReplayWake {
         connection_id: Uuid,
         recovery_epoch: u64,
     ) -> RecoveryReplayStatus {
+        self.completion_state_checked(full_jid, connection_id, recovery_epoch, None)
+    }
+
+    fn completion_state_checked(
+        &self,
+        full_jid: &str,
+        connection_id: Uuid,
+        recovery_epoch: u64,
+        recipient_id: Option<Uuid>,
+    ) -> RecoveryReplayStatus {
         let Some(session) = self.sessions.get(full_jid) else {
             return RecoveryReplayStatus::Stale;
         };
-        if session.connection_id != connection_id {
+        if session.connection_id != connection_id
+            || recipient_id.is_some_and(|recipient_id| session.user_id != recipient_id)
+        {
             return RecoveryReplayStatus::Stale;
         }
         let epoch = recovery_epoch_status(&session, recovery_epoch);
@@ -240,6 +285,17 @@ impl ClusterRecoveryReplayWake {
         cutoff: DateTime<Utc>,
         recovery_epoch: u64,
     ) -> bool {
+        self.request_checked(full_jid, connection_id, cutoff, recovery_epoch, None)
+    }
+
+    fn request_checked(
+        &self,
+        full_jid: &str,
+        connection_id: Uuid,
+        cutoff: DateTime<Utc>,
+        recovery_epoch: u64,
+        recipient_id: Option<Uuid>,
+    ) -> bool {
         if recovery_epoch == 0 || self.admission.direct_mode() != DirectPostCommitMode::Live {
             return false;
         }
@@ -250,6 +306,9 @@ impl ClusterRecoveryReplayWake {
         else {
             return false;
         };
+        if recipient_id.is_some_and(|recipient_id| session.user_id != recipient_id) {
+            return false;
+        }
         let generation = session.availability_generation.load(Ordering::Acquire);
         if !exact_replay_route_is_current(
             &self.sessions,
@@ -594,6 +653,18 @@ mod tests {
             metrics: Arc::default(),
             permits: Arc::new(Semaphore::new(0)),
         };
+        let wrong_recipient = Uuid::new_v4();
+        assert_eq!(
+            wake.recipient_completion_state(wrong_recipient, full_jid, route.connection_id, 7),
+            RecoveryReplayStatus::Stale
+        );
+        assert!(!wake.request_for_recipient(
+            wrong_recipient,
+            full_jid,
+            route.connection_id,
+            Utc::now(),
+            7
+        ));
         assert!(!wake.request(full_jid, route.connection_id, Utc::now(), 7));
         assert_eq!(
             route.recovery_replay_inflight_epoch.load(Ordering::Acquire),

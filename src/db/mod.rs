@@ -66,6 +66,7 @@ pub(crate) mod cluster_muc_receipt_claim_repository;
 pub(crate) mod cluster_replay_maintenance_repository;
 pub(crate) mod cluster_session_route_maintenance_repository;
 pub mod data_lifecycle;
+pub(crate) mod direct_spool_wake_repository;
 pub mod fast;
 pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;

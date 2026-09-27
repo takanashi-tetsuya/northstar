@@ -21,6 +21,7 @@ pub(crate) mod cluster_muc_outbox_settlement;
 pub(crate) mod cluster_muc_receipt_claim;
 pub(crate) mod cluster_replay_maintenance;
 pub(crate) mod cluster_session_route_maintenance;
+pub(crate) mod direct_spool_wake;
 pub(crate) mod durable_outbox;
 pub(crate) mod extdisco;
 pub(crate) mod federation_outbox;

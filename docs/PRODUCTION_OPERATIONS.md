@@ -1034,11 +1034,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 153 files from `0001` through
-`0154`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 154 files from `0001` through
+`0155`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0154`, with the exact SQLx description and SHA-384 checksum, before it
+through `0155`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1067,6 +1067,12 @@ starting the updated server.
 Migration `0154` adds three fixed REST panic-disconnect functions for the same
 role. Reconcile their exact grants before starting the updated server; the
 command role still has no direct table or sequence rights.
+Migration `0155` adds committed direct-spool wake records for cluster nodes.
+Apply it and reconcile the scoped runtime function grants before starting the
+updated server. Deploy all nodes together: older binaries do not have this
+recovery path or accept the new exact migration ledger. This path accepts at
+most 256 live cluster nodes; a larger node set rejects direct-spool admission
+and must be treated as a capacity/configuration error.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1240,7 +1246,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0154` manifest
+5. run the one-shot migration job through the complete `0001`-`0155` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

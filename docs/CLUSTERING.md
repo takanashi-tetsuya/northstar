@@ -180,14 +180,25 @@ connection, availability generation, recipient authority and privacy before
 delivery. Busy or incomplete routes retain a retry plan with bounded backoff;
 the cutoff and route identity are attached to that recovery attempt.
 
-This cutoff only orders direct commits that held this node's authority rows.
-A different node can commit a recipient spool row after the cutoff; that row
-may miss this recovery pass, with no proven finite catch-up bound until a later
-availability transition or recovery sweep. Cancellation during a database
-`COMMIT` or rollback can also release the process-local turn before the server
-has established the final transaction outcome. Isolated multi-VM fault tests
-and scaled route/queue measurements are still needed before qualifying this
-failure policy as complete.
+The cutoff orders commits that held this node's authority rows. A separate
+PostgreSQL outbox records one coalesced wake per live node and recipient in the
+same transaction as each stored local direct message. The target node consumes
+that revision through a scoped claim, checks its exact local routes, and asks
+the same replay worker to inspect the recipient spool. PostgreSQL NOTIFY is a
+hint; a one-second poll covers missed notifications and reconnects. The wake
+remains until PostgreSQL confirms that no offline row remains for the
+recipient. A later producer replaces the revision under the same row lock, so
+an earlier consumer cannot acknowledge the newer wake. Nodes without a live
+lease at commit rely on normal bind or resume replay when they reconnect.
+The producer accepts at most 256 live nodes; exceeding that limit rejects and
+rolls back the admission instead of creating an unbounded fanout.
+
+This closes the known late-commit hole in the recovery cutoff under a healthy
+database, but it does not make delivery instantaneous or exactly once. A
+cancelled `COMMIT` may leave the caller uncertain whether its message and wake
+committed; backpressure, unavailable routes, and PostgreSQL failure can delay
+consumption. The isolated multi-VM race matrix and scaled queue measurements
+remain required before qualifying this failure policy as complete.
 
 ## Reliability classes
 

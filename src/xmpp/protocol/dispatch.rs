@@ -26,6 +26,9 @@ fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action
 impl ProtocolSession {
     pub async fn handle(&mut self, xml: &str) -> Result<Action> {
         self.state.inbound_stanza_telemetry().received();
+        // External recovery wakes share this supervisor. Keep their replay
+        // task pending until the current stanza's transport action completes.
+        self.post_actions.begin_action();
         let stream_open = crate::xmpp::protocol::sasl2::is_tcp_stream_opening(xml)
             || (self.uses_websocket_framing() && is_websocket_open(xml));
         if stream_open {

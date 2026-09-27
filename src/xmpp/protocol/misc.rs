@@ -16,7 +16,7 @@ use crate::{
 };
 use anyhow::Result;
 use roxmltree::Node;
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+use std::sync::{atomic::AtomicBool, atomic::AtomicU64, atomic::Ordering, Arc};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -637,6 +637,11 @@ impl ProtocolSession {
                 routable: Arc::new(AtomicBool::new(false)),
                 sender: self.outbound.clone(),
                 available: Arc::clone(&available),
+                availability_generation: Arc::clone(&self.presence.availability_generation),
+                post_actions: self.post_actions.clone(),
+                recovery_replay_inflight_epoch: Arc::new(AtomicU64::new(0)),
+                recovery_replay_completed_epoch: Arc::new(AtomicU64::new(0)),
+                bind2_mam_catchup: fast_plan.is_some(),
                 mix_presence_gate: Arc::clone(&self.presence.mix_presence_gate),
                 mix_presence_fallback_suppressed: Arc::clone(
                     &self.presence.mix_presence_fallback_suppressed,

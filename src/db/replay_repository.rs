@@ -9,6 +9,53 @@ use uuid::Uuid;
 pub(crate) struct PostgresReplayRepository {
     pool: PgPool,
 }
+
+/// A recovery-only account fence. Protocol code may hold the returned opaque
+/// guard across a bounded queue enqueue without issuing SQL itself.
+#[derive(Clone)]
+pub(crate) struct RecoveryReplayAuthority {
+    pool: PgPool,
+    user_id: Uuid,
+    auth_generation: i64,
+}
+
+impl RecoveryReplayAuthority {
+    pub(crate) fn new(pool: PgPool, user_id: Uuid, auth_generation: i64) -> Self {
+        Self {
+            pool,
+            user_id,
+            auth_generation,
+        }
+    }
+
+    pub(crate) async fn lock(
+        &self,
+    ) -> Result<Option<db::replay::RecoveryReplayAuthorizationGuard>> {
+        db::replay::lock_recovery_replay_authorization(
+            &self.pool,
+            self.user_id,
+            self.auth_generation,
+        )
+        .await
+    }
+}
+
+impl RecoveryReplayAuthorizationPort for RecoveryReplayAuthority {
+    fn lock(&self) -> RecoveryAuthorizationFuture<'_> {
+        Box::pin(async move {
+            RecoveryReplayAuthority::lock(self)
+                .await
+                .map(|guard| guard.map(|guard| Box::new(guard) as Box<dyn RecoveryReplayGuardPort>))
+        })
+    }
+}
+
+impl RecoveryReplayGuardPort for db::replay::RecoveryReplayAuthorizationGuard {
+    fn release(self: Box<Self>) -> RecoveryGuardReleaseFuture {
+        Box::pin(async move { db::replay::RecoveryReplayAuthorizationGuard::release(*self).await })
+    }
+}
+
 impl PostgresReplayRepository {
     pub(crate) fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -77,6 +124,9 @@ impl ReplayRepository for PostgresReplayRepository {
                     })
                 }
                 db::replay::OfflineReplayPageOutcome::Empty => ReplayPageOutcome::Empty,
+                db::replay::OfflineReplayPageOutcome::PendingClaims => {
+                    ReplayPageOutcome::PendingClaims
+                }
                 db::replay::OfflineReplayPageOutcome::LeaseLost => ReplayPageOutcome::LeaseLost,
             },
         )

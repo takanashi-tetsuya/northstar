@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::time::Duration;
@@ -74,6 +75,68 @@ pub(crate) async fn fence_direct_message_authority_in_transaction(
         "cluster process instance lease was lost before direct-message commit"
     );
     Ok(())
+}
+
+/// Wait behind every direct admission currently holding this process's exact
+/// key and instance shared locks. The returned PostgreSQL timestamp is a
+/// cutoff for one bounded recovery replay pass, never a claim on live routes.
+pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
+    pool: &PgPool,
+    authority: &crate::cluster::ClusterReadinessAuthority,
+) -> Result<DateTime<Utc>> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout = '7s'")
+            .execute(&mut *tx)
+            .await?;
+        let key: Option<bool> = sqlx::query_scalar(
+            "SELECT TRUE FROM cluster_key_deployments
+             WHERE xmpp_domain=$1 AND node_id=$2 AND epoch=$3
+               AND current_key_id=$4 AND current_public_key_sha256=$5
+             FOR UPDATE",
+        )
+        .bind(&authority.key_identity.xmpp_domain)
+        .bind(&authority.key_identity.node_id)
+        .bind(authority.key_identity.epoch)
+        .bind(&authority.key_identity.current_key_id)
+        .bind(&authority.key_identity.current_public_key_sha256)
+        .fetch_optional(&mut *tx)
+        .await?;
+        anyhow::ensure!(
+            key.is_some(),
+            "cluster recovery signing-key authority changed"
+        );
+        let instance: Option<bool> = sqlx::query_scalar(
+            "SELECT TRUE FROM cluster_node_instances
+             WHERE xmpp_domain=$1 AND node_id=$2
+               AND instance_uuid=$3 AND instance_epoch=$4
+               AND signing_key_id=$5 AND signing_key_epoch=$6
+               AND lease_until > clock_timestamp()
+             FOR UPDATE",
+        )
+        .bind(&authority.key_identity.xmpp_domain)
+        .bind(&authority.instance_node_id)
+        .bind(authority.instance_uuid)
+        .bind(authority.instance_epoch)
+        .bind(&authority.signing_key_id)
+        .bind(authority.signing_key_epoch)
+        .fetch_optional(&mut *tx)
+        .await?;
+        anyhow::ensure!(
+            instance.is_some(),
+            "cluster recovery process instance lease was lost"
+        );
+        let cutoff: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(cutoff)
+    })
+    .await
+    .context("cluster recovery authority barrier exceeded ten seconds")?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1185,6 +1248,28 @@ mod tests {
             signing_key_id: key_identity.current_key_id.clone(),
             signing_key_epoch: key_identity.epoch,
         };
+        let mut tx = pool.begin().await.unwrap();
+        fence_direct_message_authority_in_transaction(&mut tx, &authority)
+            .await
+            .unwrap();
+        let barrier_pool = pool.clone();
+        let barrier_authority = authority.clone();
+        let barrier = tokio::spawn(async move {
+            recovery_replay_cutoff_after_direct_commits(&barrier_pool, &barrier_authority).await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !barrier.is_finished(),
+            "recovery cutoff passed a held direct-message admission"
+        );
+        let before_commit: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let cutoff = barrier.await.unwrap().unwrap();
+        assert!(cutoff >= before_commit);
+
         let mut tx = pool.begin().await.unwrap();
         fence_direct_message_authority_in_transaction(&mut tx, &authority)
             .await

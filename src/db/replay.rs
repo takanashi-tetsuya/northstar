@@ -53,6 +53,7 @@ pub struct ClaimedOfflinePage {
 pub enum OfflineReplayPageOutcome {
     Claimed(ClaimedOfflinePage),
     Empty,
+    PendingClaims,
     LeaseLost,
 }
 
@@ -487,6 +488,43 @@ pub async fn release_offline_replay_lease(
         == 1)
 }
 
+/// Keep the exact account incarnation authorized until a recovery replay
+/// claim or bounded transport enqueue has crossed its boundary. Credential
+/// revocation updates the same users row and therefore waits for this guard.
+pub(crate) struct RecoveryReplayAuthorizationGuard {
+    transaction: Transaction<'static, Postgres>,
+}
+
+impl RecoveryReplayAuthorizationGuard {
+    pub(crate) async fn release(self) -> Result<()> {
+        self.transaction.rollback().await?;
+        Ok(())
+    }
+}
+
+pub(crate) async fn lock_recovery_replay_authorization(
+    pool: &PgPool,
+    user_id: Uuid,
+    expected_auth_generation: i64,
+) -> Result<Option<RecoveryReplayAuthorizationGuard>> {
+    let mut transaction = pool.begin().await?;
+    let authorized = sqlx::query_scalar::<_, bool>(
+        "SELECT TRUE FROM users
+          WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
+          FOR SHARE",
+    )
+    .bind(user_id)
+    .bind(expected_auth_generation)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .is_some();
+    if !authorized {
+        transaction.rollback().await?;
+        return Ok(None);
+    }
+    Ok(Some(RecoveryReplayAuthorizationGuard { transaction }))
+}
+
 #[derive(Clone, Debug)]
 struct ClaimedOfflineCandidate {
     message: ClaimedOfflineMessage,
@@ -811,12 +849,44 @@ async fn claim_offline_replay_page_once(
     .bind(REPLAY_PAGE_SIZE)
     .bind(CLAIM_LEASE_SECONDS)
     .bind(lease.replay_started_at)
-    .bind(owner_resource)
+    .bind(&owner_resource)
     .fetch_all(&mut *transaction)
     .await?;
     if rows.is_empty() {
+        // SKIP LOCKED and unexpired claim leases can hide a cutoff-eligible
+        // row from this page. Only mark the replay high-water complete when
+        // no eligible row exists even without those temporary claim filters.
+        // Keep privacy-denied and Bind2 MAM-backed rows in this conservative
+        // probe: suppression consumes their projection only after this claim
+        // transaction owns the row, and a different resource/policy may later
+        // be eligible if an earlier claim expires without that consumption.
+        let pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM offline_messages message
+                  WHERE message.recipient_id=$1
+                    AND message.created_at<=$2
+                    AND (message.target_resource IS NULL OR message.target_resource=$3)
+                    AND NOT EXISTS(
+                        SELECT 1 FROM sm_resume_stanzas sm
+                         WHERE sm.delivery_message_id=message.id
+                    )
+                    AND NOT EXISTS(
+                        SELECT 1 FROM bosh_delivery_fences bosh
+                         WHERE bosh.message_id=message.id
+                    )
+             )",
+        )
+        .bind(lease.recipient_id)
+        .bind(lease.replay_started_at)
+        .bind(&owner_resource)
+        .fetch_one(&mut *transaction)
+        .await?;
         transaction.commit().await?;
-        return Ok(OfflineReplayPageOutcome::Empty);
+        return Ok(if pending {
+            OfflineReplayPageOutcome::PendingClaims
+        } else {
+            OfflineReplayPageOutcome::Empty
+        });
     }
     let mut candidates = rows
         .into_iter()
@@ -1091,7 +1161,7 @@ async fn deliver_offline_pages_for_test(
         .await?
         {
             OfflineReplayPageOutcome::Claimed(page) => page,
-            OfflineReplayPageOutcome::Empty => break,
+            OfflineReplayPageOutcome::Empty | OfflineReplayPageOutcome::PendingClaims => break,
             OfflineReplayPageOutcome::LeaseLost => {
                 anyhow::bail!("offline replay owner lease was lost")
             }

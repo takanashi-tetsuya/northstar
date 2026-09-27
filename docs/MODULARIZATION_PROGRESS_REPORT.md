@@ -236,6 +236,14 @@ matrix still needs a wire-level check of this boundary.
 Component routing and inbound S2S identity checks now share one hosted-domain
 classifier. Upload remains a protected local identity but cannot be an S2S
 stream target; connect-mode components retain their local-only relay grant.
+The cluster direct-message path now counts a `DirectCommitTurn` across its final
+PostgreSQL authority check and acknowledged commit, deferring process-local
+health publication while that turn is active. Recovery takes a database-clock
+cutoff after locking this node's key and instance authority, then wakes exact
+eligible local resources through paged, capacity-limited replay with retries.
+This remains a partial Packet 6 result: another node can commit after this
+cutoff, cancelled database commits have an uncertain outcome window, and the
+transition/replay behavior still needs isolated VM fault and scale evidence.
 
 ### Packet 7 — Administration and final composition
 

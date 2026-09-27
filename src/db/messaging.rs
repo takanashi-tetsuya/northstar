@@ -173,6 +173,27 @@ impl PostgresMessageRepository {
         Ok(())
     }
 
+    /// Keep cluster health stable through the acknowledged commit. The final
+    /// PostgreSQL fence runs after all invitation writes, including a replay
+    /// that upgraded legacy identity evidence.
+    async fn commit_live_invite(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<()> {
+        if let Some(cluster) = self.cluster.as_ref() {
+            let (turn, authority) =
+                cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
+            if let Some(authority) = authority {
+                db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
+            }
+            tx.commit().await?;
+            let _mode = turn.finish();
+        } else {
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(
         pool: PgPool,
         content_identity: PersonalMessageContentKeyring,
@@ -355,8 +376,7 @@ impl MessageRepository for PostgresMessageRepository {
             // No room mutation has happened yet. Commit so a migration-0104
             // legacy digest upgrade performed by the history repository is
             // durable; a keyed replay commits only read locks.
-            self.fence_live_invite(&mut transaction).await?;
-            transaction.commit().await?;
+            self.commit_live_invite(transaction).await?;
             return Ok(RemoteMucInviteAdmissionOutcome::Replay);
         }
         let cluster_authority = request.cluster_authority.map(Into::into);
@@ -376,8 +396,7 @@ impl MessageRepository for PostgresMessageRepository {
         };
         let outcome = match affiliation {
             db::FederatedMucInviteAffiliationOutcome::Stored => {
-                self.fence_live_invite(&mut transaction).await?;
-                transaction.commit().await?;
+                self.commit_live_invite(transaction).await?;
                 RemoteMucInviteAdmissionOutcome::Stored
             }
             db::FederatedMucInviteAffiliationOutcome::Replay => {
@@ -454,8 +473,7 @@ impl MessageRepository for PostgresMessageRepository {
         if matches!(history, db::PersonalHistoryAdmission::Replay(_)) {
             // The affiliation path has not run, so the only possible write is
             // a safe legacy-content-evidence upgrade.
-            self.fence_live_invite(&mut transaction).await?;
-            transaction.commit().await?;
+            self.commit_live_invite(transaction).await?;
             return Ok(DurableMucInviteOutcome::Replay {
                 id: request.delivery_id,
             });
@@ -479,8 +497,7 @@ impl MessageRepository for PostgresMessageRepository {
         };
         match affiliation {
             db::DurableMucInviteOutcome::Stored { .. } => {
-                self.fence_live_invite(&mut transaction).await?;
-                transaction.commit().await?;
+                self.commit_live_invite(transaction).await?;
             }
             db::DurableMucInviteOutcome::Replay { .. }
             | db::DurableMucInviteOutcome::QuotaExceeded

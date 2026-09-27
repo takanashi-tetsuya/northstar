@@ -6,11 +6,59 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use std::{future::Future, pin::Pin, sync::Arc};
 use uuid::Uuid;
 
 pub(crate) const OWNER_LEASE_SECONDS: i64 = 90;
 
 pub(crate) type PendingPresencePage = PendingPresenceReplayPage;
+
+/// The repository supplies a recovery-only authorization fence without
+/// exposing its transaction or pool to replay orchestration.
+pub(crate) type RecoveryAuthorizationFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<Box<dyn RecoveryReplayGuardPort>>>> + Send + 'a>>;
+pub(crate) type RecoveryGuardReleaseFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+pub(crate) trait RecoveryReplayAuthorizationPort: Send + Sync {
+    fn lock(&self) -> RecoveryAuthorizationFuture<'_>;
+}
+
+pub(crate) trait RecoveryReplayGuardPort: Send {
+    fn release(self: Box<Self>) -> RecoveryGuardReleaseFuture;
+}
+
+/// Opaque recovery-only account authority exposed to the protocol layer.
+#[derive(Clone)]
+pub(crate) struct RecoveryReplayAuthority {
+    port: Arc<dyn RecoveryReplayAuthorizationPort>,
+}
+
+impl RecoveryReplayAuthority {
+    pub(crate) fn new(port: impl RecoveryReplayAuthorizationPort + 'static) -> Self {
+        Self {
+            port: Arc::new(port),
+        }
+    }
+
+    pub(crate) async fn lock(&self) -> Result<Option<RecoveryReplayAuthorizationGuard>> {
+        self.port
+            .lock()
+            .await
+            .map(|guard| guard.map(|inner| RecoveryReplayAuthorizationGuard { inner }))
+    }
+}
+
+/// Holding this value serializes credential revocation with one bounded
+/// replay claim or enqueue. Dropping it rolls back the read-only transaction.
+pub(crate) struct RecoveryReplayAuthorizationGuard {
+    inner: Box<dyn RecoveryReplayGuardPort>,
+}
+
+impl RecoveryReplayAuthorizationGuard {
+    pub(crate) async fn release(self) -> Result<()> {
+        self.inner.release().await
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReplaySession {
@@ -63,6 +111,7 @@ pub(crate) struct ReplayPage {
 pub(crate) enum ReplayPageOutcome {
     Claimed(ReplayPage),
     Empty,
+    PendingClaims,
     LeaseLost,
 }
 

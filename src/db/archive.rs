@@ -388,29 +388,30 @@ async fn admit_personal_history_inner(
         c2s_delivery,
     )
     .await?;
-    // Logical admission linearizes at this final health/eligibility read while
-    // the exact key and instance rows remain locked through COMMIT. The health
-    // atomic transition and physical COMMIT do not share a total order: a
-    // transition may land just after this read. The postcommit mode read below
-    // suppresses live effects in that case, leaving only recoverable rows.
-    if let Some((cluster, eligibility)) = cluster {
-        if let Some(authority) = cluster.check_direct_eligibility(eligibility)? {
+    // The short health gate admits this final turn before the exact PostgreSQL
+    // authority recheck, and holds a counted permit through acknowledged
+    // COMMIT. A concurrent health transition freezes new work immediately,
+    // then publishes its state after this turn finishes. Routing is outside
+    // the permit.
+    let mode = if let Some((cluster, eligibility)) = cluster {
+        let (turn, authority) = cluster.begin_direct_commit_turn(eligibility)?;
+        if let Some(authority) = authority {
             super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
                 .await?;
         }
-    }
-    transaction.commit().await?;
-    // A transition after commit can only suppress volatile effects. It cannot
-    // turn an accepted durable projection into a truthful stanza rejection.
-    let mode = cluster.map_or(
-        crate::cluster::DirectPostCommitMode::Live,
-        |(cluster, _)| match cluster.direct_mode() {
-            crate::cluster::DirectPostCommitMode::Live => {
-                crate::cluster::DirectPostCommitMode::Live
-            }
-            _ => crate::cluster::DirectPostCommitMode::SpoolOnly,
-        },
-    );
+        transaction.commit().await?;
+        let admitted_mode = turn.finish();
+        if admitted_mode == crate::cluster::DirectPostCommitMode::Live
+            && cluster.direct_mode() != crate::cluster::DirectPostCommitMode::Live
+        {
+            crate::cluster::DirectPostCommitMode::SpoolOnly
+        } else {
+            admitted_mode
+        }
+    } else {
+        transaction.commit().await?;
+        crate::cluster::DirectPostCommitMode::Live
+    };
     Ok((outcome, mode))
 }
 
@@ -2126,18 +2127,7 @@ async fn store_offline_idempotent_inner(
                         )
                 });
             anyhow::ensure!(exact, "conflicting offline message identity");
-            if let Some(cluster) = cluster {
-                if let Some(authority) = cluster
-                    .check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
-                {
-                    super::fence_direct_message_authority_in_transaction(
-                        &mut transaction,
-                        authority,
-                    )
-                    .await?;
-                }
-            }
-            transaction.commit().await?;
+            commit_live_direct_offline_transaction(transaction, cluster).await?;
             return Ok(OfflineStoreOutcome::Replay);
         }
     }
@@ -2274,16 +2264,29 @@ async fn store_offline_idempotent_inner(
     sqlx::query("INSERT INTO offline_messages (id, recipient_id, sender_jid, stanza, target_resource, encrypted, mam_backed) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(offline_message_id).bind(recipient_id).bind(sender_jid).bind(stanza).bind(target_resource).bind(encrypted).bind(policy.mam_backed)
         .execute(&mut *transaction).await?;
+    commit_live_direct_offline_transaction(transaction, cluster).await?;
+    Ok(OfflineStoreOutcome::Stored)
+}
+
+async fn commit_live_direct_offline_transaction(
+    mut transaction: sqlx::Transaction<'_, sqlx::Postgres>,
+    cluster: Option<&crate::cluster::ClusterAdmission>,
+) -> Result<()> {
     if let Some(cluster) = cluster {
-        if let Some(authority) =
-            cluster.check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
-        {
+        let (turn, authority) =
+            cluster.begin_direct_commit_turn(crate::cluster::DirectSpoolEligibility::LiveOnly)?;
+        if let Some(authority) = authority {
             super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
                 .await?;
         }
+        transaction.commit().await?;
+        // This legacy offline API has no postcommit mode. Its callers must
+        // independently suppress live effects if health changed during COMMIT.
+        let _mode = turn.finish();
+    } else {
+        transaction.commit().await?;
     }
-    transaction.commit().await?;
-    Ok(OfflineStoreOutcome::Stored)
+    Ok(())
 }
 
 fn normalized_offline_target_resource(

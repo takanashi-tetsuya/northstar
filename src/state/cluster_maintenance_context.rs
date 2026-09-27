@@ -11,6 +11,7 @@ pub(crate) struct ClusterMaintenanceContext {
         cluster::ClusterMaintenanceRedis,
     >,
     pub(crate) locals: ClusterMaintenanceLocals,
+    pub(crate) replay_wake: super::cluster_recovery_replay::ClusterRecoveryReplayWake,
     pub(crate) session_authority: services::session_authority_sweep::SessionAuthoritySweepService<
         db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
     >,
@@ -58,6 +59,7 @@ impl AppState {
                 services::session_route_maintenance::SessionRouteRenewalService::new(redis.clone()),
             redis,
             locals: self.cluster_maintenance_locals(),
+            replay_wake: self.cluster_recovery_replay_wake(),
             session_authority: services::session_authority_sweep::SessionAuthoritySweepService::new(
                 db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository::new(
                     self.pool.clone(),

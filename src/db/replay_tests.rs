@@ -60,6 +60,187 @@ fn resource_owner_lease_strictly_outlives_page_claim_and_jitter() {
 
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn recovery_replay_authorization_serializes_with_account_disable() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+    let user_id = Uuid::new_v4();
+    let username = format!("recoveryauth{}", &user_id.simple().to_string()[..12]);
+    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+        .bind(user_id)
+        .bind(&username)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let generation: i64 = sqlx::query_scalar("SELECT auth_generation FROM users WHERE id=$1")
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let guard = lock_recovery_replay_authorization(&pool, user_id, generation)
+        .await
+        .unwrap()
+        .expect("current enabled account must authorize recovery enqueue");
+    let competing_pool = pool.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut disable = tokio::spawn(async move {
+        let _ = started_tx.send(());
+        sqlx::query(
+            "UPDATE users SET is_disabled=TRUE,auth_generation=auth_generation+1 WHERE id=$1",
+        )
+        .bind(user_id)
+        .execute(&competing_pool)
+        .await
+    });
+    started_rx.await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut disable)
+            .await
+            .is_err(),
+        "disable cannot commit while recovery holds the exact user-row guard"
+    );
+    drop(guard);
+    tokio::time::timeout(Duration::from_secs(2), disable)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        lock_recovery_replay_authorization(&pool, user_id, generation)
+            .await
+            .unwrap()
+            .is_none(),
+        "old generation must never authorize after disable"
+    );
+    sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn recovery_replay_does_not_complete_while_cutoff_row_has_another_claim() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+    let recipient = Uuid::new_v4();
+    let username = format!("recoveryclaim{}", &recipient.simple().to_string()[..12]);
+    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+        .bind(recipient)
+        .bind(&username)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let message_id = insert_resource_replay_message(&pool, recipient, None, "account-wide").await;
+    let owner = format!("{username}@example.test");
+    let phone = acquire_offline_replay_lease(
+        &pool,
+        recipient,
+        "Phone",
+        Uuid::new_v4(),
+        None,
+        REPLAY_OWNER_LEASE_SECONDS,
+    )
+    .await
+    .unwrap()
+    .into_acquired()
+    .unwrap();
+    let tablet = acquire_offline_replay_lease(
+        &pool,
+        recipient,
+        "Tablet",
+        Uuid::new_v4(),
+        None,
+        REPLAY_OWNER_LEASE_SECONDS,
+    )
+    .await
+    .unwrap()
+    .into_acquired()
+    .unwrap();
+    let first = match claim_offline_replay_page(
+        &pool,
+        &phone,
+        30,
+        &owner,
+        &format!("{owner}/Phone"),
+        None,
+        false,
+        REPLAY_OWNER_LEASE_SECONDS,
+    )
+    .await
+    .unwrap()
+    {
+        OfflineReplayPageOutcome::Claimed(page) => page,
+        other => panic!("expected first claim, got {other:?}"),
+    };
+    assert_eq!(first.messages[0].id, message_id);
+    assert!(matches!(
+        claim_offline_replay_page(
+            &pool,
+            &tablet,
+            30,
+            &owner,
+            &format!("{owner}/Tablet"),
+            None,
+            false,
+            REPLAY_OWNER_LEASE_SECONDS,
+        )
+        .await
+        .unwrap(),
+        OfflineReplayPageOutcome::PendingClaims
+    ));
+    assert_eq!(
+        release_untransferred_offline_claims(&pool, recipient, first.claim_token, &[message_id])
+            .await
+            .unwrap(),
+        1
+    );
+    let retry = match claim_offline_replay_page(
+        &pool,
+        &tablet,
+        30,
+        &owner,
+        &format!("{owner}/Tablet"),
+        None,
+        false,
+        REPLAY_OWNER_LEASE_SECONDS,
+    )
+    .await
+    .unwrap()
+    {
+        OfflineReplayPageOutcome::Claimed(page) => page,
+        other => panic!("expected retry claim, got {other:?}"),
+    };
+    assert_eq!(retry.messages[0].id, message_id);
+    assert_eq!(
+        release_untransferred_offline_claims(&pool, recipient, retry.claim_token, &[message_id])
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(release_offline_replay_lease(&pool, &phone).await.unwrap());
+    assert!(release_offline_replay_lease(&pool, &tablet).await.unwrap());
+    sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(recipient)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn replay_enforces_resource_affinity_and_immutable_ownership() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");

@@ -3,6 +3,11 @@ use chrono::Utc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 
+#[test]
+fn recovery_account_lock_is_shorter_than_revocation_budget() {
+    assert!(RECOVERY_AUTHORITY_HOLD_TIMEOUT <= Duration::from_secs(1));
+}
+
 #[tokio::test]
 async fn elapsed_recovery_deadline_never_schedules_another_retry() {
     let (sender, _receiver) = mpsc::channel(1);
@@ -28,6 +33,8 @@ async fn already_invalid_availability_fence_cancels_without_waiting() {
         available,
         generation,
         expected_generation: 11,
+        current_route: None,
+        recovery_authority: None,
     };
     let busy = ReplayBusyUntil {
         expires_at: Utc::now() + chrono::Duration::seconds(30),
@@ -55,6 +62,8 @@ async fn availability_generation_change_cancels_busy_wait() {
         available,
         generation: Arc::clone(&generation),
         expected_generation: 7,
+        current_route: None,
+        recovery_authority: None,
     };
     let busy = ReplayBusyUntil {
         expires_at: Utc::now() + chrono::Duration::seconds(30),
@@ -99,6 +108,8 @@ async fn busy_resource_lease_retries_without_second_availability_transition() {
         available,
         generation,
         expected_generation: 11,
+        current_route: None,
+        recovery_authority: None,
     };
 
     // The current resource starts while an unexpired lease from its previous

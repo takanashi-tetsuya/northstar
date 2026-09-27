@@ -96,7 +96,8 @@ pub(super) fn validate_listener_generation_health(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     anyhow::ensure!(
-        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+        health.effective_state() != CLUSTER_SHUTDOWN_REQUIRED
+            && !health.transition_pending()
             && health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
             && health.listener_generation.load(Ordering::Acquire) == generation
             && !health.listener_requires_rotation(generation),

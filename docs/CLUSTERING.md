@@ -137,8 +137,14 @@ durable C2S and authenticated S2S messages check the exact signing-key and
 process-instance authority inside their PostgreSQL admission transaction.
 Eligible bare `normal`/`chat` messages may commit to the recipient spool during
 `durable_direct_only`; live routing is suppressed after a degraded commit.
-Recovery delivery and the transition race still require isolated VM evidence,
-so these cells remain unqualified. See [ARCH-CLU-DEGRADE](KNOWN_ISSUES.md).
+Before the final authority recheck, `DirectCommitTurn` joins a process-local
+health-transition gate and remains counted until PostgreSQL acknowledges
+`COMMIT`. A pending failure or reconciliation stops new direct admission;
+the published state waits for those counted turns. An admitted commit may
+still return `SpoolOnly` if the state changed, so a degraded commit does not
+claim live delivery. This orders acknowledged commits against transitions on
+one process; it does not make PostgreSQL, Redis and sockets one transaction.
+See [ARCH-CLU-DEGRADE](KNOWN_ISSUES.md) for the remaining limits.
 
 | State/policy | New bind/resume | MUC join or mutation | Admin mutation/control | `no-store`/transient | Storage-eligible direct message | Readiness | Shutdown |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -163,6 +169,25 @@ Recovery becomes healthy only after this ordered reconciliation succeeds:
    occupant;
 5. observe a new subscribed Pub/Sub listener generation;
 6. atomically clear degradation and report ready.
+
+Readiness is separate from offline-spool delivery. After recovery, a bounded
+worker takes a PostgreSQL-clock cutoff while holding exclusive locks on this
+node's exact signing-key and process-instance rows. Those locks wait behind
+direct admissions using the same rows. The worker then scans eligible local
+full-JID routes in pages of at most 256, requests at most 256 wakes per pass,
+and allows at most eight concurrent recovery replays. Each replay checks its
+connection, availability generation, recipient authority and privacy before
+delivery. Busy or incomplete routes retain a retry plan with bounded backoff;
+the cutoff and route identity are attached to that recovery attempt.
+
+This cutoff only orders direct commits that held this node's authority rows.
+A different node can commit a recipient spool row after the cutoff; that row
+may miss this recovery pass, with no proven finite catch-up bound until a later
+availability transition or recovery sweep. Cancellation during a database
+`COMMIT` or rollback can also release the process-local turn before the server
+has established the final transaction outcome. Isolated multi-VM fault tests
+and scaled route/queue measurements are still needed before qualifying this
+failure policy as complete.
 
 ## Reliability classes
 

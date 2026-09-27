@@ -42,6 +42,26 @@ impl PostgresRetractionRepository {
         }
         Ok(())
     }
+
+    /// A retraction may upgrade replay evidence or write tombstones. Hold the
+    /// health turn across the last PostgreSQL fence and acknowledged commit.
+    async fn commit_live_retraction(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<()> {
+        if let Some(cluster) = self.cluster.as_ref() {
+            let (turn, authority) =
+                cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
+            if let Some(authority) = authority {
+                db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
+            }
+            tx.commit().await?;
+            let _mode = turn.finish();
+        } else {
+            tx.commit().await?;
+        }
+        Ok(())
+    }
 }
 impl RetractionRepository for PostgresRetractionRepository {
     async fn apply_prepared(&self, prepared: PreparedRetraction<'_>) -> Result<RetractionOutcome> {
@@ -376,8 +396,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 );
             }
             if legacy_semantic_exact || legacy_owner_exact {
-                self.fence_live_retraction(&mut transaction).await?;
-                transaction.commit().await?;
+                self.commit_live_retraction(transaction).await?;
             } else {
                 transaction.rollback().await?;
             }
@@ -479,8 +498,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 && normalized_delivery.is_none()
                 && normalized_outbound.is_none()
             {
-                self.fence_live_retraction(&mut transaction).await?;
-                transaction.commit().await?;
+                self.commit_live_retraction(transaction).await?;
                 return Ok(RetractionOutcome::Replay);
             }
             transaction.rollback().await?;
@@ -592,8 +610,7 @@ impl RetractionRepository for PostgresRetractionRepository {
             )
             .await?;
         }
-        self.fence_live_retraction(&mut transaction).await?;
-        transaction.commit().await?;
+        self.commit_live_retraction(transaction).await?;
         Ok(RetractionOutcome::Applied {
             tombstones: tombstones.len(),
         })

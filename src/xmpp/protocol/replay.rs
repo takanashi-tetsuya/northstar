@@ -1,7 +1,7 @@
 use crate::{
     services::replay::{
-        ReplayBusyUntil, ReplayPageOutcome, ReplayRepository, ReplayService, ReplaySession,
-        ReplayStartOutcome,
+        RecoveryReplayAuthority, RecoveryReplayAuthorizationGuard, ReplayBusyUntil,
+        ReplayPageOutcome, ReplayRepository, ReplayService, ReplaySession, ReplayStartOutcome,
     },
     state::attr_escape,
 };
@@ -17,6 +17,9 @@ use std::{
 use uuid::Uuid;
 
 const OUTBOUND_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(5);
+// A recovery wake holds users FOR SHARE only within one PG claim or bounded
+// transport enqueue. Keep that interval below the revocation worker budget.
+const RECOVERY_AUTHORITY_HOLD_TIMEOUT: Duration = Duration::from_millis(750);
 const REPLAY_RECOVERY_DEADLINE: Duration = Duration::from_secs(120);
 // Leave a bounded tail for releasing an exact page claim and the resource
 // owner lease. Recovery work never starts inside this reserve, so every
@@ -32,12 +35,49 @@ struct AvailabilityFence {
     available: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     expected_generation: u64,
+    current_route: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    recovery_authority: Option<RecoveryReplayAuthority>,
 }
 
 impl AvailabilityFence {
     fn current(&self) -> bool {
         is_current_availability(&self.available, &self.generation, self.expected_generation)
+            && self.current_route.as_ref().is_none_or(|current| current())
     }
+}
+
+enum RecoveryReplayAuthorization {
+    Unrestricted,
+    Held {
+        _guard: RecoveryReplayAuthorizationGuard,
+    },
+    Denied,
+}
+
+async fn lock_recovery_authorization(
+    availability: Option<&AvailabilityFence>,
+    deadline: tokio::time::Instant,
+) -> Result<RecoveryReplayAuthorization> {
+    let Some(authority) = availability.and_then(|fence| fence.recovery_authority.as_ref()) else {
+        return Ok(RecoveryReplayAuthorization::Unrestricted);
+    };
+    match tokio::time::timeout_at(deadline, authority.lock()).await {
+        Ok(Ok(Some(guard))) => Ok(RecoveryReplayAuthorization::Held { _guard: guard }),
+        Ok(Ok(None)) | Err(_) => Ok(RecoveryReplayAuthorization::Denied),
+        Ok(Err(error)) => Err(error).context("recovery replay account authority unavailable"),
+    }
+}
+
+async fn release_recovery_authorization(
+    authorization: RecoveryReplayAuthorization,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    if let RecoveryReplayAuthorization::Held { _guard } = authorization {
+        tokio::time::timeout_at(deadline, _guard.release())
+            .await
+            .context("recovery replay account lock release timed out")??;
+    }
+    Ok(())
 }
 
 fn jittered_busy_retry_delay(retry_after: Duration) -> Duration {
@@ -183,7 +223,7 @@ async fn drain_offline(
     bind2_mam_catchup: bool,
     explicit_cutoff: Option<chrono::DateTime<chrono::Utc>>,
     availability: Option<&AvailabilityFence>,
-) -> Result<usize> {
+) -> Result<(usize, bool)> {
     let recovery_deadline = tokio::time::Instant::now() + REPLAY_RECOVERY_DEADLINE;
     let work_deadline = recovery_deadline
         .checked_sub(REPLAY_CLEANUP_RESERVE)
@@ -199,7 +239,7 @@ async fn drain_offline(
     )
     .await?
     else {
-        return Ok(0);
+        return Ok((0, false));
     };
     let result = drain_owned_offline(
         service,
@@ -248,27 +288,42 @@ async fn drain_owned_offline(
     availability: Option<&AvailabilityFence>,
     work_deadline: tokio::time::Instant,
     recovery_deadline: tokio::time::Instant,
-) -> Result<usize> {
+) -> Result<(usize, bool)> {
     let mut delivered = 0usize;
     loop {
         if tokio::time::Instant::now() >= work_deadline {
-            return Ok(delivered);
+            return Ok((delivered, false));
         }
         if availability.is_some_and(|fence| !fence.current()) {
-            return Ok(delivered);
+            return Ok((delivered, false));
         }
-        let claimed = match tokio::time::timeout_at(
-            work_deadline,
+        let claim_deadline = if availability.is_some_and(|fence| fence.recovery_authority.is_some())
+        {
+            work_deadline.min(tokio::time::Instant::now() + RECOVERY_AUTHORITY_HOLD_TIMEOUT)
+        } else {
+            work_deadline
+        };
+        let claim_authorization = lock_recovery_authorization(availability, claim_deadline).await?;
+        if matches!(&claim_authorization, RecoveryReplayAuthorization::Denied) {
+            return Ok((delivered, false));
+        }
+        if availability.is_some_and(|fence| !fence.current()) {
+            return Ok((delivered, false));
+        }
+        let claimed = tokio::time::timeout_at(
+            claim_deadline,
             service.claim_page(session, active_privacy_list, bind2_mam_catchup),
         )
-        .await
-        {
+        .await;
+        release_recovery_authorization(claim_authorization, claim_deadline).await?;
+        let claimed = match claimed {
             Ok(claimed) => claimed?,
-            Err(_) => return Ok(delivered),
+            Err(_) => return Ok((delivered, false)),
         };
         let page = match claimed {
             ReplayPageOutcome::Claimed(page) => page,
-            ReplayPageOutcome::Empty => return Ok(delivered),
+            ReplayPageOutcome::Empty => return Ok((delivered, true)),
+            ReplayPageOutcome::PendingClaims => return Ok((delivered, false)),
             ReplayPageOutcome::LeaseLost => {
                 anyhow::bail!("offline replay owner lease expired before page claim")
             }
@@ -290,7 +345,7 @@ async fn drain_owned_offline(
                     recovery_deadline,
                 )
                 .await;
-                return Ok(delivered);
+                return Ok((delivered, false));
             }
             if availability.is_some_and(|fence| !fence.current()) {
                 release_unsent_suffix(
@@ -301,7 +356,7 @@ async fn drain_owned_offline(
                     recovery_deadline,
                 )
                 .await;
-                return Ok(delivered);
+                return Ok((delivered, false));
             }
             let renewed = match tokio::time::timeout_at(
                 work_deadline,
@@ -330,7 +385,7 @@ async fn drain_owned_offline(
                         recovery_deadline,
                     )
                     .await;
-                    return Ok(delivered);
+                    return Ok((delivered, false));
                 }
             };
             if !renewed {
@@ -358,14 +413,36 @@ async fn drain_owned_offline(
                     recovery_deadline,
                 )
                 .await;
-                return Ok(delivered);
+                return Ok((delivered, false));
             }
+            let send_timeout =
+                if availability.is_some_and(|fence| fence.recovery_authority.is_some()) {
+                    RECOVERY_AUTHORITY_HOLD_TIMEOUT
+                } else {
+                    OUTBOUND_BACKPRESSURE_TIMEOUT
+                };
             let send_deadline = work_deadline.min(
                 tokio::time::Instant::now()
-                    .checked_add(OUTBOUND_BACKPRESSURE_TIMEOUT)
+                    .checked_add(send_timeout)
                     .unwrap_or(work_deadline),
             );
-            match tokio::time::timeout_at(
+            let send_authorization =
+                lock_recovery_authorization(availability, send_deadline).await?;
+            if matches!(&send_authorization, RecoveryReplayAuthorization::Denied)
+                || availability.is_some_and(|fence| !fence.current())
+            {
+                drop(send_authorization);
+                release_unsent_suffix(
+                    service,
+                    session,
+                    page.claim_token,
+                    &suffix,
+                    recovery_deadline,
+                )
+                .await;
+                return Ok((delivered, false));
+            }
+            let send_result = tokio::time::timeout_at(
                 send_deadline,
                 outbound.send_durable_if_current(
                     message.stanza.clone(),
@@ -377,8 +454,14 @@ async fn drain_owned_offline(
                     || availability.is_none_or(AvailabilityFence::current),
                 ),
             )
-            .await
+            .await;
+            if let Err(error) =
+                release_recovery_authorization(send_authorization, send_deadline).await
             {
+                tracing::warn!(?error, recipient_id = %session.recipient_id(),
+                    "recovery replay account lock release deferred to transaction drop");
+            }
+            match send_result {
                 Ok(Ok(true)) => delivered += 1,
                 Ok(Ok(false)) => {
                     release_unsent_suffix(
@@ -389,7 +472,7 @@ async fn drain_owned_offline(
                         recovery_deadline,
                     )
                     .await;
-                    return Ok(delivered);
+                    return Ok((delivered, false));
                 }
                 Ok(Err(_)) => {
                     release_unsent_suffix(
@@ -400,10 +483,15 @@ async fn drain_owned_offline(
                         recovery_deadline,
                     )
                     .await;
-                    return Ok(delivered);
+                    return Ok((delivered, false));
                 }
                 Err(_) => {
-                    outbound.disconnect_backpressured_transport();
+                    // Recovery uses a shorter account-lock deadline than
+                    // ordinary replay. Yield this claim for a later wake
+                    // instead of disconnecting a merely busy live session.
+                    if !availability.is_some_and(|fence| fence.recovery_authority.is_some()) {
+                        outbound.disconnect_backpressured_transport();
+                    }
                     release_unsent_suffix(
                         service,
                         session,
@@ -412,7 +500,7 @@ async fn drain_owned_offline(
                         recovery_deadline,
                     )
                     .await;
-                    return Ok(delivered);
+                    return Ok((delivered, false));
                 }
             }
         }
@@ -441,6 +529,8 @@ pub(crate) async fn replay_newly_available_resource(
         available,
         generation: availability_generation,
         expected_generation,
+        current_route: None,
+        recovery_authority: None,
     };
     if !availability.current() {
         return;
@@ -553,6 +643,8 @@ pub(crate) async fn replay_resumed_offline(
         available,
         generation: availability_generation,
         expected_generation,
+        current_route: None,
+        recovery_authority: None,
     };
     if !availability.current() {
         return;
@@ -592,6 +684,8 @@ pub(crate) async fn replay_newly_nonnegative_resource(
         available,
         generation: availability_generation,
         expected_generation,
+        current_route: None,
+        recovery_authority: None,
     };
     if !availability.current() {
         return;
@@ -609,6 +703,74 @@ pub(crate) async fn replay_newly_nonnegative_resource(
     .await
     {
         tracing::warn!(?error, %recipient_id, "offline delivery failed after priority became nonnegative; durable rows remain retryable");
+    }
+}
+
+/// Redis recovery does not create a new RFC 6121 presence transition. Replay
+/// only the durable offline queue for this exact, already-available resource;
+/// pending subscription presence and XEP-0198 resume stanzas have independent
+/// owners. The caller's route predicate is rechecked across every PG await
+/// and immediately before the bounded outbound queue accepts a stanza.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recovery carries the exact route, availability epoch, privacy selection, and PG cutoff"
+)]
+pub(crate) async fn replay_after_cluster_reconciliation(
+    service: ReplayService<impl ReplayRepository>,
+    outbound: crate::outbound::OutboundSender,
+    recipient_id: Uuid,
+    full_jid: String,
+    active_privacy_list: Arc<std::sync::RwLock<Option<String>>>,
+    bind2_mam_catchup: bool,
+    available: Arc<AtomicBool>,
+    availability_generation: Arc<AtomicU64>,
+    expected_generation: u64,
+    cutoff: chrono::DateTime<chrono::Utc>,
+    current_route: Arc<dyn Fn() -> bool + Send + Sync>,
+    recovery_authority: RecoveryReplayAuthority,
+) -> bool {
+    // Read only after the actor's current transport action has completed.
+    // A later active-list change invalidates this pass; the PG claim path
+    // independently evaluates durable account policy on every page.
+    let selected_privacy = active_privacy_list
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let expected_privacy = selected_privacy.clone();
+    let availability = AvailabilityFence {
+        available,
+        generation: availability_generation,
+        expected_generation,
+        current_route: Some(Arc::new(move || {
+            current_route()
+                && *active_privacy_list
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    == expected_privacy
+        })),
+        recovery_authority: Some(recovery_authority),
+    };
+    if !availability.current() {
+        return false;
+    }
+    match drain_offline(
+        &service,
+        &outbound,
+        recipient_id,
+        &full_jid,
+        selected_privacy.as_deref(),
+        bind2_mam_catchup,
+        Some(cutoff),
+        Some(&availability),
+    )
+    .await
+    {
+        Ok((_, completed)) => completed,
+        Err(error) => {
+            tracing::warn!(?error, %recipient_id, %full_jid,
+                "cluster recovery offline replay stopped; durable rows remain retryable");
+            false
+        }
     }
 }
 

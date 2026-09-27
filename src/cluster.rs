@@ -872,7 +872,7 @@ impl ClusterAdmission {
     }
 
     pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
-        match self.health.state.load(Ordering::Acquire) {
+        match self.health.effective_state() {
             CLUSTER_DISABLED | CLUSTER_HEALTHY => DirectPostCommitMode::Live,
             CLUSTER_DURABLE_DIRECT_ONLY => DirectPostCommitMode::SpoolOnly,
             _ => DirectPostCommitMode::Rejected,
@@ -883,7 +883,7 @@ impl ClusterAdmission {
     /// instance, never from the peer cache or a previous readiness observation.
     pub(crate) fn durable_direct_authority(&self) -> Result<Option<&ClusterReadinessAuthority>> {
         self.admit(ClusterOperation::DurableDirect)?;
-        if self.health.state.load(Ordering::Acquire) == CLUSTER_DISABLED {
+        if self.health.effective_state() == CLUSTER_DISABLED {
             return Ok(None);
         }
         let authority = self
@@ -914,6 +914,104 @@ impl ClusterAdmission {
         // caller repeats this check with both PG rows locked near commit.
         self.durable_direct_authority()
     }
+
+    /// Keep the final health decision ordered with the acknowledged database
+    /// commit. The returned turn never covers routing or other live effects.
+    pub(crate) fn begin_direct_commit_turn(
+        &self,
+        eligibility: DirectSpoolEligibility,
+    ) -> Result<(DirectCommitTurn, Option<&ClusterReadinessAuthority>)> {
+        let mut gate = self
+            .health
+            .direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(
+            gate.pending.is_none(),
+            "cluster health transition is pending"
+        );
+        let state = self.health.state.load(Ordering::Acquire);
+        let mode = match state {
+            CLUSTER_DISABLED | CLUSTER_HEALTHY => DirectPostCommitMode::Live,
+            CLUSTER_DURABLE_DIRECT_ONLY if eligibility == DirectSpoolEligibility::Eligible => {
+                DirectPostCommitMode::SpoolOnly
+            }
+            CLUSTER_DURABLE_DIRECT_ONLY => anyhow::bail!(
+                "this direct-message operation cannot be durably spooled while cluster control is degraded"
+            ),
+            _ => anyhow::bail!("cluster control plane cannot admit direct messages"),
+        };
+        let authority = if state == CLUSTER_DISABLED {
+            None
+        } else {
+            let authority = self
+                .direct_authority
+                .as_ref()
+                .context("cluster durable direct admission has no claimed process authority")?;
+            anyhow::ensure!(
+                authority.instance_epoch >= 1,
+                "cluster process instance was not claimed"
+            );
+            Some(authority)
+        };
+        gate.active = gate
+            .active
+            .checked_add(1)
+            .context("too many direct commit turns")?;
+        let turn = DirectCommitTurn {
+            health: Arc::clone(&self.health),
+            admitted_mode: mode,
+            transition_epoch: gate.transition_epoch,
+            finished: false,
+        };
+        Ok((turn, authority))
+    }
+}
+
+pub(crate) struct DirectCommitTurn {
+    health: Arc<ClusterHealth>,
+    admitted_mode: DirectPostCommitMode,
+    transition_epoch: u64,
+    finished: bool,
+}
+
+impl DirectCommitTurn {
+    /// A successful commit can only lose live effects; it cannot become a
+    /// postcommit rejection. Capture the decision under the transition gate.
+    pub(crate) fn finish(mut self) -> DirectPostCommitMode {
+        let mut gate = self
+            .health
+            .direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let live = self.admitted_mode == DirectPostCommitMode::Live
+            && gate.transition_epoch == self.transition_epoch
+            && gate.pending.is_none()
+            && matches!(
+                self.health.state.load(Ordering::Acquire),
+                CLUSTER_DISABLED | CLUSTER_HEALTHY
+            );
+        self.health.release_direct_commit_turn(&mut gate);
+        self.finished = true;
+        if live {
+            DirectPostCommitMode::Live
+        } else {
+            DirectPostCommitMode::SpoolOnly
+        }
+    }
+}
+
+impl Drop for DirectCommitTurn {
+    fn drop(&mut self) {
+        if !self.finished {
+            let mut gate = self
+                .health
+                .direct_commit_gate
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            self.health.release_direct_commit_turn(&mut gate);
+        }
+    }
 }
 
 /// Controls only effects after a durable personal-message admission. Rejected
@@ -935,7 +1033,7 @@ pub(crate) enum DirectSpoolEligibility {
     LiveOnly,
 }
 fn admit_health(health: &ClusterHealth, operation: ClusterOperation) -> Result<()> {
-    let state = health.state.load(Ordering::Acquire);
+    let state = health.effective_state();
     if operation_allowed(state, operation) {
         return Ok(());
     }
@@ -1306,6 +1404,116 @@ pub(crate) struct ClusterMaintenanceControl {
     health: Arc<ClusterHealth>,
     listener_rotation: Arc<tokio::sync::Notify>,
     failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+}
+
+const RECOVERY_REPLAY_PAGE: usize = 256;
+const RECOVERY_REPLAY_REQUESTS_PER_PASS: usize = 256;
+const RECOVERY_REPLAY_RETRY_MAX: Duration = Duration::from_secs(300);
+const RECOVERY_REPLAY_OBSERVATIONS_PER_SWEEP: u8 = 4;
+const RECOVERY_REPLAY_INCOMPLETE_DELAY: Duration = Duration::from_secs(300);
+
+struct RecoveryReplayRoute {
+    full_jid: String,
+    connection_id: uuid::Uuid,
+    attempts: u8,
+    observations: u8,
+    retry_after: Instant,
+}
+
+struct RecoveryReplayPlan {
+    health_epoch: u64,
+    wake_epoch: u64,
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    cursor: Option<String>,
+    pending: VecDeque<RecoveryReplayRoute>,
+    barrier_attempts: u8,
+    barrier_retry_after: Instant,
+    incomplete: bool,
+    exhausted: bool,
+    next_sweep_at: Option<Instant>,
+}
+
+impl RecoveryReplayPlan {
+    fn new(health_epoch: u64, wake_epoch: u64) -> Self {
+        Self {
+            health_epoch,
+            wake_epoch,
+            cutoff: None,
+            cursor: None,
+            pending: VecDeque::new(),
+            barrier_attempts: 0,
+            barrier_retry_after: Instant::now(),
+            incomplete: false,
+            exhausted: false,
+            next_sweep_at: None,
+        }
+    }
+
+    fn begin_next_sweep(&mut self, wake_epoch: u64) {
+        self.wake_epoch = wake_epoch;
+        self.cutoff = None;
+        self.cursor = None;
+        self.pending.clear();
+        self.barrier_attempts = 0;
+        self.barrier_retry_after = Instant::now();
+        self.incomplete = false;
+        self.exhausted = false;
+        self.next_sweep_at = None;
+    }
+
+    fn queue_page(&mut self, page: Vec<(String, uuid::Uuid)>) {
+        debug_assert!(self.pending.is_empty() && page.len() <= RECOVERY_REPLAY_PAGE);
+        if page.is_empty() {
+            self.exhausted = true;
+            return;
+        }
+        self.cursor = page.last().map(|(full_jid, _)| full_jid.clone());
+        self.pending
+            .extend(
+                page.into_iter()
+                    .map(|(full_jid, connection_id)| RecoveryReplayRoute {
+                        full_jid,
+                        connection_id,
+                        attempts: 0,
+                        observations: 0,
+                        retry_after: Instant::now(),
+                    }),
+            );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryRouteProgress {
+    Done,
+    Pending,
+    DeferredToNextSweep,
+}
+
+fn recovery_route_progress(
+    route: &mut RecoveryReplayRoute,
+    status: crate::state::cluster_recovery_replay::RecoveryReplayStatus,
+    now: Instant,
+    schedule: impl FnOnce(),
+) -> RecoveryRouteProgress {
+    use crate::state::cluster_recovery_replay::RecoveryReplayStatus;
+    match status {
+        RecoveryReplayStatus::Complete
+        | RecoveryReplayStatus::Ineligible
+        | RecoveryReplayStatus::Stale => RecoveryRouteProgress::Done,
+        RecoveryReplayStatus::AwaitEligibility => RecoveryRouteProgress::DeferredToNextSweep,
+        RecoveryReplayStatus::InFlight | RecoveryReplayStatus::Retryable => {
+            route.observations = route.observations.saturating_add(1);
+            if route.observations >= RECOVERY_REPLAY_OBSERVATIONS_PER_SWEEP {
+                return RecoveryRouteProgress::DeferredToNextSweep;
+            }
+            if status == RecoveryReplayStatus::Retryable && now >= route.retry_after {
+                schedule();
+                route.attempts = route.attempts.saturating_add(1);
+                route.retry_after = now + recovery_retry_delay(route.attempts);
+            }
+            RecoveryRouteProgress::Pending
+        }
+    }
 }
 
 /// Shared signed command publication without listener replay, database, or
@@ -2485,7 +2693,7 @@ impl ClusterMaintenanceControl {
         cluster_readiness_error(&self.health)
     }
 
-    fn begin_reconciliation(&self) -> Result<u64> {
+    fn begin_reconciliation(&self) -> Result<Option<u64>> {
         begin_cluster_reconciliation(&self.health, self.enabled)
     }
 
@@ -3086,9 +3294,6 @@ fn record_cluster_failure(
         .failure_since
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED {
-        return;
-    }
     // PostgreSQL owns the key and process-instance fences required even by
     // durable-direct fallback. Losing that authority cannot enter a mode
     // which still accepts new spool rows while the supervisor is waking up.
@@ -3102,9 +3307,14 @@ fn record_cluster_failure(
             _ => CLUSTER_FAIL_CLOSED,
         }
     };
-    let previous = health.state.swap(failed_state, Ordering::AcqRel);
-    if previous != failed_state {
-        health.degraded_transitions.fetch_add(1, Ordering::Relaxed);
+    let mut gate = health
+        .direct_commit_gate
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if gate.pending == Some(CLUSTER_SHUTDOWN_REQUIRED)
+        || health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED
+    {
+        return;
     }
     let next_listener = health
         .listener_generation
@@ -3116,10 +3326,14 @@ fn record_cluster_failure(
     health
         .listener_rotation_epoch
         .fetch_add(1, Ordering::AcqRel);
-    listener_rotation.notify_waiters();
     if since.is_none() {
         *since = Some(Instant::now());
     }
+    if health.request_state_locked(&mut gate, failed_state) {
+        health.degraded_transitions.fetch_add(1, Ordering::Relaxed);
+    }
+    drop(gate);
+    listener_rotation.notify_waiters();
     drop(since);
     tracing::error!(
         ?error,
@@ -3135,9 +3349,7 @@ fn require_cluster_shutdown(health: &ClusterHealth, enabled: bool) {
             .failure_since
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        health
-            .state
-            .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
+        health.request_state(CLUSTER_SHUTDOWN_REQUIRED);
     }
 }
 
@@ -3185,19 +3397,32 @@ fn dispatch_pending_ack(
     pending.sender.try_send(ack).is_ok()
 }
 
-fn begin_cluster_reconciliation(health: &ClusterHealth, enabled: bool) -> Result<u64> {
+fn begin_cluster_reconciliation(health: &ClusterHealth, enabled: bool) -> Result<Option<u64>> {
     let _transition = health
         .failure_since
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     anyhow::ensure!(
-        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+        health.effective_state() != CLUSTER_SHUTDOWN_REQUIRED,
         "cluster shutdown is required; reconciliation cannot begin"
     );
     if enabled {
+        let mut gate = health
+            .direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if gate.pending.is_some() {
+            return Ok(None);
+        }
+        if gate.active != 0 {
+            gate.pending = Some(CLUSTER_RECONCILING);
+            gate.transition_epoch = gate.transition_epoch.wrapping_add(1);
+            return Ok(None);
+        }
         health.state.store(CLUSTER_RECONCILING, Ordering::Release);
+        gate.transition_epoch = gate.transition_epoch.wrapping_add(1);
     }
-    Ok(health.listener_rotation_epoch.load(Ordering::Acquire))
+    Ok(Some(health.listener_rotation_epoch.load(Ordering::Acquire)))
 }
 
 fn complete_cluster_reconciliation(
@@ -3221,7 +3446,8 @@ fn confirm_listener_generation(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     anyhow::ensure!(
-        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+        health.effective_state() != CLUSTER_SHUTDOWN_REQUIRED
+            && !health.transition_pending()
             && health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
             && generation == health.next_listener_generation()
             && !health.listener_requires_rotation(generation),
@@ -3232,7 +3458,7 @@ fn confirm_listener_generation(
         .store(generation, Ordering::Release);
     // Only the initial self-loop may complete startup reconciliation. Later
     // recoveries still require the full maintenance pass.
-    if health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
+    if health.effective_state() == CLUSTER_RECONCILING
         && health.degraded_transitions.load(Ordering::Acquire) == 0
     {
         let outcome = complete_cluster_reconciliation_locked(health, &mut since, rotation_epoch)?;
@@ -3250,29 +3476,39 @@ fn complete_cluster_reconciliation_locked(
     rotation_epoch: u64,
 ) -> Result<ReconciliationOutcome> {
     anyhow::ensure!(
-        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+        health.effective_state() != CLUSTER_SHUTDOWN_REQUIRED,
         "cluster shutdown is required; reconciliation cannot restore readiness"
     );
     anyhow::ensure!(
         health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch,
         "cluster control-plane failure invalidated this reconciliation attempt"
     );
-    // The first maintenance pass can finish authority I/O before the initial
-    // listener self-loop. Keep the original failure timer until that proof.
-    if health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
-        && health.listener_generation.load(Ordering::Acquire) == 0
-        && health.required_listener_generation.load(Ordering::Acquire) == 1
-        && rotation_epoch == 0
-        && health.degraded_transitions.load(Ordering::Acquire) == 0
     {
-        return Ok(ReconciliationOutcome::WaitingForInitialListener);
+        let mut gate = health
+            .direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if gate.active != 0 || gate.pending.is_some() {
+            return Ok(ReconciliationOutcome::DeferredForDirectCommits);
+        }
+        // Keep the gate through publication so no direct turn can enter after
+        // the idle check but before health becomes live.
+        if health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
+            && health.listener_generation.load(Ordering::Acquire) == 0
+            && health.required_listener_generation.load(Ordering::Acquire) == 1
+            && rotation_epoch == 0
+            && health.degraded_transitions.load(Ordering::Acquire) == 0
+        {
+            return Ok(ReconciliationOutcome::WaitingForInitialListener);
+        }
+        anyhow::ensure!(
+            health.listener_generation.load(Ordering::Acquire)
+                >= health.required_listener_generation.load(Ordering::Acquire),
+            "cluster PubSub listener generation has not been re-established"
+        );
+        health.state.store(CLUSTER_HEALTHY, Ordering::Release);
+        gate.transition_epoch = gate.transition_epoch.wrapping_add(1);
     }
-    anyhow::ensure!(
-        health.listener_generation.load(Ordering::Acquire)
-            >= health.required_listener_generation.load(Ordering::Acquire),
-        "cluster PubSub listener generation has not been re-established"
-    );
-    health.state.store(CLUSTER_HEALTHY, Ordering::Release);
     **since = None;
     Ok(ReconciliationOutcome::Complete)
 }
@@ -3316,7 +3552,10 @@ fn cluster_readiness_error(health: &ClusterHealth) -> Option<String> {
     if !health.peer_versions_compatible.load(Ordering::Acquire) {
         return Some("a live cluster peer uses an incompatible application protocol".into());
     }
-    match health.state.load(Ordering::Acquire) {
+    if health.transition_pending() {
+        return Some("cluster health transition is waiting for direct-message commits".into());
+    }
+    match health.effective_state() {
         CLUSTER_DISABLED | CLUSTER_HEALTHY => None,
         CLUSTER_RECONCILING => Some("cluster ownership reconciliation is incomplete".into()),
         CLUSTER_DURABLE_DIRECT_ONLY => {
@@ -3455,10 +3694,14 @@ const CLUSTER_SHUTDOWN_REQUIRED: u8 = 5;
 enum ReconciliationOutcome {
     Complete,
     WaitingForInitialListener,
+    DeferredForDirectCommits,
 }
 
 struct ClusterHealth {
     state: AtomicU8,
+    direct_commit_gate: Mutex<DirectCommitGate>,
+    recovery_replay_plan: Mutex<Option<RecoveryReplayPlan>>,
+    recovery_wake_sequence: AtomicU64,
     listener_generation: AtomicU64,
     required_listener_generation: AtomicU64,
     listener_rotation_epoch: AtomicU64,
@@ -3470,10 +3713,79 @@ struct ClusterHealth {
     incompatible_peer_versions: AtomicU64,
 }
 
+#[derive(Default)]
+struct DirectCommitGate {
+    active: usize,
+    pending: Option<u8>,
+    transition_epoch: u64,
+}
+
 impl ClusterHealth {
+    fn effective_state(&self) -> u8 {
+        let gate = self
+            .direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match gate.pending {
+            Some(CLUSTER_SHUTDOWN_REQUIRED) => CLUSTER_SHUTDOWN_REQUIRED,
+            Some(_) => CLUSTER_RECONCILING,
+            None => self.state.load(Ordering::Acquire),
+        }
+    }
+
+    fn transition_pending(&self) -> bool {
+        self.direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .is_some()
+    }
+
+    /// Called under failure_since for lifecycle transitions. No database or
+    /// network wait occurs while this mutex is held.
+    fn request_state(&self, requested: u8) -> bool {
+        let mut gate = self
+            .direct_commit_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.request_state_locked(&mut gate, requested)
+    }
+
+    fn request_state_locked(&self, gate: &mut DirectCommitGate, requested: u8) -> bool {
+        let previous = gate
+            .pending
+            .unwrap_or_else(|| self.state.load(Ordering::Acquire));
+        if previous == CLUSTER_SHUTDOWN_REQUIRED {
+            return false;
+        }
+        if previous == CLUSTER_FAIL_CLOSED && requested == CLUSTER_DURABLE_DIRECT_ONLY {
+            return false;
+        }
+        if gate.active == 0 {
+            self.state.store(requested, Ordering::Release);
+        } else {
+            gate.pending = Some(requested);
+        }
+        gate.transition_epoch = gate.transition_epoch.wrapping_add(1);
+        previous != requested
+    }
+
+    fn release_direct_commit_turn(&self, gate: &mut DirectCommitGate) {
+        debug_assert!(gate.active > 0);
+        gate.active -= 1;
+        if gate.active == 0 {
+            if let Some(state) = gate.pending.take() {
+                self.state.store(state, Ordering::Release);
+            }
+        }
+    }
+
     fn disabled() -> Self {
         Self {
             state: AtomicU8::new(CLUSTER_DISABLED),
+            direct_commit_gate: Mutex::new(DirectCommitGate::default()),
+            recovery_replay_plan: Mutex::new(None),
+            recovery_wake_sequence: AtomicU64::new(0),
             listener_generation: AtomicU64::new(0),
             required_listener_generation: AtomicU64::new(0),
             listener_rotation_epoch: AtomicU64::new(0),
@@ -3510,6 +3822,9 @@ impl ClusterHealth {
     fn enabled() -> Self {
         Self {
             state: AtomicU8::new(CLUSTER_RECONCILING),
+            direct_commit_gate: Mutex::new(DirectCommitGate::default()),
+            recovery_replay_plan: Mutex::new(None),
+            recovery_wake_sequence: AtomicU64::new(0),
             listener_generation: AtomicU64::new(0),
             required_listener_generation: AtomicU64::new(1),
             listener_rotation_epoch: AtomicU64::new(0),
@@ -3557,7 +3872,7 @@ impl ClusterMetricsProbe {
 
 fn cluster_metrics_snapshot(health: &ClusterHealth) -> ClusterMetricsSnapshot {
     ClusterMetricsSnapshot {
-        state: health.state.load(Ordering::Relaxed),
+        state: health.effective_state(),
         listener_generation: health.listener_generation.load(Ordering::Relaxed),
         authentication_failures: health.authentication_failures.load(Ordering::Relaxed),
         replay_rejections: health.replay_rejections.load(Ordering::Relaxed),
@@ -4305,7 +4620,8 @@ impl ClusterManager {
 
     #[cfg(test)]
     fn begin_reconciliation(&self) -> Result<u64> {
-        begin_cluster_reconciliation(&self.health, self.is_enabled())
+        begin_cluster_reconciliation(&self.health, self.is_enabled())?
+            .context("cluster reconciliation deferred for direct commits")
     }
 
     #[cfg(test)]
@@ -5386,7 +5702,8 @@ impl ClusterNodeDelivery {
                 "annotated cluster roster payload version does not match its delivery fence"
             );
         }
-        if self.health.state.load(Ordering::Acquire) == CLUSTER_DURABLE_DIRECT_ONLY
+        if (self.health.transition_pending()
+            || self.health.effective_state() == CLUSTER_DURABLE_DIRECT_ONLY)
             && (options.durable_delivery.is_some() || options.mix_delivery.is_some())
         {
             // The PostgreSQL row remains the only accepted projection. The
@@ -6809,7 +7126,12 @@ async fn maintenance_once(
         return Ok(());
     }
     let reconciliation_epoch = if control.readiness_error().is_some() {
-        Some(control.begin_reconciliation()?)
+        match control.begin_reconciliation()? {
+            Some(epoch) => Some(epoch),
+            // A direct COMMIT still owns the old health decision. Leave Redis
+            // reconciliation to the next maintenance pass after it drains.
+            None => return Ok(()),
+        }
     } else {
         None
     };
@@ -6955,15 +7277,218 @@ async fn maintenance_once(
             muc_soft_state_errors == 0,
             "Redis MUC soft-state reconciliation failed for {muc_soft_state_errors} authoritative occupancies"
         );
-        if control.complete_reconciliation(rotation_epoch)?
-            == ReconciliationOutcome::WaitingForInitialListener
-        {
-            // Every database/Redis operation above succeeded. The independent
-            // cluster readiness gate stays closed until the first self-loop.
-            tracing::debug!("cluster authority reconciled; awaiting initial listener self-loop");
+        match control.complete_reconciliation(rotation_epoch)? {
+            ReconciliationOutcome::WaitingForInitialListener => {
+                // Every database/Redis operation above succeeded. The independent
+                // cluster readiness gate stays closed until the first self-loop.
+                tracing::debug!(
+                    "cluster authority reconciled; awaiting initial listener self-loop"
+                );
+            }
+            ReconciliationOutcome::DeferredForDirectCommits => {
+                tracing::debug!("cluster reconciliation deferred until direct commits drain");
+            }
+            ReconciliationOutcome::Complete => {
+                if rotation_epoch != 0 {
+                    let mut slot = control
+                        .health
+                        .recovery_replay_plan
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if slot
+                        .as_ref()
+                        .is_none_or(|plan| plan.health_epoch <= rotation_epoch)
+                    {
+                        let wake_epoch = control
+                            .health
+                            .recovery_wake_sequence
+                            .fetch_add(1, Ordering::AcqRel)
+                            .saturating_add(1);
+                        *slot = Some(RecoveryReplayPlan::new(rotation_epoch, wake_epoch));
+                    }
+                }
+            }
         }
     }
+    drive_recovery_replay_plan(context).await;
     Ok(())
+}
+
+fn retain_recovery_replay_plan(health: &ClusterHealth, plan: RecoveryReplayPlan) {
+    let mut slot = health
+        .recovery_replay_plan
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if slot.as_ref().is_none_or(|current| {
+        (current.health_epoch, current.wake_epoch) <= (plan.health_epoch, plan.wake_epoch)
+    }) {
+        *slot = Some(plan);
+    }
+}
+
+fn recovery_retry_delay(attempts: u8) -> Duration {
+    Duration::from_secs(
+        (30_u64 << attempts.saturating_sub(1).min(4)).min(RECOVERY_REPLAY_RETRY_MAX.as_secs()),
+    )
+}
+
+async fn drive_recovery_replay_plan(
+    context: &crate::state::cluster_maintenance_context::ClusterMaintenanceContext,
+) {
+    let control = &context.control;
+    let Some(mut plan) = control
+        .health
+        .recovery_replay_plan
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    else {
+        return;
+    };
+    if control
+        .health
+        .listener_rotation_epoch
+        .load(Ordering::Acquire)
+        != plan.health_epoch
+    {
+        // The next successful recovery gets a newer cutoff and supersedes
+        // this resource-scoped wake plan.
+        return;
+    }
+    if control.readiness_error().is_some() {
+        retain_recovery_replay_plan(&control.health, plan);
+        return;
+    }
+    if let Some(next_sweep_at) = plan.next_sweep_at {
+        if Instant::now() < next_sweep_at {
+            retain_recovery_replay_plan(&control.health, plan);
+            return;
+        }
+        let wake_epoch = control
+            .health
+            .recovery_wake_sequence
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        plan.begin_next_sweep(wake_epoch);
+    }
+    if plan.cutoff.is_none() {
+        let Some(authority) = control.peer_authority.readiness_snapshot() else {
+            tracing::warn!("cluster recovery replay lacks exact local authority");
+            plan.barrier_attempts = plan.barrier_attempts.saturating_add(1);
+            plan.barrier_retry_after = Instant::now() + recovery_retry_delay(plan.barrier_attempts);
+            retain_recovery_replay_plan(&control.health, plan);
+            return;
+        };
+        if Instant::now() < plan.barrier_retry_after {
+            retain_recovery_replay_plan(&control.health, plan);
+            return;
+        }
+        match context.replay_wake.barrier(&authority).await {
+            Ok(cutoff) => plan.cutoff = Some(cutoff),
+            Err(error) => {
+                plan.barrier_attempts = plan.barrier_attempts.saturating_add(1);
+                plan.barrier_retry_after =
+                    Instant::now() + recovery_retry_delay(plan.barrier_attempts);
+                context.locals.record_background_failure();
+                if plan.barrier_attempts == 1
+                    || plan.barrier_attempts.is_power_of_two()
+                    || plan.barrier_attempts == u8::MAX
+                {
+                    tracing::warn!(?error, health_epoch = plan.health_epoch, attempts = plan.barrier_attempts,
+                        "cluster recovery replay cutoff was not established; retrying while healthy");
+                }
+                retain_recovery_replay_plan(&control.health, plan);
+                return;
+            }
+        }
+    }
+    if control
+        .health
+        .listener_rotation_epoch
+        .load(Ordering::Acquire)
+        != plan.health_epoch
+    {
+        return;
+    }
+    if control.readiness_error().is_some() {
+        retain_recovery_replay_plan(&control.health, plan);
+        return;
+    }
+    let cutoff = plan.cutoff.expect("successful recovery barrier set cutoff");
+    let mut budget = RECOVERY_REPLAY_REQUESTS_PER_PASS;
+    while budget != 0 {
+        if plan.pending.is_empty() {
+            if plan.exhausted {
+                break;
+            }
+            let page = context
+                .replay_wake
+                .routes_page_after(plan.cursor.as_deref(), RECOVERY_REPLAY_PAGE);
+            plan.queue_page(page);
+            if plan.exhausted {
+                break;
+            }
+        }
+        let batch = plan.pending.len().min(budget);
+        let mut stalled_routes = 0_usize;
+        for _ in 0..batch {
+            if control
+                .health
+                .listener_rotation_epoch
+                .load(Ordering::Acquire)
+                != plan.health_epoch
+            {
+                return;
+            }
+            if control.readiness_error().is_some() {
+                retain_recovery_replay_plan(&control.health, plan);
+                return;
+            }
+            let mut route = plan.pending.pop_front().expect("bounded page has route");
+            budget -= 1;
+            let status = context.replay_wake.completion_state(
+                &route.full_jid,
+                route.connection_id,
+                plan.wake_epoch,
+            );
+            let full_jid = route.full_jid.clone();
+            let connection_id = route.connection_id;
+            let wake_epoch = plan.wake_epoch;
+            let progress = recovery_route_progress(&mut route, status, Instant::now(), || {
+                let _scheduled =
+                    context
+                        .replay_wake
+                        .request(&full_jid, connection_id, cutoff, wake_epoch);
+            });
+            match progress {
+                RecoveryRouteProgress::Done => {}
+                RecoveryRouteProgress::Pending => plan.pending.push_back(route),
+                RecoveryRouteProgress::DeferredToNextSweep => {
+                    plan.incomplete = true;
+                    stalled_routes += 1;
+                }
+            }
+        }
+        if stalled_routes != 0 {
+            tracing::warn!(health_epoch = plan.health_epoch, wake_epoch = plan.wake_epoch, stalled_routes,
+                pending_routes = plan.pending.len(), cursor = ?plan.cursor,
+                "cluster recovery replay page advanced with incomplete exact routes; next bounded sweep will retry them");
+        }
+        if !plan.pending.is_empty() {
+            break;
+        }
+    }
+    if plan.exhausted && plan.pending.is_empty() && plan.incomplete {
+        tracing::warn!(
+            health_epoch = plan.health_epoch,
+            wake_epoch = plan.wake_epoch,
+            "cluster recovery replay sweep incomplete; retrying with a fresh cutoff after backoff"
+        );
+        plan.next_sweep_at = Some(Instant::now() + RECOVERY_REPLAY_INCOMPLETE_DELAY);
+    }
+    if !plan.exhausted || !plan.pending.is_empty() || plan.incomplete {
+        retain_recovery_replay_plan(&control.health, plan);
+    }
 }
 
 /// Listener capabilities are assembled once; the receive loop never retains

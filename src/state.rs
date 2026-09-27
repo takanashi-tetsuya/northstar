@@ -177,6 +177,7 @@ pub(crate) mod cluster_maintenance_context;
 pub(crate) mod cluster_muc_delivery_endpoints;
 pub(crate) mod cluster_muc_outbox_worker;
 pub(crate) mod cluster_muc_projection;
+pub(crate) mod cluster_recovery_replay;
 pub(crate) mod cluster_routing;
 mod cluster_shutdown;
 mod cluster_teardown;
@@ -693,6 +694,18 @@ pub struct OnlineSession {
     pub routable: Arc<AtomicBool>,
     pub sender: crate::outbound::OutboundSender,
     pub available: Arc<AtomicBool>,
+    /// The protocol actor's exact available/unavailable epoch. Recovery
+    /// replay must reject an unavailable/available ABA on this same route.
+    pub(crate) availability_generation: Arc<AtomicU64>,
+    /// External replay requests join the owning actor's transport-ordered,
+    /// bounded post-action supervisor rather than spawning detached work.
+    pub(crate) post_actions: crate::xmpp::protocol::PostActionHandle,
+    /// One recovery replay per exact route at a time; zero means idle.
+    pub(crate) recovery_replay_inflight_epoch: Arc<AtomicU64>,
+    /// A completed PG claim pass is coalesced only for its own recovery epoch.
+    pub(crate) recovery_replay_completed_epoch: Arc<AtomicU64>,
+    /// Bind 2 MAM catch-up suppresses MAM-backed offline projections.
+    pub(crate) bind2_mam_catchup: bool,
     /// Per-account/resource linearization boundary for MIX presence. Explicit
     /// presence, verified-caps fallback, transport cleanup and an exact SM
     /// replacement all share this gate, so a delayed side effect cannot

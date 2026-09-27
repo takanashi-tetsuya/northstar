@@ -78,10 +78,22 @@ struct PendingPostAction {
     future: PostActionFuture,
 }
 
-#[derive(Default)]
 struct PostActionSupervisor {
     pending: VecDeque<PendingPostAction>,
     running: tokio::task::JoinSet<&'static str>,
+    transport_ready: bool,
+    closed: bool,
+}
+
+impl Default for PostActionSupervisor {
+    fn default() -> Self {
+        Self {
+            pending: VecDeque::new(),
+            running: tokio::task::JoinSet::new(),
+            transport_ready: true,
+            closed: false,
+        }
+    }
 }
 
 impl PostActionSupervisor {
@@ -94,6 +106,7 @@ impl PostActionSupervisor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        anyhow::ensure!(!self.closed, "session post-action supervisor is closed");
         self.reap(telemetry);
         if self.pending.len().saturating_add(self.running.len())
             >= MAX_POST_ACTION_TASKS_PER_SESSION
@@ -109,6 +122,10 @@ impl PostActionSupervisor {
     }
 
     fn start(&mut self, telemetry: &PostActionTelemetry<'_>) {
+        if self.closed {
+            return;
+        }
+        self.transport_ready = true;
         self.reap(telemetry);
         while let Some(task) = self.pending.pop_front() {
             telemetry.started();
@@ -153,6 +170,85 @@ impl PostActionSupervisor {
         self.pending.clear();
         self.running.abort_all();
         telemetry.aborted(aborted);
+    }
+}
+
+/// Shared with the exact local route so cluster recovery can request a
+/// bounded offline replay without racing an in-progress presence action.
+/// The transport opens the gate only after its current action reaches the
+/// socket or BOSH response FIFO.
+#[derive(Clone, Default)]
+pub(crate) struct PostActionHandle(Arc<std::sync::Mutex<PostActionSupervisor>>);
+
+impl PostActionHandle {
+    fn begin_action(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .transport_ready = false;
+    }
+
+    fn defer<F>(
+        &self,
+        name: &'static str,
+        task: F,
+        telemetry: &PostActionTelemetry<'_>,
+    ) -> Result<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .defer(name, task, telemetry)
+    }
+
+    pub(crate) fn defer_recovery<F>(
+        &self,
+        name: &'static str,
+        task: F,
+        telemetry: &PostActionTelemetry<'_>,
+    ) -> Result<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let mut supervisor = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        supervisor.defer(name, task, telemetry)?;
+        if supervisor.transport_ready {
+            supervisor.start(telemetry);
+        }
+        Ok(())
+    }
+
+    fn start(&self, telemetry: &PostActionTelemetry<'_>) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start(telemetry);
+    }
+
+    fn take_for_shutdown(&self) -> PostActionSupervisor {
+        let mut supervisor = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        supervisor.closed = true;
+        let mut owned = std::mem::take(&mut *supervisor);
+        supervisor.closed = true;
+        owned.closed = true;
+        owned
+    }
+
+    fn abort_now(&self, telemetry: &PostActionTelemetry<'_>) {
+        let mut supervisor = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        supervisor.closed = true;
+        supervisor.abort_now(telemetry);
     }
 }
 
@@ -595,7 +691,7 @@ pub struct ProtocolSession {
     // methods do not inherit a false `ProtocolSession: !Sync` requirement.
     // Every mutation still uses `&mut ProtocolSession` and `get_mut()`, so no
     // mutex guard is ever held across an await.
-    post_actions: std::sync::Mutex<PostActionSupervisor>,
+    post_actions: PostActionHandle,
 }
 
 impl ProtocolSession {
@@ -757,7 +853,7 @@ impl ProtocolSession {
             live_session_ownership: LiveSessionOwnership::default(),
             route_lifecycle: Arc::new(AtomicU8::new(0)),
             local_quiesced: false,
-            post_actions: std::sync::Mutex::new(PostActionSupervisor::default()),
+            post_actions: PostActionHandle::default(),
         }
     }
 
@@ -766,15 +862,11 @@ impl ProtocolSession {
         F: Future<Output = ()> + Send + 'static,
     {
         self.post_actions
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .defer(name, task, &self.state.c2s_post_action_telemetry())
     }
 
     pub(crate) fn start_post_action_tasks(&mut self) {
         self.post_actions
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .start(&self.state.c2s_post_action_telemetry());
     }
 
@@ -2006,8 +2098,7 @@ impl ProtocolSession {
                 self.local_quiesced = true;
                 let telemetry = self.state.c2s_post_action_telemetry();
                 self.post_actions
-                    .get_mut()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take_for_shutdown()
                     .abort_and_drain(&telemetry)
                     .await;
                 let report = service
@@ -2081,8 +2172,7 @@ impl ProtocolSession {
         self.local_quiesced = true;
         let telemetry = self.state.c2s_post_action_telemetry();
         self.post_actions
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take_for_shutdown()
             .abort_and_drain(&telemetry)
             .await;
         self._certificate_session = None;
@@ -2101,8 +2191,6 @@ impl ProtocolSession {
         );
         self.disconnect.cancel();
         self.post_actions
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .abort_now(&self.state.c2s_post_action_telemetry());
         if let Some(key) = self.registered_key.take() {
             let _ = self
@@ -2150,8 +2238,6 @@ impl Drop for ProtocolSession {
             self.route_lifecycle.load(Ordering::Acquire),
         ) {
             self.post_actions
-                .get_mut()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .abort_now(&self.state.c2s_post_action_telemetry());
             return;
         }
@@ -2163,8 +2249,6 @@ impl Drop for ProtocolSession {
             }
             SessionCleanupOwnership::SupersededBySm => {
                 self.post_actions
-                    .get_mut()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .abort_now(&self.state.c2s_post_action_telemetry());
                 self.joined_rooms.clear();
                 self.registered_key = None;
@@ -2189,8 +2273,8 @@ mod legacy_sasl_wire_tests {
         begin_owned_session_cleanup, claim_session_cleanup, client_stream_limits_feature,
         drop_requires_local_quiesce, durable_delivery_managed_by_sm, legacy_sasl_auth,
         legacy_sasl_payload, resource_bind_deadline_for, unauthenticated_timed_out_for, Action,
-        PostActionSupervisor, PostActionTelemetry, ResumePayload, SessionCleanupOwnership,
-        SessionTerminationSignals, StreamLimits,
+        PostActionHandle, PostActionSupervisor, PostActionTelemetry, ResumePayload,
+        SessionCleanupOwnership, SessionTerminationSignals, StreamLimits,
     };
     use roxmltree::Document;
 
@@ -2595,5 +2679,47 @@ mod legacy_sasl_wire_tests {
         .await
         .unwrap();
         supervisor.reap(&telemetry);
+    }
+
+    #[tokio::test]
+    async fn external_recovery_task_waits_for_current_transport_action() {
+        let metrics = crate::metrics::Metrics::default();
+        let telemetry = PostActionTelemetry::new(
+            &metrics.post_action_tasks_started_total,
+            &metrics.post_action_tasks_completed_total,
+            &metrics.post_action_tasks_panicked_total,
+            &metrics.post_action_tasks_aborted_total,
+            &metrics.post_action_capacity_rejections_total,
+        );
+        let handle = PostActionHandle::default();
+        handle.begin_action();
+        let (published, receiver) = tokio::sync::oneshot::channel();
+        handle
+            .defer_recovery(
+                "recovered-offline-test",
+                async move {
+                    let _ = published.send(());
+                },
+                &telemetry,
+            )
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            metrics
+                .post_action_tasks_started_total
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        handle.start(&telemetry);
+        tokio::time::timeout(std::time::Duration::from_secs(1), receiver)
+            .await
+            .expect("recovery task should start after transport")
+            .expect("task should publish after transport");
+        assert_eq!(
+            metrics
+                .post_action_tasks_started_total
+                .load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
     }
 }

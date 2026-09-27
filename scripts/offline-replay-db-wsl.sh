@@ -42,6 +42,12 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database?options=-csearch_path%3D$schema"
 cargo test --locked --offline \
+  db::replay::tests::recovery_replay_authorization_serializes_with_account_disable \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --offline \
+  db::replay::tests::recovery_replay_does_not_complete_while_cutoff_row_has_another_claim \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --offline \
   db::replay::tests::durable_ack_batch_validates_every_fence_before_deleting_any_row \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline \

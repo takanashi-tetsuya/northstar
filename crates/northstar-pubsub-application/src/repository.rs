@@ -251,6 +251,12 @@ pub trait PubSubSubscriptionMutationRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<SubscriptionAuthorizationOutcome>> + Send;
 }
 pub trait PubSubAffiliationQueryRepository: Send + Sync {
+    /// Affiliation and active subscription from one read-only statement snapshot.
+    fn retrieval_authorization_facts(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<(Option<String>, bool)>> + Send;
     fn get_node_affiliation(
         &self,
         node_id: Uuid,

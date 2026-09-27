@@ -1510,9 +1510,14 @@ impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
     }
 }
 
-impl<R: PubSubAffiliationQueryRepository + PubSubSubscriptionQueryRepository> PubSubService<R> {
+impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
     pub(crate) async fn can_retrieve_node(&self, node: &PubSubNode, jid: &str) -> Result<bool> {
-        let affiliation = self.repository.get_node_affiliation(node.id, jid).await?;
+        // Affiliation and subscription share one statement snapshot. The
+        // caller loaded node configuration separately for its response.
+        let (affiliation, subscribed) = self
+            .repository
+            .retrieval_authorization_facts(node.id, jid)
+            .await?;
         let affiliation = affiliation
             .as_deref()
             .map(str::parse::<northstar_xep_0060::Affiliation>)
@@ -1522,7 +1527,6 @@ impl<R: PubSubAffiliationQueryRepository + PubSubSubscriptionQueryRepository> Pu
             .access_model
             .parse::<northstar_xep_0060::AccessModel>()
             .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
-        let subscribed = self.repository.is_subscribed(node.id, jid).await?;
         Ok(northstar_xep_0060::can_retrieve_pure(
             access_model,
             affiliation,

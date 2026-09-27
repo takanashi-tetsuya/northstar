@@ -185,7 +185,7 @@ impl ProtocolSession {
         // legacy resumption is an intended compatibility boundary.
         let resume = resumability_allowed(
             resume,
-            self.state.sm_session_policy().require_same_device,
+            self.sm_runtime_policy.session.require_same_device,
             self.user_agent_id.is_some(),
         );
         self.sm.enabled = true;
@@ -209,7 +209,7 @@ impl ProtocolSession {
             self.reset_sm();
             return Err("unexpected-request");
         };
-        let server_max = self.state.sm_session_policy().resume_timeout_seconds;
+        let server_max = self.sm_runtime_policy.session.resume_timeout_seconds;
         let negotiated_max = if resume {
             requested_max.unwrap_or(server_max).min(server_max).max(1)
         } else {
@@ -228,7 +228,7 @@ impl ProtocolSession {
         let token_hash = sm_resume_token_hash(resume_id.as_str());
         let snapshot = self.sm_snapshot();
         let snapshot_bytes = snapshot.resident_bytes().ok_or("resource-constraint")?;
-        if snapshot_bytes > self.state.sm_buffer_limits().max_snapshot_bytes {
+        if snapshot_bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes {
             self.reset_sm();
             return Err("resource-constraint");
         }
@@ -260,9 +260,9 @@ impl ProtocolSession {
                         connection_id: self.connection_id,
                         snapshot: &snapshot,
                         ttl_seconds: negotiated_max,
-                        live_lease_seconds: self.state.sm_session_policy().live_lease_seconds,
-                        max_per_account: self.state.sm_session_policy().max_per_account,
-                        max_global: self.state.sm_session_policy().max_global,
+                        live_lease_seconds: self.sm_runtime_policy.session.live_lease_seconds,
+                        max_per_account: self.sm_runtime_policy.session.max_per_account,
+                        max_global: self.sm_runtime_policy.session.max_global,
                     }),
             )
             .await
@@ -442,9 +442,9 @@ impl ProtocolSession {
                     user_id: current_user.id,
                     peer_ip: self.peer_ip,
                     user_agent_id: self.user_agent_id,
-                    ip_binding: self.state.sm_ip_binding(),
-                    require_same_device: self.state.sm_session_policy().require_same_device,
-                    claim_lease_seconds: self.state.sm_session_policy().claim_lease_seconds,
+                    ip_binding: self.sm_runtime_policy.ip_binding.as_str(),
+                    require_same_device: self.sm_runtime_policy.session.require_same_device,
+                    claim_lease_seconds: self.sm_runtime_policy.session.claim_lease_seconds,
                 }))
                 .await?
             {
@@ -531,7 +531,7 @@ impl ProtocolSession {
         };
 
         let claimed_bytes = claim.resident_bytes().unwrap_or(usize::MAX);
-        if claimed_bytes > self.state.sm_buffer_limits().max_snapshot_bytes
+        if claimed_bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes
             || claim_capacity.shrink_to(claimed_bytes).is_err()
         {
             self.state.sm_session_telemetry().capacity_rejected();
@@ -849,9 +849,9 @@ impl ProtocolSession {
                 user_agent_id: effective_user_agent,
                 active_privacy_list: claim.active_privacy_list.as_deref(),
                 ttl_seconds: claim.resume_timeout_seconds,
-                live_lease_seconds: self.state.sm_session_policy().live_lease_seconds,
-                max_stanzas: self.state.sm_buffer_limits().max_unacked_stanzas,
-                max_bytes: self.state.sm_buffer_limits().max_unacked_bytes,
+                live_lease_seconds: self.sm_runtime_policy.session.live_lease_seconds,
+                max_stanzas: self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                max_bytes: self.sm_runtime_policy.buffer.max_unacked_bytes,
                 fast_plan,
             })
             .await;
@@ -983,8 +983,8 @@ impl ProtocolSession {
                     current_user.auth_generation,
                     &abort_snapshot,
                     claim.resume_timeout_seconds,
-                    self.state.sm_buffer_limits().max_unacked_stanzas,
-                    self.state.sm_buffer_limits().max_unacked_bytes,
+                    self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                    self.sm_runtime_policy.buffer.max_unacked_bytes,
                 )
                 .await
             {
@@ -1129,7 +1129,7 @@ impl ProtocolSession {
             .sm_resident_bytes()
             .and_then(|bytes| suffix_growth.and_then(|growth| bytes.checked_add(growth)));
         if projected.is_none_or(|bytes| {
-            bytes > self.state.sm_buffer_limits().max_snapshot_bytes
+            bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes
                 || claim_capacity.try_grow_to(bytes).is_err()
         }) {
             self.sm.resume_allowed = false;
@@ -1142,8 +1142,8 @@ impl ProtocolSession {
             &self.sm.unacked,
             self.sm.outbound_h,
             muc_replay_suffix,
-            self.state.sm_buffer_limits().max_unacked_stanzas,
-            self.state.sm_buffer_limits().max_unacked_bytes,
+            self.sm_runtime_policy.buffer.max_unacked_stanzas,
+            self.sm_runtime_policy.buffer.max_unacked_bytes,
         ) else {
             self.state
                 .abort_local_muc_resume(&restored_muc, false)
@@ -1195,9 +1195,9 @@ impl ProtocolSession {
                 self.connection_id,
                 &staged_snapshot,
                 self.sm.resume_timeout_seconds,
-                self.state.sm_session_policy().live_lease_seconds,
-                self.state.sm_buffer_limits().max_unacked_stanzas,
-                self.state.sm_buffer_limits().max_unacked_bytes,
+                self.sm_runtime_policy.session.live_lease_seconds,
+                self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                self.sm_runtime_policy.buffer.max_unacked_bytes,
             )
             .await;
         match checkpointed {
@@ -1386,9 +1386,9 @@ impl ProtocolSession {
                     &snapshot,
                     &acknowledged,
                     self.sm.resume_timeout_seconds,
-                    self.state.sm_session_policy().live_lease_seconds,
-                    self.state.sm_buffer_limits().max_unacked_stanzas,
-                    self.state.sm_buffer_limits().max_unacked_bytes,
+                    self.sm_runtime_policy.session.live_lease_seconds,
+                    self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                    self.sm_runtime_policy.buffer.max_unacked_bytes,
                 ),
             )
             .await

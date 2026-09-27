@@ -327,6 +327,83 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
 
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
+    db::migrate(&pool).await.unwrap();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let owner = format!("owner-{suffix}@example.test");
+    let localpart = format!("mam-policy-{}", &suffix[..16]);
+    let (created, _) = create_mix_channel(
+        &pool,
+        "mix.example.test",
+        Some(&localpart),
+        &owner,
+        100,
+        &crate::services::mix::MixPayloads,
+        None,
+    )
+    .await
+    .unwrap();
+    let CreateChannelOutcome::Created(channel_id) = created else {
+        panic!("unique MIX MAM policy test channel was not created");
+    };
+    let mut filtered = query(super::super::MamRsmPage::First, 10);
+    filtered.with_jid = Some("peer@example.test".to_owned());
+
+    let visible_channel = mix_channel_by_id(&pool, channel_id).await.unwrap().unwrap();
+    assert_eq!(visible_channel.jid_visibility, "visible");
+    sqlx::query("UPDATE mix_channels SET jid_visibility='hidden' WHERE id=$1")
+        .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        authorized_mix_mam_page(&pool, channel_id, &owner, None, &filtered)
+            .await
+            .unwrap(),
+        MixReadOutcome::Unauthorized
+    ));
+    assert!(matches!(
+        authorized_mix_mam_page(
+            &pool,
+            channel_id,
+            &owner,
+            None,
+            &query(super::super::MamRsmPage::First, 10)
+        )
+        .await
+        .unwrap(),
+        MixReadOutcome::Found(_)
+    ));
+
+    let hidden_channel = mix_channel_by_id(&pool, channel_id).await.unwrap().unwrap();
+    assert_eq!(hidden_channel.jid_visibility, "hidden");
+    sqlx::query("UPDATE mix_channels SET jid_visibility='visible' WHERE id=$1")
+        .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        authorized_mix_mam_page(&pool, channel_id, &owner, None, &filtered)
+            .await
+            .unwrap(),
+        MixReadOutcome::Found(_)
+    ));
+    sqlx::query("DELETE FROM mix_channels WHERE id=$1")
+        .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn mix_anon_misc_permissions_are_atomic_and_private() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");

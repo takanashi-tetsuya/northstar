@@ -111,7 +111,9 @@ the repository still owns their transactions and outbox plans.
 PubSub node discovery and last-item delivery use one service-level read decision
 for affiliation, access model and subscription; the protocol layer only maps
 the result to stanzas. This preserves the existing query order and error
-precedence, but the facts are still read separately in PostgreSQL.
+precedence. Affiliation and active subscription now come from one PostgreSQL
+statement snapshot. Node configuration is still loaded separately, so this is
+not an atomic snapshot of every authorization input.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -142,6 +144,9 @@ backpressure guards hold only a counter handle. The session still owns
 TCP, Direct TLS, STARTTLS and WebSocket now move that state into the session at
 construction. Their transport loops retain only a fixed SM lease polling
 interval and a narrow backpressure counter handle.
+The session also captures its immutable SM limits and IP binding at creation;
+enable, resume, checkpoint and ACK no longer repeatedly read those settings
+through `AppState`. Durable SM service authority remains unchanged.
 
 ### Packet 4 — Roster/visibility and archive
 
@@ -158,10 +163,10 @@ and roster facts in one PostgreSQL statement and applies their precedence in
 MUC and MIX queries while preserving MIX's bare-publisher rule. Other archive
 authorization and paging paths still need the same boundary review. MIX now
 uses the shared referenced-ID and cursor resolver while keeping its filtered
-item-ID rule in the PostgreSQL adapter. Protocol precheck and database query
-also share MIX's peer-JID visibility rule. Complete the existing archive/MAM core
-and application integration without splitting an authorized query's consistent
-result snapshot.
+item-ID rule in the PostgreSQL adapter. MIX MAM peer visibility and page
+contents are decided in one repeatable-read database snapshot. Complete the
+existing archive/MAM core and application integration without splitting an
+authorized query's consistent result snapshot.
 
 ### Packet 5 — Upload/object lifecycle
 

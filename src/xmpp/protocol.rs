@@ -30,7 +30,7 @@ pub(crate) mod vcard;
 use super::capabilities::PostActionTelemetry;
 use super::xml_builder::XmlElement;
 use super::xml_util::*;
-use crate::state::AppState;
+use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
 use anyhow::{Context, Result};
 use dashmap::DashSet;
 
@@ -459,6 +459,24 @@ pub(crate) struct SessionTerminationSignals {
     backpressure: tokio_util::sync::CancellationToken,
 }
 
+/// Fixed SM admission and replay limits for this connection. AppState owns
+/// immutable configuration; durable ownership still belongs to the SM service.
+struct SmRuntimePolicy {
+    session: SmSessionPolicy,
+    buffer: SmBufferLimits,
+    ip_binding: String,
+}
+
+impl SmRuntimePolicy {
+    fn from_state(state: &AppState) -> Self {
+        Self {
+            session: state.sm_session_policy(),
+            buffer: state.sm_buffer_limits(),
+            ip_binding: state.sm_ip_binding().to_owned(),
+        }
+    }
+}
+
 impl SessionTerminationSignals {
     pub(crate) async fn revoked(&self) {
         self.policy_revoke.cancelled().await;
@@ -479,6 +497,7 @@ impl SessionTerminationSignals {
 
 pub struct ProtocolSession {
     state: Arc<AppState>,
+    sm_runtime_policy: SmRuntimePolicy,
     outbound: crate::outbound::OutboundSender,
     /// Authoritative transport-security decision. Native TLS and trusted
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
@@ -686,8 +705,10 @@ impl ProtocolSession {
         stream_limits: Option<StreamLimits>,
         peer_ip: IpAddr,
     ) -> Self {
+        let sm_runtime_policy = SmRuntimePolicy::from_state(&state);
         Self {
             state,
+            sm_runtime_policy,
             outbound,
             secure_transport,
             transport,
@@ -969,8 +990,8 @@ impl ProtocolSession {
                 .map(|entry| entry.stanza.len())
                 .sum::<usize>()
                 .saturating_add(stanza.len());
-            if self.sm.unacked.len() >= self.state.sm_buffer_limits().max_unacked_stanzas
-                || next_bytes > self.state.sm_buffer_limits().max_unacked_bytes
+            if self.sm.unacked.len() >= self.sm_runtime_policy.buffer.max_unacked_stanzas
+                || next_bytes > self.sm_runtime_policy.buffer.max_unacked_bytes
             {
                 self.sm.resume_allowed = false;
                 anyhow::bail!("XEP-0198 unacknowledged queue capacity reached");
@@ -983,7 +1004,7 @@ impl ProtocolSession {
                         .and_then(|bytes| bytes.checked_add(stanza.len()))
                 })
                 .context("XEP-0198 projected resident-size overflow")?;
-            if projected > self.state.sm_buffer_limits().max_snapshot_bytes
+            if projected > self.sm_runtime_policy.buffer.max_snapshot_bytes
                 || self
                     .sm
                     .capacity
@@ -1140,7 +1161,7 @@ impl ProtocolSession {
         let snapshot_bytes = snapshot
             .resident_bytes()
             .context("XEP-0198 snapshot resident-size overflow")?;
-        if snapshot_bytes > self.state.sm_buffer_limits().max_snapshot_bytes
+        if snapshot_bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes
             || self
                 .sm
                 .capacity
@@ -1157,9 +1178,9 @@ impl ProtocolSession {
                 self.connection_id,
                 &snapshot,
                 self.sm.resume_timeout_seconds,
-                self.state.sm_session_policy().live_lease_seconds,
-                self.state.sm_buffer_limits().max_unacked_stanzas,
-                self.state.sm_buffer_limits().max_unacked_bytes,
+                self.sm_runtime_policy.session.live_lease_seconds,
+                self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                self.sm_runtime_policy.buffer.max_unacked_bytes,
             ),
         )
         .await

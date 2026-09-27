@@ -1951,6 +1951,22 @@ const protocolSessionBody = structBody(legacyAuthProtocolSource, 'pub struct Pro
 if (!/^\s*state\s*:\s*Arc<AppState>\s*,?\s*$/m.test(protocolSessionBody)) {
   throw new Error('ProtocolSession must keep AppState private to its protocol implementation');
 }
+const smRuntimePolicyBody = structBody(legacyAuthProtocolSource, 'struct SmRuntimePolicy');
+if (/\b(?:AppState|Arc)\b/.test(smRuntimePolicyBody)
+    || !/\bsession\s*:\s*SmSessionPolicy\b/.test(smRuntimePolicyBody)
+    || !/\bbuffer\s*:\s*SmBufferLimits\b/.test(smRuntimePolicyBody)
+    || !/\bip_binding\s*:\s*String\b/.test(smRuntimePolicyBody)
+    || !/\bsm_runtime_policy\s*:\s*SmRuntimePolicy\b/.test(protocolSessionBody)) {
+  throw new Error('ProtocolSession SM safety policy must be a narrow owned snapshot');
+}
+for (const [name, source] of [
+  ['protocol.rs', legacyAuthProtocolSource],
+  ['protocol/sm.rs', read('src/xmpp/protocol/sm.rs')],
+]) {
+  if (/\bself\s*\.\s*state\s*\.\s*(?:sm_session_policy|sm_buffer_limits|sm_ip_binding)\s*\(/.test(source)) {
+    throw new Error(`${name} reads SM safety configuration through global state after construction`);
+  }
+}
 for (const transport of ['src/bosh.rs', 'src/xmpp/mod.rs', 'src/xmpp/tcp_action.rs', 'src/xmpp/websocket_action.rs']) {
   if (/\b(?:session|protocol)\s*\.\s*state\b/.test(read(transport))) {
     throw new Error(`${transport} traverses ProtocolSession into global state`);

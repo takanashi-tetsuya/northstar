@@ -71,9 +71,17 @@ struct RetrievalFacts {
 }
 
 impl PubSubAffiliationQueryRepository for RetrievalFacts {
+    async fn retrieval_authorization_facts(
+        &self,
+        _node_id: Uuid,
+        _jid: &str,
+    ) -> Result<(Option<String>, bool)> {
+        self.calls.lock().unwrap().push("facts");
+        Ok((self.affiliation.clone(), self.subscribed))
+    }
+
     async fn get_node_affiliation(&self, _node_id: Uuid, _jid: &str) -> Result<Option<String>> {
-        self.calls.lock().unwrap().push("affiliation");
-        Ok(self.affiliation.clone())
+        panic!("retrieval should use the combined facts query")
     }
 
     async fn affiliations_for_jid(
@@ -82,38 +90,6 @@ impl PubSubAffiliationQueryRepository for RetrievalFacts {
         _node: Option<&str>,
     ) -> Result<Vec<PubSubAffiliation>> {
         panic!("retrieval should not enumerate affiliations")
-    }
-}
-
-impl PubSubSubscriptionQueryRepository for RetrievalFacts {
-    async fn is_subscribed(&self, _node_id: Uuid, _jid: &str) -> Result<bool> {
-        self.calls.lock().unwrap().push("subscription");
-        Ok(self.subscribed)
-    }
-
-    async fn subscriptions_for_jid(
-        &self,
-        _jid: &str,
-        _node: Option<&str>,
-    ) -> Result<Vec<PubSubSubscription>> {
-        panic!("retrieval should not enumerate subscriptions")
-    }
-
-    async fn subscriptions_addressing_jid_page(
-        &self,
-        _jid: &str,
-        _after: Option<(&str, &str)>,
-        _limit: i64,
-    ) -> Result<Vec<PubSubSubscription>> {
-        panic!("retrieval should not page subscriptions")
-    }
-
-    async fn get_subscription(
-        &self,
-        _node_id: Uuid,
-        _jid: &str,
-    ) -> Result<Option<PubSubSubscription>> {
-        panic!("retrieval should not load a subscription")
     }
 }
 
@@ -134,11 +110,11 @@ async fn retrieval_query_preserves_outcast_precedence_over_open_and_subscription
         .can_retrieve_node(&node, "reader@example.test/mobile")
         .await
         .unwrap());
-    assert_eq!(*calls.lock().unwrap(), ["affiliation", "subscription"]);
+    assert_eq!(*calls.lock().unwrap(), ["facts"]);
 }
 
 #[tokio::test]
-async fn retrieval_query_rejects_corrupt_stored_policy_before_subscription_lookup() {
+async fn retrieval_query_preserves_affiliation_error_before_access_model_error() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let service = PubSubService::new_with_durable_outbox_database_admission(
         RetrievalFacts {
@@ -149,7 +125,8 @@ async fn retrieval_query_rejects_corrupt_stored_policy_before_subscription_looku
         2,
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
     );
-    let node = renderer_node(Uuid::new_v4(), "news", "leaf");
+    let mut node = renderer_node(Uuid::new_v4(), "news", "leaf");
+    node.access_model = "invalid-access-model".to_owned();
     let error = service
         .can_retrieve_node(&node, "reader@example.test")
         .await
@@ -157,7 +134,7 @@ async fn retrieval_query_rejects_corrupt_stored_policy_before_subscription_looku
     assert!(error
         .to_string()
         .contains("invalid stored PubSub affiliation"));
-    assert_eq!(*calls.lock().unwrap(), ["affiliation"]);
+    assert_eq!(*calls.lock().unwrap(), ["facts"]);
 }
 
 struct QueryOnlyPepItems;

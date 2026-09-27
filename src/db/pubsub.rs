@@ -2037,10 +2037,10 @@ pub async fn is_subscribed(pool: &PgPool, node_id: Uuid, jid: &str) -> Result<bo
     .map_err(Into::into)
 }
 
-/// Read the two mutable inputs to a publish precheck from one statement
-/// snapshot. The publication transaction still makes the authoritative
-/// decision under its existing locks.
-pub(crate) async fn publish_authorization_facts(
+/// Read affiliation and active subscription from one statement snapshot.
+/// Publication transactions still make their authoritative decision under
+/// their existing locks.
+pub(crate) async fn node_authorization_facts(
     pool: &PgPool,
     node_id: Uuid,
     requester: &str,

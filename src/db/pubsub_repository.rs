@@ -1579,7 +1579,7 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
     async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         let outcome: Result<_> = async {
             let (affiliation, subscribed) =
-                db::publish_authorization_facts(&self.pool, node.id, requester).await?;
+                db::node_authorization_facts(&self.pool, node.id, requester).await?;
             let affiliation = affiliation
                 .as_deref()
                 .map(str::parse::<northstar_xep_0060::Affiliation>)
@@ -1846,6 +1846,16 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
     }
 }
 impl PubSubAffiliationQueryRepository for PostgresPubSubRepository {
+    async fn retrieval_authorization_facts(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<(Option<String>, bool)> {
+        db::node_authorization_facts(&self.pool, node_id, jid)
+            .await
+            .map_err(map_database_busy)
+    }
+
     async fn get_node_affiliation(&self, node_id: Uuid, jid: &str) -> Result<Option<String>> {
         let outcome: Result<_> =
             async { db::get_node_affiliation(&self.pool, node_id, jid).await }.await;

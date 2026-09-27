@@ -8,9 +8,9 @@ use crate::services::{
         PepAudienceSnapshot, PepConfigureNodeCommand, PepConfigureNodeWrite, PepCreateNodeCommand,
         PepCreateOutcome, PepDeleteNodeCommand, PepDeleteNodeWrite, PepDirectStateSnapshot,
         PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind,
-        PepOwnerMutationOutcome, PepProfileWrite, PepPublishOutcome, PepPublishWrite,
-        PepPurgeNodeCommand, PepPurgeNodeWrite, PepRetractCommand, PepRetractWrite,
-        PepSetAffiliationsCommand, PepSetAffiliationsWrite, PepSubscribeOutcome,
+        PepOutboxFactory, PepOwnerMutationOutcome, PepProfileWrite, PepPublishOutcome,
+        PepPublishWrite, PepPurgeNodeCommand, PepPurgeNodeWrite, PepRetractCommand,
+        PepRetractWrite, PepSetAffiliationsCommand, PepSetAffiliationsWrite, PepSubscribeOutcome,
         PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeBatchCommand,
         PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert,
         PubSubService,
@@ -37,6 +37,63 @@ const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
 const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 const VCARD4: &str = "urn:xmpp:vcard4";
 const CONTACTS: &str = "urn:xmpp:contacts";
+
+struct PepPublishedEventFactory<'a> {
+    state: std::sync::Arc<crate::state::AppState>,
+    publisher_full_jid: Option<String>,
+    node: &'a str,
+    event: Option<&'a str>,
+}
+
+impl PepPublishedEventFactory<'_> {
+    fn render(&self, audience: &PepAudienceSnapshot, event: &str) -> Result<Vec<(String, String)>> {
+        ProtocolSession::prepare_pep_audience_messages(
+            self.state.as_ref(),
+            self.publisher_full_jid.as_deref(),
+            self.node,
+            event,
+            audience,
+        )
+    }
+}
+
+impl PepOutboxFactory for PepPublishedEventFactory<'_> {
+    fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>> {
+        anyhow::ensure!(
+            self.node != BOOKMARKS2,
+            "Bookmarks2 publication requires a transaction-owned item diff"
+        );
+        self.event
+            .map_or_else(|| Ok(Vec::new()), |event| self.render(audience, event))
+    }
+
+    fn build_published(
+        &self,
+        audience: &PepAudienceSnapshot,
+        changed_items: &[(&str, &str)],
+    ) -> Result<Vec<(String, String)>> {
+        if self.node != BOOKMARKS2 {
+            return self.build(audience);
+        }
+        let Some(event) = bookmarks2_items_event(changed_items)? else {
+            return Ok(Vec::new());
+        };
+        self.render(audience, &event)
+    }
+}
+
+pub(crate) fn bookmarks2_items_event(changed_items: &[(&str, &str)]) -> Result<Option<String>> {
+    if changed_items.is_empty() {
+        return Ok(None);
+    }
+    let payload = changed_items
+        .iter()
+        .map(|(_, item)| *item)
+        .collect::<String>();
+    let mut event = XmlElement::new("items").attr("node", BOOKMARKS2);
+    event.push_validated_fragment(&strip_pubsub_item_root_namespaces(&payload)?)?;
+    Ok(Some(event.finish()))
+}
 
 fn profile_publish_error(id: &str, status: ProfilePublishStatus) -> Option<String> {
     match status {
@@ -328,23 +385,7 @@ impl ProtocolSession {
         // XEP-0292 notifications deliberately omit the vCard4 payload.  The
         // item itself remains stored in PEP and is retrieved with an IQ.
         let payload = if node == BOOKMARKS2 {
-            let previous = self
-                .state
-                .pubsub_service()
-                .pep_items(
-                    user.id,
-                    BOOKMARKS2,
-                    None,
-                    crate::services::pubsub::PEP_MAX_ITEMS as i64,
-                )
-                .await?
-                .into_iter()
-                .collect::<std::collections::HashMap<_, _>>();
-            normalized
-                .iter()
-                .filter(|(item_id, payload)| previous.get(item_id) != Some(payload))
-                .map(|(_, payload)| payload.as_str())
-                .collect::<String>()
+            String::new()
         } else {
             published_event_items(node, &normalized)?
         };
@@ -439,9 +480,12 @@ impl ProtocolSession {
             }
             (None, result.content_changed)
         } else {
-            let audience_state = std::sync::Arc::clone(&self.state);
-            let publisher_full_jid = self.full_jid.clone();
-            let event = generic_event.as_deref();
+            let factory = PepPublishedEventFactory {
+                state: std::sync::Arc::clone(&self.state),
+                publisher_full_jid: self.full_jid.clone(),
+                node,
+                event: generic_event.as_deref(),
+            };
             let result = self
                 .state
                 .pubsub_service()
@@ -460,18 +504,7 @@ impl ProtocolSession {
                         },
                         node == BOOKMARKS2,
                     ),
-                    &move |audience: &PepAudienceSnapshot| {
-                        let Some(event) = event else {
-                            return Ok(Vec::new());
-                        };
-                        ProtocolSession::prepare_pep_audience_messages(
-                            audience_state.as_ref(),
-                            publisher_full_jid.as_deref(),
-                            node,
-                            event,
-                            audience,
-                        )
-                    },
+                    &factory,
                 )
                 .await?;
             let outcome = result.outcome;
@@ -3275,6 +3308,28 @@ fn normalized_pep_item(item_xml: &str, item_id: &str, rewrite_id: bool) -> Strin
 mod tests {
     use super::*;
     use roxmltree::Document;
+
+    #[test]
+    fn bookmarks_event_contains_only_the_locked_changed_items() {
+        let changed = "<item id='changed@conference.example.test'><conference xmlns='urn:xmpp:bookmarks:1' name='new'/></item>";
+        let event = bookmarks2_items_event(&[("changed@conference.example.test", changed)])
+            .unwrap()
+            .unwrap();
+        let document = Document::parse(&event).unwrap();
+        let items = document.root_element();
+        assert_eq!(items.tag_name().name(), "items");
+        assert_eq!(items.attribute("node"), Some(BOOKMARKS2));
+        let children = items
+            .children()
+            .filter(Node::is_element)
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].attribute("id"),
+            Some("changed@conference.example.test")
+        );
+        assert!(bookmarks2_items_event(&[]).unwrap().is_none());
+    }
 
     #[test]
     fn c2s_pep_subscription_handlers_delegate_authority_to_the_service() {

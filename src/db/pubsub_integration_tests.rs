@@ -1,10 +1,34 @@
 use super::*;
 use crate::db;
 use crate::services::pubsub::{
-    CollectionDiscoItems, LeafDiscoItems, PubSubCollectionDiscoChild, PubSubService,
+    CollectionDiscoItems, LeafDiscoItems, PepAudienceSnapshot, PepOutboxFactory,
+    PubSubCollectionDiscoChild, PubSubService,
 };
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+struct LockedBookmarksOutbox;
+
+impl PepOutboxFactory for LockedBookmarksOutbox {
+    fn build(&self, _: &PepAudienceSnapshot) -> Result<Vec<(String, String)>> {
+        anyhow::bail!("Bookmarks2 outbox did not receive the locked item diff")
+    }
+
+    fn build_published(
+        &self,
+        audience: &PepAudienceSnapshot,
+        changed_items: &[(&str, &str)],
+    ) -> Result<Vec<(String, String)>> {
+        let Some(event) = crate::xmpp::protocol::pep::bookmarks2_items_event(changed_items)? else {
+            return Ok(Vec::new());
+        };
+        let owner = &audience.owner_bare_jid;
+        Ok(vec![(
+            owner.clone(),
+            format!("<message xmlns='jabber:client' from='{owner}' to='{owner}'>{event}</message>"),
+        )])
+    }
+}
 
 #[derive(Clone, Debug)]
 struct MutationObservation {
@@ -5263,6 +5287,169 @@ async fn subscribe_options_recheck_remote_show_values_after_lock_wait() {
     assert!(observation_rx.try_recv().is_err());
 
     retry_pool.close().await;
+    pool.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn bookmarks2_outbox_uses_locked_item_diff_after_lock_wait() {
+    const NODE: &str = "urn:xmpp:bookmarks:1";
+    let (url, pool) = integration_pool(8).await;
+    let owner_id = Uuid::new_v4();
+    let username = format!("bookmarkowner{}", &owner_id.simple().to_string()[..10]);
+    let auth_generation: i64 = sqlx::query_scalar(
+        "INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test') RETURNING auth_generation",
+    )
+    .bind(owner_id)
+    .bind(&username)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let config = db::default_pep_node_config(NODE);
+    assert_eq!(
+        db::create_pep_node(&pool, owner_id, NODE, &config, 10)
+            .await
+            .unwrap(),
+        db::PepCreateOutcome::Created
+    );
+    let first_id = "one@conference.example.test";
+    let second_id = "two@conference.example.test";
+    let unchanged =
+        format!("<item id='{first_id}'><conference xmlns='{NODE}' name='unchanged'/></item>");
+    let committed =
+        format!("<item id='{second_id}'><conference xmlns='{NODE}' name='committed'/></item>");
+    let intervening =
+        format!("<item id='{second_id}'><conference xmlns='{NODE}' name='intervening'/></item>");
+    for (item_id, payload) in [(first_id, &unchanged), (second_id, &committed)] {
+        sqlx::query("INSERT INTO pep_items(owner_id,node,item_id,payload) VALUES($1,$2,$3,$4)")
+            .bind(owner_id)
+            .bind(NODE)
+            .bind(item_id)
+            .bind(payload)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let stale_read = db::pep_items(&pool, owner_id, NODE, None, 10)
+        .await
+        .unwrap();
+    assert!(stale_read
+        .iter()
+        .any(|(id, payload)| id == second_id && payload == &committed));
+
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("UPDATE pep_items SET payload=$4 WHERE owner_id=$1 AND node=$2 AND item_id=$3")
+        .bind(owner_id)
+        .bind(NODE)
+        .bind(second_id)
+        .bind(&intervening)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let application = format!("ps-bookmarks-{}", &owner_id.simple().to_string()[..8]);
+    let publish_pool = named_single_connection_pool(&url, &application).await;
+    let publish_service = PubSubService::new(publish_pool.clone(), "example.test");
+    let requested_config = crate::services::pubsub::PepNodeConfig::from(config);
+    let publish = tokio::spawn({
+        let username = username.clone();
+        let unchanged = unchanged.clone();
+        let committed = committed.clone();
+        let requested_config = requested_config.clone();
+        async move {
+            let items = [
+                (first_id, unchanged.as_str()),
+                (second_id, committed.as_str()),
+            ];
+            publish_service
+                .publish_pep_items(
+                    northstar_pubsub_application::PepPublishItemsCommand::new(
+                        crate::services::pubsub::PepPublishWrite {
+                            user_id: owner_id,
+                            username: &username,
+                            auth_generation,
+                            connection_id: Uuid::new_v4(),
+                            node: NODE,
+                            requested: &requested_config,
+                            enforce_preconditions: false,
+                            items: &items,
+                            quotas: crate::services::pubsub::PepQuotas {
+                                max_nodes: 10,
+                                max_storage_bytes: 1_000_000,
+                            },
+                        },
+                        true,
+                    ),
+                    &LockedBookmarksOutbox,
+                )
+                .await
+        }
+    });
+    wait_for_named_session_lock(&pool, &application).await;
+    blocker.commit().await.unwrap();
+    let result = publish.await.unwrap().unwrap();
+    assert_eq!(
+        result.outcome,
+        northstar_pubsub_application::PepPublishItemsOutcome::Published
+    );
+    assert!(result.content_changed);
+    let owner_jid = format!("{username}@example.test");
+    let payload: String = sqlx::query_scalar(
+        "SELECT payload_xml FROM pubsub_event_outbox
+          WHERE source_node=$1 AND recipient_jid=$2 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(NODE)
+    .bind(&owner_jid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(payload.contains(second_id));
+    assert!(payload.contains("committed"));
+    assert!(!payload.contains(first_id));
+    assert!(!payload.contains("intervening"));
+    let outbox_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
+            .bind(NODE)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let items = [
+        (first_id, unchanged.as_str()),
+        (second_id, committed.as_str()),
+    ];
+    let replay = PubSubService::new(pool.clone(), "example.test")
+        .publish_pep_items(
+            northstar_pubsub_application::PepPublishItemsCommand::new(
+                crate::services::pubsub::PepPublishWrite {
+                    user_id: owner_id,
+                    username: &username,
+                    auth_generation,
+                    connection_id: Uuid::new_v4(),
+                    node: NODE,
+                    requested: &requested_config,
+                    enforce_preconditions: false,
+                    items: &items,
+                    quotas: crate::services::pubsub::PepQuotas {
+                        max_nodes: 10,
+                        max_storage_bytes: 1_000_000,
+                    },
+                },
+                true,
+            ),
+            &LockedBookmarksOutbox,
+        )
+        .await
+        .unwrap();
+    assert!(!replay.content_changed);
+    let after_replay: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
+            .bind(NODE)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after_replay, outbox_count);
+
+    publish_pool.close().await;
     pool.close().await;
 }
 

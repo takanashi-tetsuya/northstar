@@ -1431,13 +1431,13 @@ impl ProtocolSession {
             // This queue only duplicates MAM for Bind 2. Defer its deletion
             // until the resource is successfully active, and never convert a
             // post-acceptance cleanup outage into a false SASL failure.
-            let replay_state = self.state.clone();
+            let replay_service = self.state.replay_service().clone();
             let user_id = user.id;
             let outbound = self.outbound.clone();
             let replay_full_jid = jid.clone();
             self.defer_after_transport("bind2-offline-replay", async move {
                 super::replay::replay_bind2_offline(
-                    replay_state,
+                    replay_service,
                     outbound,
                     user_id,
                     replay_full_jid,

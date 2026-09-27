@@ -119,6 +119,9 @@ in the service and again under the database mutation locks. The service keeps
 requester identity errors ahead of option errors. Subscribe-and-configure keeps
 its protocol precheck and now repeats the remote filter check under its
 existing mutation locks, before changing the subscription or outbox.
+Bookmarks2 publish notifications now use the item diff read under the publish
+transaction's locks. A concurrent write can no longer leave the notification
+based on an earlier protocol-layer read.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -152,6 +155,9 @@ interval and a narrow backpressure counter handle.
 The session also captures its immutable SM limits and IP binding at creation;
 enable, resume, checkpoint and ACK no longer repeatedly read those settings
 through `AppState`. Durable SM service authority remains unchanged.
+Deferred offline replay tasks now capture `ReplayService` directly instead of
+retaining the full `AppState`; the service still owns the same lease and policy
+checks.
 
 ### Packet 4 — Roster/visibility and archive
 

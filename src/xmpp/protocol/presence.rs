@@ -738,7 +738,7 @@ impl ProtocolSession {
                         );
                     }
                 }
-                let state = self.state.clone();
+                let replay_service = self.state.replay_service().clone();
                 let outbound = self.outbound.clone();
                 let active_privacy_list = self
                     .privacy_active
@@ -758,7 +758,7 @@ impl ProtocolSession {
                 let include_offline = priority >= 0 && !bind2_mam_catchup;
                 self.defer_after_transport("available-offline-replay", async move {
                     super::replay::replay_newly_available_resource(
-                        state,
+                        replay_service,
                         outbound,
                         recipient_id,
                         account,
@@ -780,7 +780,7 @@ impl ProtocolSession {
                 // reaches the transport and applies awaited backpressure.
                 let _ = self.pubsub_presence("available", &from).await?;
             } else if newly_offline_eligible && !self.bind2_mam_catchup {
-                let state = self.state.clone();
+                let replay_service = self.state.replay_service().clone();
                 let outbound = self.outbound.clone();
                 let active_privacy_list = self
                     .privacy_active
@@ -799,7 +799,7 @@ impl ProtocolSession {
                     .expect("newly eligible legacy replay captured a database cutoff");
                 self.defer_after_transport("nonnegative-offline-replay", async move {
                     super::replay::replay_newly_nonnegative_resource(
-                        state,
+                        replay_service,
                         outbound,
                         recipient_id,
                         full_jid,

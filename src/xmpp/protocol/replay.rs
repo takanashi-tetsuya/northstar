@@ -1,8 +1,9 @@
 use crate::{
     services::replay::{
-        ReplayBusyUntil, ReplayPageOutcome, ReplayService, ReplaySession, ReplayStartOutcome,
+        ReplayBusyUntil, ReplayPageOutcome, ReplayRepository, ReplayService, ReplaySession,
+        ReplayStartOutcome,
     },
-    state::{attr_escape, AppState},
+    state::attr_escape,
 };
 use anyhow::{Context, Result};
 use rand::Rng;
@@ -174,7 +175,7 @@ async fn release_unsent_suffix(
     reason = "the replay entry point keeps recipient authority, privacy, cutoff, and availability fences explicit"
 )]
 async fn drain_offline(
-    state: &Arc<AppState>,
+    service: &ReplayService<impl ReplayRepository>,
     outbound: &crate::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
@@ -183,13 +184,12 @@ async fn drain_offline(
     explicit_cutoff: Option<chrono::DateTime<chrono::Utc>>,
     availability: Option<&AvailabilityFence>,
 ) -> Result<usize> {
-    let service = state.replay_service().clone();
     let recovery_deadline = tokio::time::Instant::now() + REPLAY_RECOVERY_DEADLINE;
     let work_deadline = recovery_deadline
         .checked_sub(REPLAY_CLEANUP_RESERVE)
         .unwrap_or(recovery_deadline);
     let Some(session) = acquire_replay_session(
-        &service,
+        service,
         outbound,
         recipient_id,
         current_full_jid,
@@ -202,7 +202,7 @@ async fn drain_offline(
         return Ok(0);
     };
     let result = drain_owned_offline(
-        &service,
+        service,
         &session,
         outbound,
         active_privacy_list,
@@ -424,7 +424,7 @@ async fn drain_owned_offline(
     reason = "the post-presence replay task captures one immutable availability generation and its complete policy snapshot"
 )]
 pub(crate) async fn replay_newly_available_resource(
-    state: Arc<AppState>,
+    service: ReplayService<impl ReplayRepository>,
     outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     account: String,
@@ -447,7 +447,7 @@ pub(crate) async fn replay_newly_available_resource(
     }
     if include_offline {
         if let Err(error) = drain_offline(
-            &state,
+            &service,
             &outbound,
             recipient_id,
             &full_jid,
@@ -463,7 +463,6 @@ pub(crate) async fn replay_newly_available_resource(
         }
     }
 
-    let service = state.replay_service().clone();
     let mut cursor = None;
     loop {
         if !availability.current() {
@@ -515,13 +514,13 @@ pub(crate) async fn replay_newly_available_resource(
 }
 
 pub(crate) async fn replay_bind2_offline(
-    state: Arc<AppState>,
+    service: ReplayService<impl ReplayRepository>,
     outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
 ) {
     if let Err(error) = drain_offline(
-        &state,
+        &service,
         &outbound,
         recipient_id,
         &full_jid,
@@ -541,7 +540,7 @@ pub(crate) async fn replay_bind2_offline(
     reason = "the resumed replay task carries one immutable availability generation and privacy snapshot"
 )]
 pub(crate) async fn replay_resumed_offline(
-    state: Arc<AppState>,
+    service: ReplayService<impl ReplayRepository>,
     outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
@@ -559,7 +558,7 @@ pub(crate) async fn replay_resumed_offline(
         return;
     }
     if let Err(error) = drain_offline(
-        &state,
+        &service,
         &outbound,
         recipient_id,
         &full_jid,
@@ -579,7 +578,7 @@ pub(crate) async fn replay_resumed_offline(
     reason = "the priority-transition replay task carries one immutable availability generation and cutoff"
 )]
 pub(crate) async fn replay_newly_nonnegative_resource(
-    state: Arc<AppState>,
+    service: ReplayService<impl ReplayRepository>,
     outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
@@ -598,7 +597,7 @@ pub(crate) async fn replay_newly_nonnegative_resource(
         return;
     }
     if let Err(error) = drain_offline(
-        &state,
+        &service,
         &outbound,
         recipient_id,
         &full_jid,

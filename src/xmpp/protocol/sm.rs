@@ -1321,7 +1321,7 @@ impl ProtocolSession {
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
-            let replay_state = self.state.clone();
+            let replay_service = self.state.replay_service().clone();
             let replay_outbound = self.outbound.clone();
             let replay_user_id = current_user.id;
             let replay_full_jid = key.clone();
@@ -1334,7 +1334,7 @@ impl ProtocolSession {
             let replay_expected_generation = replay_availability_generation.load(Ordering::Acquire);
             self.defer_after_transport("resumed-offline-replay", async move {
                 super::replay::replay_resumed_offline(
-                    replay_state,
+                    replay_service,
                     replay_outbound,
                     replay_user_id,
                     replay_full_jid,

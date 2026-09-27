@@ -1766,7 +1766,16 @@ for (const [name, serviceAccessor, source] of [
       throw new Error(`${name} bypasses its application service through ${description}`);
     }
   }
-  if (!new RegExp(`\\.${serviceAccessor}\\s*\\(\\s*\\)`).test(source)) {
+  if (name === 'replay.rs') {
+    if (!/\bReplayService\s*</.test(source) || /\bAppState\b/.test(source)) {
+      throw new Error('replay.rs must receive a narrow ReplayService handle');
+    }
+    for (const caller of ['presence.rs', 'sasl2.rs', 'sm.rs']) {
+      if (!/\.replay_service\s*\(\s*\)/.test(read(`src/xmpp/protocol/${caller}`))) {
+        throw new Error(`${caller} no longer obtains the replay service for deferred work`);
+      }
+    }
+  } else if (!new RegExp(`\\.${serviceAccessor}\\s*\\(\\s*\\)`).test(source)) {
     throw new Error(`${name} no longer routes persistence through ${serviceAccessor}()`);
   }
 }
@@ -1811,8 +1820,8 @@ for (const [description, pattern] of [
     throw new Error(`replay.rs bypasses ReplayService through ${description}`);
   }
 }
-if (!/\.replay_service\s*\(\s*\)/.test(replayProtocolSource)) {
-  throw new Error('replay.rs no longer routes persistence through replay_service()');
+if (!/\bReplayService\s*</.test(replayProtocolSource) || /\bAppState\b/.test(replayProtocolSource)) {
+  throw new Error('replay.rs must use its narrow ReplayService handle');
 }
 const replayServiceSource = read('src/services/replay.rs');
 const replayServiceBody = structBody(replayServiceSource, 'pub(crate) struct ReplayService');

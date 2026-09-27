@@ -6,6 +6,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
+const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
+
 #[derive(Clone)]
 pub(crate) struct PostgresPubSubRepository {
     pool: PgPool,
@@ -258,6 +260,7 @@ impl PostgresPubSubRepository {
         event_kind: PepOutboxEventKind,
         authorization_mode: PepOutboxAuthorizationMode,
         factory: &dyn PepOutboxFactory,
+        published_items: Option<&[(&str, &str)]>,
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
         let owner_bare_jid =
             crate::jid::CanonicalJid::parse_bare(&format!("{owner_username}@{}", self.domain))?
@@ -436,7 +439,10 @@ impl PostgresPubSubRepository {
             roster_jids,
             explicit_jids,
         };
-        let deliveries = factory.build(&audience)?;
+        let deliveries = match published_items {
+            Some(items) => factory.build_published(&audience, items)?,
+            None => factory.build(&audience)?,
+        };
         anyhow::ensure!(
             deliveries
                 .iter()
@@ -2504,6 +2510,7 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
                     PepOutboxEventKind::Configuration,
                     PepOutboxAuthorizationMode::CausalAudience,
                     factory,
+                    None,
                 )
                 .await?;
             Self::store_pep_node_config(&mut transaction, owner.id, node, config).await?;
@@ -2545,6 +2552,7 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
                     PepOutboxEventKind::Purge,
                     PepOutboxAuthorizationMode::CausalAudience,
                     factory,
+                    None,
                 )
                 .await?;
             sqlx::query("DELETE FROM pep_items WHERE owner_id=$1 AND node=$2")
@@ -2590,6 +2598,7 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
                     PepOutboxEventKind::Delete,
                     PepOutboxAuthorizationMode::CausalAudience,
                     factory,
+                    None,
                 )
                 .await?;
             sqlx::query("DELETE FROM pep_nodes WHERE owner_id=$1 AND node=$2")
@@ -2694,6 +2703,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                     PepOutboxEventKind::Retract,
                     PepOutboxAuthorizationMode::CausalAudience,
                     factory,
+                    None,
                 )
                 .await?
             } else {
@@ -2728,7 +2738,6 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
         factory: &dyn PepOutboxFactory,
     ) -> Result<PepBookmarkMutationOutcome> {
         const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
-        const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
         let outcome: Result<_> = async {
             let Some((mut transaction, _)) = self
                 .begin_authorized_pep_owner_mutation(owner, BOOKMARKS2)
@@ -2797,6 +2806,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                     PepOutboxEventKind::Publish,
                     PepOutboxAuthorizationMode::CausalAudience,
                     factory,
+                    None,
                 )
                 .await?;
             db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
@@ -2865,6 +2875,18 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 || write.items.iter().any(|(item_id, payload)| {
                     previous.get(*item_id).map(String::as_str) != Some(*payload)
                 });
+            let changed_items = if write.node == BOOKMARKS2 {
+                write
+                    .items
+                    .iter()
+                    .copied()
+                    .filter(|(item_id, payload)| {
+                        previous.get(*item_id).map(String::as_str) != Some(*payload)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             let requested = db::PepNodeConfig::from(write.requested);
             let outcome = db::pep::publish_pep_items_in_transaction(
                 &mut transaction,
@@ -2894,6 +2916,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                         PepOutboxEventKind::Publish,
                         PepOutboxAuthorizationMode::CausalAudience,
                         factory,
+                        (write.node == BOOKMARKS2).then_some(changed_items.as_slice()),
                     )
                     .await?;
                 db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;

@@ -965,6 +965,17 @@ where
 /// principal absent from `PepAudienceSnapshot`.
 pub trait PepOutboxFactory: Send + Sync {
     fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>>;
+
+    /// A publication may supply its item changes from the locked write
+    /// transaction. Renderers that do not need the diff keep their existing
+    /// audience-only behavior.
+    fn build_published(
+        &self,
+        audience: &PepAudienceSnapshot,
+        _changed_items: &[(&str, &str)],
+    ) -> Result<Vec<(String, String)>> {
+        self.build(audience)
+    }
 }
 
 pub trait PepDirectOutboxFactory: Send + Sync {

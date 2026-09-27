@@ -262,6 +262,8 @@ run_exact_ignored \
 run_exact_ignored \
   db::pubsub::integration_tests::subscribe_options_recheck_remote_show_values_after_lock_wait
 run_exact_ignored \
+  db::pubsub::integration_tests::bookmarks2_outbox_uses_locked_item_diff_after_lock_wait
+run_exact_ignored \
   db::pep::integration_tests::pep_node_subscription_and_item_transitions_are_atomic
 run_exact_ignored \
   db::vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard

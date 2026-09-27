@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use object_store::ObjectStoreExt as _;
 use sha2::{Digest, Sha256};
 use std::{
     future::Future,
@@ -37,7 +36,7 @@ pub(crate) mod backup;
 pub(crate) mod migrate;
 mod s3;
 
-pub use s3::{S3UploadSettings, S3UploadStore};
+pub use s3::{S3CleanupMode, S3UploadSettings, S3UploadStore};
 
 /// Parse the one S3 namespace used by offline storage tools. This intentionally
 /// does not load the server configuration: during local-to-S3 migration both
@@ -58,6 +57,14 @@ pub(crate) fn s3_settings_from_env() -> Result<S3UploadSettings> {
         std::env::var("UPLOAD_S3_PREFIX").unwrap_or_else(|_| "northstar/uploads".to_owned());
     let path_style = flag("UPLOAD_S3_PATH_STYLE")?;
     let allow_http = flag("UPLOAD_S3_ALLOW_HTTP")?;
+    let cleanup_mode = S3CleanupMode::parse(
+        optional("UPLOAD_S3_CLEANUP_MODE")
+            .as_deref()
+            .unwrap_or("exact-version")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+    )?;
     anyhow::ensure!(
         (3..=63).contains(&bucket.len())
             && !bucket.starts_with(['.', '-'])
@@ -183,6 +190,7 @@ pub(crate) fn s3_settings_from_env() -> Result<S3UploadSettings> {
         path_style,
         allow_http,
         ambient_credentials,
+        cleanup_mode,
         credential_bundle_file,
         access_key_id_file,
         secret_access_key_file,
@@ -264,8 +272,10 @@ fn push_startup_staging_attempt(
 }
 
 /// Lease-owned staged bytes. Dropping a completed stage before its database-
-/// fenced promotion removes only that attempt, including when an HTTP future
-/// is canceled between body ingestion and the completion transaction.
+/// fenced promotion schedules cleanup of its provider object, including when
+/// an HTTP future is canceled between ingestion and the DB handoff. Versioned
+/// S3 cleanup names an exact version; key-only cleanup requires an explicit
+/// qualified unversioned mode and a fresh provider-state proof.
 pub struct StagedUpload {
     bytes_written: u64,
     sha256: Option<[u8; 32]>,
@@ -273,7 +283,7 @@ pub struct StagedUpload {
     object_key: String,
     stage_version: Option<String>,
     cleanup_path: Option<PathBuf>,
-    remote_cleanup: Option<(Arc<dyn object_store::ObjectStore>, object_store::path::Path)>,
+    remote_cleanup: Option<s3::RemoteS3Cleanup>,
     cleanup_authority: Option<(Arc<UploadSafetyGate>, UploadAuthorityGeneration)>,
 }
 
@@ -342,13 +352,14 @@ impl Drop for StagedUpload {
             }
         }
         let Some(path) = self.cleanup_path.take() else {
-            if let Some((store, path)) = self.remote_cleanup.take() {
+            if let Some(cleanup) = self.remote_cleanup.take() {
                 // A completed multipart stage is a normal object. If the HTTP
                 // future is cancelled before PostgreSQL records it, schedule
-                // attempt-scoped cleanup. Incomplete multipart parts remain
+                // guarded cleanup. Incomplete multipart parts remain
                 // subject to the mandatory bucket lifecycle policy.
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     let authority = authority.clone();
+                    let stage_key = cleanup.path().to_string();
                     handle.spawn(async move {
                         let deleted = if let Some((gate, generation)) = authority {
                             let Ok(mut permit) = gate.permit(UploadIoClass::Recovery) else {
@@ -360,13 +371,13 @@ impl Drop for StagedUpload {
                             tokio::select! {
                                 biased;
                                 _ = permit.invalidated() => return,
-                                deleted = store.delete(&path) => deleted,
+                                deleted = cleanup.delete() => deleted,
                             }
                         } else {
-                            store.delete(&path).await
+                            cleanup.delete().await
                         };
                         if let Err(error) = deleted {
-                            tracing::warn!(stage_key = %path, ?error, "failed to remove abandoned remote upload stage");
+                            tracing::warn!(stage_key = %stage_key, ?error, "failed to remove abandoned remote upload stage");
                         }
                     });
                 }

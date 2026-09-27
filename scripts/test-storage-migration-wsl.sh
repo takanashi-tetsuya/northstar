@@ -49,12 +49,15 @@ psql_fixture() {
     psql -h 127.0.0.1 -p "${PGPORT:-5432}" -U xmpp_test -d xmpp_test -v ON_ERROR_STOP=1 "$@"
 }
 query() { psql_fixture -Atqc "$1"; }
-s3() {
+s3_bucket() {
+  local bucket="$1"
+  shift
   python3 "$project_dir/scripts/lib/s3-fixture.py" \
-    --endpoint "$NORTHSTAR_MINIO_ENDPOINT" --bucket northstar-migrate-it \
+    --endpoint "$NORTHSTAR_MINIO_ENDPOINT" --bucket "$bucket" \
     --access-key-file "$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \
     --secret-key-file "$NORTHSTAR_MINIO_SECRET_KEY_FILE" "$@"
 }
+s3() { s3_bucket northstar-migrate-it "$@"; }
 namespace_digest() {
   python3 - "$1" "$2" "$NORTHSTAR_MINIO_ENDPOINT" <<'PY'
 import hashlib
@@ -80,6 +83,9 @@ PY
 
 northstar_minio_start "$work_dir"
 s3 create-versioned-bucket
+s3_bucket northstar-unversioned-it create-unversioned-bucket
+s3_bucket northstar-suspended-it create-versioned-bucket
+s3_bucket northstar-suspended-it suspend-versioning
 PGPASSWORD=xmpp-test-password PGOPTIONS= psql -h 127.0.0.1 -p "${PGPORT:-5432}" -U xmpp_test -d xmpp_test \
   -v ON_ERROR_STOP=1 -q -c "CREATE SCHEMA \"$schema\"" >/dev/null
 schema_created=true
@@ -111,6 +117,22 @@ export UPLOAD_S3_SECRET_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE"
 
 cargo build --locked --bin rust-xmpp-server
 binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
+NORTHSTAR_MINIO_TEST_ENDPOINT="$NORTHSTAR_MINIO_ENDPOINT" \
+NORTHSTAR_MINIO_TEST_BUCKET=northstar-migrate-it \
+NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \
+NORTHSTAR_MINIO_TEST_SECRET_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE" \
+  cargo test --locked --offline \
+    storage::s3::tests::minio_exact_version_cleanup_preserves_newer_version_without_marker \
+    -- --ignored --exact --nocapture
+NORTHSTAR_MINIO_TEST_ENDPOINT="$NORTHSTAR_MINIO_ENDPOINT" \
+NORTHSTAR_MINIO_TEST_BUCKET=northstar-migrate-it \
+NORTHSTAR_MINIO_TEST_UNVERSIONED_BUCKET=northstar-unversioned-it \
+NORTHSTAR_MINIO_TEST_SUSPENDED_BUCKET=northstar-suspended-it \
+NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \
+NORTHSTAR_MINIO_TEST_SECRET_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE" \
+  cargo test --locked --offline \
+    storage::s3::tests::minio_unversioned_provider_without_conditional_delete_fails_closed \
+    -- --ignored --exact --nocapture
 "$binary" migrate >"$work_dir/migrate.log" 2>&1
 psql_fixture -q -c 'SELECT northstar_upload_bind_capacity_policy(100000,1000000,1099511627776)' >/dev/null
 psql_fixture -q -v user_id="$user_id" -v upload_id="$upload_id" \

@@ -3,12 +3,15 @@ use super::{
 };
 use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
 use anyhow::{Context, Result};
+use axum::http::{Method, Request, StatusCode};
 use bytes::BytesMut;
 use futures::TryStreamExt;
 use object_store::{
-    aws::{AmazonS3Builder, AmazonS3ConfigKey},
+    aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsAuthorizer},
+    client::{ClientOptions, HttpClient, HttpConnector, HttpRequestBody, ReqwestConnector},
     path::Path,
-    GetOptions, ObjectStore, ObjectStoreExt, WriteMultipart,
+    signer::Signer,
+    GetOptions, ObjectStore, ObjectStoreExt, PutMode, WriteMultipart,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -26,6 +29,24 @@ use zeroize::{Zeroize, Zeroizing};
 /// `ambient_credentials` enables the maintained client's web-identity,
 /// container and IMDSv2 providers; long-lived environment credentials are
 /// rejected by configuration validation before this type is constructed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum S3CleanupMode {
+    ExactVersion,
+    QualifiedUnversioned,
+}
+
+impl S3CleanupMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "exact-version" => Ok(Self::ExactVersion),
+            "qualified-unversioned" => Ok(Self::QualifiedUnversioned),
+            _ => anyhow::bail!(
+                "UPLOAD_S3_CLEANUP_MODE must be exact-version or qualified-unversioned"
+            ),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct S3UploadSettings {
     pub endpoint: Option<String>,
@@ -35,6 +56,7 @@ pub struct S3UploadSettings {
     pub path_style: bool,
     pub allow_http: bool,
     pub ambient_credentials: bool,
+    pub cleanup_mode: S3CleanupMode,
     pub credential_bundle_file: Option<PathBuf>,
     pub access_key_id_file: Option<PathBuf>,
     pub secret_access_key_file: Option<PathBuf>,
@@ -49,6 +71,7 @@ impl std::fmt::Debug for S3UploadSettings {
             .field("bucket", &self.bucket)
             .field("prefix", &self.prefix)
             .field("path_style", &self.path_style)
+            .field("cleanup_mode", &self.cleanup_mode)
             .field("allow_http", &self.allow_http)
             .field("ambient_credentials", &self.ambient_credentials)
             .field("custom_endpoint", &self.endpoint.is_some())
@@ -64,9 +87,43 @@ impl std::fmt::Debug for S3UploadSettings {
 
 pub struct S3UploadStore {
     settings: S3UploadSettings,
-    client: std::sync::RwLock<Arc<dyn ObjectStore>>,
+    client: std::sync::RwLock<Arc<S3ClientSnapshot>>,
     credential_generation: AtomicU64,
     safety_gate: Option<Arc<UploadSafetyGate>>,
+    #[cfg(test)]
+    exact_delete_gate: Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>,
+}
+
+/// Keep the object-store operations, URL construction, and credential provider
+/// on one immutable client generation while a version-qualified delete runs.
+struct S3ClientSnapshot {
+    store: Arc<dyn ObjectStore>,
+    s3: Option<Arc<AmazonS3>>,
+    delete_http: Option<HttpClient>,
+    region: String,
+    cleanup_mode: S3CleanupMode,
+}
+
+type ExactDeleteGate = (Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>);
+
+/// An unrecorded completed stage retains the same client generation used for
+/// its write. Exact-version cleanup is the default; qualified unversioned
+/// cleanup requires a fresh bucket-state proof. The outer `StagedUpload` Drop
+/// still owns the recovery-generation check.
+pub(super) struct RemoteS3Cleanup {
+    snapshot: Arc<S3ClientSnapshot>,
+    path: Path,
+    version: Option<String>,
+}
+
+impl RemoteS3Cleanup {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) async fn delete(self) -> Result<bool> {
+        delete_with_snapshot(&self.snapshot, &self.path, self.version.as_deref(), None).await
+    }
 }
 
 #[derive(Deserialize)]
@@ -94,24 +151,13 @@ impl Drop for CredentialBundle {
 /// bucket lifecycle rule because deleting an object key cannot address an
 /// upload id hidden inside the provider client.
 struct RemoteTemporaryObject {
-    client: Arc<dyn ObjectStore>,
     path: Path,
     armed: bool,
-    cleanup_authority: Option<(Arc<UploadSafetyGate>, UploadAuthorityGeneration)>,
 }
 
 impl RemoteTemporaryObject {
-    fn new(
-        client: Arc<dyn ObjectStore>,
-        path: Path,
-        cleanup_authority: Option<(Arc<UploadSafetyGate>, UploadAuthorityGeneration)>,
-    ) -> Self {
-        Self {
-            client,
-            path,
-            armed: true,
-            cleanup_authority,
-        }
+    fn new(path: Path) -> Self {
+        Self { path, armed: true }
     }
 
     fn commit(&mut self) {
@@ -121,33 +167,12 @@ impl RemoteTemporaryObject {
 
 impl Drop for RemoteTemporaryObject {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let client = Arc::clone(&self.client);
-        let path = self.path.clone();
-        let authority = self.cleanup_authority.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let deleted = if let Some((gate, generation)) = authority {
-                    let Ok(mut permit) = gate.permit(UploadIoClass::Recovery) else {
-                        return;
-                    };
-                    if permit.generation() != generation {
-                        return;
-                    }
-                    tokio::select! {
-                        biased;
-                        _ = permit.invalidated() => return,
-                        deleted = client.delete(&path) => deleted,
-                    }
-                } else {
-                    client.delete(&path).await
-                };
-                if let Err(error) = deleted {
-                    tracing::warn!(stage_key=%path, ?error, "failed to remove canceled remote upload stage");
-                }
-            });
+        if self.armed {
+            // Completion may have succeeded even when its response was lost;
+            // without that version ID, a key-level DELETE could hide a newer
+            // stage. Provider lifecycle or an operational orphan sweep must
+            // handle any completed object whose version response was lost.
+            tracing::warn!(stage_key=%self.path, "canceled S3 stage has no known version; retaining provider bytes for orphan cleanup");
         }
     }
 }
@@ -171,6 +196,8 @@ impl S3UploadStore {
             client: std::sync::RwLock::new(client),
             credential_generation: AtomicU64::new(generation),
             safety_gate: None,
+            #[cfg(test)]
+            exact_delete_gate: None,
         })
     }
 
@@ -189,11 +216,15 @@ impl S3UploadStore {
         Ok(Some((Arc::clone(gate), permit.generation())))
     }
 
-    fn client(&self) -> Arc<dyn ObjectStore> {
+    fn client_snapshot(&self) -> Arc<S3ClientSnapshot> {
         self.client
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    fn client(&self) -> Arc<dyn ObjectStore> {
+        self.client_snapshot().store.clone()
     }
 
     #[cfg(test)]
@@ -207,15 +238,23 @@ impl S3UploadStore {
                 path_style: true,
                 allow_http: false,
                 ambient_credentials: false,
+                cleanup_mode: S3CleanupMode::ExactVersion,
                 credential_bundle_file: None,
                 access_key_id_file: None,
                 secret_access_key_file: None,
                 session_token_file: None,
                 sse_kms_key_id_file: None,
             },
-            client: std::sync::RwLock::new(client),
+            client: std::sync::RwLock::new(Arc::new(S3ClientSnapshot {
+                store: client,
+                s3: None,
+                delete_http: None,
+                region: "test-1".to_owned(),
+                cleanup_mode: S3CleanupMode::ExactVersion,
+            })),
             credential_generation: AtomicU64::new(0),
             safety_gate: None,
+            exact_delete_gate: None,
         }
     }
 
@@ -224,7 +263,13 @@ impl S3UploadStore {
         *self
             .client
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = replacement;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(S3ClientSnapshot {
+            store: replacement,
+            s3: None,
+            delete_http: None,
+            region: "test-1".to_owned(),
+            cleanup_mode: S3CleanupMode::ExactVersion,
+        });
     }
 
     fn path(&self, relative: &str) -> Result<Path> {
@@ -288,6 +333,415 @@ impl S3UploadStore {
             size,
         }))
     }
+
+    async fn delete_expected_version(&self, path: &Path, version: Option<&str>) -> Result<bool> {
+        let snapshot = self.client_snapshot();
+        let gate = {
+            #[cfg(test)]
+            {
+                self.exact_delete_gate.as_ref()
+            }
+            #[cfg(not(test))]
+            {
+                None
+            }
+        };
+        delete_with_snapshot(&snapshot, path, version, gate).await
+    }
+}
+
+async fn delete_with_snapshot(
+    snapshot: &S3ClientSnapshot,
+    path: &Path,
+    version: Option<&str>,
+    gate: Option<&ExactDeleteGate>,
+) -> Result<bool> {
+    match version {
+        Some(version) => delete_exact_version_with_snapshot(snapshot, path, version, gate).await,
+        None => delete_qualified_unversioned_with_snapshot(snapshot, path, gate).await,
+    }
+}
+
+async fn signed_provider_request(
+    snapshot: &S3ClientSnapshot,
+    method: Method,
+    path: &Path,
+    query: Option<(&str, &str)>,
+    if_match: Option<&str>,
+) -> Result<Request<HttpRequestBody>> {
+    let s3 = snapshot
+        .s3
+        .as_ref()
+        .context("S3 provider client is unavailable")?;
+    let mut url = s3
+        .signed_url(method.clone(), path, std::time::Duration::from_secs(60))
+        .await?;
+    anyhow::ensure!(
+        url.query_pairs()
+            .all(|(name, _)| name.starts_with("X-Amz-") || name == "x-amz-request-payer"),
+        "S3 signer returned an unexpected resource query"
+    );
+    url.set_query(None);
+    if let Some((name, value)) = query {
+        url.query_pairs_mut().append_pair(name, value);
+    }
+    let mut builder = Request::builder().method(method).uri(url.as_str());
+    if let Some(etag) = if_match {
+        builder = builder.header(axum::http::header::IF_MATCH, etag);
+    }
+    let mut request = builder.body(HttpRequestBody::empty())?;
+    let credential = s3.credentials().get_credential().await?;
+    AwsAuthorizer::new(&credential, "s3", &snapshot.region).try_authorize(&mut request, None)?;
+    Ok(request)
+}
+
+async fn ensure_bucket_never_versioned(snapshot: &S3ClientSnapshot) -> Result<()> {
+    anyhow::ensure!(
+        snapshot.cleanup_mode == S3CleanupMode::QualifiedUnversioned,
+        "S3 key-only cleanup requires qualified-unversioned opt-in"
+    );
+    let http = snapshot
+        .delete_http
+        .as_ref()
+        .context("S3 bucket versioning probe needs its bounded HTTP transport")?;
+    let request = signed_provider_request(
+        snapshot,
+        Method::GET,
+        &Path::default(),
+        Some(("versioning", "")),
+        None,
+    )
+    .await?;
+    let response = http.execute(request).await?;
+    anyhow::ensure!(
+        response.status() == StatusCode::OK,
+        "S3 bucket versioning state could not be verified: HTTP {}",
+        response.status()
+    );
+    let mut chunks = response.into_body().bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = chunks.try_next().await? {
+        anyhow::ensure!(
+            body.len().saturating_add(chunk.len()) <= 8192,
+            "S3 bucket versioning response exceeds the allowed size"
+        );
+        body.extend_from_slice(&chunk);
+    }
+    let xml = std::str::from_utf8(&body).context("S3 bucket versioning response is not UTF-8")?;
+    let document =
+        roxmltree::Document::parse(xml).context("S3 bucket versioning response is not XML")?;
+    let root = document.root_element();
+    anyhow::ensure!(
+        root.tag_name().name() == "VersioningConfiguration"
+            && root.tag_name().namespace() == Some("http://s3.amazonaws.com/doc/2006-03-01/")
+            && root
+                .children()
+                .all(|child| child.is_text()
+                    && child.text().is_some_and(|text| text.trim().is_empty())),
+        "S3 bucket versioning is enabled, suspended, or unverifiable"
+    );
+    Ok(())
+}
+
+fn conditional_delete_canary_path(target: &Path) -> Result<Path> {
+    let (parent, _) = target
+        .as_ref()
+        .rsplit_once('/')
+        .context("S3 cleanup target has no attempt component")?;
+    let (objects_root, _) = parent
+        .rsplit_once('/')
+        .context("S3 cleanup target has no object component")?;
+    anyhow::ensure!(
+        objects_root == "objects" || objects_root.ends_with("/objects"),
+        "S3 cleanup target is outside the upload object namespace"
+    );
+    Path::parse(format!(
+        "{objects_root}/{}/{}",
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4()
+    ))
+    .context("could not construct S3 conditional-delete canary key")
+}
+
+/// The recovery authority may cancel a Drop cleanup during canary creation.
+/// Log the exact key even then; doing provider I/O from Drop would bypass the
+/// generation fence that canceled the operation.
+struct ConditionalDeleteCanaryGuard {
+    key: String,
+    armed: bool,
+}
+
+impl Drop for ConditionalDeleteCanaryGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            tracing::warn!(canary_key = %self.key, "conditional-delete canary may need operational orphan cleanup");
+        }
+    }
+}
+
+async fn cleanup_conditional_delete_canary(snapshot: &S3ClientSnapshot, path: &Path) -> Result<()> {
+    let current = match snapshot.store.head(path).await {
+        Ok(current) => current,
+        Err(object_store::Error::NotFound { .. }) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(version) = current.version.as_deref() {
+        anyhow::ensure!(
+            !version.eq_ignore_ascii_case("null") && !version.is_empty(),
+            "conditional-delete canary has an unsafe null provider version"
+        );
+        let _ = delete_exact_version_with_snapshot(snapshot, path, version, None).await?;
+        return match snapshot.store.head(path).await {
+            Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Ok(_) => anyhow::bail!("conditional-delete canary remains after exact cleanup"),
+            Err(error) => Err(error.into()),
+        };
+    }
+    ensure_bucket_never_versioned(snapshot).await?;
+    let etag = current
+        .e_tag
+        .as_deref()
+        .filter(|etag| !etag.is_empty())
+        .context("conditional-delete canary has no ETag")?;
+    let request = signed_provider_request(snapshot, Method::DELETE, path, None, Some(etag)).await?;
+    let http = snapshot
+        .delete_http
+        .as_ref()
+        .context("S3 conditional-delete canary needs its bounded HTTP transport")?;
+    let response = http.execute(request).await?;
+    anyhow::ensure!(
+        response.status() == StatusCode::NO_CONTENT
+            && response
+                .headers()
+                .get("x-amz-delete-marker")
+                .is_none_or(|value| !value.as_bytes().eq_ignore_ascii_case(b"true")),
+        "conditional-delete canary cleanup failed with HTTP {} or created a marker",
+        response.status()
+    );
+    match snapshot.store.head(path).await {
+        Err(object_store::Error::NotFound { .. }) => Ok(()),
+        Ok(_) => anyhow::bail!("conditional-delete canary remains visible after cleanup"),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn probe_conditional_delete(snapshot: &S3ClientSnapshot, target: &Path) -> Result<()> {
+    let canary = conditional_delete_canary_path(target)?;
+    let canary_key = canary.to_string();
+    let mut guard = ConditionalDeleteCanaryGuard {
+        key: canary_key.clone(),
+        armed: true,
+    };
+    let payload = format!(
+        "northstar-conditional-delete-canary:{}",
+        uuid::Uuid::new_v4()
+    );
+    let probe = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let result = snapshot
+            .store
+            .put_opts(
+                &canary,
+                payload.as_bytes().to_vec().into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .context("could not create an isolated conditional-delete canary")?;
+        anyhow::ensure!(
+            result.version.is_none(),
+            "conditional-delete canary returned a provider version"
+        );
+        let before = snapshot.store.head(&canary).await?;
+        anyhow::ensure!(
+            before.version.is_none(),
+            "conditional-delete canary HEAD returned a provider version"
+        );
+        let etag = before
+            .e_tag
+            .as_deref()
+            .filter(|etag| !etag.is_empty())
+            .context("conditional-delete canary has no ETag")?;
+        let deliberately_wrong = format!("\"northstar-invalid-{}\"", uuid::Uuid::new_v4());
+        anyhow::ensure!(
+            etag != deliberately_wrong,
+            "conditional-delete canary ETag collided"
+        );
+        let request = signed_provider_request(
+            snapshot,
+            Method::DELETE,
+            &canary,
+            None,
+            Some(&deliberately_wrong),
+        )
+        .await?;
+        let http = snapshot
+            .delete_http
+            .as_ref()
+            .context("S3 conditional-delete probe needs its bounded HTTP transport")?;
+        let response = http.execute(request).await?;
+        anyhow::ensure!(
+            response.status() == StatusCode::PRECONDITION_FAILED,
+            "S3 provider did not enforce conditional DELETE: HTTP {}",
+            response.status()
+        );
+        let after = snapshot.store.head(&canary).await?;
+        anyhow::ensure!(
+            after.version.is_none() && after.e_tag == before.e_tag,
+            "S3 conditional-delete canary changed after rejected DELETE"
+        );
+        let bytes = snapshot.store.get(&canary).await?.bytes().await?;
+        anyhow::ensure!(
+            bytes.as_ref() == payload.as_bytes(),
+            "S3 conditional-delete canary bytes changed after rejected DELETE"
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("S3 conditional-delete canary probe timed out")
+    .and_then(|result| result);
+
+    let cleanup = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        cleanup_conditional_delete_canary(snapshot, &canary),
+    )
+    .await
+    .context("S3 conditional-delete canary cleanup timed out")
+    .and_then(|result| result);
+    if cleanup.is_ok() {
+        guard.armed = false;
+    } else if let Err(error) = &cleanup {
+        tracing::warn!(canary_key = %canary_key, ?error, "conditional-delete canary cleanup failed");
+    }
+    if let Err(error) = probe {
+        tracing::warn!(canary_key = %canary_key, ?error, "S3 conditional-delete capability probe rejected provider");
+        return Err(error);
+    }
+    cleanup?;
+    Ok(())
+}
+
+async fn delete_qualified_unversioned_with_snapshot(
+    snapshot: &S3ClientSnapshot,
+    path: &Path,
+    gate: Option<&ExactDeleteGate>,
+) -> Result<bool> {
+    ensure_bucket_never_versioned(snapshot).await?;
+    probe_conditional_delete(snapshot, path).await?;
+    let current = match snapshot.store.head(path).await {
+        Ok(current) => current,
+        Err(object_store::Error::NotFound { .. }) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        current.version.is_none(),
+        "S3 qualified-unversioned object returned a provider version"
+    );
+    let etag = current
+        .e_tag
+        .as_deref()
+        .filter(|etag| !etag.is_empty())
+        .context("S3 qualified-unversioned object has no ETag for conditional deletion")?;
+    if let Some((entered, resume)) = gate {
+        entered.wait().await;
+        resume.wait().await;
+    }
+    let http = snapshot
+        .delete_http
+        .as_ref()
+        .context("S3 conditional deletion needs its bounded HTTP transport")?;
+    let request = signed_provider_request(snapshot, Method::DELETE, path, None, Some(etag)).await?;
+    let response = http.execute(request).await?;
+    anyhow::ensure!(
+        response.status() == StatusCode::NO_CONTENT,
+        "S3 conditional unversioned deletion failed with HTTP {}",
+        response.status()
+    );
+    anyhow::ensure!(
+        response
+            .headers()
+            .get("x-amz-delete-marker")
+            .is_none_or(|value| !value.as_bytes().eq_ignore_ascii_case(b"true")),
+        "S3 conditional unversioned deletion unexpectedly created a marker"
+    );
+    match snapshot.store.head(path).await {
+        Err(object_store::Error::NotFound { .. }) => Ok(true),
+        Ok(_) => anyhow::bail!("S3 qualified-unversioned object remains after deletion"),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn delete_exact_version_with_snapshot(
+    snapshot: &S3ClientSnapshot,
+    path: &Path,
+    version: &str,
+    gate: Option<&ExactDeleteGate>,
+) -> Result<bool> {
+    anyhow::ensure!(
+        !version.is_empty() && !version.eq_ignore_ascii_case("null"),
+        "S3 cleanup requires a non-null exact object version"
+    );
+    let s3 = snapshot
+        .s3
+        .as_ref()
+        .context("S3 exact-version deletion needs the provider client")?;
+    let delete_http = snapshot
+        .delete_http
+        .as_ref()
+        .context("S3 exact-version deletion needs its bounded HTTP transport")?;
+    let mut head_options = GetOptions::new().with_version(Some(version.to_owned()));
+    head_options.head = true;
+    let before_version = match snapshot.store.get_opts(path, head_options.clone()).await {
+        Ok(result) => result.meta.version,
+        Err(object_store::Error::NotFound { .. }) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        before_version.as_deref() == Some(version),
+        "S3 provider did not identify the requested cleanup version"
+    );
+
+    if let Some((entered, resume)) = gate {
+        entered.wait().await;
+        resume.wait().await;
+    }
+
+    // object_store 0.14.1 exposes exact-version GET but only key-level
+    // DELETE. Its public signer supplies the same client's canonical
+    // endpoint and encoded path; discard the *entire* presign query, add
+    // only versionId, then use its public SigV4 authorizer for this request.
+    let mut url = s3
+        .signed_url(Method::DELETE, path, std::time::Duration::from_secs(60))
+        .await?;
+    anyhow::ensure!(
+        url.query_pairs()
+            .all(|(name, _)| name.starts_with("X-Amz-") || name == "x-amz-request-payer"),
+        "S3 signer returned an unexpected resource query"
+    );
+    url.set_query(None);
+    url.query_pairs_mut().append_pair("versionId", version);
+    let mut request = Request::builder()
+        .method(Method::DELETE)
+        .uri(url.as_str())
+        .body(HttpRequestBody::empty())?;
+    let credential = s3.credentials().get_credential().await?;
+    AwsAuthorizer::new(&credential, "s3", &snapshot.region).try_authorize(&mut request, None)?;
+    let response = delete_http.execute(request).await?;
+    anyhow::ensure!(
+        response.status() == StatusCode::NO_CONTENT,
+        "S3 exact-version deletion failed with HTTP {}",
+        response.status()
+    );
+    anyhow::ensure!(
+        response
+            .headers()
+            .get("x-amz-delete-marker")
+            .is_none_or(|value| value.as_bytes() != b"true"),
+        "S3 cleanup unexpectedly deleted a marker"
+    );
+    match snapshot.store.get_opts(path, head_options).await {
+        Err(object_store::Error::NotFound { .. }) => Ok(true),
+        Ok(_) => anyhow::bail!("S3 exact object version remains after deletion"),
+        Err(error) => Err(error.into()),
+    }
 }
 
 impl UploadStore for S3UploadStore {
@@ -313,16 +767,14 @@ impl UploadStore for S3UploadStore {
             let object_key = format!("objects/{id}/{attempt}");
             let stage_key = object_key.clone();
             let path = self.path(&stage_key)?;
-            let client = self.client();
-            let mut temporary = RemoteTemporaryObject::new(
-                Arc::clone(&client),
-                path.clone(),
-                self.cleanup_authority()?,
-            );
+            let cleanup_authority = self.cleanup_authority()?;
+            let snapshot = self.client_snapshot();
+            let client = Arc::clone(&snapshot.store);
             let upload = client
                 .put_multipart(&path)
                 .await
                 .context("could not initiate multipart upload stage")?;
+            let mut temporary = RemoteTemporaryObject::new(path.clone());
             let mut writer = WriteMultipart::new(upload);
             let mut bytes_written = 0_u64;
             let mut digest = Sha256::new();
@@ -331,7 +783,9 @@ impl UploadStore for S3UploadStore {
                 let read = match stream.read(&mut buffer[..]).await {
                     Ok(read) => read,
                     Err(error) => {
-                        writer.abort().await.ok();
+                        if writer.abort().await.is_ok() {
+                            temporary.commit();
+                        }
                         return Err(error).context("could not read multipart upload body");
                     }
                 };
@@ -342,7 +796,9 @@ impl UploadStore for S3UploadStore {
                     .checked_add(read as u64)
                     .context("upload stage size overflow")?;
                 if bytes_written > max_size {
-                    writer.abort().await.ok();
+                    if writer.abort().await.is_ok() {
+                        temporary.commit();
+                    }
                     return Ok(StagedUpload {
                         bytes_written,
                         sha256: None,
@@ -359,7 +815,9 @@ impl UploadStore for S3UploadStore {
                 digest.update(&buffer[..read]);
             }
             if bytes_written != max_size {
-                writer.abort().await.ok();
+                if writer.abort().await.is_ok() {
+                    temporary.commit();
+                }
                 return Ok(StagedUpload {
                     bytes_written,
                     sha256: None,
@@ -376,15 +834,20 @@ impl UploadStore for S3UploadStore {
                 .await
                 .context("could not complete multipart upload stage")?;
             temporary.commit();
+            let version = result.version;
             Ok(StagedUpload {
                 bytes_written,
                 sha256: Some(digest.finalize().into()),
                 stage_key,
                 object_key,
-                stage_version: result.version,
+                stage_version: version.clone(),
                 cleanup_path: None,
-                remote_cleanup: Some((client, path)),
-                cleanup_authority: None,
+                remote_cleanup: Some(RemoteS3Cleanup {
+                    snapshot,
+                    path,
+                    version,
+                }),
+                cleanup_authority,
             })
         })
     }
@@ -424,27 +887,7 @@ impl UploadStore for S3UploadStore {
             let attempt =
                 uuid::Uuid::parse_str(attempt).context("upload attempt key is not a UUID")?;
             let path = self.path(&format!("objects/{id}/{attempt}"))?;
-            let client = self.client();
-            let current = match client.head(&path).await {
-                Ok(current) => current,
-                Err(object_store::Error::NotFound { .. }) => return Ok(false),
-                Err(error) => return Err(error.into()),
-            };
-            if let Some(expected) = stage_version {
-                anyhow::ensure!(
-                    current.version.as_deref() == Some(expected),
-                    "refusing to delete an upload stage version not named by PostgreSQL"
-                );
-            }
-            match client.delete(&path).await {
-                Ok(()) => match client.head(&path).await {
-                    Err(object_store::Error::NotFound { .. }) => Ok(true),
-                    Ok(_) => anyhow::bail!("upload stage remains visible after delete"),
-                    Err(error) => Err(error.into()),
-                },
-                Err(object_store::Error::NotFound { .. }) => Ok(false),
-                Err(error) => Err(error.into()),
-            }
+            self.delete_expected_version(&path, stage_version).await
         })
     }
 
@@ -486,27 +929,7 @@ impl UploadStore for S3UploadStore {
     ) -> StoreFuture<'a, bool> {
         Box::pin(async move {
             let path = self.path(object_key)?;
-            let client = self.client();
-            let current = match client.head(&path).await {
-                Ok(current) => current,
-                Err(object_store::Error::NotFound { .. }) => return Ok(false),
-                Err(error) => return Err(error.into()),
-            };
-            if let Some(expected) = object_version {
-                anyhow::ensure!(
-                    current.version.as_deref() == Some(expected),
-                    "refusing to delete an object-store version not named by PostgreSQL"
-                );
-            }
-            match client.delete(&path).await {
-                Ok(()) => match client.head(&path).await {
-                    Err(object_store::Error::NotFound { .. }) => Ok(true),
-                    Ok(_) => anyhow::bail!("object remains visible after delete"),
-                    Err(error) => Err(error.into()),
-                },
-                Err(object_store::Error::NotFound { .. }) => Ok(false),
-                Err(error) => Err(error.into()),
-            }
+            self.delete_expected_version(&path, object_version).await
         })
     }
 
@@ -548,11 +971,12 @@ impl UploadStore for S3UploadStore {
     }
 }
 
-fn build_client(settings: &S3UploadSettings) -> Result<(Arc<dyn ObjectStore>, u64)> {
-    // Start from a clean builder. `from_env` also accepts endpoint, proxy,
-    // unsigned-payload and HTTP overrides, which would bypass Northstar's
-    // SSRF/TLS validation. Copy only credential-provider inputs with bounded
-    // semantics; absent inputs deliberately fall back to IMDSv2 (never v1).
+fn build_client(settings: &S3UploadSettings) -> Result<(Arc<S3ClientSnapshot>, u64)> {
+    // Start from a clean builder. `from_env` also accepts explicit endpoint,
+    // proxy, unsigned-payload and HTTP overrides outside this configuration.
+    // Copy only credential-provider inputs with bounded semantics; absent
+    // inputs deliberately fall back to IMDSv2 (never v1). Reqwest may still
+    // honor the process's system proxy environment in both S3 transports.
     let has_file_credentials = settings.credential_bundle_file.is_some()
         || settings.access_key_id_file.is_some() && settings.secret_access_key_file.is_some();
     anyhow::ensure!(
@@ -669,12 +1093,25 @@ fn build_client(settings: &S3UploadSettings) -> Result<(Arc<dyn ObjectStore>, u6
         builder = builder.with_sse_kms_encryption(kms_key.as_str());
         kms_key.zeroize();
     }
+    let s3 = Arc::new(
+        builder
+            .build()
+            .context("could not build S3 upload client")?,
+    );
+    let delete_http = ReqwestConnector::default().connect(
+        &ClientOptions::new()
+            .with_allow_http(settings.allow_http)
+            .with_connect_timeout(std::time::Duration::from_secs(5))
+            .with_timeout(std::time::Duration::from_secs(30)),
+    )?;
     Ok((
-        Arc::new(
-            builder
-                .build()
-                .context("could not build S3 upload client")?,
-        ),
+        Arc::new(S3ClientSnapshot {
+            store: s3.clone(),
+            s3: Some(s3),
+            delete_http: Some(delete_http),
+            region: settings.region.clone(),
+            cleanup_mode: settings.cleanup_mode,
+        }),
         generation,
     ))
 }
@@ -697,8 +1134,9 @@ mod tests {
     use super::{validate_relative_key, S3UploadSettings, S3UploadStore};
     use crate::storage::UploadStore;
     use object_store::{memory::InMemory, ObjectStore};
+    use serde_json::Value;
     use sha2::{Digest, Sha256};
-    use std::sync::Arc;
+    use std::{process::Command, sync::Arc};
     use tokio::io::AsyncReadExt;
 
     #[test]
@@ -727,6 +1165,7 @@ mod tests {
             path_style: true,
             allow_http: false,
             ambient_credentials: false,
+            cleanup_mode: super::S3CleanupMode::ExactVersion,
             credential_bundle_file: None,
             access_key_id_file: None,
             secret_access_key_file: None,
@@ -740,7 +1179,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_fake_store_verifies_same_attempt_across_nodes_and_deletes() {
+    async fn shared_fake_store_verifies_same_attempt_and_rejects_versionless_cleanup() {
         let shared: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let node_a = S3UploadStore::with_client_for_test(Arc::clone(&shared));
         let node_b = S3UploadStore::with_client_for_test(shared);
@@ -797,16 +1236,12 @@ mod tests {
         assert!(node_b
             .delete(&first.object_key, first.object_version.as_deref())
             .await
-            .unwrap());
+            .is_err());
         assert!(node_a
             .get(&first.object_key, first.object_version.as_deref())
             .await
             .unwrap()
-            .is_none());
-        assert!(!node_a
-            .delete(&first.object_key, first.object_version.as_deref())
-            .await
-            .unwrap());
+            .is_some());
     }
 
     #[tokio::test]
@@ -821,19 +1256,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn late_attempt_appearance_is_removed_by_a_retained_cleanup_tombstone() {
+    async fn versionless_attempt_cleanup_remains_pending_after_late_appearance() {
         let shared: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let store = S3UploadStore::with_client_for_test(shared);
         let id = uuid::Uuid::new_v4();
         let attempt = uuid::Uuid::new_v4();
-        assert!(!store
+        assert!(store
             .abort(&id.to_string(), &attempt.to_string(), None)
             .await
-            .unwrap());
+            .is_err());
 
-        // Model a provider completing a previously timed-out multipart after
-        // the first absence observation. The durable DB tombstone is retained
-        // for a quiet interval, so its next pass names the same attempt key.
+        // A timed-out multipart may still complete after cleanup first sees
+        // an unversioned locator. Refusing the deletion keeps recovery pending.
         let mut late = store
             .put(
                 &id.to_string(),
@@ -848,11 +1282,333 @@ mod tests {
         assert!(store
             .abort(&id.to_string(), &attempt.to_string(), version.as_deref())
             .await
-            .unwrap());
-        assert!(!store
+            .is_err());
+        assert!(store
             .abort(&id.to_string(), &attempt.to_string(), version.as_deref())
             .await
+            .is_err());
+        assert!(store
+            .get(&format!("objects/{id}/{attempt}"), None)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    fn minio_versions(settings: &S3UploadSettings, key: &str) -> (Vec<String>, Vec<String>) {
+        let output = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/lib/s3-fixture.py"
+            ))
+            .arg("--endpoint")
+            .arg(settings.endpoint.as_deref().unwrap())
+            .arg("--bucket")
+            .arg(&settings.bucket)
+            .arg("--access-key-file")
+            .arg(settings.access_key_id_file.as_deref().unwrap())
+            .arg("--secret-key-file")
+            .arg(settings.secret_access_key_file.as_deref().unwrap())
+            .arg("list-versions")
+            .arg(key)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "MinIO version inspection failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let values = |name: &str| {
+            result[name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        (values("versions"), values("delete_markers"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires the explicit loopback MinIO fixture and a versioned bucket"]
+    async fn minio_exact_version_cleanup_preserves_newer_version_without_marker() {
+        let settings = S3UploadSettings {
+            endpoint: Some(std::env::var("NORTHSTAR_MINIO_TEST_ENDPOINT").unwrap()),
+            region: "us-east-1".to_owned(),
+            bucket: std::env::var("NORTHSTAR_MINIO_TEST_BUCKET").unwrap(),
+            prefix: format!("northstar-exact-delete/{}", uuid::Uuid::new_v4()),
+            path_style: true,
+            allow_http: true,
+            ambient_credentials: false,
+            cleanup_mode: super::S3CleanupMode::ExactVersion,
+            credential_bundle_file: None,
+            access_key_id_file: Some(
+                std::env::var_os("NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE")
+                    .unwrap()
+                    .into(),
+            ),
+            secret_access_key_file: Some(
+                std::env::var_os("NORTHSTAR_MINIO_TEST_SECRET_KEY_FILE")
+                    .unwrap()
+                    .into(),
+            ),
+            session_token_file: None,
+            sse_kms_key_id_file: None,
+        };
+        let entered = Arc::new(tokio::sync::Barrier::new(2));
+        let resume = Arc::new(tokio::sync::Barrier::new(2));
+        let mut gated = S3UploadStore::new(settings.clone()).unwrap();
+        gated.exact_delete_gate = Some((Arc::clone(&entered), Arc::clone(&resume)));
+        let gated = Arc::new(gated);
+        let id = uuid::Uuid::new_v4();
+        let attempt = uuid::Uuid::new_v4();
+        let key = format!("objects/{id}/{attempt}");
+        let full_key = format!("{}/{key}", settings.prefix);
+        let mut first = gated
+            .put(
+                &id.to_string(),
+                &attempt.to_string(),
+                Box::new(std::io::Cursor::new(b"first".to_vec())),
+                5,
+            )
+            .await
+            .unwrap();
+        let first_version = first.stage_version().unwrap().to_owned();
+        first.durably_recorded();
+
+        let abort = tokio::spawn({
+            let gated = Arc::clone(&gated);
+            let first_version = first_version.clone();
+            async move {
+                gated
+                    .abort(&id.to_string(), &attempt.to_string(), Some(&first_version))
+                    .await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(30), entered.wait())
+            .await
+            .expect("exact-version abort did not reach its pre-delete gate");
+        let mut second = gated
+            .put(
+                &id.to_string(),
+                &attempt.to_string(),
+                Box::new(std::io::Cursor::new(b"second".to_vec())),
+                6,
+            )
+            .await
+            .unwrap();
+        let second_version = second.stage_version().unwrap().to_owned();
+        second.durably_recorded();
+        assert_ne!(first_version, second_version);
+        tokio::time::timeout(std::time::Duration::from_secs(30), resume.wait())
+            .await
+            .expect("exact-version abort did not resume after the newer write");
+        assert!(abort.await.unwrap().unwrap());
+
+        let store = S3UploadStore::new(settings.clone()).unwrap();
+        assert!(store
+            .get(&key, Some(&first_version))
+            .await
+            .unwrap()
+            .is_none());
+        let mut current = store.get(&key, None).await.unwrap().unwrap();
+        assert_eq!(
+            current.object_version.as_deref(),
+            Some(second_version.as_str())
+        );
+        let mut bytes = Vec::new();
+        current.reader.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"second");
+        assert_eq!(
+            minio_versions(&settings, &full_key),
+            (vec![second_version.clone()], Vec::new())
+        );
+
+        assert!(!store
+            .abort(&id.to_string(), &attempt.to_string(), Some(&first_version))
+            .await
             .unwrap());
+        assert!(store
+            .abort(&id.to_string(), &attempt.to_string(), None)
+            .await
+            .is_err());
+        assert!(store.delete(&key, Some("null")).await.is_err());
+        assert_eq!(
+            minio_versions(&settings, &full_key),
+            (vec![second_version.clone()], Vec::new())
+        );
+
+        let abandoned = store
+            .put(
+                &id.to_string(),
+                &attempt.to_string(),
+                Box::new(std::io::Cursor::new(b"abandoned".to_vec())),
+                9,
+            )
+            .await
+            .unwrap();
+        let abandoned_version = abandoned.stage_version().unwrap().to_owned();
+        let mut latest = store
+            .put(
+                &id.to_string(),
+                &attempt.to_string(),
+                Box::new(std::io::Cursor::new(b"latest".to_vec())),
+                6,
+            )
+            .await
+            .unwrap();
+        let latest_version = latest.stage_version().unwrap().to_owned();
+        latest.durably_recorded();
+
+        // Dropping a completed but unrecorded stage removes only its exact
+        // version, even after a concurrent writer has replaced latest.
+        drop(abandoned);
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if store
+                    .get(&key, Some(&abandoned_version))
+                    .await
+                    .unwrap()
+                    .is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("abandoned exact-version Drop cleanup did not complete");
+        let (versions, markers) = minio_versions(&settings, &full_key);
+        assert!(versions.contains(&second_version));
+        assert!(versions.contains(&latest_version));
+        assert_eq!(versions.len(), 2);
+        assert!(markers.is_empty());
+
+        // Cancellation while multipart completion is in flight has no known
+        // version. Its temporary Drop must not create a key-level marker.
+        drop(super::RemoteTemporaryObject::new(store.path(&key).unwrap()));
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let mut current = store.get(&key, None).await.unwrap().unwrap();
+        assert_eq!(
+            current.object_version.as_deref(),
+            Some(latest_version.as_str())
+        );
+        let mut bytes = Vec::new();
+        current.reader.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"latest");
+        assert!(minio_versions(&settings, &full_key).1.is_empty());
+
+        assert!(store.delete(&key, Some(&second_version)).await.unwrap());
+        assert!(store.delete(&key, Some(&latest_version)).await.unwrap());
+        assert!(store.get(&key, None).await.unwrap().is_none());
+        assert_eq!(
+            minio_versions(&settings, &full_key),
+            (Vec::new(), Vec::new())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires the explicit loopback MinIO fixture with never-versioned, enabled, and suspended buckets"]
+    async fn minio_unversioned_provider_without_conditional_delete_fails_closed() {
+        let settings = S3UploadSettings {
+            endpoint: Some(std::env::var("NORTHSTAR_MINIO_TEST_ENDPOINT").unwrap()),
+            region: "us-east-1".to_owned(),
+            bucket: std::env::var("NORTHSTAR_MINIO_TEST_UNVERSIONED_BUCKET").unwrap(),
+            prefix: format!("northstar-unversioned-delete/{}", uuid::Uuid::new_v4()),
+            path_style: true,
+            allow_http: true,
+            ambient_credentials: false,
+            cleanup_mode: super::S3CleanupMode::QualifiedUnversioned,
+            credential_bundle_file: None,
+            access_key_id_file: Some(
+                std::env::var_os("NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE")
+                    .unwrap()
+                    .into(),
+            ),
+            secret_access_key_file: Some(
+                std::env::var_os("NORTHSTAR_MINIO_TEST_SECRET_KEY_FILE")
+                    .unwrap()
+                    .into(),
+            ),
+            session_token_file: None,
+            sse_kms_key_id_file: None,
+        };
+        let store = S3UploadStore::new(settings.clone()).unwrap();
+        let id = uuid::Uuid::new_v4();
+        for action in ["abort", "delete", "drop"] {
+            let attempt = uuid::Uuid::new_v4();
+            let key = format!("objects/{id}/{attempt}");
+            let full_key = format!("{}/{key}", settings.prefix);
+            let mut staged = store
+                .put(
+                    &id.to_string(),
+                    &attempt.to_string(),
+                    Box::new(std::io::Cursor::new(action.as_bytes().to_vec())),
+                    action.len() as u64,
+                )
+                .await
+                .unwrap();
+            assert!(staged.stage_version().is_none());
+            assert!(store.get(&key, None).await.unwrap().is_some());
+            let before = minio_versions(&settings, &full_key);
+            match action {
+                "abort" => {
+                    staged.durably_recorded();
+                    let error = store
+                        .abort(&id.to_string(), &attempt.to_string(), None)
+                        .await
+                        .unwrap_err();
+                    assert!(
+                        format!("{error:#}").contains("did not enforce conditional DELETE"),
+                        "unexpected canary failure: {error:#}"
+                    );
+                }
+                "delete" => {
+                    staged.durably_recorded();
+                    assert!(store.delete(&key, None).await.is_err());
+                }
+                "drop" => {
+                    drop(staged);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                _ => unreachable!(),
+            }
+            let mut current = store.get(&key, None).await.unwrap().unwrap();
+            let mut bytes = Vec::new();
+            current.reader.read_to_end(&mut bytes).await.unwrap();
+            assert_eq!(bytes, action.as_bytes());
+            assert_eq!(minio_versions(&settings, &full_key), before);
+            assert!(before.1.is_empty());
+        }
+
+        for bucket in [
+            std::env::var("NORTHSTAR_MINIO_TEST_BUCKET").unwrap(),
+            std::env::var("NORTHSTAR_MINIO_TEST_SUSPENDED_BUCKET").unwrap(),
+        ] {
+            let mut blocked_settings = settings.clone();
+            blocked_settings.bucket = bucket;
+            let blocked = S3UploadStore::new(blocked_settings.clone()).unwrap();
+            let attempt = uuid::Uuid::new_v4();
+            let key = format!("objects/{id}/{attempt}");
+            let full_key = format!("{}/{key}", blocked_settings.prefix);
+            let mut staged = blocked
+                .put(
+                    &id.to_string(),
+                    &attempt.to_string(),
+                    Box::new(std::io::Cursor::new(b"blocked".to_vec())),
+                    7,
+                )
+                .await
+                .unwrap();
+            staged.durably_recorded();
+            let before = minio_versions(&blocked_settings, &full_key);
+            assert!(blocked
+                .abort(&id.to_string(), &attempt.to_string(), None)
+                .await
+                .is_err());
+            assert!(blocked.get(&key, None).await.unwrap().is_some());
+            assert_eq!(minio_versions(&blocked_settings, &full_key), before);
+        }
     }
 
     #[tokio::test]
@@ -876,6 +1632,7 @@ mod tests {
             path_style: true,
             allow_http: true,
             ambient_credentials: false,
+            cleanup_mode: super::S3CleanupMode::ExactVersion,
             credential_bundle_file: None,
             access_key_id_file: Some(access_key_id_file),
             secret_access_key_file: Some(secret_access_key_file),

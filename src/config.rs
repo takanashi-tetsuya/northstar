@@ -685,6 +685,8 @@ pub struct RawConfig {
     #[serde(default = "default_upload_s3_region")]
     pub upload_s3_region: String,
     pub upload_s3_bucket: Option<String>,
+    #[serde(default = "default_upload_s3_cleanup_mode")]
+    pub upload_s3_cleanup_mode: String,
     #[serde(default = "default_upload_s3_prefix")]
     pub upload_s3_prefix: String,
     #[serde(default)]
@@ -1131,6 +1133,9 @@ fn default_upload_s3_prefix() -> String {
 }
 fn default_upload_s3_credential_mode() -> String {
     "ambient".to_owned()
+}
+fn default_upload_s3_cleanup_mode() -> String {
+    "exact-version".to_owned()
 }
 fn default_xep_0487_ttl() -> u64 {
     300
@@ -2258,6 +2263,7 @@ impl Config {
         )?;
         raw.upload_storage_backend = raw.upload_storage_backend.trim().to_ascii_lowercase();
         raw.upload_s3_credential_mode = raw.upload_s3_credential_mode.trim().to_ascii_lowercase();
+        raw.upload_s3_cleanup_mode = raw.upload_s3_cleanup_mode.trim().to_ascii_lowercase();
         raw.upload_s3_region = raw.upload_s3_region.trim().to_owned();
         raw.upload_s3_prefix = raw.upload_s3_prefix.trim().trim_matches('/').to_owned();
         if raw.upload_mode.keeps_storage_runtime() {
@@ -2276,6 +2282,14 @@ impl Config {
                 );
             }
             if raw.upload_storage_backend == "s3" {
+                if !matches!(
+                    raw.upload_s3_cleanup_mode.as_str(),
+                    "exact-version" | "qualified-unversioned"
+                ) {
+                    anyhow::bail!(
+                        "UPLOAD_S3_CLEANUP_MODE must be exact-version or qualified-unversioned"
+                    );
+                }
                 let bucket = raw
                     .upload_s3_bucket
                     .as_deref()
@@ -2412,6 +2426,7 @@ impl Config {
                     anyhow::bail!("UPLOAD_S3_SESSION_TOKEN_FILE requires file credential mode");
                 }
             } else if raw.upload_s3_endpoint.is_some()
+                || raw.upload_s3_cleanup_mode != "exact-version"
                 || raw.upload_s3_bucket.is_some()
                 || raw.upload_s3_access_key_id_file.is_some()
                 || raw.upload_s3_credential_bundle_file.is_some()

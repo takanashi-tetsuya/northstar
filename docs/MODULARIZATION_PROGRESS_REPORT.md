@@ -199,6 +199,12 @@ finalization. The HTTP adapter follows that decision, retaining a committed
 direct-final object or an indeterminate stage for recovery.
 It also classifies an unrecorded stage handoff: a direct-final object stays
 available for reconciliation, while a distinct stage may be removed.
+S3 cleanup now removes a known provider version directly and checks that it
+is gone, so a newer version at the same key survives. When a multipart
+completion loses its version response, the adapter leaves the key intact for
+orphan recovery. Versionless cleanup requires explicit provider qualification;
+the pinned MinIO fixture fails the conditional-delete probe and retains the
+object for repair.
 
 ### Packet 6 — Federation, components and cluster
 

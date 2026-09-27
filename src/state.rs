@@ -634,20 +634,25 @@ fn admit_bounded_omemo_poll_ip(
 /// Credential material is deliberately excluded: rotating credentials must
 /// not change storage authority.
 fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8; 32]> {
-    let s3 = (config.upload_storage_backend == "s3").then(|| S3UploadSettings {
-        endpoint: config.upload_s3_endpoint.clone(),
-        region: config.upload_s3_region.clone(),
-        bucket: config.upload_s3_bucket.clone().unwrap_or_default(),
-        prefix: config.upload_s3_prefix.clone(),
-        path_style: config.upload_s3_path_style,
-        allow_http: config.upload_s3_allow_http,
-        ambient_credentials: config.upload_s3_credential_mode == "ambient",
-        credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
-        access_key_id_file: config.upload_s3_access_key_id_file.clone(),
-        secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
-        session_token_file: config.upload_s3_session_token_file.clone(),
-        sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
-    });
+    let s3 = (config.upload_storage_backend == "s3")
+        .then(|| -> anyhow::Result<S3UploadSettings> {
+            Ok(S3UploadSettings {
+                endpoint: config.upload_s3_endpoint.clone(),
+                region: config.upload_s3_region.clone(),
+                bucket: config.upload_s3_bucket.clone().unwrap_or_default(),
+                prefix: config.upload_s3_prefix.clone(),
+                path_style: config.upload_s3_path_style,
+                allow_http: config.upload_s3_allow_http,
+                ambient_credentials: config.upload_s3_credential_mode == "ambient",
+                cleanup_mode: crate::storage::S3CleanupMode::parse(&config.upload_s3_cleanup_mode)?,
+                credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
+                access_key_id_file: config.upload_s3_access_key_id_file.clone(),
+                secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
+                session_token_file: config.upload_s3_session_token_file.clone(),
+                sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
+            })
+        })
+        .transpose()?;
     crate::storage::upload_storage_namespace_id(
         &config.upload_storage_backend,
         &config.upload_dir,
@@ -3893,6 +3898,9 @@ impl AppState {
                                 path_style: config.upload_s3_path_style,
                                 allow_http: config.upload_s3_allow_http,
                                 ambient_credentials: config.upload_s3_credential_mode == "ambient",
+                                cleanup_mode: crate::storage::S3CleanupMode::parse(
+                                    &config.upload_s3_cleanup_mode,
+                                )?,
                                 credential_bundle_file: config
                                     .upload_s3_credential_bundle_file
                                     .clone(),

@@ -9,6 +9,7 @@ import argparse
 import datetime
 import hashlib
 import hmac
+import json
 from pathlib import Path
 import sys
 import urllib.error
@@ -81,6 +82,8 @@ def main():
     parser.add_argument("--secret-key-file", required=True)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("create-versioned-bucket")
+    sub.add_parser("create-unversioned-bucket")
+    sub.add_parser("suspend-versioning")
     put = sub.add_parser("put")
     put.add_argument("key")
     put.add_argument("file", type=Path)
@@ -94,6 +97,8 @@ def main():
     delete = sub.add_parser("delete-version")
     delete.add_argument("key")
     delete.add_argument("version")
+    versions = sub.add_parser("list-versions")
+    versions.add_argument("key")
     args = parser.parse_args()
     if not args.bucket.isascii() or not args.bucket.replace("-", "").isalnum():
         parser.error("bucket must be a simple fixture-owned DNS label")
@@ -107,6 +112,22 @@ def main():
         status = root.find("{http://s3.amazonaws.com/doc/2006-03-01/}Status")
         if status is None or status.text != "Enabled":
             raise RuntimeError("fixture bucket versioning was not enabled")
+    elif args.command == "create-unversioned-bucket":
+        request(args, "PUT")
+        response, _ = request(args, "GET", query=[("versioning", "")])
+        root = ET.fromstring(response)
+        namespace = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+        if root.tag != f"{namespace}VersioningConfiguration" or list(root):
+            raise RuntimeError("fixture bucket did not return never-versioned state")
+    elif args.command == "suspend-versioning":
+        body = (b'<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                b"<Status>Suspended</Status></VersioningConfiguration>")
+        request(args, "PUT", query=[("versioning", "")], body=body)
+        response, _ = request(args, "GET", query=[("versioning", "")])
+        root = ET.fromstring(response)
+        status = root.find("{http://s3.amazonaws.com/doc/2006-03-01/}Status")
+        if status is None or status.text != "Suspended":
+            raise RuntimeError("fixture bucket versioning was not suspended")
     elif args.command == "put":
         _, headers = request(args, "PUT", key=args.key, body=args.file.read_bytes())
         version = headers.get("x-amz-version-id")
@@ -130,6 +151,21 @@ def main():
                              query=[("versionId", args.version)])
         if headers.get("x-amz-version-id") != args.version:
             raise RuntimeError("MinIO deleted an unexpected object version")
+    elif args.command == "list-versions":
+        response, _ = request(args, "GET", query=[("versions", ""), ("prefix", args.key)])
+        root = ET.fromstring(response)
+        namespace = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+        if root.findtext(f"{namespace}IsTruncated") == "true":
+            raise RuntimeError("MinIO version listing was truncated")
+        result = {"versions": [], "delete_markers": []}
+        for tag, field in (("Version", "versions"), ("DeleteMarker", "delete_markers")):
+            for item in root.findall(f"{namespace}{tag}"):
+                if item.findtext(f"{namespace}Key") == args.key:
+                    version = item.findtext(f"{namespace}VersionId")
+                    if not version:
+                        raise RuntimeError("MinIO version listing omitted a version ID")
+                    result[field].append(version)
+        print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -1131,18 +1131,16 @@ async fn process_cleanup_job<R: UploadMaintenanceRepository>(
         job.storage_backend == context.store.backend(),
         "cleanup targets a different upload storage backend"
     );
-    // The generic object-store interface can delete only the current object
-    // at a key; it cannot prove removal of two distinct historical versions
-    // at that same key. Normal S3 admission always normalizes the staged and
-    // object locator to one exact version. Preserve a corrupt/legacy
-    // two-version tombstone (and its conservative capacity charge) for
-    // operator repair instead of deleting one version and silently releasing
-    // metadata for the other.
+    // Normal S3 admission gives the stage and committed locator the same
+    // version. A tombstone naming two versions at one key has ambiguous
+    // database authority: deleting either one could release metadata while
+    // the other remains. Preserve it, including its capacity charge, for
+    // operator repair.
     anyhow::ensure!(
         !(job.storage_backend == "s3"
             && job.stage_key.as_deref() == Some(job.object_key.as_str())
             && job.stage_version.as_deref() != job.object_version.as_deref()),
-        "cleanup names two object-store versions at one key; exact deletion is unsupported"
+        "cleanup names two object-store versions at one key; database authority is ambiguous"
     );
     if !context
         .repository

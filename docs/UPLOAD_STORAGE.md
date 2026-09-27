@@ -199,22 +199,56 @@ provider-enforced retention error keeps the cleanup row pending and readiness
 observable rather than pretending deletion completed.
 
 S3 versioning deserves special treatment. `object_store` 0.14.1 can read an
-exact S3 version but its generic delete API deletes the current key (normally
-creating a delete marker) rather than targeting an arbitrary historical
-version. Northstar verifies that the committed version is current before
-deletion and verifies that the current key is absent afterwards. Noncurrent
-versions therefore belong to the provider backup/retention boundary and must
-have a reviewed expiration or Object Lock policy. Deleting the current key leaves
-historical versions subject to that policy. Northstar needs a version-qualified
-delete API to remove them directly.
+exact S3 version but its generic delete API can create a current-key delete
+marker. By default, Northstar uses a signed version-qualified DELETE for a
+non-null provider version, then verifies that exact version is absent. This
+also removes noncurrent versions without hiding a newer object. Provider
+retention and Object Lock can still defer cleanup.
 
 An unversioned compatible store returns no version identifier. Northstar still
 binds the canonical attempt key, exact size and SHA-256 and fails closed on a
 scrub mismatch, but it cannot ask that provider for a historical immutable
-generation. Production qualification must therefore either enable provider
-versioning/immutability or prove with bucket/IAM policy that no principal can
-overwrite Northstar attempt keys. This is an explicit provider trust boundary,
-not an application guarantee.
+generation. The default `UPLOAD_S3_CLEANUP_MODE=exact-version` retains cleanup
+debt for a missing version. To preserve cleanup for a qualified unversioned
+deployment, explicitly set `UPLOAD_S3_CLEANUP_MODE=qualified-unversioned` on
+every node. Before each key-only delete, Northstar requires the same S3 client
+snapshot to return the never-versioned, empty `GetBucketVersioning` response.
+It creates a one-off canary under the upload-object key pattern, sends an
+intentionally wrong-ETag conditional DELETE, and requires HTTP 412 with the
+canary's bytes still intact. It then attempts bounded canary cleanup; an
+uncertain canary is logged by full key for operational sweeping. Only after
+this probe succeeds does Northstar HEAD the user object, require no version
+and an ETag, sign its `If-Match` DELETE, and check that the key is absent.
+Enabled, Suspended, `null` or another version, denied
+`s3:GetBucketVersioning`, unsupported API,
+or an ambiguous response all retain cleanup debt. The operator must prove
+that no principal can overwrite attempt keys and that bucket versioning
+cannot change during cleanup; ETag matching is not a unique generation token.
+These are provider trust boundaries, not application guarantees. An object
+completed before its version response was observed can need an operational
+orphan sweep because no database tombstone may exist.
+
+This mode does not currently have a general AWS production qualification:
+Northstar's multipart writer can overwrite the same attempt key, while a
+bucket/IAM policy requiring `If-None-Match` on writes would reject its normal
+multipart completion. Use it only with a provider that actually enforces
+write-once/no-overwrite behavior for this namespace and after deployment
+acceptance tests prove that behavior. `If-Match` protects a deletion only when
+a replacement has a different ETag; identical-content overwrites can reuse an
+ETag, and a bucket versioning change between the status probe and DELETE can
+still create a marker. Neither case is prevented by Northstar.
+The pinned MinIO fixture ignores `If-Match` on DELETE, so this release refuses
+its unversioned key cleanup and retains the user object and cleanup debt.
+
+Enabling `qualified-unversioned` changes only cleanup eligibility, not the
+physical storage namespace identity. Existing nodes can adopt it without a
+storage-authority rebind, but nodes left in the default mode will keep retrying
+versionless cleanup. Enabling bucket versioning later does not assign a
+non-null version to historical `version=NULL` database locators. Once the
+bucket is Enabled or Suspended, this mode refuses their key-only deletion;
+those objects require a reviewed offline locator migration or manual recovery.
+The versioned v3 backup format likewise cannot protect `version=NULL`
+locators; do not claim v3 backup coverage until they have been migrated.
 
 ## Configuration and credentials
 
@@ -223,6 +257,7 @@ not an application guarantee.
 | `UPLOAD_STORAGE_BACKEND` | `local` (default) or `s3`; public clustered mode requires `s3`. |
 | `UPLOAD_DIR` | Private local root; ignored for S3 object data but retained by existing local backup tooling. |
 | `UPLOAD_S3_BUCKET` | Required lowercase DNS-style bucket. |
+| `UPLOAD_S3_CLEANUP_MODE` | `exact-version` (default), or explicit `qualified-unversioned` after write-once policy review and `s3:GetBucketVersioning` permission. |
 | `UPLOAD_S3_REGION` | Signing region, default `us-east-1`. |
 | `UPLOAD_S3_PREFIX` | Optional canonical relative namespace prefix. |
 | `UPLOAD_S3_ENDPOINT` | Optional absolute HTTPS S3-compatible endpoint with no credentials, path, query or fragment. |

@@ -489,11 +489,28 @@ bytes), no pending jobs and 11 cleanup obligations; per-user and global
 limits were far higher, and MinIO and disk had free capacity. A transient
 PostgreSQL `NOWAIT` lock conflict is plausible but the lock holder was not
 captured. The server's retryable response was valid; the lab probe treated
-its first response as fatal. The raw failed log is retained, and the probe
-now retries only that response within a 20-second, three-attempt bound. A
+its first response as fatal. The raw failed log was retained until the
+2026-09-27 host reboot. The probe now retries only that response within a
+20-second, three-attempt bound. A
 fresh, separately recorded run is required.
 
 This low-rate profile does not contain OMEMO, Push or sustained active load
 and cannot close `EXT-CAPACITY`. The latest `dev` changes also require a new
 frozen binary and affected-path retests; the failed run is evidence only for
 its recorded source and binary.
+
+## Persistent lab rebuild
+
+The host rebooted at 2026-09-27 13:17 UTC during a later 24-hour soak. That
+run had lasted about 13 hours; it did not complete the gate. Its VM disks and
+raw evidence were under the host's `/tmp` tmpfs and were lost on reboot. The
+older `/tmp` paths above identify historical observations, not files that can
+still be inspected on this host.
+
+Six clean guests were rebuilt under the persistent workspace directory
+`target/vm-lab/20260927T1350Z/` using the same checksum-verified Debian 13
+image. They are on the isolated `northstar-lab` network and passed the
+six-guest route/interface preflight. Package provisioning and candidate
+qualification are still in progress. A new 24-hour soak must start from the
+frozen, CI-verified candidate and complete without interruption before it can
+count as a pass.

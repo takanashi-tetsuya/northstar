@@ -645,6 +645,27 @@ mod tests {
             .await
             .unwrap()
         );
+        sqlx::query("DELETE FROM offline_messages WHERE recipient_id=$1")
+            .bind(reserved_recipient)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let reserved_wake = repository
+            .claim(&authority, 256)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|wake| wake.recipient_id == reserved_recipient)
+            .expect("the reserved recipient wake remains claimable");
+        assert!(repository
+            .acknowledge_if_empty(
+                &authority,
+                reserved_recipient,
+                reserved_wake.revision,
+                reserved_wake.claim_token,
+            )
+            .await
+            .unwrap());
 
         // A producer that updates the stable row before an old ACK makes the
         // old revision ineligible, even after all offline rows are drained.

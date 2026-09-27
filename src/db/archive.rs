@@ -3,8 +3,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    decide_mam_room_read, finish_mam_page, mam_referenced_ids, resolve_mam_query, MamQueryBounds,
-    MamRoomReadDecision,
+    decide_mam_archive_admission, decide_mam_room_read, finish_mam_page, mam_referenced_ids,
+    resolve_mam_query, MamArchiveAdmissionFacts, MamQueryBounds, MamRoomReadDecision,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use rand::RngCore;
@@ -174,37 +174,29 @@ pub async fn set_mam_preferences(
 pub async fn archive_allowed(pool: &PgPool, owner_id: Uuid, peer_jid: &str) -> Result<bool> {
     let peer_jid = crate::jid::canonicalize(peer_jid)?;
     let peer_bare = crate::jid::canonical_bare_key(&peer_jid)?;
-    // Explicit full/bare policy, account default and roster membership are
-    // decided by one PostgreSQL statement. A concurrent preference rewrite
-    // therefore cannot splice an old explicit row into a new default policy.
-    sqlx::query_scalar::<_, bool>(
-        "WITH effective AS (
-             SELECT COALESCE(
-                 (SELECT policy FROM mam_preference_jids
-                   WHERE user_id=$1
-                     AND (jid=$2 OR (position('/' in jid)=0 AND jid=$3))
-                   ORDER BY CASE WHEN jid=$2 THEN 0 ELSE 1 END
-                   LIMIT 1),
-                 (SELECT default_policy FROM mam_preferences WHERE user_id=$1),
-                 'always'
-             ) AS policy
-         )
-         SELECT CASE effective.policy
-                  WHEN 'always' THEN TRUE
-                  WHEN 'roster' THEN EXISTS(
-                      SELECT 1 FROM roster_items
-                       WHERE owner_id=$1 AND contact_jid=$3
-                  )
-                  ELSE FALSE
-                END
-           FROM effective",
+    // Read every policy input in one statement. The pure domain rule chooses
+    // full JID, bare JID, then account default without mixing snapshots.
+    let row = sqlx::query(
+        "SELECT
+             (SELECT policy FROM mam_preference_jids WHERE user_id=$1 AND jid=$2) AS full_policy,
+             (SELECT policy FROM mam_preference_jids WHERE user_id=$1 AND jid=$3) AS bare_policy,
+             (SELECT default_policy FROM mam_preferences WHERE user_id=$1) AS default_policy,
+             EXISTS(SELECT 1 FROM roster_items WHERE owner_id=$1 AND contact_jid=$3) AS roster_member",
     )
     .bind(owner_id)
     .bind(&peer_jid)
     .bind(&peer_bare)
     .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    .await?;
+    let full_policy: Option<String> = row.try_get("full_policy")?;
+    let bare_policy: Option<String> = row.try_get("bare_policy")?;
+    let default_policy: Option<String> = row.try_get("default_policy")?;
+    Ok(decide_mam_archive_admission(MamArchiveAdmissionFacts {
+        full_jid_policy: full_policy.as_deref(),
+        bare_jid_policy: bare_policy.as_deref(),
+        default_policy: default_policy.as_deref(),
+        roster_member: row.try_get("roster_member")?,
+    }))
 }
 
 #[cfg(test)]
@@ -3226,6 +3218,43 @@ mod history_identity_pg_tests {
             new_preferences
         );
         assert!(!archive_allowed(&pool, viewer_id, "peer@remote.test/Phone")
+            .await
+            .unwrap());
+
+        set_mam_preferences(
+            &pool,
+            viewer_id,
+            &MamPreferences {
+                default_policy: "never".to_owned(),
+                always: vec!["peer@remote.test/Phone".to_owned()],
+                never: vec!["peer@remote.test".to_owned()],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(archive_allowed(&pool, viewer_id, "peer@remote.test/Phone")
+            .await
+            .unwrap());
+        assert!(
+            !archive_allowed(&pool, viewer_id, "peer@remote.test/Laptop")
+                .await
+                .unwrap()
+        );
+        set_mam_preferences(
+            &pool,
+            viewer_id,
+            &MamPreferences {
+                default_policy: "never".to_owned(),
+                always: vec!["peer@remote.test".to_owned()],
+                never: vec!["peer@remote.test/Phone".to_owned()],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!archive_allowed(&pool, viewer_id, "peer@remote.test/Phone")
+            .await
+            .unwrap());
+        assert!(archive_allowed(&pool, viewer_id, "peer@remote.test/Laptop")
             .await
             .unwrap());
 

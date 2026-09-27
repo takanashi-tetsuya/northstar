@@ -2,17 +2,17 @@ use super::{Action, ProtocolSession};
 use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::pubsub::{
     subscription_event_children, CollectionDiscoItems, CollectionUpdateOutcome, CreateNodeOutcome,
-    LeafDiscoItems, OwnerMutationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
-    PubSubConfigureNodeWrite, PubSubCreateNodeCommand, PubSubCreateNodeWrite,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubListPageQuery, PubSubNode,
-    PubSubNodeConfig, PubSubOwnerRead, PubSubOwnerReadKind, PubSubPublishCommand,
-    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeCommand, PubSubPurgeNodeWrite,
-    PubSubRetractCommand, PubSubRetractOutcome, PubSubRetractWrite, PubSubRootDiscoQuery,
-    PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand,
-    PubSubSetSubscriptionsWrite, PubSubSubscribeCommand, PubSubSubscribeOutcome,
-    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeCommand,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
+    LeafDiscoItems, OwnerMutationOutcome, PubSubAuthorizeSubscriptionCommand, PubSubConfigOutcome,
+    PubSubConfigureNodeCommand, PubSubConfigureNodeWrite, PubSubCreateNodeCommand,
+    PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem,
+    PubSubListPageQuery, PubSubNode, PubSubNodeConfig, PubSubOwnerRead, PubSubOwnerReadKind,
+    PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeCommand,
+    PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome, PubSubRetractWrite,
+    PubSubRootDiscoQuery, PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite,
+    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite, PubSubSubscribeCommand,
+    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
+    PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
@@ -2117,39 +2117,20 @@ pub(crate) async fn handle_authorization_response(
     else {
         return Ok(());
     };
-    let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-        return Ok(());
-    };
-    let Some(pending_subscription) = state
-        .pubsub_service()
-        .get_subscription(node.id, &subscriber)
-        .await?
-    else {
-        return Ok(());
-    };
     // XEP-0060 subscription authorization forms identify the request with
     // the node and subscriber JID; `pubsub#subid` is not a required response
-    // field. Northstar currently permits one subscription per node/JID, so a
-    // missing subid is unambiguous. If a client echoes it, still verify it to
-    // reject stale or forged forms.
-    if first_field(&fields, "pubsub#subid").is_some_and(|subid| subid != pending_subscription.subid)
-    {
-        return Ok(());
-    }
-    if !is_owner(state, node.id, &normalized_bare(requester)?).await?
-        || pending_subscription.state != "pending"
-    {
-        return Ok(());
-    }
+    // field. The service resolves the unique pending subscription and rejects
+    // an echoed SubID that does not match it.
+    let requester = normalized_bare(requester)?;
     let _ = state
         .pubsub_service()
-        .resolve_pending_subscription(
-            node.id,
-            &normalized_bare(requester)?,
-            &subscriber,
-            &pending_subscription.subid,
+        .execute_pubsub_authorize_subscription(PubSubAuthorizeSubscriptionCommand {
+            requester: &requester,
+            node: node_name,
+            subscriber_jid: &subscriber,
+            echoed_subid: first_field(&fields, "pubsub#subid"),
             allow,
-        )
+        })
         .await?;
     Ok(())
 }

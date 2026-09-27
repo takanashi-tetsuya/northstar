@@ -792,6 +792,11 @@ and RSM fields.
 Node metadata discovery now reads owner and publisher JIDs and the active
 subscriber count in one read-only statement snapshot. It retains the previous
 affiliation filters, JID ordering and subscription expiry rule.
+XEP-0060 subscription authorization replies now use a typed PubSub command.
+The service owns the read precheck, while the existing locked PostgreSQL
+transaction remains authoritative for owner, pending-state and SubID checks
+and writes the outbox atomically. Other command and query paths remain under
+C1 review.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for
@@ -808,6 +813,10 @@ can still initialize a missing occupant-ID secret; the query capability is
 therefore not a claim that every SQL statement is read-only.
 The MIX wire fixture checks two adjacent MAM pages, stable count/index values
 and disjoint archive IDs after three delivered group messages.
+Personal MAM archive admission now reads full-JID, bare-JID, default-policy
+and roster facts in one PostgreSQL statement, then applies the preference
+precedence in archive core. The remaining MAM scope and paging paths still
+require C2 review.
 D1 no longer stores a second WebSocket flag alongside the transport kind. The
 TCP and WebSocket action executors now have separate adapters. Plain TCP and
 direct TLS share the TCP adapter; both adapters retain their existing write,
@@ -878,7 +887,13 @@ rollback dumps. The raw evidence is recorded in
 [LOCAL_VM_QUALIFICATION.md](LOCAL_VM_QUALIFICATION.md). Old upload copies in
 the cutover and rollback directories remain plaintext; those filesystems need
 encryption and independent recovery keys. A drill on the eventual deployment's
-storage layout is still required. An expired or ambiguous XID remains fail-closed.
+storage layout is still required. An expired XID without its exact committed
+marker, or any ambiguous outcome, remains fail-closed.
+The recovery journal parser now rejects conflicting decisions, mismatched
+transaction outcomes and rollback intents without a committed incoming
+predecessor. The disposable restore fixture includes four additional
+recovery-process SIGKILL points, but their full PostgreSQL/MinIO re-entry run
+is pending; hook self-tests alone do not close R1.
 
 C1 and C2 precede D1 because they close application authority boundaries before
 the wider transport split. R1–R3 are independent hardening packets and can run

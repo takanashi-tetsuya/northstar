@@ -4,7 +4,7 @@ use crate::services::profile::{
 };
 use anyhow::Result;
 pub(crate) use northstar_pubsub_application::{
-    existing_node_publish_admission_outcome,
+    authorization_precheck, existing_node_publish_admission_outcome,
     is_pubsub_mutation_busy as is_pubsub_mutation_busy_core, publish_validation_outcome,
     pubsub_mutation_admission_active as pubsub_mutation_admission_active_core,
     pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
@@ -12,19 +12,20 @@ pub(crate) use northstar_pubsub_application::{
     validate_pep_configure_node_command, validate_pep_delete_node_command,
     validate_pep_publish_command, validate_pep_purge_node_command, validate_pep_retract_command,
     validate_pep_set_affiliations_command, validate_pep_subscribe_command,
-    validate_pep_unsubscribe_command, validate_pubsub_configure_node_command,
-    validate_pubsub_create_node_command, validate_pubsub_delete_node_command,
-    validate_pubsub_publish_command, validate_pubsub_purge_node_command,
-    validate_pubsub_retract_command, validate_pubsub_set_affiliations_command,
-    validate_pubsub_set_subscriptions_command, validate_pubsub_subscribe_command,
-    validate_pubsub_unsubscribe_command, PepConfigureNodeCommand, PepConfigureNodeResult,
-    PepDeleteNodeCommand, PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome,
-    PepPublishItemsResult, PepPurgeNodeCommand, PepPurgeNodeResult, PepRetractCommand,
-    PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand,
-    PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult, PubSubCollectionDiscoChild,
-    PubSubCollectionDiscoSnapshot, PubSubConfigureNodeCommand, PubSubConfigureNodeResult,
-    PubSubCreateNodeCommand, PubSubCreateNodeResult, PubSubDeleteNodeCommand,
-    PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
+    validate_pep_unsubscribe_command, validate_pubsub_authorize_subscription_command,
+    validate_pubsub_configure_node_command, validate_pubsub_create_node_command,
+    validate_pubsub_delete_node_command, validate_pubsub_publish_command,
+    validate_pubsub_purge_node_command, validate_pubsub_retract_command,
+    validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
+    validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
+    PepConfigureNodeCommand, PepConfigureNodeResult, PepDeleteNodeCommand, PepDeleteNodeResult,
+    PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult, PepPurgeNodeCommand,
+    PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
+    PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeCommand,
+    PepUnsubscribeResult, PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
+    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubConfigureNodeCommand,
+    PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubOwnerRead, PubSubOwnerReadKind,
     PubSubPublishCommand, PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult,
     PubSubRetractCommand, PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult,
@@ -953,6 +954,62 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 }
 
 impl<
+        R: PubSubNodeQueryRepository
+            + PubSubSubscriptionQueryRepository
+            + PubSubSubscriptionMutationRepository,
+    > PubSubService<R>
+{
+    pub(crate) async fn execute_pubsub_authorize_subscription(
+        &self,
+        command: PubSubAuthorizeSubscriptionCommand<'_>,
+    ) -> Result<PubSubAuthorizeSubscriptionResult> {
+        validate_pubsub_authorize_subscription_command(&command)?;
+        let Some(node) = self.get_node(command.node).await? else {
+            return Ok(PubSubAuthorizeSubscriptionResult {
+                outcome: SubscriptionAuthorizationOutcome::NotFound,
+            });
+        };
+        let Some(subscription) = self
+            .get_subscription(node.id, command.subscriber_jid)
+            .await?
+        else {
+            return Ok(PubSubAuthorizeSubscriptionResult {
+                outcome: SubscriptionAuthorizationOutcome::NotFound,
+            });
+        };
+        // This read is only a cheap precheck. The locked PostgreSQL mutation
+        // rechecks ownership, pending state and SubID before committing.
+        let requester_is_owner = self.is_owner(node.id, command.requester).await?;
+        if let Some(outcome) = authorization_precheck(
+            &subscription.state,
+            &subscription.subid,
+            command.echoed_subid,
+            requester_is_owner,
+        ) {
+            return Ok(PubSubAuthorizeSubscriptionResult { outcome });
+        }
+        let node_key = node.id.to_string();
+        let _permit = self
+            .admit_mutation(
+                &[command.requester, command.subscriber_jid, &node_key],
+                false,
+            )
+            .await?;
+        let outcome = self
+            .repository
+            .resolve_pending_subscription(
+                node.id,
+                command.requester,
+                command.subscriber_jid,
+                &subscription.subid,
+                command.allow,
+            )
+            .await?;
+        Ok(PubSubAuthorizeSubscriptionResult { outcome })
+    }
+}
+
+impl<
         R: PubSubNodeMutationRepository
             + PubSubItemMutationRepository
             + PubSubSubscriptionMutationRepository
@@ -1157,22 +1214,6 @@ impl<
         let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
         self.repository
             .delete_node_as_owner_with_redirect_and_outbox(node_id, requester, redirect)
-            .await
-    }
-    pub(crate) async fn resolve_pending_subscription(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: &str,
-        allow: bool,
-    ) -> Result<SubscriptionAuthorizationOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
-            .await?;
-        self.repository
-            .resolve_pending_subscription(node_id, requester, subscriber_jid, expected_subid, allow)
             .await
     }
 }

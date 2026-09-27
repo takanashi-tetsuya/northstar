@@ -13,7 +13,7 @@ use northstar_pubsub_core::{
     PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
     PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite,
     PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome,
+    SetSubscriptionsOutcome, SubscriptionAuthorizationOutcome,
 };
 pub mod repository;
 pub use repository::*;
@@ -224,6 +224,40 @@ impl From<PubSubUnsubscribeOutcome> for PubSubUnsubscribeResult {
     fn from(outcome: PubSubUnsubscribeOutcome) -> Self {
         Self { outcome }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct PubSubAuthorizeSubscriptionCommand<'a> {
+    pub requester: &'a str,
+    pub node: &'a str,
+    pub subscriber_jid: &'a str,
+    pub echoed_subid: Option<&'a str>,
+    pub allow: bool,
+}
+
+#[derive(Debug)]
+pub struct PubSubAuthorizeSubscriptionResult {
+    pub outcome: SubscriptionAuthorizationOutcome,
+}
+
+/// A read snapshot only filters invalid authorization forms. The repository
+/// must repeat these checks under its node and subscription locks before write.
+pub fn authorization_precheck(
+    state: &str,
+    stored_subid: &str,
+    echoed_subid: Option<&str>,
+    requester_is_owner: bool,
+) -> Option<SubscriptionAuthorizationOutcome> {
+    if echoed_subid.is_some_and(|echoed| echoed != stored_subid) {
+        return Some(SubscriptionAuthorizationOutcome::Stale);
+    }
+    if !requester_is_owner {
+        return Some(SubscriptionAuthorizationOutcome::Forbidden);
+    }
+    if state != "pending" {
+        return Some(SubscriptionAuthorizationOutcome::Stale);
+    }
+    None
 }
 
 pub struct PubSubRetractCommand<'a> {
@@ -685,6 +719,18 @@ pub fn validate_pubsub_unsubscribe_command(command: &PubSubUnsubscribeCommand<'_
     Ok(())
 }
 
+pub fn validate_pubsub_authorize_subscription_command(
+    command: &PubSubAuthorizeSubscriptionCommand<'_>,
+) -> Result<()> {
+    if command.requester.trim().is_empty()
+        || command.node.trim().is_empty()
+        || command.subscriber_jid.trim().is_empty()
+    {
+        return Err(anyhow::anyhow!("invalid PubSub subscription authorization"));
+    }
+    Ok(())
+}
+
 pub fn validate_pubsub_retract_command(command: &PubSubRetractCommand<'_>) -> Result<()> {
     if command.write.requester.trim().is_empty() {
         return Err(anyhow::anyhow!("requester must not be empty"));
@@ -947,6 +993,67 @@ impl PubSubMutationAdmission {
 mod tests {
     use super::*;
     use northstar_pubsub_core::{PubSubAccount, PubSubPublishWrite, PubSubSubscribeWrite};
+
+    #[test]
+    fn subscription_authorization_accepts_omitted_subid_but_rejects_stale_forms() {
+        assert_eq!(
+            authorization_precheck("pending", "current", None, true),
+            None
+        );
+        assert_eq!(
+            authorization_precheck("pending", "current", Some("current"), true),
+            None
+        );
+        assert_eq!(
+            authorization_precheck("pending", "current", Some("old"), true),
+            Some(SubscriptionAuthorizationOutcome::Stale)
+        );
+        assert_eq!(
+            authorization_precheck("subscribed", "current", None, true),
+            Some(SubscriptionAuthorizationOutcome::Stale)
+        );
+        assert_eq!(
+            authorization_precheck("pending", "current", None, false),
+            Some(SubscriptionAuthorizationOutcome::Forbidden)
+        );
+    }
+
+    #[test]
+    fn subscription_authorization_rejects_empty_command_fields() {
+        let valid = PubSubAuthorizeSubscriptionCommand {
+            requester: "owner@example.test",
+            node: "room-events",
+            subscriber_jid: "reader@example.test/phone",
+            echoed_subid: None,
+            allow: true,
+        };
+        assert!(validate_pubsub_authorize_subscription_command(&valid).is_ok());
+        for invalid in [
+            PubSubAuthorizeSubscriptionCommand {
+                requester: " ",
+                ..valid
+            },
+            PubSubAuthorizeSubscriptionCommand { node: "", ..valid },
+            PubSubAuthorizeSubscriptionCommand {
+                subscriber_jid: "",
+                ..valid
+            },
+        ] {
+            assert!(validate_pubsub_authorize_subscription_command(&invalid).is_err());
+        }
+        // An empty echoed SubID is a stale form, not a malformed command.
+        assert!(validate_pubsub_authorize_subscription_command(
+            &PubSubAuthorizeSubscriptionCommand {
+                echoed_subid: Some(""),
+                ..valid
+            }
+        )
+        .is_ok());
+        assert_eq!(
+            authorization_precheck("pending", "current", Some(""), true),
+            Some(SubscriptionAuthorizationOutcome::Stale)
+        );
+    }
 
     #[test]
     fn pubsub_publish_validation() {

@@ -264,7 +264,10 @@ The lab setup is repeatable in this order: provision the six guests and lab
 PKI, run `bash scripts/local-vm-lab-minio.sh` with the pinned Debian package
 staged on the host, run `bash scripts/local-vm-lab-minio-bucket.sh`, complete an
 offline storage migration, then run `bash scripts/local-vm-lab-cluster.sh`.
-The latter requires committed S3 authority
+The MinIO setup script reuses the infra VM's attached `vdb` and rejects a
+live/saved disk-path mismatch; when provisioning a new data disk, set
+`NORTHSTAR_LAB_DIR` to the lab storage root.
+`local-vm-lab-cluster.sh` requires committed S3 authority
 and deliberately refuses to replace lost node signing keys. Run
 `local-vm-lab-cluster-delivery.py`, `local-vm-lab-upload.py`,
 `local-vm-lab-mam.py` and `local-vm-lab-muc-mam.py` from `ns-a` after copying

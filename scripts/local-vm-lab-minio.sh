@@ -17,17 +17,41 @@ ssh_opts=(-i "$key" -o BatchMode=yes -o ConnectTimeout=5
   -o StrictHostKeyChecking=accept-new
   -o "UserKnownHostsFile=$(dirname "$key")/known_hosts")
 remote=lab@$infra_ip
-disk=/tmp/northstar-lab/northstar-lab-infra/minio-data.qcow2
-if [[ ! -e $disk ]]; then
-  qemu-img create -f qcow2 "$disk" 10G >/dev/null
+lab_dir=${NORTHSTAR_LAB_DIR:-/tmp/northstar-lab}
+disk=${NORTHSTAR_LAB_MINIO_DISK:-$lab_dir/northstar-lab-infra/minio-data.qcow2}
+live_disk=$(virsh domblklist northstar-lab-infra --details |
+  awk '$2 == "disk" && $3 == "vdb" { print $4 }')
+saved_disk=$(virsh domblklist northstar-lab-infra --inactive --details |
+  awk '$2 == "disk" && $3 == "vdb" { print $4 }')
+if [[ -n $live_disk || -n $saved_disk ]]; then
+  [[ -n $live_disk && $live_disk == "$saved_disk" ]] || {
+    echo 'MinIO disk differs between running and saved VM configuration' >&2
+    exit 1
+  }
+  if [[ -n ${NORTHSTAR_LAB_MINIO_DISK:-} && $disk != "$live_disk" ]]; then
+    echo 'configured MinIO disk differs from the attached disk' >&2
+    exit 1
+  fi
+  disk=$live_disk
+else
+  [[ $disk == /* && -d $(dirname "$disk") ]] || {
+    echo 'MinIO disk directory is missing' >&2
+    exit 1
+  }
+  if [[ ! -e $disk ]]; then
+    qemu-img create -f qcow2 "$disk" 10G >/dev/null
+  fi
 fi
-[[ -f $disk && ! -L $disk ]] || exit 1
-if ! virsh domblklist northstar-lab-infra | grep -Fq "$disk"; then
+[[ -f $disk && ! -L $disk ]] || {
+  echo 'MinIO disk must be a regular file' >&2
+  exit 1
+}
+if [[ -z $live_disk ]]; then
   virsh attach-disk northstar-lab-infra "$disk" vdb \
     --targetbus virtio --subdriver qcow2 --live --config >/dev/null
 fi
 scp "${ssh_opts[@]}" "$package" "$remote:/tmp/northstar-lab-minio.deb"
-ssh "${ssh_opts[@]}" "$remote" "sudo bash -s -- '$infra_ip'" <<'GUEST'
+ssh "${ssh_opts[@]}" "$remote" sudo bash -s -- "$infra_ip" <<'GUEST'
 set -euo pipefail
 set +x
 umask 077

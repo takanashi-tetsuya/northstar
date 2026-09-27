@@ -463,6 +463,104 @@ if PGPASSWORD="$backup_password" PGHOST="$socket_dir" PGUSER="$backup_role" \
   exit 1
 fi
 
+# These hooks run only in the disposable recovery child. They stop it after
+# a durable boundary, without adding test branches to the production tool.
+recovery_kill_hooks="$production_root/recovery-kill-hooks"
+mkdir -m 0700 "$recovery_kill_hooks"
+cat >"$recovery_kill_hooks/sitecustomize.py" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+point = os.environ.get("NORTHSTAR_RECOVERY_TEST_KILL_POINT")
+script = os.environ.get("NORTHSTAR_RECOVERY_TEST_SCRIPT")
+marker = os.environ.get("NORTHSTAR_RECOVERY_TEST_MARKER")
+floor_helper = os.environ.get("NORTHSTAR_RECOVERY_TEST_FLOOR_HELPER")
+open_count = 0
+
+if point and script and marker and floor_helper:
+    def stop():
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, (point + "\n").encode("ascii"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    def profile(frame, event, result):
+        global open_count
+        filename = frame.f_code.co_filename
+        name = frame.f_code.co_name
+        if filename == script and name == "append" and event == "return":
+            fields = frame.f_locals.get("fields", ())
+            if point == "after-recovery-decision" and fields[:1] == ("recovery-decision",):
+                stop()
+            if point == "after-recovery-compensated" and fields == ("compensated",):
+                stop()
+        if point == "after-recovery-floor" and event == "return" \
+                and filename == subprocess.__file__ and name == "run" \
+                and frame.f_back is not None \
+                and frame.f_back.f_code.co_filename == script:
+            calls = frame.f_locals.get("popenargs", ())
+            command = calls[0] if len(calls) == 1 else None
+            if isinstance(command, list) and len(command) > 2 \
+                    and command[1:3] == [floor_helper, "commit-restore-state"] \
+                    and isinstance(result, subprocess.CompletedProcess) \
+                    and result.returncode == 0:
+                stop()
+        if point == "before-recovery-publication" and filename == script \
+                and name == "run_pg" and event == "call":
+            sql = frame.f_locals.get("sql", "")
+            if sql.startswith('ALTER DATABASE "') \
+                    and sql.endswith('" WITH ALLOW_CONNECTIONS true'):
+                open_count += 1
+                if open_count == 2:
+                    stop()
+
+    sys.setprofile(profile)
+PY
+chmod 0600 "$recovery_kill_hooks/sitecustomize.py"
+
+run_killed_recovery() {
+  local point="$1" marker_root="$2" target="$3" status marker cutover
+  shift 3
+  cutover="$1"
+  marker="$marker_root/$point.marker"
+  [[ ! -e "$marker" ]] || { echo "duplicate recovery kill marker: $point" >&2; return 1; }
+  if PYTHONPATH="$recovery_kill_hooks${PYTHONPATH:+:$PYTHONPATH}" \
+     NORTHSTAR_RECOVERY_TEST_KILL_POINT="$point" \
+     NORTHSTAR_RECOVERY_TEST_SCRIPT="$project_dir/scripts/restore-recovery.py" \
+     NORTHSTAR_RECOVERY_TEST_FLOOR_HELPER="$project_dir/scripts/backup-security.py" \
+     NORTHSTAR_RECOVERY_TEST_MARKER="$marker" \
+     bash "$project_dir/scripts/recover-restore.sh" "$@" \
+       >"$marker_root/$point.log" 2>&1; then
+    status=0
+  else
+    status=$?
+  fi
+  [[ "$status" == 137 && -f "$marker" && "$(<"$marker")" == "$point" ]] \
+    || { echo "recovery did not hit the exact $point SIGKILL boundary (exit $status)" >&2; return 1; }
+  if grep -q $'^recovery-complete\t' "$cutover/journal.tsv"; then
+    echo "recovery $point completed before its SIGKILL boundary" >&2
+    return 1
+  fi
+  local closed
+  closed="$(PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" \
+    PGUSER="$bootstrap_role" PGDATABASE=postgres "$postgres_bin/psql" \
+    --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command="SELECT NOT datallowconn FROM pg_database WHERE datname='$target'")"
+  [[ "$closed" == t ]] \
+    || { echo "recovery $point lost its target database fence" >&2; return 1; }
+  # A killed Python parent can leave only this disposable target's psql child.
+  PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
+    PGDATABASE=postgres "$postgres_bin/psql" --no-psqlrc --quiet \
+    --set ON_ERROR_STOP=1 \
+    --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$target'" \
+    >/dev/null
+}
+
 # SIGKILL bypasses EXIT traps. A fresh process must prove the committed XID
 # against the in-transaction marker, finish the exact object set, and reopen
 # the database only after writing its own durable forward decision and floor.
@@ -526,20 +624,68 @@ if bash "$project_dir/scripts/recover-restore.sh" "$recovery_cutover" \
   echo 'recovery accepted an unrelated rollback identity' >&2
   exit 1
 fi
-bash "$project_dir/scripts/recover-restore.sh" "$recovery_cutover" \
-  --database-url-file "$recovery_url_file" \
-  --upload-dir "$recovery_uploads" --rollback-dir "$recovery_rollback" \
-  --rollback-state-file "$recovery_floor_dir/floor" \
-  --backup-dir "$production_backup_dir" \
-  --public-key-file "$production_verify_key" \
-  --age-identity-file "$production_age_identity" \
-  --rollback-age-identity-file "$rollback_recovery_identity" \
-  --plaintext-staging-dir "$production_scratch" \
-  --confirm-stopped NORTHSTAR-RECOVER >/dev/null
+recovery_args=(
+  "$recovery_cutover"
+  --database-url-file "$recovery_url_file"
+  --upload-dir "$recovery_uploads" --rollback-dir "$recovery_rollback"
+  --rollback-state-file "$recovery_floor_dir/floor"
+  --backup-dir "$production_backup_dir"
+  --public-key-file "$production_verify_key"
+  --age-identity-file "$production_age_identity"
+  --rollback-age-identity-file "$rollback_recovery_identity"
+  --plaintext-staging-dir "$production_scratch"
+  --confirm-stopped NORTHSTAR-RECOVER
+)
+recovery_restore_id="${recovery_cutover##*-}"
+recovery_manifest_sha="$(sha256sum "$production_backup_dir/manifest.txt" | awk '{print $1}')"
+run_killed_recovery after-recovery-decision "$recovery_root" \
+  northstar_recovery_target "${recovery_args[@]}"
+grep -Fqx $'recovery-decision\tforward\t'"$recovery_restore_id"$'\t'"$recovery_manifest_sha" \
+  "$recovery_cutover/journal.tsv"
+[[ ! -e "$recovery_floor_dir/floor" ]] \
+  || { echo 'recovery committed the floor before the decision kill point' >&2; exit 1; }
+if grep -q $'^forward-decision\t' "$recovery_cutover/journal.tsv"; then
+  echo 'recovery passed the forward decision before its decision kill point' >&2
+  exit 1
+fi
+run_killed_recovery after-recovery-floor "$recovery_root" \
+  northstar_recovery_target "${recovery_args[@]}"
+recovery_incoming_xid="$(awk -F $'\t' \
+  '$1 == "database-transaction-intent" && $2 == "incoming" { print $4 }' \
+  "$recovery_cutover/journal.tsv")"
+[[ "$recovery_incoming_xid" =~ ^[1-9][0-9]{0,19}$ ]] \
+  || { echo 'recovery lost its incoming XID binding' >&2; exit 1; }
+grep -Fqx $'forward-decision\t'"$recovery_restore_id"$'\t'"$recovery_manifest_sha"$'\t'"$recovery_incoming_xid" \
+  "$recovery_cutover/journal.tsv"
+grep -qx "last_restore_id=$recovery_restore_id" "$recovery_floor_dir/floor"
+grep -qx "last_manifest_sha256=$recovery_manifest_sha" "$recovery_floor_dir/floor"
+recovery_backup_generation="$(sed -n 's/^backup_generation=//p' \
+  "$production_backup_dir/manifest.txt")"
+recovery_backup_sequence="$(sed -n 's/^backup_sequence=//p' \
+  "$production_backup_dir/manifest.txt")"
+[[ -n "$recovery_backup_generation" && "$recovery_backup_sequence" =~ ^[1-9][0-9]*$ ]] \
+  || { echo 'recovery backup lacks generation or sequence' >&2; exit 1; }
+grep -qx "generation=$recovery_backup_generation" "$recovery_floor_dir/floor"
+grep -qx "sequence=$recovery_backup_sequence" "$recovery_floor_dir/floor"
+[[ "$(<"$recovery_uploads/$upload_id")" == "$upload_body" ]] \
+  || { echo 'recovery floor kill did not retain the exact upload' >&2; exit 1; }
+run_killed_recovery before-recovery-publication "$recovery_root" \
+  northstar_recovery_target "${recovery_args[@]}"
+grep -qx "last_restore_id=$recovery_restore_id" "$recovery_floor_dir/floor"
+grep -qx "last_manifest_sha256=$recovery_manifest_sha" "$recovery_floor_dir/floor"
+grep -qx "generation=$recovery_backup_generation" "$recovery_floor_dir/floor"
+grep -qx "sequence=$recovery_backup_sequence" "$recovery_floor_dir/floor"
+bash "$project_dir/scripts/recover-restore.sh" "${recovery_args[@]}" >/dev/null
 [[ "$(<"$recovery_uploads/$upload_id")" == "$upload_body" ]] \
   || { echo "SIGKILL recovery did not activate the exact backup object" >&2; exit 1; }
+[[ "$(find "$recovery_uploads" -mindepth 1 -maxdepth 1 -type f \
+  ! -name .northstar-upload-root | wc -l)" == 1 ]] \
+  || { echo 'SIGKILL recovery retained an unexpected live object' >&2; exit 1; }
 grep -qx 'format=northstar-restore-state-v2' "$recovery_floor_dir/floor" \
   || { echo "SIGKILL recovery did not publish the bound restore floor" >&2; exit 1; }
+grep -qx "generation=$recovery_backup_generation" "$recovery_floor_dir/floor"
+grep -qx "sequence=$recovery_backup_sequence" "$recovery_floor_dir/floor"
+grep -Fqx $'recovery-complete\tforward' "$recovery_cutover/journal.tsv"
 recovered_value="$(read_canonical_probe northstar_recovery_target "$source_probe_user_id")"
 [[ "$recovered_value" == "$source_probe_marker|$source_probe_marker" ]] \
   || { echo "SIGKILL recovery did not reopen the exact restored database" >&2; exit 1; }
@@ -708,6 +854,13 @@ PSQL
   create_restore_database "$s3_crash_target"
   apply_repository_migrations "$s3_crash_target"
   reconcile_repository_grants "$s3_crash_target"
+  local s3_crash_authority_before
+  s3_crash_authority_before="$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" \
+    PGUSER="$migrator_role" PGDATABASE="$s3_crash_target" "$postgres_bin/psql" \
+    --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command="SELECT COALESCE((SELECT storage_backend || ':' || \
+      encode(namespace_sha256,'hex') || ':' || generation::text \
+      FROM upload_storage_authority WHERE singleton), 'none')")"
   local s3_crash_url="$s3_root/crash-database-url"
   printf '%s\n' \
     "postgresql://$migrator_role:$migrator_password@/$s3_crash_target?host=$encoded_socket" \
@@ -738,21 +891,40 @@ PSQL
     --set ON_ERROR_STOP=1 \
     --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
                 WHERE datname='$s3_crash_target'" >/dev/null
-  bash "$project_dir/scripts/recover-restore.sh" "$aborted_journal" \
-    --database-url-file "$s3_crash_url" \
-    --upload-dir "$s3_root/abort-uploads" \
-    --rollback-dir "$s3_root/abort-rollback" \
-    --rollback-state-file "$s3_root/abort-floor/current" \
-    --backup-dir "$s3_archive" \
-    --public-key-file "$production_verify_key" \
-    --age-identity-file "$production_age_identity" \
-    --rollback-age-identity-file "$rollback_recovery_identity" \
-    --plaintext-staging-dir "$production_scratch" \
-    --confirm-stopped NORTHSTAR-RECOVER >/dev/null
+  local -a aborted_recovery_args=(
+    "$aborted_journal"
+    --database-url-file "$s3_crash_url"
+    --upload-dir "$s3_root/abort-uploads"
+    --rollback-dir "$s3_root/abort-rollback"
+    --rollback-state-file "$s3_root/abort-floor/current"
+    --backup-dir "$s3_archive"
+    --public-key-file "$production_verify_key"
+    --age-identity-file "$production_age_identity"
+    --rollback-age-identity-file "$rollback_recovery_identity"
+    --plaintext-staging-dir "$production_scratch"
+    --confirm-stopped NORTHSTAR-RECOVER
+  )
+  run_killed_recovery after-recovery-compensated "$s3_root" \
+    "$s3_crash_target" "${aborted_recovery_args[@]}"
+  grep -Fqx $'recovery-decision\tcompensate\t'"${aborted_journal##*-}"$'\t'"$(
+    sha256sum "$s3_archive/manifest.txt" | awk '{print $1}')" \
+    "$aborted_journal/journal.tsv"
+  grep -qx compensated "$aborted_journal/journal.tsv"
+  [[ ! -e "$s3_root/abort-floor/current" ]] \
+    || { echo 'S3 compensation committed a restore floor' >&2; exit 1; }
+  bash "$project_dir/scripts/recover-restore.sh" "${aborted_recovery_args[@]}" >/dev/null
+  grep -Fqx $'recovery-complete\tcompensate' "$aborted_journal/journal.tsv"
   [[ "$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
        PGDATABASE="$s3_crash_target" "$postgres_bin/psql" --no-psqlrc \
        --tuples-only --no-align --set ON_ERROR_STOP=1 \
        --command='SELECT count(*) FROM upload_slots')" == 0 \
+     && "$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
+       PGDATABASE="$s3_crash_target" "$postgres_bin/psql" --no-psqlrc \
+       --tuples-only --no-align --set ON_ERROR_STOP=1 \
+       --command="SELECT COALESCE((SELECT storage_backend || ':' || \
+         encode(namespace_sha256,'hex') || ':' || generation::text \
+         FROM upload_storage_authority WHERE singleton), 'none')")" == \
+       "$s3_crash_authority_before" \
      && ! -e "$s3_root/abort-floor/current" ]] \
     || { echo 'S3 pre-commit recovery changed the original authority' >&2; exit 1; }
   IFS=$'\t' read -r _ aborted_key aborted_version _ _ \

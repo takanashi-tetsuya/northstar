@@ -775,9 +775,11 @@ coordinator acquires the same transaction advisory lock and only then calls
 `pg_xact_status(xid8)`. `committed` and `aborted` are the only automatic
 outcomes. `in progress`, `NULL`, malformed/multiple output or a query failure
 are unknown and keep `ALLOW_CONNECTIONS=false` with the journal and rollback
-materials retained. The function reports only recent XIDs; a hard-crash
-journal left until PostgreSQL discards that status therefore requires manual
-recovery. Incoming and compensation transactions always have different XIDs.
+materials retained. The function reports only recent XIDs. During recovery
+started by an operator, a too-old incoming XID can still authorize forward
+replay when the same transaction left its exact committed database outcome
+marker; without that marker, the result is indeterminate and the target stays
+fenced. Incoming and compensation transactions always have different XIDs.
 This model grants no new PostgreSQL privilege and does not use a custom GUC as
 a substitute database marker.
 

@@ -221,7 +221,8 @@ class Evidence:
                         and sha256(self.s3_results) == digests["results-sha256"]
                         and sha256(self.s3_remap) == digests["remap-sha256"],
                         "S3 import evidence differs from the durable journal")
-            require(not any(row[0] == "database-transaction-intent" and row[1] == "incoming"
+            require(not any(row[0] == "database-transaction-intent"
+                            and len(row) > 1 and row[1] == "incoming"
                             for row in records) or self.s3_import_verified,
                     "incoming replacement lacks complete S3 import evidence")
         else:
@@ -283,6 +284,7 @@ class Evidence:
         require((self.backup / "manifest.txt").is_file()
                 and sha256(self.backup / "manifest.txt") == self.manifest_sha,
                 "signed backup manifest differs from the journal")
+        transaction_intents: dict[str, tuple[int, list[str]]] = {}
         for kind, label in (("incoming", "restored"), ("rollback", "rollback")):
             intents = [row for row in records if row[0] == "database-transaction-intent"
                        and len(row) >= 2 and row[1] == kind]
@@ -294,12 +296,66 @@ class Evidence:
                         and row[5] == f"target-database={self.database}"
                         and re.fullmatch(r"worker-backend-pid=[1-9][0-9]*", row[6]) is not None,
                         f"malformed {kind} transaction intent")
+                transaction_intents[kind] = (records.index(row), row)
             setattr(self, f"{kind}_xid", intents[0][3] if intents else None)
+        require(not any(row[0] == "database-transaction-intent"
+                        and (len(row) < 2 or row[1] not in {"incoming", "rollback"})
+                        for row in records), "unknown transaction intent kind")
+        if self.rollback_xid is not None:
+            require(self.incoming_xid is not None
+                    and self.rollback_xid != self.incoming_xid
+                    and transaction_intents["incoming"][0] < transaction_intents["rollback"][0],
+                    "rollback intent lacks a distinct incoming predecessor")
+        transaction_outcomes: dict[str, tuple[int, str]] = {}
+        for position, row in enumerate(records):
+            if row[0] != "database-transaction-outcome":
+                continue
+            require(len(row) == 5 and row[1] in {"incoming", "rollback"},
+                    "malformed transaction outcome")
+            kind = row[1]
+            require(kind not in transaction_outcomes
+                    and row[2] == ("restored" if kind == "incoming" else "rollback")
+                    and row[4] in {"committed", "aborted"}
+                    and (row[3] == "unassigned" or XID.fullmatch(row[3]) is not None)
+                    and (row[3] != "unassigned" or row[4] == "aborted"),
+                    f"malformed {kind} transaction outcome")
+            intent = transaction_intents.get(kind)
+            if intent is not None:
+                require(intent[0] < position and row[3] == intent[1][3],
+                        f"{kind} transaction outcome differs from its durable intent")
+            else:
+                # A worker can abort before its XID intent is durably written.
+                require(row[4] == "aborted",
+                        f"{kind} transaction outcome lacks a durable intent")
+            if kind == "rollback":
+                predecessor = transaction_outcomes.get("incoming")
+                require(predecessor is not None and predecessor[1] == "committed"
+                        and predecessor[0] < position,
+                        "rollback outcome lacks a committed incoming predecessor")
+            transaction_outcomes[kind] = (position, row[4])
+        if self.rollback_xid is not None:
+            predecessor = transaction_outcomes.get("incoming")
+            require(predecessor is not None and predecessor[1] == "committed"
+                    and predecessor[0] < transaction_intents["rollback"][0],
+                    "rollback intent lacks a committed incoming predecessor")
         decisions = [row for row in records if row[0] == "forward-decision"]
         require(len(decisions) <= 1 and (not decisions or decisions[0] ==
                 ["forward-decision", self.restore_id, self.manifest_sha, self.incoming_xid]),
                 "forward decision does not match the transaction binding")
         self.forward_decided = bool(decisions)
+        recovery_decision: str | None = None
+        for row in records:
+            if row[0] == "recovery-decision":
+                require(len(row) == 4 and row[1] in {"forward", "compensate"}
+                        and row[2:] == [self.restore_id, self.manifest_sha]
+                        and (recovery_decision is None or recovery_decision == row[1])
+                        and (row[1] != "compensate" or not self.forward_decided),
+                        "recovery decision differs from the restore binding or earlier decision")
+                recovery_decision = row[1]
+            elif row[0] == "recovery-complete":
+                require(len(row) == 2 and row[1] == recovery_decision,
+                        "recovery completion lacks a matching prior decision")
+        self.recovery_decision = recovery_decision
 
 
 def object_matches(path: Path, expected: tuple[int, str]) -> bool:
@@ -730,6 +786,8 @@ def main() -> None:
             lock = session.query(f"SELECT pg_try_advisory_lock({MAINTENANCE_LOCK})")
             require(lock == "t", "another backup or restore holds the target maintenance lock")
             outcome = decide(session, evidence)
+            require(evidence.recovery_decision is None or evidence.recovery_decision == outcome,
+                    "live transaction evidence conflicts with the durable recovery decision")
             append(evidence.journal, evidence.cutover, "recovery-decision", outcome,
                    evidence.restore_id, evidence.manifest_sha)
             if outcome == "forward":

@@ -205,6 +205,111 @@ class ReplayTests(unittest.TestCase):
             with self.assertRaisesRegex(recovery.RecoveryError, "truncated"):
                 fixture.evidence()
 
+    def test_recovery_decisions_bind_identity_and_reject_conflicts(self) -> None:
+        for decision, error in (
+            (["recovery-decision", "forward", "wrong-id", "0" * 64], "restore binding"),
+            (["recovery-decision", "forward", JournalFixture.restore_id,
+              "0" * 64], "restore binding"),
+            (["recovery-decision", "unknown", JournalFixture.restore_id,
+              "0" * 64], "restore binding"),
+            (["recovery-decision", "forward", JournalFixture.restore_id], "restore binding"),
+        ):
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory(
+                    prefix="northstar-recovery-test-") as directory:
+                fixture = JournalFixture(Path(directory))
+                fixture.records.append(decision)
+                fixture.flush()
+                with self.assertRaisesRegex(recovery.RecoveryError, error):
+                    fixture.evidence()
+
+        with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
+            fixture = JournalFixture(Path(directory))
+            bound = ["recovery-decision", "forward", fixture.restore_id,
+                     recovery.sha256(fixture.backup / "manifest.txt")]
+            fixture.records.extend([bound, bound.copy()])
+            fixture.flush()
+            self.assertEqual(fixture.evidence().incoming_xid, "500")
+            fixture.records.append(["recovery-decision", "compensate", *bound[2:]])
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "earlier decision"):
+                fixture.evidence()
+
+    def test_recovery_completion_requires_matching_prior_decision(self) -> None:
+        for rows in (
+            [["recovery-complete", "forward"]],
+            [["recovery-decision", "forward", JournalFixture.restore_id, "placeholder"],
+             ["recovery-complete", "compensate"]],
+        ):
+            with self.subTest(rows=rows), tempfile.TemporaryDirectory(
+                    prefix="northstar-recovery-test-") as directory:
+                fixture = JournalFixture(Path(directory))
+                for row in rows:
+                    if len(row) == 4 and row[3] == "placeholder":
+                        row[3] = recovery.sha256(fixture.backup / "manifest.txt")
+                    fixture.records.append(row)
+                fixture.flush()
+                with self.assertRaises(recovery.RecoveryError):
+                    fixture.evidence()
+
+        with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
+            fixture = JournalFixture(Path(directory))
+            fixture.records.extend([
+                ["recovery-decision", "forward", fixture.restore_id,
+                 recovery.sha256(fixture.backup / "manifest.txt")],
+                ["recovery-complete", "forward"],
+            ])
+            fixture.flush()
+            self.assertEqual(fixture.evidence().incoming_xid, "500")
+
+    def test_rollback_intent_needs_distinct_committed_incoming_predecessor(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
+            fixture = JournalFixture(Path(directory))
+            rollback = ["database-transaction-intent", "rollback", "rollback", "501",
+                        f"northstar-restore-{fixture.restore_id}-rollback",
+                        "target-database=northstar", "worker-backend-pid=124"]
+            fixture.records.append(rollback)
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "committed incoming predecessor"):
+                fixture.evidence()
+
+            fixture.records.insert(-1, ["database-transaction-outcome", "incoming",
+                                        "restored", "500", "committed"])
+            fixture.flush()
+            self.assertEqual(fixture.evidence().rollback_xid, "501")
+            rollback[3] = "500"
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "distinct incoming predecessor"):
+                fixture.evidence()
+            rollback[3] = "501"
+            fixture.records = [row for row in fixture.records
+                               if row[0] != "database-transaction-intent" or row[1] != "incoming"]
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "incoming predecessor"):
+                fixture.evidence()
+
+    def test_transaction_outcome_must_match_durable_intent(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="northstar-recovery-test-") as directory:
+            fixture = JournalFixture(Path(directory))
+            outcome = ["database-transaction-outcome", "incoming", "restored",
+                       "501", "committed"]
+            fixture.records.append(outcome)
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "differs from its durable intent"):
+                fixture.evidence()
+            outcome[3] = "500"
+            fixture.flush()
+            self.assertEqual(fixture.evidence().incoming_xid, "500")
+            outcome[3] = "unassigned"
+            outcome[4] = "aborted"
+            fixture.flush()
+            with self.assertRaisesRegex(recovery.RecoveryError, "differs from its durable intent"):
+                fixture.evidence()
+
+            # The worker may abort before publishing an XID intent.
+            fixture.records.remove(fixture.records[5])
+            fixture.flush()
+            self.assertIsNone(fixture.evidence().incoming_xid)
+
     def test_transaction_status_requires_the_exact_marker(self) -> None:
         class Session:
             def __init__(self, *, status: str, marker: str) -> None:

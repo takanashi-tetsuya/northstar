@@ -379,9 +379,11 @@ keep an otherwise consistent database offline.
 cutover directory makes the strict upload-root preflight reject the next normal
 restore. Treat it together with the retained pre-restore dump as recovery
 evidence; do not merely remove it or run `ALTER DATABASE ... ALLOW_CONNECTIONS
-true`. This release does not provide a fully automatic hard-crash journal
-replay command, so hard-crash recovery requires an operator-reviewed restore
-drill.
+true`. After stopping all workloads, an operator can invoke `recover-restore.sh`
+with the retained journal and recovery keys. It checks the exact transaction
+markers and replays the appropriate forward or compensation path while the
+target remains fenced. Review its result and complete the post-restore checks
+before returning the service to normal operation.
 
 The retained pre-restore database dump and old upload copies are plaintext by
 default. To encrypt the database dump as it is created, place two independently

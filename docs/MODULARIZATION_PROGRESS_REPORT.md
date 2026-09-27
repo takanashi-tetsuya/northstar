@@ -97,6 +97,10 @@ Root PubSub discovery now uses a read-only repository port returning its
 authorized count, cursor result, page and index from one PostgreSQL statement.
 This replaces four separately observed snapshots and preserves zero-length
 and reverse RSM pages.
+XEP-0060 subscription authorization replies now pass a typed command to the
+PubSub service. The service performs the read precheck; the PostgreSQL mutation
+still verifies owner, pending state and SubID under its existing locks before
+writing the event outbox.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -129,9 +133,12 @@ rules, and the memory-pure `RosterSyncGate` push fence into `northstar-roster-ap
 `src/services/roster.rs` now provides atomic `execute_roster_*` methods, and `src/xmpp/protocol/roster.rs`
 dispatches typed commands without manual parameter passing or database coupling.
 
-Remaining for Packet 4: Complete the existing archive/MAM core and application
-integration. Move pure authorization and paging policy out of the PostgreSQL
-adapter without splitting an authorized query's consistent result snapshot.
+Personal MAM archive admission now reads full-JID, bare-JID, account-default
+and roster facts in one PostgreSQL statement and applies their precedence in
+`northstar-archive-core`. Other archive authorization and paging paths still
+need the same boundary review. Complete the existing archive/MAM core and
+application integration without splitting an authorized query's consistent
+result snapshot.
 
 ### Packet 5 — Upload/object lifecycle
 

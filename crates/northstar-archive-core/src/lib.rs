@@ -51,6 +51,29 @@ impl Default for MamPreferences {
     }
 }
 
+/// Facts read from one database statement for personal-message archiving.
+/// A full-JID preference overrides its bare-JID and account defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MamArchiveAdmissionFacts<'a> {
+    pub full_jid_policy: Option<&'a str>,
+    pub bare_jid_policy: Option<&'a str>,
+    pub default_policy: Option<&'a str>,
+    pub roster_member: bool,
+}
+
+pub fn decide_mam_archive_admission(facts: MamArchiveAdmissionFacts<'_>) -> bool {
+    match facts
+        .full_jid_policy
+        .or(facts.bare_jid_policy)
+        .or(facts.default_policy)
+        .unwrap_or("always")
+    {
+        "always" => true,
+        "roster" => facts.roster_member,
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MamRsmPage {
     First,
@@ -463,6 +486,32 @@ mod tests {
         assert_eq!(prefs.default_policy, "always");
         assert!(prefs.always.is_empty());
         assert!(prefs.never.is_empty());
+    }
+
+    #[test]
+    fn archive_admission_respects_preference_precedence_and_roster() {
+        let mut facts = MamArchiveAdmissionFacts {
+            full_jid_policy: Some("never"),
+            bare_jid_policy: Some("always"),
+            default_policy: Some("always"),
+            roster_member: true,
+        };
+        assert!(!decide_mam_archive_admission(facts));
+        facts.full_jid_policy = Some("always");
+        facts.bare_jid_policy = Some("never");
+        assert!(decide_mam_archive_admission(facts));
+        facts.full_jid_policy = None;
+        assert!(!decide_mam_archive_admission(facts));
+        facts.bare_jid_policy = None;
+        facts.default_policy = Some("roster");
+        facts.roster_member = false;
+        assert!(!decide_mam_archive_admission(facts));
+        facts.roster_member = true;
+        assert!(decide_mam_archive_admission(facts));
+        facts.default_policy = Some("unknown");
+        assert!(!decide_mam_archive_admission(facts));
+        facts.default_policy = None;
+        assert!(decide_mam_archive_admission(facts));
     }
 
     #[test]

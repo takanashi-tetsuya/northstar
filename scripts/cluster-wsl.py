@@ -400,43 +400,6 @@ def offline_marker_count(marker: str) -> int:
     return int(result.stdout.strip())
 
 
-def offline_account_snapshot(username: str) -> str:
-    fixture.check(
-        re.fullmatch(r"[a-z_][a-z0-9_]*", username) is not None,
-        "offline snapshot username is unsafe",
-    )
-    environment = dict(os.environ)
-    environment["PGPASSWORD"] = "xmpp-test-password"
-    environment["PGOPTIONS"] = f"-c search_path={SCHEMA}"
-    result = subprocess.run(
-        [
-            "psql",
-            "--no-psqlrc",
-            "--quiet",
-            "--tuples-only",
-            "--no-align",
-            "--host",
-            "127.0.0.1",
-            "--username",
-            "xmpp_test",
-            "--dbname",
-            "xmpp_test",
-            "--set",
-            "ON_ERROR_STOP=1",
-            "--command",
-            "SELECT message.id::TEXT || ':' || message.stanza "
-            "FROM offline_messages message JOIN users ON users.id=message.recipient_id "
-            f"WHERE users.username='{username}' ORDER BY message.created_at,message.id;",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-        env=environment,
-        text=True,
-    )
-    return result.stdout.strip()
-
-
 def metric_value(port: int, name: str, timeout: float = 3) -> int:
     fixture.check(port > 0, "cluster metrics listener is not configured")
     fixture.check(timeout > 0, "cluster metrics observation deadline elapsed")
@@ -1509,6 +1472,20 @@ def expect_no_frame(client: object, marker: str, timeout: float = 0.75) -> None:
     )
 
 
+def expect_no_fault_frames(client: object, markers: tuple[str, ...], timeout: float = 0.75) -> None:
+    """Check every received frame so one forbidden marker cannot hide another."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            frame = client.receive(max(0.1, deadline - time.monotonic()))
+        except (TimeoutError, socket.timeout):
+            return
+        fixture.check(
+            not any(marker in frame for marker in markers),
+            f"fail-closed cluster delivered a rejected stanza: {frame}",
+        )
+
+
 def run_faults() -> None:
     fixture.check(
         REDIS_PORT > 0
@@ -1540,6 +1517,10 @@ def run_faults() -> None:
     fixture.check(bool(bob_node), "Bob's Redis session route is absent")
     bob_alive = f"{prefix}:node:{bob_node}:alive"
     bob_channel = f"{prefix}:node:{bob_node}"
+    fixture.check(
+        all(metric_value(port, "xmpp_cluster_operational_state") == 2 for port in (METRICS_A, METRICS_B)),
+        "both nodes must be Healthy before the Redis pause",
+    )
 
     # Pause the real control plane beyond the Redis client's bounded response
     # timeout. HTTP remains independently healthy; the stanza is not routed
@@ -1548,6 +1529,11 @@ def run_faults() -> None:
     os.kill(REDIS_PID, signal.SIGSTOP)
     try:
         time.sleep(0.25)
+        redis_status = pathlib.Path(f"/proc/{REDIS_PID}/status").read_text()
+        fixture.check(
+            re.search(r"^State:\s+T\b", redis_status, re.MULTILINE) is not None,
+            "the owned Redis process did not enter the stopped state",
+        )
         for port in (HTTP_A, HTTP_B):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=2) as response:
                 fixture.check(response.status == 200, "node readiness failed during Redis pause")
@@ -1555,8 +1541,7 @@ def run_faults() -> None:
             f"<message xmlns='jabber:client' to='{bob_full}' type='normal' id='redis-pause-bounded'>"
             "<body>must not bypass the paused control plane</body>"
             # The fault assertion is about a stale Redis command executing
-            # after recovery. Without no-store, normal/chat has a legitimate
-            # PostgreSQL offline fallback and may be replayed with <delay/>.
+            # after recovery; no-store cannot be accepted into PostgreSQL.
             "<no-store xmlns='urn:xmpp:hints'/></message>"
         )
         rejected, _ = alice_a.receive_until("redis-pause-bounded", timeout=6)
@@ -1579,67 +1564,87 @@ def run_faults() -> None:
             offline_marker_count("redis-pause-bounded") == 0,
             "no-store fault marker entered the PostgreSQL offline queue",
         )
+        # The no-store request may be the first command to notice the outage.
+        # Wait for the actual fail-closed health decision on both nodes before
+        # asserting the admission policy for an ordinary direct message.
+        fenced_deadline = time.monotonic() + 10
+        fenced_states = (None, None)
+        while time.monotonic() < fenced_deadline:
+            fenced_states = tuple(
+                metric_value(port, "xmpp_cluster_operational_state", timeout=1)
+                for port in (METRICS_A, METRICS_B)
+            )
+            if fenced_states == (3, 3):
+                break
+            time.sleep(0.1)
+        fixture.check(
+            fenced_states == (3, 3),
+            f"both nodes did not enter FailClosed while Redis was stopped: {fenced_states}",
+        )
+        for port in (HTTP_A, HTTP_B):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=2).close()
+            except urllib.error.HTTPError as error:
+                fixture.check(error.code == 503, f"fenced readiness returned {error.code}")
+            else:
+                raise AssertionError("fenced node remained ready during Redis outage")
 
-        # Preserve the complementary production behavior: ordinary chat is
-        # durably accepted into PostgreSQL when the Redis route is unavailable.
-        # Reconnecting Bob after recovery below must replay it with XEP-0203.
-        alice_a.send(
-            f"<message xmlns='jabber:client' to='{bob_full}' type='chat' "
-            "id='redis-pause-offline-fallback'>"
-            "<body>durable offline fallback while Redis is paused</body></message>"
+        forbidden_markers = (
+            "redis-pause-bounded",
+            "redis-pause-full-fail-closed",
+            "redis-pause-bare-fail-closed",
         )
-        alice_a.send("<r xmlns='urn:xmpp:sm:3'/>")
-        fallback_handled, _ = alice_a.receive_until("<a ", timeout=6)
-        fixture.check(
-            "urn:xmpp:sm:3" in fallback_handled,
-            "ordinary fallback message did not finish while Redis remained paused",
-        )
-        fallback_rows = offline_marker_count("redis-pause-offline-fallback")
-        fixture.check(
-            fallback_rows == 1,
-            "ordinary chat was not durably queued exactly once during the Redis outage; "
-            f"matching_rows={fallback_rows}; account_rows={offline_account_snapshot(BOB)!r}",
-        )
+        for target, marker in (
+            (bob_full, forbidden_markers[1]),
+            (f"{BOB}@{DOMAIN}", forbidden_markers[2]),
+        ):
+            alice_a.send(
+                f"<message xmlns='jabber:client' to='{target}' type='chat' id='{marker}'>"
+                "<body>fail closed while Redis is stopped</body></message>"
+            )
+            rejected, _ = alice_a.receive_until(marker, timeout=6)
+            fixture.check(
+                "type='error'" in rejected and "service-unavailable" in rejected,
+                f"ordinary chat was not rejected by FailClosed: {rejected}",
+            )
+            alice_a.send("<r xmlns='urn:xmpp:sm:3'/>")
+            handled, _ = alice_a.receive_until("<a ", timeout=6)
+            fixture.check(
+                "urn:xmpp:sm:3" in handled,
+                "fail-closed ordinary chat did not finish before the SM barrier",
+            )
+            fixture.check(
+                offline_marker_count(marker) == 0,
+                f"fail-closed ordinary chat entered the PostgreSQL queue: {marker}",
+            )
+            expect_no_fault_frames(bob_b, forbidden_markers)
     finally:
         os.kill(REDIS_PID, signal.SIGCONT)
-    expect_no_frame(bob_b, "redis-pause-bounded")
-    fixture.check(
-        offline_marker_count("redis-pause-offline-fallback") == 1,
-        "durable Redis-outage fallback disappeared before reconnect replay",
-    )
     fixture.check(
         wait_for_cluster_recovery((HTTP_A, HTTP_B), time.monotonic() + 40),
         "cluster nodes did not recover after the Redis pause",
     )
+    expect_no_fault_frames(bob_b, forbidden_markers)
     bob_b.close()
     time.sleep(0.5)
     bob_b = fixture.XmppWebSocket(BOB, PASSWORD, "fault-bob")
-    fallback, _ = bob_b.receive_until("redis-pause-offline-fallback", timeout=10)
-    fixture.check(
-        "urn:xmpp:delay" in fallback
-        and "durable offline fallback while Redis is paused" in fallback,
-        f"Redis-outage fallback was not replayed as delayed offline content: {fallback}",
-    )
-    deadline = time.monotonic() + 5
-    while (
-        time.monotonic() < deadline
-        and offline_marker_count("redis-pause-offline-fallback") != 0
-    ):
-        time.sleep(0.1)
-    fixture.check(
-        offline_marker_count("redis-pause-offline-fallback") == 0,
-        "offline replay did not acknowledge and delete the durable fallback row",
-    )
+    expect_no_fault_frames(bob_b, forbidden_markers)
     time.sleep(0.25)
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='redis-pause-recovery'>"
         "<body>fresh route after Redis resumes</body></message>"
     )
-    recovered, _ = bob_b.receive_until("redis-pause-recovery", timeout=10)
+    recovered, observed = bob_b.receive_until("redis-pause-recovery", timeout=10)
     fixture.check(
-        "fresh route after Redis resumes" in recovered,
+        "fresh route after Redis resumes" in recovered
+        and all(not any(marker in frame for marker in forbidden_markers) for frame in observed),
         "cluster route did not recover after Redis SIGCONT",
     )
+    for marker in forbidden_markers:
+        fixture.check(
+            offline_marker_count(marker) == 0,
+            f"rejected Redis-pause message entered the PostgreSQL queue after recovery: {marker}",
+        )
 
     # A hostile/buggy trusted broker publisher cannot make the listener parse
     # an unbounded body. The subsequent authenticated route proves liveness.

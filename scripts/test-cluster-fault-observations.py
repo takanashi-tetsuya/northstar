@@ -41,6 +41,21 @@ class RejectionObservationTests(unittest.TestCase):
     def observe(self, offset=0):
         return cluster.authentication_rejection_since(self.path, offset)
 
+    def test_fail_closed_socket_probe_checks_every_frame_for_every_marker(self):
+        class Client:
+            def __init__(self, frames):
+                self.frames = iter(frames)
+
+            def receive(self, _timeout):
+                return next(self.frames)
+
+        client = Client(["<presence/>", "<message id='redis-pause-bare-fail-closed'/>"])
+        with self.assertRaisesRegex(AssertionError, "delivered a rejected stanza"):
+            cluster.expect_no_fault_frames(
+                client,
+                ("redis-pause-full-fail-closed", "redis-pause-bare-fail-closed"),
+            )
+
     def test_accepts_only_a_new_complete_matching_event(self):
         previous = rejection()
         self.path.write_bytes(previous)

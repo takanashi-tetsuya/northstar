@@ -1510,11 +1510,28 @@ impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
     }
 }
 
-impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
-    pub(crate) async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
-        self.repository.is_subscribed(node_id, jid).await
+impl<R: PubSubAffiliationQueryRepository + PubSubSubscriptionQueryRepository> PubSubService<R> {
+    pub(crate) async fn can_retrieve_node(&self, node: &PubSubNode, jid: &str) -> Result<bool> {
+        let affiliation = self.repository.get_node_affiliation(node.id, jid).await?;
+        let affiliation = affiliation
+            .as_deref()
+            .map(str::parse::<northstar_xep_0060::Affiliation>)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
+        let access_model = node
+            .access_model
+            .parse::<northstar_xep_0060::AccessModel>()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
+        let subscribed = self.repository.is_subscribed(node.id, jid).await?;
+        Ok(northstar_xep_0060::can_retrieve_pure(
+            access_model,
+            affiliation,
+            subscribed,
+        ))
     }
+}
 
+impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
     pub(crate) async fn subscriptions_for_jid(
         &self,
         jid: &str,

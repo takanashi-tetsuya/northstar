@@ -64,6 +64,102 @@ async fn item_queries_do_not_require_mutation_repository_capability() {
         .is_empty());
 }
 
+struct RetrievalFacts {
+    affiliation: Option<String>,
+    subscribed: bool,
+    calls: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl PubSubAffiliationQueryRepository for RetrievalFacts {
+    async fn get_node_affiliation(&self, _node_id: Uuid, _jid: &str) -> Result<Option<String>> {
+        self.calls.lock().unwrap().push("affiliation");
+        Ok(self.affiliation.clone())
+    }
+
+    async fn affiliations_for_jid(
+        &self,
+        _jid: &str,
+        _node: Option<&str>,
+    ) -> Result<Vec<PubSubAffiliation>> {
+        panic!("retrieval should not enumerate affiliations")
+    }
+}
+
+impl PubSubSubscriptionQueryRepository for RetrievalFacts {
+    async fn is_subscribed(&self, _node_id: Uuid, _jid: &str) -> Result<bool> {
+        self.calls.lock().unwrap().push("subscription");
+        Ok(self.subscribed)
+    }
+
+    async fn subscriptions_for_jid(
+        &self,
+        _jid: &str,
+        _node: Option<&str>,
+    ) -> Result<Vec<PubSubSubscription>> {
+        panic!("retrieval should not enumerate subscriptions")
+    }
+
+    async fn subscriptions_addressing_jid_page(
+        &self,
+        _jid: &str,
+        _after: Option<(&str, &str)>,
+        _limit: i64,
+    ) -> Result<Vec<PubSubSubscription>> {
+        panic!("retrieval should not page subscriptions")
+    }
+
+    async fn get_subscription(
+        &self,
+        _node_id: Uuid,
+        _jid: &str,
+    ) -> Result<Option<PubSubSubscription>> {
+        panic!("retrieval should not load a subscription")
+    }
+}
+
+#[tokio::test]
+async fn retrieval_query_preserves_outcast_precedence_over_open_and_subscription() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let service = PubSubService::new_with_durable_outbox_database_admission(
+        RetrievalFacts {
+            affiliation: Some("outcast".to_owned()),
+            subscribed: true,
+            calls: Arc::clone(&calls),
+        },
+        2,
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+    );
+    let node = renderer_node(Uuid::new_v4(), "news", "leaf");
+    assert!(!service
+        .can_retrieve_node(&node, "reader@example.test/mobile")
+        .await
+        .unwrap());
+    assert_eq!(*calls.lock().unwrap(), ["affiliation", "subscription"]);
+}
+
+#[tokio::test]
+async fn retrieval_query_rejects_corrupt_stored_policy_before_subscription_lookup() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let service = PubSubService::new_with_durable_outbox_database_admission(
+        RetrievalFacts {
+            affiliation: Some("invalid-affiliation".to_owned()),
+            subscribed: true,
+            calls: Arc::clone(&calls),
+        },
+        2,
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+    );
+    let node = renderer_node(Uuid::new_v4(), "news", "leaf");
+    let error = service
+        .can_retrieve_node(&node, "reader@example.test")
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("invalid stored PubSub affiliation"));
+    assert_eq!(*calls.lock().unwrap(), ["affiliation"]);
+}
+
 struct QueryOnlyPepItems;
 
 impl PepItemQueryRepository for QueryOnlyPepItems {

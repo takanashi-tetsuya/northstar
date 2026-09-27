@@ -50,6 +50,29 @@ pub enum UploadClaimOutcome {
     Rejected,
 }
 
+/// Confirm a replay only after the request and the stored object have both
+/// been checked against the immutable digest returned by the slot claim.
+pub(crate) struct UploadReplayCommand<'a> {
+    pub id: Uuid,
+    pub token_hash: &'a [u8],
+    pub committed_sha256: [u8; 32],
+    pub presented_sha256: [u8; 32],
+}
+
+impl UploadReplayCommand<'_> {
+    pub(crate) fn presented_bytes_match(&self) -> bool {
+        self.presented_sha256 == self.committed_sha256
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UploadReplayOutcome {
+    Confirmed,
+    DifferentBytes,
+    StoredObjectMismatch,
+    Invalidated,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UploadRenewOutcome {
     Renewed,
@@ -234,15 +257,26 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
             .await
     }
 
-    pub(crate) async fn record_replay(
+    pub(crate) async fn execute_upload_replay(
         &self,
-        id: Uuid,
-        token_hash: &[u8],
-        content_sha256: &[u8; 32],
-    ) -> Result<bool> {
-        self.repository
-            .record_replay(id, token_hash, content_sha256)
-            .await
+        command: UploadReplayCommand<'_>,
+        stored_sha256: [u8; 32],
+    ) -> Result<UploadReplayOutcome> {
+        if !command.presented_bytes_match() {
+            return Ok(UploadReplayOutcome::DifferentBytes);
+        }
+        if stored_sha256 != command.committed_sha256 {
+            return Ok(UploadReplayOutcome::StoredObjectMismatch);
+        }
+        if self
+            .repository
+            .record_replay(command.id, command.token_hash, &command.committed_sha256)
+            .await?
+        {
+            Ok(UploadReplayOutcome::Confirmed)
+        } else {
+            Ok(UploadReplayOutcome::Invalidated)
+        }
     }
 
     pub(crate) async fn renew_claim(
@@ -352,6 +386,13 @@ mod tests {
     use std::sync::Mutex;
     use uuid::Uuid;
 
+    #[derive(Debug, Eq, PartialEq)]
+    struct ReplayCall {
+        id: Uuid,
+        token_hash: Vec<u8>,
+        digest: [u8; 32],
+    }
+
     #[derive(Default)]
     struct LifecycleRepository {
         claim: Option<Uuid>,
@@ -359,6 +400,8 @@ mod tests {
         retire: bool,
         complete: bool,
         committed: bool,
+        replay_result: bool,
+        replay_calls: Mutex<Vec<ReplayCall>>,
         calls: Mutex<Vec<&'static str>>,
     }
 
@@ -367,8 +410,18 @@ mod tests {
             unreachable!("not used by this promotion test")
         }
 
-        async fn record_replay(&self, _: Uuid, _: &[u8], _: &[u8; 32]) -> Result<bool> {
-            unreachable!("not used by this promotion test")
+        async fn record_replay(
+            &self,
+            id: Uuid,
+            token_hash: &[u8],
+            digest: &[u8; 32],
+        ) -> Result<bool> {
+            self.replay_calls.lock().unwrap().push(ReplayCall {
+                id,
+                token_hash: token_hash.to_vec(),
+                digest: *digest,
+            });
+            Ok(self.replay_result)
         }
 
         async fn renew_claim(&self, _: Uuid, _: Uuid, _: i64) -> Result<UploadRenewOutcome> {
@@ -434,6 +487,67 @@ mod tests {
             safety_gate: UploadSafetyGate::new(),
             max_upload_bytes: 1024,
         }
+    }
+
+    #[tokio::test]
+    async fn replay_consumes_database_allowance_only_after_both_digests_match() {
+        let id = Uuid::new_v4();
+        let token_hash = [9_u8; 32];
+        let committed = [3_u8; 32];
+        let different = [4_u8; 32];
+        let service = lifecycle_service(LifecycleRepository {
+            replay_result: true,
+            ..Default::default()
+        });
+        let replay = |presented_sha256| UploadReplayCommand {
+            id,
+            token_hash: &token_hash,
+            committed_sha256: committed,
+            presented_sha256,
+        };
+
+        assert!(!replay(different).presented_bytes_match());
+        assert_eq!(
+            service
+                .execute_upload_replay(replay(different), committed)
+                .await
+                .unwrap(),
+            UploadReplayOutcome::DifferentBytes
+        );
+        assert_eq!(
+            service
+                .execute_upload_replay(replay(committed), different)
+                .await
+                .unwrap(),
+            UploadReplayOutcome::StoredObjectMismatch
+        );
+        assert!(service.repository.replay_calls.lock().unwrap().is_empty());
+
+        assert_eq!(
+            service
+                .execute_upload_replay(replay(committed), committed)
+                .await
+                .unwrap(),
+            UploadReplayOutcome::Confirmed
+        );
+        assert_eq!(
+            *service.repository.replay_calls.lock().unwrap(),
+            [ReplayCall {
+                id,
+                token_hash: token_hash.to_vec(),
+                digest: committed,
+            }]
+        );
+
+        let invalidated = lifecycle_service(LifecycleRepository::default());
+        assert_eq!(
+            invalidated
+                .execute_upload_replay(replay(committed), committed)
+                .await
+                .unwrap(),
+            UploadReplayOutcome::Invalidated
+        );
+        assert_eq!(invalidated.repository.replay_calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

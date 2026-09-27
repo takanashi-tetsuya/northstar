@@ -108,6 +108,10 @@ is now rechecked under the node and subscription locks; the new PostgreSQL
 lock-wait fixture runs in CI.
 PEP node creation and owner batch-unsubscribe now enter through typed commands;
 the repository still owns their transactions and outbox plans.
+PubSub node discovery and last-item delivery use one service-level read decision
+for affiliation, access model and subscription; the protocol layer only maps
+the result to stanzas. This preserves the existing query order and error
+precedence, but the facts are still read separately in PostgreSQL.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -135,6 +139,9 @@ replay, MIX delivery and SM memory as specific backend handles. Direct socket
 delivery uses narrow fence and acknowledgment methods, and TCP/WebSocket
 backpressure guards hold only a counter handle. The session still owns
 `AppState`, so this closes an access path rather than the full kernel split.
+TCP, Direct TLS, STARTTLS and WebSocket now move that state into the session at
+construction. Their transport loops retain only a fixed SM lease polling
+interval and a narrow backpressure counter handle.
 
 ### Packet 4 — Roster/visibility and archive
 
@@ -162,6 +169,10 @@ Separate XMPP/HTTP adapters, capacity/slot authority, object bytes and
 reconciliation. Local and S3 adapters must implement exact version/delete
 semantics. Exit when no HTTP handler can independently modify slot/object
 state and crash recovery is fault-injectable through ports.
+The HTTP idempotent replay path now asks the upload service to compare the
+presented and stored digests with the committed digest before consuming the
+database replay allowance. The handler still streams and verifies object bytes
+outside the transaction; the repository remains the authority for replay count.
 
 ### Packet 6 — Federation, components and cluster
 

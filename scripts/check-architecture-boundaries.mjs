@@ -1956,10 +1956,39 @@ for (const transport of ['src/bosh.rs', 'src/xmpp/mod.rs', 'src/xmpp/tcp_action.
     throw new Error(`${transport} traverses ProtocolSession into global state`);
   }
 }
-const backpressureGuard = structBody(read('src/xmpp/mod.rs'), 'struct BackpressureDisconnectMetric');
+const nativeTransportSource = read('src/xmpp/mod.rs');
+const backpressureGuard = structBody(nativeTransportSource, 'struct BackpressureDisconnectMetric');
 if (/\bAppState\b/.test(backpressureGuard)
     || !/\btelemetry\s*:\s*C2sBackpressureTelemetry\b/.test(backpressureGuard)) {
   throw new Error('TCP/WebSocket backpressure guard must hold only narrow telemetry');
+}
+const nativeTransportPolicy = structBody(nativeTransportSource, 'struct NativeTransportPolicy');
+if (/\b(?:AppState|Arc)\b/.test(nativeTransportPolicy)
+    || !/\bsm_lease_poll_interval\s*:\s*Duration\b/.test(nativeTransportPolicy)
+    || !/\bbackpressure_telemetry\s*:\s*C2sBackpressureTelemetry\b/.test(nativeTransportPolicy)) {
+  throw new Error('TCP/WebSocket transport policy must contain only immutable cadence and typed telemetry');
+}
+const driveIoDeclaration = nativeTransportSource.slice(
+  nativeTransportSource.indexOf('async fn drive_io<S>'),
+  nativeTransportSource.indexOf('async fn drive_io<S>') + 400,
+);
+if (!/transport_policy\s*:\s*&NativeTransportPolicy/.test(driveIoDeclaration)
+    || /\bstate\s*:|\bAppState\b/.test(driveIoDeclaration)
+    || /\bstate\s*\./.test(structBody(nativeTransportSource, 'async fn drive_io<S>'))) {
+  throw new Error('TCP transport loop must use NativeTransportPolicy, not global state');
+}
+for (const connection of [
+  'async fn xmpps_tcp_connection',
+  'async fn tcp_connection',
+  'pub async fn websocket_connection',
+]) {
+  const body = structBody(nativeTransportSource, connection);
+  const sessionCreated = body.indexOf('let mut session = ProtocolSession::new(');
+  if (sessionCreated < 0
+      || !/let mut session = ProtocolSession::new\(\s*state\s*,/.test(body)
+      || /\bstate\s*\./.test(body.slice(sessionCreated))) {
+    throw new Error(`${connection} retains global state after ProtocolSession construction`);
+  }
 }
 if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/direct_delivery.rs'))) {
   throw new Error('direct delivery traverses ProtocolSession into global state');

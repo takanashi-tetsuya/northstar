@@ -258,7 +258,12 @@ impl ProtocolSession {
                     return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
                 };
                 let requester = self.full_jid.as_deref().unwrap_or_default();
-                if !super::pubsub::can_retrieve(&self.state, &node, requester).await? {
+                if !self
+                    .state
+                    .pubsub_service()
+                    .can_retrieve_node(&node, requester)
+                    .await?
+                {
                     return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
                 }
                 let mut query = disco_info_query(Some(node_name));

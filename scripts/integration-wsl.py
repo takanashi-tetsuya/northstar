@@ -641,6 +641,45 @@ def put_upload_when_ready(path: str, body: bytes, headers):
         time.sleep(delay)
 
 
+def request_upload_slot_when_ready(client, slot_id: str, request: str) -> str:
+    """Wait briefly for a normal slot during capacity admission contention."""
+    deadline = time.monotonic() + 10
+    attempt = 0
+    last_response = None
+    while True:
+        remaining = deadline - time.monotonic()
+        check(
+            remaining > 0,
+            f"HTTP Upload slot {slot_id} stayed capacity-busy for ten seconds; "
+            f"last response={last_response!r}",
+        )
+        request_id = slot_id if attempt == 0 else f"{slot_id}-{attempt}"
+        client.send(
+            f"<iq xmlns='jabber:client' type='get' id='{request_id}' to='upload.{DOMAIN}'>"
+            f"{request}</iq>"
+        )
+        response, _ = client.receive_until(f"id='{request_id}'", timeout=remaining)
+        last_response = response
+        try:
+            iq = ET.fromstring(response)
+        except ET.ParseError:
+            return response
+        error = iq.find("{jabber:client}error")
+        if not (
+            iq.tag == "{jabber:client}iq"
+            and iq.get("type") == "error"
+            and error is not None
+            and error.get("type") == "wait"
+            and error.find("{urn:ietf:params:xml:ns:xmpp-stanzas}resource-constraint")
+            is not None
+        ):
+            return response
+        attempt += 1
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25 * 2 ** min(attempt - 1, 2), remaining))
+
+
 def raw_admin_http(method: str, path: str, body: bytes | None = None, headers=None):
     check(0 < WEB_ADMIN_PORT <= 65535, "administrator listener was not published by readiness")
     return raw_http(method, path, body, headers, port=WEB_ADMIN_PORT)
@@ -3329,11 +3368,11 @@ def run() -> None:
         "oversized HTTP Upload request did not expose the advertised limit",
     )
     upload_body = b"encrypted-upload"
-    alice.send(
-        f"<iq xmlns='jabber:client' type='get' id='upload-slot' to='upload.{DOMAIN}'>"
-        f"<request xmlns='urn:xmpp:http:upload:0' filename='cipher.bin' size='{len(upload_body)}' content-type='application/octet-stream'/></iq>"
+    upload_slot = request_upload_slot_when_ready(
+        alice,
+        "upload-slot",
+        f"<request xmlns='urn:xmpp:http:upload:0' filename='cipher.bin' size='{len(upload_body)}' content-type='application/octet-stream'/>",
     )
-    upload_slot, _ = alice.receive_until("upload-slot")
     put_match = re.search(r"<put url='([^']+)'>.*?Bearer ([A-Za-z0-9]+)", upload_slot)
     get_match = re.search(r"<get url='([^']+)'", upload_slot)
     check(put_match is not None and get_match is not None, f"invalid HTTP Upload slot: {upload_slot}")
@@ -3402,11 +3441,11 @@ def run() -> None:
     # limit. Exercise the real HTTP stack above 256 KiB so middleware ordering
     # regressions cannot silently break ordinary encrypted attachments.
     route_limit_body = b"northstar-route-limit-probe-" + b"x" * (300 * 1024)
-    alice.send(
-        f"<iq xmlns='jabber:client' type='get' id='upload-route-limit-slot' to='upload.{DOMAIN}'>"
-        f"<request xmlns='urn:xmpp:http:upload:0' filename='route-limit.bin' size='{len(route_limit_body)}' content-type='application/octet-stream'/></iq>"
+    route_limit_slot = request_upload_slot_when_ready(
+        alice,
+        "upload-route-limit-slot",
+        f"<request xmlns='urn:xmpp:http:upload:0' filename='route-limit.bin' size='{len(route_limit_body)}' content-type='application/octet-stream'/>",
     )
-    route_limit_slot, _ = alice.receive_until("upload-route-limit-slot")
     route_limit_put = re.search(
         r"<put url='([^']+)'>.*?Bearer ([A-Za-z0-9]+)", route_limit_slot
     )
@@ -3433,11 +3472,11 @@ def run() -> None:
     )
 
     retry_body = b"retry-after-length-mismatch"
-    alice.send(
-        f"<iq xmlns='jabber:client' type='get' id='upload-retry-slot' to='upload.{DOMAIN}'>"
-        f"<request xmlns='urn:xmpp:http:upload:0' filename='retry.bin' size='{len(retry_body)}' content-type='application/octet-stream'/></iq>"
+    retry_slot = request_upload_slot_when_ready(
+        alice,
+        "upload-retry-slot",
+        f"<request xmlns='urn:xmpp:http:upload:0' filename='retry.bin' size='{len(retry_body)}' content-type='application/octet-stream'/>",
     )
-    retry_slot, _ = alice.receive_until("upload-retry-slot")
     retry_put = re.search(r"<put url='([^']+)'>.*?Bearer ([A-Za-z0-9]+)", retry_slot)
     retry_get = re.search(r"<get url='([^']+)'", retry_slot)
     check(retry_put is not None and retry_get is not None, f"invalid retry slot: {retry_slot}")

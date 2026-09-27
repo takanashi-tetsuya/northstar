@@ -14,6 +14,16 @@ spec.loader.exec_module(integration)
 
 BUSY = (409, {"retry-after": "1"}, b'{"error":{"code":"upload_in_progress"}}')
 CREATED = (201, {"idempotency-replayed": "true"}, b"")
+WAIT_SLOT = (
+    "<iq xmlns='jabber:client' type='error' id='upload-retry-slot'>"
+    "<error type='wait'><resource-constraint "
+    "xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>"
+)
+RESERVED_SLOT = (
+    "<iq xmlns='jabber:client' type='result' id='upload-retry-slot-1'>"
+    "<slot xmlns='urn:xmpp:http:upload:0'/></iq>"
+)
+SLOT_REQUEST = "<request xmlns='urn:xmpp:http:upload:0' filename='retry.bin' size='10'/>"
 
 
 class UploadRetryTests(unittest.TestCase):
@@ -92,6 +102,57 @@ class UploadRetryTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 self.put()
             request.assert_called_once()
+
+    def test_slot_retries_only_exact_wait_resource_constraint(self):
+        client = mock.Mock()
+        client.receive_until.side_effect = [(WAIT_SLOT, []), (RESERVED_SLOT, [])]
+        self.assertEqual(
+            integration.request_upload_slot_when_ready(client, "upload-retry-slot", SLOT_REQUEST),
+            RESERVED_SLOT,
+        )
+        self.assertEqual(self.now, 0.25)
+        self.assertEqual(client.send.call_args_list, [
+            mock.call(
+                "<iq xmlns='jabber:client' type='get' id='upload-retry-slot' "
+                f"to='upload.{integration.DOMAIN}'>" + SLOT_REQUEST + "</iq>"
+            ),
+            mock.call(
+                "<iq xmlns='jabber:client' type='get' id='upload-retry-slot-1' "
+                f"to='upload.{integration.DOMAIN}'>" + SLOT_REQUEST + "</iq>"
+            ),
+        ])
+        self.assertEqual(
+            [call.kwargs["timeout"] for call in client.receive_until.call_args_list],
+            [10, 9.75],
+        )
+
+    def test_slot_other_errors_fail_immediately(self):
+        for response in (
+            WAIT_SLOT.replace("type='wait'", "type='cancel'"),
+            WAIT_SLOT.replace("resource-constraint", "internal-server-error"),
+            "<iq xmlns='jabber:client' type='error' id='upload-retry-slot' />",
+            "not XML",
+        ):
+            with self.subTest(response=response):
+                client = mock.Mock()
+                client.receive_until.return_value = (response, [])
+                self.assertEqual(
+                    integration.request_upload_slot_when_ready(
+                        client, "upload-retry-slot", SLOT_REQUEST
+                    ),
+                    response,
+                )
+                client.send.assert_called_once()
+
+    def test_slot_capacity_busy_expires_with_last_response(self):
+        client = mock.Mock()
+        client.receive_until.return_value = (WAIT_SLOT, [])
+        with self.assertRaisesRegex(
+            AssertionError, "stayed capacity-busy for ten seconds.*last response=.*resource-constraint"
+        ):
+            integration.request_upload_slot_when_ready(client, "upload-retry-slot", SLOT_REQUEST)
+        self.assertEqual(self.now, 10)
+        self.assertGreater(client.send.call_count, 1)
 
 
 if __name__ == "__main__":

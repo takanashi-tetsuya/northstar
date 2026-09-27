@@ -146,7 +146,11 @@ pub(crate) async fn federated_disco_info(
     let Some(node) = state.pubsub_service().get_node(node_name).await? else {
         return missing_node_reply(state, node_name).await;
     };
-    if !can_retrieve(state, &node, &normalized_bare(requester)?).await? {
+    if !state
+        .pubsub_service()
+        .can_retrieve_node(&node, &normalized_bare(requester)?)
+        .await?
+    {
         return Ok(PubSubReply::Error("forbidden"));
     }
     let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info")
@@ -2128,28 +2132,6 @@ pub(crate) async fn handle_authorization_response(
     Ok(())
 }
 
-pub(crate) async fn can_retrieve(state: &AppState, node: &PubSubNode, jid: &str) -> Result<bool> {
-    let affiliation = state
-        .pubsub_service()
-        .get_node_affiliation(node.id, jid)
-        .await?;
-    let affiliation = affiliation
-        .as_deref()
-        .map(str::parse::<northstar_xep_0060::Affiliation>)
-        .transpose()
-        .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
-    let access_model = node
-        .access_model
-        .parse::<northstar_xep_0060::AccessModel>()
-        .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
-    let subscribed = state.pubsub_service().is_subscribed(node.id, jid).await?;
-    Ok(northstar_xep_0060::can_retrieve_pure(
-        access_model,
-        affiliation,
-        subscribed,
-    ))
-}
-
 /// Apply the XEP-0060 item-retrieval access and SubID rules after the caller
 /// has loaded all active subscriptions that address the requesting resource
 /// (its exact full JID plus its bare JID).
@@ -2490,7 +2472,10 @@ async fn deliver_last_items_on_presence(
                 continue;
             };
             if node.send_last_published_item != "on_sub_and_presence"
-                || !can_retrieve(&state, &node, &requester_bare).await?
+                || !state
+                    .pubsub_service()
+                    .can_retrieve_node(&node, &requester_bare)
+                    .await?
             {
                 continue;
             }

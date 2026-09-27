@@ -18,8 +18,8 @@ use crate::auth;
 use crate::error::{AppError, Result};
 use crate::services::upload::{
     AcquirePromotionOutcome, FinalizePromotionOutcome, PromotedUploadProjection, PromotionClaim,
-    UploadClaimOutcome, UploadRenewOutcome, UploadSlot, UploadStageProjection,
-    UserUploadDeleteOutcome,
+    UploadClaimOutcome, UploadRenewOutcome, UploadReplayCommand, UploadReplayOutcome, UploadSlot,
+    UploadStageProjection, UserUploadDeleteOutcome,
 };
 use crate::state::{
     upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
@@ -96,23 +96,37 @@ pub async fn upload_put(
             )
             .await
             .map_err(|_| AppError::BadRequest("upload attempt timed out".into()))??;
-            if digest != content_sha256 {
+            let replay = UploadReplayCommand {
+                id: slot.id,
+                token_hash: &token_hash,
+                committed_sha256: content_sha256,
+                presented_sha256: digest,
+            };
+            if !replay.presented_bytes_match() {
                 return Err(AppError::Conflict(
                     "upload slot already contains different bytes".into(),
                 ));
             }
             let stored_digest = stored_object_digest(&replay_read, &slot).await?;
-            if stored_digest != content_sha256 {
-                return Err(AppError::Internal(anyhow::anyhow!(
-                    "stored upload content does not match its committed digest"
-                )));
-            }
-            if !state
+            match state
                 .service()
-                .record_replay(slot.id, &token_hash, &digest)
+                .execute_upload_replay(replay, stored_digest)
                 .await?
             {
-                return Err(AppError::IdempotencyReplayInvalidated);
+                UploadReplayOutcome::Confirmed => {}
+                UploadReplayOutcome::DifferentBytes => {
+                    return Err(AppError::Conflict(
+                        "upload slot already contains different bytes".into(),
+                    ));
+                }
+                UploadReplayOutcome::StoredObjectMismatch => {
+                    return Err(AppError::Internal(anyhow::anyhow!(
+                        "stored upload content does not match its committed digest"
+                    )));
+                }
+                UploadReplayOutcome::Invalidated => {
+                    return Err(AppError::IdempotencyReplayInvalidated);
+                }
             }
             return created_upload_response(true);
         }

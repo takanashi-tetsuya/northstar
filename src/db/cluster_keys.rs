@@ -4,6 +4,78 @@ use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// The replay function uses PostgreSQL's default PL/pgSQL exception code for
+/// both ordinary validation rejections and authority failures. Only the exact
+/// source-side validation texts may bypass terminal authority handling.
+pub(crate) fn cluster_replay_validation_rejection(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<sqlx::Error>()
+        .and_then(sqlx::Error::as_database_error)
+        .is_some_and(|database| {
+            replay_validation_rejection_fields(database.code().as_deref(), database.message())
+        })
+}
+
+fn replay_validation_rejection_fields(code: Option<&str>, message: &str) -> bool {
+    code == Some("P0001")
+        && matches!(
+            message,
+            "cluster replay identity conflict"
+                | "cluster replay source instance is not authoritative"
+                | "cluster replay validity window rejected"
+        )
+}
+
+/// Lock the local signing-key row before the exact live process-instance row.
+/// Both locks are held by the caller's transaction through its message commit,
+/// serializing key rotation, instance replacement and clean release with the
+/// durable message write. PostgreSQL's clock, rather than a cached peer lease,
+/// decides whether this process still owns the instance.
+pub(crate) async fn fence_direct_message_authority_in_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    authority: &crate::cluster::ClusterReadinessAuthority,
+) -> Result<()> {
+    let key: Option<bool> = sqlx::query_scalar(
+        "SELECT TRUE FROM cluster_key_deployments
+         WHERE xmpp_domain=$1 AND node_id=$2 AND epoch=$3
+           AND current_key_id=$4 AND current_public_key_sha256=$5
+         FOR SHARE",
+    )
+    .bind(&authority.key_identity.xmpp_domain)
+    .bind(&authority.key_identity.node_id)
+    .bind(authority.key_identity.epoch)
+    .bind(&authority.key_identity.current_key_id)
+    .bind(&authority.key_identity.current_public_key_sha256)
+    .fetch_optional(&mut **tx)
+    .await?;
+    anyhow::ensure!(
+        key.is_some(),
+        "cluster signing-key authority changed before direct-message commit"
+    );
+
+    let instance: Option<bool> = sqlx::query_scalar(
+        "SELECT TRUE FROM cluster_node_instances
+         WHERE xmpp_domain=$1 AND node_id=$2
+           AND instance_uuid=$3 AND instance_epoch=$4
+           AND signing_key_id=$5 AND signing_key_epoch=$6
+           AND lease_until > clock_timestamp()
+         FOR SHARE",
+    )
+    .bind(&authority.key_identity.xmpp_domain)
+    .bind(&authority.instance_node_id)
+    .bind(authority.instance_uuid)
+    .bind(authority.instance_epoch)
+    .bind(&authority.signing_key_id)
+    .bind(authority.signing_key_epoch)
+    .fetch_optional(&mut **tx)
+    .await?;
+    anyhow::ensure!(
+        instance.is_some(),
+        "cluster process instance lease was lost before direct-message commit"
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn admit_cluster_envelope_replay(
     pool: &PgPool,
@@ -35,6 +107,35 @@ pub async fn cleanup_cluster_envelope_replays(pool: &PgPool, limit: i32) -> Resu
 
 #[cfg(test)]
 mod replay_schema_tests {
+    use super::*;
+
+    #[test]
+    fn replay_validation_classifier_requires_exact_sqlstate_and_text() {
+        for message in [
+            "cluster replay identity conflict",
+            "cluster replay source instance is not authoritative",
+            "cluster replay validity window rejected",
+        ] {
+            assert!(replay_validation_rejection_fields(Some("P0001"), message));
+        }
+        for (code, message) in [
+            (
+                Some("P0001"),
+                "cluster replay destination instance is not authoritative",
+            ),
+            (
+                Some("P0001"),
+                "cluster replay authority capacity is exhausted",
+            ),
+            (Some("23505"), "cluster replay identity conflict"),
+            (None, "cluster replay identity conflict"),
+        ] {
+            assert!(!replay_validation_rejection_fields(code, message));
+        }
+        let non_database = anyhow::anyhow!("cluster replay identity conflict");
+        assert!(!cluster_replay_validation_rejection(&non_database));
+    }
+
     #[test]
     fn replay_fence_binds_both_process_instances_and_has_bounded_cleanup() {
         let migration = include_str!("../../migrations/0095_cluster_replay_fence.sql");
@@ -1015,6 +1116,148 @@ mod tests {
             now,
         )
         .is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL pointing to a disposable PostgreSQL database; migrates and removes an isolated schema"]
+    async fn direct_message_fence_locks_exact_key_and_instance_through_commit() {
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to a disposable PostgreSQL database");
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        let schema = format!("direct_fence_test_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        eprintln!("isolated_schema_created={schema}");
+        let connection_schema = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(3)
+            .after_connect(move |connection, _| {
+                let statement = format!("SET search_path TO {connection_schema}");
+                Box::pin(async move {
+                    sqlx::query(&statement).execute(connection).await?;
+                    Ok(())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let suffix = Uuid::new_v4().simple().to_string();
+        let domain = format!("direct-{suffix}.test");
+        let node_id = format!("node-{suffix}");
+        let key_identity = ClusterKeyDeploymentIdentity {
+            xmpp_domain: domain.clone(),
+            node_id: node_id.clone(),
+            epoch: 1,
+            current_key_id: "AAAAAAAAAAAAAAAA".into(),
+            current_public_key_sha256: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            previous_key_id: None,
+            previous_public_key_sha256: None,
+            staged_next_key_id: None,
+            staged_next_public_key_sha256: None,
+        };
+        reconcile_cluster_key_deployment_before_instance_claim(&pool, &key_identity)
+            .await
+            .unwrap();
+        let instance_uuid = Uuid::new_v4();
+        let instance = claim_cluster_node_instance(
+            &pool,
+            &domain,
+            &node_id,
+            instance_uuid,
+            &key_identity.current_key_id,
+            key_identity.epoch,
+            Duration::from_secs(90),
+        )
+        .await
+        .unwrap();
+        let authority = crate::cluster::ClusterReadinessAuthority {
+            key_identity: key_identity.clone(),
+            instance_node_id: node_id.clone(),
+            instance_uuid,
+            instance_epoch: instance.instance_epoch,
+            signing_key_id: key_identity.current_key_id.clone(),
+            signing_key_epoch: key_identity.epoch,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        fence_direct_message_authority_in_transaction(&mut tx, &authority)
+            .await
+            .unwrap();
+        let release_pool = pool.clone();
+        let release_domain = domain.clone();
+        let release_node = node_id.clone();
+        let release_key = key_identity.current_key_id.clone();
+        let release = tokio::spawn(async move {
+            release_cluster_node_instance(
+                &release_pool,
+                &release_domain,
+                &release_node,
+                instance_uuid,
+                instance.instance_epoch,
+                &release_key,
+                1,
+            )
+            .await
+            .unwrap()
+        });
+        let key_pool = pool.clone();
+        let key_domain = domain.clone();
+        let key_node = node_id.clone();
+        let key_update = tokio::spawn(async move {
+            sqlx::query(
+                "UPDATE cluster_key_deployments SET updated_at=clock_timestamp()
+                 WHERE xmpp_domain=$1 AND node_id=$2",
+            )
+            .bind(key_domain)
+            .bind(key_node)
+            .execute(&key_pool)
+            .await
+            .unwrap()
+            .rows_affected()
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !release.is_finished(),
+            "instance release passed a held message fence"
+        );
+        assert!(
+            !key_update.is_finished(),
+            "key authority update passed a held message fence"
+        );
+        fence_direct_message_authority_in_transaction(&mut tx, &authority)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert!(release.await.unwrap());
+        assert_eq!(key_update.await.unwrap(), 1);
+        let mut stale = pool.begin().await.unwrap();
+        assert!(
+            fence_direct_message_authority_in_transaction(&mut stale, &authority)
+                .await
+                .is_err()
+        );
+        stale.rollback().await.unwrap();
+
+        let mut wrong_key = authority.clone();
+        wrong_key.key_identity.current_public_key_sha256 = "wrong".into();
+        let mut mismatch = pool.begin().await.unwrap();
+        assert!(
+            fence_direct_message_authority_in_transaction(&mut mismatch, &wrong_key)
+                .await
+                .is_err()
+        );
+        mismatch.rollback().await.unwrap();
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

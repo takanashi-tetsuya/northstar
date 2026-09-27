@@ -4283,11 +4283,13 @@ impl AppState {
                 config.offline_max_messages_per_account,
                 config.offline_max_bytes_per_account,
                 config.offline_message_ttl_days,
-            ),
+            )
+            .with_cluster_admission(cluster.admission()),
             config.require_encrypted_archive,
         );
         let retraction_service = crate::services::retractions::RetractionService::new(
-            db::retractions::PostgresRetractionRepository::new(pool.clone()),
+            db::retractions::PostgresRetractionRepository::new(pool.clone())
+                .with_cluster_admission(cluster.admission()),
             retraction_content_identity,
             config.domain.clone(),
         );

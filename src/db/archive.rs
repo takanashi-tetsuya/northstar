@@ -301,7 +301,9 @@ pub async fn admit_personal_history(
     identity: Option<&PersonalHistoryIdentity<'_>>,
     writes: &[PersonalArchiveWrite<'_>],
 ) -> Result<PersonalHistoryAdmission> {
-    admit_personal_history_inner(pool, identity, writes, None, None).await
+    admit_personal_history_inner(pool, identity, writes, None, None, None)
+        .await
+        .map(|result| result.0)
 }
 
 /// Atomically commit all enabled MAM projections and the transient C2S
@@ -314,7 +316,9 @@ pub async fn admit_personal_history_and_c2s_delivery(
     writes: &[PersonalArchiveWrite<'_>],
     delivery: &PersonalC2sDeliveryAdmission<'_>,
 ) -> Result<PersonalHistoryAdmission> {
-    admit_personal_history_inner(pool, identity, writes, None, Some(delivery)).await
+    admit_personal_history_inner(pool, identity, writes, None, Some(delivery), None)
+        .await
+        .map(|result| result.0)
 }
 
 /// Atomically admit one federated personal message and its optional sender
@@ -327,7 +331,32 @@ pub async fn admit_outbound_personal_history(
     writes: &[PersonalArchiveWrite<'_>],
     outbox: &PersonalS2sOutboxAdmission<'_>,
 ) -> Result<PersonalHistoryAdmission> {
-    admit_personal_history_inner(pool, identity, writes, Some(outbox), None).await
+    admit_personal_history_inner(pool, identity, writes, Some(outbox), None, None)
+        .await
+        .map(|result| result.0)
+}
+
+pub(crate) async fn admit_personal_history_with_direct_fence(
+    pool: &PgPool,
+    identity: Option<&PersonalHistoryIdentity<'_>>,
+    writes: &[PersonalArchiveWrite<'_>],
+    outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
+    delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
+    cluster: &crate::cluster::ClusterAdmission,
+    eligibility: crate::cluster::DirectSpoolEligibility,
+) -> Result<(
+    PersonalHistoryAdmission,
+    crate::cluster::DirectPostCommitMode,
+)> {
+    admit_personal_history_inner(
+        pool,
+        identity,
+        writes,
+        outbox,
+        delivery,
+        Some((cluster, eligibility)),
+    )
+    .await
 }
 
 async fn admit_personal_history_inner(
@@ -336,8 +365,21 @@ async fn admit_personal_history_inner(
     writes: &[PersonalArchiveWrite<'_>],
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
-) -> Result<PersonalHistoryAdmission> {
+    cluster: Option<(
+        &crate::cluster::ClusterAdmission,
+        crate::cluster::DirectSpoolEligibility,
+    )>,
+) -> Result<(
+    PersonalHistoryAdmission,
+    crate::cluster::DirectPostCommitMode,
+)> {
     let mut transaction = pool.begin().await?;
+    if let Some((cluster, eligibility)) = cluster {
+        if let Some(authority) = cluster.check_direct_eligibility(eligibility)? {
+            super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
+                .await?;
+        }
+    }
     let outcome = admit_personal_history_in_transaction(
         &mut transaction,
         identity,
@@ -346,8 +388,30 @@ async fn admit_personal_history_inner(
         c2s_delivery,
     )
     .await?;
+    // Logical admission linearizes at this final health/eligibility read while
+    // the exact key and instance rows remain locked through COMMIT. The health
+    // atomic transition and physical COMMIT do not share a total order: a
+    // transition may land just after this read. The postcommit mode read below
+    // suppresses live effects in that case, leaving only recoverable rows.
+    if let Some((cluster, eligibility)) = cluster {
+        if let Some(authority) = cluster.check_direct_eligibility(eligibility)? {
+            super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
+                .await?;
+        }
+    }
     transaction.commit().await?;
-    Ok(outcome)
+    // A transition after commit can only suppress volatile effects. It cannot
+    // turn an accepted durable projection into a truthful stanza rejection.
+    let mode = cluster.map_or(
+        crate::cluster::DirectPostCommitMode::Live,
+        |(cluster, _)| match cluster.direct_mode() {
+            crate::cluster::DirectPostCommitMode::Live => {
+                crate::cluster::DirectPostCommitMode::Live
+            }
+            _ => crate::cluster::DirectPostCommitMode::SpoolOnly,
+        },
+    );
+    Ok((outcome, mode))
 }
 
 /// Repository half of a larger application-owned admission transaction.
@@ -1827,6 +1891,7 @@ pub async fn store_offline(
         encrypted,
         policy,
         None,
+        None,
     )
     .await
 }
@@ -1852,6 +1917,7 @@ pub async fn store_offline_for_recipient(
         stanza,
         encrypted,
         policy,
+        None,
         None,
     )
     .await
@@ -1882,6 +1948,7 @@ pub async fn store_offline_idempotent(
         encrypted,
         policy,
         identity,
+        None,
     )
     .await
 }
@@ -1910,6 +1977,46 @@ pub async fn store_offline_idempotent_for_recipient(
         encrypted,
         policy,
         identity,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn store_offline_idempotent_for_recipient_with_direct_fence(
+    pool: &PgPool,
+    recipient_id: Uuid,
+    recipient_bare_jid: &str,
+    sender_jid: &str,
+    stanza: &str,
+    encrypted: bool,
+    policy: OfflineStorePolicy,
+    identity: Option<&crate::abuse::MessageDedupeIdentity>,
+    cluster: Option<&crate::cluster::ClusterAdmission>,
+) -> Result<OfflineStoreOutcome> {
+    let Some(cluster) = cluster else {
+        return store_offline_idempotent_for_recipient(
+            pool,
+            recipient_id,
+            recipient_bare_jid,
+            sender_jid,
+            stanza,
+            encrypted,
+            policy,
+            identity,
+        )
+        .await;
+    };
+    store_offline_idempotent_inner(
+        pool,
+        recipient_id,
+        Some(recipient_bare_jid),
+        sender_jid,
+        stanza,
+        encrypted,
+        policy,
+        identity,
+        Some(cluster),
     )
     .await
 }
@@ -1924,6 +2031,7 @@ async fn store_offline_idempotent_inner(
     encrypted: bool,
     policy: OfflineStorePolicy,
     identity: Option<&crate::abuse::MessageDedupeIdentity>,
+    cluster: Option<&crate::cluster::ClusterAdmission>,
 ) -> Result<OfflineStoreOutcome> {
     let (recipient_authority, target_resource) =
         normalized_offline_target_resource(stanza, recipient_bare_jid)?;
@@ -1942,6 +2050,14 @@ async fn store_offline_idempotent_inner(
         );
     }
     let mut transaction = pool.begin().await?;
+    if let Some(cluster) = cluster {
+        if let Some(authority) =
+            cluster.check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
+        {
+            super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
+                .await?;
+        }
+    }
     // Linearize durable delivery against account disable/delete.  The
     // administrator's FOR UPDATE cannot pass this shared row lock until the
     // queue projection commits, while a disable that won first is observed as
@@ -2010,6 +2126,17 @@ async fn store_offline_idempotent_inner(
                         )
                 });
             anyhow::ensure!(exact, "conflicting offline message identity");
+            if let Some(cluster) = cluster {
+                if let Some(authority) = cluster
+                    .check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
+                {
+                    super::fence_direct_message_authority_in_transaction(
+                        &mut transaction,
+                        authority,
+                    )
+                    .await?;
+                }
+            }
             transaction.commit().await?;
             return Ok(OfflineStoreOutcome::Replay);
         }
@@ -2147,6 +2274,14 @@ async fn store_offline_idempotent_inner(
     sqlx::query("INSERT INTO offline_messages (id, recipient_id, sender_jid, stanza, target_resource, encrypted, mam_backed) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(offline_message_id).bind(recipient_id).bind(sender_jid).bind(stanza).bind(target_resource).bind(encrypted).bind(policy.mam_backed)
         .execute(&mut *transaction).await?;
+    if let Some(cluster) = cluster {
+        if let Some(authority) =
+            cluster.check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
+        {
+            super::fence_direct_message_authority_in_transaction(&mut transaction, authority)
+                .await?;
+        }
+    }
     transaction.commit().await?;
     Ok(OfflineStoreOutcome::Stored)
 }

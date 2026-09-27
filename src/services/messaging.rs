@@ -6,6 +6,7 @@ use super::{
     retractions::FederationOutboxPolicy,
 };
 use crate::abuse::MessageDedupeIdentity;
+use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 use crate::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_message_application::{
@@ -49,6 +50,12 @@ pub(crate) enum OfflineAdmissionOutcome {
     Replay,
     QuotaExceeded,
     RecipientUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DirectPersonalMessageAdmission {
+    pub(crate) commit: DurableAdmissionOutcome,
+    pub(crate) mode: DirectPostCommitMode,
 }
 
 /// The first accepted online resource, if any. Cluster v1 receipts may be
@@ -314,6 +321,12 @@ pub(crate) struct LocalMucInviteAdmission<'a> {
 pub(crate) trait MessageRepository:
     PersonalMessageCommitRepository<Error = anyhow::Error> + Clone + Send + Sync
 {
+    fn direct_mode(&self) -> DirectPostCommitMode;
+    fn commit_direct<'a>(
+        &'a self,
+        request: &'a ValidatedPersonalMessage<'a>,
+        eligibility: DirectSpoolEligibility,
+    ) -> impl Future<Output = Result<DirectPersonalMessageAdmission>> + Send + 'a;
     fn authorize_outbound_message(
         &self,
         owner_id: Uuid,
@@ -375,6 +388,20 @@ impl<R: MessageRepository> MessageService<R> {
             repository,
             require_encrypted_archive,
         }
+    }
+
+    pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
+        self.repository.direct_mode()
+    }
+
+    pub(crate) async fn admit_personal_message_with_mode(
+        &self,
+        request: &ValidatedPersonalMessage<'_>,
+        eligibility: DirectSpoolEligibility,
+    ) -> Result<DirectPersonalMessageAdmission> {
+        northstar_message_application::validate_authority(request)
+            .map_err(|error| anyhow::anyhow!("invalid personal-message command: {error:?}"))?;
+        self.repository.commit_direct(request, eligibility).await
     }
     pub(crate) async fn authorize_outbound_message(
         &self,

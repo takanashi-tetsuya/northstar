@@ -185,9 +185,12 @@ and Docker artifacts and their provenance. They do not repeat source CI.
 - [ ] Apply migration `0152` before MIX MAM traffic. Check adjacent pages whose
   events share a timestamp; the authoritative stanza ID must order both the
   results and their RSM cursors.
+- [ ] Apply migration `0153` and reconcile grants before starting the server.
+  Verify `northstar_commands` can execute only the fixed TLS reload functions
+  and runtime cannot execute them.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 151 migrations from `0001` through the current
-  repository maximum `0152`, with `0021` as the sole intentional gap.
+  identity and verify all 152 migrations from `0001` through the current
+  repository maximum `0153`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

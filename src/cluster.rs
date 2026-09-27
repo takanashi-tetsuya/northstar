@@ -864,11 +864,75 @@ fn delivery_carbon_muc_scope(json: &serde_json::Value) -> Result<Option<(String,
 #[derive(Clone)]
 pub(crate) struct ClusterAdmission {
     health: Arc<ClusterHealth>,
+    direct_authority: Option<ClusterReadinessAuthority>,
 }
 impl ClusterAdmission {
     pub(crate) fn admit(&self, operation: ClusterOperation) -> Result<()> {
         admit_health(&self.health, operation)
     }
+
+    pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
+        match self.health.state.load(Ordering::Acquire) {
+            CLUSTER_DISABLED | CLUSTER_HEALTHY => DirectPostCommitMode::Live,
+            CLUSTER_DURABLE_DIRECT_ONLY => DirectPostCommitMode::SpoolOnly,
+            _ => DirectPostCommitMode::Rejected,
+        }
+    }
+
+    /// The identity comes from this process's signing configuration and claimed
+    /// instance, never from the peer cache or a previous readiness observation.
+    pub(crate) fn durable_direct_authority(&self) -> Result<Option<&ClusterReadinessAuthority>> {
+        self.admit(ClusterOperation::DurableDirect)?;
+        if self.health.state.load(Ordering::Acquire) == CLUSTER_DISABLED {
+            return Ok(None);
+        }
+        let authority = self
+            .direct_authority
+            .as_ref()
+            .context("cluster durable direct admission has no claimed process authority")?;
+        anyhow::ensure!(
+            authority.instance_epoch >= 1,
+            "cluster process instance was not claimed"
+        );
+        Ok(Some(authority))
+    }
+
+    pub(crate) fn check_direct_eligibility(
+        &self,
+        eligibility: DirectSpoolEligibility,
+    ) -> Result<Option<&ClusterReadinessAuthority>> {
+        match self.direct_mode() {
+            DirectPostCommitMode::Rejected => {
+                anyhow::bail!("cluster control plane cannot admit direct messages")
+            }
+            DirectPostCommitMode::SpoolOnly if eligibility == DirectSpoolEligibility::LiveOnly => {
+                anyhow::bail!("this direct-message operation cannot be durably spooled while cluster control is degraded")
+            }
+            DirectPostCommitMode::Live | DirectPostCommitMode::SpoolOnly => {}
+        }
+        // Re-read health while retrieving this process's exact identity. The
+        // caller repeats this check with both PG rows locked near commit.
+        self.durable_direct_authority()
+    }
+}
+
+/// Controls only effects after a durable personal-message admission. Rejected
+/// is a pre-commit decision; a committed message must remain recoverable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DirectPostCommitMode {
+    Live,
+    SpoolOnly,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DirectSpoolEligibility {
+    /// Bare normal/chat with an allowed durable projection. Exact DB replays
+    /// remain no-op admissions while PostgreSQL-spooled mode is active.
+    Eligible,
+    /// Retractions, invitations, no-store and other operations requiring live
+    /// control are rejected in degraded mode, including their old retries.
+    LiveOnly,
 }
 fn admit_health(health: &ClusterHealth, operation: ClusterOperation) -> Result<()> {
     let state = health.state.load(Ordering::Acquire);
@@ -1110,8 +1174,18 @@ impl ClusterListenerSecurity {
         {
             Ok(admitted) => admitted,
             Err(error) => {
-                // PostgreSQL replay failures are control-plane failures, not
-                // unauthenticated traffic. Rotate and fail closed for repair.
+                if crate::db::cluster_replay_validation_rejection(&error) {
+                    // A changed event identity, stale source lease or elapsed
+                    // validity window is a source-side validation rejection,
+                    // not a lost local PostgreSQL authority connection.
+                    self.publisher
+                        .health
+                        .replay_rejections
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Err(error);
+                }
+                // Other PostgreSQL replay failures may mean that authority is
+                // unavailable or internally inconsistent; fail closed.
                 record_cluster_failure(
                     &self.publisher.health,
                     &self.publisher.listener_rotation,
@@ -4178,6 +4252,7 @@ impl ClusterManager {
     pub(crate) fn admission(&self) -> ClusterAdmission {
         ClusterAdmission {
             health: Arc::clone(&self.health),
+            direct_authority: self.readiness_authority_snapshot(),
         }
     }
 
@@ -7855,3 +7930,7 @@ mod muc_routing_tests;
 #[cfg(test)]
 #[path = "cluster_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cluster_direct_admission_tests.rs"]
+mod direct_admission_tests;

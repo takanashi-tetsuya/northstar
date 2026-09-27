@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 use crate::services::messaging::{
     admit_offline_then_push, ArchiveWrite, DurableAdmissionOutcome, FederationDelivery,
     FullJidFallback, FullJidFallbackResult, IdentityAuthority, LocalDelivery,
@@ -36,6 +37,94 @@ fn mixes_personal_retraction_and_direct_invite(root: Node<'_, '_>) -> bool {
                 && node.tag_name().name() == "x"
                 && node.tag_name().namespace() == Some("jabber:x:conference")
         })
+}
+
+/// A degraded cluster can only accept a durable bare-account direct message.
+/// The recipient spool is account scoped; an exact resource or an invitation
+/// cannot be represented by that authority while Redis is unavailable.
+fn degraded_local_direct_eligible(
+    root: Node<'_, '_>,
+    bare_target: bool,
+    personal_retraction: bool,
+    archive_requires_encryption: bool,
+) -> bool {
+    bare_target
+        && matches!(
+            root.attribute("type").unwrap_or("normal"),
+            "normal" | "chat"
+        )
+        && !personal_retraction
+        && !root.children().any(|node| {
+            node.is_element()
+                && ((node.tag_name().name() == "x"
+                    && node.tag_name().namespace() == Some("jabber:x:conference"))
+                    || (node.tag_name().name() == "pubsub"
+                        && node.tag_name().namespace()
+                            == Some("http://jabber.org/protocol/pubsub")))
+        })
+        && !signal_only_direct_message(root)
+        && direct_delivery_mode(root) == DirectDeliveryMode::Durable
+        && (!archive_requires_encryption || is_encrypted(root))
+}
+
+/// An explicit store hint does not turn a receipt/chat-state signal into
+/// ordinary direct content for degraded admission.
+fn signal_only_direct_message(root: Node<'_, '_>) -> bool {
+    let mut signal = false;
+    for node in root.children().filter(|node| node.is_element()) {
+        let namespace = node.tag_name().namespace().unwrap_or_default();
+        let name = node.tag_name().name();
+        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
+            && matches!(
+                name,
+                "active" | "composing" | "paused" | "inactive" | "gone"
+            ))
+            || (namespace == "urn:xmpp:receipts" && name == "received")
+            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
+        if is_signal {
+            signal = true;
+            continue;
+        }
+        if namespace == "urn:xmpp:hints"
+            || (matches!(namespace, "" | "jabber:client") && name == "thread")
+            || namespace == "urn:xmpp:sid:0"
+            || (namespace == "urn:northstar:pow:1" && name == "pow")
+        {
+            continue;
+        }
+        return false;
+    }
+    signal
+}
+
+fn direct_spool_eligibility(
+    stanza_eligible: bool,
+    account_default_privacy_permits: bool,
+) -> DirectSpoolEligibility {
+    if stanza_eligible && account_default_privacy_permits {
+        DirectSpoolEligibility::Eligible
+    } else {
+        DirectSpoolEligibility::LiveOnly
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LocalDirectLiveEffect {
+    Proceed,
+    AcceptedForRecovery,
+    Reject,
+}
+
+fn local_direct_live_effect(mode: DirectPostCommitMode, committed: bool) -> LocalDirectLiveEffect {
+    match mode {
+        DirectPostCommitMode::Live => LocalDirectLiveEffect::Proceed,
+        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected if committed => {
+            LocalDirectLiveEffect::AcceptedForRecovery
+        }
+        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
+            LocalDirectLiveEffect::Reject
+        }
+    }
 }
 
 /// An outbox wake is only a hint to process a row that has already committed.
@@ -106,6 +195,33 @@ impl ProtocolSession {
             // stanza's persistence semantics internally contradictory.
             return Ok(message_error(root, "wait", "service-unavailable"));
         }
+        // Read-only target parsing precedes PubSub authorization forms, PoW
+        // consumption and all other message side effects. During degradation,
+        // even a long-lived C2S stream cannot admit an unsupported direct.
+        let raw_to = root.attribute("to").unwrap_or_else(|| bare_jid(from));
+        let target_jid = match crate::jid::CanonicalJid::parse(raw_to) {
+            Ok(target) => target,
+            Err(_) => return Ok(message_error(root, "modify", "jid-malformed")),
+        };
+        let canonical_to = target_jid.to_string();
+        let to = canonical_to.as_str();
+        let local_direct = target_jid.domainpart() == self.state.local_domain()
+            && target_jid.localpart().is_some();
+        let degraded_spool_eligible = degraded_local_direct_eligible(
+            root,
+            target_jid.resourcepart().is_none(),
+            personal_retraction,
+            self.state.archive_requires_encryption(),
+        );
+        if local_direct {
+            match self.state.message_service().direct_mode() {
+                DirectPostCommitMode::Live => {}
+                DirectPostCommitMode::SpoolOnly if degraded_spool_eligible => {}
+                DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
+                    return Ok(message_error(root, "wait", "service-unavailable"));
+                }
+            }
+        }
         match self.pubsub_authorization_response(root).await {
             Ok(true) => return Ok(Action::None),
             Ok(false) => {}
@@ -142,16 +258,6 @@ impl ProtocolSession {
         // envelope and untrusted direct delay assertions are consumed.
         let routed_raw = strip_untrusted_direct_delays(&strip_pow_element(raw), None);
         let pow_intent_payload = message_pow_intent_payload(client_raw);
-        // RFC 6120 section 10.3.1 treats a client message without `to` as
-        // addressed to the sender's bare JID. This is commonly used to fan a
-        // message out to the account's other available resources.
-        let raw_to = root.attribute("to").unwrap_or_else(|| bare_jid(from));
-        let target_jid = match crate::jid::CanonicalJid::parse(raw_to) {
-            Ok(target) => target,
-            Err(_) => return Ok(message_error(root, "modify", "jid-malformed")),
-        };
-        let canonical_to = target_jid.to_string();
-        let to = canonical_to.as_str();
         let mut message_admission_lease = None;
         if is_abuse_rated_message(root) {
             let normalized_admission_payload =
@@ -669,7 +775,24 @@ impl ProtocolSession {
                 )
                 .await?
         };
-        let mut targets = self.state.session_entries_for(to);
+        let spool_only_now = if local_direct {
+            match self.state.message_service().direct_mode() {
+                DirectPostCommitMode::Live => false,
+                DirectPostCommitMode::SpoolOnly if degraded_spool_eligible => true,
+                DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
+                    return Ok(message_error(root, "wait", "service-unavailable"));
+                }
+            }
+        } else {
+            false
+        };
+        // The degraded destination is the PostgreSQL recipient spool. Redis
+        // session discovery cannot establish a live route in this mode.
+        let mut targets = if spool_only_now {
+            Vec::new()
+        } else {
+            self.state.session_entries_for(to)
+        };
         if bare_target {
             targets.retain(|(_, session)| {
                 session.available.load(Ordering::Relaxed)
@@ -700,16 +823,40 @@ impl ProtocolSession {
         if unfiltered_local_targets > 0 && targets.is_empty() {
             return Ok(message_error(root, "cancel", "service-unavailable"));
         }
-        let remote_route_exists = self.state.personal_message_remote_resource_exists(to).await;
-        if targets.is_empty()
-            && !remote_route_exists
-            && self
-                .state
-                .message_service()
-                .default_recipient_privacy_denies(recipient.id, from)
-                .await?
-        {
-            return Ok(message_error(root, "cancel", "service-unavailable"));
+        let remote_route_exists = if spool_only_now {
+            false
+        } else {
+            self.state.personal_message_remote_resource_exists(to).await
+        };
+        // A live resource's active privacy list may override the account
+        // default. If mode changes to SpoolOnly inside the PG transaction,
+        // however, the delivery becomes account-scoped. Read that default
+        // even when a live resource exists so the transaction can be marked
+        // LiveOnly when an account spool would violate recipient privacy.
+        let default_privacy_for_spool = if degraded_spool_eligible {
+            Some(
+                self.state
+                    .message_service()
+                    .default_recipient_privacy_denies(recipient.id, from)
+                    .await,
+            )
+        } else {
+            None
+        };
+        let spool_privacy_permits = matches!(&default_privacy_for_spool, Some(Ok(false)));
+        if targets.is_empty() && !remote_route_exists {
+            let default_denies = match default_privacy_for_spool {
+                Some(result) => result?,
+                None => {
+                    self.state
+                        .message_service()
+                        .default_recipient_privacy_denies(recipient.id, from)
+                        .await?
+                }
+            };
+            if default_denies {
+                return Ok(message_error(root, "cancel", "service-unavailable"));
+            }
         }
         // A trusted client origin-id is account scoped.  When the recipient's
         // personal archive is part of this admission, commit every owner
@@ -721,7 +868,7 @@ impl ProtocolSession {
         let exact_full_target_can_route = bare_target
             || message_type == "chat"
             || !targets.is_empty()
-            || self.state.personal_message_remote_resource_exists(to).await;
+            || (!spool_only_now && self.state.personal_message_remote_resource_exists(to).await);
         let mut history_committed = false;
         let mut durable_c2s_delivery = None;
         let direct_delivery_candidate = direct_invite_room.is_none()
@@ -784,16 +931,21 @@ impl ProtocolSession {
                     mam_backed: recipient_history_enabled,
                 }),
             };
-            match self
+            let eligibility =
+                direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
+            let admitted = self
                 .state
                 .message_service()
-                .admit_personal_message(&admission)
-                .await
-            {
-                Ok(DurableAdmissionOutcome::Stored {
-                    archive_written,
-                    post_commit,
-                }) => {
+                .admit_personal_message_with_mode(&admission, eligibility)
+                .await;
+            match admitted.map(|result| (result.commit, result.mode)) {
+                Ok((
+                    DurableAdmissionOutcome::Stored {
+                        archive_written,
+                        post_commit,
+                    },
+                    post_commit_mode,
+                )) => {
                     history_committed = archive_written;
                     let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit
                     else {
@@ -808,11 +960,30 @@ impl ProtocolSession {
                     );
                     self.finalize_message_admission(
                         &mut message_admission_lease,
-                        "local-durable-c2s",
+                        if post_commit_mode == DirectPostCommitMode::Live {
+                            "local-durable-c2s"
+                        } else {
+                            "local-durable-c2s-spooled"
+                        },
                     )
                     .await;
+                    // A committed spool row is accepted for recovery. It has
+                    // no live owner while Redis is degraded, so do not attempt
+                    // local delivery, Redis routing, Push, Carbons or a later
+                    // transient/offline fallback. The second mode read also
+                    // catches degradation during PoW finalization.
+                    if post_commit_mode != DirectPostCommitMode::Live
+                        || self.state.message_service().direct_mode() != DirectPostCommitMode::Live
+                    {
+                        tracing::debug!(
+                            recipient_id = %recipient.id,
+                            message_id = %recipient_stable_id,
+                            "C2S direct committed to PostgreSQL spool for recovery"
+                        );
+                        return Ok(Action::None);
+                    }
                 }
-                Ok(DurableAdmissionOutcome::Replay) => {
+                Ok((DurableAdmissionOutcome::Replay, _)) => {
                     self.finalize_message_admission(
                         &mut message_admission_lease,
                         "local-durable-c2s-replay",
@@ -820,7 +991,7 @@ impl ProtocolSession {
                     .await;
                     return Ok(Action::None);
                 }
-                Ok(DurableAdmissionOutcome::AccountUnavailable) => {
+                Ok((DurableAdmissionOutcome::AccountUnavailable, _)) => {
                     return Ok(message_error(root, "cancel", "service-unavailable"));
                 }
                 Err(error) => {
@@ -1080,6 +1251,21 @@ impl ProtocolSession {
             claim_id: None,
         });
         let deliver_all = bare_target && bare_message_route(message_type) == BareMessageRoute::All;
+        if local_direct {
+            // A mode transition can happen while policy reads or PoW
+            // finalization await. A committed row remains accepted for
+            // recovery, whereas an uncommitted transient stanza must fail.
+            match local_direct_live_effect(
+                self.state.message_service().direct_mode(),
+                live_delivery_id.is_some(),
+            ) {
+                LocalDirectLiveEffect::Proceed => {}
+                LocalDirectLiveEffect::AcceptedForRecovery => return Ok(Action::None),
+                LocalDirectLiveEffect::Reject => {
+                    return Ok(message_error(root, "wait", "service-unavailable"));
+                }
+            }
+        }
         let route = OnlineMessageRouter::dispatch(
             &*self.state,
             to,
@@ -1095,7 +1281,19 @@ impl ProtocolSession {
         // RFC 6121 §8.5.3.2 permits chat fallback after an exact resource
         // disappears. The service preserves post-commit privacy/error behavior.
         if !delivered && !bare_target {
-            match OnlineMessageRouter::full_jid_fallback(
+            if local_direct {
+                match local_direct_live_effect(
+                    self.state.message_service().direct_mode(),
+                    live_delivery_id.is_some(),
+                ) {
+                    LocalDirectLiveEffect::Proceed => {}
+                    LocalDirectLiveEffect::AcceptedForRecovery => return Ok(Action::None),
+                    LocalDirectLiveEffect::Reject => {
+                        return Ok(message_error(root, "wait", "service-unavailable"));
+                    }
+                }
+            }
+            let fallback = OnlineMessageRouter::full_jid_fallback(
                 &*self.state,
                 FullJidFallback {
                     message_type,
@@ -1107,8 +1305,18 @@ impl ProtocolSession {
                     delivery: live_delivery,
                 },
             )
-            .await?
-            {
+            .await;
+            let fallback = match fallback {
+                Ok(fallback) => fallback,
+                Err(error) if live_delivery_id.is_some() => {
+                    self.state.personal_message_telemetry().post_accept_failed();
+                    tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id,
+                        "full-JID fallback failed after durable admission; row remains recoverable");
+                    return Ok(Action::None);
+                }
+                Err(error) => return Err(error),
+            };
+            match fallback {
                 FullJidFallbackResult::Dropped => {
                     self.finalize_message_admission(
                         &mut message_admission_lease,
@@ -1118,12 +1326,41 @@ impl ProtocolSession {
                     return Ok(Action::None);
                 }
                 FullJidFallbackResult::Rejected => {
+                    if live_delivery_id.is_some() {
+                        self.state.personal_message_telemetry().post_accept_failed();
+                        tracing::warn!(recipient_id = %recipient.id, %recipient_stable_id,
+                            "full-JID fallback rejected after durable admission; row remains recoverable");
+                        return Ok(Action::None);
+                    }
                     return Ok(message_error(root, "cancel", "service-unavailable"));
                 }
                 FullJidFallbackResult::Undelivered => {}
                 FullJidFallbackResult::Delivered(key) => {
                     delivered = true;
                     delivered_key = key;
+                }
+            }
+        }
+
+        if local_direct {
+            match local_direct_live_effect(
+                self.state.message_service().direct_mode(),
+                live_delivery_id.is_some(),
+            ) {
+                LocalDirectLiveEffect::Proceed => {}
+                LocalDirectLiveEffect::AcceptedForRecovery => return Ok(Action::None),
+                LocalDirectLiveEffect::Reject if delivered => {
+                    // The live queue accepted the volatile stanza before the
+                    // transition. An error now would invite a duplicate.
+                    self.finalize_message_admission(
+                        &mut message_admission_lease,
+                        "online-before-degrade",
+                    )
+                    .await;
+                    return Ok(Action::None);
+                }
+                LocalDirectLiveEffect::Reject => {
+                    return Ok(message_error(root, "wait", "service-unavailable"));
                 }
             }
         }
@@ -1139,6 +1376,13 @@ impl ProtocolSession {
             }
             if live_delivery_id.is_some() {
                 stored_offline = true;
+                if local_direct
+                    && self.state.message_service().direct_mode() != DirectPostCommitMode::Live
+                {
+                    return Ok(Action::None);
+                }
+                // This check precedes the Push call; a provider request
+                // already in flight cannot be recalled by a later transition.
                 if let Err(error) = self.notify_push(recipient.id).await {
                     self.state.personal_message_telemetry().post_accept_failed();
                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "durable direct MUC invite was accepted but push notification failed");
@@ -1184,7 +1428,16 @@ impl ProtocolSession {
                                 },
                             ),
                             history_committed,
-                            self.state.dispatch_push_notification(recipient.id),
+                            async {
+                                if local_direct
+                                    && self.state.message_service().direct_mode()
+                                        != DirectPostCommitMode::Live
+                                {
+                                    Ok(())
+                                } else {
+                                    self.state.dispatch_push_notification(recipient.id).await
+                                }
+                            },
                         )
                         .await?;
                         match offline.admission {
@@ -1223,7 +1476,11 @@ impl ProtocolSession {
                     }
                 }
             }
-        } else if should_carbon(root) && recipient.id != user.id {
+        } else if should_carbon(root)
+            && recipient.id != user.id
+            && (!local_direct
+                || self.state.message_service().direct_mode() == DirectPostCommitMode::Live)
+        {
             if let Some(delivered_key) = delivered_key.as_deref() {
                 self.send_received_carbons(bare_jid(to), Some(delivered_key), &recipient_delivery)
                     .await;
@@ -1272,7 +1529,10 @@ impl ProtocolSession {
                 tracing::warn!(?error, %sender_stable_id, route = accepted_route, "accepted message history transaction failed atomically");
             }
         }
-        if should_carbon(root) {
+        if should_carbon(root)
+            && (!local_direct
+                || self.state.message_service().direct_mode() == DirectPostCommitMode::Live)
+        {
             let delivered_self = (recipient.id == user.id)
                 .then_some(delivered_key.as_deref())
                 .flatten();
@@ -1465,12 +1725,14 @@ fn message_pow_intent_payload(client_raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_message_route, direct_delivery_mode, durable_direct_delivery_allowed,
-        durable_full_no_match_recovers, full_no_match_route, message_pow_intent_payload,
+        bare_message_route, degraded_local_direct_eligible, direct_delivery_mode,
+        direct_spool_eligibility, durable_direct_delivery_allowed, durable_full_no_match_recovers,
+        full_no_match_route, local_direct_live_effect, message_pow_intent_payload,
         missing_user_message_should_error, mixes_personal_retraction_and_direct_invite,
         offline_storage_eligible, undelivered_disposition, wake_federation_outbox_after_commit,
-        BareMessageRoute, DirectDeliveryMode, DurableAdmissionOutcome, FullNoMatchRoute,
-        MessagePostCommit, UndeliveredDisposition,
+        BareMessageRoute, DirectDeliveryMode, DirectPostCommitMode, DirectSpoolEligibility,
+        DurableAdmissionOutcome, FullNoMatchRoute, LocalDirectLiveEffect, MessagePostCommit,
+        UndeliveredDisposition,
     };
     use crate::{
         abuse::{AbuseAction, PowIntent},
@@ -1585,6 +1847,94 @@ mod tests {
             DirectDeliveryMode::Volatile,
             true
         ));
+    }
+
+    #[test]
+    fn degraded_direct_spool_accepts_only_bare_storage_eligible_content() {
+        let accepted = [
+            "<message type='chat'><body>hello</body></message>",
+            "<message type='chat'><body>hello</body><composing xmlns='http://jabber.org/protocol/chatstates'/></message>",
+            "<message type='normal'><body>hello</body></message>",
+            "<message><body>hello</body></message>",
+        ];
+        for xml in accepted {
+            let document = Document::parse(xml).unwrap();
+            assert!(degraded_local_direct_eligible(
+                document.root_element(),
+                true,
+                false,
+                false,
+            ));
+        }
+
+        let rejected = [
+            "<message type='chat'><body>private</body><no-store xmlns='urn:xmpp:hints'/></message>",
+            "<message type='chat'><composing xmlns='http://jabber.org/protocol/chatstates'/></message>",
+            "<message type='chat'><composing xmlns='http://jabber.org/protocol/chatstates'/><store xmlns='urn:xmpp:hints'/></message>",
+            "<message type='chat'><received xmlns='urn:xmpp:receipts' id='m1'/><store xmlns='urn:xmpp:hints'/></message>",
+            "<message type='headline'><body>news</body></message>",
+            "<message type='groupchat'><body>hello</body></message>",
+            "<message type='chat'><body>join</body><x xmlns='jabber:x:conference' jid='room@conference.example.test'/></message>",
+            "<message type='normal'><pubsub xmlns='http://jabber.org/protocol/pubsub' node='push'><affiliation affiliation='none' jid='push.example.test'/></pubsub><store xmlns='urn:xmpp:hints'/></message>",
+        ];
+        for xml in rejected {
+            let document = Document::parse(xml).unwrap();
+            assert!(
+                !degraded_local_direct_eligible(document.root_element(), true, false, false,),
+                "unexpected degraded spool eligibility: {xml}"
+            );
+        }
+
+        let plain = Document::parse("<message type='chat'><body>hello</body></message>").unwrap();
+        assert!(
+            !degraded_local_direct_eligible(plain.root_element(), false, false, false,),
+            "a full JID has no account-scoped spool fallback"
+        );
+        assert!(
+            !degraded_local_direct_eligible(plain.root_element(), true, true, false,),
+            "a retraction is a separate history mutation"
+        );
+        assert!(
+            !degraded_local_direct_eligible(plain.root_element(), true, false, true,),
+            "deployment encryption policy still applies"
+        );
+    }
+
+    #[test]
+    fn account_privacy_denial_keeps_a_live_route_out_of_degraded_spool() {
+        assert_eq!(
+            direct_spool_eligibility(true, true),
+            DirectSpoolEligibility::Eligible
+        );
+        assert_eq!(
+            direct_spool_eligibility(true, false),
+            DirectSpoolEligibility::LiveOnly
+        );
+        assert_eq!(
+            direct_spool_eligibility(false, true),
+            DirectSpoolEligibility::LiveOnly
+        );
+    }
+
+    #[test]
+    fn mode_change_after_commit_preserves_recovery_without_live_effects() {
+        for mode in [
+            DirectPostCommitMode::SpoolOnly,
+            DirectPostCommitMode::Rejected,
+        ] {
+            assert_eq!(
+                local_direct_live_effect(mode, true),
+                LocalDirectLiveEffect::AcceptedForRecovery
+            );
+            assert_eq!(
+                local_direct_live_effect(mode, false),
+                LocalDirectLiveEffect::Reject
+            );
+        }
+        assert_eq!(
+            local_direct_live_effect(DirectPostCommitMode::Live, true),
+            LocalDirectLiveEffect::Proceed
+        );
     }
 
     #[test]

@@ -681,6 +681,8 @@ for capability in northstar_admin_tls_reload_admit \
     "migration 0153 is missing TLS reload command capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "command role allowlist is missing TLS reload capability: $capability"
+  [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
+    fail "TLS reload capability must appear in grant and both exact role audits: $capability"
   require_literal "$role_attestation" "$capability" \
     "command role attestation is missing TLS reload capability: $capability"
 done

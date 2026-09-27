@@ -43,6 +43,7 @@ case "$shard" in
       'message-pow|Message PoW database|600|message-pow-db-wsl.sh'
       'push-delivery|Push delivery database|480|push-delivery-db-wsl.sh'
       'offline-replay|Offline replay database|600|offline-replay-db-wsl.sh'
+      'direct-admission|Direct admission fence database|480|direct-admission-db-wsl.sh'
       'retention|Retention database|480|retention-db-wsl.sh'
       'stream-management|Stream Management database|600|sm-db-wsl.sh'
       's2s|S2S database|600|s2s-db-wsl.sh'

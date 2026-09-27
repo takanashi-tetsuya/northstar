@@ -2,6 +2,126 @@ use super::*;
 use crate::services::retractions::RetractionService;
 
 #[test]
+fn degraded_inbound_spool_accepts_only_recoverable_bare_messages() {
+    for xml in [
+        "<message type='chat'><body>hello</body></message>",
+        "<message type='chat'><body>hello</body><composing xmlns='http://jabber.org/protocol/chatstates'/></message>",
+        "<message type='normal'><body>hello</body></message>",
+        "<message><body>hello</body></message>",
+    ] {
+        let document = Document::parse(xml).unwrap();
+        assert!(degraded_inbound_direct_eligible(
+            document.root_element(),
+            true,
+            false,
+            false,
+        ));
+    }
+
+    for xml in [
+        "<message type='chat'><body>private</body><no-store xmlns='urn:xmpp:hints'/></message>",
+        "<message type='chat'><composing xmlns='http://jabber.org/protocol/chatstates'/></message>",
+        "<message type='chat'><composing xmlns='http://jabber.org/protocol/chatstates'/><store xmlns='urn:xmpp:hints'/></message>",
+        "<message type='chat'><received xmlns='urn:xmpp:receipts' id='m1'/><store xmlns='urn:xmpp:hints'/></message>",
+        "<message type='chat'><displayed xmlns='urn:xmpp:chat-markers:0' id='m1'/><store xmlns='urn:xmpp:hints'/></message>",
+        "<message type='headline'><body>news</body></message>",
+        "<message type='groupchat'><body>hello</body></message>",
+        "<message type='chat'><body>join</body><x xmlns='jabber:x:conference' jid='room@conference.example.test'/></message>",
+        "<message type='normal'><pubsub xmlns='http://jabber.org/protocol/pubsub' node='push'><affiliation affiliation='none' jid='push.example.test'/></pubsub><store xmlns='urn:xmpp:hints'/></message>",
+    ] {
+        let document = Document::parse(xml).unwrap();
+        assert!(
+            !degraded_inbound_direct_eligible(document.root_element(), true, false, false),
+            "unexpected degraded spool eligibility: {xml}"
+        );
+    }
+
+    let plain = Document::parse("<message type='chat'><body>hello</body></message>").unwrap();
+    assert!(!degraded_inbound_direct_eligible(
+        plain.root_element(),
+        false,
+        false,
+        false,
+    ));
+    assert!(!degraded_inbound_direct_eligible(
+        plain.root_element(),
+        true,
+        true,
+        false,
+    ));
+    assert!(!degraded_inbound_direct_eligible(
+        plain.root_element(),
+        true,
+        false,
+        true,
+    ));
+    let encrypted = Document::parse(
+        "<message type='chat'><encrypted xmlns='urn:xmpp:omemo:2'>ciphertext</encrypted></message>",
+    )
+    .unwrap();
+    assert!(degraded_inbound_direct_eligible(
+        encrypted.root_element(),
+        true,
+        false,
+        true,
+    ));
+}
+
+#[test]
+fn degraded_inbound_postcommit_is_accepted_without_live_effects() {
+    assert_eq!(
+        inbound_live_effect(DirectPostCommitMode::Live, false),
+        InboundLiveEffect::Proceed
+    );
+    assert_eq!(
+        inbound_live_effect(DirectPostCommitMode::Live, true),
+        InboundLiveEffect::Proceed
+    );
+    for mode in [
+        DirectPostCommitMode::SpoolOnly,
+        DirectPostCommitMode::Rejected,
+    ] {
+        assert_eq!(inbound_live_effect(mode, false), InboundLiveEffect::Reject);
+        assert_eq!(
+            inbound_live_effect(mode, true),
+            InboundLiveEffect::AcceptedSpool
+        );
+    }
+}
+
+#[test]
+fn degraded_inbound_privacy_uses_account_default_and_fences_live_only_admission() {
+    assert_eq!(
+        degraded_inbound_privacy_uses_default(DirectPostCommitMode::Live, true),
+        Some(false)
+    );
+    assert_eq!(
+        degraded_inbound_privacy_uses_default(DirectPostCommitMode::SpoolOnly, true),
+        Some(true)
+    );
+    assert_eq!(
+        degraded_inbound_privacy_uses_default(DirectPostCommitMode::SpoolOnly, false),
+        None
+    );
+    assert_eq!(
+        degraded_inbound_privacy_uses_default(DirectPostCommitMode::Rejected, true),
+        None
+    );
+    assert_eq!(
+        inbound_direct_spool_eligibility(true, false),
+        DirectSpoolEligibility::Eligible
+    );
+    assert_eq!(
+        inbound_direct_spool_eligibility(true, true),
+        DirectSpoolEligibility::LiveOnly
+    );
+    assert_eq!(
+        inbound_direct_spool_eligibility(false, false),
+        DirectSpoolEligibility::LiveOnly
+    );
+}
+
+#[test]
 fn bidi_route_waits_for_resume_preface_but_admits_non_sm_peers() {
     // A new authenticated transport has not established its SM mode yet.
     // In particular it must not receive an outbox stanza before <resume/>.

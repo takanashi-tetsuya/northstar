@@ -1,4 +1,5 @@
 use crate::{
+    cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
     jid::{prepare_domainpart, CanonicalJid},
     services::{
@@ -2974,6 +2975,105 @@ pub(crate) async fn route_inbound_iq(
     }
 }
 
+/// A degraded node can accept only an account-scoped, recoverable direct
+/// message. Resource-affine and transient stanzas require a live route.
+fn degraded_inbound_direct_eligible(
+    root: roxmltree::Node<'_, '_>,
+    bare_target: bool,
+    personal_retraction: bool,
+    archive_requires_encryption: bool,
+) -> bool {
+    bare_target
+        && matches!(
+            root.attribute("type").unwrap_or("normal"),
+            "normal" | "chat"
+        )
+        && !personal_retraction
+        && !root.children().any(|node| {
+            node.is_element()
+                && ((node.tag_name().name() == "x"
+                    && node.tag_name().namespace() == Some("jabber:x:conference"))
+                    || (node.tag_name().name() == "pubsub"
+                        && node.tag_name().namespace()
+                            == Some("http://jabber.org/protocol/pubsub")))
+        })
+        && !signal_only_inbound_direct_message(root)
+        && crate::xmpp::protocol::messaging::direct_delivery_mode(root)
+            == crate::xmpp::protocol::messaging::DirectDeliveryMode::Durable
+        && (!archive_requires_encryption || is_encrypted(root))
+}
+
+/// A storage hint does not turn a receipt or chat-state signal into a
+/// recoverable direct message when live delivery is unavailable.
+fn signal_only_inbound_direct_message(root: roxmltree::Node<'_, '_>) -> bool {
+    let mut signal = false;
+    for node in root.children().filter(roxmltree::Node::is_element) {
+        let namespace = node.tag_name().namespace().unwrap_or_default();
+        let name = node.tag_name().name();
+        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
+            && matches!(
+                name,
+                "active" | "composing" | "paused" | "inactive" | "gone"
+            ))
+            || (namespace == "urn:xmpp:receipts" && name == "received")
+            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
+        if is_signal {
+            signal = true;
+            continue;
+        }
+        if namespace == "urn:xmpp:hints"
+            || (matches!(namespace, "" | "jabber:client" | "jabber:server") && name == "thread")
+            || namespace == "urn:xmpp:sid:0"
+            || (namespace == "urn:northstar:pow:1" && name == "pow")
+        {
+            continue;
+        }
+        return false;
+    }
+    signal
+}
+
+fn degraded_inbound_privacy_uses_default(
+    mode: DirectPostCommitMode,
+    spool_eligible: bool,
+) -> Option<bool> {
+    match mode {
+        DirectPostCommitMode::Live => Some(false),
+        DirectPostCommitMode::SpoolOnly if spool_eligible => Some(true),
+        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => None,
+    }
+}
+
+fn inbound_direct_spool_eligibility(
+    statically_eligible: bool,
+    default_privacy_denied: bool,
+) -> DirectSpoolEligibility {
+    if statically_eligible && !default_privacy_denied {
+        DirectSpoolEligibility::Eligible
+    } else {
+        DirectSpoolEligibility::LiveOnly
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InboundLiveEffect {
+    Proceed,
+    AcceptedSpool,
+    Reject,
+}
+
+fn inbound_live_effect(mode: DirectPostCommitMode, committed: bool) -> InboundLiveEffect {
+    match mode {
+        DirectPostCommitMode::Live => InboundLiveEffect::Proceed,
+        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected if committed => {
+            InboundLiveEffect::AcceptedSpool
+        }
+        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
+            InboundLiveEffect::Reject
+        }
+    }
+}
+
 pub(crate) async fn route_inbound_message(
     state: &AppState,
     root: roxmltree::Node<'_, '_>,
@@ -3003,6 +3103,23 @@ pub(crate) async fn route_inbound_message(
     let Ok(to_jid) = CanonicalJid::parse(to) else {
         return Ok(inbound_message_error(root, "modify", "jid-malformed"));
     };
+    let bare_target = to_jid.resourcepart().is_none();
+    let degraded_spool_eligible = degraded_inbound_direct_eligible(
+        root,
+        bare_target,
+        personal_retraction,
+        state.archive_requires_encryption(),
+    );
+    // Push-disable and retraction are mutations too. Reject unsupported
+    // stanzas before either handler can write anything while Redis is down.
+    if degraded_inbound_privacy_uses_default(
+        state.message_service().direct_mode(),
+        degraded_spool_eligible,
+    )
+    .is_none()
+    {
+        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+    }
     if crate::xmpp::protocol::misc::handle_push_disable(state, root, from, to).await? {
         return Ok(None);
     }
@@ -3035,7 +3152,6 @@ pub(crate) async fn route_inbound_message(
     if personal_retraction && !matches!(message_type, "normal" | "chat") {
         return Ok(inbound_message_error(root, "modify", "bad-request"));
     }
-    let bare_target = to_jid.resourcepart().is_none();
     if bare_target {
         match crate::xmpp::protocol::messaging::bare_message_route(message_type) {
             crate::xmpp::protocol::messaging::BareMessageRoute::Reject => {
@@ -3049,7 +3165,19 @@ pub(crate) async fn route_inbound_message(
     // Resolve local per-resource privacy policy before any archive or delivery
     // admission.  A resource's active list replaces the account default; if
     // there is no online route, the durable default governs offline storage.
-    let mut privacy_candidates = state.session_entries_for(to);
+    // A degraded node cannot trust cached sessions or a Redis route to choose
+    // a resource policy, so use the account default for the spool admission.
+    let Some(spool_only_privacy) = degraded_inbound_privacy_uses_default(
+        state.message_service().direct_mode(),
+        degraded_spool_eligible,
+    ) else {
+        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+    };
+    let mut privacy_candidates = if spool_only_privacy {
+        Vec::new()
+    } else {
+        state.session_entries_for(to)
+    };
     if bare_target {
         privacy_candidates.retain(|(_, session)| {
             session.available.load(Ordering::Relaxed)
@@ -3070,14 +3198,30 @@ pub(crate) async fn route_inbound_message(
     if unfiltered_privacy_candidates > 0 && !privacy_allowed {
         return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
     }
-    let remote_route_exists = state.s2s_remote_recipient_route_exists(to).await;
-    if unfiltered_privacy_candidates == 0
-        && !remote_route_exists
-        && state
+    let remote_route_exists =
+        !spool_only_privacy && state.s2s_remote_recipient_route_exists(to).await;
+    // Even with a healthy resource route, a statically spoolable message
+    // might enter SpoolOnly during its PostgreSQL transaction. Bind that
+    // transition to the account-default privacy decision before admission.
+    let no_live_route = unfiltered_privacy_candidates == 0 && !remote_route_exists;
+    let default_privacy_denied = if degraded_spool_eligible || no_live_route {
+        match state
             .message_service()
             .default_recipient_privacy_denies(recipient.id, from)
-            .await?
-    {
+            .await
+        {
+            Ok(denied) => denied,
+            Err(error) if !no_live_route => {
+                tracing::warn!(?error, recipient_id = %recipient.id,
+                    "account-default privacy unavailable; S2S message remains live-only");
+                true
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        false
+    };
+    if no_live_route && default_privacy_denied {
         return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
     }
     // Deterministic full-resource failure is still a truthful stanza error
@@ -3184,24 +3328,53 @@ pub(crate) async fn route_inbound_message(
                 mam_backed: archive_allowed,
             }),
         };
+        let eligibility =
+            inbound_direct_spool_eligibility(degraded_spool_eligible, default_privacy_denied);
         match state
             .message_service()
-            .admit_personal_message(&delivery)
+            .admit_personal_message_with_mode(&delivery, eligibility)
             .await
+            .map(|admitted| (admitted.commit, admitted.mode))
         {
-            Ok(DurableAdmissionOutcome::Stored { post_commit, .. }) => {
+            Ok((DurableAdmissionOutcome::Stored { post_commit, .. }, post_commit_mode)) => {
                 history_committed = archive_allowed;
                 let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit else {
-                    anyhow::bail!("local federation ingress returned a non-local commit plan");
+                    state.s2s_inbound_delivery_telemetry().post_accept_failed();
+                    tracing::warn!(%stable_id, "committed S2S ingress returned a non-local delivery plan");
+                    return Ok(None);
                 };
                 durable_c2s_delivery = Some(delivery_id);
+                // A committed spool row has no safe live owner during Redis
+                // degradation. A second read covers a mode change after the
+                // PostgreSQL commit; neither case may trigger local/cluster
+                // routing, Carbons, Push, or an offline fallback.
+                if post_commit_mode != DirectPostCommitMode::Live
+                    || state.message_service().direct_mode() != DirectPostCommitMode::Live
+                {
+                    tracing::debug!(%stable_id, recipient_id = %recipient.id,
+                        "S2S direct committed to PostgreSQL spool for recovery");
+                    return Ok(None);
+                }
             }
-            Ok(DurableAdmissionOutcome::Replay) => return Ok(None),
-            Ok(DurableAdmissionOutcome::AccountUnavailable) => return Ok(None),
+            Ok((DurableAdmissionOutcome::Replay, _)) => return Ok(None),
+            Ok((DurableAdmissionOutcome::AccountUnavailable, _)) => return Ok(None),
             Err(error) => {
                 tracing::warn!(?error, %authenticated_domain, "inbound message history/C2S admission failed atomically");
                 return Ok(inbound_message_error(root, "wait", "resource-constraint"));
             }
+        }
+    }
+    // The remaining paths are live-only. The durable branch above already
+    // returned for a committed spool, while a race into degradation before
+    // a volatile route or retraction must fail without side effects.
+    match inbound_live_effect(
+        state.message_service().direct_mode(),
+        durable_c2s_delivery.is_some(),
+    ) {
+        InboundLiveEffect::Proceed => {}
+        InboundLiveEffect::AcceptedSpool => return Ok(None),
+        InboundLiveEffect::Reject => {
+            return Ok(inbound_message_error(root, "wait", "service-unavailable"));
         }
     }
     let mut targets = state.session_entries_for(to);
@@ -3222,11 +3395,18 @@ pub(crate) async fn route_inbound_message(
     }
     let mut allowed_targets = Vec::with_capacity(targets.len());
     for target in targets {
-        if state
+        match state
             .privacy_allows_session(&target.1, from, db::PrivacyStanzaKind::Message)
-            .await?
+            .await
         {
-            allowed_targets.push(target);
+            Ok(true) => allowed_targets.push(target),
+            Ok(false) => {}
+            Err(error) if durable_c2s_delivery.is_some() => {
+                state.s2s_inbound_delivery_telemetry().post_accept_failed();
+                tracing::warn!(?error, recipient_id = %recipient.id,
+                    "privacy policy failed closed after durable S2S admission");
+            }
+            Err(error) => return Err(error),
         }
     }
     let targets = allowed_targets;
@@ -3234,6 +3414,9 @@ pub(crate) async fn route_inbound_message(
         && crate::xmpp::protocol::messaging::bare_message_route(message_type)
             == crate::xmpp::protocol::messaging::BareMessageRoute::All;
     if let Some(command) = personal_retraction_command.as_ref() {
+        if state.message_service().direct_mode() != DirectPostCommitMode::Live {
+            return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+        }
         // A full-JID route that is deterministically invalid must be rejected
         // before creating a durable projection. Chat fallback remains valid;
         // a bare target may recover through the offline outbox.
@@ -3311,6 +3494,16 @@ pub(crate) async fn route_inbound_message(
             }
         }
     }
+    match inbound_live_effect(
+        state.message_service().direct_mode(),
+        durable_c2s_delivery.is_some() || history_committed,
+    ) {
+        InboundLiveEffect::Proceed => {}
+        InboundLiveEffect::AcceptedSpool => return Ok(None),
+        InboundLiveEffect::Reject => {
+            return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+        }
+    }
     let mut delivered_key = None;
     let live_delivery = durable_c2s_delivery.map(|message_id| crate::outbound::DurableDelivery {
         recipient_id: recipient.id,
@@ -3340,6 +3533,13 @@ pub(crate) async fn route_inbound_message(
     }
     let mut delivered = delivered_key.is_some();
 
+    if state.message_service().direct_mode() != DirectPostCommitMode::Live {
+        return Ok(if delivered || live_delivery.is_some() {
+            None
+        } else {
+            inbound_message_error(root, "wait", "service-unavailable")
+        });
+    }
     if deliver_all {
         delivered |= state
             .route_s2s_message_to_available_remote_resources(to, &annotated, live_delivery)
@@ -3355,6 +3555,16 @@ pub(crate) async fn route_inbound_message(
     }
 
     if !delivered && !bare_target {
+        match inbound_live_effect(
+            state.message_service().direct_mode(),
+            live_delivery.is_some(),
+        ) {
+            InboundLiveEffect::Proceed => {}
+            InboundLiveEffect::AcceptedSpool => return Ok(None),
+            InboundLiveEffect::Reject => {
+                return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+            }
+        }
         let allow_bare_fallback = match crate::xmpp::protocol::messaging::full_no_match_route(
             message_type,
         ) {
@@ -3412,6 +3622,16 @@ pub(crate) async fn route_inbound_message(
                     Err(error) => return Err(error),
                 }
             }
+            match inbound_live_effect(
+                state.message_service().direct_mode(),
+                live_delivery.is_some(),
+            ) {
+                InboundLiveEffect::Proceed => {}
+                InboundLiveEffect::AcceptedSpool => return Ok(None),
+                InboundLiveEffect::Reject => {
+                    return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+                }
+            }
             for (key, target) in allowed_fallback {
                 let accepted = if let Some(delivery) = live_delivery {
                     target
@@ -3431,6 +3651,16 @@ pub(crate) async fn route_inbound_message(
                 }
             }
             if !delivered {
+                match inbound_live_effect(
+                    state.message_service().direct_mode(),
+                    live_delivery.is_some(),
+                ) {
+                    InboundLiveEffect::Proceed => {}
+                    InboundLiveEffect::AcceptedSpool => return Ok(None),
+                    InboundLiveEffect::Reject => {
+                        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+                    }
+                }
                 let remote = state
                     .route_s2s_message_to_remote_primary(&recipient_by, &annotated, live_delivery)
                     .await;
@@ -3447,6 +3677,9 @@ pub(crate) async fn route_inbound_message(
     }
 
     if delivered {
+        if state.message_service().direct_mode() != DirectPostCommitMode::Live {
+            return Ok(None);
+        }
         if !history_committed {
             finalize_accepted_inbound_history(
                 state,
@@ -3466,7 +3699,10 @@ pub(crate) async fn route_inbound_message(
         }
         let remote_muc_private_message =
             is_remote_muc_private_message(root, from, authenticated_domain);
-        if should_carbon(root) && !remote_muc_private_message {
+        if state.message_service().direct_mode() == DirectPostCommitMode::Live
+            && should_carbon(root)
+            && !remote_muc_private_message
+        {
             if let Some(delivered_key) = delivered_key.as_deref() {
                 crate::services::message_carbons::send_received_carbons(
                     state,
@@ -3481,9 +3717,11 @@ pub(crate) async fn route_inbound_message(
         return Ok(None);
     }
     if durable_c2s_delivery.is_some() {
-        if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-            state.s2s_inbound_delivery_telemetry().post_accept_failed();
-            tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "durable inbound C2S message was accepted but push notification failed");
+        if state.message_service().direct_mode() == DirectPostCommitMode::Live {
+            if let Err(error) = state.dispatch_push_notification(recipient.id).await {
+                state.s2s_inbound_delivery_telemetry().post_accept_failed();
+                tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "durable inbound C2S message was accepted but push notification failed");
+            }
         }
         return Ok(None);
     }
@@ -3502,6 +3740,13 @@ pub(crate) async fn route_inbound_message(
         )
         && durable_content_allowed
     {
+        match inbound_live_effect(state.message_service().direct_mode(), history_committed) {
+            InboundLiveEffect::Proceed => {}
+            InboundLiveEffect::AcceptedSpool => return Ok(None),
+            InboundLiveEffect::Reject => {
+                return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+            }
+        }
         let delayed = add_delay_from(&archive, chrono::Utc::now(), Some(state.local_domain()));
         let offline_outcome = state
             .message_service()
@@ -3520,9 +3765,11 @@ pub(crate) async fn route_inbound_message(
         }
         if offline_outcome == OfflineAdmissionOutcome::QuotaExceeded {
             if history_committed {
-                if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-                    state.s2s_inbound_delivery_telemetry().post_accept_failed();
-                    tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "MAM-backed inbound message was accepted but offline quota and push delivery both failed");
+                if state.message_service().direct_mode() == DirectPostCommitMode::Live {
+                    if let Err(error) = state.dispatch_push_notification(recipient.id).await {
+                        state.s2s_inbound_delivery_telemetry().post_accept_failed();
+                        tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "MAM-backed inbound message was accepted but offline quota and push delivery both failed");
+                    }
                 }
                 return Ok(None);
             }
@@ -3545,9 +3792,11 @@ pub(crate) async fn route_inbound_message(
             )
             .await;
         }
-        if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-            state.s2s_inbound_delivery_telemetry().post_accept_failed();
-            tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "inbound offline message was accepted but push notification failed");
+        if state.message_service().direct_mode() == DirectPostCommitMode::Live {
+            if let Err(error) = state.dispatch_push_notification(recipient.id).await {
+                state.s2s_inbound_delivery_telemetry().post_accept_failed();
+                tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "inbound offline message was accepted but push notification failed");
+            }
         }
         return Ok(None);
     }

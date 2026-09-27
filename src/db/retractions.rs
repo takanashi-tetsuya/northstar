@@ -1,5 +1,9 @@
 //! Atomic retraction intents, archive tombstones and delivery projections.
-use crate::{db, services::retractions::*};
+use crate::{
+    cluster::{ClusterAdmission, DirectSpoolEligibility},
+    db,
+    services::retractions::*,
+};
 use anyhow::Result;
 use roxmltree::Document;
 use sqlx::{PgPool, Row};
@@ -10,10 +14,33 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) struct PostgresRetractionRepository {
     pool: PgPool,
+    cluster: Option<ClusterAdmission>,
 }
 impl PostgresRetractionRepository {
     pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            cluster: None,
+        }
+    }
+
+    pub(crate) fn with_cluster_admission(mut self, cluster: ClusterAdmission) -> Self {
+        self.cluster = Some(cluster);
+        self
+    }
+
+    async fn fence_live_retraction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<()> {
+        if let Some(cluster) = self.cluster.as_ref() {
+            if let Some(authority) =
+                cluster.check_direct_eligibility(DirectSpoolEligibility::LiveOnly)?
+            {
+                db::fence_direct_message_authority_in_transaction(tx, authority).await?;
+            }
+        }
+        Ok(())
     }
 }
 impl RetractionRepository for PostgresRetractionRepository {
@@ -40,6 +67,7 @@ impl RetractionRepository for PostgresRetractionRepository {
             delivery_authenticators,
         } = prepared;
         let mut transaction = self.pool.begin().await?;
+        self.fence_live_retraction(&mut transaction).await?;
         let mut required_accounts = normalized_owners
             .iter()
             .map(|owner| owner.owner_id)
@@ -348,6 +376,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 );
             }
             if legacy_semantic_exact || legacy_owner_exact {
+                self.fence_live_retraction(&mut transaction).await?;
                 transaction.commit().await?;
             } else {
                 transaction.rollback().await?;
@@ -450,6 +479,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 && normalized_delivery.is_none()
                 && normalized_outbound.is_none()
             {
+                self.fence_live_retraction(&mut transaction).await?;
                 transaction.commit().await?;
                 return Ok(RetractionOutcome::Replay);
             }
@@ -562,6 +592,7 @@ impl RetractionRepository for PostgresRetractionRepository {
             )
             .await?;
         }
+        self.fence_live_retraction(&mut transaction).await?;
         transaction.commit().await?;
         Ok(RetractionOutcome::Applied {
             tombstones: tombstones.len(),

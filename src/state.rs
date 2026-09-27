@@ -3240,10 +3240,15 @@ impl AppState {
         &self,
     ) -> crate::xmpp::capabilities::Sasl2AuthenticationTelemetry<'_> {
         crate::xmpp::capabilities::Sasl2AuthenticationTelemetry::new(
-            &self.metrics.authentication_duration_seconds,
             &self.metrics.fast_credential_integrity_failures_total,
             &self.metrics.authentication_backend_failures_total,
         )
+    }
+
+    pub(crate) fn sasl2_authentication_timer(&self) -> crate::metrics::OwnedDurationTimer {
+        self.metrics
+            .authentication_duration_seconds
+            .start_owned_timer()
     }
 
     pub(crate) fn c2s_authentication_telemetry(

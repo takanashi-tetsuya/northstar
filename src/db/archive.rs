@@ -2883,6 +2883,10 @@ mod mam_query_tests {
 #[cfg(test)]
 mod history_identity_pg_tests {
     use super::*;
+    use northstar_archive_application::{
+        FederatedMamMetadataCommand, MamMetadataCommand, MamMetadataResult, MamQueryCommand,
+        MamQueryRepository, MamQueryResult, MamQueryScope,
+    };
     use std::sync::Arc;
     use tokio::sync::Barrier;
 
@@ -3362,6 +3366,60 @@ mod history_identity_pg_tests {
             .execute(&pool)
             .await
             .unwrap();
+        let metadata_repository = crate::db::mam::PostgresMamRepository::new(pool.clone());
+        let federated_metadata = |actor_full_jid: &str| {
+            FederatedMamMetadataCommand::from_authenticated_actor(
+                "snapshot-room".to_owned(),
+                "remote.test",
+                actor_full_jid,
+                false,
+            )
+            .unwrap()
+        };
+        let federated_scope = |viewer_bare_jid: &str| MamQueryScope::FederatedRoom {
+            localpart: "snapshot-room".to_owned(),
+            viewer_bare_jid: viewer_bare_jid.to_owned(),
+            currently_joined: false,
+        };
+        let metadata = metadata_repository
+            .get_federated_boundaries(federated_metadata("remote@remote.test/phone"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            metadata,
+            MamMetadataResult::Boundaries {
+                room: Some(access),
+                start: Some(ArchiveBoundary { id: start, .. }),
+                end: Some(ArchiveBoundary { id: end, .. }),
+            } if !access.reveal_real_jid() && start == message_id && end == message_id
+        ));
+        assert!(matches!(
+            metadata_repository
+                .get_federated_boundaries(federated_metadata("outsider@remote.test/phone"))
+                .await
+                .unwrap(),
+            MamMetadataResult::Forbidden
+        ));
+        assert!(matches!(
+            metadata_repository
+                .get_boundaries(MamMetadataCommand {
+                    scope: federated_scope("remote@remote.test"),
+                })
+                .await
+                .unwrap(),
+            MamMetadataResult::Forbidden
+        ));
+        assert!(matches!(
+            metadata_repository
+                .query_archive(MamQueryCommand {
+                    scope: federated_scope("remote@remote.test"),
+                    query: page_query(),
+                })
+                .await
+                .unwrap(),
+            MamQueryResult::Forbidden
+        ));
+
         let mut peer_query = page_query();
         peer_query.with_jid = Some("sender@remote.test/Phone".to_owned());
         assert!(matches!(
@@ -3539,6 +3597,13 @@ mod history_identity_pg_tests {
             .await
             .unwrap(),
             MamRoomReadOutcome::Forbidden
+        ));
+        assert!(matches!(
+            metadata_repository
+                .get_federated_boundaries(federated_metadata("remote@remote.test/phone"))
+                .await
+                .unwrap(),
+            MamMetadataResult::Forbidden
         ));
 
         sqlx::query(

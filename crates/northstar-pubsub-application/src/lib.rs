@@ -5,17 +5,17 @@
 
 use anyhow::{Error, Result};
 use northstar_pubsub_core::{
-    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PepConfigureNodeWrite,
-    PepCreateOutcome, PepDeleteNodeWrite, PepNodeConfig, PepOwnerMutationOutcome,
-    PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite, PepRetractWrite,
-    PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeWrite, PepUnsubscribeOutcome,
-    PepUnsubscribeWrite, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
-    PubSubDeleteNodeWrite, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite,
-    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
-    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite,
-    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionAuthorizationOutcome,
-    SubscriptionOptionsOutcome,
+    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PepBookmarkMutationOutcome,
+    PepConfigureNodeWrite, PepCreateOutcome, PepDeleteNodeWrite, PepNodeConfig,
+    PepOwnerMutationOutcome, PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite, PepQuotas,
+    PepRetractWrite, PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeWrite,
+    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubConfigOutcome,
+    PubSubConfigureNodeWrite, PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubPublishOutcome,
+    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
+    PubSubSubscribeWrite, PubSubSubscriptionOptions, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
 };
 pub mod repository;
 pub use repository::*;
@@ -26,6 +26,7 @@ pub use root_discovery::{discover_roots, PubSubRootDiscoQuery, PubSubRootDiscoRe
 mod publish_policy;
 pub use publish_policy::{existing_node_publish_admission_outcome, publish_validation_outcome};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -615,6 +616,73 @@ impl From<PepOwnerMutationOutcome> for PepUnsubscribeBatchResult {
     }
 }
 
+pub struct PepCommitLegacyBookmarksCommand<'a> {
+    pub owner: &'a PubSubAccount,
+    pub connection_id: Uuid,
+    pub private_xml: &'a str,
+    pub items: &'a mut [(String, String)],
+    pub expected_previous_items: &'a [(String, String)],
+    pub max_private_bytes: i64,
+    pub quotas: PepQuotas,
+}
+
+#[derive(Debug)]
+pub struct PepCommitLegacyBookmarksResult {
+    pub outcome: PepBookmarkMutationOutcome,
+}
+
+impl From<PepBookmarkMutationOutcome> for PepCommitLegacyBookmarksResult {
+    fn from(outcome: PepBookmarkMutationOutcome) -> Self {
+        Self { outcome }
+    }
+}
+
+/// The notification delta is calculated from the transaction's locked item
+/// snapshot, not from the protocol handler's optimistic read.
+#[derive(Debug, Eq, PartialEq)]
+pub struct PepBookmarkEventPlan<'a> {
+    pub changed_items: Vec<(&'a str, &'a str)>,
+    pub retracted_item_ids: Vec<&'a str>,
+}
+
+impl PepBookmarkEventPlan<'_> {
+    pub fn is_empty(&self) -> bool {
+        self.changed_items.is_empty() && self.retracted_item_ids.is_empty()
+    }
+}
+
+pub fn plan_pep_bookmark_event<'a>(
+    current: &[(&'a str, &'a str)],
+    previous: &[(&'a str, &'a str)],
+) -> PepBookmarkEventPlan<'a> {
+    let previous_by_id = previous.iter().copied().collect::<HashMap<_, _>>();
+    let current_ids = current.iter().map(|(id, _)| *id).collect::<HashSet<_>>();
+    let changed_items = current
+        .iter()
+        .copied()
+        .filter(|(id, payload)| previous_by_id.get(id).copied() != Some(*payload))
+        .collect();
+    let mut retracted_item_ids = previous
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| !current_ids.contains(id))
+        .collect::<Vec<_>>();
+    retracted_item_ids.sort_unstable();
+    PepBookmarkEventPlan {
+        changed_items,
+        retracted_item_ids,
+    }
+}
+
+pub fn validate_pep_commit_legacy_bookmarks_command(
+    command: &PepCommitLegacyBookmarksCommand<'_>,
+) -> Result<()> {
+    if command.owner.id.is_nil() || command.owner.username.is_empty() {
+        return Err(anyhow::anyhow!("invalid PEP bookmarks owner"));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum PepSubscriptionCommandValidationError {
     EmptyOwner,
@@ -1144,6 +1212,69 @@ impl PubSubMutationAdmission {
 mod tests {
     use super::*;
     use northstar_pubsub_core::{PubSubAccount, PubSubPublishWrite, PubSubSubscribeWrite};
+
+    #[test]
+    fn bookmark_plan_uses_locked_snapshot_and_orders_retractions() {
+        let previous = [
+            ("z@conference.test", "old-z"),
+            ("same@conference.test", "same"),
+            ("a@conference.test", "old-a"),
+            ("changed@conference.test", "old"),
+        ];
+        let current = [
+            ("same@conference.test", "same"),
+            ("changed@conference.test", "new"),
+            ("added@conference.test", "added"),
+        ];
+        let plan = plan_pep_bookmark_event(&current, &previous);
+        assert_eq!(
+            plan.changed_items,
+            [
+                ("changed@conference.test", "new"),
+                ("added@conference.test", "added")
+            ]
+        );
+        assert_eq!(
+            plan.retracted_item_ids,
+            ["a@conference.test", "z@conference.test"]
+        );
+        assert!(plan_pep_bookmark_event(&current, &current).is_empty());
+    }
+
+    #[test]
+    fn legacy_bookmark_command_requires_valid_owner() {
+        let owner = PubSubAccount {
+            id: Uuid::new_v4(),
+            username: "owner".to_owned(),
+            auth_generation: 1,
+        };
+        let mut items = [];
+        let valid = PepCommitLegacyBookmarksCommand {
+            owner: &owner,
+            connection_id: Uuid::new_v4(),
+            private_xml: "<storage/>",
+            items: &mut items,
+            expected_previous_items: &[],
+            max_private_bytes: 1024,
+            quotas: PepQuotas {
+                max_nodes: 10,
+                max_storage_bytes: 1024,
+            },
+        };
+        assert!(validate_pep_commit_legacy_bookmarks_command(&valid).is_ok());
+        let invalid_owner = PubSubAccount {
+            id: Uuid::nil(),
+            username: "owner".to_owned(),
+            auth_generation: 1,
+        };
+        assert!(
+            validate_pep_commit_legacy_bookmarks_command(&PepCommitLegacyBookmarksCommand {
+                owner: &invalid_owner,
+                ..valid
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn pep_create_command_selects_node_policy_and_rejects_invalid_quota() {

@@ -122,6 +122,11 @@ existing mutation locks, before changing the subscription or outbox.
 Bookmarks2 publish notifications now use the item diff read under the publish
 transaction's locks. A concurrent write can no longer leave the notification
 based on an earlier protocol-layer read.
+The legacy Private XML bookmark bridge now enters through a typed PubSub
+application command and repository port. Its event plan compares the locked
+previous and replacement items inside the existing transaction; the protocol
+handler only renders the resulting XML. The compare-and-swap check and outbox
+write remain atomic with the bookmark replacement.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -158,6 +163,11 @@ through `AppState`. Durable SM service authority remains unchanged.
 Deferred offline replay tasks now capture `ReplayService` directly instead of
 retaining the full `AppState`; the service still owns the same lease and policy
 checks.
+SASL2 authenticate, response and abort now retain only an owned authentication
+histogram timer across mutable session work. These paths no longer clone
+`AppState` for telemetry; the timer still records on every exit, including
+early failures. The session itself still owns `AppState` for its remaining
+application capabilities.
 
 ### Packet 4 — Roster/visibility and archive
 
@@ -183,6 +193,11 @@ same room authorization decision used by local and federated queries. Room
 metadata and boundary reads keep their existing policy.
 The Archive application now maps authorized room page and metadata reads to
 typed results; the PostgreSQL adapter still owns the consistent read.
+Federated MUC metadata now enters through a typed Archive application command
+built from the authenticated S2S actor. The PostgreSQL adapter retains the
+room guard and one repeatable-read snapshot for authorization and boundaries;
+generic federated metadata/page scopes remain forbidden, and page streams keep
+their atomic outbox admission.
 
 ### Packet 5 — Upload/object lifecycle
 

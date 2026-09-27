@@ -1,14 +1,12 @@
 //! Persistence operations for authorized archive reads and federated responses.
 
 use crate::{
-    ArchiveBoundary, FederatedMamAdmissionOutcome, FederatedMamStreamPage,
+    FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
     FederatedMamStreamRequest, MamMetadataCommand, MamMetadataResult, MamPreferences,
     MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand, MamQueryResult,
-    MamRoomAccessOutcome, MamRoomReadOutcome,
+    MamRoomAccessOutcome,
 };
 use std::future::Future;
-
-pub type MamArchiveBoundaries = (Option<ArchiveBoundary>, Option<ArchiveBoundary>);
 
 #[derive(Clone, Copy)]
 pub struct FederatedMamOutboxLimits {
@@ -30,6 +28,10 @@ pub trait MamQueryRepository: Send + Sync {
         &self,
         command: MamMetadataCommand,
     ) -> impl Future<Output = Result<MamMetadataResult, Self::Error>> + Send;
+    fn get_federated_boundaries(
+        &self,
+        command: FederatedMamMetadataCommand,
+    ) -> impl Future<Output = Result<MamMetadataResult, Self::Error>> + Send;
     fn get_preferences(
         &self,
         command: MamPreferencesGetCommand,
@@ -46,12 +48,6 @@ pub trait MamQueryRepository: Send + Sync {
         viewer_bare_jid: &str,
         currently_joined: bool,
     ) -> impl Future<Output = Result<MamRoomAccessOutcome, Self::Error>> + Send;
-    fn authorized_federated_room_boundaries(
-        &self,
-        localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
-    ) -> impl Future<Output = Result<MamRoomReadOutcome<MamArchiveBoundaries>, Self::Error>> + Send;
 }
 
 pub trait MamPreferencesWriter: Send + Sync {

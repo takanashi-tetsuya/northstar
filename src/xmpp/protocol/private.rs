@@ -4,19 +4,54 @@ use crate::services::private_storage::{
     LegacyBookmarkSnapshot, PrivateXmlEntry, PrivateXmlWriteOutcome, MAX_BOOKMARK_ITEMS,
 };
 use crate::services::pubsub::{
-    PepAudienceSnapshot, PepBookmarkMutationOutcome, PepQuotas, PubSubAccount,
+    PepAudienceSnapshot, PepBookmarkMutationOutcome, PepOutboxFactory, PepQuotas, PubSubAccount,
 };
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{iq_error, iq_result};
 use anyhow::Result;
+use northstar_pubsub_application::{
+    plan_pep_bookmark_event, PepBookmarkEventPlan, PepCommitLegacyBookmarksCommand,
+};
 use roxmltree::Node;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
 const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
 const PRIVATE_XML: &str = "jabber:iq:private";
 const PRIVATE_XML_MAX_ITEM_BYTES: usize = 512 * 1024;
 const PRIVATE_XML_MAX_REQUEST_BYTES: usize = 1024 * 1024;
+
+struct LegacyBookmarkOutboxFactory {
+    state: Arc<crate::state::AppState>,
+    publisher_full_jid: Option<String>,
+}
+
+impl PepOutboxFactory for LegacyBookmarkOutboxFactory {
+    fn build(&self, _audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>> {
+        anyhow::bail!("legacy bookmark replacement requires a locked item diff")
+    }
+
+    fn build_replaced(
+        &self,
+        audience: &PepAudienceSnapshot,
+        current_items: &[(&str, &str)],
+        previous_items: &[(&str, &str)],
+    ) -> Result<Vec<(String, String)>> {
+        let plan = plan_pep_bookmark_event(current_items, previous_items);
+        if plan.is_empty() {
+            return Ok(Vec::new());
+        }
+        let event = bookmark_event_fragment(&plan)?;
+        ProtocolSession::prepare_pep_audience_messages(
+            self.state.as_ref(),
+            self.publisher_full_jid.as_deref(),
+            BOOKMARKS2,
+            &event,
+            audience,
+        )
+    }
+}
 
 impl ProtocolSession {
     pub(crate) async fn private_get(
@@ -153,8 +188,6 @@ impl ProtocolSession {
                 .private_storage_service()
                 .prepare_legacy_bookmark_write(user.id, &mut items)
                 .await?;
-            let previous = previous_items.iter().cloned().collect::<HashMap<_, _>>();
-            let event = bookmark_event_delta(&items, &previous)?;
             let (max_private_bytes, max_nodes, max_storage_bytes) = self
                 .state
                 .private_storage_service()
@@ -164,36 +197,30 @@ impl ProtocolSession {
                 username: user.username.clone(),
                 auth_generation: user.auth_generation,
             };
-            let audience_state = std::sync::Arc::clone(&self.state);
-            let publisher_full_jid = self.full_jid.clone();
+            let factory = LegacyBookmarkOutboxFactory {
+                state: Arc::clone(&self.state),
+                publisher_full_jid: self.full_jid.clone(),
+            };
             match self
                 .state
                 .pubsub_service()
                 .commit_legacy_bookmarks(
-                    &owner,
-                    self.connection_id,
-                    private_xml,
-                    &mut items,
-                    &previous_items,
-                    max_private_bytes,
-                    PepQuotas {
-                        max_nodes,
-                        max_storage_bytes,
+                    PepCommitLegacyBookmarksCommand {
+                        owner: &owner,
+                        connection_id: self.connection_id,
+                        private_xml,
+                        items: &mut items,
+                        expected_previous_items: &previous_items,
+                        max_private_bytes,
+                        quotas: PepQuotas {
+                            max_nodes,
+                            max_storage_bytes,
+                        },
                     },
-                    &move |audience: &PepAudienceSnapshot| {
-                        if event.is_empty() {
-                            return Ok(Vec::new());
-                        }
-                        ProtocolSession::prepare_pep_audience_messages(
-                            audience_state.as_ref(),
-                            publisher_full_jid.as_deref(),
-                            BOOKMARKS2,
-                            &event,
-                            audience,
-                        )
-                    },
+                    &factory,
                 )
                 .await?
+                .outcome
             {
                 PepBookmarkMutationOutcome::Stored => {}
                 PepBookmarkMutationOutcome::ConcurrentChange => {
@@ -231,27 +258,12 @@ impl ProtocolSession {
     }
 }
 
-fn bookmark_event_delta(
-    current: &[(String, String)],
-    previous: &HashMap<String, String>,
-) -> Result<String> {
-    let current_ids = current
-        .iter()
-        .map(|(item_id, _)| item_id.as_str())
-        .collect::<HashSet<_>>();
+fn bookmark_event_fragment(plan: &PepBookmarkEventPlan<'_>) -> Result<String> {
     let mut event = XmlElement::new("northstar-event-fragment");
-    for (_, payload) in current
-        .iter()
-        .filter(|(item_id, payload)| previous.get(item_id) != Some(payload))
-    {
+    for (_, payload) in &plan.changed_items {
         event.push_validated_fragment(payload)?;
     }
-    let mut removed = previous
-        .keys()
-        .filter(|item_id| !current_ids.contains(item_id.as_str()))
-        .collect::<Vec<_>>();
-    removed.sort();
-    for item_id in removed {
+    for item_id in &plan.retracted_item_ids {
         event.push_child(XmlElement::new("retract").attr("id", item_id));
     }
     Ok(event.finish_children())
@@ -592,16 +604,22 @@ mod tests {
 
     #[test]
     fn bookmark_compatibility_suppresses_unchanged_events() {
-        let current = vec![(
+        let current = [(
             "room@conference.example".to_owned(),
             "<item id='room@conference.example'><conference xmlns='urn:xmpp:bookmarks:1' autojoin='true'></conference></item>".to_owned(),
         )];
-        let identical = HashMap::from([(current[0].0.clone(), current[0].1.clone())]);
-        assert!(bookmark_event_delta(&current, &identical)
-            .unwrap()
-            .is_empty());
+        let current_refs = current
+            .iter()
+            .map(|(id, payload)| (id.as_str(), payload.as_str()))
+            .collect::<Vec<_>>();
+        let identical = [(current[0].0.as_str(), current[0].1.as_str())];
+        assert!(
+            bookmark_event_fragment(&plan_pep_bookmark_event(&current_refs, &identical))
+                .unwrap()
+                .is_empty()
+        );
 
-        let removed = bookmark_event_delta(&[], &identical).unwrap();
+        let removed = bookmark_event_fragment(&plan_pep_bookmark_event(&[], &identical)).unwrap();
         assert_eq!(removed, "<retract id='room@conference.example'/>");
     }
 

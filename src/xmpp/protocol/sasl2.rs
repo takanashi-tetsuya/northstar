@@ -734,9 +734,7 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn authenticate2(&mut self, root: Node<'_, '_>) -> Result<Action> {
-        let metrics_state = self.state.clone();
-        let telemetry = metrics_state.sasl2_authentication_telemetry();
-        let _authentication_timer = telemetry.start_timer();
+        let _authentication_timer = self.state.sasl2_authentication_timer();
         if !self.secure_transport {
             return Ok(Action::Send(failure_xml("encryption-required", None)));
         }
@@ -1002,9 +1000,7 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn sasl2_response(&mut self, root: Node<'_, '_>) -> Result<Action> {
-        let metrics_state = self.state.clone();
-        let telemetry = metrics_state.sasl2_authentication_telemetry();
-        let _authentication_timer = telemetry.start_timer();
+        let _authentication_timer = self.state.sasl2_authentication_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
             || root.tag_name().name() != "response"
             || !attr_is(root, &[])
@@ -1040,9 +1036,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn sasl2_abort(&mut self, root: Node<'_, '_>) -> Action {
-        let metrics_state = self.state.clone();
-        let telemetry = metrics_state.sasl2_authentication_telemetry();
-        let _authentication_timer = telemetry.start_timer();
+        let _authentication_timer = self.state.sasl2_authentication_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
             || !attr_is(root, &[])
             || !structural_text_is_empty(root)

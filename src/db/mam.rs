@@ -114,6 +114,22 @@ impl MamQueryRepository for PostgresMamRepository {
         }
     }
 
+    async fn get_federated_boundaries(
+        &self,
+        command: FederatedMamMetadataCommand,
+    ) -> Result<MamMetadataResult> {
+        let read = map_room_read(
+            db::mam_federated_room_archive_boundaries_authorized(
+                &self.pool,
+                command.localpart(),
+                command.viewer_bare_jid(),
+                command.currently_joined(),
+            )
+            .await?,
+        )?;
+        Ok(MamMetadataResult::from_room_read(read))
+    }
+
     async fn get_preferences(&self, command: MamPreferencesGetCommand) -> Result<MamPreferences> {
         db::mam_preferences(&self.pool, command.owner_id).await
     }
@@ -158,23 +174,6 @@ impl MamQueryRepository for PostgresMamRepository {
                 db::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
                 db::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
             },
-        )
-    }
-
-    async fn authorized_federated_room_boundaries(
-        &self,
-        localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
-    ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        map_room_read(
-            db::mam_federated_room_archive_boundaries_authorized(
-                &self.pool,
-                localpart,
-                viewer_bare_jid,
-                currently_joined,
-            )
-            .await?,
         )
     }
 }

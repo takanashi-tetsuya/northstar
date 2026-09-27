@@ -4,6 +4,7 @@
 //! account. Remote occupants therefore live in the room map with a federated
 //! endpoint and use a separate persistent-affiliation table.
 
+use crate::services::mam::{FederatedMamMetadataCommand, MamMetadataResult};
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucPrincipal, ClusterMucRegistrationOutcome,
@@ -4098,15 +4099,33 @@ async fn federated_muc_iq_owned(
                 }
             },
             FederatedIqPayload::MamMetadata => {
-                let (access, (first, last)) = match state
+                let Some(command) = FederatedMamMetadataCommand::from_authenticated_actor(
+                    room.localpart.clone(),
+                    authenticated_domain,
+                    &actor_full_jid,
+                    joined,
+                ) else {
+                    return Ok(federated_error(
+                        &request.stanza,
+                        from,
+                        "auth",
+                        "not-authorized",
+                    ));
+                };
+                let (access, first, last) = match state
                     .mam_service()
-                    .authorized_federated_room_boundaries(&room.localpart, &actor_bare_jid, joined)
+                    .execute_federated_mam_metadata(command)
                     .await?
                 {
-                    crate::services::mam::MamRoomReadOutcome::Allowed { access, value } => {
-                        (access, value)
+                    MamMetadataResult::Boundaries {
+                        room: Some(access),
+                        start,
+                        end,
+                    } => (access, start, end),
+                    MamMetadataResult::Boundaries { room: None, .. } => {
+                        return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
-                    crate::services::mam::MamRoomReadOutcome::Missing => {
+                    MamMetadataResult::ItemNotFound => {
                         return Ok(federated_error(
                             &request.stanza,
                             from,
@@ -4114,7 +4133,7 @@ async fn federated_muc_iq_owned(
                             "item-not-found",
                         ));
                     }
-                    crate::services::mam::MamRoomReadOutcome::Forbidden => {
+                    MamMetadataResult::Forbidden => {
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
                 };

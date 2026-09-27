@@ -1,8 +1,9 @@
 //! Complete PubSub and PEP repository operations. Mutations include their
 //! authorization snapshot and durable audience; no transaction escapes a port.
 use crate::{
-    PepPublishItemsCommand, PepPublishItemsResult, PepSubscribeCommand, PepSubscribeResult,
-    PepUnsubscribeCommand, PepUnsubscribeResult,
+    PepCommitLegacyBookmarksCommand, PepCommitLegacyBookmarksResult, PepPublishItemsCommand,
+    PepPublishItemsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeCommand,
+    PepUnsubscribeResult,
 };
 use anyhow::Result;
 use northstar_pubsub_core::*;
@@ -472,18 +473,11 @@ pub trait PepItemMutationRepository: Send + Sync {
         notify: bool,
         factory: &dyn PepOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
-    #[allow(clippy::too_many_arguments)]
     fn commit_legacy_bookmarks(
         &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        private_xml: &str,
-        items: &mut [(String, String)],
-        expected_previous_items: &[(String, String)],
-        max_private_bytes: i64,
-        quotas: PepQuotas,
+        command: PepCommitLegacyBookmarksCommand<'_>,
         factory: &dyn PepOutboxFactory,
-    ) -> impl std::future::Future<Output = Result<PepBookmarkMutationOutcome>> + Send;
+    ) -> impl std::future::Future<Output = Result<PepCommitLegacyBookmarksResult>> + Send;
     fn publish_pep_items(
         &self,
         command: PepPublishItemsCommand<'_>,

@@ -2104,6 +2104,21 @@ for (const authority of [
 if (!/\.mam_service\s*\(\s*\)/.test(federatedMucSource)) {
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
 }
+const federatedIqHandler = structBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
+const federatedMetadataCall = federatedIqHandler.indexOf('.execute_federated_mam_metadata(command)');
+const federatedActorCheck = federatedIqHandler.indexOf('authenticated_remote_actor(authenticated_domain, from)');
+const federatedBareActor = federatedIqHandler.indexOf('let actor_bare_jid = crate::jid::canonical_bare_key(&actor_full_jid)?;');
+const federatedMetadataCommand = federatedIqHandler.indexOf('FederatedMamMetadataCommand::from_authenticated_actor(');
+if (federatedMetadataCall < 0
+  || federatedActorCheck < 0
+  || federatedBareActor <= federatedActorCheck
+  || federatedMetadataCommand <= federatedBareActor
+  || federatedMetadataCall <= federatedMetadataCommand
+  || !/room\.localpart\.clone\(\),\s*authenticated_domain,\s*&actor_full_jid,\s*joined,/.test(
+    federatedIqHandler.slice(federatedMetadataCommand, federatedMetadataCall))
+  || federatedIqHandler.includes('.authorized_federated_room_boundaries(')) {
+  throw new Error('federated MAM metadata must use an authenticated actor and typed archive command');
+}
 for (const forbidden of [
   'enqueue_s2s_outbox_in_transaction',
   'mam_federated_room_archive_page_authorized_in_transaction',
@@ -2118,6 +2133,34 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mamServiceBody)) {
   throw new Error('MamService must receive its repository port');
 }
 const mamRepositorySource = read('src/db/mam.rs');
+const mamMetadataRepository = structBody(mamRepositorySource, 'async fn get_federated_boundaries(');
+if (!mamMetadataRepository.includes('db::mam_federated_room_archive_boundaries_authorized(')
+  || !mamMetadataRepository.includes('MamMetadataResult::from_room_read(read)')) {
+  throw new Error('federated MAM metadata lost its authorized archive repository result');
+}
+const genericMamMetadataRepository = structBody(mamRepositorySource, 'async fn get_boundaries(');
+const genericMamPageRepository = structBody(mamRepositorySource, 'async fn query_archive(');
+if (!genericMamMetadataRepository.includes('MamQueryScope::FederatedRoom { .. } => Ok(MamMetadataResult::Forbidden)')
+  || !genericMamPageRepository.includes('MamQueryScope::FederatedRoom { .. } => Ok(MamQueryResult::Forbidden)')) {
+  throw new Error('generic federated MAM metadata or page scope no longer fails closed');
+}
+const federatedMetadataSnapshot = structBody(
+  read('src/db/archive.rs'), 'pub async fn mam_federated_room_archive_boundaries_authorized(',
+);
+let previousFederatedMetadataStep = -1;
+for (const invariant of [
+  'FederatedMamRoomGuard::acquire(pool, localpart)',
+  'guard.begin_snapshot().await?',
+  'authorize_federated_mam_room_in_transaction(',
+  'archive_boundaries_for_in_transaction(',
+  'transaction.commit().await?',
+]) {
+  const position = federatedMetadataSnapshot.indexOf(invariant);
+  if (position <= previousFederatedMetadataStep) {
+    throw new Error(`federated MAM metadata lost its guarded read snapshot: ${invariant}`);
+  }
+  previousFederatedMetadataStep = position;
+}
 for (const invariant of [
   'mam_federated_room_archive_page_authorized_in_transaction',
   'enqueue_s2s_outbox_in_transaction',

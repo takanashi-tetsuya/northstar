@@ -8,6 +8,19 @@ use uuid::Uuid;
 
 const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
 
+struct PepBookmarkReplacementOutbox<'a> {
+    factory: &'a dyn PepOutboxFactory,
+    current: Vec<(&'a str, &'a str)>,
+    previous: Vec<(&'a str, &'a str)>,
+}
+
+impl PepOutboxFactory for PepBookmarkReplacementOutbox<'_> {
+    fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>> {
+        self.factory
+            .build_replaced(audience, &self.current, &self.previous)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct PostgresPubSubRepository {
     pool: PgPool,
@@ -2725,19 +2738,21 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-    #[allow(clippy::too_many_arguments)]
     async fn commit_legacy_bookmarks(
         &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        private_xml: &str,
-        items: &mut [(String, String)],
-        expected_previous_items: &[(String, String)],
-        max_private_bytes: i64,
-        quotas: PepQuotas,
+        command: PepCommitLegacyBookmarksCommand<'_>,
         factory: &dyn PepOutboxFactory,
-    ) -> Result<PepBookmarkMutationOutcome> {
+    ) -> Result<PepCommitLegacyBookmarksResult> {
         const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
+        let PepCommitLegacyBookmarksCommand {
+            owner,
+            connection_id: sender_connection_id,
+            private_xml,
+            items,
+            expected_previous_items,
+            max_private_bytes,
+            quotas,
+        } = command;
         let outcome: Result<_> = async {
             let Some((mut transaction, _)) = self
                 .begin_authorized_pep_owner_mutation(owner, BOOKMARKS2)
@@ -2796,6 +2811,17 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 transaction.rollback().await?;
                 return Ok(PepBookmarkMutationOutcome::ResourceConstraint);
             }
+            let replacement_factory = PepBookmarkReplacementOutbox {
+                factory,
+                current: items
+                    .iter()
+                    .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
+                    .collect(),
+                previous: previous_items
+                    .iter()
+                    .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
+                    .collect(),
+            };
             let outbox = self
                 .exact_pep_outbox(
                     &mut transaction,
@@ -2805,7 +2831,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                     BOOKMARKS2,
                     PepOutboxEventKind::Publish,
                     PepOutboxAuthorizationMode::CausalAudience,
-                    factory,
+                    &replacement_factory,
                     None,
                 )
                 .await?;
@@ -2814,7 +2840,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
             Ok(PepBookmarkMutationOutcome::Stored)
         }
         .await;
-        outcome.map_err(map_database_busy)
+        outcome.map(Into::into).map_err(map_database_busy)
     }
     async fn publish_pep_items(
         &self,

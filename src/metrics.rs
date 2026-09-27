@@ -73,6 +73,15 @@ impl DurationHistogram {
         }
     }
 
+    /// Keep one timer alive across a mutable session operation without
+    /// retaining its AppState or the full metrics registry.
+    pub(crate) fn start_owned_timer(self: &Arc<Self>) -> OwnedDurationTimer {
+        OwnedDurationTimer {
+            histogram: Arc::clone(self),
+            started: Instant::now(),
+        }
+    }
+
     fn render_into(&self, output: &mut String, name: &str, help: &str) {
         debug_assert!(name
             .bytes()
@@ -109,9 +118,20 @@ impl Drop for DurationTimer<'_> {
     }
 }
 
+pub(crate) struct OwnedDurationTimer {
+    histogram: Arc<DurationHistogram>,
+    started: Instant,
+}
+
+impl Drop for OwnedDurationTimer {
+    fn drop(&mut self) {
+        self.histogram.observe(self.started.elapsed());
+    }
+}
+
 #[derive(Default)]
 pub struct Metrics {
-    pub authentication_duration_seconds: DurationHistogram,
+    pub authentication_duration_seconds: Arc<DurationHistogram>,
     pub database_operation_duration_seconds: DurationHistogram,
     pub routing_duration_seconds: DurationHistogram,
     pub outbox_delivery_duration_seconds: Arc<DurationHistogram>,
@@ -1144,6 +1164,20 @@ mod tests {
         {
             let _timer = histogram.start_timer();
         }
+        let mut rendered = String::new();
+        histogram.render_into(&mut rendered, "test_duration_seconds", "test");
+        assert!(rendered.contains("test_duration_seconds_count 1\n"));
+    }
+
+    #[test]
+    fn owned_duration_timer_records_after_its_registry_is_dropped() {
+        let metrics = Metrics::default();
+        let histogram = Arc::clone(&metrics.authentication_duration_seconds);
+        let timer = histogram.start_owned_timer();
+        drop(metrics);
+        assert_eq!(Arc::strong_count(&histogram), 2);
+        drop(timer);
+        assert_eq!(Arc::strong_count(&histogram), 1);
         let mut rendered = String::new();
         histogram.render_into(&mut rendered, "test_duration_seconds", "test");
         assert!(rendered.contains("test_duration_seconds_count 1\n"));

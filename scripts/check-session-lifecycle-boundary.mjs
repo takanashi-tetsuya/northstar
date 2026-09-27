@@ -12,6 +12,7 @@ const protocol = read("src/xmpp/protocol.rs");
 const transport = read("src/xmpp/mod.rs");
 const bosh = read("src/bosh.rs");
 const replay = read("src/services/replay.rs");
+const sasl2 = read("src/xmpp/protocol/sasl2.rs");
 
 const dropStart = protocol.indexOf("fn synchronous_drop_fallback");
 const dropEnd = protocol.indexOf("#[cfg(test)]", dropStart);
@@ -68,6 +69,29 @@ for (const capability of [
   if (!replay.includes(`fn ${capability}`)) {
     throw new Error(`ReplayService is missing transport capability ${capability}`);
   }
+}
+
+// Authentication timing spans mutable SASL2 session work, but it only needs
+// the histogram handle. A clone here would keep the entire AppState alive.
+if (/self\.state\.clone\(\)|Arc::clone\(&self\.state\)/.test(sasl2)) {
+  throw new Error("SASL2 session work regained an owned AppState clone");
+}
+const sasl2Timers = sasl2.match(/self\.state\.sasl2_authentication_timer\(\)/g) ?? [];
+if (sasl2Timers.length !== 3) {
+  throw new Error(`expected owned timers for SASL2 authenticate, response and abort; found ${sasl2Timers.length}`);
+}
+for (const entry of [
+  "authenticate2(&mut self, root: Node<'_, '_>) -> Result<Action>",
+  "sasl2_response(&mut self, root: Node<'_, '_>) -> Result<Action>",
+  "sasl2_abort(&mut self, root: Node<'_, '_>) -> Action",
+]) {
+  const start = sasl2.indexOf(entry);
+  if (start < 0) throw new Error(`SASL2 entry ${entry} is missing`);
+  requireMatch(
+    sasl2.slice(start + entry.length),
+    /^\s*\{\s*let _authentication_timer = self\.state\.sasl2_authentication_timer\(\);/,
+    `${entry} must start its owned timer before any early return`,
+  );
 }
 
 const startTlsTransition = transport.indexOf("STARTTLS is a transport transition");

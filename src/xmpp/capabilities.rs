@@ -344,28 +344,19 @@ impl<'a> SmSessionTelemetry<'a> {
     }
 }
 
-/// SASL2 authentication timing and verifier/backend failure counters.
+/// SASL2 verifier/backend failure counters. Timing has an independently owned
+/// histogram handle so a mutable session operation need not retain full state.
 pub(crate) struct Sasl2AuthenticationTelemetry<'a> {
-    duration: &'a DurationHistogram,
     integrity_failures: &'a AtomicU64,
     backend_failures: &'a AtomicU64,
 }
 
 impl<'a> Sasl2AuthenticationTelemetry<'a> {
-    pub(crate) fn new(
-        duration: &'a DurationHistogram,
-        integrity_failures: &'a AtomicU64,
-        backend_failures: &'a AtomicU64,
-    ) -> Self {
+    pub(crate) fn new(integrity_failures: &'a AtomicU64, backend_failures: &'a AtomicU64) -> Self {
         Self {
-            duration,
             integrity_failures,
             backend_failures,
         }
-    }
-
-    pub(crate) fn start_timer(&self) -> DurationTimer<'_> {
-        self.duration.start_timer()
     }
 
     pub(crate) fn integrity_failed(&self) {

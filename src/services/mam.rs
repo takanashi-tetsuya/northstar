@@ -5,12 +5,12 @@ use uuid::Uuid;
 
 pub(crate) use northstar_archive_application::{
     validate_mam_preferences, validate_mam_query_command, ArchiveBoundary, ArchivePage, ArchiveRow,
-    FederatedMamAdmissionOutcome, FederatedMamOutboxLimits, FederatedMamStreamPage,
-    FederatedMamStreamRequest, FederatedMamStreamRow, FederatedMamStreamWriter, MamArchiveQuery,
-    MamMetadataCommand, MamMetadataResult, MamPreferences, MamPreferencesGetCommand,
-    MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand, MamQueryRepository,
-    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRoomReadOutcome,
-    MamRsmPage,
+    FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamOutboxLimits,
+    FederatedMamStreamPage, FederatedMamStreamRequest, FederatedMamStreamRow,
+    FederatedMamStreamWriter, MamArchiveQuery, MamMetadataCommand, MamMetadataResult,
+    MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand, MamPreferencesWriter,
+    MamQueryCommand, MamQueryRepository, MamQueryResult, MamQueryScope, MamRoomAccess,
+    MamRoomAccessOutcome, MamRoomReadOutcome, MamRsmPage,
 };
 
 #[derive(Clone)]
@@ -52,6 +52,13 @@ impl<R: MamQueryRepository<Error = anyhow::Error>> MamService<R> {
         self.repository.get_boundaries(command).await
     }
 
+    pub(crate) async fn execute_federated_mam_metadata(
+        &self,
+        command: FederatedMamMetadataCommand,
+    ) -> Result<MamMetadataResult> {
+        self.repository.get_federated_boundaries(command).await
+    }
+
     pub(crate) async fn execute_mam_preferences_get(
         &self,
         command: MamPreferencesGetCommand,
@@ -78,17 +85,6 @@ impl<R: MamQueryRepository<Error = anyhow::Error>> MamService<R> {
     ) -> Result<MamRoomAccessOutcome> {
         self.repository
             .authorize_federated_room(localpart, viewer_bare_jid, currently_joined)
-            .await
-    }
-
-    pub(crate) async fn authorized_federated_room_boundaries(
-        &self,
-        localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
-    ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        self.repository
-            .authorized_federated_room_boundaries(localpart, viewer_bare_jid, currently_joined)
             .await
     }
 }

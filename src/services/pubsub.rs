@@ -9,9 +9,10 @@ pub(crate) use northstar_pubsub_application::{
     pubsub_mutation_admission_active as pubsub_mutation_admission_active_core,
     pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
     pubsub_mutation_admission_waiters as pubsub_mutation_admission_waiters_core,
-    subscription_options_precheck, validate_pep_configure_node_command,
-    validate_pep_create_node_command, validate_pep_delete_node_command,
-    validate_pep_publish_command, validate_pep_purge_node_command, validate_pep_retract_command,
+    subscription_options_precheck, validate_pep_commit_legacy_bookmarks_command,
+    validate_pep_configure_node_command, validate_pep_create_node_command,
+    validate_pep_delete_node_command, validate_pep_publish_command,
+    validate_pep_purge_node_command, validate_pep_retract_command,
     validate_pep_set_affiliations_command, validate_pep_subscribe_command,
     validate_pep_unsubscribe_batch_command, validate_pep_unsubscribe_command,
     validate_pubsub_authorize_subscription_command, validate_pubsub_collection_edge_command,
@@ -20,13 +21,14 @@ pub(crate) use northstar_pubsub_application::{
     validate_pubsub_purge_node_command, validate_pubsub_retract_command,
     validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
     validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
-    validate_pubsub_update_subscription_options_command, PepConfigureNodeCommand,
-    PepConfigureNodeResult, PepCreateNodeCommand, PepCreateNodeResult, PepDeleteNodeCommand,
-    PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult,
-    PepPurgeNodeCommand, PepPurgeNodeResult, PepRetractCommand, PepRetractResult,
-    PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult,
-    PepUnsubscribeBatchCommand, PepUnsubscribeBatchResult, PepUnsubscribeCommand,
-    PepUnsubscribeResult, PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
+    validate_pubsub_update_subscription_options_command, PepCommitLegacyBookmarksCommand,
+    PepCommitLegacyBookmarksResult, PepConfigureNodeCommand, PepConfigureNodeResult,
+    PepCreateNodeCommand, PepCreateNodeResult, PepDeleteNodeCommand, PepDeleteNodeResult,
+    PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult, PepPurgeNodeCommand,
+    PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
+    PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeBatchCommand,
+    PepUnsubscribeBatchResult, PepUnsubscribeCommand, PepUnsubscribeResult,
+    PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
     PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubCollectionEdgeCommand,
     PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult, PubSubConfigureNodeCommand,
     PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
@@ -916,34 +918,19 @@ impl<
             .await
             .map(Into::into)
     }
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn commit_legacy_bookmarks(
         &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        private_xml: &str,
-        items: &mut [(String, String)],
-        expected_previous_items: &[(String, String)],
-        max_private_bytes: i64,
-        quotas: PepQuotas,
+        command: PepCommitLegacyBookmarksCommand<'_>,
         factory: &dyn PepOutboxFactory,
-    ) -> Result<PepBookmarkMutationOutcome> {
+    ) -> Result<PepCommitLegacyBookmarksResult> {
         const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
-        let owner_key = owner.id.to_string();
+        validate_pep_commit_legacy_bookmarks_command(&command)?;
+        let owner_key = command.owner.id.to_string();
         let _permit = self
             .admit_mutation(&[&owner_key, BOOKMARKS2], false)
             .await?;
         self.repository
-            .commit_legacy_bookmarks(
-                owner,
-                sender_connection_id,
-                private_xml,
-                items,
-                expected_previous_items,
-                max_private_bytes,
-                quotas,
-                factory,
-            )
+            .commit_legacy_bookmarks(command, factory)
             .await
     }
     pub(crate) async fn publish_pep_items(

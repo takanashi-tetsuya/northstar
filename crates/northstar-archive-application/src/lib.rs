@@ -39,6 +39,54 @@ pub struct MamMetadataCommand {
     pub scope: MamQueryScope,
 }
 
+/// A federated metadata request carries the canonical actor derived from an
+/// authenticated S2S connection. Page reads still use atomic stream admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederatedMamMetadataCommand {
+    localpart: String,
+    viewer_bare_jid: String,
+    currently_joined: bool,
+}
+
+impl FederatedMamMetadataCommand {
+    /// `authenticated_domain` must come from the authenticated S2S connection;
+    /// this constructor checks the binding but cannot authenticate the caller.
+    pub fn from_authenticated_actor(
+        localpart: String,
+        authenticated_domain: &str,
+        actor_full_jid: &str,
+        currently_joined: bool,
+    ) -> Option<Self> {
+        let domain = northstar_xmpp_types::CanonicalJid::parse(authenticated_domain).ok()?;
+        let actor = northstar_xmpp_types::CanonicalJid::parse(actor_full_jid).ok()?;
+        if domain.localpart().is_some()
+            || domain.resourcepart().is_some()
+            || actor.localpart().is_none()
+            || actor.resourcepart().is_none()
+            || actor.domainpart() != domain.domainpart()
+        {
+            return None;
+        }
+        Some(Self {
+            localpart,
+            viewer_bare_jid: actor.bare(),
+            currently_joined,
+        })
+    }
+
+    pub fn localpart(&self) -> &str {
+        &self.localpart
+    }
+
+    pub fn viewer_bare_jid(&self) -> &str {
+        &self.viewer_bare_jid
+    }
+
+    pub fn currently_joined(&self) -> bool {
+        self.currently_joined
+    }
+}
+
 /// Typed command for reading MAM preferences.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MamPreferencesGetCommand {
@@ -204,6 +252,41 @@ pub fn validate_mam_preferences(prefs: &MamPreferences) -> Result<(), MamQueryVa
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    #[test]
+    fn federated_metadata_command_requires_authenticated_full_jid() {
+        let command = FederatedMamMetadataCommand::from_authenticated_actor(
+            "room".to_owned(),
+            "REMOTE.TEST",
+            "alice@remote.test/phone",
+            false,
+        )
+        .expect("authenticated actor");
+        assert_eq!(command.localpart(), "room");
+        assert_eq!(command.viewer_bare_jid(), "alice@remote.test");
+        assert!(!command.currently_joined());
+        for actor in [
+            "alice@evil.test/phone",
+            "alice@remote.test",
+            "remote.test/phone",
+            "alice@@remote.test/phone",
+        ] {
+            assert!(FederatedMamMetadataCommand::from_authenticated_actor(
+                "room".to_owned(),
+                "remote.test",
+                actor,
+                false,
+            )
+            .is_none());
+        }
+        assert!(FederatedMamMetadataCommand::from_authenticated_actor(
+            "room".to_owned(),
+            "alice@remote.test",
+            "alice@remote.test/phone",
+            false,
+        )
+        .is_none());
+    }
 
     #[test]
     fn room_query_result_distinguishes_missing_page_from_denied_access() {

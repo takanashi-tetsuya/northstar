@@ -976,6 +976,17 @@ pub trait PepOutboxFactory: Send + Sync {
     ) -> Result<Vec<(String, String)>> {
         self.build(audience)
     }
+
+    /// A replacement may also retract items. Both slices are read while the
+    /// replacement transaction holds its item locks.
+    fn build_replaced(
+        &self,
+        _audience: &PepAudienceSnapshot,
+        _current_items: &[(&str, &str)],
+        _previous_items: &[(&str, &str)],
+    ) -> Result<Vec<(String, String)>> {
+        anyhow::bail!("PEP replacement requires a locked item diff renderer")
+    }
 }
 
 pub trait PepDirectOutboxFactory: Send + Sync {

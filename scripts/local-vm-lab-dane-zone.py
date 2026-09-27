@@ -68,9 +68,17 @@ def stage_zone(base: str, owner: str, records: list[str]) -> tuple[str, int, int
     )
     lines = []
     for line in updated.splitlines():
-        fields = line.split()
-        if fields and fields[0].lower() == owner and "TLSA" in [field.upper() for field in fields[1:4]]:
+        if line.lstrip().startswith(";"):
+            lines.append(line)
             continue
+        fields = line.split()
+        if fields and fields[0].upper() in ("$INCLUDE", "$GENERATE"):
+            raise ValueError("zone includes generated or external records; TLSA replacement is ambiguous")
+        if "TLSA" in [field.upper() for field in fields[:4]]:
+            if not fields or TLSA_OWNER.fullmatch(fields[0].lower()) is None:
+                raise ValueError("existing TLSA owner must be an absolute lab peer name")
+            if fields[0].lower() == owner:
+                continue
         lines.append(line)
     lines.extend(normalized)
     return "\n".join(lines) + "\n", old_serial, old_serial + 1
@@ -90,6 +98,16 @@ def self_test() -> None:
     assert overlap.count(" IN TLSA ") == 2
     empty, _, _ = stage_zone(replaced, owner, [])
     assert " IN TLSA " not in empty
+    for ambiguous in (
+        good.replace(owner, "_5269._tcp.prosody"),
+        "$INCLUDE other.zone",
+    ):
+        try:
+            stage_zone(zone + ambiguous + "\n", owner, [bad])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("ambiguous existing zone records were accepted")
     for bad_records in ([good, good], [good.replace(owner, "evil.test.")]):
         try:
             stage_zone(zone, owner, bad_records)

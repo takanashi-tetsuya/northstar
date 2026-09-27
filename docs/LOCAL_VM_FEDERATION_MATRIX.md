@@ -65,6 +65,11 @@ Omit `--records` to stage an absent TLSA RRset. The tool replaces only that
 owner's RRset and increments the SOA serial. Check the staged file with
 `named-checkzone` before installing it. Always stage from the current zone;
 files prepared from an earlier serial must not be installed after another case.
+Immediately before installation, hold an exclusive zone-update lock and compare
+the guest's current unsigned zone SHA-256 and SOA serial with the staging input;
+abort and stage again if either differs. The helper accepts only the apex
+`lab.test` zone with absolute TLSA owners. F8's deliberately bogus child-zone
+records require a separate signed `fed.lab.test` fixture and restore procedure.
 
 After each RRset change and TTL expiry, run the read-only
 `scripts/local-vm-lab-dane-proof.py` probe against the isolated DNS server.

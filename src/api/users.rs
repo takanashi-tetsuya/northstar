@@ -13,7 +13,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db;
 use crate::error::{AppError, Result};
 use crate::state::{
     account_teardown_runtime::AccountTeardownRuntime,
@@ -52,7 +51,7 @@ pub async fn change_password(
             idempotency: request.idempotency(
                 None,
                 presented_session.as_bytes(),
-                db::ApiPrincipalKind::User,
+                ApiPrincipalKind::User,
                 "PATCH",
                 "/api/v1/me/password",
             ),

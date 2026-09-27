@@ -1,6 +1,6 @@
-pub use crate::services::api_mutations::{
-    api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
-};
+#[cfg(test)]
+pub use crate::services::api_mutations::{api_request_fingerprint, ApiPrincipalKind};
+pub use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};

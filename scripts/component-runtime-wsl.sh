@@ -279,6 +279,11 @@ if ! wait "$mock_pid"; then
   exit 1
 fi
 mock_pid=""
+connect_relay_rows="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
+  --set ON_ERROR_STOP=1 --tuples-only --no-align \
+  --command "SET search_path TO \"$schema\"; SELECT COUNT(*) FROM s2s_outbox WHERE target_domain='allowed.remote.invalid' AND stanza LIKE '%connect-allowlisted-denied%';" | tail -n 1)"
+echo "connect-mode allowlisted remote outbox rows: $connect_relay_rows"
+[[ "$connect_relay_rows" == "0" ]] || { echo "connect-mode stanza reached S2S outbox" >&2; exit 1; }
 remaining="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
   --tuples-only --no-align --command "SET search_path TO \"$schema\"; SELECT COUNT(*) FROM s2s_outbox WHERE target_domain IN ('gateway.localhost', 'outbound.localhost');" | tail -n 1)"
 echo "component outbox rows after accept, modern and connect transports: $remaining"

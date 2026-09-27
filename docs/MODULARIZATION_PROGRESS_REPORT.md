@@ -213,6 +213,11 @@ distinct authenticated-domain capabilities; Redis remains a hint/cache plane
 and PostgreSQL remains the lease/outbox authority. Exit when connect-mode
 components cannot inherit federation relay and Redis loss has an explicit
 durable fallback result.
+The component router now derives a relay grant from the negotiated protocol.
+XEP-0114 connect mode can address local services and configured local
+components, but cannot enqueue a stanza for a remote domain. Accept mode and
+XEP-0225 keep their existing federation route. The isolated VM component
+matrix still needs a wire-level check of this boundary.
 
 ### Packet 7 — Administration and final composition
 
@@ -220,6 +225,11 @@ Move REST/admin operation transactions behind command-role ports, narrow the
 remaining broad transport capabilities, regenerate configuration/docs from
 the effective capability graph, and remove obsolete facades. Then execute the
 complete environment-dependent release matrix.
+REST idempotency requests, principals and replay responses now use the
+application service contract directly instead of importing those types from
+the database facade. This only narrows a type boundary; moving management
+transactions to the command role requires controlled database routines and
+matching ACL and atomicity tests.
 
 ## 6. Scheduling
 

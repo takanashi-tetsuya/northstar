@@ -14,8 +14,10 @@ use std::sync::Arc;
 
 use crate::abuse::AbuseAction;
 use crate::auth;
-use crate::db;
 use crate::error::{AppError, Result};
+use crate::services::api_mutations::{
+    api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
+};
 use crate::state::{
     api_session_http::ApiSessionHttpContext,
     http_registration_endpoint::HttpRegistrationEndpointContext,
@@ -164,7 +166,7 @@ where
         Ok(Self {
             value,
             request_id,
-            request_fingerprint: db::api_request_fingerprint(&media_type, &bytes),
+            request_fingerprint: api_request_fingerprint(&media_type, &bytes),
             idempotency_key,
         })
     }
@@ -191,7 +193,7 @@ where
         }
         Ok(Self {
             request_id,
-            request_fingerprint: db::api_request_fingerprint("", &bytes),
+            request_fingerprint: api_request_fingerprint("", &bytes),
             idempotency_key,
         })
     }
@@ -202,11 +204,11 @@ impl<T> ApiJson<T> {
         &'a self,
         actor_id: Option<uuid::Uuid>,
         principal_scope: &'a [u8],
-        principal_kind: db::ApiPrincipalKind,
+        principal_kind: ApiPrincipalKind,
         method: &'a str,
         route: &'a str,
-    ) -> db::IdempotencyRequest<'a> {
-        db::IdempotencyRequest {
+    ) -> IdempotencyRequest<'a> {
+        IdempotencyRequest {
             request_id: self.request_id.0,
             actor_id,
             principal_scope,
@@ -228,11 +230,11 @@ impl ApiEmpty {
         &'a self,
         actor_id: Option<uuid::Uuid>,
         principal_scope: &'a [u8],
-        principal_kind: db::ApiPrincipalKind,
+        principal_kind: ApiPrincipalKind,
         method: &'a str,
         route: &'a str,
-    ) -> db::IdempotencyRequest<'a> {
-        db::IdempotencyRequest {
+    ) -> IdempotencyRequest<'a> {
+        IdempotencyRequest {
             request_id: self.request_id.0,
             actor_id,
             principal_scope,
@@ -249,7 +251,7 @@ impl ApiEmpty {
     }
 }
 
-pub fn idempotency_replay_response(replay: db::IdempotentResponse) -> Result<Response, AppError> {
+pub fn idempotency_replay_response(replay: IdempotentResponse) -> Result<Response, AppError> {
     let status =
         StatusCode::from_u16(replay.status).map_err(|error| AppError::Internal(error.into()))?;
     let mut response = Response::builder().status(status);
@@ -1724,7 +1726,7 @@ mod tests {
         let idempotency = parsed.idempotency(
             None,
             b"login:127.0.0.1:alice",
-            db::ApiPrincipalKind::Anonymous,
+            ApiPrincipalKind::Anonymous,
             "POST",
             "/api/v1/login",
         );
@@ -1732,7 +1734,7 @@ mod tests {
         assert_eq!(idempotency.idempotency_key, "login-request-key-0001");
         assert_eq!(
             idempotency.request_fingerprint,
-            db::api_request_fingerprint("application/json", body)
+            api_request_fingerprint("application/json", body)
         );
 
         let oversized = Request::builder()
@@ -1750,7 +1752,7 @@ mod tests {
     #[tokio::test]
     async fn idempotency_replay_marks_the_original_attempt() {
         let original_request_id = uuid::Uuid::new_v4();
-        let replay = db::IdempotentResponse {
+        let replay = IdempotentResponse {
             request_id: original_request_id,
             status: StatusCode::OK.as_u16(),
             headers: json_replay_headers(),

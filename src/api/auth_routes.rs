@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 
 use crate::abuse::AbuseAction;
 use crate::auth;
+#[cfg(test)]
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::services::challenge_issuance::ChallengeIssueRequest;
@@ -57,7 +58,7 @@ pub async fn register(
             idempotency: request.idempotency(
                 None,
                 principal_scope.as_bytes(),
-                db::ApiPrincipalKind::Anonymous,
+                ApiPrincipalKind::Anonymous,
                 "POST",
                 "/api/v1/register",
             ),
@@ -159,7 +160,7 @@ pub async fn login(
     let mut idempotency = request.idempotency(
         None,
         subject.as_bytes(),
-        db::ApiPrincipalKind::Anonymous,
+        ApiPrincipalKind::Anonymous,
         "POST",
         "/api/v1/login",
     );

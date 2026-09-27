@@ -504,6 +504,17 @@ def connect_mock() -> None:
                     )
                     connection.sendall(
                         (f"<message xmlns='jabber:component:connect' from='{OUTBOUND_COMPONENT_DOMAIN}' "
+                         "to='recipient@allowed.remote.invalid' id='connect-allowlisted-denied'>"
+                         "<body>must not relay despite allowlist</body></message>").encode()
+                    )
+                    allowlisted = inbox.receive_id("connect-allowlisted-denied")
+                    fixture.check(
+                        b"remote-server-not-found" in allowlisted and b"type='error'" in allowlisted,
+                        "connect-mode component acquired remote relay through the federation "
+                        f"allowlist; response={allowlisted!r}",
+                    )
+                    connection.sendall(
+                        (f"<message xmlns='jabber:component:connect' from='{OUTBOUND_COMPONENT_DOMAIN}' "
                          f"to='echo@{COMPONENT_DOMAIN}' id='component-cross-route'>"
                          "<body>component to component</body></message>").encode()
                     )

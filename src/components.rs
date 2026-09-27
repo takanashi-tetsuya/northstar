@@ -128,6 +128,55 @@ pub enum ComponentProtocol {
     Modern0225,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComponentRelayGrant {
+    LocalOnly,
+    FederationRelay,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComponentRouteTarget {
+    LocalService,
+    ConfiguredComponent,
+    Federation,
+    Denied,
+}
+
+impl ComponentProtocol {
+    fn relay_grant(self) -> ComponentRelayGrant {
+        match self {
+            Self::Legacy0114Connect => ComponentRelayGrant::LocalOnly,
+            Self::Legacy0114Accept | Self::Modern0225 => ComponentRelayGrant::FederationRelay,
+        }
+    }
+}
+
+fn component_route_target(
+    local_domain: &str,
+    target: &str,
+    configured_component: bool,
+    relay_grant: ComponentRelayGrant,
+) -> ComponentRouteTarget {
+    let hosted_locally = [
+        local_domain.to_owned(),
+        format!("pubsub.{local_domain}"),
+        format!("conference.{local_domain}"),
+        format!("mix.{local_domain}"),
+        format!("upload.{local_domain}"),
+    ]
+    .iter()
+    .any(|hosted| same_component_domain(target, hosted));
+    if hosted_locally {
+        ComponentRouteTarget::LocalService
+    } else if configured_component {
+        ComponentRouteTarget::ConfiguredComponent
+    } else if relay_grant == ComponentRelayGrant::FederationRelay {
+        ComponentRouteTarget::Federation
+    } else {
+        ComponentRouteTarget::Denied
+    }
+}
+
 #[derive(Clone)]
 struct ComponentSession {
     connection_id: Uuid,
@@ -998,6 +1047,7 @@ where
         tokio::time::sleep(state.component_runtime_policy().handshake_timeout);
     tokio::pin!(initial_binding_deadline);
     let mut initial_binding_complete = protocol != ComponentProtocol::Modern0225;
+    let relay_grant = protocol.relay_grant();
     let cancellation = cancel.clone().cancelled_owned();
     tokio::pin!(cancellation);
     loop {
@@ -1043,6 +1093,7 @@ where
                 let reply = route_component_stanza(
                     Arc::clone(&state),
                     connection_id,
+                    relay_grant,
                     bound_domains.clone(),
                     canonical,
                 ).await?;
@@ -1417,6 +1468,7 @@ async fn handle_hostname_binding(
 async fn route_component_stanza(
     state: Arc<AppState>,
     connection_id: Uuid,
+    relay_grant: ComponentRelayGrant,
     bound_domains: HashSet<String>,
     raw: String,
 ) -> Result<Option<String>> {
@@ -1444,16 +1496,16 @@ async fn route_component_stanza(
     }
 
     let target = target_domain(to).expect("checked above");
-    let hosted_locally = [
-        state.local_domain().to_owned(),
-        format!("pubsub.{}", state.local_domain()),
-        format!("conference.{}", state.local_domain()),
-        format!("mix.{}", state.local_domain()),
-        format!("upload.{}", state.local_domain()),
-    ]
-    .iter()
-    .any(|hosted| same_component_domain(&target, hosted));
-    if hosted_locally {
+    let route_target = component_route_target(
+        state.local_domain(),
+        &target,
+        state.xmpp_component_domain_configured(&target),
+        relay_grant,
+    );
+    if route_target == ComponentRouteTarget::Denied {
+        return Ok(component_stanza_error(root, "remote-server-not-found"));
+    }
+    if route_target == ComponentRouteTarget::LocalService {
         let server_raw = s2s::stanza_namespace(&raw, "jabber:client", "jabber:server");
         // Do not retain a parser node or frame-local `&str` across the
         // application await.  The owned bridge also gives the actor registry
@@ -1471,7 +1523,7 @@ async fn route_component_stanza(
         });
     }
 
-    if state.xmpp_component_domain_configured(&target) {
+    if route_target == ComponentRouteTarget::ConfiguredComponent {
         let error = component_stanza_error(root, "service-unavailable");
         let federation = state.federation_outbox().clone();
         let from = from.to_owned();
@@ -2529,6 +2581,39 @@ mod tests {
         assert!(error
             .contains("<remote-server-not-found xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/>"));
         assert!(!error.contains("undefined-condition"));
+    }
+
+    #[test]
+    fn connect_mode_cannot_relay_beyond_locally_hosted_domains() {
+        let connect = ComponentProtocol::Legacy0114Connect.relay_grant();
+        let stanza = Document::parse(
+            "<message xmlns='jabber:client' from='gateway.example' to='user@remote.example'><body>hello</body></message>",
+        )
+        .unwrap();
+        let target = target_domain(stanza.root_element().attribute("to").unwrap()).unwrap();
+        assert_eq!(
+            component_route_target("example.test", &target, false, connect),
+            ComponentRouteTarget::Denied
+        );
+        assert_eq!(
+            component_route_target("example.test", "mix.example.test", false, connect),
+            ComponentRouteTarget::LocalService
+        );
+        assert_eq!(
+            component_route_target("example.test", "other-component.test", true, connect),
+            ComponentRouteTarget::ConfiguredComponent
+        );
+
+        for protocol in [
+            ComponentProtocol::Legacy0114Accept,
+            ComponentProtocol::Modern0225,
+        ] {
+            let grant = protocol.relay_grant();
+            assert_eq!(
+                component_route_target("example.test", &target, false, grant),
+                ComponentRouteTarget::Federation
+            );
+        }
     }
 
     #[test]

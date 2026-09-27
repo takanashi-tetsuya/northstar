@@ -14,11 +14,14 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','storage','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
 VALUES
+  ('northstar_admin_tls_reload_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)','command','0153'),
+  ('northstar_admin_tls_reload_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)','command','0153'),
+  ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)','command','0153'),
   ('northstar_lock_enabled_user_name(uuid,text)','runtime','0151'),
   ('northstar_lock_auth_generation(uuid,int8)','runtime','0150'),
   ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)','runtime','0145'),

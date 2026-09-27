@@ -11,15 +11,38 @@ use crate::{
 };
 use anyhow::Result;
 use serde_json::json;
+use sqlx::{PgPool, Row};
+use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct PostgresAdminDispatchRepository {
     mutations: AdminMutationStore,
+    tls_reload: AdminTlsReloadStore,
+}
+
+#[derive(Clone)]
+struct AdminTlsReloadStore {
+    command_pool: PgPool,
+    keyring: Arc<db::ApiControlKeyring>,
+    cluster: crate::cluster::ClusterAdmission,
 }
 
 impl PostgresAdminDispatchRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
-        Self { mutations }
+    pub(crate) fn new(
+        mutations: AdminMutationStore,
+        command_pool: PgPool,
+        keyring: Arc<db::ApiControlKeyring>,
+        cluster: crate::cluster::ClusterAdmission,
+    ) -> Self {
+        Self {
+            mutations,
+            tls_reload: AdminTlsReloadStore {
+                command_pool,
+                keyring,
+                cluster,
+            },
+        }
     }
 
     async fn dispatch(
@@ -37,21 +60,182 @@ impl PostgresAdminDispatchRepository {
     }
 }
 
+impl AdminTlsReloadStore {
+    async fn dispatch(
+        &self,
+        admission: AdminMutationAdmission<'_>,
+    ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
+        let hashes = self
+            .keyring
+            .admin_tls_reload_hashes(&admission.idempotency)?;
+        anyhow::ensure!(
+            admission.idempotency.actor_id == Some(admission.authority.user_id),
+            "TLS reload actor and idempotency identity differ"
+        );
+        let mut tx = self.command_pool.begin().await?;
+        if let Err(error) = self
+            .cluster
+            .admit(crate::cluster::ClusterOperation::AdminMutation)
+        {
+            tx.rollback().await?;
+            return Ok(ApiMutationOutcome::Rejected(
+                ApiMutationRejection::Unavailable(error.to_string()),
+            ));
+        }
+        let actor_id = admission.authority.user_id;
+        let auth_generation = admission.authority.auth_generation;
+        let session_hash = crate::auth::token_hash(admission.authority.session_token);
+        let row = sqlx::query(
+            "SELECT * FROM northstar_admin_tls_reload_admit(
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+        )
+        .bind(actor_id)
+        .bind(auth_generation)
+        .bind(session_hash.as_slice())
+        .bind(hashes.current_scope.as_slice())
+        .bind(hashes.previous_scope.as_ref().map(<[u8; 32]>::as_slice))
+        .bind(hashes.current_principal.as_slice())
+        .bind(hashes.previous_principal.as_ref().map(<[u8; 32]>::as_slice))
+        .bind(hashes.current_fingerprint.as_slice())
+        .bind(
+            hashes
+                .previous_fingerprint
+                .as_ref()
+                .map(<[u8; 32]>::as_slice),
+        )
+        .bind(&hashes.current_key_id)
+        .bind(admission.idempotency.request_id)
+        .bind(admission.idempotency.lease_seconds)
+        .bind(admission.idempotency.ttl_seconds)
+        .fetch_one(&mut *tx)
+        .await?;
+        let outcome: &str = row.try_get("outcome")?;
+        match outcome {
+            "acquired" => {
+                let record_id: Uuid = row.try_get("record_id")?;
+                let lease_token: Uuid = row.try_get("lease_token")?;
+                let operation_id = Uuid::new_v4();
+                let response = StoredApiResponse::json(
+                    202,
+                    json!({"operation_id":operation_id,"status":"pending"}),
+                )?
+                .with_header(
+                    "location",
+                    format!("/api/v1/admin/operations/{operation_id}"),
+                );
+                let sealed = self.keyring.seal_admin_tls_reload_response(
+                    record_id,
+                    &hashes.current_scope,
+                    &hashes.current_fingerprint,
+                    &response.headers,
+                    &response.body,
+                )?;
+                let committed: bool = sqlx::query_scalar(
+                    "SELECT northstar_admin_tls_reload_commit(
+                        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                )
+                .bind(record_id)
+                .bind(lease_token)
+                .bind(actor_id)
+                .bind(auth_generation)
+                .bind(session_hash.as_slice())
+                .bind(operation_id)
+                .bind(&sealed.key_id)
+                .bind(sealed.nonce.as_slice())
+                .bind(&sealed.ciphertext)
+                .bind(admission.idempotency.ttl_seconds)
+                .fetch_one(&mut *tx)
+                .await?;
+                anyhow::ensure!(committed, "TLS reload command lease changed before commit");
+                tx.commit().await?;
+                Ok(ApiMutationOutcome::Committed(response))
+            }
+            "replay" => {
+                let record_id: Uuid = row.try_get("record_id")?;
+                let request_id: Uuid = row.try_get("request_id")?;
+                let stored_scope_hash: Vec<u8> = row.try_get("stored_scope_hash")?;
+                let stored_fingerprint: Vec<u8> = row.try_get("stored_fingerprint")?;
+                let status: i16 = row.try_get("response_status")?;
+                let response_key_id: String = row.try_get("response_key_id")?;
+                let response_nonce: Vec<u8> = row.try_get("response_nonce")?;
+                let response_ciphertext: Vec<u8> = row.try_get("response_ciphertext")?;
+                let replay = self.keyring.open_admin_tls_reload_replay(
+                    db::api_control::AdminTlsReloadReplayRecord {
+                        record_id,
+                        request_id,
+                        scope_hash: &stored_scope_hash,
+                        fingerprint: &stored_fingerprint,
+                        status,
+                        key_id: &response_key_id,
+                        nonce: &response_nonce,
+                        ciphertext: response_ciphertext,
+                    },
+                )?;
+                if row.try_get::<bool, _>("needs_rotation")? {
+                    let sealed = self.keyring.seal_admin_tls_reload_response(
+                        record_id,
+                        &hashes.current_scope,
+                        &hashes.current_fingerprint,
+                        &replay.headers,
+                        &replay.body,
+                    )?;
+                    let changed: bool = sqlx::query_scalar(
+                        "SELECT northstar_admin_tls_reload_rekey(
+                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                    )
+                    .bind(record_id)
+                    .bind(actor_id)
+                    .bind(auth_generation)
+                    .bind(session_hash.as_slice())
+                    .bind(&stored_scope_hash)
+                    .bind(&stored_fingerprint)
+                    .bind(hashes.current_scope.as_slice())
+                    .bind(hashes.current_principal.as_slice())
+                    .bind(hashes.current_fingerprint.as_slice())
+                    .bind(&sealed.key_id)
+                    .bind(sealed.nonce.as_slice())
+                    .bind(&sealed.ciphertext)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    if !changed {
+                        tx.rollback().await?;
+                        return Ok(ApiMutationOutcome::Rejected(
+                            ApiMutationRejection::IdempotencyConflict,
+                        ));
+                    }
+                }
+                tx.commit().await?;
+                Ok(ApiMutationOutcome::Replay(replay))
+            }
+            "forbidden" => {
+                tx.rollback().await?;
+                Ok(ApiMutationOutcome::Rejected(
+                    ApiMutationRejection::Forbidden,
+                ))
+            }
+            "busy" | "capacity_limited" | "in_progress" | "idempotency_conflict" => {
+                let retry_after: Option<i64> = row.try_get("retry_after")?;
+                let retry_after = retry_after.unwrap_or_default().max(1) as u64;
+                let rejection = match outcome {
+                    "busy" => ApiMutationRejection::Busy { retry_after },
+                    "capacity_limited" => ApiMutationRejection::CapacityLimited { retry_after },
+                    "in_progress" => ApiMutationRejection::InProgress { retry_after },
+                    _ => ApiMutationRejection::IdempotencyConflict,
+                };
+                tx.rollback().await?;
+                Ok(ApiMutationOutcome::Rejected(rejection))
+            }
+            _ => anyhow::bail!("TLS reload command returned an unknown outcome"),
+        }
+    }
+}
+
 impl AdminDispatchRepository for PostgresAdminDispatchRepository {
     async fn reload_tls(
         &self,
         admission: AdminMutationAdmission<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
-        self.dispatch(
-            admission,
-            AdminOperationIntent {
-                kind: "admin.tls_reload",
-                target: None,
-                policy: AuthorizationPolicy::ReauthorizeUntilEffect,
-                payload: &json!({}),
-            },
-        )
-        .await
+        self.tls_reload.dispatch(admission).await
     }
     async fn panic_disconnect(
         &self,

@@ -65,11 +65,12 @@ async fn administrative_dispatch_preserves_intents_replay_and_atomic_side_record
     let secret = Uuid::new_v4().simple().to_string();
     let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
     let service = AdminDispatchService::new(
-        PostgresAdminDispatchRepository::new(AdminMutationStore::new(
+        PostgresAdminDispatchRepository::new(
+            AdminMutationStore::new(pool.clone(), Arc::clone(&keyring), cluster.admission()),
             pool.clone(),
             keyring,
             cluster.admission(),
-        )),
+        ),
         "dispatch.test".into(),
     );
     let localpart = format!("room-{}", Uuid::new_v4().simple());
@@ -248,4 +249,23 @@ async fn administrative_dispatch_preserves_intents_replay_and_atomic_side_record
     );
     assert!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM audit_log WHERE request_id=$1) OR EXISTS(SELECT 1 FROM api_idempotency_records WHERE request_id=$1)")
         .bind(overlap.request_id).fetch_one(&pool).await.unwrap());
+
+    let invalid_bearer = Request {
+        actor: &actor,
+        session: "invalid-bearer",
+        method: "POST",
+        route: "/api/v1/admin/tls/reload",
+        target: b"",
+        key: Uuid::new_v4().to_string(),
+        request_id: Uuid::new_v4(),
+    };
+    assert!(matches!(
+        service
+            .reload_tls(invalid_bearer.admission())
+            .await
+            .unwrap(),
+        ApiMutationOutcome::Rejected(ApiMutationRejection::Forbidden)
+    ));
+    assert!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM audit_log WHERE request_id=$1) OR EXISTS(SELECT 1 FROM api_idempotency_records WHERE request_id=$1) OR EXISTS(SELECT 1 FROM api_operation_journal WHERE request_id=$1)")
+        .bind(invalid_bearer.request_id).fetch_one(&pool).await.unwrap());
 }

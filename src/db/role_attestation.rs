@@ -1414,10 +1414,10 @@ pub async fn attest_storage_role(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// Proves that the isolated XEP-0133 session issuer has no relation access and
-/// can execute only the eight typed, owner-held session lifecycle commands.
-/// The bearer and claim secrets therefore cannot be minted through arbitrary
-/// SQL on the normal runtime pool.
+/// Proves that the isolated command login has no relation access and can
+/// execute only the eight XEP-0133 session commands and three TLS reload
+/// capabilities. Neither workload can mint administrative authority through
+/// arbitrary table access.
 pub async fn attest_admin_command_role(pool: &PgPool) -> Result<()> {
     attest_database_capability_catalog(pool).await?;
     attest_security_definer_capability_acls(pool).await?;
@@ -1431,7 +1431,10 @@ pub async fn attest_admin_command_role(pool: &PgPool) -> Result<()> {
                ('northstar_admin_command_renew_claim(text,uuid,text,int8,text,bytea)'),
                ('northstar_admin_command_release_claim(text,uuid,text,int8,text,bytea)'),
                ('northstar_admin_command_complete_read_claim(text,uuid,text,int8,text,bytea,text)'),
-               ('northstar_admin_command_cleanup()')
+               ('northstar_admin_command_cleanup()'),
+               ('northstar_admin_tls_reload_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
+               ('northstar_admin_tls_reload_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
+               ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)')
            ), resolved AS (
              SELECT signature,
                     pg_catalog.to_regprocedure('public.' || signature) AS oid
@@ -1506,7 +1509,7 @@ pub async fn attest_admin_command_role(pool: &PgPool) -> Result<()> {
     .context("could not inspect XEP-0133 command PostgreSQL role")?;
     anyhow::ensure!(
         accepted,
-        "PostgreSQL command role attestation failed: mount the no-table-access northstar_commands URL with the exact XEP-0133 session capability set"
+        "PostgreSQL command role attestation failed: mount the no-table-access northstar_commands URL with the exact administrator capability set"
     );
     Ok(())
 }

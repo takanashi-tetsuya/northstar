@@ -897,7 +897,10 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
              ('northstar_admin_command_renew_claim(text,uuid,text,int8,text,bytea)'),
              ('northstar_admin_command_release_claim(text,uuid,text,int8,text,bytea)'),
              ('northstar_admin_command_complete_read_claim(text,uuid,text,int8,text,bytea,text)'),
-             ('northstar_admin_command_cleanup()')
+             ('northstar_admin_command_cleanup()'),
+             ('northstar_admin_tls_reload_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)'),
+             ('northstar_admin_tls_reload_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)'),
+             ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)')
            ) AS required(signature)
           WHERE pg_catalog.to_regprocedure('public.' || required.signature) IS NULL
              OR NOT pg_catalog.has_function_privilege(

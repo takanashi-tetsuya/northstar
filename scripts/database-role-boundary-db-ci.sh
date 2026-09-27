@@ -2583,6 +2583,9 @@ expect_insufficient_privilege "$command_role" "$command_password" \
 expect_insufficient_privilege "$command_role" "$command_password" \
   'command issuer direct user read' \
   'SELECT id FROM public.users LIMIT 1'
+expect_insufficient_privilege "$runtime_role" "$runtime_password" \
+  'runtime REST TLS reload command' \
+  "SELECT * FROM public.northstar_admin_tls_reload_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('a1',32),'hex'),NULL,decode(repeat('b1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000116',180,3600)"
 expect_insufficient_privilege "$command_role" "$command_password" \
   'command issuer cleanup effect direct read' \
   'SELECT id FROM public.admin_session_cleanup_effects LIMIT 1'
@@ -2618,6 +2621,132 @@ SELECT public.northstar_user_create_bootstrap_admin(
 PSQL
 )
 [[ "$bootstrap_created" == 't' ]] || fail 'bootstrap account command did not create its fixture'
+
+# The command login can issue only the fixed TLS reload intent through its
+# three reviewed routines. Admission, operation, audit and encrypted replay
+# must commit together; an invalid generation cannot reserve a request.
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+INSERT INTO public.api_sessions(id,user_id,token_hash,expires_at)
+VALUES ('00000000-0000-0000-0000-000000000115',
+        '00000000-0000-0000-0000-000000000012',
+        decode(repeat('c1',32),'hex'),clock_timestamp()+INTERVAL '1 hour');
+PSQL
+psql_as "$command_role" "$command_password" --quiet >/dev/null <<'PSQL'
+BEGIN;
+DO $tls_reload_command$
+DECLARE
+    admitted RECORD;
+    replayed RECORD;
+BEGIN
+    SELECT * INTO admitted FROM public.northstar_admin_tls_reload_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('a1',32),'hex'),NULL,
+        decode(repeat('b1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000116',180,3600
+    );
+    IF admitted.outcome<>'acquired' OR admitted.record_id IS NULL OR
+       admitted.lease_token IS NULL THEN
+        RAISE EXCEPTION 'TLS reload admission did not reserve a fenced request';
+    END IF;
+    IF NOT public.northstar_admin_tls_reload_commit(
+        admitted.record_id,admitted.lease_token,
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),
+        '00000000-0000-0000-0000-000000000117',
+        '0123456789abcdef',decode(repeat('01',12),'hex'),
+        decode(repeat('02',32),'hex'),3600
+    ) THEN
+        RAISE EXCEPTION 'TLS reload operation and replay did not commit';
+    END IF;
+    SELECT * INTO replayed FROM public.northstar_admin_tls_reload_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('a1',32),'hex'),NULL,
+        decode(repeat('b1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000118',180,3600
+    );
+    IF replayed.outcome<>'replay' OR replayed.record_id<>admitted.record_id OR
+       replayed.request_id<>admitted.request_id OR
+       replayed.response_status<>202 OR replayed.response_ciphertext IS NULL THEN
+        RAISE EXCEPTION 'TLS reload replay lost its original response';
+    END IF;
+    IF public.northstar_admin_tls_reload_commit(
+        admitted.record_id,admitted.lease_token,
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),
+        '00000000-0000-0000-0000-000000000119',
+        '0123456789abcdef',decode(repeat('01',12),'hex'),
+        decode(repeat('02',32),'hex'),3600
+    ) THEN
+        RAISE EXCEPTION 'completed TLS reload lease was reusable';
+    END IF;
+END;
+$tls_reload_command$;
+COMMIT;
+PSQL
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome FROM public.northstar_admin_tls_reload_admit('00000000-0000-0000-0000-000000000012',1,decode(repeat('c1',32),'hex'),decode(repeat('a3',32),'hex'),NULL,decode(repeat('b3',32),'hex'),NULL,decode(repeat('d3',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000120',180,3600)")" == 'forbidden' ]] \
+  || fail 'stale administrator generation reserved a TLS reload'
+# The nonterminal-operation guard retains an expired completed reservation.
+# Rotation must preserve its exact replay instead of turning it into 409.
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+UPDATE public.api_idempotency_records
+   SET expires_at=created_at+INTERVAL '1 microsecond'
+ WHERE request_id='00000000-0000-0000-0000-000000000116';
+PSQL
+[[ "$(control_psql --dbname="$database_name" --tuples-only --no-align \
+  --command="SELECT count(*)=1 FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000116' AND expires_at<=clock_timestamp()")" == 't' ]] \
+  || fail 'pending TLS operation did not retain its expired replay reservation'
+psql_as "$command_role" "$command_password" --quiet >/dev/null <<'PSQL'
+BEGIN;
+DO $tls_reload_rotation$
+DECLARE replayed RECORD;
+BEGIN
+    SELECT * INTO replayed FROM public.northstar_admin_tls_reload_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('a2',32),'hex'),
+        decode(repeat('a1',32),'hex'),decode(repeat('b2',32),'hex'),
+        decode(repeat('b1',32),'hex'),decode(repeat('d2',32),'hex'),
+        decode(repeat('d1',32),'hex'),'fedcba9876543210',
+        '00000000-0000-0000-0000-000000000121',180,3600
+    );
+    IF replayed.outcome<>'replay' OR NOT replayed.needs_rotation OR
+       replayed.request_id<>'00000000-0000-0000-0000-000000000116'::uuid THEN
+        RAISE EXCEPTION 'TLS reload replay did not identify key rotation';
+    END IF;
+    IF public.northstar_admin_tls_reload_rekey(
+        replayed.record_id,'00000000-0000-0000-0000-000000000012',1,
+        decode(repeat('c1',32),'hex'),replayed.stored_scope_hash,
+        replayed.stored_fingerprint,decode(repeat('a2',32),'hex'),
+        decode(repeat('b2',32),'hex'),decode(repeat('d2',32),'hex'),
+        'fedcba9876543210',decode(repeat('03',12),'hex'),
+        decode(repeat('04',32),'hex')
+    ) THEN
+        RAISE EXCEPTION 'stale generation rekeyed TLS replay';
+    END IF;
+    IF NOT public.northstar_admin_tls_reload_rekey(
+        replayed.record_id,'00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),replayed.stored_scope_hash,
+        replayed.stored_fingerprint,decode(repeat('a2',32),'hex'),
+        decode(repeat('b2',32),'hex'),decode(repeat('d2',32),'hex'),
+        'fedcba9876543210',decode(repeat('03',12),'hex'),
+        decode(repeat('04',32),'hex')
+    ) THEN
+        RAISE EXCEPTION 'authorized TLS replay rekey was rejected';
+    END IF;
+END;
+$tls_reload_rotation$;
+COMMIT;
+PSQL
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome || ':' || needs_rotation::text || ':' || response_key_id FROM public.northstar_admin_tls_reload_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('a2',32),'hex'),decode(repeat('a1',32),'hex'),decode(repeat('b2',32),'hex'),decode(repeat('b1',32),'hex'),decode(repeat('d2',32),'hex'),decode(repeat('d1',32),'hex'),'fedcba9876543210','00000000-0000-0000-0000-000000000122',180,3600)")" == 'replay:false:fedcba9876543210' ]] \
+  || fail 'TLS reload replay rotation did not survive a new transaction'
+[[ "$(control_psql --dbname="$database_name" --tuples-only --no-align \
+  --command="SELECT (SELECT count(*) FROM public.api_operation_journal WHERE id='00000000-0000-0000-0000-000000000117' AND kind='admin.tls_reload' AND status='pending')=1 AND (SELECT count(*) FROM public.audit_log WHERE operation_id='00000000-0000-0000-0000-000000000117' AND action='api.operation.transition')=1 AND (SELECT count(*) FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000116' AND state='completed' AND response_status=202)=1")" == 't' ]] \
+  || fail 'TLS reload command did not atomically persist operation, audit and replay'
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+DELETE FROM public.api_operation_journal WHERE id='00000000-0000-0000-0000-000000000117';
+DELETE FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000116';
+PSQL
 
 # A legacy or partially recovered snapshot may have no stored peer address.
 # Under exact/subnet policy that absence must fail closed rather than acting as

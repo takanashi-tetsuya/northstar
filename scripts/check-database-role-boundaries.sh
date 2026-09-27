@@ -31,6 +31,7 @@ muc_protocol_source="$project_dir/src/xmpp/protocol/muc.rs"
 muc_protocol_test_source="$project_dir/src/xmpp/protocol/muc_tests.rs"
 omemo_recovery_source="$project_dir/src/db/omemo_recovery.rs"
 user_capability_migration="$project_dir/migrations/0108_user_command_capabilities.sql"
+admin_tls_reload_migration="$project_dir/migrations/0153_admin_tls_reload_command_capability.sql"
 admin_cleanup_migration="$project_dir/migrations/0111_admin_session_cleanup_effects.sql"
 cluster_authority_migration="$project_dir/migrations/0112_cluster_runtime_capacity_and_authority.sql"
 upload_authority_migration="$project_dir/migrations/0113_upload_authority_capabilities.sql"
@@ -673,6 +674,15 @@ for capability in northstar_admin_command_create_session \
     "command role allowlist is missing: $capability"
   require_literal "$role_attestation" "$capability" \
     "command role attestation is missing: $capability"
+done
+for capability in northstar_admin_tls_reload_admit \
+  northstar_admin_tls_reload_rekey northstar_admin_tls_reload_commit; do
+  require_literal "$admin_tls_reload_migration" "CREATE FUNCTION $capability" \
+    "migration 0153 is missing TLS reload command capability: $capability"
+  require_literal "$grant_apply" "$capability" \
+    "command role allowlist is missing TLS reload capability: $capability"
+  require_literal "$role_attestation" "$capability" \
+    "command role attestation is missing TLS reload capability: $capability"
 done
 if grep -Eiq 'EXECUTE[[:space:]]+[^;]*(requested_|caller_)|format\([^)]*(requested_|caller_)|current_setting\(.northstar\..*authority' \
   "$user_capability_migration"; then

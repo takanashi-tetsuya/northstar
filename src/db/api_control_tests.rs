@@ -101,6 +101,99 @@ fn replay_aead_detects_ciphertext_and_context_tampering() {
     .is_err());
 }
 
+#[test]
+fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request() {
+    let old_secret = b"tls-reload-old-control-key-000000001";
+    let new_secret = b"tls-reload-new-control-key-000000001";
+    let actor = Uuid::new_v4();
+    let request = admin_request(
+        &actor,
+        "tls-reload-key-0001",
+        b"",
+        "POST",
+        "/api/v1/admin/tls/reload",
+        b"{}",
+    );
+    let old = ApiControlKeyring::new(old_secret, None).unwrap();
+    let old_hashes = old.admin_tls_reload_hashes(&request).unwrap();
+    let record_id = Uuid::new_v4();
+    let response = serde_json::to_vec(&serde_json::json!({
+        "operation_id": Uuid::new_v4(),
+        "status": "pending"
+    }))
+    .unwrap();
+    let headers = crate::services::api_mutations::json_replay_headers();
+    let old_sealed = old
+        .seal_admin_tls_reload_response(
+            record_id,
+            &old_hashes.current_scope,
+            &old_hashes.current_fingerprint,
+            &headers,
+            &response,
+        )
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&old_sealed.ciphertext).contains("operation_id"));
+
+    let rotating = ApiControlKeyring::new(new_secret, Some(old_secret)).unwrap();
+    let new_hashes = rotating.admin_tls_reload_hashes(&request).unwrap();
+    assert_eq!(new_hashes.previous_scope, Some(old_hashes.current_scope));
+    assert_eq!(
+        new_hashes.previous_fingerprint,
+        Some(old_hashes.current_fingerprint)
+    );
+    let replay = rotating
+        .open_admin_tls_reload_replay(AdminTlsReloadReplayRecord {
+            record_id,
+            request_id: request.request_id,
+            scope_hash: &old_hashes.current_scope,
+            fingerprint: &old_hashes.current_fingerprint,
+            status: 202,
+            key_id: &old_sealed.key_id,
+            nonce: &old_sealed.nonce,
+            ciphertext: old_sealed.ciphertext,
+        })
+        .unwrap();
+    assert_eq!(replay.body, response);
+    let new_sealed = rotating
+        .seal_admin_tls_reload_response(
+            record_id,
+            &new_hashes.current_scope,
+            &new_hashes.current_fingerprint,
+            &replay.headers,
+            &replay.body,
+        )
+        .unwrap();
+    let current_only = ApiControlKeyring::new(new_secret, None).unwrap();
+    assert!(current_only
+        .open_admin_tls_reload_replay(AdminTlsReloadReplayRecord {
+            record_id,
+            request_id: request.request_id,
+            scope_hash: &new_hashes.current_scope,
+            fingerprint: &new_hashes.current_fingerprint,
+            status: 202,
+            key_id: &new_sealed.key_id,
+            nonce: &new_sealed.nonce,
+            ciphertext: new_sealed.ciphertext.clone(),
+        })
+        .is_ok());
+    assert!(current_only
+        .open_admin_tls_reload_replay(AdminTlsReloadReplayRecord {
+            record_id,
+            request_id: request.request_id,
+            scope_hash: &old_hashes.current_scope,
+            fingerprint: &new_hashes.current_fingerprint,
+            status: 202,
+            key_id: &new_sealed.key_id,
+            nonce: &new_sealed.nonce,
+            ciphertext: new_sealed.ciphertext,
+        })
+        .is_err());
+
+    let mut bad_request = request;
+    bad_request.target_scope = b"other-target";
+    assert!(current_only.admin_tls_reload_hashes(&bad_request).is_err());
+}
+
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn capacity_lock_contention_fails_fast_without_starving_pool() {

@@ -4638,6 +4638,9 @@ impl AppState {
         let admin_dispatch_service = crate::services::admin_dispatch::AdminDispatchService::new(
             db::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
                 admin_mutations.clone(),
+                command_pool.clone(),
+                Arc::clone(&api_control),
+                cluster.admission(),
             ),
             config.domain.clone(),
         );

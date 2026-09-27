@@ -12,7 +12,7 @@ PostgreSQL superuser nor the database/schema owner.
 | `northstar_migrator` | yes | Owns the application database/schema; migration, grant reconciliation and stopped restore | non-superuser, no role memberships, `CONNECTION LIMIT 4` | One-shot migration/reconciliation/restore jobs |
 | `northstar_runtime` | yes | Application DML except account authority; `users` is SELECT-only and all account writes use an exact reviewed command-capability allowlist | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 64` | Long-lived server |
 | `northstar_storage` | yes | Upload lifecycle through owner-held functions; no direct table or sequence rights | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 16` | Bounded storage pool when uploads are enabled or draining |
-| `northstar_commands` | yes | No relation or sequence access; may only create/claim/finalize bounded XEP-0133 command sessions through eight typed owner-held functions | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 8` | Isolated four-connection command pool in the long-lived server |
+| `northstar_commands` | yes | No relation or sequence access; eight typed XEP-0133 session functions and three bounded REST TLS reload functions | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 8` | Isolated four-connection command pool in the long-lived server |
 | `northstar_backup` | yes | `SELECT` only, no routine execution or sequence allocation | same non-privileged attributes, `CONNECTION LIMIT 2` | Backup job only |
 
 The five workload roles use `NOINHERIT`. All six protected roles, including
@@ -100,11 +100,13 @@ operations must share the caller's authorization transaction. Production
 requires `STORAGE_DATABASE_URL_FILE` when uploads are enabled or draining.
 Disabled-upload mode does not open the storage pool.
 
-The independent `command_database_url` is used only by the XEP-0133
-command-session service. It
-cannot read or write any table or execute a business mutation capability. The
-runtime role can consume a valid claim only after that isolated pool has minted
-it, but cannot create, inspect, renew, release, or complete a command session.
+The independent `command_database_url` serves XEP-0133 command sessions and
+REST TLS reload requests. It has no direct table access. Its TLS reload
+capabilities admit an authorized administrator request, commit the fixed
+operation with its audit record and encrypted replay, and rotate the replay
+after a key change. They cannot choose another operation. The runtime role can
+consume a valid XEP-0133 claim only after that isolated pool has minted it,
+but cannot create, inspect, renew, release, or complete a command session.
 The command, runtime and storage pools use distinct PostgreSQL credentials
 within the same `xmpp-server` process. Their database capabilities are separate;
 their process boundary is shared.

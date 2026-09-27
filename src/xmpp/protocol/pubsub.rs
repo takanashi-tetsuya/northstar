@@ -1380,6 +1380,7 @@ async fn handle_entity_set(
                     PubSubError::new("not-allowed", "closed-node"),
                 )),
                 PubSubSubscribeOutcome::PreconditionFailed => Ok(PubSubReply::Error("conflict")),
+                PubSubSubscribeOutcome::InvalidOptions => Ok(invalid_subscription_options()),
             }
         }
         "unsubscribe" => {

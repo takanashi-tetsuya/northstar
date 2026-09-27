@@ -64,6 +64,25 @@ pub enum MamQueryResult {
     ValidationFailed(MamQueryValidationError),
 }
 
+impl MamQueryResult {
+    /// An authorized room with no page still has an unresolved archive ID.
+    pub fn from_room_read(outcome: MamRoomReadOutcome<Option<ArchivePage>>) -> Self {
+        match outcome {
+            MamRoomReadOutcome::Allowed {
+                access,
+                value: Some(page),
+            } => Self::Page {
+                room: Some(access),
+                page,
+            },
+            MamRoomReadOutcome::Allowed { value: None, .. } | MamRoomReadOutcome::Missing => {
+                Self::ItemNotFound
+            }
+            MamRoomReadOutcome::Forbidden => Self::Forbidden,
+        }
+    }
+}
+
 /// Outcome of executing a MAM metadata command.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MamMetadataResult {
@@ -74,6 +93,25 @@ pub enum MamMetadataResult {
     },
     ItemNotFound,
     Forbidden,
+}
+
+impl MamMetadataResult {
+    pub fn from_room_read(
+        outcome: MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>,
+    ) -> Self {
+        match outcome {
+            MamRoomReadOutcome::Allowed {
+                access,
+                value: (start, end),
+            } => Self::Boundaries {
+                room: Some(access),
+                start,
+                end,
+            },
+            MamRoomReadOutcome::Missing => Self::ItemNotFound,
+            MamRoomReadOutcome::Forbidden => Self::Forbidden,
+        }
+    }
 }
 
 /// Authorization and paging context for one atomic federated room archive response.
@@ -166,6 +204,67 @@ pub fn validate_mam_preferences(prefs: &MamPreferences) -> Result<(), MamQueryVa
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    #[test]
+    fn room_query_result_distinguishes_missing_page_from_denied_access() {
+        let access = MamRoomAccess::new("room".to_owned(), vec![7; 32], false);
+        let page = ArchivePage {
+            rows: Vec::new(),
+            total: 0,
+            first_index: 0,
+            complete: true,
+        };
+
+        assert_eq!(
+            MamQueryResult::from_room_read(MamRoomReadOutcome::Allowed {
+                access: access.clone(),
+                value: Some(page.clone()),
+            }),
+            MamQueryResult::Page {
+                room: Some(access.clone()),
+                page: page.clone(),
+            }
+        );
+        assert_eq!(
+            MamQueryResult::from_room_read(MamRoomReadOutcome::Allowed {
+                access,
+                value: None,
+            }),
+            MamQueryResult::ItemNotFound
+        );
+        assert_eq!(
+            MamQueryResult::from_room_read(MamRoomReadOutcome::Missing),
+            MamQueryResult::ItemNotFound
+        );
+        assert_eq!(
+            MamQueryResult::from_room_read(MamRoomReadOutcome::Forbidden),
+            MamQueryResult::Forbidden
+        );
+    }
+
+    #[test]
+    fn room_metadata_result_preserves_authorized_empty_boundaries() {
+        let access = MamRoomAccess::new("room".to_owned(), vec![7; 32], false);
+        assert_eq!(
+            MamMetadataResult::from_room_read(MamRoomReadOutcome::Allowed {
+                access: access.clone(),
+                value: (None, None),
+            }),
+            MamMetadataResult::Boundaries {
+                room: Some(access),
+                start: None,
+                end: None,
+            }
+        );
+        assert_eq!(
+            MamMetadataResult::from_room_read(MamRoomReadOutcome::Missing),
+            MamMetadataResult::ItemNotFound
+        );
+        assert_eq!(
+            MamMetadataResult::from_room_read(MamRoomReadOutcome::Forbidden),
+            MamMetadataResult::Forbidden
+        );
+    }
 
     #[test]
     fn command_validation_rules() {

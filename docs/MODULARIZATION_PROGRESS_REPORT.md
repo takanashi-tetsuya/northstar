@@ -116,8 +116,9 @@ statement snapshot. Node configuration is still loaded separately, so this is
 not an atomic snapshot of every authorization input.
 Subscription-options SET now checks the remote subscriber's presence filters
 in the service and again under the database mutation locks. The service keeps
-requester identity errors ahead of option errors; subscribe-and-configure still
-uses its existing protocol precheck.
+requester identity errors ahead of option errors. Subscribe-and-configure keeps
+its protocol precheck and now repeats the remote filter check under its
+existing mutation locks, before changing the subscription or outbox.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -174,6 +175,8 @@ authorized query's consistent result snapshot.
 MUC archive page reads now apply the anonymous-room peer-filter rule in the
 same room authorization decision used by local and federated queries. Room
 metadata and boundary reads keep their existing policy.
+The Archive application now maps authorized room page and metadata reads to
+typed results; the PostgreSQL adapter still owns the consistent read.
 
 ### Packet 5 — Upload/object lifecycle
 
@@ -188,6 +191,8 @@ outside the transaction; the repository remains the authority for replay count.
 The upload service now returns the stage-cleanup decision with promotion
 finalization. The HTTP adapter follows that decision, retaining a committed
 direct-final object or an indeterminate stage for recovery.
+It also classifies an unrecorded stage handoff: a direct-final object stays
+available for reconciliation, while a distinct stage may be removed.
 
 ### Packet 6 — Federation, components and cluster
 

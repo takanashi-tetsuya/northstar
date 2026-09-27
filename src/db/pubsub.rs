@@ -576,6 +576,7 @@ pub enum SubscribeOutcome {
     Forbidden,
     ClosedNode,
     PreconditionFailed,
+    InvalidOptions,
 }
 
 fn canonical_bare_jids(values: &[String]) -> Result<Vec<String>> {
@@ -2604,25 +2605,32 @@ pub async fn get_subscription(
 #[cfg(test)]
 pub async fn set_subscription_limited(
     pool: &PgPool,
+    local_domain: &str,
     node_id: Uuid,
     jid: &str,
     state: &str,
     max_subscriptions: i64,
 ) -> Result<bool> {
-    Ok(
-        set_subscription_limited_with_options(pool, node_id, jid, state, max_subscriptions, None)
-            .await?
-            .is_some(),
+    Ok(set_subscription_limited_with_options(
+        pool,
+        local_domain,
+        node_id,
+        jid,
+        state,
+        max_subscriptions,
+        None,
     )
+    .await?
+    .is_some())
 }
 
 /// Creates/renews a subscription and applies its options in one transaction.
-/// Invalid options are parsed by the protocol layer before entering here, so a
-/// failed subscribe-and-configure request can never leave a default-configured
-/// subscription behind.
+/// Options and authorization are checked again under the node and subscription
+/// locks before either the subscription or its notification outbox changes.
 #[cfg(test)]
 pub async fn set_subscription_limited_with_options(
     pool: &PgPool,
+    local_domain: &str,
     node_id: Uuid,
     jid: &str,
     state: &str,
@@ -2636,6 +2644,7 @@ pub async fn set_subscription_limited_with_options(
     Ok(
         match set_subscription_limited_with_options_and_outbox(
             pool,
+            local_domain,
             node_id,
             &requester,
             jid,
@@ -2659,6 +2668,7 @@ pub async fn set_subscription_limited_with_options(
 #[allow(clippy::too_many_arguments)]
 pub async fn set_subscription_limited_with_options_and_renderer(
     pool: &PgPool,
+    local_domain: &str,
     node_id: Uuid,
     requester: &str,
     jid: &str,
@@ -2740,6 +2750,25 @@ pub async fn set_subscription_limited_with_options_and_renderer(
     {
         transaction.rollback().await?;
         return Ok(SubscribeOutcome::PreconditionFailed);
+    }
+    if let Some(options) = options {
+        let requester_jid = crate::jid::CanonicalJid::parse_bare(&requester)?;
+        let core_options: northstar_pubsub_core::PubSubSubscriptionOptions = options.clone().into();
+        // Subscribe-and-configure starts from the node defaults, not an old
+        // subscription's depth. Leaf forms cannot set a depth and write 1.
+        if !northstar_pubsub_core::subscription_options_match_node_policy(
+            &node.node_type,
+            node.payload_type.as_deref(),
+            Some(1),
+            &core_options,
+        ) || !northstar_xep_0060::subscription_show_values_allowed(
+            requester_jid.domainpart(),
+            local_domain,
+            &options.show_values,
+        ) {
+            transaction.rollback().await?;
+            return Ok(SubscribeOutcome::InvalidOptions);
+        }
     }
     if expired {
         sqlx::query("DELETE FROM pubsub_digest_queue WHERE subscription_node_id = $1 AND subscriber_jid = $2 AND source_delivery_id IS NULL")
@@ -4418,6 +4447,7 @@ pub async fn cleanup_expired_subscriptions(pool: &PgPool, limit: i64) -> Result<
 #[allow(clippy::too_many_arguments)]
 async fn set_subscription_limited_with_options_and_outbox(
     pool: &PgPool,
+    local_domain: &str,
     node_id: Uuid,
     requester: &str,
     jid: &str,
@@ -4431,6 +4461,7 @@ async fn set_subscription_limited_with_options_and_outbox(
 ) -> Result<SubscribeOutcome> {
     set_subscription_limited_with_options_and_renderer(
         pool,
+        local_domain,
         node_id,
         requester,
         jid,

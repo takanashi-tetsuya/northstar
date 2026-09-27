@@ -363,6 +363,7 @@ impl<
             SubscribeOutcome::Forbidden => PubSubSubscribeOutcome::Forbidden,
             SubscribeOutcome::ClosedNode => PubSubSubscribeOutcome::ClosedNode,
             SubscribeOutcome::PreconditionFailed => PubSubSubscribeOutcome::PreconditionFailed,
+            SubscribeOutcome::InvalidOptions => PubSubSubscribeOutcome::InvalidOptions,
         };
         Ok(PubSubSubscribeResult {
             outcome: pubsub_outcome,

@@ -20,7 +20,7 @@ use crate::services::upload::{
     AcquirePromotionOutcome, FinalizePromotionCommand, FinalizePromotionOutcome,
     PromotedUploadProjection, PromotionClaim, UploadClaimOutcome, UploadRenewOutcome,
     UploadReplayCommand, UploadReplayOutcome, UploadSlot, UploadStageCleanup,
-    UploadStageProjection, UserUploadDeleteOutcome,
+    UploadStageHandoffOutcome, UploadStageProjection, UserUploadDeleteOutcome,
 };
 use crate::state::{
     upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
@@ -214,7 +214,6 @@ pub async fn upload_put(
             "storage backend accepted exact bytes without an upload digest"
         ))
     })?;
-    let stage_is_final_object = staged.stage_key() == staged.object_key();
     if state.store().backend() != slot.storage_backend {
         release_claim_best_effort(&state, slot.id, lease.claim_token).await;
         return Err(AppError::Internal(anyhow::anyhow!(
@@ -228,9 +227,9 @@ pub async fn upload_put(
     // error are recovered by the bounded storage worker instead of deleting a
     // stage that a committed promotion job may now own.
     staged.durably_recorded();
-    if !state
+    match state
         .service()
-        .record_stage(UploadStageProjection {
+        .execute_stage_handoff(UploadStageProjection {
             id: slot.id,
             claim_token: lease.claim_token,
             storage_backend: state.store().backend(),
@@ -243,15 +242,16 @@ pub async fn upload_put(
         })
         .await?
     {
-        // The stage was disarmed before an uncertain database handoff. For an
-        // S3 direct-final key, only a fenced lost-authority/deletion
-        // projection may delete it; a concurrent worker may already have
-        // committed this same immutable attempt.
-        if !stage_is_final_object {
-            abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version())
-                .await;
+        UploadStageHandoffOutcome::Recorded => {}
+        UploadStageHandoffOutcome::NotRecorded { cleanup } => {
+            // The stage was disarmed before an uncertain database handoff.
+            // Only the service's disposition can remove request-local bytes.
+            if cleanup == UploadStageCleanup::Abort {
+                abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version())
+                    .await;
+            }
+            return upload_in_progress(1);
         }
-        return upload_in_progress(1);
     }
     let promotion_claim_token = match state
         .service()

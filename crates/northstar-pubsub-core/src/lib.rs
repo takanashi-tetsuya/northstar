@@ -724,6 +724,7 @@ pub enum SubscribeOutcome {
     Forbidden,
     ClosedNode,
     PreconditionFailed,
+    InvalidOptions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -770,6 +771,7 @@ pub enum PubSubSubscribeOutcome {
     Forbidden,
     ClosedNode,
     PreconditionFailed,
+    InvalidOptions,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

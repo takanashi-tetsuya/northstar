@@ -81,21 +81,10 @@ impl MamQueryRepository for PostgresMamRepository {
                 viewer_id,
                 currently_joined,
             } => {
-                match self
+                let read = self
                     .authorized_room_page(&localpart, viewer_id, currently_joined, &command.query)
-                    .await?
-                {
-                    MamRoomReadOutcome::Allowed {
-                        access,
-                        value: Some(page),
-                    } => Ok(MamQueryResult::Page {
-                        room: Some(access),
-                        page,
-                    }),
-                    MamRoomReadOutcome::Allowed { value: None, .. }
-                    | MamRoomReadOutcome::Missing => Ok(MamQueryResult::ItemNotFound),
-                    MamRoomReadOutcome::Forbidden => Ok(MamQueryResult::Forbidden),
-                }
+                    .await?;
+                Ok(MamQueryResult::from_room_read(read))
             }
             MamQueryScope::FederatedRoom { .. } => Ok(MamQueryResult::Forbidden),
         }
@@ -116,20 +105,10 @@ impl MamQueryRepository for PostgresMamRepository {
                 viewer_id,
                 currently_joined,
             } => {
-                match self
+                let read = self
                     .authorized_room_boundaries(&localpart, viewer_id, currently_joined)
-                    .await?
-                {
-                    MamRoomReadOutcome::Allowed { access, value } => {
-                        Ok(MamMetadataResult::Boundaries {
-                            room: Some(access),
-                            start: value.0,
-                            end: value.1,
-                        })
-                    }
-                    MamRoomReadOutcome::Missing => Ok(MamMetadataResult::ItemNotFound),
-                    MamRoomReadOutcome::Forbidden => Ok(MamMetadataResult::Forbidden),
-                }
+                    .await?;
+                Ok(MamMetadataResult::from_room_read(read))
             }
             MamQueryScope::FederatedRoom { .. } => Ok(MamMetadataResult::Forbidden),
         }

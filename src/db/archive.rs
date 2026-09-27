@@ -3357,6 +3357,11 @@ mod history_identity_pg_tests {
         .await
         .unwrap();
 
+        sqlx::query("UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1")
+            .bind(room_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         let mut peer_query = page_query();
         peer_query.with_jid = Some("sender@remote.test/Phone".to_owned());
         assert!(matches!(
@@ -3418,11 +3423,6 @@ mod history_identity_pg_tests {
                 ..
             }
         ));
-        sqlx::query("UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1")
-            .bind(room_id)
-            .execute(&pool)
-            .await
-            .unwrap();
 
         let mut local_snapshot = pool.begin().await.unwrap();
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")

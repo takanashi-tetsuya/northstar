@@ -651,6 +651,7 @@ impl From<db::SubscribeOutcome> for SubscribeOutcome {
             db::SubscribeOutcome::Forbidden => Self::Forbidden,
             db::SubscribeOutcome::ClosedNode => Self::ClosedNode,
             db::SubscribeOutcome::PreconditionFailed => Self::PreconditionFailed,
+            db::SubscribeOutcome::InvalidOptions => Self::InvalidOptions,
         }
     }
 }
@@ -1765,6 +1766,7 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
             let options = options.map(db::PubSubSubscriptionOptions::from);
             Ok(db::set_subscription_limited_with_options_and_renderer(
                 &self.pool,
+                &self.domain,
                 node_id,
                 requester,
                 jid,

@@ -92,6 +92,12 @@ pub struct UploadStageProjection<'a> {
     pub storage_fence: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UploadStageHandoffOutcome {
+    Recorded,
+    NotRecorded { cleanup: UploadStageCleanup },
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct PromotionClaim {
     pub id: Uuid,
@@ -314,8 +320,24 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
         self.repository.release_claim(id, claim_token).await
     }
 
-    pub(crate) async fn record_stage(&self, projection: UploadStageProjection<'_>) -> Result<bool> {
-        self.repository.record_stage(projection).await
+    pub(crate) async fn execute_stage_handoff(
+        &self,
+        projection: UploadStageProjection<'_>,
+    ) -> Result<UploadStageHandoffOutcome> {
+        let stage_is_final_object = projection.stage_key == projection.object_key;
+        if self.repository.record_stage(projection).await? {
+            Ok(UploadStageHandoffOutcome::Recorded)
+        } else {
+            // A direct-final key may already belong to a concurrent commit;
+            // only a distinct, attempt-scoped stage can be removed here.
+            Ok(UploadStageHandoffOutcome::NotRecorded {
+                cleanup: if stage_is_final_object {
+                    UploadStageCleanup::Retain
+                } else {
+                    UploadStageCleanup::Abort
+                },
+            })
+        }
     }
 
     pub(crate) async fn acquire_promotion(
@@ -431,6 +453,19 @@ mod tests {
         digest: [u8; 32],
     }
 
+    #[derive(Debug, Eq, PartialEq)]
+    struct StageCall {
+        id: Uuid,
+        claim_token: Uuid,
+        backend: String,
+        stage_key: String,
+        stage_version: Option<String>,
+        object_key: String,
+        digest: [u8; 32],
+        size: u64,
+        storage_fence: i64,
+    }
+
     #[derive(Default)]
     struct LifecycleRepository {
         claim: Option<Uuid>,
@@ -440,6 +475,8 @@ mod tests {
         committed: bool,
         replay_result: bool,
         replay_calls: Mutex<Vec<ReplayCall>>,
+        stage_result: bool,
+        stage_calls: Mutex<Vec<StageCall>>,
         calls: Mutex<Vec<&'static str>>,
     }
 
@@ -470,8 +507,19 @@ mod tests {
             unreachable!("not used by this promotion test")
         }
 
-        async fn record_stage(&self, _: UploadStageProjection<'_>) -> Result<bool> {
-            unreachable!("not used by this promotion test")
+        async fn record_stage(&self, projection: UploadStageProjection<'_>) -> Result<bool> {
+            self.stage_calls.lock().unwrap().push(StageCall {
+                id: projection.id,
+                claim_token: projection.claim_token,
+                backend: projection.storage_backend.to_owned(),
+                stage_key: projection.stage_key.to_owned(),
+                stage_version: projection.stage_version.map(str::to_owned),
+                object_key: projection.object_key.to_owned(),
+                digest: *projection.content_sha256,
+                size: projection.size,
+                storage_fence: projection.storage_fence,
+            });
+            Ok(self.stage_result)
         }
 
         async fn claim_promotion(&self, _: Uuid, _: Uuid, _: i64) -> Result<Option<Uuid>> {
@@ -524,6 +572,89 @@ mod tests {
             repository,
             safety_gate: UploadSafetyGate::new(),
             max_upload_bytes: 1024,
+        }
+    }
+
+    #[tokio::test]
+    async fn stage_handoff_only_releases_a_distinct_unrecorded_stage() {
+        let id = Uuid::new_v4();
+        let claim_token = Uuid::new_v4();
+        let digest = [5_u8; 32];
+        let direct_key = format!("objects/{id}/{claim_token}");
+        let local_stage = format!("staging/{id}/{claim_token}");
+        let local_object = id.to_string();
+        for (recorded, backend, stage_key, stage_version, object_key, expected) in [
+            (
+                false,
+                "s3",
+                direct_key.as_str(),
+                Some("v1"),
+                direct_key.as_str(),
+                UploadStageHandoffOutcome::NotRecorded {
+                    cleanup: UploadStageCleanup::Retain,
+                },
+            ),
+            (
+                false,
+                "local",
+                local_stage.as_str(),
+                None,
+                local_object.as_str(),
+                UploadStageHandoffOutcome::NotRecorded {
+                    cleanup: UploadStageCleanup::Abort,
+                },
+            ),
+            (
+                true,
+                "s3",
+                direct_key.as_str(),
+                Some("v1"),
+                direct_key.as_str(),
+                UploadStageHandoffOutcome::Recorded,
+            ),
+            (
+                true,
+                "local",
+                local_stage.as_str(),
+                None,
+                local_object.as_str(),
+                UploadStageHandoffOutcome::Recorded,
+            ),
+        ] {
+            let service = lifecycle_service(LifecycleRepository {
+                stage_result: recorded,
+                ..Default::default()
+            });
+            let result = service
+                .execute_stage_handoff(UploadStageProjection {
+                    id,
+                    claim_token,
+                    storage_backend: backend,
+                    stage_key,
+                    stage_version,
+                    object_key,
+                    content_sha256: &digest,
+                    size: 17,
+                    storage_fence: 11,
+                })
+                .await
+                .unwrap();
+            assert_eq!(result, expected);
+            assert_eq!(
+                *service.repository.stage_calls.lock().unwrap(),
+                [StageCall {
+                    id,
+                    claim_token,
+                    backend: backend.to_owned(),
+                    stage_key: stage_key.to_owned(),
+                    stage_version: stage_version.map(str::to_owned),
+                    object_key: object_key.to_owned(),
+                    digest,
+                    size: 17,
+                    storage_fence: 11,
+                }],
+                "the exact leased stage must be offered to the SQL handoff once"
+            );
         }
     }
 

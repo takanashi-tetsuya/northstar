@@ -44,6 +44,12 @@ const MAX_RESPONSE_ACK_AGE: Duration = Duration::from_secs(300);
 const MAX_RESPONSE_REPLAYS: u8 = 2;
 const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn superseded_bosh_message_id(error: &anyhow::Error) -> Option<uuid::Uuid> {
+    error
+        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+        .map(|superseded| superseded.message_id)
+}
+
 #[derive(Clone)]
 pub struct BoshManager {
     inner: Arc<BoshManagerInner>,
@@ -1007,6 +1013,10 @@ impl BoshActor {
     async fn record_and_push_item(&mut self, mut item: crate::outbound::OutboundItem) -> bool {
         let managed_by_sm = match self.protocol.record_outbound_item(&item).await {
             Ok(managed) => managed,
+            Err(error) if superseded_bosh_message_id(&error).is_some() => {
+                tracing::debug!(?error, "superseded durable BOSH/SM item skipped");
+                return true;
+            }
             Err(error) => {
                 tracing::error!(?error, "failed to record BOSH outbound item");
                 return false;
@@ -1127,85 +1137,99 @@ impl BoshActor {
         cache: bool,
     ) -> bool {
         let rid = pending.request.rid;
-        let built = if condition == Some("remote-stream-error") {
-            self.response_body(condition, true)
-        } else if condition == Some("terminate") {
-            Ok((
-                BoshHttpResponse {
-                    body: Bytes::from(bosh_body_element(None, true, None).finish()),
-                    content_type: self.content_type.clone(),
-                },
-                Vec::new(),
-                Vec::new(),
-            ))
-        } else if let Some(condition) = condition {
-            // Binding errors and graceful termination never expose ordinary
-            // queued XMPP payloads. This is especially important for an
-            // invalid key: a party that knows only SID/RID must not receive
-            // messages while being told that its key proof failed.
-            Ok((
-                terminal_response_with_content(condition, &self.content_type),
-                Vec::new(),
-                Vec::new(),
-            ))
-        } else {
-            self.response_body(None, false)
-        };
-        let (response, sources, transport_receipts) = match built {
-            Ok(built) => built,
-            Err(error) => {
-                tracing::error!(?error, rid, "failed to construct bounded BOSH response");
-                let response =
-                    terminal_response_with_content("internal-server-error", &self.content_type);
-                for responder in pending.responders {
-                    let _ = responder.send(response.clone());
-                }
-                return false;
-            }
-        };
-        let response_bytes = response.body.len();
-        if cache && condition.is_none() && pending.request.pause.is_none() {
-            while self.replay.len() >= RESPONSE_CACHE_SIZE
-                && self.replay.front().is_some_and(|cached| {
-                    cached.durable_ownership.is_empty() && cached.transport_receipts.is_empty()
-                })
-            {
-                self.replay.pop_front();
-            }
-            let now = Instant::now();
-            if bosh_unacknowledged_limit_exceeded(&self.replay, response_bytes, now) {
-                let _ = self
-                    .replay_service
-                    .release_bosh_fences(self.delivery_session_id)
-                    .await;
-                let terminal =
-                    terminal_response_with_content("policy-violation", &self.content_type);
-                for responder in pending.responders {
-                    let _ = responder.send(terminal.clone());
-                }
-                return false;
-            }
-        }
-        let durable_ownership = if sources.is_empty() {
-            crate::outbound::BoshResponseOwnership::default()
-        } else {
-            match self
-                .replay_service
-                .bind_bosh_response_sources(
-                    self.delivery_session_id,
-                    rid,
-                    &sources,
-                    self.delivery_fence_ttl_seconds,
-                )
-                .await
-            {
-                Ok(ownership) => ownership,
+        let mut superseded_rebuilds = 0;
+        let (response, transport_receipts, durable_ownership) = loop {
+            let built = if condition == Some("remote-stream-error") {
+                self.response_body(condition, true)
+            } else if condition == Some("terminate") {
+                Ok((
+                    BoshHttpResponse {
+                        body: Bytes::from(bosh_body_element(None, true, None).finish()),
+                        content_type: self.content_type.clone(),
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    VecDeque::new(),
+                ))
+            } else if let Some(condition) = condition {
+                // Invalid key/terminal responses never expose queued payloads.
+                Ok((
+                    terminal_response_with_content(condition, &self.content_type),
+                    Vec::new(),
+                    Vec::new(),
+                    VecDeque::new(),
+                ))
+            } else {
+                self.response_body(None, false)
+            };
+            let (response, sources, transport_receipts, selected_items) = match built {
+                Ok(built) => built,
                 Err(error) => {
-                    // The HTTP response has not been exposed yet. Fail closed
-                    // and leave every source either recoverable or held by its
-                    // typed pending BOSH fence; actor teardown releases that
-                    // pending fence instead of creating an untracked window.
-                    tracing::error!(?error, session_id = %self.delivery_session_id, rid, "failed to bind durable BOSH transport sources");
+                    tracing::error!(?error, rid, "failed to construct bounded BOSH response");
+                    let response =
+                        terminal_response_with_content("internal-server-error", &self.content_type);
+                    for responder in pending.responders {
+                        let _ = responder.send(response.clone());
+                    }
+                    return false;
+                }
+            };
+            let response_bytes = response.body.len();
+            if cache && condition.is_none() && pending.request.pause.is_none() {
+                while self.replay.len() >= RESPONSE_CACHE_SIZE
+                    && self.replay.front().is_some_and(|cached| {
+                        cached.durable_ownership.is_empty() && cached.transport_receipts.is_empty()
+                    })
+                {
+                    self.replay.pop_front();
+                }
+                if bosh_unacknowledged_limit_exceeded(&self.replay, response_bytes, Instant::now())
+                {
+                    let _ = self
+                        .replay_service
+                        .release_bosh_fences(self.delivery_session_id)
+                        .await;
+                    let terminal =
+                        terminal_response_with_content("policy-violation", &self.content_type);
+                    for responder in pending.responders {
+                        let _ = responder.send(terminal.clone());
+                    }
+                    return false;
+                }
+            }
+            let ownership = if sources.is_empty() {
+                Ok(crate::outbound::BoshResponseOwnership::default())
+            } else {
+                self.replay_service
+                    .bind_bosh_response_sources(
+                        self.delivery_session_id,
+                        rid,
+                        &sources,
+                        self.delivery_fence_ttl_seconds,
+                    )
+                    .await
+            };
+            match ownership {
+                Ok(ownership) => break (response, transport_receipts, ownership),
+                Err(error) => {
+                    if let Some(message_id) = superseded_bosh_message_id(&error) {
+                        let removed = restore_response_items(
+                            &mut self.output,
+                            &mut self.output_bytes,
+                            selected_items,
+                            Some(message_id),
+                        );
+                        if removed && superseded_rebuilds < self.max_output_stanzas {
+                            superseded_rebuilds += 1;
+                            tracing::debug!(%message_id, rid,
+                                "superseded durable BOSH item removed before response exposure");
+                            continue;
+                        }
+                    }
+                    // A typed conflict without a matching selected source is
+                    // an invariant failure, not permission to discard peers.
+                    tracing::error!(?error, session_id = %self.delivery_session_id, rid,
+                        "failed to bind durable BOSH transport sources");
                     let response =
                         terminal_response_with_content("internal-server-error", &self.content_type);
                     for responder in pending.responders {
@@ -1215,6 +1239,7 @@ impl BoshActor {
                 }
             }
         };
+        let response_bytes = response.body.len();
         let mut exposed_to_transport = false;
         for responder in pending.responders {
             exposed_to_transport |= responder.send(response.clone()).is_ok();
@@ -1266,28 +1291,31 @@ impl BoshActor {
         &mut self,
         condition: Option<&str>,
         terminate: bool,
-    ) -> anyhow::Result<(
-        BoshHttpResponse,
-        Vec<crate::outbound::TransportOwnershipSource>,
-        Vec<mpsc::UnboundedSender<()>>,
-    )> {
-        let (payload, sources, transport_receipts, transient_sm_capacity) = take_response_payload(
-            &mut self.output,
-            &mut self.output_bytes,
-            self.max_response_bytes,
-            &self.sm_memory_governor,
-        )?;
+    ) -> anyhow::Result<BoshResponseBody> {
+        let (payload, sources, transport_receipts, transient_sm_capacity, selected_items) =
+            take_response_payload(
+                &mut self.output,
+                &mut self.output_bytes,
+                self.max_response_bytes,
+                &self.sm_memory_governor,
+            )?;
         let body = bosh_body_element(
             condition,
             terminate,
             highest_contiguous_buffered_rid(self.next_rid, self.highest_received, &self.buffered),
         );
-        let body = body
-            .validated_fragment(&payload)
-            .map_err(|error| {
-                anyhow::anyhow!("malformed protocol output at BOSH boundary: {error}")
-            })?
-            .finish();
+        let body = match body.validated_fragment(&payload) {
+            Ok(body) => body.finish(),
+            Err(error) => {
+                restore_response_items(
+                    &mut self.output,
+                    &mut self.output_bytes,
+                    selected_items,
+                    None,
+                );
+                anyhow::bail!("malformed protocol output at BOSH boundary: {error}");
+            }
+        };
         Ok((
             BoshHttpResponse {
                 body: bosh_response_bytes(body, transient_sm_capacity),
@@ -1295,6 +1323,7 @@ impl BoshActor {
             },
             sources,
             transport_receipts,
+            selected_items,
         ))
     }
 
@@ -1369,12 +1398,46 @@ fn queue_bosh_resume_payload(
     true
 }
 
+type BoshResponseBody = (
+    BoshHttpResponse,
+    Vec<crate::outbound::TransportOwnershipSource>,
+    Vec<mpsc::UnboundedSender<()>>,
+    VecDeque<crate::outbound::OutboundItem>,
+);
+
 type BoshResponsePayload = (
     String,
     Vec<crate::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
     Vec<Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
+    VecDeque<crate::outbound::OutboundItem>,
 );
+
+/// Put a failed response attempt back ahead of later actor output. An exact
+/// superseded C2S item is the only one discarded; every other stanza and its
+/// receipt keep their original relative order for response reconstruction.
+fn restore_response_items(
+    output: &mut VecDeque<crate::outbound::OutboundItem>,
+    output_bytes: &mut usize,
+    selected: VecDeque<crate::outbound::OutboundItem>,
+    superseded: Option<uuid::Uuid>,
+) -> bool {
+    let mut removed = false;
+    for item in selected.into_iter().rev() {
+        if superseded.is_some_and(|id| {
+            item.c2s_delivery()
+                .is_some_and(|source| source.message_id == id)
+        }) {
+            removed = true;
+            continue;
+        }
+        *output_bytes = output_bytes
+            .checked_add(item.stanza.len())
+            .expect("restoring previously bounded BOSH output bytes");
+        output.push_front(item);
+    }
+    removed
+}
 
 fn take_response_payload(
     output: &mut VecDeque<crate::outbound::OutboundItem>,
@@ -1433,23 +1496,31 @@ fn take_response_payload(
     let mut payload = String::with_capacity(selected_bytes);
     let mut sources = Vec::new();
     let mut transport_receipts = Vec::new();
+    let mut selected_items = VecDeque::with_capacity(selected);
     for _ in 0..selected {
         let stanza = output.pop_front().expect("front was present");
         *output_bytes = output_bytes
             .checked_sub(stanza.stanza.len())
             .context("BOSH output byte accounting underflow")?;
         payload.push_str(&stanza.stanza);
-        if let Some(receipt) = stanza.transport_receipt {
-            transport_receipts.push(receipt);
+        if let Some(receipt) = &stanza.transport_receipt {
+            transport_receipts.push(receipt.clone());
         }
-        if let Some(receipt) = stanza.transport_write_receipt {
-            transport_receipts.push(receipt);
+        if let Some(receipt) = &stanza.transport_write_receipt {
+            transport_receipts.push(receipt.clone());
         }
         if let Some(source) = stanza.durable_source {
             sources.push(source);
         }
+        selected_items.push_back(stanza);
     }
-    Ok((payload, sources, transport_receipts, transient_sm_capacity))
+    Ok((
+        payload,
+        sources,
+        transport_receipts,
+        transient_sm_capacity,
+        selected_items,
+    ))
 }
 
 pub async fn http_bind(
@@ -2420,7 +2491,7 @@ mod tests {
         let mut bytes = first.stanza.len() + second.stanza.len();
         let mut output = VecDeque::from([first.clone(), second.clone()]);
         let governor = response_test_governor();
-        let (payload, sources, receipts, holds) =
+        let (payload, sources, receipts, holds, selected) =
             take_response_payload(&mut output, &mut bytes, 4_096, &governor).unwrap();
         assert_eq!(payload, format!("{}{}", first.stanza, second.stanza));
         assert_eq!(
@@ -2429,6 +2500,7 @@ mod tests {
         );
         assert!(receipts.is_empty());
         assert!(holds.is_empty());
+        assert_eq!(selected.len(), 2);
         assert_eq!(bytes, 0);
         assert!(output.is_empty());
 
@@ -2441,6 +2513,75 @@ mod tests {
             Some(&oversized.stanza)
         );
         assert_eq!(bytes, output.front().unwrap().stanza.len());
+    }
+
+    #[test]
+    fn superseded_bosh_source_is_removed_without_losing_other_response_items() {
+        let stale = crate::outbound::DurableDelivery {
+            recipient_id: uuid::Uuid::from_u128(1),
+            message_id: uuid::Uuid::from_u128(2),
+            claim_id: Some(uuid::Uuid::from_u128(3)),
+        };
+        let survivor = crate::outbound::DurableDelivery {
+            message_id: uuid::Uuid::from_u128(4),
+            ..stale
+        };
+        let (receipt, mut received) = mpsc::unbounded_channel();
+        let mut output = VecDeque::from([
+            crate::outbound::OutboundItem::with_transport_receipt(
+                "<presence id='before'/>".to_owned(),
+                receipt,
+            ),
+            crate::outbound::OutboundItem::durable("<message id='stale'/>".to_owned(), stale),
+            crate::outbound::OutboundItem::durable("<message id='survivor'/>".to_owned(), survivor),
+            crate::outbound::OutboundItem::plain("<presence id='after'/>".to_owned()),
+        ]);
+        let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
+        let (_, _, abandoned_receipts, _, selected) =
+            take_response_payload(&mut output, &mut bytes, 4_096, &response_test_governor())
+                .unwrap();
+        drop(abandoned_receipts);
+        assert!(received.try_recv().is_err());
+        assert!(restore_response_items(
+            &mut output,
+            &mut bytes,
+            selected,
+            Some(stale.message_id)
+        ));
+        assert_eq!(
+            bytes,
+            output.iter().map(|item| item.stanza.len()).sum::<usize>()
+        );
+        let (payload, sources, receipts, _, _) =
+            take_response_payload(&mut output, &mut bytes, 4_096, &response_test_governor())
+                .unwrap();
+        assert_eq!(
+            payload,
+            "<presence id='before'/><message id='survivor'/><presence id='after'/>"
+        );
+        assert_eq!(
+            sources,
+            vec![crate::outbound::TransportOwnershipSource::C2s(survivor)]
+        );
+        assert_eq!(receipts.len(), 1);
+        receipts[0].send(()).unwrap();
+        assert!(received.try_recv().is_ok());
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn only_exact_typed_supersession_allows_bosh_response_rebuild() {
+        let message_id = uuid::Uuid::from_u128(42);
+        let superseded =
+            anyhow::Error::new(crate::outbound::DurableDeliverySuperseded { message_id })
+                .context("bind BOSH response");
+        assert_eq!(superseded_bosh_message_id(&superseded), Some(message_id));
+        for error in [
+            anyhow::anyhow!("database timeout"),
+            anyhow::anyhow!("durable delivery claim changed before BOSH response binding"),
+        ] {
+            assert_eq!(superseded_bosh_message_id(&error), None);
+        }
     }
 
     #[test]
@@ -2461,7 +2602,7 @@ mod tests {
         let mut output = VecDeque::from([c2s_item.clone(), mix_item.clone()]);
         let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
 
-        let (payload, sources, receipts, holds) =
+        let (payload, sources, receipts, holds, selected) =
             take_response_payload(&mut output, &mut bytes, 4_096, &response_test_governor())
                 .unwrap();
 
@@ -2475,6 +2616,7 @@ mod tests {
         );
         assert!(receipts.is_empty());
         assert!(holds.is_empty());
+        assert_eq!(selected.len(), 2);
         assert!(output.is_empty());
         assert_eq!(bytes, 0);
     }
@@ -2496,7 +2638,7 @@ mod tests {
         );
         let mut output = VecDeque::from([control.clone(), replay.clone(), suffix.clone()]);
         let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
-        let (payload, _, _, _) =
+        let (payload, _, _, _, _) =
             take_response_payload(&mut output, &mut bytes, 4_096, &response_test_governor())
                 .unwrap();
         assert_eq!(
@@ -2536,7 +2678,7 @@ mod tests {
             64 * 1024,
             action.into_transport_parts(),
         ));
-        let (body, _, _, holds) =
+        let (body, _, _, holds, _) =
             take_response_payload(&mut output, &mut bytes, 64 * 1024, &governor).unwrap();
         assert!(output.is_empty());
         assert!(!holds.is_empty());

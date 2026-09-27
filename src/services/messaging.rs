@@ -56,6 +56,20 @@ pub(crate) enum OfflineAdmissionOutcome {
 pub(crate) struct DirectPersonalMessageAdmission {
     pub(crate) commit: DurableAdmissionOutcome,
     pub(crate) mode: DirectPostCommitMode,
+    /// Initial PostgreSQL reservation for a newly stored clustered local
+    /// delivery whose transaction admitted a Live handoff. This remains Some
+    /// if health degrades immediately after commit so protocol can rearm it.
+    pub(crate) live_claim_id: Option<Uuid>,
+}
+
+/// A clustered committed C2S row may enter a live queue only with the exact
+/// reservation committed beside it. Standalone delivery has no claim token.
+pub(crate) fn committed_live_delivery_has_fence(
+    clustered: bool,
+    message_id: Uuid,
+    claim_id: Option<Uuid>,
+) -> bool {
+    !clustered || claim_id == Some(message_id)
 }
 
 /// The first accepted online resource, if any. Cluster v1 receipts may be
@@ -322,11 +336,18 @@ pub(crate) trait MessageRepository:
     PersonalMessageCommitRepository<Error = anyhow::Error> + Clone + Send + Sync
 {
     fn direct_mode(&self) -> DirectPostCommitMode;
+    fn clustered_direct_admission_enabled(&self) -> bool;
     fn commit_direct<'a>(
         &'a self,
         request: &'a ValidatedPersonalMessage<'a>,
         eligibility: DirectSpoolEligibility,
     ) -> impl Future<Output = Result<DirectPersonalMessageAdmission>> + Send + 'a;
+    fn release_live_direct_claim(
+        &self,
+        recipient_id: Uuid,
+        message_id: Uuid,
+        claim_id: Uuid,
+    ) -> impl Future<Output = Result<bool>> + Send;
     fn authorize_outbound_message(
         &self,
         owner_id: Uuid,
@@ -394,6 +415,10 @@ impl<R: MessageRepository> MessageService<R> {
         self.repository.direct_mode()
     }
 
+    pub(crate) fn clustered_direct_admission_enabled(&self) -> bool {
+        self.repository.clustered_direct_admission_enabled()
+    }
+
     pub(crate) async fn admit_personal_message_with_mode(
         &self,
         request: &ValidatedPersonalMessage<'_>,
@@ -402,6 +427,43 @@ impl<R: MessageRepository> MessageService<R> {
         northstar_message_application::validate_authority(request)
             .map_err(|error| anyhow::anyhow!("invalid personal-message command: {error:?}"))?;
         self.repository.commit_direct(request, eligibility).await
+    }
+
+    /// Rearm recovery only when the initial live reservation still owns the
+    /// exact row. A transport that already fenced the row wins the CAS.
+    pub(crate) async fn release_live_direct_claim(
+        &self,
+        recipient_id: Uuid,
+        message_id: Uuid,
+        claim_id: Uuid,
+    ) -> Result<bool> {
+        self.repository
+            .release_live_direct_claim(recipient_id, message_id, claim_id)
+            .await
+    }
+
+    /// A committed stanza has no known transport owner. Relinquish only its
+    /// initial reservation, allowing the durable wake to retry promptly. A
+    /// concurrent socket/SM/BOSH ownership transfer makes the CAS lose safely.
+    pub(crate) async fn rearm_unrouted_live_direct(
+        &self,
+        recipient_id: Uuid,
+        message_id: Uuid,
+        claim_id: &mut Option<Uuid>,
+    ) {
+        let Some(claim_id) = claim_id.take() else {
+            return;
+        };
+        if let Err(error) = self
+            .release_live_direct_claim(recipient_id, message_id, claim_id)
+            .await
+        {
+            // PostgreSQL still has the row and its bounded claim lease. A
+            // post-commit failure cannot turn accepted content into a stanza
+            // error inviting a second admission.
+            tracing::warn!(?error, %recipient_id, %message_id, %claim_id,
+                "could not promptly rearm unrouted committed direct delivery");
+        }
     }
     pub(crate) async fn authorize_outbound_message(
         &self,

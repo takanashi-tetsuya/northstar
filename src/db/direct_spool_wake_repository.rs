@@ -303,6 +303,349 @@ mod tests {
             .await
             .unwrap());
 
+        // A queued live write loses to an exact replay claim without changing
+        // it. The replay winner can fence, write and acknowledge; only then
+        // may the same wake revision be acknowledged as empty.
+        let raced_recipient = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+            .bind(raced_recipient)
+            .bind(format!("raced-{}", &suffix[..8]))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let raced_message = Uuid::new_v4();
+        let mut raced_producer = pool.begin().await.unwrap();
+        crate::db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(
+            &mut raced_producer,
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO offline_messages(id,recipient_id,sender_jid,stanza,encrypted) VALUES($1,$2,'sender@test','<message/>',FALSE)")
+            .bind(raced_message)
+            .bind(raced_recipient)
+            .execute(&mut *raced_producer)
+            .await
+            .unwrap();
+        record_direct_spool_wake_in_transaction(&mut raced_producer, &domain, raced_recipient)
+            .await
+            .unwrap();
+        raced_producer.commit().await.unwrap();
+        let raced_wake = repository.claim(&authority, 1).await.unwrap().remove(0);
+        assert_eq!(raced_wake.recipient_id, raced_recipient);
+        let replay_claim = Uuid::new_v4();
+        sqlx::query("UPDATE offline_messages SET delivery_claim_id=$2,delivery_claim_expires_at=clock_timestamp()+INTERVAL '60 seconds' WHERE id=$1")
+            .bind(raced_message)
+            .bind(replay_claim)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let live_delivery = crate::outbound::DurableDelivery {
+            recipient_id: raced_recipient,
+            message_id: raced_message,
+            claim_id: None,
+        };
+        let loser = crate::db::replay::fence_durable_socket_write(&pool, live_delivery)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            loser.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+            Some(&crate::outbound::DurableDeliverySuperseded {
+                message_id: raced_message,
+            })
+        );
+        let persisted_claim: Option<Uuid> =
+            sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+                .bind(raced_message)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(persisted_claim, Some(replay_claim));
+        let winner = crate::db::replay::fence_durable_socket_write(
+            &pool,
+            crate::outbound::DurableDelivery {
+                claim_id: Some(replay_claim),
+                ..live_delivery
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::replay::acknowledge_durable_delivery(&pool, winner)
+            .await
+            .unwrap();
+        assert!(repository
+            .acknowledge_if_empty(
+                &authority,
+                raced_recipient,
+                raced_wake.revision,
+                raced_wake.claim_token,
+            )
+            .await
+            .unwrap());
+
+        // A clustered live reservation is committed with its wake. The
+        // socket fence rotates its initial token, so a late no-route cleanup
+        // cannot erase transport ownership; an actual no-route CAS releases
+        // and rearms the wake atomically.
+        let reserved_recipient = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+            .bind(reserved_recipient)
+            .bind(format!("reserved-{}", &suffix[..8]))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let reserved_message = Uuid::new_v4();
+        let mut reserved_producer = pool.begin().await.unwrap();
+        crate::db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(
+            &mut reserved_producer,
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO offline_messages(id,recipient_id,sender_jid,stanza,encrypted) VALUES($1,$2,'sender@test','<message/>',FALSE)")
+            .bind(reserved_message)
+            .bind(reserved_recipient)
+            .execute(&mut *reserved_producer)
+            .await
+            .unwrap();
+        crate::db::archive::reserve_cluster_live_delivery_in_transaction(
+            &mut reserved_producer,
+            reserved_recipient,
+            reserved_message,
+        )
+        .await
+        .unwrap();
+        record_direct_spool_wake_in_transaction(
+            &mut reserved_producer,
+            &domain,
+            reserved_recipient,
+        )
+        .await
+        .unwrap();
+        reserved_producer.commit().await.unwrap();
+        let initial_claim: Option<Uuid> =
+            sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+                .bind(reserved_message)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(initial_claim, Some(reserved_message));
+        let fenced = crate::db::replay::fence_durable_socket_write(
+            &pool,
+            crate::outbound::DurableDelivery {
+                recipient_id: reserved_recipient,
+                message_id: reserved_message,
+                claim_id: initial_claim,
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(fenced.claim_id, initial_claim);
+        assert!(
+            !crate::db::archive::release_cluster_live_delivery_reservation_and_rearm(
+                &pool,
+                &domain,
+                reserved_recipient,
+                reserved_message,
+                reserved_message,
+            )
+            .await
+            .unwrap()
+        );
+        let persisted_fenced_claim: Option<Uuid> =
+            sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+                .bind(reserved_message)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(persisted_fenced_claim, fenced.claim_id);
+        crate::db::replay::acknowledge_durable_delivery(&pool, fenced)
+            .await
+            .unwrap();
+
+        let no_route_message = Uuid::new_v4();
+        let mut no_route_producer = pool.begin().await.unwrap();
+        crate::db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(
+            &mut no_route_producer,
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO offline_messages(id,recipient_id,sender_jid,stanza,encrypted) VALUES($1,$2,'sender@test','<message/>',FALSE)")
+            .bind(no_route_message)
+            .bind(reserved_recipient)
+            .execute(&mut *no_route_producer)
+            .await
+            .unwrap();
+        crate::db::archive::reserve_cluster_live_delivery_in_transaction(
+            &mut no_route_producer,
+            reserved_recipient,
+            no_route_message,
+        )
+        .await
+        .unwrap();
+        record_direct_spool_wake_in_transaction(
+            &mut no_route_producer,
+            &domain,
+            reserved_recipient,
+        )
+        .await
+        .unwrap();
+        no_route_producer.commit().await.unwrap();
+        let before_release: Uuid = sqlx::query_scalar(
+            "SELECT revision FROM direct_spool_wake_outbox WHERE xmpp_domain=$1 AND node_id=$2 AND recipient_id=$3",
+        )
+        .bind(&domain)
+        .bind(&node)
+        .bind(reserved_recipient)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            crate::db::archive::release_cluster_live_delivery_reservation_and_rearm(
+                &pool,
+                &domain,
+                reserved_recipient,
+                no_route_message,
+                no_route_message,
+            )
+            .await
+            .unwrap()
+        );
+        let after_release: Uuid = sqlx::query_scalar(
+            "SELECT revision FROM direct_spool_wake_outbox WHERE xmpp_domain=$1 AND node_id=$2 AND recipient_id=$3",
+        )
+        .bind(&domain)
+        .bind(&node)
+        .bind(reserved_recipient)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_ne!(after_release, before_release);
+        assert!(
+            !crate::db::archive::release_cluster_live_delivery_reservation_and_rearm(
+                &pool,
+                &domain,
+                reserved_recipient,
+                no_route_message,
+                no_route_message,
+            )
+            .await
+            .unwrap()
+        );
+        let after_repeat: Uuid = sqlx::query_scalar(
+            "SELECT revision FROM direct_spool_wake_outbox WHERE xmpp_domain=$1 AND node_id=$2 AND recipient_id=$3",
+        )
+        .bind(&domain)
+        .bind(&node)
+        .bind(reserved_recipient)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(after_repeat, after_release);
+        let released_claim: Option<Uuid> =
+            sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+                .bind(no_route_message)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(released_claim, None);
+
+        // The independent room-service MUC producer must reserve and wake
+        // too: another direct message's recipient wake scans all offline
+        // rows, and a process can crash before this invite's live route.
+        let inviter_id = Uuid::new_v4();
+        let inviter_name = format!("inviter-{}", &suffix[..8]);
+        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+            .bind(inviter_id)
+            .bind(&inviter_name)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let inviter_bare = format!("{inviter_name}@{domain}");
+        let inviter_full = format!("{inviter_bare}/desk");
+        let (room, created) = crate::db::muc::get_or_create_muc_room(
+            &pool,
+            &format!("room-{}", &suffix[..8]),
+            inviter_id,
+            &inviter_full,
+        )
+        .await
+        .unwrap();
+        assert!(created);
+        let invitee_bare = format!("reserved-{}@{domain}", &suffix[..8]);
+        let muc_authority = crate::db::cluster_muc::ClusterMucInviteAuthority {
+            operation_id: Uuid::new_v4(),
+            expected_room_epoch: room.room_epoch,
+            expected_config_version: room.config_version,
+            actor: crate::db::cluster_muc::ClusterMucPrincipal::Local {
+                user_id: inviter_id,
+                bare_jid: inviter_bare.clone(),
+            },
+            actor_full_jid: inviter_full,
+            actor_target: None,
+            subject: crate::db::cluster_muc::ClusterMucAffiliationSubject::Local {
+                user_id: reserved_recipient,
+                bare_jid: invitee_bare.clone(),
+            },
+            reason: None,
+        };
+        let room_invite_id = Uuid::new_v4();
+        let room_invite =
+            format!("<message from='room@conference.{domain}' to='{invitee_bare}' type='normal'/>");
+        let room_outcome = crate::db::muc::admit_local_muc_invite(
+            &pool,
+            room_invite_id,
+            room.id,
+            reserved_recipient,
+            &invitee_bare,
+            &muc_authority.actor_full_jid,
+            &room_invite,
+            false,
+            crate::db::OfflineStorePolicy {
+                max_messages: 100,
+                max_bytes: 1_000_000,
+                ttl_days: 30,
+                mam_backed: false,
+            },
+            Some(&muc_authority),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            room_outcome,
+            crate::db::DurableMucInviteOutcome::Stored {
+                id,
+                live_claim_id: Some(claim),
+                ..
+            } if id == room_invite_id && claim == room_invite_id
+        ));
+        let room_claim: Option<Uuid> =
+            sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+                .bind(room_invite_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(room_claim, Some(room_invite_id));
+        let room_revision: Uuid = sqlx::query_scalar(
+            "SELECT revision FROM direct_spool_wake_outbox WHERE xmpp_domain=$1 AND node_id=$2 AND recipient_id=$3",
+        )
+        .bind(&domain)
+        .bind(&node)
+        .bind(reserved_recipient)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_ne!(room_revision, after_release);
+        assert!(
+            crate::db::archive::release_cluster_live_delivery_reservation_and_rearm(
+                &pool,
+                &domain,
+                reserved_recipient,
+                room_invite_id,
+                room_invite_id,
+            )
+            .await
+            .unwrap()
+        );
+
         // A producer that updates the stable row before an old ACK makes the
         // old revision ineligible, even after all offline rows are drained.
         sqlx::query("DELETE FROM offline_messages WHERE recipient_id=$1")

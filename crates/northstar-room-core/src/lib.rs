@@ -286,8 +286,14 @@ pub enum ClusterMucRegistrationOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DurableMucInviteOutcome {
-    Stored { id: Uuid, affiliation_changed: bool },
-    Replay { id: Uuid },
+    Stored {
+        id: Uuid,
+        affiliation_changed: bool,
+        live_claim_id: Option<Uuid>,
+    },
+    Replay {
+        id: Uuid,
+    },
     QuotaExceeded,
     RecipientUnavailable,
     Outcast,

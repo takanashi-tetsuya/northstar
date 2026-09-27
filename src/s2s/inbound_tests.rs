@@ -804,7 +804,10 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
             )
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 1 }
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
     );
     let tombstone: String = sqlx::query_scalar(
         "SELECT stanza FROM message_archive WHERE owner_id=$1 AND stanza_id='remote-original'",
@@ -878,7 +881,10 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
             )
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 1 }
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
     );
     let offline_tombstone: String = sqlx::query_scalar(
         "SELECT stanza FROM message_archive WHERE owner_id=$1 AND stanza_id='offline-original'",
@@ -942,7 +948,10 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
             )
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 1 }
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
     );
     let rollback_original_id = uuid::Uuid::new_v4();
     db::archive_message(

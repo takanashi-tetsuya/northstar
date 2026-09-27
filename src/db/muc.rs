@@ -1143,8 +1143,14 @@ pub async fn federated_muc_nick_reserved_for_other(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DurableMucInviteOutcome {
-    Stored { id: Uuid, affiliation_changed: bool },
-    Replay { id: Uuid },
+    Stored {
+        id: Uuid,
+        affiliation_changed: bool,
+        live_claim_id: Option<Uuid>,
+    },
+    Replay {
+        id: Uuid,
+    },
     QuotaExceeded,
     RecipientUnavailable,
     Outcast,
@@ -1230,6 +1236,7 @@ pub(crate) async fn grant_local_muc_invite_affiliation_in_transaction(
     Ok(DurableMucInviteOutcome::Stored {
         id,
         affiliation_changed,
+        live_claim_id: None,
     })
 }
 
@@ -1252,12 +1259,29 @@ pub async fn admit_local_muc_invite(
     cluster_authority: Option<&super::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<DurableMucInviteOutcome> {
     let mut transaction = pool.begin().await?;
+    if cluster_authority.is_some() {
+        // The node-instance claim takes this lock exclusively. Acquire its
+        // shared side before user and room locks, as for personal direct
+        // admission, so a new instance cannot miss this late wake fanout.
+        super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
+            .await?;
+    }
     if !super::lock_enabled_users_in_transaction(&mut transaction, &[recipient_id]).await? {
         transaction.rollback().await?;
         return Ok(DurableMucInviteOutcome::RecipientUnavailable);
     }
     let recipient_bare_jid = crate::jid::canonicalize_bare(recipient_bare_jid)?;
     let recipient_authority = crate::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
+    if let Some(authority) = cluster_authority {
+        anyhow::ensure!(
+            matches!(
+                &authority.subject,
+                super::cluster_muc::ClusterMucAffiliationSubject::Local { user_id, bare_jid }
+                    if *user_id == recipient_id && bare_jid == &recipient_bare_jid
+            ),
+            "cluster MUC invite recipient authority does not match the durable row"
+        );
+    }
     let recipient_matches: bool =
         sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
             .bind(recipient_id)
@@ -1394,10 +1418,28 @@ pub async fn admit_local_muc_invite(
     .bind(encrypted)
     .execute(&mut *transaction)
     .await?;
+    let live_claim_id = if cluster_authority.is_some() {
+        super::archive::reserve_cluster_live_delivery_in_transaction(
+            &mut transaction,
+            recipient_id,
+            id,
+        )
+        .await?;
+        super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+            &mut transaction,
+            recipient_authority.domainpart(),
+            recipient_id,
+        )
+        .await?;
+        Some(id)
+    } else {
+        None
+    };
     transaction.commit().await?;
     Ok(DurableMucInviteOutcome::Stored {
         id,
         affiliation_changed,
+        live_claim_id,
     })
 }
 

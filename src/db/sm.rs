@@ -1211,13 +1211,18 @@ async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(row) = row else {
-        anyhow::bail!("durable delivery row disappeared before SM ownership transfer");
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
-    anyhow::ensure!(
-        stored_claim == delivery.claim_id,
-        "durable delivery claim changed before SM ownership transfer"
-    );
+    if stored_claim != delivery.claim_id {
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
+    }
     let bosh_owned: bool = sqlx::query_scalar(
         "SELECT EXISTS(
              SELECT 1 FROM bosh_delivery_fences WHERE message_id=$1
@@ -1226,10 +1231,12 @@ async fn lock_new_c2s_source_for_sm_transfer(
     .bind(delivery.message_id)
     .fetch_one(&mut **transaction)
     .await?;
-    anyhow::ensure!(
-        !bosh_owned,
-        "durable delivery is already owned by a BOSH response"
-    );
+    if bosh_owned {
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
+    }
     let sm_owned: bool = sqlx::query_scalar(
         "SELECT EXISTS(
              SELECT 1 FROM sm_resume_stanzas WHERE delivery_message_id=$1
@@ -1238,10 +1245,12 @@ async fn lock_new_c2s_source_for_sm_transfer(
     .bind(delivery.message_id)
     .fetch_one(&mut **transaction)
     .await?;
-    anyhow::ensure!(
-        !sm_owned,
-        "durable delivery is already owned by another SM queue"
-    );
+    if sm_owned {
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
+    }
     sqlx::query(
         "UPDATE offline_messages
             SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL

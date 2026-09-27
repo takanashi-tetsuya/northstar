@@ -556,6 +556,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         DurableMucInviteOutcome::Stored {
             id,
             affiliation_changed,
+            live_claim_id: None,
         } => {
             assert!(
                 affiliation_changed,
@@ -623,6 +624,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         DurableMucInviteOutcome::Stored {
             id,
             affiliation_changed,
+            live_claim_id: None,
         } => {
             assert!(
                 !affiliation_changed,

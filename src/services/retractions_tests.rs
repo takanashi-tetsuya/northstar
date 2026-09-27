@@ -560,7 +560,10 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
             )
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 1 }
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
     );
     let committed: (i64, i64, i64, bool, Option<Uuid>) = sqlx::query_as(
         "SELECT
@@ -1095,7 +1098,10 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
             )
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 1 }
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
     );
 
     assert_eq!(
@@ -1210,7 +1216,10 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
             .apply(&owners, "alice@local.test/Laptop", &zero_command, &[], None,)
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 1 }
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
     );
     // Emulate a row created by 0102 before keyed commitments existed.
     // The first exact replay must upgrade it and commit that upgrade even
@@ -1644,7 +1653,10 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
             )
             .await
             .unwrap(),
-        RetractionOutcome::Applied { tombstones: 2 }
+        RetractionOutcome::Applied {
+            tombstones: 2,
+            live_claim_id: None,
+        }
     );
     assert_eq!(
         service

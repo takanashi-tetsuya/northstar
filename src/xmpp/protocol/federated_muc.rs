@@ -2717,6 +2717,7 @@ async fn federated_muc_message_owned(
                         "service-unavailable",
                     ));
                 }
+                let mut live_claim_id = None;
                 let durable_invite = if room.members_only {
                     let delayed = add_delay_from(&invitation, chrono::Utc::now(), Some(&room_jid));
                     let cluster_authority = if state.federated_muc_pg_authority_enabled() {
@@ -2767,11 +2768,20 @@ async fn federated_muc_message_owned(
                         )
                         .await?
                     {
-                        DurableMucInviteOutcome::Stored { id, .. } => {
+                        DurableMucInviteOutcome::Stored {
+                            id,
+                            live_claim_id: admitted_claim_id,
+                            ..
+                        } => {
+                            live_claim_id = admitted_claim_id;
                             if let Some(authority) = &cluster_authority {
-                                state
+                                if let Err(error) = state
                                     .wake_committed_muc_operation(authority.operation_id)
-                                    .await?;
+                                    .await
+                                {
+                                    tracing::warn!(?error, operation_id = %authority.operation_id,
+                                        "committed federated MUC invitation wake failed");
+                                }
                             }
                             Some(id)
                         }
@@ -2830,11 +2840,31 @@ async fn federated_muc_message_owned(
                             .then_with(|| left_jid.cmp(right_jid))
                     });
                 }
+                if let Some(message_id) = durable_invite {
+                    if state.federated_muc_pg_authority_enabled()
+                        && (!crate::services::messaging::committed_live_delivery_has_fence(
+                            true,
+                            message_id,
+                            live_claim_id,
+                        ) || state.message_service().direct_mode()
+                            != crate::cluster::DirectPostCommitMode::Live)
+                    {
+                        state
+                            .message_service()
+                            .rearm_unrouted_live_direct(
+                                local_user.id,
+                                message_id,
+                                &mut live_claim_id,
+                            )
+                            .await;
+                        return Ok(None);
+                    }
+                }
                 let live_delivery =
                     durable_invite.map(|message_id| crate::outbound::DurableDelivery {
                         recipient_id: local_user.id,
                         message_id,
-                        claim_id: None,
+                        claim_id: live_claim_id,
                     });
                 let mut delivered = false;
                 let mut delivered_full_jid = None;
@@ -2857,6 +2887,22 @@ async fn federated_muc_message_owned(
                     }
                 }
                 if !delivered {
+                    if let Some(message_id) = durable_invite {
+                        if state.federated_muc_pg_authority_enabled()
+                            && state.message_service().direct_mode()
+                                != crate::cluster::DirectPostCommitMode::Live
+                        {
+                            state
+                                .message_service()
+                                .rearm_unrouted_live_direct(
+                                    local_user.id,
+                                    message_id,
+                                    &mut live_claim_id,
+                                )
+                                .await;
+                            return Ok(None);
+                        }
+                    }
                     if let Some(route) = state
                         .route_federated_muc_account_message_remote(
                             &invitee_jid,
@@ -2869,8 +2915,23 @@ async fn federated_muc_message_owned(
                         delivered_full_jid = route.accepted_full_jid;
                     }
                 }
+                if !delivered {
+                    if let Some(message_id) = durable_invite {
+                        state
+                            .message_service()
+                            .rearm_unrouted_live_direct(
+                                local_user.id,
+                                message_id,
+                                &mut live_claim_id,
+                            )
+                            .await;
+                    }
+                }
                 if delivered {
-                    if request.carbon_eligible {
+                    if request.carbon_eligible
+                        && state.message_service().direct_mode()
+                            == crate::cluster::DirectPostCommitMode::Live
+                    {
                         crate::services::message_carbons::send_received_carbons(
                             state,
                             &invitee_bare,
@@ -2903,7 +2964,11 @@ async fn federated_muc_message_owned(
                         return Ok(None);
                     }
                 }
-                if !delivered && request.temporary_storage {
+                if !delivered
+                    && request.temporary_storage
+                    && state.message_service().direct_mode()
+                        == crate::cluster::DirectPostCommitMode::Live
+                {
                     if let Err(error) = state.dispatch_push_notification(local_user.id).await {
                         tracing::warn!(?error, recipient_id = %local_user.id, %room_jid, "accepted federated offline mediated MUC invitation could not trigger push notification");
                     }

@@ -347,6 +347,7 @@ pub(crate) async fn admit_personal_history_with_direct_fence(
 ) -> Result<(
     PersonalHistoryAdmission,
     crate::cluster::DirectPostCommitMode,
+    Option<Uuid>,
 )> {
     admit_personal_history_inner(
         pool,
@@ -372,6 +373,7 @@ async fn admit_personal_history_inner(
 ) -> Result<(
     PersonalHistoryAdmission,
     crate::cluster::DirectPostCommitMode,
+    Option<Uuid>,
 )> {
     let mut transaction = pool.begin().await?;
     if let Some((cluster, eligibility)) = cluster {
@@ -395,6 +397,7 @@ async fn admit_personal_history_inner(
     // COMMIT. A concurrent health transition freezes new work immediately,
     // then publishes its state after this turn finishes. Routing is outside
     // the permit.
+    let mut live_claim_id = None;
     let mode = if let Some((cluster, eligibility)) = cluster {
         let (turn, authority) = cluster.begin_direct_commit_turn(eligibility)?;
         if let Some(authority) = authority {
@@ -402,6 +405,20 @@ async fn admit_personal_history_inner(
                 .await?;
             if let (PersonalHistoryAdmission::Stored(_), Some(delivery)) = (&outcome, c2s_delivery)
             {
+                // A committed wake can start replay before the postcommit
+                // primary route reaches its socket. Reserve this exact row in
+                // the same transaction as its wake when this turn can still
+                // return Live. The message UUID is the initial claim token;
+                // the socket fence rotates it before bytes are exposed.
+                if turn.admitted_mode() == crate::cluster::DirectPostCommitMode::Live {
+                    reserve_cluster_live_delivery_in_transaction(
+                        &mut transaction,
+                        delivery.recipient_id,
+                        delivery.id,
+                    )
+                    .await?;
+                    live_claim_id = Some(delivery.id);
+                }
                 super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
                     &mut transaction,
                     &authority.key_identity.xmpp_domain,
@@ -423,7 +440,72 @@ async fn admit_personal_history_inner(
         transaction.commit().await?;
         crate::cluster::DirectPostCommitMode::Live
     };
-    Ok((outcome, mode))
+    Ok((outcome, mode, live_claim_id))
+}
+
+/// Reserve the newly inserted durable row for its postcommit primary route.
+/// The initial token is deliberately the row UUID, allowing every transport
+/// to receive the same exact claim without a second result-shape projection.
+pub(crate) async fn reserve_cluster_live_delivery_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    recipient_id: Uuid,
+    message_id: Uuid,
+) -> Result<()> {
+    let updated = sqlx::query(
+        "UPDATE offline_messages
+            SET delivery_claim_id=$2,
+                delivery_claim_expires_at=clock_timestamp()+INTERVAL '60 seconds'
+          WHERE recipient_id=$1 AND id=$2 AND delivery_claim_id IS NULL",
+    )
+    .bind(recipient_id)
+    .bind(message_id)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        updated == 1,
+        "new direct delivery lost its live reservation before commit"
+    );
+    Ok(())
+}
+
+/// Release only the initial claim if no transport has taken it, and refresh
+/// the persistent wake in the same transaction. A socket fence rotates the
+/// token; SM and BOSH transfers clear it while creating their own owner.
+pub(crate) async fn release_cluster_live_delivery_reservation_and_rearm(
+    pool: &PgPool,
+    domain: &str,
+    recipient_id: Uuid,
+    message_id: Uuid,
+    claim_id: Uuid,
+) -> Result<bool> {
+    anyhow::ensure!(
+        claim_id == message_id,
+        "direct live reservation token is not the durable message ID"
+    );
+    let mut transaction = pool.begin().await?;
+    super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction).await?;
+    let released = sqlx::query(
+        "UPDATE offline_messages
+            SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL
+          WHERE recipient_id=$1 AND id=$2 AND delivery_claim_id=$3",
+    )
+    .bind(recipient_id)
+    .bind(message_id)
+    .bind(claim_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    if released == 1 {
+        super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+            &mut transaction,
+            domain,
+            recipient_id,
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(released == 1)
 }
 
 /// Repository half of a larger application-owned admission transaction.

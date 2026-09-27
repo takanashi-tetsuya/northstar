@@ -167,12 +167,24 @@ mod tests {
     }
 
     impl DirectWritePort for FakePort {
-        async fn record(&mut self, _: &OutboundItem) -> Result<bool> {
+        async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
+            if self.fail_at == Some("superseded_record") {
+                return Err(crate::outbound::DurableDeliverySuperseded {
+                    message_id: item.c2s_delivery().unwrap().message_id,
+                }
+                .into());
+            }
             self.event("record")?;
             Ok(self.managed_by_sm)
         }
 
         async fn fence_c2s(&self, delivery: DurableDelivery) -> Result<DurableDelivery> {
+            if self.fail_at == Some("superseded") {
+                return Err(crate::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into());
+            }
             self.event("fence_c2s")?;
             Ok(DurableDelivery {
                 claim_id: Some(Uuid::from_u128(11)),
@@ -282,6 +294,28 @@ mod tests {
         }
         assert_eq!(port.events(), ["record", "fence_c2s"]);
         assert!(!*port.acknowledged.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn superseded_claim_survives_context_and_never_confirms_transport() {
+        for fail_at in ["superseded", "superseded_record"] {
+            let mut port = FakePort {
+                fail_at: Some(fail_at),
+                ..FakePort::default()
+            };
+            let item = c2s_item();
+            let error = match DirectWriteLease::prepare_with(&mut port, &item).await {
+                Ok(_) => panic!("superseded claim must not prepare a socket write"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error
+                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                    .map(|superseded| superseded.message_id),
+                item.c2s_delivery().map(|delivery| delivery.message_id)
+            );
+            assert!(!*port.acknowledged.lock().unwrap());
+        }
     }
 
     #[tokio::test]

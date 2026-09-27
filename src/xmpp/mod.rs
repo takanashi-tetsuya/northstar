@@ -922,6 +922,17 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
 ) -> Result<bool> {
     let lease = match direct_delivery::DirectWriteLease::prepare(session, item).await {
         Ok(lease) => lease,
+        Err(error)
+            if error
+                .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                .is_some() =>
+        {
+            tracing::debug!(
+                ?error,
+                "superseded durable TCP item skipped before socket write"
+            );
+            return Ok(true);
+        }
         Err(error) => {
             tcp_internal_backend_error(
                 io,
@@ -1274,6 +1285,17 @@ async fn websocket_record_and_send_item(
 ) -> bool {
     let lease = match direct_delivery::DirectWriteLease::prepare(session, &item).await {
         Ok(lease) => lease,
+        Err(error)
+            if error
+                .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                .is_some() =>
+        {
+            tracing::debug!(
+                ?error,
+                "superseded durable WebSocket item skipped before write"
+            );
+            return true;
+        }
         Err(error) => {
             tracing::error!(?error, "failed to prepare durable WebSocket write");
             session.forbid_sm_resume();

@@ -2,6 +2,101 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+    let recipient_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+        .bind(recipient_id)
+        .bind(format!(
+            "smclaim{}",
+            &recipient_id.simple().to_string()[..12]
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let message_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO offline_messages(id,recipient_id,sender_jid,stanza,encrypted,mam_backed) VALUES($1,$2,'sender@test','<message/>',FALSE,FALSE)")
+        .bind(message_id)
+        .bind(recipient_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let live = crate::outbound::DurableDelivery {
+        recipient_id,
+        message_id,
+        claim_id: None,
+    };
+    let winner_claim = Uuid::new_v4();
+    let mut winner = pool.begin().await.unwrap();
+    sqlx::query("UPDATE offline_messages SET delivery_claim_id=$2,delivery_claim_expires_at=clock_timestamp()+INTERVAL '60 seconds' WHERE id=$1")
+        .bind(message_id)
+        .bind(winner_claim)
+        .execute(&mut *winner)
+        .await
+        .unwrap();
+    let loser_pool = pool.clone();
+    let loser = tokio::spawn(async move {
+        let mut transaction = loser_pool.begin().await?;
+        lock_new_c2s_source_for_sm_transfer(&mut transaction, live).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !loser.is_finished(),
+        "SM transfer must wait on the exact row"
+    );
+    winner.commit().await.unwrap();
+    let error = loser.await.unwrap().unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+        Some(&crate::outbound::DurableDeliverySuperseded { message_id })
+    );
+    let stored_claim: Option<Uuid> =
+        sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_claim, Some(winner_claim));
+
+    sqlx::query("UPDATE offline_messages SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL WHERE id=$1")
+        .bind(message_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO bosh_delivery_fences(message_id,recipient_id,session_id,response_rid,expires_at,first_owned_at) VALUES($1,$2,$3,1,clock_timestamp()+INTERVAL '60 seconds',clock_timestamp())")
+        .bind(message_id)
+        .bind(recipient_id)
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut transaction = pool.begin().await.unwrap();
+    let bosh_error = lock_new_c2s_source_for_sm_transfer(&mut transaction, live)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        bosh_error.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+        Some(&crate::outbound::DurableDeliverySuperseded { message_id })
+    );
+    transaction.rollback().await.unwrap();
+    let still_bosh_owned: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bosh_delivery_fences WHERE message_id=$1)")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(still_bosh_owned);
+}
+
 async fn session_capability_catalog_healthy(pool: &PgPool) -> bool {
     sqlx::query_scalar(
         "SELECT northstar_session_capability_catalog_healthy(

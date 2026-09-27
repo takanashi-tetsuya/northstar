@@ -185,13 +185,22 @@ PostgreSQL outbox records one coalesced wake per live node and recipient in the
 same transaction as each stored local direct message. The target node consumes
 that revision through a scoped claim, checks its exact local routes, and asks
 the same replay worker to inspect the recipient spool. PostgreSQL NOTIFY is a
-hint; a one-second poll covers missed notifications and reconnects. The wake
-remains until PostgreSQL confirms that no offline row remains for the
-recipient. A later producer replaces the revision under the same row lock, so
-an earlier consumer cannot acknowledge the newer wake. Nodes without a live
-lease at commit rely on normal bind or resume replay when they reconnect.
+hint; a one-second poll covers missed notifications and reconnects. For a live
+node, the wake remains until PostgreSQL confirms that no offline row remains
+for the recipient. A later producer replaces the revision under the same row
+lock, so an earlier consumer cannot acknowledge the newer wake. Nodes without
+a live lease at commit rely on normal bind or resume replay when they reconnect.
+An expired node slot with no live route is eligible for wake cleanup after
+seven days; the offline rows remain available for bind or resume replay.
 The producer accepts at most 256 live nodes; exceeding that limit rejects and
 rolls back the admission instead of creating an unbounded fanout.
+
+A newly committed Live delivery keeps an exact PostgreSQL claim while its
+primary route reaches a transport. The socket, SM or BOSH fence takes over
+that claim before exposing the stanza. If no route accepts it, the producer
+releases the initial claim and refreshes the wake. A crash leaves the claim
+eligible for replay after its 60-second lease expires. Spool-only admissions
+are immediately eligible for replay.
 
 This closes the known late-commit hole in the recovery cutoff under a healthy
 database, but it does not make delivery instantaneous or exactly once. A

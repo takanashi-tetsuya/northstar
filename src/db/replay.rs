@@ -1343,7 +1343,20 @@ pub async fn fence_durable_socket_write(
     pool: &PgPool,
     delivery: crate::outbound::DurableDelivery,
 ) -> Result<crate::outbound::DurableDelivery> {
-    let claim_id = delivery.claim_id.unwrap_or_else(Uuid::new_v4);
+    // A newly committed clustered live row is reserved with its message UUID
+    // until the primary route reaches a transport. Rotate that initial token
+    // under the exact row lock: a concurrent no-route/degradation cleanup may
+    // release only the initial reservation, never this socket's write fence.
+    let claim_id = if delivery.claim_id == Some(delivery.message_id) {
+        loop {
+            let fresh = Uuid::new_v4();
+            if fresh != delivery.message_id {
+                break fresh;
+            }
+        }
+    } else {
+        delivery.claim_id.unwrap_or_else(Uuid::new_v4)
+    };
     let mut transaction = pool.begin().await?;
     let row = sqlx::query(
         "SELECT delivery_claim_id FROM offline_messages
@@ -1354,13 +1367,18 @@ pub async fn fence_durable_socket_write(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = row else {
-        anyhow::bail!("durable delivery disappeared before socket write fencing");
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
-    anyhow::ensure!(
-        stored_claim == delivery.claim_id,
-        "durable delivery claim changed before socket write fencing"
-    );
+    if stored_claim != delivery.claim_id {
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
+    }
     let transport_owned: bool = sqlx::query_scalar(
         "SELECT EXISTS(
              SELECT 1 FROM sm_resume_stanzas WHERE delivery_message_id=$1
@@ -1371,10 +1389,12 @@ pub async fn fence_durable_socket_write(
     .bind(delivery.message_id)
     .fetch_one(&mut *transaction)
     .await?;
-    anyhow::ensure!(
-        !transport_owned,
-        "durable delivery is already owned by another recoverable transport"
-    );
+    if transport_owned {
+        return Err(crate::outbound::DurableDeliverySuperseded {
+            message_id: delivery.message_id,
+        }
+        .into());
+    }
     let updated = sqlx::query(
         "UPDATE offline_messages
             SET delivery_claim_id=$3,
@@ -1485,7 +1505,10 @@ pub async fn bind_bosh_transport_response(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            anyhow::bail!("durable delivery disappeared before BOSH response binding");
+            return Err(crate::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into());
         };
         let sm_owned: bool = sqlx::query_scalar(
             "SELECT EXISTS(
@@ -1495,10 +1518,12 @@ pub async fn bind_bosh_transport_response(
         .bind(delivery.message_id)
         .fetch_one(&mut *transaction)
         .await?;
-        anyhow::ensure!(
-            !sm_owned,
-            "durable delivery is already owned by an XEP-0198 sequence"
-        );
+        if sm_owned {
+            return Err(crate::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into());
+        }
         let existing = sqlx::query(
             "SELECT session_id,response_rid,expires_at>clock_timestamp() AS active
                FROM bosh_delivery_fences WHERE message_id=$1 FOR UPDATE",
@@ -1510,12 +1535,15 @@ pub async fn bind_bosh_transport_response(
             let owner: Uuid = existing.try_get("session_id")?;
             let rid: i64 = existing.try_get("response_rid")?;
             if owner == session_id && rid == response_rid {
-                anyhow::ensure!(
-                    offline
-                        .try_get::<Option<Uuid>, _>("delivery_claim_id")?
-                        .is_none(),
-                    "BOSH response fence lost ownership to another replay claim"
-                );
+                if offline
+                    .try_get::<Option<Uuid>, _>("delivery_claim_id")?
+                    .is_some()
+                {
+                    return Err(crate::outbound::DurableDeliverySuperseded {
+                        message_id: delivery.message_id,
+                    }
+                    .into());
+                }
                 let renewed = sqlx::query(
                     "UPDATE bosh_delivery_fences
                         SET expires_at=LEAST(clock_timestamp()+($2*INTERVAL '1 second'),
@@ -1534,19 +1562,23 @@ pub async fn bind_bosh_transport_response(
                 );
                 continue;
             }
-            anyhow::ensure!(
-                !existing.try_get::<bool, _>("active")?,
-                "durable delivery is owned by another active BOSH response"
-            );
+            if existing.try_get::<bool, _>("active")? {
+                return Err(crate::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into());
+            }
             sqlx::query("DELETE FROM bosh_delivery_fences WHERE message_id=$1")
                 .bind(delivery.message_id)
                 .execute(&mut *transaction)
                 .await?;
         }
-        anyhow::ensure!(
-            offline.try_get::<Option<Uuid>, _>("delivery_claim_id")? == delivery.claim_id,
-            "durable delivery claim changed before BOSH response binding"
-        );
+        if offline.try_get::<Option<Uuid>, _>("delivery_claim_id")? != delivery.claim_id {
+            return Err(crate::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into());
+        }
         sqlx::query(
             "UPDATE offline_messages
                 SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL
@@ -1703,7 +1735,10 @@ pub async fn bind_bosh_delivery_response(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            anyhow::bail!("durable delivery disappeared before BOSH response binding");
+            return Err(crate::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into());
         };
         let sm_owned: bool = sqlx::query_scalar(
             "SELECT EXISTS(
@@ -1713,10 +1748,12 @@ pub async fn bind_bosh_delivery_response(
         .bind(delivery.message_id)
         .fetch_one(&mut *transaction)
         .await?;
-        anyhow::ensure!(
-            !sm_owned,
-            "durable delivery is already owned by an XEP-0198 sequence"
-        );
+        if sm_owned {
+            return Err(crate::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into());
+        }
         let existing = sqlx::query(
             "SELECT session_id,response_rid,expires_at>clock_timestamp() AS active
                FROM bosh_delivery_fences WHERE message_id=$1 FOR UPDATE",
@@ -1728,12 +1765,15 @@ pub async fn bind_bosh_delivery_response(
             let owner: Uuid = existing.try_get("session_id")?;
             let rid: i64 = existing.try_get("response_rid")?;
             if owner == session_id && rid == response_rid {
-                anyhow::ensure!(
-                    offline
-                        .try_get::<Option<Uuid>, _>("delivery_claim_id")?
-                        .is_none(),
-                    "BOSH response fence lost ownership to another replay claim"
-                );
+                if offline
+                    .try_get::<Option<Uuid>, _>("delivery_claim_id")?
+                    .is_some()
+                {
+                    return Err(crate::outbound::DurableDeliverySuperseded {
+                        message_id: delivery.message_id,
+                    }
+                    .into());
+                }
                 let renewed = sqlx::query(
                     "UPDATE bosh_delivery_fences
                         SET expires_at=LEAST(clock_timestamp()+($2*INTERVAL '1 second'),
@@ -1751,20 +1791,24 @@ pub async fn bind_bosh_delivery_response(
                 );
                 continue;
             }
-            anyhow::ensure!(
-                !existing.try_get::<bool, _>("active")?,
-                "durable delivery is owned by another active BOSH response"
-            );
+            if existing.try_get::<bool, _>("active")? {
+                return Err(crate::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into());
+            }
             sqlx::query("DELETE FROM bosh_delivery_fences WHERE message_id=$1")
                 .bind(delivery.message_id)
                 .execute(&mut *transaction)
                 .await?;
         }
         let stored_claim: Option<Uuid> = offline.try_get("delivery_claim_id")?;
-        anyhow::ensure!(
-            stored_claim == delivery.claim_id,
-            "durable delivery claim changed before BOSH response binding"
-        );
+        if stored_claim != delivery.claim_id {
+            return Err(crate::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into());
+        }
         sqlx::query(
             "UPDATE offline_messages
                 SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL

@@ -1,12 +1,12 @@
 use super::{Action, ProtocolSession};
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 use crate::services::messaging::{
-    admit_offline_then_push, ArchiveWrite, DurableAdmissionOutcome, FederationDelivery,
-    FullJidFallback, FullJidFallbackResult, IdentityAuthority, LocalDelivery,
-    LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-    OfflineAdmissionOutcome, OnlineMessageRouter, OutboundPolicyDecision,
-    PersonalMessageDestination, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
-    ValidatedPersonalMessage,
+    admit_offline_then_push, committed_live_delivery_has_fence, ArchiveWrite,
+    DurableAdmissionOutcome, FederationDelivery, FullJidFallback, FullJidFallbackResult,
+    IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
+    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OnlineMessageRouter,
+    OutboundPolicyDecision, PersonalMessageDestination, RemoteMucInviteAdmission,
+    RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
@@ -871,6 +871,7 @@ impl ProtocolSession {
             || (!spool_only_now && self.state.personal_message_remote_resource_exists(to).await);
         let mut history_committed = false;
         let mut durable_c2s_delivery = None;
+        let mut live_claim_id = None;
         let direct_delivery_candidate = direct_invite_room.is_none()
             && matches!(message_type, "normal" | "chat")
             && exact_full_target_can_route
@@ -938,13 +939,14 @@ impl ProtocolSession {
                 .message_service()
                 .admit_personal_message_with_mode(&admission, eligibility)
                 .await;
-            match admitted.map(|result| (result.commit, result.mode)) {
+            match admitted.map(|result| (result.commit, result.mode, result.live_claim_id)) {
                 Ok((
                     DurableAdmissionOutcome::Stored {
                         archive_written,
                         post_commit,
                     },
                     post_commit_mode,
+                    admitted_claim_id,
                 )) => {
                     history_committed = archive_written;
                     let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit
@@ -952,6 +954,7 @@ impl ProtocolSession {
                         return Ok(message_error(root, "wait", "internal-server-error"));
                     };
                     durable_c2s_delivery = Some(delivery_id);
+                    live_claim_id = admitted_claim_id;
                     tracing::debug!(
                         recipient_id = %recipient.id,
                         message_id = %recipient_stable_id,
@@ -975,6 +978,14 @@ impl ProtocolSession {
                     if post_commit_mode != DirectPostCommitMode::Live
                         || self.state.message_service().direct_mode() != DirectPostCommitMode::Live
                     {
+                        self.state
+                            .message_service()
+                            .rearm_unrouted_live_direct(
+                                recipient.id,
+                                delivery_id,
+                                &mut live_claim_id,
+                            )
+                            .await;
                         tracing::debug!(
                             recipient_id = %recipient.id,
                             message_id = %recipient_stable_id,
@@ -983,7 +994,7 @@ impl ProtocolSession {
                         return Ok(Action::None);
                     }
                 }
-                Ok((DurableAdmissionOutcome::Replay, _)) => {
+                Ok((DurableAdmissionOutcome::Replay, _, _)) => {
                     self.finalize_message_admission(
                         &mut message_admission_lease,
                         "local-durable-c2s-replay",
@@ -991,7 +1002,7 @@ impl ProtocolSession {
                     .await;
                     return Ok(Action::None);
                 }
-                Ok((DurableAdmissionOutcome::AccountUnavailable, _)) => {
+                Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => {
                     return Ok(message_error(root, "cancel", "service-unavailable"));
                 }
                 Err(error) => {
@@ -1061,9 +1072,13 @@ impl ProtocolSession {
                 )
                 .await
             {
-                Ok(RetractionOutcome::Applied { .. }) => {
+                Ok(RetractionOutcome::Applied {
+                    live_claim_id: admitted_claim_id,
+                    ..
+                }) => {
                     history_committed = true;
                     durable_c2s_delivery = Some(recipient_stable_id);
+                    live_claim_id = admitted_claim_id;
                     self.finalize_message_admission(
                         &mut message_admission_lease,
                         "local-retraction-durable-c2s",
@@ -1201,8 +1216,13 @@ impl ProtocolSession {
                 .admit_local_muc_invite(&invitation)
                 .await?
             {
-                DurableMucInviteOutcome::Stored { id, .. } => {
+                DurableMucInviteOutcome::Stored {
+                    id,
+                    live_claim_id: admitted_claim_id,
+                    ..
+                } => {
                     history_committed = true;
+                    live_claim_id = admitted_claim_id;
                     if cluster_authority.is_some() {
                         if let Err(error) = self
                             .state
@@ -1245,10 +1265,28 @@ impl ProtocolSession {
             None
         };
         let live_delivery_id = durable_direct_invite.or(durable_c2s_delivery);
+        let live_delivery_message_id = live_delivery_id.unwrap_or(recipient_stable_id);
+        if live_delivery_id.is_some()
+            && !committed_live_delivery_has_fence(
+                self.state
+                    .message_service()
+                    .clustered_direct_admission_enabled(),
+                live_delivery_message_id,
+                live_claim_id,
+            )
+        {
+            // A clustered Stored outcome must carry its exact precommit
+            // reservation. Never turn an accepted row into an unfenced live
+            // delivery even if the health mode recovered after COMMIT.
+            self.state.personal_message_telemetry().post_accept_failed();
+            tracing::error!(recipient_id = %recipient.id, message_id = ?live_delivery_id,
+                "clustered durable direct admission lacked live reservation");
+            return Ok(Action::None);
+        }
         let live_delivery = live_delivery_id.map(|message_id| crate::outbound::DurableDelivery {
             recipient_id: recipient.id,
             message_id,
-            claim_id: None,
+            claim_id: live_claim_id,
         });
         let deliver_all = bare_target && bare_message_route(message_type) == BareMessageRoute::All;
         if local_direct {
@@ -1260,7 +1298,17 @@ impl ProtocolSession {
                 live_delivery_id.is_some(),
             ) {
                 LocalDirectLiveEffect::Proceed => {}
-                LocalDirectLiveEffect::AcceptedForRecovery => return Ok(Action::None),
+                LocalDirectLiveEffect::AcceptedForRecovery => {
+                    self.state
+                        .message_service()
+                        .rearm_unrouted_live_direct(
+                            recipient.id,
+                            live_delivery_message_id,
+                            &mut live_claim_id,
+                        )
+                        .await;
+                    return Ok(Action::None);
+                }
                 LocalDirectLiveEffect::Reject => {
                     return Ok(message_error(root, "wait", "service-unavailable"));
                 }
@@ -1287,7 +1335,17 @@ impl ProtocolSession {
                     live_delivery_id.is_some(),
                 ) {
                     LocalDirectLiveEffect::Proceed => {}
-                    LocalDirectLiveEffect::AcceptedForRecovery => return Ok(Action::None),
+                    LocalDirectLiveEffect::AcceptedForRecovery => {
+                        self.state
+                            .message_service()
+                            .rearm_unrouted_live_direct(
+                                recipient.id,
+                                live_delivery_message_id,
+                                &mut live_claim_id,
+                            )
+                            .await;
+                        return Ok(Action::None);
+                    }
                     LocalDirectLiveEffect::Reject => {
                         return Ok(message_error(root, "wait", "service-unavailable"));
                     }
@@ -1309,6 +1367,14 @@ impl ProtocolSession {
             let fallback = match fallback {
                 Ok(fallback) => fallback,
                 Err(error) if live_delivery_id.is_some() => {
+                    self.state
+                        .message_service()
+                        .rearm_unrouted_live_direct(
+                            recipient.id,
+                            live_delivery_message_id,
+                            &mut live_claim_id,
+                        )
+                        .await;
                     self.state.personal_message_telemetry().post_accept_failed();
                     tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id,
                         "full-JID fallback failed after durable admission; row remains recoverable");
@@ -1318,6 +1384,14 @@ impl ProtocolSession {
             };
             match fallback {
                 FullJidFallbackResult::Dropped => {
+                    self.state
+                        .message_service()
+                        .rearm_unrouted_live_direct(
+                            recipient.id,
+                            live_delivery_message_id,
+                            &mut live_claim_id,
+                        )
+                        .await;
                     self.finalize_message_admission(
                         &mut message_admission_lease,
                         "full-target-drop",
@@ -1327,6 +1401,14 @@ impl ProtocolSession {
                 }
                 FullJidFallbackResult::Rejected => {
                     if live_delivery_id.is_some() {
+                        self.state
+                            .message_service()
+                            .rearm_unrouted_live_direct(
+                                recipient.id,
+                                live_delivery_message_id,
+                                &mut live_claim_id,
+                            )
+                            .await;
                         self.state.personal_message_telemetry().post_accept_failed();
                         tracing::warn!(recipient_id = %recipient.id, %recipient_stable_id,
                             "full-JID fallback rejected after durable admission; row remains recoverable");
@@ -1340,6 +1422,17 @@ impl ProtocolSession {
                     delivered_key = key;
                 }
             }
+        }
+
+        if !delivered {
+            self.state
+                .message_service()
+                .rearm_unrouted_live_direct(
+                    recipient.id,
+                    live_delivery_message_id,
+                    &mut live_claim_id,
+                )
+                .await;
         }
 
         if local_direct {

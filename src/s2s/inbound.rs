@@ -4,9 +4,10 @@ use crate::{
     jid::{prepare_domainpart, CanonicalJid},
     services::{
         messaging::{
-            DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, LocalRecipientDecision,
-            MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OfflineMessageAdmission,
-            PersonalMessageDestination, ValidatedPersonalMessage,
+            committed_live_delivery_has_fence, DurableAdmissionOutcome, IdentityAuthority,
+            LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+            OfflineAdmissionOutcome, OfflineMessageAdmission, PersonalMessageDestination,
+            ValidatedPersonalMessage,
         },
         retractions::{
             ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
@@ -3274,6 +3275,7 @@ pub(crate) async fn route_inbound_message(
         .await?;
     let mut history_committed = false;
     let mut durable_c2s_delivery = None;
+    let mut live_claim_id = None;
     let direct_delivery_mode = crate::xmpp::protocol::messaging::direct_delivery_mode(root);
     if !personal_retraction
         && matches!(message_type, "normal" | "chat")
@@ -3334,9 +3336,13 @@ pub(crate) async fn route_inbound_message(
             .message_service()
             .admit_personal_message_with_mode(&delivery, eligibility)
             .await
-            .map(|admitted| (admitted.commit, admitted.mode))
+            .map(|admitted| (admitted.commit, admitted.mode, admitted.live_claim_id))
         {
-            Ok((DurableAdmissionOutcome::Stored { post_commit, .. }, post_commit_mode)) => {
+            Ok((
+                DurableAdmissionOutcome::Stored { post_commit, .. },
+                post_commit_mode,
+                admitted_claim_id,
+            )) => {
                 history_committed = archive_allowed;
                 let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit else {
                     state.s2s_inbound_delivery_telemetry().post_accept_failed();
@@ -3344,6 +3350,7 @@ pub(crate) async fn route_inbound_message(
                     return Ok(None);
                 };
                 durable_c2s_delivery = Some(delivery_id);
+                live_claim_id = admitted_claim_id;
                 // A committed spool row has no safe live owner during Redis
                 // degradation. A second read covers a mode change after the
                 // PostgreSQL commit; neither case may trigger local/cluster
@@ -3351,13 +3358,17 @@ pub(crate) async fn route_inbound_message(
                 if post_commit_mode != DirectPostCommitMode::Live
                     || state.message_service().direct_mode() != DirectPostCommitMode::Live
                 {
+                    state
+                        .message_service()
+                        .rearm_unrouted_live_direct(recipient.id, delivery_id, &mut live_claim_id)
+                        .await;
                     tracing::debug!(%stable_id, recipient_id = %recipient.id,
                         "S2S direct committed to PostgreSQL spool for recovery");
                     return Ok(None);
                 }
             }
-            Ok((DurableAdmissionOutcome::Replay, _)) => return Ok(None),
-            Ok((DurableAdmissionOutcome::AccountUnavailable, _)) => return Ok(None),
+            Ok((DurableAdmissionOutcome::Replay, _, _)) => return Ok(None),
+            Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => return Ok(None),
             Err(error) => {
                 tracing::warn!(?error, %authenticated_domain, "inbound message history/C2S admission failed atomically");
                 return Ok(inbound_message_error(root, "wait", "resource-constraint"));
@@ -3372,7 +3383,13 @@ pub(crate) async fn route_inbound_message(
         durable_c2s_delivery.is_some(),
     ) {
         InboundLiveEffect::Proceed => {}
-        InboundLiveEffect::AcceptedSpool => return Ok(None),
+        InboundLiveEffect::AcceptedSpool => {
+            state
+                .message_service()
+                .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                .await;
+            return Ok(None);
+        }
         InboundLiveEffect::Reject => {
             return Ok(inbound_message_error(root, "wait", "service-unavailable"));
         }
@@ -3473,9 +3490,13 @@ pub(crate) async fn route_inbound_message(
             )
             .await
         {
-            Ok(RetractionOutcome::Applied { .. }) => {
+            Ok(RetractionOutcome::Applied {
+                live_claim_id: admitted_claim_id,
+                ..
+            }) => {
                 history_committed = true;
                 durable_c2s_delivery = Some(stable_id);
+                live_claim_id = admitted_claim_id;
             }
             Ok(RetractionOutcome::Replay) => return Ok(None),
             Ok(RetractionOutcome::Conflict) => {
@@ -3494,12 +3515,30 @@ pub(crate) async fn route_inbound_message(
             }
         }
     }
+    if durable_c2s_delivery.is_some()
+        && !committed_live_delivery_has_fence(
+            state.message_service().clustered_direct_admission_enabled(),
+            durable_c2s_delivery.expect("checked durable delivery"),
+            live_claim_id,
+        )
+    {
+        state.s2s_inbound_delivery_telemetry().post_accept_failed();
+        tracing::error!(recipient_id = %recipient.id, message_id = ?durable_c2s_delivery,
+            "clustered inbound direct admission lacked live reservation");
+        return Ok(None);
+    }
     match inbound_live_effect(
         state.message_service().direct_mode(),
         durable_c2s_delivery.is_some() || history_committed,
     ) {
         InboundLiveEffect::Proceed => {}
-        InboundLiveEffect::AcceptedSpool => return Ok(None),
+        InboundLiveEffect::AcceptedSpool => {
+            state
+                .message_service()
+                .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                .await;
+            return Ok(None);
+        }
         InboundLiveEffect::Reject => {
             return Ok(inbound_message_error(root, "wait", "service-unavailable"));
         }
@@ -3508,7 +3547,7 @@ pub(crate) async fn route_inbound_message(
     let live_delivery = durable_c2s_delivery.map(|message_id| crate::outbound::DurableDelivery {
         recipient_id: recipient.id,
         message_id,
-        claim_id: None,
+        claim_id: live_claim_id,
     });
     for (key, target) in &targets {
         let accepted = if let Some(delivery) = live_delivery {
@@ -3534,6 +3573,12 @@ pub(crate) async fn route_inbound_message(
     let mut delivered = delivered_key.is_some();
 
     if state.message_service().direct_mode() != DirectPostCommitMode::Live {
+        if !delivered {
+            state
+                .message_service()
+                .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                .await;
+        }
         return Ok(if delivered || live_delivery.is_some() {
             None
         } else {
@@ -3560,7 +3605,13 @@ pub(crate) async fn route_inbound_message(
             live_delivery.is_some(),
         ) {
             InboundLiveEffect::Proceed => {}
-            InboundLiveEffect::AcceptedSpool => return Ok(None),
+            InboundLiveEffect::AcceptedSpool => {
+                state
+                    .message_service()
+                    .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                    .await;
+                return Ok(None);
+            }
             InboundLiveEffect::Reject => {
                 return Ok(inbound_message_error(root, "wait", "service-unavailable"));
             }
@@ -3568,7 +3619,13 @@ pub(crate) async fn route_inbound_message(
         let allow_bare_fallback = match crate::xmpp::protocol::messaging::full_no_match_route(
             message_type,
         ) {
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::Ignore => return Ok(None),
+            crate::xmpp::protocol::messaging::FullNoMatchRoute::Ignore => {
+                state
+                    .message_service()
+                    .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                    .await;
+                return Ok(None);
+            }
             crate::xmpp::protocol::messaging::FullNoMatchRoute::Reject
                 if crate::xmpp::protocol::messaging::durable_full_no_match_recovers(
                     message_type,
@@ -3627,7 +3684,13 @@ pub(crate) async fn route_inbound_message(
                 live_delivery.is_some(),
             ) {
                 InboundLiveEffect::Proceed => {}
-                InboundLiveEffect::AcceptedSpool => return Ok(None),
+                InboundLiveEffect::AcceptedSpool => {
+                    state
+                        .message_service()
+                        .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                        .await;
+                    return Ok(None);
+                }
                 InboundLiveEffect::Reject => {
                     return Ok(inbound_message_error(root, "wait", "service-unavailable"));
                 }
@@ -3656,7 +3719,13 @@ pub(crate) async fn route_inbound_message(
                     live_delivery.is_some(),
                 ) {
                     InboundLiveEffect::Proceed => {}
-                    InboundLiveEffect::AcceptedSpool => return Ok(None),
+                    InboundLiveEffect::AcceptedSpool => {
+                        state
+                            .message_service()
+                            .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+                            .await;
+                        return Ok(None);
+                    }
                     InboundLiveEffect::Reject => {
                         return Ok(inbound_message_error(root, "wait", "service-unavailable"));
                     }
@@ -3670,6 +3739,13 @@ pub(crate) async fn route_inbound_message(
                 }
             }
         }
+    }
+
+    if !delivered {
+        state
+            .message_service()
+            .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
+            .await;
     }
 
     if !delivered && message_type == "headline" {

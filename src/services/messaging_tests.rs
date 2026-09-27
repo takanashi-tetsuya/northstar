@@ -1,12 +1,30 @@
 use super::{
-    admit_offline_then_push, FullJidFallback, FullJidFallbackPort, FullJidFallbackResult,
-    OfflineAdmissionOutcome, OnlineMessageRouter, OnlineRoutePort, OnlineRouteResult,
+    admit_offline_then_push, committed_live_delivery_has_fence, FullJidFallback,
+    FullJidFallbackPort, FullJidFallbackResult, OfflineAdmissionOutcome, OnlineMessageRouter,
+    OnlineRoutePort, OnlineRouteResult,
 };
 use crate::outbound::DurableDelivery;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,
 };
+
+#[test]
+fn clustered_committed_delivery_requires_exact_live_claim() {
+    let claim_id = uuid::Uuid::new_v4();
+    assert!(committed_live_delivery_has_fence(
+        true,
+        claim_id,
+        Some(claim_id)
+    ));
+    assert!(!committed_live_delivery_has_fence(true, claim_id, None));
+    assert!(!committed_live_delivery_has_fence(
+        true,
+        claim_id,
+        Some(uuid::Uuid::new_v4())
+    ));
+    assert!(committed_live_delivery_has_fence(false, claim_id, None));
+}
 
 #[derive(Clone, Copy)]
 enum Privacy {

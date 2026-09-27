@@ -867,6 +867,10 @@ pub(crate) struct ClusterAdmission {
     direct_authority: Option<ClusterReadinessAuthority>,
 }
 impl ClusterAdmission {
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.direct_authority.is_some()
+    }
+
     pub(crate) fn admit(&self, operation: ClusterOperation) -> Result<()> {
         admit_health(&self.health, operation)
     }
@@ -976,6 +980,10 @@ pub(crate) struct DirectCommitTurn {
 }
 
 impl DirectCommitTurn {
+    pub(crate) fn admitted_mode(&self) -> DirectPostCommitMode {
+        self.admitted_mode
+    }
+
     /// A successful commit can only lose live effects; it cannot become a
     /// postcommit rejection. Capture the decision under the transition gate.
     pub(crate) fn finish(mut self) -> DirectPostCommitMode {

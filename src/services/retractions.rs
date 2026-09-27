@@ -107,7 +107,10 @@ pub(crate) struct PersonalRetractionInvocation<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetractionOutcome {
-    Applied { tombstones: usize },
+    Applied {
+        tombstones: usize,
+        live_claim_id: Option<Uuid>,
+    },
     Replay,
     Conflict,
     Forbidden,

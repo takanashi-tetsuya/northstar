@@ -1,6 +1,178 @@
 use super::*;
 use tokio::sync::mpsc;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+    let recipient_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+        .bind(recipient_id)
+        .bind(format!(
+            "claimrace{}",
+            &recipient_id.simple().to_string()[..12]
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let message_id = insert_replay_message(&pool, recipient_id, "sender@test", "<message/>").await;
+    let winner_claim = Uuid::new_v4();
+    let mut winner = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM offline_messages WHERE id=$1 FOR UPDATE")
+        .bind(message_id)
+        .fetch_one(&mut *winner)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE offline_messages SET delivery_claim_id=$2,delivery_claim_expires_at=clock_timestamp()+INTERVAL '60 seconds' WHERE id=$1")
+        .bind(message_id)
+        .bind(winner_claim)
+        .execute(&mut *winner)
+        .await
+        .unwrap();
+    let live = crate::outbound::DurableDelivery {
+        recipient_id,
+        message_id,
+        claim_id: None,
+    };
+    let loser_pool = pool.clone();
+    let loser = tokio::spawn(async move { fence_durable_socket_write(&loser_pool, live).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !loser.is_finished(),
+        "live fence must wait for replay's row lock"
+    );
+    winner.commit().await.unwrap();
+    let error = loser.await.unwrap().unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+        Some(&crate::outbound::DurableDeliverySuperseded { message_id })
+    );
+    let stored_claim: Option<Uuid> =
+        sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stored_claim,
+        Some(winner_claim),
+        "loser must not steal the claim"
+    );
+
+    let bosh_error = bind_bosh_transport_response(
+        &pool,
+        Uuid::new_v4(),
+        1,
+        &[crate::outbound::TransportOwnershipSource::C2s(live)],
+        60,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        bosh_error.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+        Some(&crate::outbound::DurableDeliverySuperseded { message_id })
+    );
+    let winning_delivery = fence_durable_socket_write(
+        &pool,
+        crate::outbound::DurableDelivery {
+            claim_id: Some(winner_claim),
+            ..live
+        },
+    )
+    .await
+    .unwrap();
+    acknowledge_durable_delivery(&pool, winning_delivery)
+        .await
+        .unwrap();
+    let missing = fence_durable_socket_write(&pool, live).await.unwrap_err();
+    assert_eq!(
+        missing.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+        Some(&crate::outbound::DurableDeliverySuperseded { message_id })
+    );
+
+    // A later C2S source losing ownership rolls back an earlier source's
+    // BOSH transfer in the same response; none of its bytes may be exposed.
+    let mut batch_ids = [
+        insert_replay_message(&pool, recipient_id, "sender@test", "<message id='a'/>").await,
+        insert_replay_message(&pool, recipient_id, "sender@test", "<message id='b'/>").await,
+    ];
+    batch_ids.sort_unstable();
+    let blocked_claim = Uuid::new_v4();
+    sqlx::query("UPDATE offline_messages SET delivery_claim_id=$2,delivery_claim_expires_at=clock_timestamp()+INTERVAL '60 seconds' WHERE id=$1")
+        .bind(batch_ids[1])
+        .bind(blocked_claim)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let batch = batch_ids.map(|message_id| {
+        crate::outbound::TransportOwnershipSource::C2s(crate::outbound::DurableDelivery {
+            recipient_id,
+            message_id,
+            claim_id: None,
+        })
+    });
+    let batch_error = bind_bosh_transport_response(&pool, Uuid::new_v4(), 2, &batch, 60)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        batch_error.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
+        Some(&crate::outbound::DurableDeliverySuperseded {
+            message_id: batch_ids[1]
+        })
+    );
+    let first_claim: Option<Uuid> =
+        sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
+            .bind(batch_ids[0])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(first_claim, None);
+    let partial_fence: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM bosh_delivery_fences WHERE message_id=ANY($1::uuid[])",
+    )
+    .bind(&batch_ids[..])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(partial_fence, 0);
+
+    // Missing relation is a real SQL failure, never the ownership marker.
+    let bad_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET search_path TO pg_catalog")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let sql_error = fence_durable_socket_write(&bad_pool, live)
+        .await
+        .unwrap_err();
+    assert!(sql_error
+        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+        .is_none());
+    assert_eq!(
+        sql_error
+            .downcast_ref::<sqlx::Error>()
+            .and_then(sqlx::Error::as_database_error)
+            .and_then(|database| database.code())
+            .as_deref(),
+        Some("42P01")
+    );
+}
+
 async fn insert_replay_message(
     pool: &PgPool,
     recipient_id: Uuid,

@@ -54,7 +54,7 @@ impl PostgresMessageRepository {
             .map(|identity| db_history_identity(&self.content_identity, identity))
             .transpose()?;
         let archives = persistence_archive_writes(request.archives);
-        let (outcome, post_commit, post_commit_mode) = match request.destination {
+        let (outcome, post_commit, post_commit_mode, live_claim_id) = match request.destination {
             PersonalMessageDestination::Federation(destination) => {
                 let outbox = db::PersonalS2sOutboxAdmission {
                     local_actor_id: destination.local_actor_id,
@@ -68,7 +68,7 @@ impl PostgresMessageRepository {
                         max_per_domain: destination.limits.max_per_domain,
                     },
                 };
-                let (outcome, mode) = self
+                let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
                         &self.pool,
                         identity.as_ref(),
@@ -78,7 +78,12 @@ impl PostgresMessageRepository {
                         eligibility,
                     )
                     .await?;
-                (outcome, MessagePostCommit::WakeFederationOutbox, mode)
+                (
+                    outcome,
+                    MessagePostCommit::WakeFederationOutbox,
+                    mode,
+                    live_claim_id,
+                )
             }
             PersonalMessageDestination::Local(destination) => {
                 validate_local_recipient_authority_for_domain(
@@ -97,7 +102,7 @@ impl PostgresMessageRepository {
                     encrypted: destination.encrypted,
                     policy: offline_store_policy(self.offline, destination.mam_backed),
                 };
-                let (outcome, mode) = self
+                let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
                         &self.pool,
                         identity.as_ref(),
@@ -114,12 +119,14 @@ impl PostgresMessageRepository {
                         recipient_id: destination.recipient_id,
                     },
                     mode,
+                    live_claim_id,
                 )
             }
         };
         Ok(DirectPersonalMessageAdmission {
             commit: map_history_outcome(outcome, request.writes_history(), post_commit)?,
             mode: post_commit_mode,
+            live_claim_id,
         })
     }
 
@@ -131,7 +138,11 @@ impl PostgresMessageRepository {
         outbox: Option<&db::PersonalS2sOutboxAdmission<'_>>,
         delivery: Option<&db::PersonalC2sDeliveryAdmission<'_>>,
         eligibility: DirectSpoolEligibility,
-    ) -> Result<(db::PersonalHistoryAdmission, DirectPostCommitMode)> {
+    ) -> Result<(
+        db::PersonalHistoryAdmission,
+        DirectPostCommitMode,
+        Option<Uuid>,
+    )> {
         let Some(cluster) = self.cluster.as_ref() else {
             // Standalone repository fixtures and single-node operation retain
             // the existing transaction behavior without a cluster fence.
@@ -145,7 +156,7 @@ impl PostgresMessageRepository {
                 }
                 _ => anyhow::bail!("personal message requires exactly one durable destination"),
             };
-            return Ok((outcome, DirectPostCommitMode::Live));
+            return Ok((outcome, DirectPostCommitMode::Live, None));
         };
         db::admit_personal_history_with_direct_fence(
             pool,
@@ -179,14 +190,22 @@ impl PostgresMessageRepository {
     async fn commit_live_invite(
         &self,
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
-        wake_recipient: Option<Uuid>,
-    ) -> Result<()> {
+        wake_delivery: Option<(Uuid, Uuid)>,
+    ) -> Result<Option<Uuid>> {
         if let Some(cluster) = self.cluster.as_ref() {
             let (turn, authority) =
                 cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
+            let mut live_claim_id = None;
             if let Some(authority) = authority {
                 db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
-                if let Some(recipient_id) = wake_recipient {
+                if let Some((recipient_id, message_id)) = wake_delivery {
+                    db::archive::reserve_cluster_live_delivery_in_transaction(
+                        &mut tx,
+                        recipient_id,
+                        message_id,
+                    )
+                    .await?;
+                    live_claim_id = Some(message_id);
                     db::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
                         &mut tx,
                         &authority.key_identity.xmpp_domain,
@@ -197,10 +216,11 @@ impl PostgresMessageRepository {
             }
             tx.commit().await?;
             let _mode = turn.finish();
+            Ok(live_claim_id)
         } else {
             tx.commit().await?;
+            Ok(None)
         }
-        Ok(())
     }
 
     pub(crate) fn new(
@@ -237,12 +257,33 @@ impl MessageRepository for PostgresMessageRepository {
             .map_or(DirectPostCommitMode::Live, ClusterAdmission::direct_mode)
     }
 
+    fn clustered_direct_admission_enabled(&self) -> bool {
+        self.cluster
+            .as_ref()
+            .is_some_and(ClusterAdmission::is_enabled)
+    }
+
     async fn commit_direct<'a>(
         &'a self,
         request: &'a ValidatedPersonalMessage<'a>,
         eligibility: DirectSpoolEligibility,
     ) -> Result<DirectPersonalMessageAdmission> {
         self.commit_with_mode(request, eligibility).await
+    }
+    async fn release_live_direct_claim(
+        &self,
+        recipient_id: Uuid,
+        message_id: Uuid,
+        claim_id: Uuid,
+    ) -> Result<bool> {
+        db::archive::release_cluster_live_delivery_reservation_and_rearm(
+            &self.pool,
+            &self.configured_domain,
+            recipient_id,
+            message_id,
+            claim_id,
+        )
+        .await
     }
     async fn authorize_outbound_message(
         &self,
@@ -510,8 +551,23 @@ impl MessageRepository for PostgresMessageRepository {
         };
         match affiliation {
             db::DurableMucInviteOutcome::Stored { .. } => {
-                self.commit_live_invite(transaction, Some(request.recipient_id))
+                let live_claim_id = self
+                    .commit_live_invite(
+                        transaction,
+                        Some((request.recipient_id, request.delivery_id)),
+                    )
                     .await?;
+                return Ok(DurableMucInviteOutcome::Stored {
+                    id: request.delivery_id,
+                    affiliation_changed: matches!(
+                        affiliation,
+                        db::DurableMucInviteOutcome::Stored {
+                            affiliation_changed: true,
+                            ..
+                        }
+                    ),
+                    live_claim_id,
+                });
             }
             db::DurableMucInviteOutcome::Replay { .. }
             | db::DurableMucInviteOutcome::QuotaExceeded
@@ -979,6 +1035,7 @@ mod tests {
             DurableMucInviteOutcome::Stored {
                 id: delivery_id,
                 affiliation_changed: true,
+                live_claim_id: None,
             }
         );
         let committed: (i64, i64, i64, i64, bool) = sqlx::query_as(

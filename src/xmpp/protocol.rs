@@ -1113,7 +1113,26 @@ impl ProtocolSession {
                     stanza.to_owned(),
                     durable_source,
                 ));
-            self.checkpoint_sm().await?;
+            if let Err(error) = self.checkpoint_sm().await {
+                if error
+                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                    .is_some()
+                {
+                    // The database checkpoint rolled back its entire source
+                    // transfer. Do not let a stale queued item advance h or
+                    // remain in the process replay queue before it is sent.
+                    self.sm.unacked.pop_back();
+                    self.sm.outbound_h = self.sm.outbound_h.wrapping_sub(1);
+                    if let (Some(bytes), Some(capacity)) =
+                        (self.sm_resident_bytes(), self.sm.capacity.as_ref())
+                    {
+                        capacity
+                            .shrink_to(bytes)
+                            .context("restore SM capacity after superseded delivery")?;
+                    }
+                }
+                return Err(error);
+            }
         } else if durable_source.is_some() {
             // With SM disabled, counted RFC 6120 stanzas are legitimately
             // completed at the transport write boundary. Non-counted control

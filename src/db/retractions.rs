@@ -48,14 +48,22 @@ impl PostgresRetractionRepository {
     async fn commit_live_retraction(
         &self,
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
-        wake_recipient: Option<Uuid>,
-    ) -> Result<()> {
+        wake_delivery: Option<(Uuid, Uuid)>,
+    ) -> Result<Option<Uuid>> {
         if let Some(cluster) = self.cluster.as_ref() {
             let (turn, authority) =
                 cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
+            let mut live_claim_id = None;
             if let Some(authority) = authority {
                 db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
-                if let Some(recipient_id) = wake_recipient {
+                if let Some((recipient_id, message_id)) = wake_delivery {
+                    db::archive::reserve_cluster_live_delivery_in_transaction(
+                        &mut tx,
+                        recipient_id,
+                        message_id,
+                    )
+                    .await?;
+                    live_claim_id = Some(message_id);
                     db::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
                         &mut tx,
                         &authority.key_identity.xmpp_domain,
@@ -66,10 +74,11 @@ impl PostgresRetractionRepository {
             }
             tx.commit().await?;
             let _mode = turn.finish();
+            Ok(live_claim_id)
         } else {
             tx.commit().await?;
+            Ok(None)
         }
-        Ok(())
     }
 }
 impl RetractionRepository for PostgresRetractionRepository {
@@ -623,15 +632,17 @@ impl RetractionRepository for PostgresRetractionRepository {
             )
             .await?;
         }
-        self.commit_live_retraction(
-            transaction,
-            normalized_delivery
-                .as_ref()
-                .map(|delivery| delivery.projection.recipient_id),
-        )
-        .await?;
+        let live_claim_id = self
+            .commit_live_retraction(
+                transaction,
+                normalized_delivery
+                    .as_ref()
+                    .map(|delivery| (delivery.projection.recipient_id, delivery.projection.id)),
+            )
+            .await?;
         Ok(RetractionOutcome::Applied {
             tombstones: tombstones.len(),
+            live_claim_id,
         })
     }
 }

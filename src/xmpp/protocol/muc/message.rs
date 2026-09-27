@@ -718,6 +718,7 @@ impl ProtocolSession {
                                     "service-unavailable",
                                 )));
                             }
+                            let mut live_claim_id = None;
                             let (durable_invite, affiliation_changed) = if room.members_only {
                                 let delayed =
                                     add_delay_from(&forwarded, chrono::Utc::now(), Some(&room_jid));
@@ -783,13 +784,20 @@ impl ProtocolSession {
                                     DurableMucInviteOutcome::Stored {
                                         id,
                                         affiliation_changed,
+                                        live_claim_id: admitted_claim_id,
                                     } => {
+                                        live_claim_id = admitted_claim_id;
                                         if let Some(authority) = &cluster_authority {
-                                            self.state
+                                            if let Err(error) = self
+                                                .state
                                                 .wake_committed_muc_operation(
                                                     authority.operation_id,
                                                 )
-                                                .await?;
+                                                .await
+                                            {
+                                                tracing::warn!(?error, operation_id = %authority.operation_id,
+                                                    "committed local MUC invitation wake failed");
+                                            }
                                         }
                                         (Some(id), affiliation_changed)
                                     }
@@ -912,11 +920,31 @@ impl ProtocolSession {
                                 });
                             }
                             let carbon_eligible = should_carbon(root);
+                            let unroutable_invite = durable_invite.filter(|message_id| {
+                                self.state.muc_pg_authority_enabled()
+                                    && (!crate::services::messaging::committed_live_delivery_has_fence(
+                                        true,
+                                        *message_id,
+                                        live_claim_id,
+                                    ) || self.state.message_service().direct_mode()
+                                        != crate::cluster::DirectPostCommitMode::Live)
+                            });
+                            if let Some(message_id) = unroutable_invite {
+                                self.state
+                                    .message_service()
+                                    .rearm_unrouted_live_direct(
+                                        recipient.id,
+                                        message_id,
+                                        &mut live_claim_id,
+                                    )
+                                    .await;
+                                continue;
+                            }
                             let live_delivery =
                                 durable_invite.map(|message_id| crate::outbound::DurableDelivery {
                                     recipient_id: recipient.id,
                                     message_id,
-                                    claim_id: None,
+                                    claim_id: live_claim_id,
                                 });
                             let mut delivered = false;
                             let mut delivered_full_jid = None;
@@ -939,6 +967,22 @@ impl ProtocolSession {
                                 }
                             }
                             if !delivered {
+                                let degraded_invite = durable_invite.filter(|_| {
+                                    self.state.muc_pg_authority_enabled()
+                                        && self.state.message_service().direct_mode()
+                                            != crate::cluster::DirectPostCommitMode::Live
+                                });
+                                if let Some(message_id) = degraded_invite {
+                                    self.state
+                                        .message_service()
+                                        .rearm_unrouted_live_direct(
+                                            recipient.id,
+                                            message_id,
+                                            &mut live_claim_id,
+                                        )
+                                        .await;
+                                    continue;
+                                }
                                 if let Some(receipt) = self
                                     .state
                                     .deliver_muc_primary_to_remote_node(
@@ -952,7 +996,23 @@ impl ProtocolSession {
                                     delivered_full_jid = receipt.accepted_full_jid;
                                 }
                             }
-                            if delivered && carbon_eligible {
+                            if !delivered {
+                                if let Some(message_id) = durable_invite {
+                                    self.state
+                                        .message_service()
+                                        .rearm_unrouted_live_direct(
+                                            recipient.id,
+                                            message_id,
+                                            &mut live_claim_id,
+                                        )
+                                        .await;
+                                }
+                            }
+                            if delivered
+                                && carbon_eligible
+                                && self.state.message_service().direct_mode()
+                                    == crate::cluster::DirectPostCommitMode::Live
+                            {
                                 crate::services::message_carbons::send_received_carbons(
                                     &*self.state,
                                     &invitee_bare,
@@ -987,7 +1047,11 @@ impl ProtocolSession {
                                     return Ok(Action::None);
                                 }
                             }
-                            if !delivered && temporary_storage {
+                            if !delivered
+                                && temporary_storage
+                                && self.state.message_service().direct_mode()
+                                    == crate::cluster::DirectPostCommitMode::Live
+                            {
                                 if let Err(error) =
                                     self.state.dispatch_push_notification(recipient.id).await
                                 {

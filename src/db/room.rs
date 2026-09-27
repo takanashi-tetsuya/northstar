@@ -448,9 +448,11 @@ impl From<db::DurableMucInviteOutcome> for DurableMucInviteOutcome {
             db::DurableMucInviteOutcome::Stored {
                 id,
                 affiliation_changed,
+                live_claim_id,
             } => Self::Stored {
                 id,
                 affiliation_changed,
+                live_claim_id,
             },
             db::DurableMucInviteOutcome::Replay { id } => Self::Replay { id },
             db::DurableMucInviteOutcome::QuotaExceeded => Self::QuotaExceeded,

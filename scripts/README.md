@@ -226,8 +226,17 @@ before starting the server.
   The single upload observation
   has no meaningful p95/p99; OMEMO and Push remain untested without clients.
   Run `python3 scripts/local-vm-lab-active-load.py --self-test` offline first.
-  After `finalize-soak.sh` has sealed the evidence, record the archive's
-  SHA-256 outside its mutable directory. Use `--soak-evidence PATH
+  Seal a completed soak with `bash scripts/finalize-soak.sh --source PATH
+  --unit UNIT --candidate-sha256 BINARY-SHA256
+  --output-directory PRIVATE-NEW-DIRECTORY`. The source JSONL and its sibling
+  `-room-mam-evidence` directory remain untouched. The command requires a
+  successful inactive `northstar-lab-soak-*.service` user unit and verifies
+  every observation and raw room
+  MAM digest before copying to a private directory. Its sibling tar archive
+  is checked against the active-load verifier. Run
+  `python3 scripts/test-finalize-soak.py` for offline fixture checks.
+  Record the archive's SHA-256 outside its mutable directory. Use
+  `--soak-evidence PATH
   --sealed-archive-sha256 ARCHIVE-SHA256 --expected-binary-sha256 BINARY-SHA256
   --output PRIVATE-NEW-PATH`. The controller checks the pinned tar archive,
   completed verifier report, successful unit status, manifest and raw MUC

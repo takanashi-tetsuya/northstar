@@ -32,6 +32,7 @@ muc_protocol_test_source="$project_dir/src/xmpp/protocol/muc_tests.rs"
 omemo_recovery_source="$project_dir/src/db/omemo_recovery.rs"
 user_capability_migration="$project_dir/migrations/0108_user_command_capabilities.sql"
 admin_tls_reload_migration="$project_dir/migrations/0153_admin_tls_reload_command_capability.sql"
+admin_panic_disconnect_migration="$project_dir/migrations/0154_admin_panic_disconnect_command_capability.sql"
 admin_cleanup_migration="$project_dir/migrations/0111_admin_session_cleanup_effects.sql"
 cluster_authority_migration="$project_dir/migrations/0112_cluster_runtime_capacity_and_authority.sql"
 upload_authority_migration="$project_dir/migrations/0113_upload_authority_capabilities.sql"
@@ -93,6 +94,7 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$muc_source" "$muc_test_source" "$muc_protocol_source" \
   "$muc_protocol_test_source" "$omemo_recovery_source" \
   "$user_capability_migration" "$admin_cleanup_migration" \
+  "$admin_tls_reload_migration" "$admin_panic_disconnect_migration" \
   "$cluster_authority_migration" "$upload_authority_migration" \
   "$session_authority_migration" \
   "$admin_cleanup_fixture" \
@@ -685,6 +687,17 @@ for capability in northstar_admin_tls_reload_admit \
     fail "TLS reload capability must appear in grant and both exact role audits: $capability"
   require_literal "$role_attestation" "$capability" \
     "command role attestation is missing TLS reload capability: $capability"
+done
+for capability in northstar_admin_panic_disconnect_admit \
+  northstar_admin_panic_disconnect_rekey northstar_admin_panic_disconnect_commit; do
+  require_literal "$admin_panic_disconnect_migration" "CREATE FUNCTION $capability" \
+    "migration 0154 is missing panic-disconnect command capability: $capability"
+  require_literal "$grant_apply" "$capability" \
+    "command role allowlist is missing panic-disconnect capability: $capability"
+  [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
+    fail "panic-disconnect capability must appear in grant and both exact role audits: $capability"
+  require_literal "$role_attestation" "$capability" \
+    "command role attestation is missing panic-disconnect capability: $capability"
 done
 if grep -Eiq 'EXECUTE[[:space:]]+[^;]*(requested_|caller_)|format\([^)]*(requested_|caller_)|current_setting\(.northstar\..*authority' \
   "$user_capability_migration"; then

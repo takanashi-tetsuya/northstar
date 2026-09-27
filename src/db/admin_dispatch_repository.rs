@@ -18,11 +18,11 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) struct PostgresAdminDispatchRepository {
     mutations: AdminMutationStore,
-    tls_reload: AdminTlsReloadStore,
+    command: AdminCommandStore,
 }
 
 #[derive(Clone)]
-struct AdminTlsReloadStore {
+struct AdminCommandStore {
     command_pool: PgPool,
     keyring: Arc<db::ApiControlKeyring>,
     cluster: crate::cluster::ClusterAdmission,
@@ -37,7 +37,7 @@ impl PostgresAdminDispatchRepository {
     ) -> Self {
         Self {
             mutations,
-            tls_reload: AdminTlsReloadStore {
+            command: AdminCommandStore {
                 command_pool,
                 keyring,
                 cluster,
@@ -60,17 +60,18 @@ impl PostgresAdminDispatchRepository {
     }
 }
 
-impl AdminTlsReloadStore {
+impl AdminCommandStore {
     async fn dispatch(
         &self,
         admission: AdminMutationAdmission<'_>,
+        route: db::api_control::AdminCommandRoute,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         let hashes = self
             .keyring
-            .admin_tls_reload_hashes(&admission.idempotency)?;
+            .admin_command_hashes(&admission.idempotency, route)?;
         anyhow::ensure!(
             admission.idempotency.actor_id == Some(admission.authority.user_id),
-            "TLS reload actor and idempotency identity differ"
+            "administrator command actor and idempotency identity differ"
         );
         let mut tx = self.command_pool.begin().await?;
         if let Err(error) = self
@@ -85,30 +86,33 @@ impl AdminTlsReloadStore {
         let actor_id = admission.authority.user_id;
         let auth_generation = admission.authority.auth_generation;
         let session_hash = crate::auth::token_hash(admission.authority.session_token);
-        let row = sqlx::query(
-            "SELECT * FROM northstar_admin_tls_reload_admit(
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-        )
-        .bind(actor_id)
-        .bind(auth_generation)
-        .bind(session_hash.as_slice())
-        .bind(hashes.current_scope.as_slice())
-        .bind(hashes.previous_scope.as_ref().map(<[u8; 32]>::as_slice))
-        .bind(hashes.current_principal.as_slice())
-        .bind(hashes.previous_principal.as_ref().map(<[u8; 32]>::as_slice))
-        .bind(hashes.current_fingerprint.as_slice())
-        .bind(
-            hashes
-                .previous_fingerprint
-                .as_ref()
-                .map(<[u8; 32]>::as_slice),
-        )
-        .bind(&hashes.current_key_id)
-        .bind(admission.idempotency.request_id)
-        .bind(admission.idempotency.lease_seconds)
-        .bind(admission.idempotency.ttl_seconds)
-        .fetch_one(&mut *tx)
-        .await?;
+        let admit_sql = match route {
+            db::api_control::AdminCommandRoute::TlsReload =>
+                "SELECT * FROM northstar_admin_tls_reload_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            db::api_control::AdminCommandRoute::PanicDisconnect =>
+                "SELECT * FROM northstar_admin_panic_disconnect_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+        };
+        let row = sqlx::query(admit_sql)
+            .bind(actor_id)
+            .bind(auth_generation)
+            .bind(session_hash.as_slice())
+            .bind(hashes.current_scope.as_slice())
+            .bind(hashes.previous_scope.as_ref().map(<[u8; 32]>::as_slice))
+            .bind(hashes.current_principal.as_slice())
+            .bind(hashes.previous_principal.as_ref().map(<[u8; 32]>::as_slice))
+            .bind(hashes.current_fingerprint.as_slice())
+            .bind(
+                hashes
+                    .previous_fingerprint
+                    .as_ref()
+                    .map(<[u8; 32]>::as_slice),
+            )
+            .bind(&hashes.current_key_id)
+            .bind(admission.idempotency.request_id)
+            .bind(admission.idempotency.lease_seconds)
+            .bind(admission.idempotency.ttl_seconds)
+            .fetch_one(&mut *tx)
+            .await?;
         let outcome: &str = row.try_get("outcome")?;
         match outcome {
             "acquired" => {
@@ -123,30 +127,36 @@ impl AdminTlsReloadStore {
                     "location",
                     format!("/api/v1/admin/operations/{operation_id}"),
                 );
-                let sealed = self.keyring.seal_admin_tls_reload_response(
+                let sealed = self.keyring.seal_admin_command_response(
                     record_id,
                     &hashes.current_scope,
                     &hashes.current_fingerprint,
                     &response.headers,
                     &response.body,
                 )?;
-                let committed: bool = sqlx::query_scalar(
-                    "SELECT northstar_admin_tls_reload_commit(
-                        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-                )
-                .bind(record_id)
-                .bind(lease_token)
-                .bind(actor_id)
-                .bind(auth_generation)
-                .bind(session_hash.as_slice())
-                .bind(operation_id)
-                .bind(&sealed.key_id)
-                .bind(sealed.nonce.as_slice())
-                .bind(&sealed.ciphertext)
-                .bind(admission.idempotency.ttl_seconds)
-                .fetch_one(&mut *tx)
-                .await?;
-                anyhow::ensure!(committed, "TLS reload command lease changed before commit");
+                let commit_sql = match route {
+                    db::api_control::AdminCommandRoute::TlsReload =>
+                        "SELECT northstar_admin_tls_reload_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                    db::api_control::AdminCommandRoute::PanicDisconnect =>
+                        "SELECT northstar_admin_panic_disconnect_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                };
+                let committed: bool = sqlx::query_scalar(commit_sql)
+                    .bind(record_id)
+                    .bind(lease_token)
+                    .bind(actor_id)
+                    .bind(auth_generation)
+                    .bind(session_hash.as_slice())
+                    .bind(operation_id)
+                    .bind(&sealed.key_id)
+                    .bind(sealed.nonce.as_slice())
+                    .bind(&sealed.ciphertext)
+                    .bind(admission.idempotency.ttl_seconds)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                anyhow::ensure!(
+                    committed,
+                    "administrator command lease changed before commit"
+                );
                 tx.commit().await?;
                 Ok(ApiMutationOutcome::Committed(response))
             }
@@ -159,8 +169,8 @@ impl AdminTlsReloadStore {
                 let response_key_id: String = row.try_get("response_key_id")?;
                 let response_nonce: Vec<u8> = row.try_get("response_nonce")?;
                 let response_ciphertext: Vec<u8> = row.try_get("response_ciphertext")?;
-                let replay = self.keyring.open_admin_tls_reload_replay(
-                    db::api_control::AdminTlsReloadReplayRecord {
+                let replay = self.keyring.open_admin_command_replay(
+                    db::api_control::AdminCommandReplayRecord {
                         record_id,
                         request_id,
                         scope_hash: &stored_scope_hash,
@@ -172,31 +182,34 @@ impl AdminTlsReloadStore {
                     },
                 )?;
                 if row.try_get::<bool, _>("needs_rotation")? {
-                    let sealed = self.keyring.seal_admin_tls_reload_response(
+                    let sealed = self.keyring.seal_admin_command_response(
                         record_id,
                         &hashes.current_scope,
                         &hashes.current_fingerprint,
                         &replay.headers,
                         &replay.body,
                     )?;
-                    let changed: bool = sqlx::query_scalar(
-                        "SELECT northstar_admin_tls_reload_rekey(
-                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-                    )
-                    .bind(record_id)
-                    .bind(actor_id)
-                    .bind(auth_generation)
-                    .bind(session_hash.as_slice())
-                    .bind(&stored_scope_hash)
-                    .bind(&stored_fingerprint)
-                    .bind(hashes.current_scope.as_slice())
-                    .bind(hashes.current_principal.as_slice())
-                    .bind(hashes.current_fingerprint.as_slice())
-                    .bind(&sealed.key_id)
-                    .bind(sealed.nonce.as_slice())
-                    .bind(&sealed.ciphertext)
-                    .fetch_one(&mut *tx)
-                    .await?;
+                    let rekey_sql = match route {
+                        db::api_control::AdminCommandRoute::TlsReload =>
+                            "SELECT northstar_admin_tls_reload_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                        db::api_control::AdminCommandRoute::PanicDisconnect =>
+                            "SELECT northstar_admin_panic_disconnect_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                    };
+                    let changed: bool = sqlx::query_scalar(rekey_sql)
+                        .bind(record_id)
+                        .bind(actor_id)
+                        .bind(auth_generation)
+                        .bind(session_hash.as_slice())
+                        .bind(&stored_scope_hash)
+                        .bind(&stored_fingerprint)
+                        .bind(hashes.current_scope.as_slice())
+                        .bind(hashes.current_principal.as_slice())
+                        .bind(hashes.current_fingerprint.as_slice())
+                        .bind(&sealed.key_id)
+                        .bind(sealed.nonce.as_slice())
+                        .bind(&sealed.ciphertext)
+                        .fetch_one(&mut *tx)
+                        .await?;
                     if !changed {
                         tx.rollback().await?;
                         return Ok(ApiMutationOutcome::Rejected(
@@ -225,7 +238,7 @@ impl AdminTlsReloadStore {
                 tx.rollback().await?;
                 Ok(ApiMutationOutcome::Rejected(rejection))
             }
-            _ => anyhow::bail!("TLS reload command returned an unknown outcome"),
+            _ => anyhow::bail!("administrator command returned an unknown outcome"),
         }
     }
 }
@@ -235,22 +248,20 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
         &self,
         admission: AdminMutationAdmission<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
-        self.tls_reload.dispatch(admission).await
+        self.command
+            .dispatch(admission, db::api_control::AdminCommandRoute::TlsReload)
+            .await
     }
     async fn panic_disconnect(
         &self,
         admission: AdminMutationAdmission<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
-        self.dispatch(
-            admission,
-            AdminOperationIntent {
-                kind: "admin.panic_disconnect",
-                target: None,
-                policy: AuthorizationPolicy::ReauthorizeUntilEffect,
-                payload: &json!({"reason":"administrator request"}),
-            },
-        )
-        .await
+        self.command
+            .dispatch(
+                admission,
+                db::api_control::AdminCommandRoute::PanicDisconnect,
+            )
+            .await
     }
     async fn set_island_mode(
         &self,

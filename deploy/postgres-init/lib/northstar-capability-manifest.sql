@@ -14,11 +14,14 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','storage','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
 VALUES
+  ('northstar_admin_panic_disconnect_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)','command','0154'),
+  ('northstar_admin_panic_disconnect_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)','command','0154'),
+  ('northstar_admin_panic_disconnect_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)','command','0154'),
   ('northstar_admin_tls_reload_admit(uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,uuid,int8,int8)','command','0153'),
   ('northstar_admin_tls_reload_rekey(uuid,uuid,int8,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea)','command','0153'),
   ('northstar_admin_tls_reload_commit(uuid,uuid,uuid,int8,bytea,uuid,text,bytea,bytea,int8)','command','0153'),

@@ -115,7 +115,9 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         b"{}",
     );
     let old = ApiControlKeyring::new(old_secret, None).unwrap();
-    let old_hashes = old.admin_tls_reload_hashes(&request).unwrap();
+    let old_hashes = old
+        .admin_command_hashes(&request, AdminCommandRoute::TlsReload)
+        .unwrap();
     let record_id = Uuid::new_v4();
     let response = serde_json::to_vec(&serde_json::json!({
         "operation_id": Uuid::new_v4(),
@@ -124,7 +126,7 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
     .unwrap();
     let headers = crate::services::api_mutations::json_replay_headers();
     let old_sealed = old
-        .seal_admin_tls_reload_response(
+        .seal_admin_command_response(
             record_id,
             &old_hashes.current_scope,
             &old_hashes.current_fingerprint,
@@ -135,14 +137,16 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
     assert!(!String::from_utf8_lossy(&old_sealed.ciphertext).contains("operation_id"));
 
     let rotating = ApiControlKeyring::new(new_secret, Some(old_secret)).unwrap();
-    let new_hashes = rotating.admin_tls_reload_hashes(&request).unwrap();
+    let new_hashes = rotating
+        .admin_command_hashes(&request, AdminCommandRoute::TlsReload)
+        .unwrap();
     assert_eq!(new_hashes.previous_scope, Some(old_hashes.current_scope));
     assert_eq!(
         new_hashes.previous_fingerprint,
         Some(old_hashes.current_fingerprint)
     );
     let replay = rotating
-        .open_admin_tls_reload_replay(AdminTlsReloadReplayRecord {
+        .open_admin_command_replay(AdminCommandReplayRecord {
             record_id,
             request_id: request.request_id,
             scope_hash: &old_hashes.current_scope,
@@ -155,7 +159,7 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         .unwrap();
     assert_eq!(replay.body, response);
     let new_sealed = rotating
-        .seal_admin_tls_reload_response(
+        .seal_admin_command_response(
             record_id,
             &new_hashes.current_scope,
             &new_hashes.current_fingerprint,
@@ -165,7 +169,7 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         .unwrap();
     let current_only = ApiControlKeyring::new(new_secret, None).unwrap();
     assert!(current_only
-        .open_admin_tls_reload_replay(AdminTlsReloadReplayRecord {
+        .open_admin_command_replay(AdminCommandReplayRecord {
             record_id,
             request_id: request.request_id,
             scope_hash: &new_hashes.current_scope,
@@ -177,7 +181,7 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         })
         .is_ok());
     assert!(current_only
-        .open_admin_tls_reload_replay(AdminTlsReloadReplayRecord {
+        .open_admin_command_replay(AdminCommandReplayRecord {
             record_id,
             request_id: request.request_id,
             scope_hash: &old_hashes.current_scope,
@@ -191,7 +195,40 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
 
     let mut bad_request = request;
     bad_request.target_scope = b"other-target";
-    assert!(current_only.admin_tls_reload_hashes(&bad_request).is_err());
+    assert!(current_only
+        .admin_command_hashes(&bad_request, AdminCommandRoute::TlsReload)
+        .is_err());
+}
+
+#[test]
+fn panic_disconnect_command_identity_is_route_bound() {
+    let keys = ApiControlKeyring::new(b"panic-command-control-secret-000001", None).unwrap();
+    let actor = Uuid::new_v4();
+    let mut request = admin_request(
+        &actor,
+        "panic-command-key-0001",
+        b"",
+        "POST",
+        "/api/v1/admin/panic_disconnect",
+        b"{}",
+    );
+    let panic = keys
+        .admin_command_hashes(&request, AdminCommandRoute::PanicDisconnect)
+        .unwrap();
+    assert!(keys
+        .admin_command_hashes(&request, AdminCommandRoute::TlsReload)
+        .is_err());
+    request.route = "/api/v1/admin/tls/reload";
+    let tls = keys
+        .admin_command_hashes(&request, AdminCommandRoute::TlsReload)
+        .unwrap();
+    assert_ne!(panic.current_scope, tls.current_scope);
+    assert_ne!(panic.current_fingerprint, tls.current_fingerprint);
+    request.route = "/api/v1/admin/panic_disconnect";
+    request.target_scope = b"another-target";
+    assert!(keys
+        .admin_command_hashes(&request, AdminCommandRoute::PanicDisconnect)
+        .is_err());
 }
 
 #[tokio::test]

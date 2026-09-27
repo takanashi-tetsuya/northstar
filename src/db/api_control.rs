@@ -54,9 +54,9 @@ pub struct ApiControlKeyring {
     previous: Option<ApiControlKey>,
 }
 
-/// Keyed request identity passed to the narrow TLS-reload command capability.
+/// Keyed request identity passed to a purpose-bound REST command capability.
 /// The HMAC keys and raw Idempotency-Key never reach PostgreSQL.
-pub(crate) struct AdminTlsReloadHashes {
+pub(crate) struct AdminCommandHashes {
     pub current_scope: [u8; 32],
     pub previous_scope: Option<[u8; 32]>,
     pub current_principal: [u8; 32],
@@ -72,7 +72,7 @@ pub(crate) struct SealedAdminReplay {
     pub ciphertext: Vec<u8>,
 }
 
-pub(crate) struct AdminTlsReloadReplayRecord<'a> {
+pub(crate) struct AdminCommandReplayRecord<'a> {
     pub record_id: Uuid,
     pub request_id: Uuid,
     pub scope_hash: &'a [u8],
@@ -81,6 +81,21 @@ pub(crate) struct AdminTlsReloadReplayRecord<'a> {
     pub key_id: &'a str,
     pub nonce: &'a [u8],
     pub ciphertext: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum AdminCommandRoute {
+    TlsReload,
+    PanicDisconnect,
+}
+
+impl AdminCommandRoute {
+    pub(crate) fn path(self) -> &'static str {
+        match self {
+            Self::TlsReload => "/api/v1/admin/tls/reload",
+            Self::PanicDisconnect => "/api/v1/admin/panic_disconnect",
+        }
+    }
 }
 
 impl ApiControlKeyring {
@@ -144,10 +159,11 @@ impl ApiControlKeyring {
         }
     }
 
-    pub(crate) fn admin_tls_reload_hashes(
+    pub(crate) fn admin_command_hashes(
         &self,
         request: &IdempotencyRequest<'_>,
-    ) -> Result<AdminTlsReloadHashes> {
+        route: AdminCommandRoute,
+    ) -> Result<AdminCommandHashes> {
         validate_request(request)?;
         anyhow::ensure!(
             request.actor_id.is_some_and(|actor| {
@@ -155,14 +171,14 @@ impl ApiControlKeyring {
                     && request.capacity_scope == actor.as_bytes()
             }) && request.principal_kind.as_str() == "admin"
                 && request.method == "POST"
-                && request.route == "/api/v1/admin/tls/reload"
+                && request.route == route.path()
                 && request.target_scope.is_empty(),
-            "TLS reload idempotency request has an invalid identity"
+            "administrator command idempotency request has an invalid identity"
         );
         let (current_scope, previous_scope) = self.scope_hashes(request);
         let (current_principal, previous_principal) = self.principal_hashes(request);
         let (current_fingerprint, previous_fingerprint) = self.request_fingerprints(request);
-        Ok(AdminTlsReloadHashes {
+        Ok(AdminCommandHashes {
             current_scope,
             previous_scope,
             current_principal,
@@ -173,26 +189,26 @@ impl ApiControlKeyring {
         })
     }
 
-    pub(crate) fn open_admin_tls_reload_replay(
+    pub(crate) fn open_admin_command_replay(
         &self,
-        record: AdminTlsReloadReplayRecord<'_>,
+        record: AdminCommandReplayRecord<'_>,
     ) -> Result<IdempotentResponse> {
-        anyhow::ensure!(record.status == 202, "stored TLS reload status is invalid");
+        anyhow::ensure!(record.status == 202, "stored command status is invalid");
         let scope_hash: &[u8; 32] = record
             .scope_hash
             .try_into()
-            .context("stored TLS reload scope hash has invalid length")?;
+            .context("stored command scope hash has invalid length")?;
         let fingerprint: &[u8; 32] = record
             .fingerprint
             .try_into()
-            .context("stored TLS reload fingerprint has invalid length")?;
+            .context("stored command fingerprint has invalid length")?;
         let nonce: [u8; 12] = record
             .nonce
             .try_into()
-            .context("stored TLS reload replay nonce has invalid length")?;
+            .context("stored command replay nonce has invalid length")?;
         let key = self
             .key(record.key_id)
-            .context("TLS reload replay key is no longer configured")?;
+            .context("command replay key is no longer configured")?;
         let mut ciphertext = record.ciphertext;
         open_replay(
             key,
@@ -209,7 +225,7 @@ impl ApiControlKeyring {
         })
     }
 
-    pub(crate) fn seal_admin_tls_reload_response(
+    pub(crate) fn seal_admin_command_response(
         &self,
         record_id: Uuid,
         scope_hash: &[u8; 32],
@@ -219,7 +235,7 @@ impl ApiControlKeyring {
     ) -> Result<SealedAdminReplay> {
         anyhow::ensure!(
             body.len() <= MAX_REPLAY_BODY_BYTES,
-            "TLS reload replay body exceeds the database bound"
+            "command replay body exceeds the database bound"
         );
         let mut nonce = [0_u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);

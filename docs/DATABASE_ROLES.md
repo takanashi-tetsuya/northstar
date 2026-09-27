@@ -12,7 +12,7 @@ PostgreSQL superuser nor the database/schema owner.
 | `northstar_migrator` | yes | Owns the application database/schema; migration, grant reconciliation and stopped restore | non-superuser, no role memberships, `CONNECTION LIMIT 4` | One-shot migration/reconciliation/restore jobs |
 | `northstar_runtime` | yes | Application DML except account authority; `users` is SELECT-only and all account writes use an exact reviewed command-capability allowlist | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 64` | Long-lived server |
 | `northstar_storage` | yes | Upload lifecycle through owner-held functions; no direct table or sequence rights | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 16` | Bounded storage pool when uploads are enabled or draining |
-| `northstar_commands` | yes | No relation or sequence access; eight typed XEP-0133 session functions and three bounded REST TLS reload functions | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 8` | Isolated four-connection command pool in the long-lived server |
+| `northstar_commands` | yes | No relation or sequence access; eight typed XEP-0133 session functions and six bounded REST command functions for TLS reload and panic disconnect | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 8` | Isolated four-connection command pool in the long-lived server |
 | `northstar_backup` | yes | `SELECT` only, no routine execution or sequence allocation | same non-privileged attributes, `CONNECTION LIMIT 2` | Backup job only |
 
 The five workload roles use `NOINHERIT`. All six protected roles, including
@@ -101,10 +101,11 @@ requires `STORAGE_DATABASE_URL_FILE` when uploads are enabled or draining.
 Disabled-upload mode does not open the storage pool.
 
 The independent `command_database_url` serves XEP-0133 command sessions and
-REST TLS reload requests. It has no direct table access. Its TLS reload
-capabilities admit an authorized administrator request, commit the fixed
-operation with its audit record and encrypted replay, and rotate the replay
-after a key change. They cannot choose another operation. The runtime role can
+the REST TLS reload and panic-disconnect requests. It has no direct table
+access. Each REST command capability admits an authorized administrator
+request, commits its fixed operation with an audit record and encrypted
+replay, and rotates that replay after a key change. Neither capability can
+choose another operation. The runtime role can
 consume a valid XEP-0133 claim only after that isolated pool has minted it,
 but cannot create, inspect, renew, release, or complete a command session.
 The command, runtime and storage pools use distinct PostgreSQL credentials
@@ -216,7 +217,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-152 migrations from `0001` through `0153`; `0021` is the sole intentional gap.
+153 migrations from `0001` through `0154`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -225,7 +226,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0153` manifest, not merely the
+requires the complete checked-in `0001`-`0154` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -391,8 +392,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 152 checked-in migrations from `0001`
-through `0153` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 153 checked-in migrations from `0001`
+through `0154` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -488,7 +489,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0153` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0154` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -526,3 +527,6 @@ ID order. It changes no workload grants.
 Migration `0153` gives the table-free command role three fixed REST TLS reload
 functions. Reconcile the exact function grants before starting the updated
 server; runtime receives no direct access to these functions.
+Migration `0154` adds three equally purpose-bound functions for REST panic
+disconnect. The command role gains only their EXECUTE grants; it still has no
+direct relation or sequence access.

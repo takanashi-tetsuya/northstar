@@ -2586,6 +2586,9 @@ expect_insufficient_privilege "$command_role" "$command_password" \
 expect_insufficient_privilege "$runtime_role" "$runtime_password" \
   'runtime REST TLS reload command' \
   "SELECT * FROM public.northstar_admin_tls_reload_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('a1',32),'hex'),NULL,decode(repeat('b1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000116',180,3600)"
+expect_insufficient_privilege "$runtime_role" "$runtime_password" \
+  'runtime REST panic-disconnect command' \
+  "SELECT * FROM public.northstar_admin_panic_disconnect_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('e1',32),'hex'),NULL,decode(repeat('f1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000126',180,3600)"
 expect_insufficient_privilege "$command_role" "$command_password" \
   'command issuer cleanup effect direct read' \
   'SELECT id FROM public.admin_session_cleanup_effects LIMIT 1'
@@ -2746,6 +2749,130 @@ PSQL
 psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
 DELETE FROM public.api_operation_journal WHERE id='00000000-0000-0000-0000-000000000117';
 DELETE FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000116';
+PSQL
+
+# Panic-disconnect has a separate route-bound capability. It must preserve
+# admission, encrypted replay and audit in one command-role transaction.
+psql_as "$command_role" "$command_password" --quiet >/dev/null <<'PSQL'
+BEGIN;
+DO $panic_command$
+DECLARE admitted RECORD; replayed RECORD; conflict RECORD;
+BEGIN
+    SELECT * INTO admitted FROM public.northstar_admin_panic_disconnect_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('e1',32),'hex'),NULL,
+        decode(repeat('f1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000126',180,3600
+    );
+    IF admitted.outcome<>'acquired' OR admitted.record_id IS NULL OR
+       admitted.lease_token IS NULL THEN
+        RAISE EXCEPTION 'panic-disconnect admission did not reserve a request';
+    END IF;
+    IF NOT public.northstar_admin_panic_disconnect_commit(
+        admitted.record_id,admitted.lease_token,
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),
+        '00000000-0000-0000-0000-000000000127',
+        '0123456789abcdef',decode(repeat('05',12),'hex'),
+        decode(repeat('06',32),'hex'),3600
+    ) THEN
+        RAISE EXCEPTION 'panic-disconnect operation and replay did not commit';
+    END IF;
+    SELECT * INTO replayed FROM public.northstar_admin_panic_disconnect_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('e1',32),'hex'),NULL,
+        decode(repeat('f1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000128',180,3600
+    );
+    IF replayed.outcome<>'replay' OR replayed.record_id<>admitted.record_id OR
+       replayed.request_id<>admitted.request_id OR replayed.response_status<>202 OR
+       replayed.response_ciphertext IS NULL THEN
+        RAISE EXCEPTION 'panic-disconnect replay lost its response';
+    END IF;
+    SELECT * INTO conflict FROM public.northstar_admin_tls_reload_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('e1',32),'hex'),NULL,
+        decode(repeat('f1',32),'hex'),NULL,decode(repeat('d1',32),'hex'),NULL,
+        '0123456789abcdef','00000000-0000-0000-0000-000000000129',180,3600
+    );
+    IF conflict.outcome<>'idempotency_conflict' THEN
+        RAISE EXCEPTION 'panic-disconnect replay crossed the TLS route boundary';
+    END IF;
+    IF public.northstar_admin_panic_disconnect_commit(
+        admitted.record_id,admitted.lease_token,
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),
+        '00000000-0000-0000-0000-000000000130',
+        '0123456789abcdef',decode(repeat('05',12),'hex'),
+        decode(repeat('06',32),'hex'),3600
+    ) THEN
+        RAISE EXCEPTION 'completed panic-disconnect lease was reusable';
+    END IF;
+END;
+$panic_command$;
+COMMIT;
+PSQL
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome FROM public.northstar_admin_panic_disconnect_admit('00000000-0000-0000-0000-000000000012',1,decode(repeat('c1',32),'hex'),decode(repeat('e3',32),'hex'),NULL,decode(repeat('f3',32),'hex'),NULL,decode(repeat('d3',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000131',180,3600)")" == 'forbidden' ]] \
+  || fail 'stale administrator generation reserved a panic-disconnect request'
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome FROM public.northstar_admin_panic_disconnect_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c2',32),'hex'),decode(repeat('e3',32),'hex'),NULL,decode(repeat('f3',32),'hex'),NULL,decode(repeat('d3',32),'hex'),NULL,'0123456789abcdef','00000000-0000-0000-0000-000000000131',180,3600)")" == 'forbidden' ]] \
+  || fail 'invalid administrator bearer reserved a panic-disconnect request'
+[[ "$(control_psql --dbname="$database_name" --tuples-only --no-align \
+  --command="SELECT (SELECT count(*) FROM public.api_operation_journal WHERE id='00000000-0000-0000-0000-000000000127' AND kind='admin.panic_disconnect' AND status='pending' AND payload='{\"reason\":\"administrator request\"}'::jsonb)=1 AND (SELECT count(*) FROM public.audit_log WHERE operation_id='00000000-0000-0000-0000-000000000127' AND action='api.operation.transition' AND details->>'phase'='requested')=1 AND (SELECT count(*) FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000126' AND state='completed' AND response_status=202)=1")" == 't' ]] \
+  || fail 'panic-disconnect command did not atomically persist fixed operation, audit and replay'
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+UPDATE public.api_idempotency_records
+   SET expires_at=created_at+INTERVAL '1 microsecond'
+ WHERE request_id='00000000-0000-0000-0000-000000000126';
+PSQL
+psql_as "$command_role" "$command_password" --quiet >/dev/null <<'PSQL'
+BEGIN;
+DO $panic_rotation$
+DECLARE replayed RECORD;
+BEGIN
+    SELECT * INTO replayed FROM public.northstar_admin_panic_disconnect_admit(
+        '00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),decode(repeat('e2',32),'hex'),
+        decode(repeat('e1',32),'hex'),decode(repeat('f2',32),'hex'),
+        decode(repeat('f1',32),'hex'),decode(repeat('d2',32),'hex'),
+        decode(repeat('d1',32),'hex'),'fedcba9876543210',
+        '00000000-0000-0000-0000-000000000132',180,3600
+    );
+    IF replayed.outcome<>'replay' OR NOT replayed.needs_rotation OR
+       replayed.request_id<>'00000000-0000-0000-0000-000000000126'::uuid THEN
+        RAISE EXCEPTION 'expired pending panic-disconnect replay was not retained';
+    END IF;
+    IF public.northstar_admin_panic_disconnect_rekey(
+        replayed.record_id,'00000000-0000-0000-0000-000000000012',1,
+        decode(repeat('c1',32),'hex'),replayed.stored_scope_hash,
+        replayed.stored_fingerprint,decode(repeat('e2',32),'hex'),
+        decode(repeat('f2',32),'hex'),decode(repeat('d2',32),'hex'),
+        'fedcba9876543210',decode(repeat('07',12),'hex'),
+        decode(repeat('08',32),'hex')
+    ) THEN
+        RAISE EXCEPTION 'stale generation rekeyed panic-disconnect replay';
+    END IF;
+    IF NOT public.northstar_admin_panic_disconnect_rekey(
+        replayed.record_id,'00000000-0000-0000-0000-000000000012',0,
+        decode(repeat('c1',32),'hex'),replayed.stored_scope_hash,
+        replayed.stored_fingerprint,decode(repeat('e2',32),'hex'),
+        decode(repeat('f2',32),'hex'),decode(repeat('d2',32),'hex'),
+        'fedcba9876543210',decode(repeat('07',12),'hex'),
+        decode(repeat('08',32),'hex')
+    ) THEN
+        RAISE EXCEPTION 'authorized panic-disconnect replay rekey was rejected';
+    END IF;
+END;
+$panic_rotation$;
+COMMIT;
+PSQL
+[[ "$(psql_as "$command_role" "$command_password" --tuples-only --no-align \
+  --command="SELECT outcome || ':' || needs_rotation::text || ':' || response_key_id FROM public.northstar_admin_panic_disconnect_admit('00000000-0000-0000-0000-000000000012',0,decode(repeat('c1',32),'hex'),decode(repeat('e2',32),'hex'),decode(repeat('e1',32),'hex'),decode(repeat('f2',32),'hex'),decode(repeat('f1',32),'hex'),decode(repeat('d2',32),'hex'),decode(repeat('d1',32),'hex'),'fedcba9876543210','00000000-0000-0000-0000-000000000133',180,3600)")" == 'replay:false:fedcba9876543210' ]] \
+  || fail 'panic-disconnect replay rotation did not survive a new transaction'
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+DELETE FROM public.api_operation_journal WHERE id='00000000-0000-0000-0000-000000000127';
+DELETE FROM public.api_idempotency_records WHERE request_id='00000000-0000-0000-0000-000000000126';
 PSQL
 
 # A legacy or partially recovered snapshot may have no stored peer address.

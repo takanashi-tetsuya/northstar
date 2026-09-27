@@ -253,9 +253,12 @@ the effective capability graph, and remove obsolete facades. Then execute the
 complete environment-dependent release matrix.
 REST idempotency requests, principals and replay responses now use the
 application service contract directly instead of importing those types from
-the database facade. This only narrows a type boundary; moving management
-transactions to the command role requires controlled database routines and
-matching ACL and atomicity tests.
+the database facade. TLS reload and panic disconnect now use separate,
+purpose-bound command-role routines. Each keeps administrator and bearer
+authorization, the operation journal, audit entry and encrypted replay in one
+transaction; the command role still has no table or sequence rights. Other
+REST management mutations remain on the runtime role and need their own
+reviewed capabilities and ACL and atomicity tests.
 The administrator's live-session page selection now belongs to the API query
 service. The route still verifies its node-bound cursor, while PostgreSQL
 authorizes the snapshot under the same read transaction before local sessions

@@ -356,8 +356,10 @@ async fn same_owner_advisory_contention_does_not_exhaust_the_shared_pool() {
         let service = Arc::clone(&service);
         requests.push(tokio::spawn(async move {
             let node = format!("urn:test:pool-admission:{owner_id}:{index}");
-            let config = default_pep_node_config(&node);
-            service.create_pep_node(owner_id, &node, &config, 100).await
+            service
+                .execute_pep_create_node(PepCreateNodeCommand::new(owner_id, &node, 100))
+                .await
+                .map(|result| result.outcome)
         }));
     }
     tokio::time::sleep(Duration::from_millis(100)).await;

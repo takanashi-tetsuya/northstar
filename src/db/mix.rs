@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, resolve_mam_query,
-    MamBlockedIdentitySource, MamBlockedPattern,
+    classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, mix_mam_peer_filter_allowed,
+    resolve_mam_query, MamBlockedIdentitySource, MamBlockedPattern,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
@@ -4793,7 +4793,7 @@ async fn mix_mam_page_for(
         match authorize_mix_node_read_tx(&mut transaction, channel_id, actor, NODE_MESSAGES).await?
         {
             MixReadOutcome::Found(channel) => {
-                if query.with_jid.is_some() && channel.jid_visibility != "visible" {
+                if !mix_mam_peer_filter_allowed(&channel.jid_visibility, query.with_jid.is_some()) {
                     transaction.rollback().await?;
                     return Ok(MixReadOutcome::Unauthorized);
                 }

@@ -5,14 +5,15 @@ use crate::services::{
         ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
     },
     pubsub::{
-        PepAudienceSnapshot, PepConfigureNodeCommand, PepConfigureNodeWrite, PepCreateOutcome,
-        PepDeleteNodeCommand, PepDeleteNodeWrite, PepDirectStateSnapshot, PepDirectStateTransition,
-        PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind, PepOwnerMutationOutcome,
-        PepProfileWrite, PepPublishOutcome, PepPublishWrite, PepPurgeNodeCommand,
-        PepPurgeNodeWrite, PepRetractCommand, PepRetractWrite, PepSetAffiliationsCommand,
-        PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite,
-        PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
-        PubSubOutboxInsert, PubSubService,
+        PepAudienceSnapshot, PepConfigureNodeCommand, PepConfigureNodeWrite, PepCreateNodeCommand,
+        PepCreateOutcome, PepDeleteNodeCommand, PepDeleteNodeWrite, PepDirectStateSnapshot,
+        PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind,
+        PepOwnerMutationOutcome, PepProfileWrite, PepPublishOutcome, PepPublishWrite,
+        PepPurgeNodeCommand, PepPurgeNodeWrite, PepRetractCommand, PepRetractWrite,
+        PepSetAffiliationsCommand, PepSetAffiliationsWrite, PepSubscribeOutcome,
+        PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeBatchCommand,
+        PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert,
+        PubSubService,
     },
 };
 use crate::state::pep_last_items::PepLastItemsContext;
@@ -555,13 +556,13 @@ impl ProtocolSession {
         match self
             .state
             .pubsub_service()
-            .create_pep_node(
+            .execute_pep_create_node(PepCreateNodeCommand::new(
                 user.id,
                 node,
-                &crate::services::pubsub::default_pep_node_config(node),
                 self.state.pep_account_quotas().max_nodes,
-            )
+            ))
             .await?
+            .outcome
         {
             PepCreateOutcome::Created => {
                 let payload = XmlElement::namespaced("pubsub", NS_PUBSUB)
@@ -1602,14 +1603,17 @@ impl ProtocolSession {
                 let outcome = self
                     .state
                     .pubsub_service()
-                    .unsubscribe_pep_nodes_batch(
-                        &owner,
-                        self.connection_id,
-                        node,
-                        &changes,
+                    .execute_pep_unsubscribe_batch(
+                        PepUnsubscribeBatchCommand {
+                            owner: &owner,
+                            connection_id: self.connection_id,
+                            node,
+                            changes: &changes,
+                        },
                         &render_pep_direct_state_messages,
                     )
-                    .await?;
+                    .await?
+                    .outcome;
                 match outcome {
                     PepOwnerMutationOutcome::Applied(_) => {}
                     PepOwnerMutationOutcome::NotSubscribed => {

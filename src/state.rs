@@ -1,4 +1,10 @@
 pub(crate) mod account_admin;
+// The composition root binds transport service handles to concrete adapters.
+pub(crate) type BoshReplayService =
+    crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>;
+pub(crate) type BoshMixService =
+    crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>;
+
 pub(crate) type AccountAdminContext = crate::services::account_admin::AccountAdminService<
     db::account_admin_repository::PostgresAccountAdminRepository,
 >;
@@ -2744,6 +2750,10 @@ impl AppState {
         self.metrics
             .c2s_backpressure_disconnects_total
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn c2s_backpressure_telemetry(&self) -> crate::metrics::C2sBackpressureTelemetry {
+        self.metrics.c2s_backpressure_telemetry()
     }
 
     pub(crate) fn federation_outbox(&self) -> &FederationRouter {

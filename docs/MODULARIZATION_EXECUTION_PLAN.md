@@ -805,6 +805,9 @@ The transaction now rechecks node type, payload type and the current
 subscription under its existing locks, rejecting stale form options after a
 concurrent node reconfiguration. The new lock-wait fixture is wired into the
 PostgreSQL CI job and must pass with the other PubSub authority tests.
+PEP node creation and owner batch-unsubscribe now use typed application
+commands. Their PostgreSQL transactions and committed outbox plans remain the
+single mutation authority.
 
 C2 shares MAM page-size and filter limits across the wire parser, application
 service and PostgreSQL adapter. Archive core now plans the RSM window for
@@ -830,7 +833,8 @@ scope and paging paths still require C2 review. MIX now resolves referenced
 IDs and RSM/form cursors with the archive core in one repeatable-read
 transaction. Item IDs must match the form filter; cursors only need to be
 visible in the base archive scope. The existing PostgreSQL fixture now tests
-both cases.
+both cases. MIX's `with`-JID visibility rule is also shared by the protocol
+precheck and the database query without moving either check.
 D1 no longer stores a second WebSocket flag alongside the transport kind. The
 TCP and WebSocket action executors now have separate adapters. Plain TCP and
 direct TLS share the TCP adapter; both adapters retain their existing write,
@@ -856,7 +860,9 @@ retains only its replay, MIX delivery and SM memory capabilities, while TCP and
 WebSocket use the state passed at their entry points. Direct delivery reaches
 fence and acknowledgment operations through narrow session methods; an
 architecture gate rejects renewed transport access to the session's global
-state. This is an access-boundary step, not the complete session-port split.
+state. TCP and WebSocket backpressure guards now hold only a shared counter
+handle rather than `AppState`. This is an access-boundary step, not the
+complete session-port split.
 These are completed slices, not packet exit claims.
 
 R2 now has an opt-in, operator-supplied OCSP staple for Northstar's own server

@@ -10,6 +10,19 @@ pub struct SubscriptionCleanupMetrics {
     pub failures_total: AtomicU64,
 }
 
+/// The transport can record a queue-pressure disconnect without owning the
+/// metrics registry or application state.
+#[derive(Clone)]
+pub(crate) struct C2sBackpressureTelemetry {
+    disconnects: Arc<AtomicU64>,
+}
+
+impl C2sBackpressureTelemetry {
+    pub(crate) fn record_disconnect(&self) {
+        self.disconnects.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 const DURATION_BUCKETS_MICROS: [u64; 14] = [
     500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000,
     2_500_000, 5_000_000, 10_000_000,
@@ -166,7 +179,7 @@ pub struct Metrics {
     /// or committed state push could not enter the bounded outbound queue.
     /// Recoverable database rows remain available for replay; state pushes
     /// are refreshed by the client after reconnect.
-    pub c2s_backpressure_disconnects_total: AtomicU64,
+    pub c2s_backpressure_disconnects_total: Arc<AtomicU64>,
     /// C2S actors which reached the explicit, awaited cleanup boundary.
     pub session_finalizations_total: AtomicU64,
     /// Individually failed or timed-out cleanup steps. Exact leases/epochs or
@@ -273,6 +286,12 @@ pub struct Metrics {
 }
 
 impl Metrics {
+    pub(crate) fn c2s_backpressure_telemetry(&self) -> C2sBackpressureTelemetry {
+        C2sBackpressureTelemetry {
+            disconnects: Arc::clone(&self.c2s_backpressure_disconnects_total),
+        }
+    }
+
     pub fn render(&self) -> String {
         let read = |v: &AtomicU64| v.load(Ordering::Relaxed);
         let mut rendered = format!(
@@ -967,6 +986,23 @@ mod tests {
         assert!(rendered.contains("xmpp_online_queue_volatile_acceptances_total 11\n"));
         assert!(rendered.contains("xmpp_online_queue_durable_acceptances_total 13\n"));
         assert!(rendered.contains("xmpp_c2s_backpressure_disconnects_total 17\n"));
+    }
+
+    #[test]
+    fn backpressure_telemetry_clones_share_the_rendered_counter() {
+        let metrics = Metrics::default();
+        let telemetry = metrics.c2s_backpressure_telemetry();
+        telemetry.record_disconnect();
+        telemetry.clone().record_disconnect();
+        assert_eq!(
+            metrics
+                .c2s_backpressure_disconnects_total
+                .load(Ordering::Relaxed),
+            2
+        );
+        assert!(metrics
+            .render()
+            .contains("xmpp_c2s_backpressure_disconnects_total 2\n"));
     }
 
     #[test]

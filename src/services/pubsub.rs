@@ -10,20 +10,22 @@ pub(crate) use northstar_pubsub_application::{
     pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
     pubsub_mutation_admission_waiters as pubsub_mutation_admission_waiters_core,
     subscription_options_precheck, validate_pep_configure_node_command,
-    validate_pep_delete_node_command, validate_pep_publish_command,
-    validate_pep_purge_node_command, validate_pep_retract_command,
+    validate_pep_create_node_command, validate_pep_delete_node_command,
+    validate_pep_publish_command, validate_pep_purge_node_command, validate_pep_retract_command,
     validate_pep_set_affiliations_command, validate_pep_subscribe_command,
-    validate_pep_unsubscribe_command, validate_pubsub_authorize_subscription_command,
-    validate_pubsub_collection_edge_command, validate_pubsub_configure_node_command,
-    validate_pubsub_create_node_command, validate_pubsub_delete_node_command,
-    validate_pubsub_publish_command, validate_pubsub_purge_node_command,
-    validate_pubsub_retract_command, validate_pubsub_set_affiliations_command,
-    validate_pubsub_set_subscriptions_command, validate_pubsub_subscribe_command,
-    validate_pubsub_unsubscribe_command, validate_pubsub_update_subscription_options_command,
-    PepConfigureNodeCommand, PepConfigureNodeResult, PepDeleteNodeCommand, PepDeleteNodeResult,
-    PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult, PepPurgeNodeCommand,
-    PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
-    PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeCommand,
+    validate_pep_unsubscribe_batch_command, validate_pep_unsubscribe_command,
+    validate_pubsub_authorize_subscription_command, validate_pubsub_collection_edge_command,
+    validate_pubsub_configure_node_command, validate_pubsub_create_node_command,
+    validate_pubsub_delete_node_command, validate_pubsub_publish_command,
+    validate_pubsub_purge_node_command, validate_pubsub_retract_command,
+    validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
+    validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
+    validate_pubsub_update_subscription_options_command, PepConfigureNodeCommand,
+    PepConfigureNodeResult, PepCreateNodeCommand, PepCreateNodeResult, PepDeleteNodeCommand,
+    PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult,
+    PepPurgeNodeCommand, PepPurgeNodeResult, PepRetractCommand, PepRetractResult,
+    PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult,
+    PepUnsubscribeBatchCommand, PepUnsubscribeBatchResult, PepUnsubscribeCommand,
     PepUnsubscribeResult, PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
     PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubCollectionEdgeCommand,
     PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult, PubSubConfigureNodeCommand,
@@ -770,18 +772,24 @@ impl<
             + PepAffiliationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn create_pep_node(
+    pub(crate) async fn execute_pep_create_node(
         &self,
-        owner_id: Uuid,
-        node: &str,
-        config: &PepNodeConfig,
-        max_nodes: i64,
-    ) -> Result<PepCreateOutcome> {
-        let owner_key = owner_id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        command: PepCreateNodeCommand<'_>,
+    ) -> Result<PepCreateNodeResult> {
+        validate_pep_create_node_command(&command)?;
+        let owner_key = command.owner_id.to_string();
+        let _permit = self
+            .admit_mutation(&[&owner_key, command.node], false)
+            .await?;
         self.repository
-            .create_pep_node(owner_id, node, config, max_nodes)
+            .create_pep_node(
+                command.owner_id,
+                command.node,
+                &command.config,
+                command.max_nodes,
+            )
             .await
+            .map(Into::into)
     }
     pub(crate) async fn subscribe_pep_node(
         &self,
@@ -886,19 +894,26 @@ impl<
             .retract_pep_items(owner, sender_connection_id, node, item_ids, notify, factory)
             .await
     }
-    pub(crate) async fn unsubscribe_pep_nodes_batch(
+    pub(crate) async fn execute_pep_unsubscribe_batch(
         &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        changes: &[(String, Option<String>)],
+        command: PepUnsubscribeBatchCommand<'_>,
         factory: &dyn PepDirectOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+    ) -> Result<PepUnsubscribeBatchResult> {
+        validate_pep_unsubscribe_batch_command(&command)?;
+        let owner_key = command.owner.id.to_string();
+        let _permit = self
+            .admit_mutation(&[&owner_key, command.node], false)
+            .await?;
         self.repository
-            .unsubscribe_pep_nodes_batch(owner, sender_connection_id, node, changes, factory)
+            .unsubscribe_pep_nodes_batch(
+                command.owner,
+                command.connection_id,
+                command.node,
+                command.changes,
+                factory,
+            )
             .await
+            .map(Into::into)
     }
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn commit_legacy_bookmarks(
@@ -1052,7 +1067,7 @@ pub(crate) enum PubSubSubscriptionOptionsRead {
     NotSubscribed,
     InvalidSubid,
     Ready {
-        node: PubSubNode,
+        node: Box<PubSubNode>,
         subscription: PubSubSubscription,
     },
 }
@@ -1075,9 +1090,10 @@ impl<R: PubSubNodeQueryRepository + PubSubSubscriptionQueryRepository> PubSubSer
             &subscription.subid,
             echoed_subid,
         ) {
-            PubSubSubscriptionOptionsPrecheck::Ready => {
-                Ok(PubSubSubscriptionOptionsRead::Ready { node, subscription })
-            }
+            PubSubSubscriptionOptionsPrecheck::Ready => Ok(PubSubSubscriptionOptionsRead::Ready {
+                node: Box::new(node),
+                subscription,
+            }),
             PubSubSubscriptionOptionsPrecheck::NotSubscribed => {
                 Ok(PubSubSubscriptionOptionsRead::NotSubscribed)
             }

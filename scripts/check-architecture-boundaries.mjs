@@ -1956,6 +1956,11 @@ for (const transport of ['src/bosh.rs', 'src/xmpp/mod.rs', 'src/xmpp/tcp_action.
     throw new Error(`${transport} traverses ProtocolSession into global state`);
   }
 }
+const backpressureGuard = structBody(read('src/xmpp/mod.rs'), 'struct BackpressureDisconnectMetric');
+if (/\bAppState\b/.test(backpressureGuard)
+    || !/\btelemetry\s*:\s*C2sBackpressureTelemetry\b/.test(backpressureGuard)) {
+  throw new Error('TCP/WebSocket backpressure guard must hold only narrow telemetry');
+}
 if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/direct_delivery.rs'))) {
   throw new Error('direct delivery traverses ProtocolSession into global state');
 }

@@ -6,15 +6,16 @@
 use anyhow::{Error, Result};
 use northstar_pubsub_core::{
     CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PepConfigureNodeWrite,
-    PepDeleteNodeWrite, PepOwnerMutationOutcome, PepPublishOutcome, PepPublishWrite,
-    PepPurgeNodeWrite, PepRetractWrite, PepSetAffiliationsWrite, PepSubscribeOutcome,
-    PepSubscribeWrite, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubConfigOutcome,
-    PubSubConfigureNodeWrite, PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubPublishOutcome,
-    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
-    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
-    PubSubSubscribeWrite, PubSubSubscriptionOptions, PubSubUnsubscribeOutcome,
-    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
+    PepCreateOutcome, PepDeleteNodeWrite, PepNodeConfig, PepOwnerMutationOutcome,
+    PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite, PepRetractWrite,
+    PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeWrite, PepUnsubscribeOutcome,
+    PepUnsubscribeWrite, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
+    PubSubDeleteNodeWrite, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite,
+    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
+    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite,
+    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionAuthorizationOutcome,
+    SubscriptionOptionsOutcome,
 };
 pub mod repository;
 pub use repository::*;
@@ -124,6 +125,35 @@ pub struct PepPublishItemsResult {
 
 pub struct PepSubscribeCommand<'a> {
     pub write: PepSubscribeWrite<'a>,
+}
+
+pub struct PepCreateNodeCommand<'a> {
+    pub owner_id: Uuid,
+    pub node: &'a str,
+    pub max_nodes: i64,
+    pub config: PepNodeConfig,
+}
+
+impl<'a> PepCreateNodeCommand<'a> {
+    pub fn new(owner_id: Uuid, node: &'a str, max_nodes: i64) -> Self {
+        Self {
+            owner_id,
+            node,
+            max_nodes,
+            config: northstar_pubsub_core::default_pep_node_config(node),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PepCreateNodeResult {
+    pub outcome: PepCreateOutcome,
+}
+
+impl From<PepCreateOutcome> for PepCreateNodeResult {
+    fn from(outcome: PepCreateOutcome) -> Self {
+        Self { outcome }
+    }
 }
 
 impl<'a> From<PepSubscribeWrite<'a>> for PepSubscribeCommand<'a> {
@@ -567,6 +597,24 @@ impl From<PepOwnerMutationOutcome> for PepSetAffiliationsResult {
     }
 }
 
+pub struct PepUnsubscribeBatchCommand<'a> {
+    pub owner: &'a northstar_pubsub_core::PubSubAccount,
+    pub connection_id: Uuid,
+    pub node: &'a str,
+    pub changes: &'a [(String, Option<String>)],
+}
+
+#[derive(Debug)]
+pub struct PepUnsubscribeBatchResult {
+    pub outcome: PepOwnerMutationOutcome,
+}
+
+impl From<PepOwnerMutationOutcome> for PepUnsubscribeBatchResult {
+    fn from(outcome: PepOwnerMutationOutcome) -> Self {
+        Self { outcome }
+    }
+}
+
 #[derive(Debug)]
 pub enum PepSubscriptionCommandValidationError {
     EmptyOwner,
@@ -595,6 +643,13 @@ impl std::fmt::Display for PepSubscriptionCommandValidationError {
 }
 
 impl std::error::Error for PepSubscriptionCommandValidationError {}
+
+pub fn validate_pep_create_node_command(command: &PepCreateNodeCommand<'_>) -> Result<()> {
+    if command.owner_id.is_nil() || command.node.trim().is_empty() || command.max_nodes < 1 {
+        return Err(anyhow::anyhow!("invalid PEP create command"));
+    }
+    Ok(())
+}
 
 pub fn validate_pep_subscribe_command(command: &PepSubscribeCommand<'_>) -> Result<()> {
     if command.write.owner.id == Uuid::nil() {
@@ -950,6 +1005,20 @@ pub fn validate_pep_set_affiliations_command(
     Ok(())
 }
 
+pub fn validate_pep_unsubscribe_batch_command(
+    command: &PepUnsubscribeBatchCommand<'_>,
+) -> Result<()> {
+    if command.owner.id.is_nil()
+        || command.owner.username.is_empty()
+        || command.node.trim().is_empty()
+        || command.changes.is_empty()
+        || command.changes.len() > 1_000
+    {
+        return Err(anyhow::anyhow!("invalid PEP unsubscribe batch command"));
+    }
+    Ok(())
+}
+
 struct PubSubAdmissionWaiter;
 
 impl PubSubAdmissionWaiter {
@@ -1075,6 +1144,51 @@ impl PubSubMutationAdmission {
 mod tests {
     use super::*;
     use northstar_pubsub_core::{PubSubAccount, PubSubPublishWrite, PubSubSubscribeWrite};
+
+    #[test]
+    fn pep_create_command_selects_node_policy_and_rejects_invalid_quota() {
+        let owner_id = Uuid::new_v4();
+        let command = PepCreateNodeCommand::new(owner_id, "urn:xmpp:bookmarks:1", 10);
+        assert!(validate_pep_create_node_command(&command).is_ok());
+        assert_eq!(command.config.access_model, "whitelist");
+        assert_eq!(command.config.send_last_published_item, "never");
+        assert!(validate_pep_create_node_command(&PepCreateNodeCommand::new(
+            owner_id,
+            "urn:xmpp:bookmarks:1",
+            0,
+        ))
+        .is_err());
+        assert!(validate_pep_create_node_command(&PepCreateNodeCommand::new(
+            Uuid::nil(),
+            "urn:xmpp:bookmarks:1",
+            10,
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn pep_unsubscribe_batch_command_requires_changes() {
+        let owner = PubSubAccount {
+            id: Uuid::new_v4(),
+            username: "owner".to_owned(),
+            auth_generation: 1,
+        };
+        let changes = [("reader@example.test/phone".to_owned(), None)];
+        let valid = PepUnsubscribeBatchCommand {
+            owner: &owner,
+            connection_id: Uuid::new_v4(),
+            node: "urn:test:node",
+            changes: &changes,
+        };
+        assert!(validate_pep_unsubscribe_batch_command(&valid).is_ok());
+        assert!(
+            validate_pep_unsubscribe_batch_command(&PepUnsubscribeBatchCommand {
+                changes: &[],
+                ..valid
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn subscription_authorization_accepts_omitted_subid_but_rejects_stale_forms() {

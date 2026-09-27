@@ -168,10 +168,8 @@ struct BoshActor {
     manager: BoshManager,
     session_key: [u8; 32],
     protocol: ProtocolSession,
-    replay_service: crate::services::replay::ReplayService<
-        crate::db::replay_repository::PostgresReplayRepository,
-    >,
-    mix_service: crate::services::mix::MixService<crate::db::mix_repository::PostgresMixRepository>,
+    replay_service: crate::state::BoshReplayService,
+    mix_service: crate::state::BoshMixService,
     sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
     commands: mpsc::Receiver<BoshCommand>,
     outbound: mpsc::Receiver<crate::outbound::OutboundItem>,

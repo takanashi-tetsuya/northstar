@@ -106,6 +106,8 @@ well. The service owns their prechecks; the locked PostgreSQL mutations retain
 graph, subscription and outbox authority. Concurrent node reconfiguration
 is now rechecked under the node and subscription locks; the new PostgreSQL
 lock-wait fixture runs in CI.
+PEP node creation and owner batch-unsubscribe now enter through typed commands;
+the repository still owns their transactions and outbox plans.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -129,8 +131,9 @@ ports. Move TCP, direct TLS, WebSocket and BOSH action execution outside the
 kernel while preserving BOSH response fences and XEP-0198 replay ownership.
 Exit when the session kernel imports no Tokio channel, socket or root service.
 Transport adapters can no longer traverse `ProtocolSession.state`; BOSH holds
-replay, MIX delivery and SM memory as specific backend handles. Direct socket delivery
-uses narrow fence and acknowledgment methods. The session still owns
+replay, MIX delivery and SM memory as specific backend handles. Direct socket
+delivery uses narrow fence and acknowledgment methods, and TCP/WebSocket
+backpressure guards hold only a counter handle. The session still owns
 `AppState`, so this closes an access path rather than the full kernel split.
 
 ### Packet 4 — Roster/visibility and archive
@@ -148,7 +151,8 @@ and roster facts in one PostgreSQL statement and applies their precedence in
 MUC and MIX queries while preserving MIX's bare-publisher rule. Other archive
 authorization and paging paths still need the same boundary review. MIX now
 uses the shared referenced-ID and cursor resolver while keeping its filtered
-item-ID rule in the PostgreSQL adapter. Complete the existing archive/MAM core
+item-ID rule in the PostgreSQL adapter. Protocol precheck and database query
+also share MIX's peer-JID visibility rule. Complete the existing archive/MAM core
 and application integration without splitting an authorized query's consistent
 result snapshot.
 

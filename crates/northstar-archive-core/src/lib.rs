@@ -74,6 +74,12 @@ pub fn decide_mam_archive_admission(facts: MamArchiveAdmissionFacts<'_>) -> bool
     }
 }
 
+/// A MIX MAM peer filter reveals publisher JIDs, so only channels that expose
+/// those JIDs may accept one. Ordinary archive reads use the node's own policy.
+pub fn mix_mam_peer_filter_allowed(jid_visibility: &str, has_peer_filter: bool) -> bool {
+    !has_peer_filter || jid_visibility == "visible"
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MamBlockedIdentitySource {
     /// Personal and MUC rows retain the sender's resource for exact blocks.
@@ -549,6 +555,16 @@ mod tests {
         assert!(!decide_mam_archive_admission(facts));
         facts.default_policy = None;
         assert!(decide_mam_archive_admission(facts));
+    }
+
+    #[test]
+    fn mix_mam_peer_filter_requires_visible_jids() {
+        assert!(mix_mam_peer_filter_allowed("visible", true));
+        assert!(mix_mam_peer_filter_allowed("visible", false));
+        for visibility in ["hidden", "maybe", "unexpected"] {
+            assert!(!mix_mam_peer_filter_allowed(visibility, true));
+            assert!(mix_mam_peer_filter_allowed(visibility, false));
+        }
     }
 
     #[test]

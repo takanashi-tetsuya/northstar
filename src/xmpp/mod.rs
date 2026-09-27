@@ -9,6 +9,7 @@ mod websocket_action;
 pub(crate) mod xml_builder;
 pub(crate) mod xml_util;
 
+use crate::metrics::C2sBackpressureTelemetry;
 use crate::state::AppState;
 use crate::transport_parsing::{
     take_websocket_frame, websocket_close_has_content,
@@ -384,7 +385,7 @@ enum DriveOutcome<S> {
 }
 
 struct BackpressureDisconnectMetric {
-    state: Arc<AppState>,
+    telemetry: C2sBackpressureTelemetry,
     signals: SessionTerminationSignals,
 }
 
@@ -414,7 +415,7 @@ async fn finish_protocol_session<T>(
 impl Drop for BackpressureDisconnectMetric {
     fn drop(&mut self) {
         if self.signals.is_backpressured() {
-            self.state.record_c2s_backpressure_disconnect();
+            self.telemetry.record_disconnect();
         }
     }
 }
@@ -432,7 +433,7 @@ where
 {
     let signals = session.termination_signals();
     let _backpressure_metric = BackpressureDisconnectMetric {
-        state: Arc::clone(state),
+        telemetry: state.c2s_backpressure_telemetry(),
         signals: signals.clone(),
     };
     let mut buffer = String::new();
@@ -961,7 +962,7 @@ pub async fn websocket_connection(
         signals: &signals,
     };
     let _backpressure_metric = BackpressureDisconnectMetric {
-        state: Arc::clone(&state),
+        telemetry: state.c2s_backpressure_telemetry(),
         signals: signals.clone(),
     };
     let mut authentication_watch = tokio::time::interval(Duration::from_secs(1));

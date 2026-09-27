@@ -33,6 +33,7 @@ use crate::xmpp::xml_util::{
     stanza_error_type,
 };
 use anyhow::{Context, Result};
+use northstar_archive_core::mix_mam_peer_filter_allowed;
 pub(crate) use worker::start_mix_delivery_outbox;
 use worker::*;
 
@@ -4819,7 +4820,7 @@ async fn handle_mix_mam_iq(
     // The MAM protocol parser produces the service-owned query; translate it
     // once so both paging variants share the identical authorized snapshot.
     let query = MamArchiveQuery::from(parsed.query.clone());
-    if channel.jid_visibility != "visible" && parsed.query.with_jid.is_some() {
+    if !mix_mam_peer_filter_allowed(&channel.jid_visibility, parsed.query.with_jid.is_some()) {
         return Ok(vec![iq_error_to(
             &request.id,
             &channel.jid(),

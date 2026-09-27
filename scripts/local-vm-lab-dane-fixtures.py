@@ -33,11 +33,11 @@ def parse_dnskey(path: Path, ttl: int) -> str:
     if len(lines) != 1:
         raise ValueError("expected one public lab.test DNSKEY record")
     fields = lines[0].split()
-    if len(fields) == 7:
-        # BIND's K*.key public-key files commonly omit the owner TTL.
+    if len(fields) >= 2 and fields[1].upper() == "IN":
+        # Some public key files omit TTL; BIND may also wrap the base64 key.
         fields.insert(1, str(ttl))
     if (
-        len(fields) != 8
+        len(fields) < 8
         or fields[0].lower() != LAB_ZONE
         or fields[2].upper() != "IN"
         or fields[3].upper() != "DNSKEY"
@@ -46,7 +46,7 @@ def parse_dnskey(path: Path, ttl: int) -> str:
         raise ValueError("expected a lab.test. KSK DNSKEY with algorithm 13")
     try:
         original_ttl = int(fields[1])
-        key = base64.b64decode(fields[7], validate=True)
+        key = base64.b64decode("".join(fields[7:]), validate=True)
     except (ValueError, binascii.Error) as error:
         raise ValueError("invalid DNSKEY TTL or public key") from error
     if not 1 <= original_ttl <= 3600 or len(key) != 64:
@@ -183,6 +183,11 @@ def self_test() -> None:
         else:
             raise AssertionError("certificate with wrong host was accepted")
         key.write_text(TEST_DNSKEY.replace(" 300 IN ", " IN "))
+        assert parse_dnskey(key, 300) == TEST_DNSKEY
+        key_fields = TEST_DNSKEY.split()
+        public_key = key_fields.pop()
+        wrapped = " ".join([*key_fields, public_key[:64], public_key[64:]])
+        key.write_text("; wrapped BIND public key\n" + wrapped + "\n")
         assert parse_dnskey(key, 300) == TEST_DNSKEY
         key.write_text(TEST_DNSKEY.replace("lab.test.", "evil.test.", 1))
         try:

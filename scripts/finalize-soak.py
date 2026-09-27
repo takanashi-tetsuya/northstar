@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import importlib.util
 import json
 import os
@@ -12,10 +13,26 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import types
 from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def rename_noreplace(source: Path, destination: Path) -> None:
+    """Publish a sealed path without replacing a concurrently created target."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as error:
+        raise RuntimeError("atomic no-replace rename is unavailable") from error
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                          ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    if renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1):
+        number = ctypes.get_errno()
+        raise OSError(number, os.strerror(number), str(destination))
 
 
 def load_script(path: Path, name: str):
@@ -24,6 +41,13 @@ def load_script(path: Path, name: str):
         raise RuntimeError(f"could not load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def load_script_bytes(path: Path, name: str, source: bytes):
+    module = types.ModuleType(name)
+    module.__file__ = str(path)
+    exec(compile(source, str(path), "exec"), module.__dict__)
     return module
 
 
@@ -74,7 +98,9 @@ def write_private(path: Path, contents: bytes) -> None:
 
 def finalize(source: Path, room_dir: Path, output: Path, candidate_sha: str,
              read_status: Callable[[], bytes]) -> dict[str, object]:
-    verifier = load_script(ROOT / "verify-soak.py", "northstar_verify_soak")
+    verifier_path = ROOT / "verify-soak.py"
+    verifier_source = verifier_path.read_bytes()
+    verifier = load_script_bytes(verifier_path, "northstar_verify_soak", verifier_source)
     active = load_script(ROOT / "local-vm-lab-active-load.py", "northstar_active_load")
     verifier.private_directory(source.parent)
     verifier.private_directory(room_dir)
@@ -99,7 +125,7 @@ def finalize(source: Path, room_dir: Path, output: Path, candidate_sha: str,
         for room in room_files:
             copy_private(room, copied_rooms / room.name, verifier, verifier.MAX_ROOM_BYTES)
         copied_verifier = stage / "verify-soak.py"
-        write_private(copied_verifier, (ROOT / "verify-soak.py").read_bytes())
+        write_private(copied_verifier, verifier_source)
         end_status = read_status()
         if end_status != start_status:
             raise RuntimeError("soak systemd unit status changed while sealing")
@@ -125,11 +151,11 @@ def finalize(source: Path, room_dir: Path, output: Path, candidate_sha: str,
         active.check_sealed_soak(copied_log, pinned, candidate_sha, parsed)
         if output.exists() or archive.exists():
             raise FileExistsError("sealed evidence path was created concurrently")
-        stage.rename(output)
+        rename_noreplace(stage, output)
         try:
-            stage_archive.rename(archive)
+            rename_noreplace(stage_archive, archive)
         except BaseException:
-            output.rename(stage)
+            rename_noreplace(output, stage)
             raise
         moved = True
         parsed = active.parse_soak(output / "soak-24h-release.jsonl", candidate_sha)

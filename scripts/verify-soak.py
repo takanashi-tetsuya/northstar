@@ -125,6 +125,7 @@ def verify(soak: Path, room_dir: Path, candidate_sha: str,
         raise ValueError("soak has too many minute checks")
     room_files: list[Path] = []
     previous = started
+    identity_by_node = {node: identity[node] for node in ("ns-a", "ns-b")}
     counts = {"cross_node": 0, "federation_prosody": 0,
               "federation_ejabberd": 0, "room_mam": 0, "upload": 0}
     for minute, row in enumerate(checks):
@@ -143,12 +144,20 @@ def verify(soak: Path, room_dir: Path, candidate_sha: str,
                     or row[f"pid_{node}"] <= 0
                     or type(row.get(f"rss_kib_{node}")) is not int
                     or row[f"rss_kib_{node}"] <= 0
-                    or not isinstance(row.get(f"binary_inode_{node}"), str)):
+                    or not isinstance(row.get(f"binary_inode_{node}"), str)
+                    or not re.fullmatch(r"[0-9]+:[0-9]+", row[f"binary_inode_{node}"])):
                 raise ValueError(f"minute {minute} lacks a node resource sample")
+            observed_identity = [row[f"pid_{node}"], row[f"binary_inode_{node}"]]
             change = row.get(f"candidate_change_{node}")
-            if change is not None and (not isinstance(change, dict)
-                                       or change.get("sha256") != candidate_sha):
-                raise ValueError(f"minute {minute} has unverified candidate replacement")
+            if observed_identity != identity_by_node[node]:
+                if (not isinstance(change, dict)
+                        or change.get("sha256") != candidate_sha
+                        or change.get("previous_pid_inode") != identity_by_node[node]
+                        or change.get("current_pid_inode") != observed_identity):
+                    raise ValueError(f"minute {minute} has unverified candidate replacement")
+                identity_by_node[node] = observed_identity
+            elif change is not None:
+                raise ValueError(f"minute {minute} has a spurious candidate replacement")
         if type(row.get("postgres_wal_bytes")) is not int or row["postgres_wal_bytes"] < 0:
             raise ValueError(f"minute {minute} lacks the PostgreSQL WAL sample")
         if not isinstance(row.get("cross_node"), str) or not row["cross_node"].strip():
@@ -197,6 +206,9 @@ def verify(soak: Path, room_dir: Path, candidate_sha: str,
             counts["upload"] += 1
     if (ended - previous).total_seconds() > 120:
         raise ValueError("last soak observation is too far from end verification")
+    for node in ("ns-a", "ns-b"):
+        if [last[node]["pid"], last[node]["binary_inode"]] != identity_by_node[node]:
+            raise ValueError(f"end candidate identity differs from the last observation on {node}")
     if len(room_files) < 24:
         raise ValueError("soak has fewer than 24 hourly room MAM evidence files")
     actual_names = {entry.name for entry in room_dir.iterdir()}

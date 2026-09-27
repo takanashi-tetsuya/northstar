@@ -82,6 +82,54 @@ def fixture(root: Path) -> tuple[Path, Path, Path]:
 
 
 class FinalizeSoakTests(unittest.TestCase):
+    def test_atomic_publication_never_replaces_existing_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_file, target_file = root / "source.tar.gz", root / "target.tar.gz"
+            source_file.write_bytes(b"new archive")
+            target_file.write_bytes(b"existing archive")
+            with self.assertRaises(FileExistsError):
+                finalizer.rename_noreplace(source_file, target_file)
+            self.assertEqual(source_file.read_bytes(), b"new archive")
+            self.assertEqual(target_file.read_bytes(), b"existing archive")
+
+            source_dir, target_dir = root / "source", root / "target"
+            source_dir.mkdir()
+            target_dir.mkdir()
+            with self.assertRaises(FileExistsError):
+                finalizer.rename_noreplace(source_dir, target_dir)
+            self.assertTrue(source_dir.is_dir())
+            self.assertTrue(target_dir.is_dir())
+
+    def test_candidate_identity_needs_an_exact_transition_and_matching_end(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source, rooms, _ = fixture(Path(directory))
+            rows = [json.loads(line) for line in source.read_text().splitlines()]
+            for row in rows[701:-1]:
+                row["pid_ns-a"] = 9999
+                row["binary_inode_ns-a"] = "1:999"
+            rows[-1]["ns-a"] = {"pid": 9999, "binary_inode": "1:999"}
+
+            def save() -> None:
+                source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            save()
+            with self.assertRaisesRegex(ValueError, "unverified candidate replacement"):
+                verifier.verify(source, rooms, SHA, SUCCESS)
+
+            rows[701]["candidate_change_ns-a"] = {
+                "previous_pid_inode": [100, "1:2"],
+                "current_pid_inode": [9999, "1:999"],
+                "sha256": SHA,
+            }
+            save()
+            self.assertEqual(verifier.verify(source, rooms, SHA, SUCCESS)[0]["result"], "complete")
+
+            rows[-1]["ns-a"] = {"pid": 7777, "binary_inode": "1:777"}
+            save()
+            with self.assertRaisesRegex(ValueError, "end candidate identity differs"):
+                verifier.verify(source, rooms, SHA, SUCCESS)
+
     def test_complete_soak_seals_and_active_load_accepts_archive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source, rooms, output = fixture(Path(directory))

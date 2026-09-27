@@ -4,9 +4,7 @@ use serde_json::json;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::api::models::{
-    BooleanToggle, BroadcastRequest, MucRoomView, OfflineMessagesStats, SessionView,
-};
+use crate::api::models::{BooleanToggle, BroadcastRequest, MucRoomView, OfflineMessagesStats};
 use crate::error::{AppError, Result};
 
 pub async fn admin_stats(
@@ -395,9 +393,8 @@ pub async fn admin_sessions(
     let after = pagination::session_after(&state, query.cursor.as_deref(), &binding).await?;
     let read = state
         .api_query_service()
-        .sessions(actor.read_authority(), || {
-            let views = state.local_sessions();
-            finish_session_page(views, after, limit)
+        .sessions(actor.read_authority(), after, limit, || {
+            state.local_sessions()
         })
         .await?
         .ok_or(AppError::Forbidden)?;
@@ -405,26 +402,6 @@ pub async fn admin_sessions(
     let database_now = read.database_now;
     let next_cursor = pagination::issue_session_cursor(&state, &binding, next, database_now)?;
     Ok(Json(json!({"sessions":views,"next_cursor":next_cursor})))
-}
-
-fn finish_session_page(
-    mut views: Vec<SessionView>,
-    after: Option<Uuid>,
-    limit: i64,
-) -> (Vec<SessionView>, Option<Uuid>) {
-    views.sort_unstable_by_key(|view| std::cmp::Reverse(view.connection_id));
-    if let Some(after) = after {
-        views.retain(|session| session.connection_id < after);
-    }
-    let has_more = views.len() > limit as usize;
-    views.truncate(limit as usize);
-    let next = has_more.then(|| {
-        views
-            .last()
-            .expect("a live-session page with an extra item is nonempty")
-            .connection_id
-    });
-    (views, next)
 }
 
 pub async fn admin_kick_session(
@@ -582,25 +559,12 @@ pub async fn admin_broadcast(
 
 #[cfg(test)]
 mod tests {
-    use super::finish_session_page;
     use crate::services::report_moderation::valid_administrative_text as valid_admin_text;
     use axum::body::Body;
     use axum::extract::FromRequest;
     use axum::http::{HeaderValue, Request};
 
-    use crate::api::{ApiEmpty, SessionView};
-
-    fn session(connection_id: u128) -> SessionView {
-        SessionView {
-            connection_id: uuid::Uuid::from_u128(connection_id),
-            node: "test-node".into(),
-            jid: format!("user{connection_id}@example.test/phone"),
-            ip: None,
-            resource: "phone".into(),
-            carbons_enabled: false,
-            connected_duration_seconds: 0,
-        }
-    }
+    use crate::api::ApiEmpty;
 
     #[test]
     fn administrator_text_rejects_database_and_display_controls() {
@@ -644,38 +608,5 @@ mod tests {
             HeaderValue::from_static("admin-delete-key-0004"),
         );
         assert!(ApiEmpty::from_request(duplicate, &()).await.is_err());
-    }
-
-    #[test]
-    fn live_session_pages_use_strict_immutable_connection_boundaries() {
-        let (first, next) = finish_session_page(
-            vec![session(1), session(5), session(3), session(4), session(2)],
-            None,
-            2,
-        );
-        assert_eq!(
-            first
-                .iter()
-                .map(|row| row.connection_id.as_u128())
-                .collect::<Vec<_>>(),
-            vec![5, 4]
-        );
-        assert_eq!(next.map(|id| id.as_u128()), Some(4));
-
-        // A new connection above the signed boundary cannot be duplicated on
-        // the continuation page; a vanished connection creates no offset gap.
-        let (second, next) = finish_session_page(
-            vec![session(6), session(5), session(3), session(2), session(1)],
-            next,
-            2,
-        );
-        assert_eq!(
-            second
-                .iter()
-                .map(|row| row.connection_id.as_u128())
-                .collect::<Vec<_>>(),
-            vec![3, 2]
-        );
-        assert_eq!(next.map(|id| id.as_u128()), Some(2));
     }
 }

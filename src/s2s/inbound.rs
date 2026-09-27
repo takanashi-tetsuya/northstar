@@ -29,31 +29,13 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
-fn hosted_s2s_domain(state: &AppState, target: &str) -> bool {
-    let Ok(target) = prepare_domainpart(target) else {
-        return false;
-    };
-    [
-        state.local_domain().to_owned(),
-        format!("pubsub.{}", state.local_domain()),
-        format!("conference.{}", state.local_domain()),
-        format!("mix.{}", state.local_domain()),
-    ]
-    .into_iter()
-    .filter_map(|domain| prepare_domainpart(&domain).ok())
-    .any(|domain| domain == target)
+fn hosted_s2s_domain(local_domain: &str, target: &str) -> bool {
+    northstar_federation_core::classify_hosted_domain(local_domain, target)
+        .is_some_and(northstar_federation_core::HostedDomain::accepts_s2s_stream_target)
 }
 
 fn locally_hosted_identity_domain(configured_domain: &str, candidate: &str) -> bool {
-    [
-        configured_domain.to_owned(),
-        format!("pubsub.{configured_domain}"),
-        format!("conference.{configured_domain}"),
-        format!("mix.{configured_domain}"),
-        format!("upload.{configured_domain}"),
-    ]
-    .iter()
-    .any(|hosted| same_s2s_domain(candidate, hosted))
+    northstar_federation_core::classify_hosted_domain(configured_domain, candidate).is_some()
 }
 
 fn authenticated_s2s_sender(asserted: &str, authenticated_domain: &str) -> bool {
@@ -434,7 +416,7 @@ pub(crate) async fn inbound_xmpps_connection(
         .await?;
         anyhow::bail!("inbound S2S Direct TLS SNI does not match the stream target domain");
     }
-    if !hosted_s2s_domain(&state, &target)
+    if !hosted_s2s_domain(state.local_domain(), &target)
         || state.island_mode_enabled()
         || !state.federation_domain_allowed(&asserted_domain)
     {
@@ -507,7 +489,7 @@ pub(crate) async fn inbound_connection(
         .await?;
         anyhow::bail!("pre-TLS S2S stream asserted a locally hosted source domain");
     }
-    if !hosted_s2s_domain(&state, &target)
+    if !hosted_s2s_domain(state.local_domain(), &target)
         || state.island_mode_enabled()
         || claimed_domain.is_empty()
     {
@@ -573,7 +555,7 @@ pub(crate) async fn inbound_connection(
         anyhow::bail!("post-TLS S2S stream asserted a locally hosted source domain");
     }
     if asserted_domain.is_empty()
-        || !hosted_s2s_domain(&state, &target)
+        || !hosted_s2s_domain(state.local_domain(), &target)
         || state.island_mode_enabled()
         || !state.federation_domain_allowed(&asserted_domain)
     {

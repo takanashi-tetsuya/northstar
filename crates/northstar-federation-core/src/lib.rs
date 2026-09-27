@@ -154,6 +154,42 @@ pub fn same_dialback_domain(left: &str, right: &str) -> bool {
     )
 }
 
+/// A domain hosted by this server rather than a federated peer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostedDomain {
+    Primary,
+    PubSub,
+    Conference,
+    Mix,
+    Upload,
+}
+
+impl HostedDomain {
+    /// Upload is a hosted identity, but it does not accept an S2S stream.
+    pub const fn accepts_s2s_stream_target(self) -> bool {
+        matches!(
+            self,
+            Self::Primary | Self::PubSub | Self::Conference | Self::Mix
+        )
+    }
+}
+
+/// Classify a candidate against the server's own service domains.
+pub fn classify_hosted_domain(local_domain: &str, candidate: &str) -> Option<HostedDomain> {
+    [
+        (local_domain.to_owned(), HostedDomain::Primary),
+        (format!("pubsub.{local_domain}"), HostedDomain::PubSub),
+        (
+            format!("conference.{local_domain}"),
+            HostedDomain::Conference,
+        ),
+        (format!("mix.{local_domain}"), HostedDomain::Mix),
+        (format!("upload.{local_domain}"), HostedDomain::Upload),
+    ]
+    .into_iter()
+    .find_map(|(domain, hosted)| same_dialback_domain(candidate, &domain).then_some(hosted))
+}
+
 /// Check if a stanza is within the maximum allowed S2S bytes.
 pub fn validate_s2s_stanza_size(size: usize, max_allowed: usize) -> bool {
     size > 0 && size <= max_allowed
@@ -162,6 +198,34 @@ pub fn validate_s2s_stanza_size(size: usize, max_allowed: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_domains_have_distinct_stream_and_identity_boundaries() {
+        for (candidate, expected) in [
+            ("EXAMPLE.TEST.", HostedDomain::Primary),
+            ("PUBSUB.Example.Test.", HostedDomain::PubSub),
+            ("conference.example.test", HostedDomain::Conference),
+            ("mix.example.test", HostedDomain::Mix),
+            ("upload.example.test", HostedDomain::Upload),
+        ] {
+            assert_eq!(
+                classify_hosted_domain("example.test", candidate),
+                Some(expected)
+            );
+        }
+        assert!(!HostedDomain::Upload.accepts_s2s_stream_target());
+        for domain in [
+            HostedDomain::Primary,
+            HostedDomain::PubSub,
+            HostedDomain::Conference,
+            HostedDomain::Mix,
+        ] {
+            assert!(domain.accepts_s2s_stream_target());
+        }
+        for candidate in ["remote.example.test", "bad domain", ""] {
+            assert_eq!(classify_hosted_domain("example.test", candidate), None);
+        }
+    }
 
     #[test]
     fn dialback_key_generation_and_matching() {

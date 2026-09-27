@@ -362,6 +362,8 @@ mod tests {
                     auth_generation: generation + 1,
                     ..actor()
                 },
+                None,
+                10,
                 || { panic!("a stale generation must not read process state") }
             )
             .await
@@ -380,13 +382,15 @@ mod tests {
                         auth_generation: generation,
                         session_token: &reader_token,
                     },
+                    None,
+                    10,
                     move || {
                         entered_tx.send(()).unwrap();
                         tokio::task::block_in_place(|| {
                             release_rx.recv_timeout(Duration::from_secs(10))
                         })
                         .unwrap();
-                        (Vec::new(), None)
+                        Vec::new()
                     },
                 )
                 .await
@@ -429,7 +433,7 @@ mod tests {
             .await
             .unwrap();
         assert!(service
-            .sessions(actor(), || panic!(
+            .sessions(actor(), None, 10, || panic!(
                 "demoted administrator read process state"
             ))
             .await

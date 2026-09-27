@@ -33,6 +33,21 @@ fn local_service_domains_cannot_be_asserted_by_an_inbound_federation_stream() {
     ));
 }
 
+#[test]
+fn s2s_stream_targets_exclude_upload_but_not_other_local_services() {
+    for domain in [
+        "EXAMPLE.TEST.",
+        "pubsub.example.test",
+        "conference.example.test",
+        "mix.example.test",
+    ] {
+        assert!(hosted_s2s_domain("example.test", domain));
+    }
+    for domain in ["upload.example.test", "remote.example.test", "bad domain"] {
+        assert!(!hosted_s2s_domain("example.test", domain));
+    }
+}
+
 #[tokio::test]
 async fn disabled_federation_task_waits_for_cancel() {
     let cancel = tokio_util::sync::CancellationToken::new();

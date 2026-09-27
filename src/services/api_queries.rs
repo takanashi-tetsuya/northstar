@@ -491,12 +491,16 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
     pub(crate) async fn sessions<F>(
         &self,
         actor: ApiReadAuthority<'_>,
+        after: Option<Uuid>,
+        limit: i64,
         snapshot: F,
     ) -> Result<Option<SessionPage>>
     where
-        F: FnOnce() -> (Vec<SessionView>, Option<Uuid>) + Send,
+        F: FnOnce() -> Vec<SessionView> + Send,
     {
-        self.repository.sessions(actor, snapshot).await
+        self.repository
+            .sessions(actor, || page_sessions(snapshot(), after, limit))
+            .await
     }
     pub(crate) async fn muc_rooms<F>(
         &self,
@@ -511,5 +515,95 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
         self.repository
             .muc_rooms(actor, after, limit, snapshot)
             .await
+    }
+}
+
+fn page_sessions(
+    mut sessions: Vec<SessionView>,
+    after: Option<Uuid>,
+    limit: i64,
+) -> (Vec<SessionView>, Option<Uuid>) {
+    sessions.sort_unstable_by_key(|session| std::cmp::Reverse(session.connection_id));
+    if let Some(after) = after {
+        sessions.retain(|session| session.connection_id < after);
+    }
+    let has_more = sessions.len() > limit as usize;
+    sessions.truncate(limit as usize);
+    let next = has_more.then(|| {
+        sessions
+            .last()
+            .expect("a live-session page with an extra item is nonempty")
+            .connection_id
+    });
+    (sessions, next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{page_sessions, SessionView};
+    use uuid::Uuid;
+
+    fn session(connection_id: u128) -> SessionView {
+        SessionView {
+            connection_id: Uuid::from_u128(connection_id),
+            node: "test-node".into(),
+            jid: format!("user{connection_id}@example.test/phone"),
+            ip: None,
+            resource: "phone".into(),
+            carbons_enabled: false,
+            connected_duration_seconds: 0,
+        }
+    }
+
+    #[test]
+    fn live_session_pages_use_strict_immutable_connection_boundaries() {
+        let (first, next) = page_sessions(
+            vec![session(1), session(5), session(3), session(4), session(2)],
+            None,
+            2,
+        );
+        assert_eq!(
+            first
+                .iter()
+                .map(|row| row.connection_id.as_u128())
+                .collect::<Vec<_>>(),
+            vec![5, 4]
+        );
+        assert_eq!(next.map(|id| id.as_u128()), Some(4));
+
+        // A new connection above the signed boundary cannot be duplicated on
+        // the continuation page; a vanished connection creates no offset gap.
+        let (second, next) = page_sessions(
+            vec![session(6), session(5), session(3), session(2), session(1)],
+            next,
+            2,
+        );
+        assert_eq!(
+            second
+                .iter()
+                .map(|row| row.connection_id.as_u128())
+                .collect::<Vec<_>>(),
+            vec![3, 2]
+        );
+        assert_eq!(next.map(|id| id.as_u128()), Some(2));
+
+        let (last, next) = page_sessions(vec![session(6), session(1)], next, 2);
+        assert_eq!(
+            last.iter()
+                .map(|row| row.connection_id.as_u128())
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn empty_and_exact_limit_pages_have_no_continuation() {
+        let (empty, next) = page_sessions(Vec::new(), None, 2);
+        assert!(empty.is_empty());
+        assert!(next.is_none());
+        let (exact, next) = page_sessions(vec![session(2), session(1)], None, 2);
+        assert_eq!(exact.len(), 2);
+        assert!(next.is_none());
     }
 }

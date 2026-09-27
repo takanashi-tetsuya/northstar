@@ -2329,6 +2329,19 @@ for (const [path, name] of [
     throw new Error(`${name} must use a complete authorized query port`);
   }
 }
+const adminSessionRoute = structBody(read('src/api/admin.rs'), 'pub async fn admin_sessions(');
+const adminSessionService = structBody(read('src/services/api_queries.rs'), 'pub(crate) async fn sessions<F>(');
+const adminSessionRepository = structBody(read('src/db/api_queries.rs'), 'async fn sessions<F>(');
+if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)
+    || !adminSessionService.includes('page_sessions(snapshot(), after, limit)')
+    || !structBody(read('src/services/api_queries.rs'), 'fn page_sessions(').includes('sort_unstable_by_key')) {
+  throw new Error('administrator session page selection must belong to the application service');
+}
+const sessionAuthorization = adminSessionRepository.indexOf('begin_authorized_read(&actor, true)');
+const sessionSnapshot = adminSessionRepository.indexOf('snapshot()');
+if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
+  throw new Error('administrator session snapshot must run after database authorization');
+}
 if (/begin_authorized_read/.test(read('src/api/mod.rs'))) {
   throw new Error('HTTP principals must not expose database read transactions');
 }
@@ -3189,6 +3202,15 @@ if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sIn
 }
 const s2sOutboundSource = read('src/s2s/outbound.rs');
 const componentsSource = read('src/components.rs');
+const federationCoreSource = read('crates/northstar-federation-core/src/lib.rs');
+if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
+    || !federationCoreSource.includes('pub const fn accepts_s2s_stream_target(')
+    || !componentsSource.includes('classify_hosted_domain(local_domain, target)')
+    || !s2sInboundSource.includes('classify_hosted_domain(local_domain, target)')
+    || !s2sInboundSource.includes('classify_hosted_domain(configured_domain, candidate)')
+    || !s2sInboundSource.includes('HostedDomain::accepts_s2s_stream_target')) {
+  throw new Error('component routes and S2S identity/stream admission must share the hosted-domain policy');
+}
 for (const invariant of [
   'struct FederatedCapsGateSlot',
   'struct FederatedCapsParticipant',

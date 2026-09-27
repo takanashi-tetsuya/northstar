@@ -157,16 +157,7 @@ fn component_route_target(
     configured_component: bool,
     relay_grant: ComponentRelayGrant,
 ) -> ComponentRouteTarget {
-    let hosted_locally = [
-        local_domain.to_owned(),
-        format!("pubsub.{local_domain}"),
-        format!("conference.{local_domain}"),
-        format!("mix.{local_domain}"),
-        format!("upload.{local_domain}"),
-    ]
-    .iter()
-    .any(|hosted| same_component_domain(target, hosted));
-    if hosted_locally {
+    if northstar_federation_core::classify_hosted_domain(local_domain, target).is_some() {
         ComponentRouteTarget::LocalService
     } else if configured_component {
         ComponentRouteTarget::ConfiguredComponent
@@ -2595,13 +2586,25 @@ mod tests {
             component_route_target("example.test", &target, false, connect),
             ComponentRouteTarget::Denied
         );
-        assert_eq!(
-            component_route_target("example.test", "mix.example.test", false, connect),
-            ComponentRouteTarget::LocalService
-        );
+        for local in [
+            "EXAMPLE.TEST.",
+            "pubsub.example.test",
+            "conference.example.test",
+            "mix.example.test",
+            "upload.example.test",
+        ] {
+            assert_eq!(
+                component_route_target("example.test", local, false, connect),
+                ComponentRouteTarget::LocalService
+            );
+        }
         assert_eq!(
             component_route_target("example.test", "other-component.test", true, connect),
             ComponentRouteTarget::ConfiguredComponent
+        );
+        assert_eq!(
+            component_route_target("example.test", "mix.example.test", true, connect),
+            ComponentRouteTarget::LocalService
         );
 
         for protocol in [
@@ -2612,6 +2615,10 @@ mod tests {
             assert_eq!(
                 component_route_target("example.test", &target, false, grant),
                 ComponentRouteTarget::Federation
+            );
+            assert_eq!(
+                component_route_target("example.test", "other-component.test", true, grant),
+                ComponentRouteTarget::ConfiguredComponent
             );
         }
     }

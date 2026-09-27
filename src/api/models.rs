@@ -344,7 +344,7 @@ pub struct LegalHoldPageQuery {
     pub limit: Option<i64>,
 }
 
-pub use crate::services::api_queries::{MucRoomView, OfflineMessagesStats, SessionView};
+pub use crate::services::api_queries::{MucRoomView, OfflineMessagesStats};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

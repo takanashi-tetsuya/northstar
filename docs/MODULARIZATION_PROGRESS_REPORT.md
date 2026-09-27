@@ -233,6 +233,9 @@ XEP-0114 connect mode can address local services and configured local
 components, but cannot enqueue a stanza for a remote domain. Accept mode and
 XEP-0225 keep their existing federation route. The isolated VM component
 matrix still needs a wire-level check of this boundary.
+Component routing and inbound S2S identity checks now share one hosted-domain
+classifier. Upload remains a protected local identity but cannot be an S2S
+stream target; connect-mode components retain their local-only relay grant.
 
 ### Packet 7 — Administration and final composition
 
@@ -245,6 +248,10 @@ application service contract directly instead of importing those types from
 the database facade. This only narrows a type boundary; moving management
 transactions to the command role requires controlled database routines and
 matching ACL and atomicity tests.
+The administrator's live-session page selection now belongs to the API query
+service. The route still verifies its node-bound cursor, while PostgreSQL
+authorizes the snapshot under the same read transaction before local sessions
+are inspected. This does not move administrative mutations to the command role.
 
 ## 6. Scheduling
 

@@ -17,8 +17,9 @@ use uuid::Uuid;
 use crate::auth;
 use crate::error::{AppError, Result};
 use crate::services::upload::{
-    AcquirePromotionOutcome, FinalizePromotionOutcome, PromotedUploadProjection, PromotionClaim,
-    UploadClaimOutcome, UploadRenewOutcome, UploadReplayCommand, UploadReplayOutcome, UploadSlot,
+    AcquirePromotionOutcome, FinalizePromotionCommand, FinalizePromotionOutcome,
+    PromotedUploadProjection, PromotionClaim, UploadClaimOutcome, UploadRenewOutcome,
+    UploadReplayCommand, UploadReplayOutcome, UploadSlot, UploadStageCleanup,
     UploadStageProjection, UserUploadDeleteOutcome,
 };
 use crate::state::{
@@ -302,27 +303,34 @@ pub async fn upload_put(
     };
     let completion = state
         .service()
-        .finalize_promotion(PromotedUploadProjection {
-            id: slot.id,
-            claim_token: lease.claim_token,
-            promotion_claim_token,
-            storage_backend: &promoted.backend,
-            object_key: &promoted.object_key,
-            object_version: promoted.object_version.as_deref(),
-            content_sha256: &content_sha256,
-            size: promoted.size,
-            retention_seconds: state.retention_seconds(),
-            storage_fence: lease.storage_fence,
+        .finalize_promotion(FinalizePromotionCommand {
+            projection: PromotedUploadProjection {
+                id: slot.id,
+                claim_token: lease.claim_token,
+                promotion_claim_token,
+                storage_backend: &promoted.backend,
+                object_key: &promoted.object_key,
+                object_version: promoted.object_version.as_deref(),
+                content_sha256: &content_sha256,
+                size: promoted.size,
+                retention_seconds: state.retention_seconds(),
+                storage_fence: lease.storage_fence,
+            },
+            stage_key: staged.stage_key(),
+            stage_object_key: staged.object_key(),
         })
         .await?;
-    match completion {
+    // The service classifies finalization before request-local removal of
+    // staged bytes; an indeterminate result leaves them for recovery.
+    if completion.stage_cleanup == UploadStageCleanup::Abort {
+        abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version()).await;
+    }
+    match completion.outcome {
         FinalizePromotionOutcome::Committed => {}
         FinalizePromotionOutcome::ConcurrentlyCommitted => {
             // A concurrent reconciler committed the same immutable bytes.
         }
         FinalizePromotionOutcome::Retired => {
-            abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version())
-                .await;
             return Err(AppError::Conflict(
                 "upload was deleted during promotion".into(),
             ));
@@ -332,12 +340,6 @@ pub async fn upload_put(
                 "upload storage projection changed before metadata completion"
             )));
         }
-    }
-    // Local promotion leaves a distinct stage whose durable delete-stage job
-    // remains authoritative. For S3 the stage is the committed object itself:
-    // a successful or benign duplicate commit must never abort that key.
-    if !stage_is_final_object {
-        abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version()).await;
     }
     created_upload_response(false)
 }

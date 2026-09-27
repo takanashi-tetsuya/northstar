@@ -1719,6 +1719,10 @@ impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
     }
 }
 impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
+    fn local_domain(&self) -> &str {
+        &self.domain
+    }
+
     async fn update_subscription_options_checked(
         &self,
         node_id: Uuid,
@@ -1731,6 +1735,7 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
             let options = db::PubSubSubscriptionOptions::from(options);
             Ok(db::update_subscription_options_checked(
                 &self.pool,
+                &self.domain,
                 node_id,
                 requester,
                 subscriber_jid,

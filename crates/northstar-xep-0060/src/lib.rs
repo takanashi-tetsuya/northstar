@@ -41,10 +41,11 @@ pub use error::{
 
 // Re-exports of models and validation
 pub use models::{
-    all_show_strings, all_show_values, bool_text, parse_bool, required_node_id, valid_bare_jid,
-    valid_item_id, valid_language_tag, valid_node_id, valid_redirect_uri, AccessModel, Affiliation,
-    ChildrenAssociationPolicy, CollectionAction, NodeType, PublishModel, SendLastPublishedItem,
-    ShowValue, SubscriptionState, SubscriptionType,
+    all_show_strings, all_show_values, bool_text, parse_bool, required_node_id,
+    subscription_show_values_allowed, valid_bare_jid, valid_item_id, valid_language_tag,
+    valid_node_id, valid_redirect_uri, AccessModel, Affiliation, ChildrenAssociationPolicy,
+    CollectionAction, NodeType, PublishModel, SendLastPublishedItem, ShowValue, SubscriptionState,
+    SubscriptionType,
 };
 
 // Re-exports of config and options

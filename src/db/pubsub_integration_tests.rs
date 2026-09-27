@@ -4728,6 +4728,7 @@ async fn subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
     assert_eq!(
         update_subscription_options_checked(
             &pool,
+            "example.test",
             node.id,
             &requester,
             &subscriber,
@@ -4741,6 +4742,7 @@ async fn subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
     assert_eq!(
         update_subscription_options_checked(
             &pool,
+            "example.test",
             node.id,
             &requester,
             &subscriber,
@@ -4811,6 +4813,7 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
         async move {
             update_subscription_options_checked(
                 &retry_pool,
+                "example.test",
                 node_id,
                 &requester,
                 &subscriber,
@@ -4829,6 +4832,7 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
     assert_eq!(
         update_subscription_options_checked(
             &pool,
+            "example.test",
             node.id,
             &requester,
             &subscriber,
@@ -4873,6 +4877,7 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
         async move {
             update_subscription_options_checked(
                 &type_pool,
+                "example.test",
                 node_id,
                 &requester,
                 &subscriber,
@@ -4897,6 +4902,60 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
     .await
     .unwrap();
     assert_eq!(subscription_type, "items");
+
+    let remote = format!("remote-options-{suffix}@remote.test/phone");
+    let remote_bare = crate::jid::canonical_bare_key(&remote).unwrap();
+    let remote_subscription =
+        set_subscription_limited_with_options(&pool, node.id, &remote, "subscribed", 100, None)
+            .await
+            .unwrap()
+            .unwrap();
+    let mut remote_options = PubSubSubscriptionOptions::for_node_type("leaf");
+    remote_options.subscription_depth = remote_subscription.subscription_depth;
+    remote_options.show_values = vec!["online".to_owned()];
+    assert_eq!(
+        update_subscription_options_checked(
+            &pool,
+            "example.test",
+            node.id,
+            &remote_bare,
+            &remote,
+            Some(&remote_subscription.subid),
+            &remote_options,
+        )
+        .await
+        .unwrap(),
+        SubscriptionOptionsOutcome::InvalidOptions
+    );
+    assert_eq!(
+        update_subscription_options_checked(
+            &pool,
+            "example.test",
+            node.id,
+            &remote_bare,
+            &remote,
+            Some("stale-subid"),
+            &remote_options,
+        )
+        .await
+        .unwrap(),
+        SubscriptionOptionsOutcome::InvalidSubid
+    );
+    remote_options.show_values = PubSubSubscriptionOptions::for_node_type("leaf").show_values;
+    assert_eq!(
+        update_subscription_options_checked(
+            &pool,
+            "example.test",
+            node.id,
+            &remote_bare,
+            &remote,
+            Some(&remote_subscription.subid),
+            &remote_options,
+        )
+        .await
+        .unwrap(),
+        SubscriptionOptionsOutcome::Updated
+    );
 
     retry_pool.close().await;
     type_pool.close().await;

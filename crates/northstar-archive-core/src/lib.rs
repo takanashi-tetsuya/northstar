@@ -229,14 +229,16 @@ pub enum MamRoomReadDecision {
     Allowed { reveal_real_jid: bool },
 }
 
-/// Decide archive visibility from facts read under the room's database lock.
-/// Local and federated readers must use the same policy before projecting rows.
+/// Decide archive visibility from facts read in the authorized room snapshot.
+/// Local and federated readers use the same policy before projecting rows.
+/// A peer filter is allowed only when the reader may see real sender JIDs.
 pub fn decide_mam_room_read(
     members_only: bool,
     non_anonymous: bool,
     password_protected: bool,
     affiliation: Option<&str>,
     currently_joined: bool,
+    has_peer_filter: bool,
 ) -> MamRoomReadDecision {
     if affiliation == Some("outcast")
         || (members_only && !matches!(affiliation, Some("owner" | "admin" | "member")))
@@ -244,9 +246,11 @@ pub fn decide_mam_room_read(
     {
         return MamRoomReadDecision::Forbidden;
     }
-    MamRoomReadDecision::Allowed {
-        reveal_real_jid: non_anonymous || matches!(affiliation, Some("owner" | "admin")),
+    let reveal_real_jid = non_anonymous || matches!(affiliation, Some("owner" | "admin"));
+    if has_peer_filter && !reveal_real_jid {
+        return MamRoomReadDecision::Forbidden;
     }
+    MamRoomReadDecision::Allowed { reveal_real_jid }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -763,31 +767,48 @@ mod tests {
     fn room_read_policy_keeps_membership_and_anonymity_boundaries() {
         use MamRoomReadDecision::{Allowed, Forbidden};
         assert_eq!(
-            decide_mam_room_read(false, false, false, Some("outcast"), true),
+            decide_mam_room_read(false, false, false, Some("outcast"), true, false),
             Forbidden
         );
         assert_eq!(
-            decide_mam_room_read(true, false, false, None, true),
+            decide_mam_room_read(true, false, false, None, true, false),
             Forbidden
         );
         assert_eq!(
-            decide_mam_room_read(false, false, true, Some("member"), false),
+            decide_mam_room_read(false, false, true, Some("member"), false, false),
             Forbidden
         );
         assert_eq!(
-            decide_mam_room_read(true, false, false, Some("member"), true),
+            decide_mam_room_read(true, false, false, Some("member"), true, false),
             Allowed {
                 reveal_real_jid: false
             }
         );
         assert_eq!(
-            decide_mam_room_read(true, false, false, Some("admin"), true),
+            decide_mam_room_read(true, false, false, Some("admin"), true, false),
             Allowed {
                 reveal_real_jid: true
             }
         );
         assert_eq!(
-            decide_mam_room_read(false, true, false, None, false),
+            decide_mam_room_read(false, true, false, None, false, false),
+            Allowed {
+                reveal_real_jid: true
+            }
+        );
+        assert_eq!(
+            decide_mam_room_read(true, false, false, Some("member"), true, true),
+            Forbidden,
+            "an anonymous room cannot expose its sender through a peer filter"
+        );
+        assert_eq!(
+            decide_mam_room_read(true, false, false, Some("admin"), true, true),
+            Allowed {
+                reveal_real_jid: true
+            }
+        );
+        assert_eq!(
+            decide_mam_room_read(true, true, false, Some("member"), true, true),
             Allowed {
                 reveal_real_jid: true
             }

@@ -1304,6 +1304,7 @@ async fn authorize_mam_room_in_transaction(
     localpart: &str,
     viewer_id: Uuid,
     currently_joined: bool,
+    has_peer_filter: bool,
 ) -> Result<MamRoomReadOutcome<()>> {
     let row = sqlx::query(
         "SELECT r.id,r.localpart,r.members_only,r.non_anonymous,r.password_hash,
@@ -1327,6 +1328,7 @@ async fn authorize_mam_room_in_transaction(
         row.try_get::<Option<String>, _>("password_hash")?.is_some(),
         affiliation.as_deref(),
         currently_joined,
+        has_peer_filter,
     ) {
         MamRoomReadDecision::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
         MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
@@ -1433,6 +1435,7 @@ async fn authorize_federated_mam_room_in_transaction(
     localpart: &str,
     viewer_bare_jid: &str,
     currently_joined: bool,
+    has_peer_filter: bool,
 ) -> Result<MamRoomReadOutcome<()>> {
     // The room row is the durable identity fence for this authorization.  A
     // shared lock prevents destroy/recreate and room-policy changes from
@@ -1470,6 +1473,7 @@ async fn authorize_federated_mam_room_in_transaction(
         row.try_get::<Option<String>, _>("password_hash")?.is_some(),
         affiliation.as_deref(),
         currently_joined,
+        has_peer_filter,
     ) {
         MamRoomReadDecision::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
         MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
@@ -1504,9 +1508,14 @@ pub async fn authorize_mam_room(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         .execute(&mut *transaction)
         .await?;
-    let outcome =
-        authorize_mam_room_in_transaction(&mut transaction, localpart, viewer_id, currently_joined)
-            .await?;
+    let outcome = authorize_mam_room_in_transaction(
+        &mut transaction,
+        localpart,
+        viewer_id,
+        currently_joined,
+        false,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(outcome)
 }
@@ -1533,6 +1542,7 @@ pub async fn authorize_federated_mam_room(
         localpart,
         &viewer_bare_jid.to_string(),
         currently_joined,
+        false,
     )
     .await?;
     transaction.commit().await?;
@@ -1555,6 +1565,7 @@ pub async fn mam_room_archive_boundaries_authorized(
         localpart,
         viewer_id,
         currently_joined,
+        false,
     )
     .await?
     {
@@ -1594,6 +1605,7 @@ pub async fn mam_room_archive_page_authorized(
         localpart,
         viewer_id,
         currently_joined,
+        query.with_jid.is_some(),
     )
     .await?
     {
@@ -1607,10 +1619,6 @@ pub async fn mam_room_archive_page_authorized(
             return Ok(MamRoomReadOutcome::Forbidden);
         }
     };
-    if !access.reveal_real_jid && query.with_jid.is_some() {
-        transaction.commit().await?;
-        return Ok(MamRoomReadOutcome::Forbidden);
-    }
     let value = mam_archive_page_for_in_transaction(
         &mut transaction,
         MamArchiveSource::Muc(access.room_id),
@@ -1644,6 +1652,7 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
         localpart,
         &viewer_bare_jid.to_string(),
         currently_joined,
+        false,
     )
     .await?
     {
@@ -1715,6 +1724,7 @@ pub(crate) async fn mam_federated_room_archive_page_authorized_in_transaction(
         localpart,
         &viewer_bare_jid.to_string(),
         currently_joined,
+        query.with_jid.is_some(),
     )
     .await?
     {
@@ -1722,9 +1732,6 @@ pub(crate) async fn mam_federated_room_archive_page_authorized_in_transaction(
         MamRoomReadOutcome::Missing => return Ok(MamRoomReadOutcome::Missing),
         MamRoomReadOutcome::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
     };
-    if !access.reveal_real_jid && query.with_jid.is_some() {
-        return Ok(MamRoomReadOutcome::Forbidden);
-    }
     let value = mam_archive_page_for_in_transaction(
         transaction,
         MamArchiveSource::Muc(access.room_id),
@@ -3350,6 +3357,73 @@ mod history_identity_pg_tests {
         .await
         .unwrap();
 
+        let mut peer_query = page_query();
+        peer_query.with_jid = Some("sender@remote.test/Phone".to_owned());
+        assert!(matches!(
+            mam_room_archive_page_authorized(
+                &pool,
+                "snapshot-room",
+                viewer_id,
+                false,
+                &peer_query,
+            )
+            .await
+            .unwrap(),
+            MamRoomReadOutcome::Forbidden
+        ));
+        assert!(matches!(
+            mam_federated_room_archive_page_authorized(
+                &pool,
+                "snapshot-room",
+                "remote@remote.test",
+                false,
+                &peer_query,
+            )
+            .await
+            .unwrap(),
+            MamRoomReadOutcome::Forbidden
+        ));
+        sqlx::query("UPDATE muc_rooms SET non_anonymous=TRUE WHERE id=$1")
+            .bind(room_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            mam_room_archive_page_authorized(
+                &pool,
+                "snapshot-room",
+                viewer_id,
+                false,
+                &peer_query,
+            )
+            .await
+            .unwrap(),
+            MamRoomReadOutcome::Allowed {
+                value: Some(ArchivePage { total: 1, .. }),
+                ..
+            }
+        ));
+        assert!(matches!(
+            mam_federated_room_archive_page_authorized(
+                &pool,
+                "snapshot-room",
+                "remote@remote.test",
+                false,
+                &peer_query,
+            )
+            .await
+            .unwrap(),
+            MamRoomReadOutcome::Allowed {
+                value: Some(ArchivePage { total: 1, .. }),
+                ..
+            }
+        ));
+        sqlx::query("UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1")
+            .bind(room_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let mut local_snapshot = pool.begin().await.unwrap();
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .execute(&mut *local_snapshot)
@@ -3359,6 +3433,7 @@ mod history_identity_pg_tests {
             &mut local_snapshot,
             "snapshot-room",
             viewer_id,
+            false,
             false,
         )
         .await

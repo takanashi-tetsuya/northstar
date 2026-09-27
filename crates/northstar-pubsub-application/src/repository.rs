@@ -207,6 +207,7 @@ pub trait PubSubSubscriptionQueryRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Option<PubSubSubscription>>> + Send;
 }
 pub trait PubSubSubscriptionMutationRepository: Send + Sync {
+    fn local_domain(&self) -> &str;
     fn update_subscription_options_checked(
         &self,
         node_id: Uuid,

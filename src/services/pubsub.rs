@@ -1110,6 +1110,22 @@ impl<R: PubSubSubscriptionMutationRepository> PubSubService<R> {
         command: PubSubUpdateSubscriptionOptionsCommand<'_>,
     ) -> Result<PubSubUpdateSubscriptionOptionsResult> {
         validate_pubsub_update_subscription_options_command(&command)?;
+        let requester = northstar_pubsub_core::CanonicalJid::parse_bare(command.requester)?;
+        let subscriber = northstar_pubsub_core::CanonicalJid::parse(command.subscriber_jid)?;
+        if subscriber.to_bare() != requester {
+            return Ok(PubSubUpdateSubscriptionOptionsResult {
+                outcome: SubscriptionOptionsOutcome::Forbidden,
+            });
+        }
+        if !northstar_xep_0060::subscription_show_values_allowed(
+            requester.domainpart(),
+            self.repository.local_domain(),
+            &command.options.show_values,
+        ) {
+            return Ok(PubSubUpdateSubscriptionOptionsResult {
+                outcome: SubscriptionOptionsOutcome::InvalidOptions,
+            });
+        }
         let node_key = command.node_id.to_string();
         let _permit = self
             .admit_mutation(

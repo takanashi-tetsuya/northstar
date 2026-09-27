@@ -115,6 +115,26 @@ pub(crate) enum FinalizePromotionOutcome {
     Indeterminate,
 }
 
+pub(crate) struct FinalizePromotionCommand<'a> {
+    pub projection: PromotedUploadProjection<'a>,
+    /// Cleanup follows the identity returned by the write, not a fresh
+    /// inference from the promoted object's locator.
+    pub stage_key: &'a str,
+    pub stage_object_key: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UploadStageCleanup {
+    Abort,
+    Retain,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FinalizePromotionResult {
+    pub outcome: FinalizePromotionOutcome,
+    pub stage_cleanup: UploadStageCleanup,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserUploadDeleteOutcome {
     Accepted,
@@ -332,8 +352,10 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
 
     pub(crate) async fn finalize_promotion(
         &self,
-        projection: PromotedUploadProjection<'_>,
-    ) -> Result<FinalizePromotionOutcome> {
+        command: FinalizePromotionCommand<'_>,
+    ) -> Result<FinalizePromotionResult> {
+        let stage_is_final_object = command.stage_key == command.stage_object_key;
+        let projection = command.projection;
         let claim = PromotionClaim {
             id: projection.id,
             storage_attempt: projection.claim_token,
@@ -350,15 +372,31 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
             size: projection.size,
             storage_fence: projection.storage_fence,
         };
-        if self.repository.complete_promotion(projection).await? {
-            Ok(FinalizePromotionOutcome::Committed)
+        let outcome = if self.repository.complete_promotion(projection).await? {
+            FinalizePromotionOutcome::Committed
         } else if self.repository.attempt_committed(identity).await? {
-            Ok(FinalizePromotionOutcome::ConcurrentlyCommitted)
+            FinalizePromotionOutcome::ConcurrentlyCommitted
         } else if self.repository.retire_promotion(claim).await? {
-            Ok(FinalizePromotionOutcome::Retired)
+            FinalizePromotionOutcome::Retired
         } else {
-            Ok(FinalizePromotionOutcome::Indeterminate)
-        }
+            FinalizePromotionOutcome::Indeterminate
+        };
+        let stage_cleanup = match outcome {
+            FinalizePromotionOutcome::Committed
+            | FinalizePromotionOutcome::ConcurrentlyCommitted
+                if !stage_is_final_object =>
+            {
+                UploadStageCleanup::Abort
+            }
+            FinalizePromotionOutcome::Retired => UploadStageCleanup::Abort,
+            FinalizePromotionOutcome::Committed
+            | FinalizePromotionOutcome::ConcurrentlyCommitted
+            | FinalizePromotionOutcome::Indeterminate => UploadStageCleanup::Retain,
+        };
+        Ok(FinalizePromotionResult {
+            outcome,
+            stage_cleanup,
+        })
     }
 
     pub(crate) async fn public_file(&self, id: Uuid) -> Result<Option<UploadSlot>> {
@@ -593,14 +631,125 @@ mod tests {
             storage_fence: 7,
         };
         assert_eq!(
-            service.finalize_promotion(projection).await.unwrap(),
-            FinalizePromotionOutcome::ConcurrentlyCommitted
+            service
+                .finalize_promotion(FinalizePromotionCommand {
+                    projection,
+                    stage_key: "object",
+                    stage_object_key: "object",
+                })
+                .await
+                .unwrap(),
+            FinalizePromotionResult {
+                outcome: FinalizePromotionOutcome::ConcurrentlyCommitted,
+                stage_cleanup: UploadStageCleanup::Retain,
+            }
         );
         assert_eq!(
             *service.repository.calls.lock().unwrap(),
             ["complete", "committed"],
             "a committed retry must never retire its promoted object"
         );
+    }
+
+    #[tokio::test]
+    async fn finalization_cleanup_tracks_authority_and_stage_identity() {
+        let id = Uuid::new_v4();
+        let storage_attempt = Uuid::new_v4();
+        let promotion_claim_token = Uuid::new_v4();
+        let digest = [7_u8; 32];
+        let scenarios = [
+            (
+                true,
+                false,
+                false,
+                "stage",
+                FinalizePromotionOutcome::Committed,
+                UploadStageCleanup::Abort,
+                &["complete"][..],
+            ),
+            (
+                true,
+                false,
+                false,
+                "object",
+                FinalizePromotionOutcome::Committed,
+                UploadStageCleanup::Retain,
+                &["complete"][..],
+            ),
+            (
+                false,
+                true,
+                false,
+                "stage",
+                FinalizePromotionOutcome::ConcurrentlyCommitted,
+                UploadStageCleanup::Abort,
+                &["complete", "committed"][..],
+            ),
+            (
+                false,
+                true,
+                true,
+                "object",
+                FinalizePromotionOutcome::ConcurrentlyCommitted,
+                UploadStageCleanup::Retain,
+                &["complete", "committed"][..],
+            ),
+            (
+                false,
+                false,
+                true,
+                "object",
+                FinalizePromotionOutcome::Retired,
+                UploadStageCleanup::Abort,
+                &["complete", "committed", "retire"][..],
+            ),
+            (
+                false,
+                false,
+                false,
+                "stage",
+                FinalizePromotionOutcome::Indeterminate,
+                UploadStageCleanup::Retain,
+                &["complete", "committed", "retire"][..],
+            ),
+        ];
+
+        for (complete, committed, retire, stage_key, outcome, stage_cleanup, calls) in scenarios {
+            let service = lifecycle_service(LifecycleRepository {
+                complete,
+                committed,
+                retire,
+                ..Default::default()
+            });
+            let projection = PromotedUploadProjection {
+                id,
+                claim_token: storage_attempt,
+                promotion_claim_token,
+                storage_backend: "local",
+                object_key: "object",
+                object_version: None,
+                content_sha256: &digest,
+                size: 12,
+                retention_seconds: 60,
+                storage_fence: 7,
+            };
+            assert_eq!(
+                service
+                    .finalize_promotion(FinalizePromotionCommand {
+                        projection,
+                        stage_key,
+                        stage_object_key: "object",
+                    })
+                    .await
+                    .unwrap(),
+                FinalizePromotionResult {
+                    outcome,
+                    stage_cleanup,
+                },
+                "stage key: {stage_key}, outcome: {outcome:?}"
+            );
+            assert_eq!(*service.repository.calls.lock().unwrap(), calls);
+        }
     }
 
     #[derive(Default)]

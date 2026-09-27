@@ -491,9 +491,45 @@ pub fn all_show_strings(values: &[String]) -> bool {
         .all(|value| values.iter().any(|candidate| candidate == value))
 }
 
+/// Remote subscribers must accept every presence show value.
+pub fn subscription_show_values_allowed(
+    requester_domain: &str,
+    local_domain: &str,
+    values: &[String],
+) -> bool {
+    requester_domain == local_domain || all_show_strings(values)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_subscription_options_require_every_show_value() {
+        let mut values = vec![
+            "away".to_owned(),
+            "chat".to_owned(),
+            "dnd".to_owned(),
+            "online".to_owned(),
+            "xa".to_owned(),
+        ];
+        assert!(subscription_show_values_allowed(
+            "remote.test",
+            "example.test",
+            &values,
+        ));
+        values.retain(|value| value != "xa");
+        assert!(!subscription_show_values_allowed(
+            "remote.test",
+            "example.test",
+            &values,
+        ));
+        assert!(subscription_show_values_allowed(
+            "example.test",
+            "example.test",
+            &values,
+        ));
+    }
 
     #[test]
     fn parses_and_displays_enums() {

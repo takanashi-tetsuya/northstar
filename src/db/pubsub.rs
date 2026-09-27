@@ -2849,6 +2849,7 @@ pub async fn set_subscription_limited_with_options_and_renderer(
 
 pub async fn update_subscription_options_checked(
     pool: &PgPool,
+    local_domain: &str,
     node_id: Uuid,
     requester: &str,
     subscriber_jid: &str,
@@ -2900,6 +2901,10 @@ pub async fn update_subscription_options_checked(
         payload_type.as_deref(),
         current.get("subscription_depth"),
         &core_options,
+    ) || !northstar_xep_0060::subscription_show_values_allowed(
+        crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
+        local_domain,
+        &options.show_values,
     ) {
         transaction.rollback().await?;
         return Ok(SubscriptionOptionsOutcome::InvalidOptions);

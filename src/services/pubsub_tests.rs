@@ -64,6 +64,38 @@ async fn item_queries_do_not_require_mutation_repository_capability() {
         .is_empty());
 }
 
+#[tokio::test]
+async fn remote_subscription_options_fail_before_mutation_admission() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@localhost/unused")
+        .unwrap();
+    let service = PubSubService::new(pool, "example.test");
+    let mut options = PubSubSubscriptionOptions::for_node_type("leaf");
+    options.show_values = vec!["online".to_owned()];
+    let result = service
+        .execute_pubsub_update_subscription_options(PubSubUpdateSubscriptionOptionsCommand {
+            node_id: Uuid::new_v4(),
+            requester: "reader@remote.test",
+            subscriber_jid: "reader@remote.test/phone",
+            expected_subid: "current",
+            options: &options,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.outcome, SubscriptionOptionsOutcome::InvalidOptions);
+    let result = service
+        .execute_pubsub_update_subscription_options(PubSubUpdateSubscriptionOptionsCommand {
+            node_id: Uuid::new_v4(),
+            requester: "other@remote.test",
+            subscriber_jid: "reader@remote.test/phone",
+            expected_subid: "current",
+            options: &options,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.outcome, SubscriptionOptionsOutcome::Forbidden);
+}
+
 struct RetrievalFacts {
     affiliation: Option<String>,
     subscribed: bool,

@@ -114,6 +114,10 @@ the result to stanzas. This preserves the existing query order and error
 precedence. Affiliation and active subscription now come from one PostgreSQL
 statement snapshot. Node configuration is still loaded separately, so this is
 not an atomic snapshot of every authorization input.
+Subscription-options SET now checks the remote subscriber's presence filters
+in the service and again under the database mutation locks. The service keeps
+requester identity errors ahead of option errors; subscribe-and-configure still
+uses its existing protocol precheck.
 
 Remaining for Packet 1: convert remaining PubSub mutation operations (including
 all subscription mutation adapters and remaining fan-out planning points) to the
@@ -167,6 +171,9 @@ item-ID rule in the PostgreSQL adapter. MIX MAM peer visibility and page
 contents are decided in one repeatable-read database snapshot. Complete the
 existing archive/MAM core and application integration without splitting an
 authorized query's consistent result snapshot.
+MUC archive page reads now apply the anonymous-room peer-filter rule in the
+same room authorization decision used by local and federated queries. Room
+metadata and boundary reads keep their existing policy.
 
 ### Packet 5 — Upload/object lifecycle
 
@@ -178,6 +185,9 @@ The HTTP idempotent replay path now asks the upload service to compare the
 presented and stored digests with the committed digest before consuming the
 database replay allowance. The handler still streams and verifies object bytes
 outside the transaction; the repository remains the authority for replay count.
+The upload service now returns the stage-cleanup decision with promotion
+finalization. The HTTP adapter follows that decision, retaining a committed
+direct-final object or an indeterminate stage for recovery.
 
 ### Packet 6 — Federation, components and cluster
 

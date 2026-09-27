@@ -1013,12 +1013,6 @@ async fn handle_entity_set(
                 Ok(options) => options,
                 Err(error) => return Ok(error),
             };
-            if crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart()
-                != state.local_domain()
-                && !all_show_values(&options.show_values)
-            {
-                return Ok(invalid_subscription_options());
-            }
             match state
                 .pubsub_service()
                 .execute_pubsub_update_subscription_options(
@@ -1336,10 +1330,11 @@ async fn handle_entity_set(
                     Ok(options) => options,
                     Err(error) => return Ok(error),
                 };
-                if crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart()
-                    != state.local_domain()
-                    && !all_show_values(&parsed.show_values)
-                {
+                if !northstar_xep_0060::subscription_show_values_allowed(
+                    crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
+                    state.local_domain(),
+                    &parsed.show_values,
+                ) {
                     return Ok(invalid_subscription_options());
                 }
                 Some(parsed)
@@ -2732,12 +2727,6 @@ fn subscription_options_form(
 
 fn supports_include_body(node: &PubSubNode) -> bool {
     node.payload_type.as_deref() == Some("http://www.w3.org/2005/Atom")
-}
-
-fn all_show_values(values: &[String]) -> bool {
-    ["away", "chat", "dnd", "online", "xa"]
-        .iter()
-        .all(|value| values.iter().any(|candidate| candidate == value))
 }
 
 fn parse_node_config(

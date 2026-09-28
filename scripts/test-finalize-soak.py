@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 
@@ -27,7 +28,19 @@ finalizer = load_script(ROOT / "finalize-soak.py", "finalize_soak_under_test")
 verifier = load_script(ROOT / "verify-soak.py", "verify_soak_under_test")
 active = load_script(ROOT / "local-vm-lab-active-load.py", "active_load_under_test")
 SHA = "a" * 64
-SUCCESS = b"ActiveState=inactive\nResult=success\nExecMainStatus=0\n"
+SUCCESS = (
+    b"LoadState=loaded\nActiveState=inactive\nSubState=dead\n"
+    b"Result=success\nExecMainCode=1\nExecMainStatus=0\n"
+    b"MainPID=0\nExecMainPID=42\n"
+    b"ExecMainStartTimestampMonotonic=1000000\n"
+    b"ExecMainExitTimestampMonotonic=86402000000\n"
+)
+COLLECTED = (
+    b"LoadState=not-found\nActiveState=inactive\nSubState=dead\n"
+    b"Result=success\nExecMainCode=0\nExecMainStatus=0\n"
+    b"MainPID=0\nExecMainPID=0\n"
+    b"ExecMainStartTimestampMonotonic=0\nExecMainExitTimestampMonotonic=0\n"
+)
 START = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
 
 
@@ -82,6 +95,73 @@ def fixture(root: Path) -> tuple[Path, Path, Path]:
 
 
 class FinalizeSoakTests(unittest.TestCase):
+    def test_unrecorded_running_failed_and_ambiguous_exits_cannot_be_sealed(self) -> None:
+        invalid = [
+            COLLECTED,
+            b"ActiveState=inactive\nResult=success\nExecMainStatus=0\n",
+            SUCCESS + b"Result=exit-code\n",
+            SUCCESS + b"malformed\n",
+        ]
+        for old, new in (
+            (b"LoadState=loaded", b"LoadState=not-found"),
+            (b"Result=success", b"Result=exit-code"),
+            (b"ExecMainCode=1", b"ExecMainCode=0"),
+            (b"ExecMainCode=1", b"ExecMainCode=2"),
+            (b"ExecMainStatus=0", b"ExecMainStatus=7"),
+            (b"MainPID=0", b"MainPID=42"),
+            (b"ExecMainPID=42", b"ExecMainPID=0"),
+            (b"ExecMainStartTimestampMonotonic=1000000",
+             b"ExecMainStartTimestampMonotonic=0"),
+            (b"ExecMainExitTimestampMonotonic=86402000000",
+             b"ExecMainExitTimestampMonotonic=0"),
+            (b"ExecMainExitTimestampMonotonic=86402000000",
+             b"ExecMainExitTimestampMonotonic=999999"),
+            (b"ActiveState=inactive\nSubState=dead",
+             b"ActiveState=active\nSubState=running"),
+            (b"ActiveState=inactive\nSubState=dead",
+             b"ActiveState=active\nSubState=exited\nRemainAfterExit=no"),
+        ):
+            invalid.append(SUCCESS.replace(old, new))
+        with tempfile.TemporaryDirectory() as directory:
+            source, rooms, output = fixture(Path(directory))
+            before = verifier.digest_file(source)
+            for status in invalid:
+                with self.subTest(status=status), self.assertRaisesRegex(ValueError, "systemd"):
+                    finalizer.finalize(source, rooms, output, SHA, lambda: status)
+                self.assertFalse(output.exists())
+                self.assertFalse(output.with_suffix(".tar.gz").exists())
+                self.assertEqual(verifier.digest_file(source), before)
+
+    def test_retained_successful_exit_can_be_sealed(self) -> None:
+        retained = SUCCESS.replace(
+            b"ActiveState=inactive\nSubState=dead",
+            b"ActiveState=active\nSubState=exited\nRemainAfterExit=yes",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source, rooms, output = fixture(Path(directory))
+            result = finalizer.finalize(source, rooms, output, SHA, lambda: retained)
+            self.assertEqual(result["verification"]["result"], "complete")
+
+    def test_active_load_rejects_legacy_archive_with_unrecorded_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source, rooms, output = fixture(Path(directory))
+            result = finalizer.finalize(source, rooms, output, SHA, lambda: SUCCESS)
+            # Recreate a consistently hashed legacy archive. Rejection must
+            # come from the exit evidence, not a checksum mismatch.
+            (output / "unit-final-status.txt").write_bytes(COLLECTED)
+            files = sorted(p for p in output.rglob("*")
+                           if p.is_file() and p.name != "SHA256SUMS.txt")
+            (output / "SHA256SUMS.txt").write_text("".join(
+                f"{verifier.digest_file(p)}  ./{p.relative_to(output)}\n" for p in files
+            ))
+            archive = Path(result["archive"])
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(output, arcname=output.name)
+            sealed = output / "soak-24h-release.jsonl"
+            with self.assertRaisesRegex(RuntimeError, "systemd unit exit is unverified"):
+                active.check_sealed_soak(sealed, verifier.digest_file(archive), SHA,
+                                         active.parse_soak(sealed, SHA))
+
     def test_atomic_publication_never_replaces_existing_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

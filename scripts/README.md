@@ -230,8 +230,16 @@ before starting the server.
   --unit UNIT --candidate-sha256 BINARY-SHA256
   --output-directory PRIVATE-NEW-DIRECTORY`. The source JSONL and its sibling
   `-room-mam-evidence` directory remain untouched. The command requires a
-  successful inactive `northstar-lab-soak-*.service` user unit and verifies
-  every observation and raw room
+  loaded `northstar-lab-soak-*.service` user unit with a recorded normal exit
+  (`ExecMainCode=1`, `ExecMainStatus=0`), exited PID and start/exit timestamps.
+  An inactive/dead unit or a retained active/exited unit with
+  `RemainAfterExit=yes` is accepted; a collected/not-found unit is not exit
+  evidence even when systemd prints `Result=success`. Launch future soak
+  controllers with `systemd-run --user --property=Type=exec
+  --property=RemainAfterExit=yes ...` so the exit result survives completion.
+  Do not stop the retained unit until sealing succeeds; after sealing, stop
+  that completed unit before active-load preflight, which requires no active
+  soak units. The sealer verifies every observation and raw room
   MAM digest before copying to a private directory. Its sibling tar archive
   is checked against the active-load verifier. Run
   `python3 scripts/test-finalize-soak.py` for offline fixture checks.

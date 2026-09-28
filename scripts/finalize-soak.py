@@ -52,11 +52,18 @@ def load_script_bytes(path: Path, name: str, source: bytes):
 
 
 def unit_status(unit: str) -> bytes:
+    properties = (
+        "Id", "LoadState", "ActiveState", "SubState", "RemainAfterExit",
+        "MainPID", "ExecMainPID", "Result", "ExecMainCode", "ExecMainStatus",
+        "ExecMainStartTimestampMonotonic", "ExecMainExitTimestampMonotonic",
+    )
     result = subprocess.run(
-        ["systemctl", "--user", "show", unit, "-p", "ActiveState",
-         "-p", "Result", "-p", "ExecMainStatus", "-p", "ExecMainCode"],
+        ["systemctl", "--user", "show", unit,
+         *[argument for name in properties for argument in ("-p", name)]],
         check=True, capture_output=True, timeout=15,
     )
+    if result.stdout.splitlines().count(f"Id={unit}".encode()) != 1:
+        raise ValueError("systemd returned a different soak unit identity")
     return result.stdout
 
 

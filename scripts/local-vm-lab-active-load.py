@@ -261,10 +261,17 @@ def check_sealed_soak(path: Path, pinned_sha: str, expected_sha: str,
             or report.get("observations") != parsed["minute_checks"]
             or report.get("room_mam_evidence_files", 0) < 24):
         raise RuntimeError("sealed verifier did not attest this complete 24-hour candidate")
-    unit = sealed["unit-final-status.txt"].decode()
-    if not all(value in unit.splitlines() for value in
-               ("ActiveState=inactive", "Result=success", "ExecMainStatus=0")):
-        raise RuntimeError("sealed soak systemd unit did not exit successfully")
+    # Apply the current validator even to archives created by older tools.
+    # Never execute the verifier source supplied inside an evidence archive.
+    spec = importlib.util.spec_from_file_location("soak_status_verifier", ROOT / "verify-soak.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("soak status verifier is unavailable")
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+    try:
+        verifier.verify_unit_status(sealed["unit-final-status.txt"])
+    except ValueError as error:
+        raise RuntimeError(f"sealed soak systemd unit exit is unverified: {error}") from error
     return {"archive_sha256": pinned_sha, "archive": str(archive),
             "verified_files": len(entries), "verifier": report}
 
@@ -616,7 +623,11 @@ def self_test() -> None:
         sealed_log.write_text("".join(json.dumps(row) + "\n" for row in rows))
         (sealed_dir / "verify-soak.py").write_text("# fixture verifier\n")
         (sealed_dir / "unit-final-status.txt").write_text(
-            "ActiveState=inactive\nResult=success\nExecMainStatus=0\n"
+            "LoadState=loaded\nActiveState=inactive\nSubState=dead\n"
+            "Result=success\nExecMainCode=1\nExecMainStatus=0\n"
+            "MainPID=0\nExecMainPID=42\n"
+            "ExecMainStartTimestampMonotonic=1000000\n"
+            "ExecMainExitTimestampMonotonic=86401000000\n"
         )
         report = {"result": "complete", "candidate_sha256": sha,
                   "start_utc": started.isoformat(),

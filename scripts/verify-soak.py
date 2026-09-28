@@ -78,10 +78,33 @@ def read_records(path: Path) -> list[dict[str, object]]:
 def verify_unit_status(contents: bytes) -> None:
     if len(contents) > 16 * 1024:
         raise ValueError("systemd status is oversized")
-    lines = contents.decode("utf-8").splitlines()
-    if not all(value in lines for value in
-               ("ActiveState=inactive", "Result=success", "ExecMainStatus=0")):
+    properties: dict[str, str] = {}
+    for line in contents.decode("utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or not key or key in properties:
+            raise ValueError("systemd status has a malformed or duplicate property")
+        properties[key] = value
+    # A collected transient unit reports inactive/success/status=0 even though
+    # systemd no longer has its exit result. CLD_EXITED (1), a recorded PID and
+    # nonzero timestamps distinguish an actual successful exit from defaults.
+    if (properties.get("LoadState") != "loaded"
+            or properties.get("Result") != "success"
+            or properties.get("ExecMainCode") != "1"
+            or properties.get("ExecMainStatus") != "0"
+            or properties.get("MainPID") != "0"):
+        raise ValueError("soak systemd unit lacks a recorded successful process exit")
+    state = (properties.get("ActiveState"), properties.get("SubState"))
+    if state != ("inactive", "dead") and not (
+            state == ("active", "exited")
+            and properties.get("RemainAfterExit") == "yes"):
         raise ValueError("soak systemd unit did not finish successfully")
+    for name in ("ExecMainPID", "ExecMainStartTimestampMonotonic",
+                 "ExecMainExitTimestampMonotonic"):
+        if not re.fullmatch(r"[1-9][0-9]*", properties.get(name, "")):
+            raise ValueError(f"systemd status lacks a recorded {name}")
+    if int(properties["ExecMainExitTimestampMonotonic"]) < int(
+            properties["ExecMainStartTimestampMonotonic"]):
+        raise ValueError("systemd process exit precedes its start")
 
 
 def verify(soak: Path, room_dir: Path, candidate_sha: str,

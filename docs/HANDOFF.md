@@ -10,7 +10,7 @@
 
 ## 倉庫與 CI 快照
 
-本次接手已用 `git ls-remote` 核對遠端 `dev` 為 `b1b6b8d0461aa7ee7cbcc1ece5ed415dd4dd5249`。其 [完整 CI run 36360376470](https://github.com/takanashi-tetsuya/northstar/actions/runs/36360376470) 已完成，逐項核對為 32 個 job 成功、1 個條件性跳過、0 失敗，包含 `CI required` 匯總門禁。
+本次修正前的遠端 `dev` 為 `6061669696e01000e7003f12ef80a94d2da3cb25`。其 [完整 CI run 36372302384](https://github.com/takanashi-tetsuya/northstar/actions/runs/36372302384) 已完成，逐項核對為 32 個 job 成功、1 個條件性跳過、0 失敗，包含 `CI required` 匯總門禁；原始 metadata、工具 job log 與核對結果保存在私有 `evidence/ci-6061669-36372302384/`。本次 systemd 退出證據修正須另核對推送後最新 HEAD 的完整 CI。
 
 先前的三個測試工具修正及交接文檔已推送：`fccd8a1` 修正 `delv -a` trust-anchor 格式及經簽署的 TLSA 缺席回應；`4af9de3` 加入只在主機產生 TLSA RRset 暫存 zone 的工具及 CI 自測；`06491f5` 拒絕相對名稱等含糊的既有 TLSA 記錄。本次新增 guest 端 CAS 安裝工具、離線故障回歸與操作文件，仍未改 Rust 伺服器或部署至 VM。推送後須用最新 HEAD 的 CI run 核對所有 job 與匯總門禁；不要把上述舊 HEAD 的綠燈套用到新提交。
 
@@ -22,13 +22,13 @@
 
 六台隔離 VM 及私有證據位於 `target/vm-lab/20260927T1350Z/`。`ns-a`、`ns-b` 連同 Prosody、ejabberd、PostgreSQL/Redis/MinIO 與 DNS/CA 共六台。浸泡前的 MUC/MAM、上傳與跨節點物件讀回已通過，記錄在 `evidence/pre-soak-baseline/`；此時沒有更改 VM 配置。
 
-24 小時浸泡在 **2026-09-27 15:04:55 UTC** 開始，最早應於 **2026-09-28 15:04:55 UTC** 結束。user systemd unit 是 `northstar-lab-soak-0ea54b0-20260927.service`，原始 JSONL 是 `target/vm-lab/20260927T1350Z/evidence/soak-24h-0ea54b0-20260927T1504Z.jsonl`。寫作時 unit 為 `active/running`、MainPID `70603`，第 527 輪於 23:51:55 UTC 通過；這只是進行中的觀測。既有失敗嘗試的原始記錄仍保留，不可與本輪混算。
+24 小時浸泡在 **2026-09-27 15:04:55.992492 UTC** 開始，最後的 `candidate_end_verification` 時間為 **2026-09-28 15:04:55.992496 UTC**。user systemd unit 是 `northstar-lab-soak-0ea54b0-20260927.service`，原始 JSONL 是 `target/vm-lab/20260927T1350Z/evidence/soak-24h-0ea54b0-20260927T1504Z.jsonl`。1,440 輪均記錄通過，首尾 binary 身分一致，24 份房間 MAM 原始檔仍保留；但本輪 **尚未通過封存門禁**。
 
 每次接手先確認 **同一 unit 的當前狀態** 與 JSONL 新紀錄。只有滿 24 小時、每輪檢查通過、最後有 `candidate_end_verification` 且 systemd 成功退出，才能封存並稱這輪浸泡通過。若失敗，保留原始日誌及 VM 狀態，診斷後以新候選或新完整時段重測；不能把短暫重試當成 24 小時成功。封存工具是 `scripts/finalize-soak.sh`、`scripts/finalize-soak.py` 及 `scripts/verify-soak.py`，離線回歸在 CI 運行。
 
-本次接手於 2026-09-28 02:49 UTC 再確認同一 unit 為 `active/running`、MainPID `70603`；第 703 輪於 02:47:55 UTC 通過。尚未滿 24 小時，沒有封存、補 guest helper 或改動 VM。
+2026-09-28 15:20 UTC 發現臨時 unit 已被 systemd 回收。`LoadState=not-found`、`ExecMainCode=0`、退出時間為零；此時顯示的 `inactive`、`Result=success`、`ExecMainStatus=0` 是預設值，不能當作程序成功退出。該 invocation 的 journal 只保留啟動及資源用量，沒有退出碼。私有 `evidence/soak-exit-evidence-gap-20260928T1528Z/` 保存原始 unit 狀態、journal、原始證據雜湊與診斷。不要補造退出證據、重建原 unit 或將原 JSONL 宣告通過；原定 sealed 目錄與 active-load 輸出尚未建立。
 
-成功結束且最新工具 CI 通過後，執行：
+原封存指令目前因上述缺口 **不得執行**：
 
 ```bash
 bash scripts/finalize-soak.sh \
@@ -38,7 +38,11 @@ bash scripts/finalize-soak.sh \
   --output-directory /home/liu/XMPP/target/vm-lab/20260927T1350Z/evidence/soak-24h-release-0ea54b0-sealed
 ```
 
-封存會建立不可覆寫的私有目錄與同名 `.tar.gz`，並輸出 archive SHA-256。先驗證封存，再進行同一 binary 的 active load。詳細執行卡及五個 guest helper 的預期 SHA-256 在私有 `target/vm-lab/20260927T1350Z/evidence/active-load-preflight-0ea54b0.md`。`ns-a` 尚缺 `local-vm-lab-mam.py`；**只在浸泡結束與封存後** 記錄缺檔、複製主機同版 helper、核對 SHA。active-load 前還要滿足最後一次 soak 上傳後 90 分鐘冷卻。預計跑 30 分鐘，輸出到封存目錄以外的新路徑。此負載沒有真實 OMEMO 或 Push，低頻 S2S/MAM 樣本也不足以單靠 p99 宣稱正式容量 SLA。
+本次修正讓封存與 active-load 的封存核驗共用嚴格的退出檢查：要求 loaded unit、正常退出碼、已退出 PID 及非零起訖時間，拒絕不存在、未執行、仍在執行、失敗及重複矛盾屬性。支援 `RemainAfterExit=yes` 的 `active/exited` 完成狀態。9 項離線回歸與 active-load 自測通過；主機上獨立 true/false/不存在 unit 的真實 systemd 回歸亦符合預期，測試 unit 已清除，未碰 VM。
+
+現有指示只授權觀察原 unit。若無法補足原 invocation 的真實退出證明，需先取得使用者同意，以同一 binary、新 unit、新輸出路徑重跑完整 24 小時。新 controller 應使用 `Type=exec` 與 `RemainAfterExit=yes`；封存成功前不要停止 retained unit。封存成功後再停止該已完成的主機 unit，讓 active-load 的「無 active soak unit」預檢通過。不可混入原輪、舊失敗輪或短測試資料。
+
+封存會建立不可覆寫的私有目錄與同名 `.tar.gz`，並輸出 archive SHA-256。先驗證封存，再進行同一 binary 的 active load。詳細執行卡及五個 guest helper 的預期 SHA-256 在私有 `target/vm-lab/20260927T1350Z/evidence/active-load-preflight-0ea54b0.md`，新一輪須更新其 unit、來源與封存路徑。`ns-a` 尚缺 `local-vm-lab-mam.py`；**只在浸泡結束與封存後** 記錄缺檔、複製主機同版 helper、核對 SHA。active-load 前還要滿足最後一次 soak 上傳後 90 分鐘冷卻。預計跑 30 分鐘，輸出到封存目錄以外的新路徑。此負載沒有真實 OMEMO 或 Push，低頻 S2S/MAM 樣本也不足以單靠 p99 宣稱正式容量 SLA。
 
 ## DANE 與聯邦驗收準備
 
@@ -52,11 +56,11 @@ bash scripts/finalize-soak.sh \
 
 ## 後續順序與未完成證據
 
-1. `b1b6b8d` 的遠端 CI 已完成且通過；CAS 安裝工具與本文推送後，追蹤新 HEAD 的完整 CI。若接手時已推送，直接查 `origin/dev` 與對應 run。保持工作樹乾淨，不開 PR。
-2. 只觀察現有浸泡，暫不改六台 VM 的 DNS、服務、憑證、網路或儲存。滿時且最終驗證成功後封存原始證據。
+1. `6061669` 的遠端 CI 已完成且通過；本次退出證據修正與本文推送後，追蹤新 HEAD 的完整 CI。若接手時已推送，直接查 `origin/dev` 與對應 run。保持工作樹乾淨，不開 PR。
+2. 原輪因 systemd 退出證據缺失而阻擋封存。保留原始證據及六台 VM 現狀，等待是否以保留退出狀態的新 unit 重跑完整 24 小時的決定；不要自行開始負載或補 helper。
 3. 核對並補齊 guest helper、等待上傳冷卻，跑同一 binary 的 30 分鐘 active load。記錄各 lane 樣本數、延遲和資源指標，不把它當作完整容量驗收。
 4. 完成後逐案執行本地聯邦/DANE/OCSP、獨立組件、客戶端、Redis Sentinel 與叢集分區、儲存/還原和告警演練。每案先定預期 RTO/RPO，保存原始輸出、配置與 binary 雜湊，結束時恢復基線。若修改 Rust 候選，重跑受影響的完整驗收。
 
 [已知問題表](KNOWN_ISSUES.md)仍將 `EXT-CLUSTER`、`EXT-CAPACITY`、`EXT-FEDERATION`、`EXT-COMPONENT`、`EXT-CLIENT`、`EXT-SECURITY`、`EXT-OPERATIONS` 列為未關閉。OCSP 的 TLS 1.2/1.3 本地矩陣、WASM 可重現構建、備份相容與硬中斷復原也有未完成邊界。Gajim 有主機套件但尚無固定候選的隔離客戶端結果；Conversations、Monal 等缺相應裝置或環境的列必須明記未測。沒有外部安全審查者與離機目的地時，相關門禁保持開放。
 
-`northstar-ci` 每小時 heartbeat 自動任務目前啟用，會在實質進展、失敗或需使用者處理時通知。接手者先檢查原 task 是否正在運行，避免同時操作同一 CI、封存路徑或 VM。交接不代表停止或宣告完成目前的 24 小時浸泡。
+`northstar` 每小時 heartbeat 自動任務目前啟用，會在實質進展、失敗或需使用者處理時通知；`northstar-ci-dea8ec4` 是已暫停的舊 CI 任務。接手者先檢查原 task 是否正在運行，避免同時操作同一 CI、封存路徑或 VM。目前浸泡封存與 active load 仍未完成。

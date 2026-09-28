@@ -636,6 +636,7 @@ NORTHSTAR_CLUSTER_HTTP_A="$relay_a_http_port" NORTHSTAR_CLUSTER_HTTP_B="$relay_b
 NORTHSTAR_CLUSTER_XMPP_A="$xmpp_a" NORTHSTAR_CLUSTER_XMPP_B="$xmpp_b" \
 NORTHSTAR_CLUSTER_METRICS_A="$metrics_a" NORTHSTAR_CLUSTER_METRICS_B="$metrics_b" \
 NORTHSTAR_CLUSTER_PID_A="$pid_a" NORTHSTAR_CLUSTER_SCHEMA="$schema" \
+NORTHSTAR_CLUSTER_LOG_B="$redis_tmp/cluster-b.log" \
 python3 scripts/cluster-wsl.py
 wait "$pid_a" || true
 pid_a=""

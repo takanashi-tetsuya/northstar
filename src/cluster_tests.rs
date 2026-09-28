@@ -462,6 +462,50 @@ pub(super) fn listener_health_manager() -> ClusterManager {
 }
 
 #[tokio::test]
+async fn muc_projection_identity_conflict_preserves_healthy_listener() {
+    let manager = listener_health_manager();
+    manager.complete_reconciliation(0).unwrap();
+    manager.note_listener_generation();
+    assert!(manager.readiness_error().is_none());
+    let generation = manager.health.listener_generation.load(Ordering::Acquire);
+    let control = manager.maintenance_control();
+
+    // A snapshot renewed in PostgreSQL can race a kick and same-nick rejoin.
+    // Redis refusing that different exact identity must still be reported as
+    // an unsuccessful projection, without rotating the healthy subscription.
+    let error = control.record_muc_projection_failure(
+        crate::services::muc::MucSoftStateDegradation::IdentityRejected,
+    );
+    assert!(error
+        .downcast_ref::<crate::services::muc::MucSoftStateDegradation>()
+        .is_some());
+    assert!(manager.readiness_error().is_none());
+    assert!(!manager.health.listener_requires_rotation(generation));
+    manager.admit(ClusterOperation::MucMutation).unwrap();
+}
+
+#[tokio::test]
+async fn muc_projection_command_errors_still_fence_the_control_plane() {
+    use crate::services::muc::MucSoftStateDegradation;
+    for error in [
+        MucSoftStateDegradation::Join(anyhow::anyhow!("join outage")),
+        MucSoftStateDegradation::Refresh(anyhow::anyhow!("refresh outage")),
+        MucSoftStateDegradation::Reconcile(anyhow::anyhow!("reconcile outage")),
+    ] {
+        let manager = listener_health_manager();
+        manager.complete_reconciliation(0).unwrap();
+        manager.note_listener_generation();
+        assert!(manager.readiness_error().is_none());
+        let generation = manager.health.listener_generation.load(Ordering::Acquire);
+        let control = manager.maintenance_control();
+        control.record_muc_projection_failure(error);
+        assert!(manager.readiness_error().is_some());
+        assert!(manager.health.listener_requires_rotation(generation));
+        assert!(manager.admit(ClusterOperation::MucMutation).is_err());
+    }
+}
+
+#[tokio::test]
 async fn listener_generation_requires_proof_at_startup_and_after_failure() {
     let manager = listener_health_manager();
     let initial = manager.health.next_listener_generation();

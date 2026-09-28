@@ -6,17 +6,23 @@
 
 本輪目標是完成 [模組化執行計劃](MODULARIZATION_EXECUTION_PLAN.md)中可在倉庫及隔離虛擬機驗證的工作，保持 `dev` 完整 CI 通過，並保存能讓他人複核的故障、恢復與互通證據。聯邦實驗只在本機六台 Debian 13 VM 的 `northstar-lab` 網路進行，不做公網實驗。沒有獨立安全審查者及實體離機備份目的地；這兩項必須維持待驗收，不能以自審或同一主機的另一台 VM 代替。
 
-開發直接在 `dev`，使用者已授權提交與推送；不要建立新分支或 PR。任何 Rust 候選程式變更，都要重新評估哪些 VM 驗收必須以新 binary 重跑。正在進行的 24 小時浸泡以固定 binary 為對象，後續工具與文檔提交不能轉移它的受測身分。
+開發直接在 `dev`，使用者已授權提交與推送；不要建立新分支或 PR。任何 Rust 候選程式變更，都要重新評估哪些 VM 驗收必須以新 binary 重跑。24 小時浸泡以固定 binary 為對象，後續提交不能轉移它的受測身分。
 
 ## 倉庫與 CI 快照
 
 本次修正前的遠端 `dev` 為 `6061669696e01000e7003f12ef80a94d2da3cb25`。其 [完整 CI run 36372302384](https://github.com/takanashi-tetsuya/northstar/actions/runs/36372302384) 已完成，逐項核對為 32 個 job 成功、1 個條件性跳過、0 失敗，包含 `CI required` 匯總門禁；原始 metadata、工具 job log 與核對結果保存在私有 `evidence/ci-6061669-36372302384/`。本次 systemd 退出證據修正須另核對推送後最新 HEAD 的完整 CI。
 
+封存門禁修正 `5689e0f187994cb17a47755f2634b70746ab4f96` 的 [CI run 36444123459](https://github.com/takanashi-tetsuya/northstar/actions/runs/36444123459) 已核對為 30 成功、2 失敗、1 條件性跳過。`Web static checks`（包含封存回歸）通過；失敗的是 `Multi-node cluster and raw 1,000-session load` 及其 `CI required` 匯總。前者在 MUC 踢人、重用暱稱後，Redis 拒絕另一身分的快取更新，維護程序卻將它列為 Redis 命令故障，封鎖節點並關閉等候 `cluster-destroy` 的 WebSocket；還沒開始 raw 1,000-session 負載。該 Rust 路徑與固定候選 `0ea54b0` 相同，不能歸因於封存腳本修改。原始 job log 與 workflow metadata 位於私有 `evidence/ci-5689e0f-36444123459/`，失敗不能以之後的成功覆蓋。
+
+本次針對 CI 失敗修正 `ClusterMaintenanceControl`：Redis `IdentityRejected` 仍回傳未完成的 projection，保留 CAS 與 PostgreSQL 授權邊界，但不旋轉健康 listener；真正的 join/refresh/reconcile 命令錯誤仍封鎖控制面。恢復中的節點仍須所有 projection 成功才可宣告 ready。新增健康狀態回歸可在舊行為下穩定失敗，叢集流程另注入舊 incarnation 並確認拒絕覆寫及跨節點送達。私有本機證據在 `target/ci-regressions/muc-projection-20260928/`。這是 **Rust 原始碼變更**，未部署至 VM；原 VM 的 binary 不包含修正，其浸泡結果也不能用來驗收這項修正。推送後必須另外核對最新 HEAD 全部 CI。
+
+本機驗證：65 項相關 Rust 測試與 18 項日誌觀測回歸通過（另 2 項 opt-in Redis 單元測試未執行）。主機隔離 PostgreSQL/Redis 的完整 `cluster-wsl.sh` 於 16:42 UTC 通過，包括新增的快取身分衝突注入、原失敗 MUC 流程、Redis SIGSTOP 恢復、協議負例、ACK 故障與 SIGKILL 租約接管；schema、listeners、runtime dirs 清理均為零，fixture PostgreSQL 成功停止。結果在 `cluster-mz97c456/`。前次因新探針漏接日誌環境變數而失敗的 `cluster-dithaf_5/` 已保留，不能與成功結果混算。這些都是主機回歸，並非 VM active load。
+
 先前的三個測試工具修正及交接文檔已推送：`fccd8a1` 修正 `delv -a` trust-anchor 格式及經簽署的 TLSA 缺席回應；`4af9de3` 加入只在主機產生 TLSA RRset 暫存 zone 的工具及 CI 自測；`06491f5` 拒絕相對名稱等含糊的既有 TLSA 記錄。本次新增 guest 端 CAS 安裝工具、離線故障回歸與操作文件，仍未改 Rust 伺服器或部署至 VM。推送後須用最新 HEAD 的 CI run 核對所有 job 與匯總門禁；不要把上述舊 HEAD 的綠燈套用到新提交。
 
 模組化已有實質端口與應用層整合，不能簡化描述為「只是拆檔」。[進度報告](MODULARIZATION_PROGRESS_REPORT.md)記錄了消息、房間、PubSub、Roster、Archive、Upload、Federation、Session 等邊界；四階段服務／DB 角色／MUC 批次／儲存還原工作也已有程式及 CI 證據。仍未完成的包括 PubSub 全部命令與查詢收斂、剩餘房間 join/leave 路徑、Session 對廣泛 `AppState` 的依賴、部分 Redis 能力邊界，以及依賴真實環境的發布驗收。以 [執行計劃](MODULARIZATION_EXECUTION_PLAN.md)的退出條件判定完成度，不以 crate 數量或單檔行數判定。
 
-## 固定候選與持續浸泡
+## 固定候選與浸泡證據
 
 受測 Rust 來源提交是 `0ea54b06b3accb918309b594842f1b24d7974132`，兩台 Northstar VM 執行的 release-profile binary SHA-256 均為 `a73aa56296980ae7b24bdb9d3ddb76058365f7005a633cbaf38be7a59bbf4945`。此來源的 [CI run 36327062168](https://github.com/takanashi-tetsuya/northstar/actions/runs/36327062168) 已完成：32 成功、1 條件性跳過、0 失敗。這只證明該候選的 CI，不等於 24 小時浸泡或後續故障驗收完成。
 
@@ -56,8 +62,8 @@ bash scripts/finalize-soak.sh \
 
 ## 後續順序與未完成證據
 
-1. `6061669` 的遠端 CI 已完成且通過；本次退出證據修正與本文推送後，追蹤新 HEAD 的完整 CI。若接手時已推送，直接查 `origin/dev` 與對應 run。保持工作樹乾淨，不開 PR。
-2. 原輪因 systemd 退出證據缺失而阻擋封存。保留原始證據及六台 VM 現狀，等待是否以保留退出狀態的新 unit 重跑完整 24 小時的決定；不要自行開始負載或補 helper。
+1. `5689e0f` 的 CI 失敗已保存並診斷；本次 MUC 身分衝突修正推送後，追蹤新 HEAD 的完整 CI。直接查 `origin/dev` 與對應 run，不沿用舊綠燈。保持工作樹乾淨，不開 PR。
+2. 原輪因 systemd 退出證據缺失而阻擋封存。保留原始證據及六台 VM 現狀，等待是否以保留退出狀態的新 unit 重跑完整 24 小時的決定；不要自行開始負載或補 helper。即使同意同 binary 重跑，也只驗證 `0ea54b0`，不能當作本次 Rust 修正的驗收；部署新 binary 仍未獲授權。
 3. 核對並補齊 guest helper、等待上傳冷卻，跑同一 binary 的 30 分鐘 active load。記錄各 lane 樣本數、延遲和資源指標，不把它當作完整容量驗收。
 4. 完成後逐案執行本地聯邦/DANE/OCSP、獨立組件、客戶端、Redis Sentinel 與叢集分區、儲存/還原和告警演練。每案先定預期 RTO/RPO，保存原始輸出、配置與 binary 雜湊，結束時恢復基線。若修改 Rust 候選，重跑受影響的完整驗收。
 

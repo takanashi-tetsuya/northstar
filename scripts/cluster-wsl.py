@@ -410,7 +410,9 @@ def metric_value(port: int, name: str, timeout: float = 3) -> int:
     return int(match.group(1))
 
 
-def authentication_rejection_since(log_path: pathlib.Path, offset: int) -> bool:
+def cluster_log_fields_since(
+    log_path: pathlib.Path, offset: int, expected_fields: dict[str, str]
+) -> bool:
     """Observe this injection's bounded node-B log suffix, never an old event."""
     fixture.check(type(offset) is int and offset >= 0, "invalid cluster log observation offset")
     try:
@@ -435,11 +437,17 @@ def authentication_rejection_since(log_path: pathlib.Path, offset: int) -> bool:
         fields = event["fields"]
         if (
             event.get("target") == "rust_xmpp_server::cluster"
-            and fields.get("message") == "rejected unauthenticated cluster protocol envelope"
-            and fields.get("error") == "cluster envelope is oversized"
+            and all(fields.get(key) == value for key, value in expected_fields.items())
         ):
             return True
     return False
+
+
+def authentication_rejection_since(log_path: pathlib.Path, offset: int) -> bool:
+    return cluster_log_fields_since(log_path, offset, {
+        "message": "rejected unauthenticated cluster protocol envelope",
+        "error": "cluster envelope is oversized",
+    })
 
 
 def wait_for_authentication_rejection(
@@ -1135,6 +1143,49 @@ def run() -> None:
         and "crashed-node" not in redis_cli("smembers", nodes_key).splitlines(),
         "explicit room read retained a crashed-node MUC soft-state member",
     )
+
+    # A maintenance snapshot can outlive a kick/rejoin. Inject that stale
+    # incarnation in the disposable cache without changing PG authority or
+    # the node/process indexes, and observe an actual rejected refresh.
+    fixture.check(bool(LOG_B), "node-B log is required for the MUC conflict probe")
+    projection_log = pathlib.Path(LOG_B)
+    projection_offset = projection_log.stat().st_size
+    exact_bob = redis_cli("hget", occupants_key, "Bob")
+    stale_bob = json.loads(exact_bob)
+    stale_bob["cluster_epoch"] = str(uuid.uuid4())
+    stale_json = json.dumps(stale_bob)
+    redis_cli("hset", occupants_key, "Bob", stale_json)
+    try:
+        deadline = time.monotonic() + 45
+        observed_conflict = False
+        while time.monotonic() < deadline:
+            if cluster_log_fields_since(projection_log, projection_offset, {
+                "message": "could not refresh disposable Redis MUC soft-state",
+                "error": "MUC Redis rejected the exact PostgreSQL occupant",
+                "room": room,
+                "nick": "Bob",
+            }):
+                observed_conflict = time.monotonic() <= deadline
+                break
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        fixture.check(observed_conflict, "MUC identity conflict was not exercised by maintenance")
+        fixture.check(redis_cli("hget", occupants_key, "Bob") == stale_json,
+                      "MUC refresh overwrote another exact cache identity")
+        bob_b.send(
+            f"<message xmlns='jabber:client' to='{room}' type='groupchat' id='muc-cas-conflict'>"
+            "<body>PostgreSQL authority survived cache conflict</body></message>"
+        )
+        delivered, _ = alice_a.receive_until("muc-cas-conflict")
+        fixture.check(f"from='{room}/Bob'" in delivered,
+                      "cache identity conflict fenced an authoritative MUC session")
+    finally:
+        restored = redis_cli(
+            "eval", "if redis.call('hget',KEYS[1],ARGV[1]) ~= ARGV[2] then return 0 end "
+            "redis.call('hset',KEYS[1],ARGV[1],ARGV[3]); return 1",
+            "1", occupants_key, "Bob", stale_json, exact_bob,
+        )
+        fixture.check(restored == "1", "MUC conflict fixture could not restore its exact cache value")
+    print("MUC cache identity conflict preserved PostgreSQL-authoritative delivery without listener fencing")
 
     cleanup_room = f"soft-state-cleanup@conference.{DOMAIN}"
     alice_b.send(

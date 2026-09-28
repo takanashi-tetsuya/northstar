@@ -2692,6 +2692,26 @@ impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRed
 }
 
 impl ClusterMaintenanceControl {
+    fn record_muc_projection_failure(
+        &self,
+        error: crate::services::muc::MucSoftStateDegradation,
+    ) -> anyhow::Error {
+        // A PG-renewed snapshot can race a kick, rename or same-nick rejoin.
+        // The Redis CAS must reject another exact identity, but that is not a
+        // command/transport outage and must not rotate a healthy listener.
+        // The caller still counts this unsuccessful projection, so an active
+        // reconciliation cannot declare readiness until every refresh passes.
+        let identity_conflict = matches!(
+            &error,
+            crate::services::muc::MucSoftStateDegradation::IdentityRejected
+        );
+        let error = anyhow::Error::from(error);
+        if !identity_conflict {
+            self.record_control_plane_failure(&error);
+        }
+        error
+    }
+
     async fn refresh_peers_with<R: ClusterAuthorityRepository>(
         &self,
         service: &ClusterAuthorityService<R>,
@@ -7343,9 +7363,8 @@ async fn maintenance_once(
             .refresh(&occupant.room_jid, &occupant.nick, &json)
             .await
         {
-            let error = anyhow::Error::from(error);
+            let error = control.record_muc_projection_failure(error);
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
-            control.record_control_plane_failure(&error);
             tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
                 "could not refresh disposable Redis MUC soft-state");
         } else {
@@ -7357,9 +7376,8 @@ async fn maintenance_once(
     // room lease, without imposing O(occupants²) maintenance work.
     for room in active_muc_rooms {
         if let Err(error) = soft_state.reconcile_room(&room).await {
-            let error = anyhow::Error::from(error);
+            let error = control.record_muc_projection_failure(error);
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
-            control.record_control_plane_failure(&error);
             tracing::warn!(?error, %room, "could not reconcile Redis MUC room soft-state");
         }
     }

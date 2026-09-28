@@ -121,6 +121,27 @@ class RejectionObservationTests(unittest.TestCase):
             log.write(rejection())
         self.assertTrue(self.observe(len(previous)))
 
+    def test_muc_conflict_requires_the_fresh_exact_room_and_nick(self):
+        fields = {
+            "message": "could not refresh disposable Redis MUC soft-state",
+            "error": "MUC Redis rejected the exact PostgreSQL occupant",
+            "room": "room@conference.localhost", "nick": "Bob",
+        }
+        previous = rejection(fields=fields)
+        self.path.write_bytes(previous)
+        offset = len(previous)
+        observe = lambda: cluster.cluster_log_fields_since(self.path, offset, fields)
+        self.assertFalse(observe())
+        for key in fields:
+            with self.subTest(key=key):
+                self.path.write_bytes(previous + rejection(fields={**fields, key: "different"}))
+                self.assertFalse(observe())
+        self.path.write_bytes(previous + rejection(fields=fields).rstrip(b"\n"))
+        self.assertFalse(observe())
+        with self.path.open("ab") as log:
+            log.write(b"\n")
+        self.assertTrue(observe())
+
     def test_incomplete_json_and_missing_newline_remain_pending(self):
         event = rejection()
         self.path.write_bytes(event[:len(event) // 2])

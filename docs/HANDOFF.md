@@ -1,6 +1,6 @@
 # Northstar 開發與本地驗收交接
 
-更新時間：2026-09-27 23:56 UTC。本文記錄當時的狀態；接手時以 `git`、GitHub Actions、systemd 與原始證據重新核對，不把本文的快照當成即時結果。
+更新日期：2026-09-28 UTC。本文記錄交接與本次接手的狀態；接手時以 `git`、GitHub Actions、systemd 與原始證據重新核對，不把本文的快照當成即時結果。
 
 ## 目標與邊界
 
@@ -10,9 +10,9 @@
 
 ## 倉庫與 CI 快照
 
-本次交接前的遠端 `dev` 為 `36819cb461013c5e10dbfa794a3214d4e1278e49`。其 [完整 CI run 36359279817](https://github.com/takanashi-tetsuya/northstar/actions/runs/36359279817) 已完成：32 個 job 成功、1 個條件性跳過、0 失敗。
+本次接手已用 `git ls-remote` 核對遠端 `dev` 為 `b1b6b8d0461aa7ee7cbcc1ece5ed415dd4dd5249`。其 [完整 CI run 36360376470](https://github.com/takanashi-tetsuya/northstar/actions/runs/36360376470) 已完成，逐項核對為 32 個 job 成功、1 個條件性跳過、0 失敗，包含 `CI required` 匯總門禁。
 
-待推送的本地 `dev` 包含三個測試工具修正：`fccd8a1` 修正 `delv -a` trust-anchor 格式及經簽署的 TLSA 缺席回應；`4af9de3` 加入只在主機產生 TLSA RRset 暫存 zone 的工具及 CI 自測；`06491f5` 拒絕相對名稱等含糊的既有 TLSA 記錄。交接文檔另有一個提交。這些提交未改 Rust 伺服器。推送後須用最新 HEAD 的 CI run 核對所有 job 與匯總門禁；不要把上述舊 HEAD 的綠燈套用到新提交。
+先前的三個測試工具修正及交接文檔已推送：`fccd8a1` 修正 `delv -a` trust-anchor 格式及經簽署的 TLSA 缺席回應；`4af9de3` 加入只在主機產生 TLSA RRset 暫存 zone 的工具及 CI 自測；`06491f5` 拒絕相對名稱等含糊的既有 TLSA 記錄。本次新增 guest 端 CAS 安裝工具、離線故障回歸與操作文件，仍未改 Rust 伺服器或部署至 VM。推送後須用最新 HEAD 的 CI run 核對所有 job 與匯總門禁；不要把上述舊 HEAD 的綠燈套用到新提交。
 
 模組化已有實質端口與應用層整合，不能簡化描述為「只是拆檔」。[進度報告](MODULARIZATION_PROGRESS_REPORT.md)記錄了消息、房間、PubSub、Roster、Archive、Upload、Federation、Session 等邊界；四階段服務／DB 角色／MUC 批次／儲存還原工作也已有程式及 CI 證據。仍未完成的包括 PubSub 全部命令與查詢收斂、剩餘房間 join/leave 路徑、Session 對廣泛 `AppState` 的依賴、部分 Redis 能力邊界，以及依賴真實環境的發布驗收。以 [執行計劃](MODULARIZATION_EXECUTION_PLAN.md)的退出條件判定完成度，不以 crate 數量或單檔行數判定。
 
@@ -25,6 +25,8 @@
 24 小時浸泡在 **2026-09-27 15:04:55 UTC** 開始，最早應於 **2026-09-28 15:04:55 UTC** 結束。user systemd unit 是 `northstar-lab-soak-0ea54b0-20260927.service`，原始 JSONL 是 `target/vm-lab/20260927T1350Z/evidence/soak-24h-0ea54b0-20260927T1504Z.jsonl`。寫作時 unit 為 `active/running`、MainPID `70603`，第 527 輪於 23:51:55 UTC 通過；這只是進行中的觀測。既有失敗嘗試的原始記錄仍保留，不可與本輪混算。
 
 每次接手先確認 **同一 unit 的當前狀態** 與 JSONL 新紀錄。只有滿 24 小時、每輪檢查通過、最後有 `candidate_end_verification` 且 systemd 成功退出，才能封存並稱這輪浸泡通過。若失敗，保留原始日誌及 VM 狀態，診斷後以新候選或新完整時段重測；不能把短暫重試當成 24 小時成功。封存工具是 `scripts/finalize-soak.sh`、`scripts/finalize-soak.py` 及 `scripts/verify-soak.py`，離線回歸在 CI 運行。
+
+本次接手於 2026-09-28 02:49 UTC 再確認同一 unit 為 `active/running`、MainPID `70603`；第 703 輪於 02:47:55 UTC 通過。尚未滿 24 小時，沒有封存、補 guest helper 或改動 VM。
 
 成功結束且最新工具 CI 通過後，執行：
 
@@ -42,13 +44,15 @@ bash scripts/finalize-soak.sh \
 
 `target/vm-lab/20260927T1350Z/evidence/dane-preparation/` 只含公開 DNSKEY、公開 peer leaf 憑證、產生的 TLSA 候選與唯讀探針結果。`local-vm-lab-dane-proof.py` 已用 BIND 可接受的 trust-anchor 設定驗證兩個 peer 的 SRV、選定 A 記錄及 TLSA 缺席的經簽署否定回應。最初因錯誤 anchor 格式而失敗的原始輸出也保留，不應刪除或誤計為通過。
 
-目前 unsigned `lab.test` zone 的唯讀快照與 SHA-256、正向 usage 1 及錯誤摘要的暫存 zone 在 `evidence/dane-preparation/zone-stage/`。三份暫存檔都以 VM 上的 `named-checkzone` 經 stdin 驗證；**沒有安裝 zone、重載 BIND 或更改 Northstar 服務**。暫存工具只處理 apex `lab.test` 的絕對 TLSA owner，遇到相對 owner 或 `$INCLUDE`／`$GENERATE` 會拒絕。尚缺帶排他鎖的安裝期 compare-and-swap：安裝前必須核對 guest 現行 unsigned zone 的 SHA-256 與 SOA serial，若與暫存基線不同便重新生成，避免舊 serial 覆寫。F8 的 `fed.lab.test` 壞簽章子 zone 另需獨立流程；現有暫存工具不能製作該案例。
+目前 unsigned `lab.test` zone 的唯讀快照與 SHA-256、正向 usage 1 及錯誤摘要的暫存 zone 在 `evidence/dane-preparation/zone-stage/`。三份暫存檔都以 VM 上的 `named-checkzone` 經 stdin 驗證；**沒有安裝 zone、重載 BIND 或更改 Northstar 服務**。暫存工具只處理 apex `lab.test` 的絕對 TLSA owner，遇到相對 owner 或 `$INCLUDE`／`$GENERATE` 會拒絕。本次新增 `local-vm-lab-dane-install.py`：在持久排他鎖內核對 guest 現行 unsigned zone 的 SHA-256 與 SOA serial，重建並比對唯一允許的 TLSA 變更，驗證後原子替換並 reload。reload 失敗時用更高 serial 還原原 RRset；外部寫入或還原失敗要求明確復原，保留原始、候選、還原檔與事件證據。24 項離線回歸已通過並加入 CI；guest 端實際安裝仍須待浸泡封存與 active load 完成後進行，不能把離線回歸當作 DANE 驗收。詳細命令與 `SIGKILL` 復原限制見聯邦矩陣。F8 的 `fed.lab.test` 壞簽章子 zone 另需獨立流程；現有工具不能製作該案例。
 
 完整 F1–F14 的預期結果與還原要求見 [聯邦矩陣](LOCAL_VM_FEDERATION_MATRIX.md)。DNS 的唯讀預檢不是 Northstar 自身的 DANE 授權或消息送達證據。後續須記錄 Northstar resolver 的驗證決策、選定 SRV/A/AAAA/TLSA、TLS/SNI/ALPN、對端與 outbox 原始日誌及每案還原；負例必須證明拒絕且沒有 PKIX/Dialback 降級。
 
+2026-09-28 03:04 UTC 以 stdin 對 DNS guest 執行六次唯讀 `named-checkzone`，三份既有候選及各自較高 serial 的還原 zone 均通過。原始檔案與輸出保存在私有 `evidence/dane-preparation/installer-bind-readonly-20260928T030411Z/`；只在主機寫入證據，沒有安裝 helper、zone 或 reload。這仍只是 zone 語法驗證。
+
 ## 後續順序與未完成證據
 
-1. 前一個遠端 CI 已完成且通過；推送本地 `dev` 的工具修正與本文，追蹤新 HEAD 的完整 CI。若接手時已推送，直接查 `origin/dev` 與對應 run。保持工作樹乾淨，不開 PR。
+1. `b1b6b8d` 的遠端 CI 已完成且通過；CAS 安裝工具與本文推送後，追蹤新 HEAD 的完整 CI。若接手時已推送，直接查 `origin/dev` 與對應 run。保持工作樹乾淨，不開 PR。
 2. 只觀察現有浸泡，暫不改六台 VM 的 DNS、服務、憑證、網路或儲存。滿時且最終驗證成功後封存原始證據。
 3. 核對並補齊 guest helper、等待上傳冷卻，跑同一 binary 的 30 分鐘 active load。記錄各 lane 樣本數、延遲和資源指標，不把它當作完整容量驗收。
 4. 完成後逐案執行本地聯邦/DANE/OCSP、獨立組件、客戶端、Redis Sentinel 與叢集分區、儲存/還原和告警演練。每案先定預期 RTO/RPO，保存原始輸出、配置與 binary 雜湊，結束時恢復基線。若修改 Rust 候選，重跑受影響的完整驗收。

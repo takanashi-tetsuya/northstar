@@ -71,6 +71,54 @@ abort and stage again if either differs. The helper accepts only the apex
 `lab.test` zone with absolute TLSA owners. F8's deliberately bogus child-zone
 records require a separate signed `fed.lab.test` fixture and restore procedure.
 
+After the soak has been sealed and active load has finished, install a staged
+apex-zone change with `scripts/local-vm-lab-dane-install.py`. Copy that script
+and its adjacent `local-vm-lab-dane-zone.py` dependency into a protected,
+root-owned directory on `northstar-lab-dns-ca`, and verify their SHA-256 hashes
+against the tested host copies. This is a guest-only command: it requires root,
+the exact DNS guest hostname, and no IPv4 or IPv6 default route. Its zone path
+is fixed to `/var/lib/bind/lab.test.zone`. For example, on that guest:
+
+```bash
+sudo python3 /root/dane-tools/local-vm-lab-dane-install.py \
+  --staged-zone /root/dane-fixture/usage1.zone \
+  --expected-base-sha256 <baseline-sha256> \
+  --expected-base-serial <baseline-soa-serial> \
+  --expected-staged-sha256 <staged-sha256> \
+  --owner _5269._tcp.prosody.lab.test. \
+  --evidence-directory /root/dane-evidence/f4-prosody-install
+```
+
+The evidence parent must already exist in protected storage; each attempt
+requires a new directory. The helper holds the persistent
+`/run/lock/northstar-lab-dane-zone.lock` through validation, replacement,
+`rndc reload lab.test`, and any compensation. All other zone writers must
+honor this same advisory lock; do not rerun the original lab DNS bootstrap
+script during the matrix. Never delete the lock file. The helper checks both
+baseline pins inside the lock, regenerates the exact permitted TLSA/serial
+change, checks candidate and recovery bytes with `named-checkzone`, and
+rechecks the current file before replacing it. It preserves the existing
+owner, group and mode, uses a same-filesystem atomic rename, and fsyncs the
+file, directories and private evidence.
+
+A reload failure, timeout or handled interruption restores the original RRset
+with a serial two greater than the baseline and attempts another reload. The
+command still fails; this is not a passing federation case. If another writer
+changed the zone, compensation refuses to overwrite it. A failed compensation
+records `recovery_required`. Evidence includes original, candidate and recovery
+zone bytes, their pins, command output and a timestamped event journal. An
+abrupt power loss or `SIGKILL` may leave only the prepared record or an
+unfinished event sequence: inspect the actual unsigned file and served SOA,
+then stage a fresh forward-serial repair under the same lock. Do not blindly
+copy an older serial back. After every failure or successful case, collect
+the evidence and verify the restored signed answers and service health.
+
+Installer success proves only that the unsigned file was installed and BIND
+accepted the reload command. Wait out the previous TTL and run the following
+DNSSEC probe; Northstar authorization and delivered-message evidence remain
+separate requirements. The offline installer regression suite in CI does not
+change a guest or count as any F1–F14 result.
+
 After each RRset change and TTL expiry, run the read-only
 `scripts/local-vm-lab-dane-proof.py` probe against the isolated DNS server.
 For example, a usage 1 case uses `--anchor-file <lab DNSKEY file>

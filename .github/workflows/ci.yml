@@ -432,6 +432,7 @@ jobs:
           node scripts/check-omemo-recovery.mjs
           node scripts/check-outbox-delivery.mjs
           node scripts/check-web-auth.mjs
+          node --test scripts/test-admin-pagination.mjs
           node scripts/check-process-isolation.mjs
           node scripts/test-release-preflight-sensitive-files.mjs
           node scripts/check-tracked-sensitive-files.mjs --include-untracked

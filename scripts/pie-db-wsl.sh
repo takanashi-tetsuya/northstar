@@ -8,7 +8,7 @@ northstar_start_test_schema "northstar_pie_it_" "PIE"
 
 cd "$project_dir"
 northstar_use_test_toolchain "$project_dir"
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
 test_name="pie::tests::portable_data_roundtrip_conflicts_and_rollback_are_atomic"
 test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)" || {

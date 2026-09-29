@@ -131,19 +131,107 @@ function showAdminSession() {
   $('#admin-identity').textContent = state.jid ? `管理员：${state.jid}` : '';
 }
 
+const adminLists = {
+  users: { path: 'users', limit: 100, render: renderUsers },
+  sessions: { path: 'sessions', limit: 100, render: renderSessions },
+  rooms: { path: 'muc_rooms', limit: 100, render: renderRooms },
+  reports: { path: 'reports', limit: 25, render: (data) => renderReports(data.reports || []) },
+  invitations: { path: 'invitations', limit: 25, render: (data) => renderInvitations(data.invitations || [], data.required) },
+  operations: { path: 'operations', limit: 25, render: (data) => renderOperations(data.items || []) },
+};
+const adminPages = new Map();
+let adminGeneration = 0;
+
+function clearAdminPages() {
+  adminPages.clear();
+  for (const name of Object.keys(adminLists)) {
+    $(`#${name}`).innerHTML = '';
+    $(`#${name}-pagination`).innerHTML = '';
+  }
+}
+
+function renderAdminPagination(name, page) {
+  const status = page.loading ? 'Loading…'
+    : page.error || (page.nextCursor ? 'More results are available.' : 'No more results.');
+  $(`#${name}-pagination`).innerHTML = `
+    <p class="admin-help" role="status">${page.loaded ? `Page ${page.history.length + 1} · ` : ''}${esc(status)}</p>
+    <button type="button" class="secondary" data-admin-direction="previous" ${page.loading || !page.history.length ? 'disabled' : ''}>Previous page</button>
+    <button type="button" class="secondary" data-admin-direction="next" ${page.loading || !page.nextCursor ? 'disabled' : ''}>Next page</button>
+    ${page.error && !page.loaded ? '<button type="button" class="secondary" data-admin-direction="refresh">Retry</button>' : ''}`;
+}
+
+async function loadAdminPage(name, destination = null) {
+  if (!state.token) return;
+  const definition = adminLists[name];
+  if (!definition) return;
+  let page = adminPages.get(name);
+  if (!destination) {
+    page = { cursor: null, history: [], nextCursor: null, loaded: false, loading: false, error: '' };
+    adminPages.set(name, page);
+    $(`#${name}`).innerHTML = '';
+  }
+  if (!page || page.loading) return;
+  const token = state.token;
+  const cursor = destination?.cursor ?? null;
+  const history = destination?.history ?? [];
+  page.loading = true;
+  page.error = '';
+  renderAdminPagination(name, page);
+  const query = new URLSearchParams({ limit: String(definition.limit) });
+  if (cursor) query.set('cursor', cursor);
+  try {
+    const data = await api(`/api/v1/admin/${definition.path}?${query}`);
+    // A refresh or logout invalidates in-flight pages from the previous view.
+    if (adminPages.get(name) !== page || state.token !== token) return;
+    definition.render(data);
+    Object.assign(page, { cursor, history, nextCursor: data.next_cursor || null, loaded: true });
+  } catch (error) {
+    if (adminPages.get(name) !== page || state.token !== token) return;
+    if (error.status === 401) { await logoutAdmin(); return; }
+    // Keep the current page and its cursor so a failed continuation can be retried.
+    page.error = error.message;
+  } finally {
+    if (adminPages.get(name) === page && state.token === token) {
+      page.loading = false;
+      renderAdminPagination(name, page);
+    }
+  }
+}
+
+async function changeAdminPage(name, direction) {
+  const page = adminPages.get(name);
+  if (!page || page.loading) return;
+  if (direction === 'next' && page.nextCursor) {
+    await loadAdminPage(name, { cursor: page.nextCursor, history: [...page.history, page.cursor] });
+  } else if (direction === 'previous' && page.history.length) {
+    await loadAdminPage(name, { cursor: page.history.at(-1), history: page.history.slice(0, -1) });
+  } else if (direction === 'refresh') {
+    await loadAdminPage(name);
+  }
+}
+
+function renderUsers(data) {
+  $('#users').innerHTML = (data.users || []).map((user) => `<tr>
+    <td><strong>${esc(user.username)}</strong></td>
+    <td>${user.is_admin ? '管理员' : '用户'}</td>
+    <td>${user.is_disabled ? '已停用' : '正常'}</td>
+    <td>${new Date(user.created_at).toLocaleDateString(currentLocale())}</td>
+    <td><button data-user="${user.id}" data-action="disabled" data-value="${!user.is_disabled}">${user.is_disabled ? '启用' : '停用'}</button><button data-user="${user.id}" data-action="admin" data-value="${!user.is_admin}">${user.is_admin ? '撤销管理' : '设为管理'}</button></td>
+  </tr>`).join('');
+}
+
 async function loadAdmin() {
   if (!state.token) return;
+  const generation = ++adminGeneration;
+  const token = state.token;
+  clearAdminPages();
   try {
-    const [stats, users, publicConfig] = await Promise.all([
+    const [stats, publicConfig] = await Promise.all([
       api('/api/v1/admin/stats'),
-      api('/api/v1/admin/users'),
       api('/api/v1/config'),
     ]);
     const invitationAvailable = Boolean(publicConfig.capabilities?.invitation_registration);
-    const [reports, invitations] = await Promise.all([
-      api('/api/v1/admin/reports').catch(() => null),
-      invitationAvailable ? api('/api/v1/admin/invitations') : Promise.resolve(null),
-    ]);
+    if (generation !== adminGeneration || token !== state.token) return;
     const values = [
       ['账户', stats.users],
       ['在线会话', stats.online_sessions],
@@ -177,23 +265,17 @@ async function loadAdmin() {
     $('#invitation-control').classList.toggle('hidden', !invitationAvailable);
     $('#island-toggle').checked = state.runtime.islandMode;
     $('#island-toggle').disabled = stats.island_mode === undefined;
-    $('#users').innerHTML = users.users.map((user) => `<tr>
-      <td><strong>${esc(user.username)}</strong></td>
-      <td>${user.is_admin ? '管理员' : '用户'}</td>
-      <td>${user.is_disabled ? '已停用' : '正常'}</td>
-      <td>${new Date(user.created_at).toLocaleDateString(currentLocale())}</td>
-      <td><button data-user="${user.id}" data-action="disabled" data-value="${!user.is_disabled}">${user.is_disabled ? '启用' : '停用'}</button><button data-user="${user.id}" data-action="admin" data-value="${!user.is_admin}">${user.is_admin ? '撤销管理' : '设为管理'}</button></td>
-    </tr>`).join('');
-    if (invitations) renderInvitations(invitations.invitations || [], invitations.required);
-    if (reports) renderReports(reports.reports || []);
-    else $('#reports').innerHTML = '<p class="admin-help">服务器更新并重启后启用举报队列。</p>';
     await Promise.all([
+      loadAdminPage('users'),
+      loadAdminPage('reports'),
+      invitationAvailable ? loadAdminPage('invitations') : Promise.resolve(),
       loadSessions(),
       loadRooms(),
       loadOfflineStats(),
       loadOperations(),
     ]);
   } catch (error) {
+    if (generation !== adminGeneration || token !== state.token) return;
     if (/authentication|required|unauthorized/i.test(error.message)) logoutAdmin();
     else $('#admin-error').textContent = error.message;
   }
@@ -254,30 +336,28 @@ function humanBytes(bytes) {
   return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function renderSessions(data) {
+  $('#sessions').innerHTML = (data.sessions || []).map((session) => `<article class="admin-item">
+    <header><strong data-i18n-ignore>${esc(session.jid)}</strong><span class="queue-status">${esc(session.node)}</span></header>
+    <p>${session.ip ? `IP ${esc(session.ip)} · ` : ''}${humanDuration(session.connected_duration_seconds)} · ${esc(session.resource)}</p>
+    <button type="button" data-kick-session="${session.connection_id}" data-session-jid="${esc(session.jid)}">Disconnect</button>
+  </article>`).join('') || '<p class="admin-help">No connected resources.</p>';
+}
+
 async function loadSessions() {
-  try {
-    const data = await api('/api/v1/admin/sessions?limit=100');
-    $('#sessions').innerHTML = (data.sessions || []).map((session) => `<article class="admin-item">
-      <header><strong data-i18n-ignore>${esc(session.jid)}</strong><span class="queue-status">${esc(session.node)}</span></header>
-      <p>${session.ip ? `IP ${esc(session.ip)} · ` : ''}${humanDuration(session.connected_duration_seconds)} · ${esc(session.resource)}</p>
-      <button type="button" data-kick-session="${session.connection_id}" data-session-jid="${esc(session.jid)}">Disconnect</button>
-    </article>`).join('') || '<p class="admin-help">No connected resources.</p>';
-  } catch (error) {
-    $('#sessions').innerHTML = `<p class="admin-help">${esc(error.message)}</p>`;
-  }
+  await loadAdminPage('sessions');
+}
+
+function renderRooms(data) {
+  $('#rooms').innerHTML = (data.rooms || []).map((room) => `<article class="admin-item">
+    <header><strong data-i18n-ignore>${esc(room.title || room.localpart)}</strong><span class="queue-status">${room.current_occupants} online</span></header>
+    <p data-i18n-ignore>${esc(room.localpart)}@conference.${esc(state.domain)} · ${room.non_anonymous ? 'non-anonymous' : 'semi-anonymous'} · ${room.persistent ? 'persistent' : 'temporary'}</p>
+    <button type="button" data-destroy-room="${esc(room.localpart)}">Destroy</button>
+  </article>`).join('') || '<p class="admin-help">No rooms exist.</p>';
 }
 
 async function loadRooms() {
-  try {
-    const data = await api('/api/v1/admin/muc_rooms?limit=100');
-    $('#rooms').innerHTML = (data.rooms || []).map((room) => `<article class="admin-item">
-      <header><strong data-i18n-ignore>${esc(room.title || room.localpart)}</strong><span class="queue-status">${room.current_occupants} online</span></header>
-      <p data-i18n-ignore>${esc(room.localpart)}@conference.${esc(state.domain)} · ${room.non_anonymous ? 'non-anonymous' : 'semi-anonymous'} · ${room.persistent ? 'persistent' : 'temporary'}</p>
-      <button type="button" data-destroy-room="${esc(room.localpart)}">Destroy</button>
-    </article>`).join('') || '<p class="admin-help">No rooms exist.</p>';
-  } catch (error) {
-    $('#rooms').innerHTML = `<p class="admin-help">${esc(error.message)}</p>`;
-  }
+  await loadAdminPage('rooms');
 }
 
 async function loadOfflineStats() {
@@ -313,12 +393,7 @@ function renderOperations(operations) {
 }
 
 async function loadOperations() {
-  try {
-    const data = await api('/api/v1/admin/operations?limit=25');
-    renderOperations(data.items || []);
-  } catch (error) {
-    $('#operations').innerHTML = `<p class="admin-help">${esc(error.message)}</p>`;
-  }
+  await loadAdminPage('operations');
 }
 
 async function inspectOperation(id) {
@@ -447,6 +522,8 @@ async function revokeApiSession(token) {
 async function logoutAdmin() {
   const token = state.token;
   state.token = null;
+  adminGeneration += 1;
+  clearAdminPages();
   state.jid = null;
   sessionStorage.removeItem('admin_token');
   sessionStorage.removeItem('admin_jid');
@@ -753,6 +830,13 @@ $('#operations').addEventListener('click', async (event) => {
   }
 });
 
+for (const name of Object.keys(adminLists)) {
+  $(`#${name}-pagination`).addEventListener('click', (event) => {
+    const button = event.target.closest('[data-admin-direction]');
+    if (button && !button.disabled) void changeAdminPage(name, button.dataset.adminDirection);
+  });
+}
+
 $('#refresh-admin').addEventListener('click', loadAdmin);
 $('#refresh-sessions').addEventListener('click', loadSessions);
 $('#refresh-rooms').addEventListener('click', loadRooms);
@@ -762,6 +846,8 @@ $('#operation-lookup-form').addEventListener('submit', async (event) => {
   const id = $('#operation-lookup-id').value.trim();
   const button = event.currentTarget.querySelector('button[type="submit"]');
   button.disabled = true;
+  adminPages.delete('operations');
+  $('#operations-pagination').innerHTML = '';
   try {
     const operation = await api(`/api/v1/admin/operations/${encodeURIComponent(id)}`);
     renderOperations([operation]);

@@ -11,9 +11,18 @@ northstar_use_test_toolchain "$project_dir"
 
 for test_name in \
   mix_mam_snapshot_filters_cursors_and_metadata_are_consistent \
-  authorized_mix_mam_peer_filter_uses_current_visibility_snapshot; do
-  TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
+  authorized_mix_mam_peer_filter_uses_current_visibility_snapshot \
+  federated_mutation_result_and_outbox_share_the_authority_transaction; do
+  if ! output="$(TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
     cargo test --locked --offline \
     "db::mix::mam_integration_tests::$test_name" \
-    -- --ignored --nocapture
+    -- --ignored --exact --nocapture 2>&1)"; then
+    printf '%s\n' "$output"
+    exit 1
+  fi
+  printf '%s\n' "$output"
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
+    echo "expected exactly one ignored MIX test to execute: $test_name" >&2
+    exit 1
+  fi
 done

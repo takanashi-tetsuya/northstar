@@ -2,6 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$project_dir/scripts/lib/test-database.sh"
+northstar_test_database_config
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 random_suffix="$(tr -d '-' </proc/sys/kernel/random/uuid)"
 test_schema="northstar_admin_cleanup_it_$random_suffix"
@@ -20,7 +22,7 @@ created=0
 cleanup() {
   if [[ "$created" == "1" ]]; then
     PGPASSWORD=xmpp-test-password psql \
-      --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+      "${northstar_test_database_args[@]}" \
       --set ON_ERROR_STOP=1 \
       --command "DROP SCHEMA IF EXISTS \"$test_schema\" CASCADE" >/dev/null
   fi
@@ -30,7 +32,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 existing="$(PGPASSWORD=xmpp-test-password psql \
-  --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+  "${northstar_test_database_args[@]}" \
   --tuples-only --no-align \
   --command "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$test_schema')")"
 if [[ "$existing" == "t" ]]; then
@@ -38,7 +40,7 @@ if [[ "$existing" == "t" ]]; then
   exit 2
 fi
 PGPASSWORD=xmpp-test-password psql \
-  --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+  "${northstar_test_database_args[@]}" \
   --set ON_ERROR_STOP=1 --command "CREATE SCHEMA \"$test_schema\"" >/dev/null
 created=1
 
@@ -49,7 +51,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
 run_exact_ignored() {
   local test_name="$1"
@@ -76,7 +78,7 @@ run_exact_ignored \
 cleanup
 created=0
 remaining="$(PGPASSWORD=xmpp-test-password psql \
-  --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+  "${northstar_test_database_args[@]}" \
   --tuples-only --no-align \
   --command "SELECT COUNT(*) FROM pg_namespace WHERE nspname='$test_schema'")"
 if [[ "$remaining" != "0" ]]; then

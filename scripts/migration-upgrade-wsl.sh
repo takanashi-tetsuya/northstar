@@ -3,6 +3,8 @@ set -euo pipefail
 umask 077
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$project_dir/scripts/lib/test-database.sh"
+northstar_test_database_config
 cd "$project_dir"
 
 # This suite deliberately exercises an upgrade from a historical schema.  A
@@ -63,10 +65,7 @@ fi
 
 database_args=(
   --no-psqlrc
-  --host 127.0.0.1
-  --port 5432
-  --username xmpp_test
-  --dbname xmpp_test
+  "${northstar_test_database_args[@]}"
   --set ON_ERROR_STOP=1
 )
 created=0
@@ -310,7 +309,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 test_name="db::migration_upgrade_test::baseline_0013_upgrades_through_the_real_domain_migrator"
 
 run_migrator() {
@@ -394,11 +393,11 @@ if [[ "$(psql_named_schema "$pre_fix_schema" --tuples-only --no-align --command 
   echo "PostgreSQL did not select the isolated migration 0132 schema" >&2
   exit 1
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$pre_fix_schema"
+export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$pre_fix_schema")"
 run_migrator "db::migration_upgrade_test::migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced"
 drop_pre_fix_schema
 pre_fix_created=0
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
 version_one_checksum="$(sha384sum migrations/0001_initial.sql | awk '{print $1}')"
 psql_schema --command \

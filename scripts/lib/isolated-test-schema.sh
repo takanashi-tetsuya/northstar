@@ -3,6 +3,8 @@
 # Shared lifecycle for disposable PostgreSQL integration-test schemas.
 # Callers provide a fixed prefix and keep their own test commands.
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-database.sh"
+
 northstar_cleanup_test_schema() {
   local status=$? remains
   trap - EXIT INT TERM
@@ -24,6 +26,7 @@ northstar_cleanup_test_schema() {
 
 northstar_start_test_schema() {
   local prefix=$1 label=$2 random_suffix
+  northstar_test_database_config || return
   if [[ ! "$prefix" =~ ^northstar_[a-z0-9_]+_$ ]]; then
     echo "invalid isolated test schema prefix: $prefix" >&2
     return 2
@@ -41,7 +44,7 @@ northstar_start_test_schema() {
   fi
 
   northstar_schema_label=$label
-  northstar_schema_database_args=(--host 127.0.0.1 --username xmpp_test --dbname xmpp_test)
+  northstar_schema_database_args=("${northstar_test_database_args[@]}")
   northstar_schema_created=0
   trap northstar_cleanup_test_schema EXIT
   trap 'exit 130' INT

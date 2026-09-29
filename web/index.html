@@ -84,14 +84,17 @@
             </form>
             <p id="invitation-token" class="one-time-token hidden"></p>
             <div id="invitations" class="admin-card-list"></div>
+            <div id="invitations-pagination" class="admin-pagination"></div>
           </section>
           <section class="admin-subpanel">
             <div class="subpanel-heading"><div><p class="eyebrow">Sessions</p><h3>Connected resources</h3></div><button id="refresh-sessions" class="secondary" type="button">Refresh</button></div>
             <div id="sessions" class="admin-card-list"></div>
+            <div id="sessions-pagination" class="admin-pagination"></div>
           </section>
           <section class="admin-subpanel">
             <div class="subpanel-heading"><div><p class="eyebrow">Rooms</p><h3>Multi-user chat rooms</h3></div><button id="refresh-rooms" class="secondary" type="button">Refresh</button></div>
             <div id="rooms" class="admin-card-list"></div>
+            <div id="rooms-pagination" class="admin-pagination"></div>
           </section>
           <section class="admin-subpanel">
             <div class="subpanel-heading"><div><p class="eyebrow">Delivery</p><h3>Offline queue</h3></div></div>
@@ -116,13 +119,16 @@
             <button class="secondary" type="submit">Find operation</button>
           </form>
           <div id="operations" class="admin-card-list"></div>
+          <div id="operations-pagination" class="admin-pagination"></div>
         </section>
         <section class="admin-subpanel moderation-panel">
           <div class="subpanel-heading"><div><p class="eyebrow">Moderation</p><h3>举报与申诉队列</h3></div><span>仅显示用户明确选取并提交的聊天记录</span></div>
           <div id="reports" class="admin-card-list"></div>
+          <div id="reports-pagination" class="admin-pagination"></div>
         </section>
         <h3 class="admin-table-title">账户管理</h3>
         <div class="table-wrap"><table><thead><tr><th>账户</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="users"></tbody></table></div>
+        <div id="users-pagination" class="admin-pagination"></div>
       </div>
     </section>
 
@@ -132,6 +138,6 @@
     </section>
   </main>
   <footer>Northstar XMPP · Rust powered · Own your conversations.</footer>
-  <script type="module" src="/app.js?v=20260827-1"></script>
+  <script type="module" src="/app.js?v=20260929-1"></script>
 </body>
 </html>

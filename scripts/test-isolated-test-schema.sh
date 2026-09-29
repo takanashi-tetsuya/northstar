@@ -10,6 +10,7 @@ mkdir "$fixture_dir/bin"
 cat >"$fixture_dir/bin/psql" <<'PSQL'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$SCHEMA_CALLS"
+[[ " $* " == *" --port ${PGPORT:-5432} "* ]] || exit 98
 case "$*" in
   *'SELECT EXISTS'*)
     if [[ -e "$SCHEMA_STATE" ]]; then printf 't\n'; else printf 'f\n'; fi ;;
@@ -52,6 +53,12 @@ run_case 0
 [[ ! -e "$fixture_dir/state" ]]
 [[ "$(wc -l <"$fixture_dir/calls")" == 4 ]]
 
+run_case 0 PGPORT=35845
+for port in 0 65536 -1 abc '5432/other' '5432,5433'; do
+  run_case 2 PGPORT="$port"
+  [[ ! -s "$fixture_dir/calls" ]]
+done
+
 CASE_BODY_STATUS=17 run_case 17
 [[ ! -e "$fixture_dir/state" ]]
 
@@ -74,7 +81,8 @@ rm -f -- "$fixture_dir/state"
 # Each migrated runner must still execute its own tests and release its schema.
 cat >"$fixture_dir/bin/cargo" <<'CARGO'
 #!/usr/bin/env bash
-printf 'test result: ok. 1 passed; 0 failed\n'
+[[ "${TEST_DATABASE_URL:-}" == "postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D"* ]] || exit 98
+printf 'test result: ok. %s passed; 0 failed\n' "${MOCK_PASSED_COUNT:-1}"
 CARGO
 chmod 700 "$fixture_dir/bin/cargo"
 for runner in retention pie mix-mam abuse-reporting mix-family pubsub-outbox sm; do
@@ -82,9 +90,20 @@ for runner in retention pie mix-mam abuse-reporting mix-family pubsub-outbox sm;
   env PATH="$fixture_dir/bin:$PATH" \
     SCHEMA_STATE="$fixture_dir/state" SCHEMA_CALLS="$fixture_dir/calls" \
     XMPP_TEST_SCHEMA= XMPP_TEST_SYSTEM_TOOLCHAIN=true \
+    PGPORT=35845 \
     bash "$project_dir/scripts/$runner-db-wsl.sh" >/dev/null
   [[ ! -e "$fixture_dir/state" ]]
   [[ "$(wc -l <"$fixture_dir/calls")" == 4 ]]
 done
+
+# A renamed or missing ignored MIX regression must not silently become green.
+if env PATH="$fixture_dir/bin:$PATH" \
+    SCHEMA_STATE="$fixture_dir/state" SCHEMA_CALLS="$fixture_dir/calls" \
+    XMPP_TEST_SCHEMA= XMPP_TEST_SYSTEM_TOOLCHAIN=true PGPORT=35845 MOCK_PASSED_COUNT=0 \
+    bash "$project_dir/scripts/mix-mam-db-wsl.sh" >/dev/null 2>&1; then
+  echo 'MIX suite accepted zero executed tests' >&2
+  exit 1
+fi
+[[ ! -e "$fixture_dir/state" ]]
 
 echo "isolated test schema lifecycle passed"

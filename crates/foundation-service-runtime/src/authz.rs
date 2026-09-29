@@ -126,7 +126,7 @@ pub struct AuthorizationRegistry {
 impl AuthorizationRegistry {
     pub fn register(&mut self, policy: RpcMethodPolicy) -> Result<(), AuthorizationError> {
         let key = policy.key();
-        if self.policies.contains_key(&key) {
+        if policy.allowed_workload_services.is_empty() || self.policies.contains_key(&key) {
             return Err(AuthorizationError::InvalidPolicy);
         }
         self.policies.insert(key, policy);
@@ -151,9 +151,7 @@ impl AuthorizationRegistry {
             .validate_at(now)
             .map_err(|_| AuthorizationError::MissingWorkload)?;
         let caller_service = workload.identity().service();
-        if !policy.allowed_workload_services.is_empty()
-            && !policy.allowed_workload_services.contains(caller_service)
-        {
+        if !policy.allowed_workload_services.contains(caller_service) {
             return Err(AuthorizationError::WorkloadNotAllowed);
         }
         if let Some(scope) = policy.required_scope.as_deref() {
@@ -239,6 +237,38 @@ mod tests {
             "1",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn omitted_workload_allowlist_cannot_register_an_rpc() {
+        let mut registry = AuthorizationRegistry::default();
+        for policy in [
+            RpcMethodPolicy::new("admin", "Revoke").unwrap(),
+            RpcMethodPolicy::new("admin", "Revoke")
+                .unwrap()
+                .require_scope("admin:revoke")
+                .unwrap()
+                .require_role("security-admin")
+                .unwrap()
+                .require_reason(),
+        ] {
+            assert_eq!(
+                registry.register(policy),
+                Err(AuthorizationError::InvalidPolicy)
+            );
+            assert!(registry.is_empty());
+            assert_eq!(
+                registry.authorize(
+                    "admin",
+                    "Revoke",
+                    Some(&workload("unlisted-service")),
+                    None,
+                    None,
+                    SystemTime::now(),
+                ),
+                Err(AuthorizationError::UnregisteredMethod)
+            );
+        }
     }
 
     #[test]

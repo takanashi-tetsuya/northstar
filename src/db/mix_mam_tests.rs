@@ -898,8 +898,14 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
     let FederatedMixIqReplay::Replay(response) = exact else {
         panic!("committed mutation lost its exact result")
     };
-    assert!(response.contains("type=\"result\""));
-    assert!(response.contains(&format!("channel=\"{localpart}\"")));
+    let document = roxmltree::Document::parse(&response).unwrap();
+    let iq = document.root_element();
+    assert!(iq.has_tag_name(("jabber:client", "iq")));
+    assert_eq!(iq.attribute("type"), Some("result"));
+    assert_eq!(iq.attribute("id"), Some(request_id.as_str()));
+    let create = iq.children().find(|child| child.is_element()).unwrap();
+    assert!(create.has_tag_name(("urn:xmpp:mix:core:1", "create")));
+    assert_eq!(create.attribute("channel"), Some(localpart.as_str()));
     assert!(
         create_mix_channel(
             &pool,
@@ -913,6 +919,19 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
         .await
         .is_err(),
         "an exact retry must stop at the durable result fence"
+    );
+    assert_eq!(
+        federated_mix_iq_replay(
+            &pool,
+            &context.authenticated_domain,
+            &context.actor_jid,
+            &request_id,
+            &digest,
+        )
+        .await
+        .unwrap(),
+        FederatedMixIqReplay::Replay(response),
+        "an exact retry must preserve the committed response byte for byte"
     );
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mix_channels WHERE service_domain=$1 AND localpart=$2",

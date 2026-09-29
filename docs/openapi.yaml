@@ -6,6 +6,14 @@ info:
     Account, anti-abuse, reporting, encrypted-history, HTTP Upload and administration API.
     Generic XMPP protocol features are documented separately in XEP_MATRIX.md.
 
+    Ordinary REST request bodies (including direct JSON extractors and empty-body commands)
+    have a 256 KiB maximum and a 15-second absolute read deadline before handler execution.
+    The public and administration listeners share 128 concurrent body reads per process and
+    8 per client IP, resolved with the configured trusted-proxy policy. Admission does not queue:
+    exhaustion returns 429 with Retry-After: 1; expiry returns 408 with error.code request_timeout.
+    Failed HTTP/1 body reads close the connection. These limits do not time out database work.
+    Upload PUT and BOSH use their separate streaming admission, size and deadline policies.
+
     Every `/api/` response carries `X-Request-ID`. JSON request bodies reject unknown fields.
     Path/query decoding failures use the same non-diagnostic `bad_request` error object. Collection
     cursors are opaque, short-lived, scope-bound keyset cursors: clients must not inspect them and

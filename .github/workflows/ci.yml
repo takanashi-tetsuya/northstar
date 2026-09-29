@@ -526,6 +526,14 @@ jobs:
         run: |
           bash scripts/github-ci-run.sh "Pinned non-root container build" bash -Eeuo pipefail <<'CONTAINER_CI'
           docker compose config --quiet
+          # Use precisely the Caddy image selected by Compose; validate both
+          # its config adapter and real loopback request/response behavior.
+          caddy_fixture="$(mktemp -d)"
+          trap 'rm -rf "$caddy_fixture"' EXIT
+          bash scripts/prepare-caddy-test.sh "$caddy_fixture"
+          python3 scripts/test-caddy-ingress.py --caddy "$caddy_fixture/caddy"
+          rm -rf "$caddy_fixture"
+          trap - EXIT
           docker run --rm --entrypoint /bin/promtool \
             -v "$PWD/deploy/monitoring:/etc/northstar-monitoring:ro" \
             prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac \
@@ -725,6 +733,10 @@ jobs:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
         run: |
+          caddy_fixture="$(mktemp -d "$RUNNER_TEMP/northstar-caddy.XXXXXX")"
+          trap 'rm -rf "$caddy_fixture"' EXIT
+          bash scripts/prepare-caddy-test.sh "$caddy_fixture"
+          export NORTHSTAR_TEST_CADDY_BINARY="$caddy_fixture/caddy"
           bash scripts/github-ci-run.sh "Protocol integration" bash scripts/integration-wsl.sh
           bash scripts/github-ci-run.sh "Message PoW wire integration" bash scripts/message-pow-wire-wsl.sh
           bash scripts/github-ci-run.sh "Profile storage runtime" bash scripts/profile-storage-runtime-wsl.sh

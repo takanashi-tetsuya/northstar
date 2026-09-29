@@ -32,6 +32,7 @@ impl axum::extract::FromRef<Arc<AppState>> for SessionAdminContext {
     }
 }
 
+pub(crate) mod http_body_admission;
 pub(crate) mod http_policy;
 pub(crate) use http_policy::{AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext};
 pub(crate) type AdminDispatchContext = crate::services::admin_dispatch::AdminDispatchService<
@@ -2458,6 +2459,7 @@ pub struct AppState {
     login_service: crate::services::http_login::HttpLoginService<
         db::http_login_repository::PostgresHttpLoginRepository,
     >,
+    http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     password_change_service: crate::services::password_change::PasswordChangeService<
         db::password_change_repository::PostgresPasswordChangeRepository,
     >,
@@ -3487,6 +3489,7 @@ impl AppState {
         HttpTransportPolicy::new(
             self.config.trusted_proxy_ips.clone(),
             Arc::clone(&self.metrics.http_insecure_requests_rejected_total),
+            Arc::clone(&self.http_body_admission),
         )
     }
 
@@ -4849,6 +4852,7 @@ impl AppState {
             caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             dialback_secret,
             dialback_verifications: Arc::new(Semaphore::new(64)),
+            http_body_admission: Arc::new(http_body_admission::HttpBodyAdmission::default()),
             client_connections,
             client_connections_by_ip: DashMap::new(),
             upload_runtime,

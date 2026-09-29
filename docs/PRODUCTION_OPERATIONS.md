@@ -71,6 +71,51 @@ balancer or container orchestrator should reach `/readyz` directly on the
 private application network; never publish that database-backed path through
 the public Caddy virtual host.
 
+## HTTP request body admission
+
+All ordinary `/api` and `/api/*` bodies are read before route extractors under
+an absolute 15-second deadline and a 256 KiB ceiling. This includes unauthenticated
+login, direct Axum JSON extractors such as Passkeys, empty-body commands, and
+requests with chunked transfer encoding. Sending occasional bytes does not
+extend the deadline. Public and administration listeners share one process
+budget: at most 128 body reads and 8 per client IP, with no waiting queue.
+Client identity uses the existing trusted-proxy/X-Forwarded-For rules; ambiguous
+forwarding falls back to the peer and IPv4-mapped addresses share the IPv4 slot.
+Inactive source entries are removed, so the admission map is also bounded.
+
+Timeout returns `408` / `request_timeout`; exhausted admission returns `429`
+with `Retry-After: 1`. HTTP/1 rejections close the connection instead of draining
+an unfinished body. Completion, transport failure, timeout, and cancellation
+release the read permit before the handler executes. The deadline does not
+cancel database mutations. Upload PUT has its own streaming limits and
+15-minute attempt budget; BOSH keeps its configured body-read and long-poll
+policies. Neither is buffered by the small REST-body middleware.
+
+The shipped Caddy policy explicitly sets a 10-second header deadline, 64 KB
+header ceiling, one-minute idle connection timeout, and a 20-second default
+body deadline that also bounds unmatched routes. Ordinary REST reads retain
+that deadline and a 256 KiB limit; only upload PUT extends it to 15 minutes
+and BOSH body reads to 30 seconds, without applying a
+short response-write deadline to long polling. Responses with status 408, 413,
+or 429 close HTTP/1 connections. The route-specific `request_body read_timeout`
+option is supported by the Compose-pinned Caddy 2.11.4; it is experimental in
+that version, so image changes must rerun the adapter and socket regression.
+See the [pinned Caddy request-body implementation](https://github.com/caddyserver/caddy/blob/v2.11.4/modules/caddyhttp/requestbody/requestbody.go)
+and [server timeout documentation](https://caddyserver.com/docs/caddyfile/options#timeouts).
+
+`scripts/test-caddy-ingress.py` uses private loopback TLS listeners and the exact
+Caddy binary extracted from the Compose image. CI verifies early error delivery,
+EOF, fragmented REST/BOSH/upload bodies and the actual header deadline. The
+HTTP/2 probe verifies that an unfinished rejected stream closes and another
+request on the same TLS connection still succeeds. Slow-upload, BOSH long-poll
+and WebSocket fixtures outlive the ordinary body deadline. The
+protocol integration job also repeats the eight-connection unauthenticated
+slow-body regression through TLS Caddy against the real application, including
+the shared public/admin budget and capacity recovery. These are bounded fixture
+checks, not public deployment or HTTP/2/3 saturation qualification. Keep the
+backend private and validate the same policies at any additional ingress;
+body-read admission does not cap idle sockets before headers are received.
+
 ## Console log delivery
 
 Core and standalone retain their existing text/JSON formatting, ANSI policy,

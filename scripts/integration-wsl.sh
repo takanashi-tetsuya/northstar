@@ -334,6 +334,11 @@ XMPP_TEST_C2S_UNTRUSTED_KEY="$runtime_dir/client-untrusted.key" \
 python3 scripts/integration-wsl.py
 
 if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" && "${XMPP_TEST_ONLY_PASSKEYS:-false}" != "true" ]]; then
+  python3 scripts/rest-body-wire.py --port "$test_http_port" --admin-port "$test_web_admin_port"
+  if [[ -n "${NORTHSTAR_TEST_CADDY_BINARY:-}" ]]; then
+    python3 scripts/test-caddy-ingress.py --caddy "$NORTHSTAR_TEST_CADDY_BINARY" \
+      --backend-port "$test_http_backend_port" --admin-port "$test_web_admin_port"
+  fi
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
   XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \

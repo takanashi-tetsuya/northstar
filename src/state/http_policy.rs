@@ -89,18 +89,28 @@ impl PublicDiscoveryContext {
 pub(crate) struct HttpTransportPolicy {
     trusted_proxies: Arc<[IpAddr]>,
     insecure_rejections: Arc<AtomicU64>,
+    body_admission: Arc<super::http_body_admission::HttpBodyAdmission>,
 }
 
 impl HttpTransportPolicy {
-    pub(super) fn new(trusted_proxies: Vec<IpAddr>, insecure_rejections: Arc<AtomicU64>) -> Self {
+    pub(crate) fn new(
+        trusted_proxies: Vec<IpAddr>,
+        insecure_rejections: Arc<AtomicU64>,
+        body_admission: Arc<super::http_body_admission::HttpBodyAdmission>,
+    ) -> Self {
         Self {
             trusted_proxies: trusted_proxies.into(),
             insecure_rejections,
+            body_admission,
         }
     }
 
     pub(crate) fn trusted_proxies(&self) -> &[IpAddr] {
         &self.trusted_proxies
+    }
+
+    pub(crate) fn body_admission(&self) -> &Arc<super::http_body_admission::HttpBodyAdmission> {
+        &self.body_admission
     }
 
     pub(crate) fn record_insecure_rejection(&self) -> u64 {
@@ -224,6 +234,7 @@ mod tests {
         let policy = HttpTransportPolicy::new(
             vec![proxy],
             Arc::clone(&metrics.http_insecure_requests_rejected_total),
+            Arc::new(super::super::http_body_admission::HttpBodyAdmission::default()),
         );
         assert_eq!(policy.trusted_proxies(), &[proxy]);
         assert_eq!(policy.clone().record_insecure_rejection(), 8);

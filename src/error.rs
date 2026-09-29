@@ -29,6 +29,8 @@ pub enum AppError {
     IdempotencyBusy { retry_after: u64 },
     #[error("request body is too large")]
     PayloadTooLarge,
+    #[error("request body read deadline exceeded")]
+    RequestTimeout,
     #[error("rate limited")]
     RateLimited(serde_json::Value),
     #[error("{message}")]
@@ -98,6 +100,11 @@ impl IntoResponse for AppError {
             Self::PayloadTooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
+                self.to_string(),
+            ),
+            Self::RequestTimeout => (
+                StatusCode::REQUEST_TIMEOUT,
+                "request_timeout",
                 self.to_string(),
             ),
             Self::Unavailable(_) => (

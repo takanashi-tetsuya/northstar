@@ -39,6 +39,7 @@ use tower_http::trace::TraceLayer;
 
 use axum::http::request::Parts;
 
+mod body_limits;
 pub mod extract;
 pub(crate) mod governance_cursor;
 pub use extract::{ApiPath, ApiQuery};
@@ -874,6 +875,10 @@ fn common_http_layers(
     state: HttpTransportPolicy,
     allow_plaintext_observability: bool,
 ) -> Router {
+    let router = router.layer(middleware::from_fn_with_state(
+        state.clone(),
+        body_limits::read_rest_body,
+    ));
     let router = if allow_plaintext_observability {
         router.layer(middleware::from_fn_with_state(state, secure_http_transport))
     } else {

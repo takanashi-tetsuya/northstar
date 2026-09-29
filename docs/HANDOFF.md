@@ -10,6 +10,8 @@
 
 ## 2026-09-29 審計修復接續
 
+另依 [安全審計](SECURITY_AUDIT_2026-09-29.zh-TW.md) 修復 S1：一般 REST 主體在 handler 前有 15 秒絕對讀取期限、256 KiB 上限、程序共享 128／每來源 8 個不排隊名額，408／429 拒絕及 HTTP/1 關閉；上傳 PUT、BOSH 與後續交易保留各自期限。固定 Caddy 範例加入分路由期限及連線策略，新增真實 socket、Caddy TLS 及完整應用程式慢速主體回歸。2,272 項 workspace 測試、完整 Clippy、8 項主體保護回歸、隔離 PostgreSQL 的完整 integration 通過；直連及 TLS Caddy 的 8 條未完成主體約 15 秒被拒絕，名額恢復成功。Caddy 補測確認 HTTP/2 拒絕後可重用同一連線，長上傳／BOSH／WebSocket 不受一般主體期限誤傷。私有 `target/security-fixes-2026-09-29/verification.json` 及後續 `ci-*` 目錄保存原始結果與逐項核對。既有 `27ae63d` 的 CI run `36509879792` 已核對 32 成功、1 條件性跳過與 CI required 成功；安全修復須另追蹤其新 HEAD，不能沿用。此次 Rust／Caddy 變更尚未部署至 VM。
+
 依 [審計報告](AUDIT_2026-09-29.zh-TW.md) 修復 A1–A5：六個管理列表的手動分頁、僅 owner 可讀寫的本機 `.env`／備份、原型 RPC 空允許名單拒絕、以 XML 結構驗證且納入 CI 的 MIX 原子性回歸，以及 psql／SQLx 共用的非預設埠設定。私有 `target/audit-fixes-2026-09-29/` 保存結果；9 項分頁測試、20 項 foundation 測試與獨立 PostgreSQL 埠 60417 上的 13 組資料庫腳本通過，schema 清理及 fixture 停止成功。獨立 Chromium 的假資料 API 測試確認六個列表的 DOM 分頁可操作，沒有頁面錯誤。既有 `7522df2` 的 CI run `36453150155` 已核對為 32 成功、1 條件性跳過，包含 CI required；本次修復推送後須重新追蹤新 HEAD。
 
 `.env` 及 `.env.bak` 的權限修復只作用於本機，未更換內容／憑證。審計原始結果與修復後證據分開保留。六台 VM 與原候選未變；原浸泡的退出證據缺口和待答覆的重跑決定仍有效。使用者要求修復審計問題，沒有因此授權替換 VM candidate 或自行重新浸泡。
@@ -68,11 +70,11 @@ bash scripts/finalize-soak.sh \
 
 ## 後續順序與未完成證據
 
-1. `5689e0f` 的 CI 失敗已保存並診斷；本次 MUC 身分衝突修正推送後，追蹤新 HEAD 的完整 CI。直接查 `origin/dev` 與對應 run，不沿用舊綠燈。保持工作樹乾淨，不開 PR。
+1. `7522df2` 的 MUC 修正與 `27ae63d` 的 A1–A5 修正完整 CI 已分別通過；本次 S1 安全修正推送後，追蹤新 HEAD 的完整 CI。直接查 `origin/dev` 與對應 run，不沿用舊綠燈。保持工作樹乾淨，不開 PR。
 2. 原輪因 systemd 退出證據缺失而阻擋封存。保留原始證據及六台 VM 現狀，等待是否以保留退出狀態的新 unit 重跑完整 24 小時的決定；不要自行開始負載或補 helper。即使同意同 binary 重跑，也只驗證 `0ea54b0`，不能當作本次 Rust 修正的驗收；部署新 binary 仍未獲授權。
 3. 核對並補齊 guest helper、等待上傳冷卻，跑同一 binary 的 30 分鐘 active load。記錄各 lane 樣本數、延遲和資源指標，不把它當作完整容量驗收。
 4. 完成後逐案執行本地聯邦/DANE/OCSP、獨立組件、客戶端、Redis Sentinel 與叢集分區、儲存/還原和告警演練。每案先定預期 RTO/RPO，保存原始輸出、配置與 binary 雜湊，結束時恢復基線。若修改 Rust 候選，重跑受影響的完整驗收。
 
 [已知問題表](KNOWN_ISSUES.md)仍將 `EXT-CLUSTER`、`EXT-CAPACITY`、`EXT-FEDERATION`、`EXT-COMPONENT`、`EXT-CLIENT`、`EXT-SECURITY`、`EXT-OPERATIONS` 列為未關閉。OCSP 的 TLS 1.2/1.3 本地矩陣、WASM 可重現構建、備份相容與硬中斷復原也有未完成邊界。Gajim 有主機套件但尚無固定候選的隔離客戶端結果；Conversations、Monal 等缺相應裝置或環境的列必須明記未測。沒有外部安全審查者與離機目的地時，相關門禁保持開放。
 
-`northstar` 每小時 heartbeat 自動任務目前啟用，會在實質進展、失敗或需使用者處理時通知；`northstar-ci-dea8ec4` 是已暫停的舊 CI 任務。接手者先檢查原 task 是否正在運行，避免同時操作同一 CI、封存路徑或 VM。目前浸泡封存與 active load 仍未完成。
+2026-09-29 重新核對本機 automation 設定時，已找不到 `northstar`，僅有已暫停的舊 `northstar-ci-dea8ec4`；不能假定每小時接續仍啟用，本次未重建自動任務。接手者先檢查原 task 是否正在運行，避免同時操作同一 CI、封存路徑或 VM。目前浸泡封存與 active load 仍未完成。

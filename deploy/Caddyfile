@@ -1,9 +1,54 @@
+{
+    servers {
+        max_header_size 64KB
+        timeouts {
+            read_header 10s
+            # Bound unmatched routes too; only the upload and BOSH routes
+            # below may extend the small-request deadline.
+            read_body 20s
+            idle 1m
+        }
+    }
+}
+
 {$XMPP_DOMAIN} {
     encode zstd gzip
     route {
         @private_observability path /metrics /readyz
         respond @private_observability 404
-        reverse_proxy xmpp:8080
+        @small_rest {
+            path /api /api/*
+            not {
+                method PUT
+                path /api/v1/upload/*
+            }
+        }
+        # read_timeout is supported by the Compose-pinned Caddy 2.11.4.
+        request_body @small_rest {
+            max_size 256KiB
+            read_timeout 20s
+        }
+        @upload {
+            method PUT
+            path /api/v1/upload/*
+        }
+        request_body @upload {
+            read_timeout 15m
+        }
+        @bosh path /http-bind /bosh
+        request_body @bosh {
+            read_timeout 30s
+        }
+        reverse_proxy xmpp:8080 {
+            @body_rejected status 408 413 429
+            handle_response @body_rejected {
+                # Close a rejected HTTP/1 upload instead of waiting to drain
+                # its unfinished body before delivering the backend error.
+                @http1 not protocol http/2+
+                header @http1 Connection close
+                copy_response
+            }
+        }
     }
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"

@@ -1,0 +1,76 @@
+{
+  "schema": "northstar-ordinary-ci-correction-v1",
+  "base_commit": "aa80d7862f515ccfd82581add39ad45025b23255",
+  "base_tree": "91f005e5fc9a40718cd2d8c5be0e58c817778e27",
+  "status": "CompileCorrectionVerifiedStage2StillWorkInProgress",
+  "failure_record": "docs/evidence/experimental-rebuild/stage2-wip-ci-terminal.json",
+  "source_change": {
+    "path": "crates/northstar-test-harness/src/controlled_admission/input.rs",
+    "before_sha256": "053556020e07f99119dfa8afca5e45d381cc8e7e218e710dd2fac5ef223df67a",
+    "after_sha256": "798775545173d2c6501d02c236daa5f91a6a6e32681835a3cae0bcb36a6c714c",
+    "removed_lines": 10,
+    "added_lines": 0,
+    "reason": "Remove the misplaced duplicate proofs field check from the array arm, where key is undefined. Preserve recursive array validation and the object arm canonical UUID check."
+  },
+  "verification": {
+    "base_commit": "aa80d7862f515ccfd82581add39ad45025b23255",
+    "source": "crates/northstar-test-harness/src/controlled_admission/input.rs",
+    "before_sha256": "798775545173d2c6501d02c236daa5f91a6a6e32681835a3cae0bcb36a6c714c",
+    "after_sha256": "798775545173d2c6501d02c236daa5f91a6a6e32681835a3cae0bcb36a6c714c",
+    "source_unchanged": true,
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "crates/northstar-test-harness/src/controlled_admission/input.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.088,
+        "log": "rustfmt.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-test-harness",
+          "--all-targets"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 2.027,
+        "log": "harness-check.log",
+        "log_sha256": "018ce071aa8c0e66c6fb80e8c3e0de3a00e10b26dd206b33eee1f612a878b8b3"
+      }
+    ],
+    "scope": "Ordinary compile correction only; no project test binary, saved replay, services or fault execution."
+  },
+  "toolchain_file": "[toolchain]\nchannel = \"1.97.1\"\nprofile = \"minimal\"\ncomponents = [\"rustfmt\", \"clippy\"]\n",
+  "independent_review": "Read-only reviewer confirmed the exact ten-line deletion preserves the object proofs validation and array recursion. This is a compile-source correction only.",
+  "dr_observation": {
+    "status": "RootCauseUnknown",
+    "source_unchanged": true,
+    "fixture_path": "scripts/backup-restore-wsl.sh",
+    "finding": "The existing after-s3-import fixture accepts any nonzero restore exit and suppresses its output; it only checks for a journal directory before recovery, then later reads s3-results.tsv.",
+    "producer_paths": [
+      "scripts/restore-backup.sh",
+      "src/storage/backup.rs",
+      "scripts/restore-recovery.py"
+    ],
+    "known_order": "Production creates the results file and records s3-import-verified before the intended test kill point. Recovery retains that evidence. The available failure summary does not show why the earlier restore did not reach that point.",
+    "not_claimed": "This compile correction does not resolve the DR failure. No empty results file, weakened assertion, restore change or new drill execution was added."
+  },
+  "limits": [
+    "The five Stage2 architecture/evidence blockers in stage2-wip-20261003-1630.json remain unresolved.",
+    "cargo check compiles targets but executes no project test binary. No full-workspace local gate is claimed.",
+    "No saved corpus, prior standalone probe, service, fault injection or soak was run for this correction.",
+    "New remote CI results must be associated with the eventual correction commit; prior passes do not qualify it."
+  ]
+}

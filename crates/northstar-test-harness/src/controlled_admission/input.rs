@@ -661,16 +661,6 @@ fn canonical_material(value: &Value) -> Result<(), InputError> {
         Value::String(s) if !s.is_ascii() => Err(InputError::Binding),
         Value::Array(values) => {
             for v in values {
-                if key == "proofs" {
-                    for proof in v.as_array().ok_or(InputError::Binding)? {
-                        let text = proof.as_str().ok_or(InputError::Binding)?;
-                        if Uuid::parse_str(text).map(|u| u.to_string()).ok().as_deref()
-                            != Some(text)
-                        {
-                            return Err(InputError::Binding);
-                        }
-                    }
-                }
                 canonical_material(v)?;
             }
             Ok(())

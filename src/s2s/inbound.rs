@@ -1,10 +1,15 @@
+mod direct_route;
+
+use direct_route::S2sDirectRoutePort;
+
 use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
     jid::{prepare_domainpart, CanonicalJid},
     services::{
         messaging::{
-            committed_live_delivery_has_fence, DurableAdmissionOutcome, IdentityAuthority,
+            DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
+            DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority,
             LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
             OfflineAdmissionOutcome, OfflineMessageAdmission, PersonalMessageDestination,
             ValidatedPersonalMessage,
@@ -3427,9 +3432,6 @@ pub(crate) async fn route_inbound_message(
         }
     }
     let targets = allowed_targets;
-    let deliver_all = bare_target
-        && crate::xmpp::protocol::messaging::bare_message_route(message_type)
-            == crate::xmpp::protocol::messaging::BareMessageRoute::All;
     if let Some(command) = personal_retraction_command.as_ref() {
         if state.message_service().direct_mode() != DirectPostCommitMode::Live {
             return Ok(inbound_message_error(root, "wait", "service-unavailable"));
@@ -3515,247 +3517,63 @@ pub(crate) async fn route_inbound_message(
             }
         }
     }
-    if durable_c2s_delivery.is_some()
-        && !committed_live_delivery_has_fence(
-            state.message_service().clustered_direct_admission_enabled(),
-            durable_c2s_delivery.expect("checked durable delivery"),
-            live_claim_id,
-        )
-    {
-        state.s2s_inbound_delivery_telemetry().post_accept_failed();
-        tracing::error!(recipient_id = %recipient.id, message_id = ?durable_c2s_delivery,
-            "clustered inbound direct admission lacked live reservation");
-        return Ok(None);
-    }
-    match inbound_live_effect(
-        state.message_service().direct_mode(),
-        durable_c2s_delivery.is_some() || history_committed,
-    ) {
-        InboundLiveEffect::Proceed => {}
-        InboundLiveEffect::AcceptedSpool => {
-            state
-                .message_service()
-                .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-                .await;
+    let delivery = durable_c2s_delivery.map_or(DirectRouteDelivery::Volatile, |message_id| {
+        DirectRouteDelivery::Committed(crate::outbound::DurableDelivery {
+            recipient_id: recipient.id,
+            message_id,
+            claim_id: live_claim_id,
+        })
+    });
+    let outcome = DirectMessageRouter::route_federated(
+        &S2sDirectRoutePort(state),
+        DirectRouteRequest {
+            message_type,
+            target: if bare_target {
+                DirectRouteTarget::Bare(to)
+            } else {
+                DirectRouteTarget::Full {
+                    jid: to,
+                    bare: &recipient_by,
+                }
+            },
+            sender: from,
+            recipient_id: recipient.id,
+            stanza: &annotated,
+            delivery,
+            approved_targets: &targets,
+            enforce_direct_health: true,
+        },
+        history_committed,
+    )
+    .await?;
+    let (delivered, delivered_key) = match outcome {
+        DirectRouteOutcome::Routed { accepted_full_jid } => (true, accepted_full_jid),
+        DirectRouteOutcome::Unrouted => (false, None),
+        DirectRouteOutcome::AcceptedForRecovery { stage, reason } => {
+            tracing::debug!(
+                ?stage,
+                ?reason,
+                "accepted federated direct message deferred to recovery"
+            );
             return Ok(None);
         }
-        InboundLiveEffect::Reject => {
-            return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+        DirectRouteOutcome::AcceptedBeforeDegradation | DirectRouteOutcome::Dropped => {
+            return Ok(None)
         }
-    }
-    let mut delivered_key = None;
-    let live_delivery = durable_c2s_delivery.map(|message_id| crate::outbound::DurableDelivery {
-        recipient_id: recipient.id,
-        message_id,
-        claim_id: live_claim_id,
-    });
-    for (key, target) in &targets {
-        let accepted = if let Some(delivery) = live_delivery {
-            target
-                .sender
-                .try_send_durable(annotated.clone(), delivery)
-                .is_ok()
-        } else {
-            target.sender.try_send(annotated.clone()).is_ok()
-        };
-        if accepted {
-            state
-                .s2s_online_queue_telemetry()
-                .accepted(live_delivery.is_some());
-            if delivered_key.is_none() {
-                delivered_key = Some(key.clone());
-            }
-            if !deliver_all {
-                break;
-            }
+        DirectRouteOutcome::Rejected(reason) => {
+            let kind = match reason {
+                DirectRouteRejection::Unavailable => "wait",
+                DirectRouteRejection::NoMatchingResource => "cancel",
+            };
+            return Ok(inbound_message_error(root, kind, "service-unavailable"));
         }
-    }
-    let mut delivered = delivered_key.is_some();
-
-    if state.message_service().direct_mode() != DirectPostCommitMode::Live {
-        if !delivered {
-            state
-                .message_service()
-                .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-                .await;
-        }
-        return Ok(if delivered || live_delivery.is_some() {
-            None
-        } else {
-            inbound_message_error(root, "wait", "service-unavailable")
-        });
-    }
-    if deliver_all {
-        delivered |= state
-            .route_s2s_message_to_available_remote_resources(to, &annotated, live_delivery)
-            .await;
-    } else if !delivered {
-        let remote = state
-            .route_s2s_message_to_remote_primary(to, &annotated, live_delivery)
-            .await;
-        if remote.delivered {
-            delivered = true;
-            delivered_key = remote.accepted_full_jid;
-        }
-    }
-
-    if !delivered && !bare_target {
-        match inbound_live_effect(
-            state.message_service().direct_mode(),
-            live_delivery.is_some(),
-        ) {
-            InboundLiveEffect::Proceed => {}
-            InboundLiveEffect::AcceptedSpool => {
-                state
-                    .message_service()
-                    .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-                    .await;
-                return Ok(None);
-            }
-            InboundLiveEffect::Reject => {
-                return Ok(inbound_message_error(root, "wait", "service-unavailable"));
-            }
-        }
-        let allow_bare_fallback = match crate::xmpp::protocol::messaging::full_no_match_route(
-            message_type,
-        ) {
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::Ignore => {
-                state
-                    .message_service()
-                    .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-                    .await;
-                return Ok(None);
-            }
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::Reject
-                if crate::xmpp::protocol::messaging::durable_full_no_match_recovers(
-                    message_type,
-                    live_delivery.is_some(),
-                ) =>
-            {
-                state.s2s_inbound_delivery_telemetry().post_accept_failed();
-                tracing::warn!(
-                    recipient_id = %recipient.id,
-                    target = %to,
-                    "exact full-JID S2S route disappeared after durable admission; resource-affine row remains replayable"
-                );
-                false
-            }
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::Reject => {
-                return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-            }
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::FallbackChat => true,
-        };
-
-        if allow_bare_fallback {
-            let mut fallback_targets = state.session_entries_for(&recipient_by);
-            fallback_targets.retain(|(_, session)| {
-                session.available.load(Ordering::Relaxed)
-                    && session.priority.load(Ordering::Relaxed) >= 0
-            });
-            fallback_targets.sort_by(|(left_jid, left), (right_jid, right)| {
-                right
-                    .priority
-                    .load(Ordering::Relaxed)
-                    .cmp(&left.priority.load(Ordering::Relaxed))
-                    .then_with(|| left_jid.cmp(right_jid))
-            });
-            let mut allowed_fallback = Vec::with_capacity(fallback_targets.len());
-            for target in fallback_targets {
-                match state
-                    .privacy_allows_session(&target.1, from, db::PrivacyStanzaKind::Message)
-                    .await
-                {
-                    Ok(true) => allowed_fallback.push(target),
-                    Ok(false) => {}
-                    Err(error) if live_delivery.is_some() => {
-                        state.s2s_inbound_delivery_telemetry().post_accept_failed();
-                        tracing::warn!(
-                            ?error,
-                            target = %target.0,
-                            recipient_id = %recipient.id,
-                            "privacy policy failed closed during post-admission S2S full-JID fallback"
-                        );
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-            match inbound_live_effect(
-                state.message_service().direct_mode(),
-                live_delivery.is_some(),
-            ) {
-                InboundLiveEffect::Proceed => {}
-                InboundLiveEffect::AcceptedSpool => {
-                    state
-                        .message_service()
-                        .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-                        .await;
-                    return Ok(None);
-                }
-                InboundLiveEffect::Reject => {
-                    return Ok(inbound_message_error(root, "wait", "service-unavailable"));
-                }
-            }
-            for (key, target) in allowed_fallback {
-                let accepted = if let Some(delivery) = live_delivery {
-                    target
-                        .sender
-                        .try_send_durable(annotated.clone(), delivery)
-                        .is_ok()
-                } else {
-                    target.sender.try_send(annotated.clone()).is_ok()
-                };
-                if accepted {
-                    state
-                        .s2s_online_queue_telemetry()
-                        .accepted(live_delivery.is_some());
-                    delivered_key = Some(key);
-                    delivered = true;
-                    break;
-                }
-            }
-            if !delivered {
-                match inbound_live_effect(
-                    state.message_service().direct_mode(),
-                    live_delivery.is_some(),
-                ) {
-                    InboundLiveEffect::Proceed => {}
-                    InboundLiveEffect::AcceptedSpool => {
-                        state
-                            .message_service()
-                            .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-                            .await;
-                        return Ok(None);
-                    }
-                    InboundLiveEffect::Reject => {
-                        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
-                    }
-                }
-                let remote = state
-                    .route_s2s_message_to_remote_primary(&recipient_by, &annotated, live_delivery)
-                    .await;
-                if remote.delivered {
-                    delivered = true;
-                    delivered_key = remote.accepted_full_jid;
-                }
-            }
-        }
-    }
-
-    if !delivered {
-        state
-            .message_service()
-            .rearm_unrouted_live_direct(recipient.id, stable_id, &mut live_claim_id)
-            .await;
-    }
+    };
 
     if !delivered && message_type == "headline" {
         return Ok(None);
     }
 
     if delivered {
-        if state.message_service().direct_mode() != DirectPostCommitMode::Live {
-            return Ok(None);
-        }
         if !history_committed {
             finalize_accepted_inbound_history(
                 state,

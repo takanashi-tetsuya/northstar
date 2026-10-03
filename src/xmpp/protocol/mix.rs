@@ -27,6 +27,7 @@ use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
 use crate::state::mix_outbox::MixOutboxContext;
 use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
 use crate::state::{AppState, MixIqRelayStage, PendingMixIqRelay};
+use crate::xmpp::frame_execution::{SessionExecutions, Stage};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{
     add_stanza_id, iq_error_to, iq_result_to, is_encrypted, mam_extended_form, stanza_error,
@@ -1903,6 +1904,24 @@ enum ChannelStanzaDeliveryOutcome {
     TransferredToRecoverableTransport,
 }
 
+/// The successful route result selects the only remaining settlement owner.
+/// Construct an acknowledgement future only while the worker still owns the
+/// source. After a socket/SM/BOSH hand-off its old token must never be used for
+/// acknowledgement, retry or dead-letter settlement.
+async fn finish_mix_delivery_owner<Acknowledge, Completion>(
+    outcome: ChannelStanzaDeliveryOutcome,
+    acknowledge: Acknowledge,
+) -> Result<bool>
+where
+    Acknowledge: FnOnce() -> Completion,
+    Completion: std::future::Future<Output = Result<bool>>,
+{
+    match outcome {
+        ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker => acknowledge().await,
+        ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport => Ok(true),
+    }
+}
+
 async fn deliver_channel_stanza(
     context: &MixOutboxContext,
     delivery: ChannelStanzaDelivery<'_>,
@@ -2407,22 +2426,17 @@ async fn process_claimed_mix_delivery(
     };
 
     let completion = match result {
-        Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker) => {
-            bounded_mix_outbox_turn(
-                &cancel,
-                attempt_deadline,
-                context
-                    .service()
-                    .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
-            )
+        Ok(outcome) => {
+            finish_mix_delivery_owner(outcome, || {
+                bounded_mix_outbox_turn(
+                    &cancel,
+                    attempt_deadline,
+                    context
+                        .service()
+                        .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+                )
+            })
             .await
-        }
-        Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport) => {
-            // XEP-0198 or BOSH rotated and persisted the exact source in its
-            // own authoritative queue. The old worker token is intentionally
-            // no longer valid, so this worker must not attempt a second
-            // acknowledgement, retry, or dead-letter transition.
-            Ok(true)
         }
         Err(error) => {
             if mix_outbox_is_shutting_down(&error) {
@@ -3294,6 +3308,7 @@ impl ProtocolSession {
         if !CanonicalJid::parse(to).is_ok_and(|target| target.domainpart() == self.mix_domain()) {
             return Ok(None);
         }
+        self.enter_frame_stage(Stage::MixPolicy);
         let Some(user) = self.authenticated.as_ref() else {
             return Ok(Some(Action::Send(stanza_error(
                 root,
@@ -3309,7 +3324,14 @@ impl ProtocolSession {
             ))));
         };
         let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
-        let result = process_channel_message(&self.state, &actor_bare, full_jid, raw).await?;
+        let result = process_channel_message(
+            &self.state,
+            &actor_bare,
+            full_jid,
+            raw,
+            Some(&self.frame_executions),
+        )
+        .await?;
         Ok(Some(result.map_or(Action::None, Action::Send)))
     }
 
@@ -5585,7 +5607,11 @@ async fn process_channel_message(
     actor_bare: &str,
     actor_full: &str,
     raw: &str,
+    observation: Option<&SessionExecutions>,
 ) -> Result<Option<String>> {
+    if let Some(observation) = observation {
+        observation.enter(Stage::MixPolicy);
+    }
     let document = Document::parse(raw).context("malformed MIX message")?;
     let root = document.root_element();
     let to = root.attribute("to").unwrap_or_default().to_owned();
@@ -5750,6 +5776,9 @@ async fn process_channel_message(
             participant.nick.as_deref(),
             archived_jid,
         );
+        if let Some(observation) = observation {
+            observation.enter(Stage::MixAdmission);
+        }
         let admission = state
             .mix_service()
             .retract_mix_message(RetractMixMessageRequest {
@@ -5813,6 +5842,9 @@ async fn process_channel_message(
     // transaction. This prevents delivery to a participant who concurrently
     // left and prevents a post-join subscriber from missing an archive that
     // linearized after their subscription.
+    if let Some(observation) = observation {
+        observation.enter(Stage::MixAdmission);
+    }
     let admission = state
         .mix_service()
         .store_mix_message(StoreMixMessageRequest {
@@ -6662,7 +6694,8 @@ pub(crate) async fn federated_mix_message(
     if to_jid.domainpart() == local_mix {
         let actor_full = authenticated_full_actor(&from, authenticated_domain)?;
         let actor_bare = crate::jid::CanonicalJid::parse(&actor_full)?.bare();
-        if let Some(error) = process_channel_message(&state, &actor_bare, &actor_full, &raw).await?
+        if let Some(error) =
+            process_channel_message(&state, &actor_bare, &actor_full, &raw, None).await?
         {
             let _ = state
                 .federation_outbox()

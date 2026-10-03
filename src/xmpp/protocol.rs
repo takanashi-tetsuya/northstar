@@ -600,6 +600,7 @@ pub struct ProtocolSession {
     /// never used as an authentication bypass.
     secure_transport: bool,
     transport: ClientTransport,
+    frame_executions: super::frame_execution::SessionExecutions,
     stream_limits: Option<StreamLimits>,
     pub(crate) peer_ip: IpAddr,
     connected_at: std::time::Instant,
@@ -695,6 +696,26 @@ pub struct ProtocolSession {
 }
 
 impl ProtocolSession {
+    /// The production entry point shared by TCP, WebSocket and BOSH. Tests
+    /// can still exercise `handle` directly without a transport budget.
+    pub(crate) async fn process_frame(
+        &mut self,
+        frame: &str,
+    ) -> std::result::Result<Action, super::frame_execution::FrameFailure> {
+        let execution = self.frame_executions.begin(self.transport, frame);
+        let result = execution.run(self.handle(frame)).await;
+        if matches!(&result, Ok(Action::SendManyThenActivate(_)))
+            || matches!(&result, Ok(Action::Resume(payload)) if payload.activate_route)
+        {
+            self.frame_executions.defer_publication(execution);
+        }
+        result
+    }
+
+    pub(super) fn enter_frame_stage(&self, stage: super::frame_execution::Stage) {
+        self.frame_executions.enter(stage);
+    }
+
     pub(crate) fn local_domain(&self) -> &str {
         self.state.local_domain()
     }
@@ -808,6 +829,7 @@ impl ProtocolSession {
             outbound,
             secure_transport,
             transport,
+            frame_executions: super::frame_execution::SessionExecutions::default(),
             stream_limits,
             peer_ip,
             connected_at: std::time::Instant::now(),
@@ -890,6 +912,22 @@ impl ProtocolSession {
     /// is part of the success frame. Only the replacement epoch is staged; it
     /// becomes visible through an exact operation/connection fence here.
     pub(crate) async fn publish_committed_authentication_and_route(&mut self) -> bool {
+        if let Some(execution) = self.frame_executions.take_publication() {
+            execution
+                .observe_publication(self.publish_committed_authentication_and_route_inner())
+                .await
+        } else {
+            self.publish_committed_authentication_and_route_inner()
+                .await
+                .transport_succeeded()
+        }
+    }
+
+    async fn publish_committed_authentication_and_route_inner(
+        &mut self,
+    ) -> super::frame_execution::PublicationResult {
+        use super::frame_execution::PublicationResult;
+
         let published_epoch = if let Some(receipt) = self.pending_credential_commit.take() {
             match self
                 .state
@@ -908,7 +946,7 @@ impl ProtocolSession {
                         "could not publish transport-confirmed authentication epoch"
                     );
                     self.sm.resume_allowed = false;
-                    return false;
+                    return PublicationResult::BackendFailure;
                 }
                 crate::services::authentication::AuthenticationResult::IntegrityFailure => {
                     self.state.c2s_authentication_telemetry().integrity_failed();
@@ -917,7 +955,7 @@ impl ProtocolSession {
                         "authentication publication integrity failure"
                     );
                     self.sm.resume_allowed = false;
-                    return false;
+                    return PublicationResult::IntegrityRejected;
                 }
                 _ => {
                     tracing::warn!(
@@ -925,7 +963,7 @@ impl ProtocolSession {
                         "transport-confirmed authentication publication fence was lost"
                     );
                     self.sm.resume_allowed = false;
-                    return false;
+                    return PublicationResult::CredentialRejected;
                 }
             }
         } else {
@@ -934,10 +972,10 @@ impl ProtocolSession {
         self.user_agent_epoch = published_epoch;
 
         let Some(key) = self.registered_key.as_deref() else {
-            return true;
+            return PublicationResult::Completed;
         };
         let Some(user) = self.authenticated.clone() else {
-            return false;
+            return PublicationResult::RouteRejected;
         };
         let route_is_current = self.state.publish_user_agent_epoch_if_current(
             key,
@@ -949,7 +987,7 @@ impl ProtocolSession {
         );
         if !route_is_current || !self.activate_committed_route() {
             self.sm.resume_allowed = false;
-            return false;
+            return PublicationResult::RouteRejected;
         }
 
         // A capability observation belongs to a connection incarnation, not
@@ -958,6 +996,7 @@ impl ProtocolSession {
         // transferred resource gate now that the replacement is routable, so
         // live and durable resumes do not depend on the client repeating its
         // unchanged initial presence.
+        self.enter_frame_stage(super::frame_execution::Stage::CapsPublication);
         self.rebind_resumed_caps_observation().await;
 
         if let (Some(device_id), Some(epoch)) = (self.user_agent_id, published_epoch) {
@@ -972,6 +1011,7 @@ impl ProtocolSession {
                     session.disconnect.cancel();
                 }
             }
+            self.enter_frame_stage(super::frame_execution::Stage::ReplacementNotification);
             if let Err(error) = self
                 .state
                 .notify_remote_user_agent_replacement(&account, user.id, device_id, epoch)
@@ -984,9 +1024,10 @@ impl ProtocolSession {
                     epoch,
                     "cross-node user-agent replacement was not acknowledged; maintenance will retry"
                 );
+                return PublicationResult::CompletedWithDeferredNotification;
             }
         }
-        true
+        PublicationResult::Completed
     }
 
     pub(crate) fn resource_bind_deadline(&self) -> Option<std::time::Instant> {

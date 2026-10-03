@@ -1,5 +1,7 @@
 //! Room authorization, local ordering and committed-operation notifications.
 
+pub(crate) mod fanout;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 pub(crate) use northstar_room_application::{
@@ -2090,7 +2092,7 @@ mod tests {
         assert_eq!(wake.failures.load(Ordering::SeqCst), 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn local_room_mutation_gate_serializes_one_room_without_a_growing_registry() {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://northstar@localhost/northstar")
@@ -2114,7 +2116,7 @@ mod tests {
         assert_eq!(service.local_join_gates.len(), LOCAL_JOIN_GATE_SHARDS);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn local_room_mutation_gate_does_not_serialize_different_fixed_shards() {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://northstar@localhost/northstar")

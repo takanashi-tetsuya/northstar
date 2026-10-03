@@ -4025,3 +4025,18 @@ console.log(
     `${protocolPgPoolReferences} PgPool refs; authority: ${largestAuthority}; ` +
     `domain: ${largestDomain}`,
 );
+
+// The experiment index consumes the exact production inventory already checked
+// above, never a second handwritten list of runtime authorities.
+export const verifiedRuntimeInventory = [
+  ...productionRustSources.flatMap(({ relative, source }) =>
+    [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)].map((match) => ({
+      id: `worker:${roleIdentity(relative, match[2])}`, kind: 'worker', owner: relative,
+    }))),
+  ...productionRustSources.flatMap(({ relative, source }) =>
+    [...source.matchAll(/\.register_observer\(\s*"([^"]+)"/g)].map((match) => ({
+      id: `observer:${roleIdentity(relative, match[1])}`, kind: 'observer', owner: relative,
+    }))),
+  ...composedServiceTasks.map((name) => ({ id: `task:${name}`, kind: 'task', owner: 'src/main.rs' })),
+  ...composedServiceAccessors.map((name) => ({ id: `service:${name}`, kind: 'service', owner: 'src/state.rs' })),
+].sort((left, right) => left.id.localeCompare(right.id));

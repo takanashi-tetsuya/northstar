@@ -438,6 +438,12 @@ jobs:
           node scripts/check-tracked-sensitive-files.mjs --include-untracked
           node scripts/check-runtime-migration-boundary.mjs
           node scripts/check-architecture-boundaries.mjs
+          node scripts/check-runtime-experiments.mjs
+          node --test scripts/test-runtime-experiments.mjs
+          node scripts/check-execution-boundaries.mjs
+          node --test scripts/test-execution-boundaries.mjs
+          node scripts/check-federated-route-boundaries.mjs
+          node --test scripts/test-federated-route-boundaries.mjs
           node --test scripts/test-mix-outbox-boundaries.mjs
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
@@ -477,6 +483,9 @@ jobs:
           python3 scripts/local-vm-lab-muc-mam.py --self-test
           python3 scripts/local-vm-lab-soak.py --self-test
           python3 scripts/test-finalize-soak.py
+          python3 scripts/test-mixed-traffic-soak.py
+          python3 scripts/test-frame-trace.py
+          python3 scripts/test-room-db-experiments.py
           python3 scripts/test-local-vm-lab-upload.py
           python3 scripts/local-vm-lab-active-presence.py --self-test
           python3 scripts/local-vm-lab-active-load.py --self-test
@@ -700,6 +709,25 @@ jobs:
         run: >-
           python3 scripts/maintenance-subserver-wsl.py
           --server "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+
+      - name: Verify migration bootstrap before any schema changes
+        env:
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "300"
+        run: >-
+          bash scripts/github-ci-run.sh 'migration bootstrap admission'
+          python3 scripts/test-migration-preflight.py
+          --binary "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --evidence "$RUNNER_TEMP/migration-preflight-evidence.json"
+
+      - name: Verify mixed traffic and owned fixture shutdown
+        env:
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "300"
+        run: >-
+          bash scripts/github-ci-run.sh 'mixed traffic smoke and shutdown'
+          python3 scripts/mixed-traffic-soak.py
+          --binary "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --duration-seconds 90
+          --output-dir "$RUNNER_TEMP/northstar-mixed-traffic-smoke"
 
   protocol-integration:
     name: PostgreSQL protocol integration

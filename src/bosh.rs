@@ -10,6 +10,7 @@ mod action;
 
 use crate::state::{AppState, ClientConnectionGuard};
 use crate::transport_parsing::parse_bosh_frame;
+use crate::xmpp::frame_execution::FrameFailure;
 use crate::xmpp::protocol::{ClientTransport, ProtocolSession, ResumeTransportParts};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
@@ -895,24 +896,19 @@ impl BoshActor {
         } else {
             let mut failure = None;
             for payload in &request.payloads {
-                match tokio::time::timeout(
-                    BOSH_BACKEND_OPERATION_TIMEOUT,
-                    self.protocol.handle(payload),
-                )
-                .await
-                {
-                    Ok(Ok(action)) => {
+                match self.protocol.process_frame(payload).await {
+                    Ok(action) => {
                         if !self.apply_action(action).await {
                             failure = Some("remote-stream-error");
                             break;
                         }
                     }
-                    Ok(Err(error)) => {
+                    Err(FrameFailure::Backend(error)) => {
                         tracing::debug!(?error, "BOSH XMPP stanza processing failed");
                         failure = Some("internal-server-error");
                         break;
                     }
-                    Err(_) => {
+                    Err(FrameFailure::TimedOut) => {
                         tracing::warn!(session_id = %self.delivery_session_id, "BOSH stanza backend budget expired");
                         failure = Some("internal-server-error");
                         break;

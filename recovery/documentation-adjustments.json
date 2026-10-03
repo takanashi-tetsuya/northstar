@@ -1,0 +1,16 @@
+{
+  "documentation_only_changes": [
+    {
+      "path": "docs/architecture/experimental-clarity-completion.zh-TW.md",
+      "original_sha256": "8c4821bb2b8893d48bbabfe54a16099854b4acca22f3b22657acbb394e935065",
+      "published_sha256": "bec8178ab0257d30e862bc61dc98ee4bea0c6350c07cf50ae054690265cbbc3c",
+      "change": "Replace unverified historical completion/results assertions with a historical-status notice; runtime code unchanged"
+    },
+    {
+      "path": "docs/architecture/experimental-clarity-results.zh-TW.md",
+      "original_sha256": "7de606c59f69d6a19e9959d070aafab2b7ceec3cd4304ceac8ebb087811505f8",
+      "published_sha256": "b747dada1fe6c55ef7cdc09e626914b04510265677f65f04b590ff79a9c2bad9",
+      "change": "Replace unverified historical completion/results assertions with a historical-status notice; runtime code unchanged"
+    }
+  ]
+}

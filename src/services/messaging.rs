@@ -1,5 +1,11 @@
 //! Personal-message policy and atomic admission through a persistence port.
 
+mod direct_route;
+pub(crate) use direct_route::{
+    DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
+    DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
+};
+
 use super::{
     muc::{ClusterMucInviteAuthority, DurableMucInviteOutcome},
     privacy::PrivacyStanzaKind,
@@ -138,6 +144,13 @@ pub(crate) struct FullJidFallback<'a> {
     pub(crate) delivery: Option<DurableDelivery>,
 }
 
+/// Policy/privacy preparation is separate from enqueue so protocol owners can
+/// recheck live health after asynchronous privacy work, before any side effect.
+enum FullJidFallbackPlan<S> {
+    Finished(FullJidFallbackResult),
+    Targets(Vec<(String, S)>),
+}
+
 pub(crate) struct OnlineMessageRouter;
 
 impl OnlineMessageRouter {
@@ -146,6 +159,17 @@ impl OnlineMessageRouter {
     pub(crate) async fn dispatch<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+        deliver_all: bool,
+        approved_targets: &[(String, P::Session)],
+    ) -> OnlineRouteResult {
+        let local = Self::dispatch_local(port, stanza, delivery, deliver_all, approved_targets);
+        Self::dispatch_remote(port, jid, stanza, delivery, deliver_all, local).await
+    }
+
+    fn dispatch_local<P: OnlineRoutePort>(
+        port: &P,
         stanza: &str,
         delivery: Option<DurableDelivery>,
         deliver_all: bool,
@@ -168,6 +192,17 @@ impl OnlineMessageRouter {
                 }
             }
         }
+        result
+    }
+
+    async fn dispatch_remote<P: OnlineRoutePort>(
+        port: &P,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+        deliver_all: bool,
+        mut result: OnlineRouteResult,
+    ) -> OnlineRouteResult {
         if deliver_all {
             result.delivered |= port.route_available_remote(jid, stanza, delivery).await;
         } else if !result.delivered {
@@ -182,6 +217,26 @@ impl OnlineMessageRouter {
         port: &P,
         request: FullJidFallback<'_>,
     ) -> Result<FullJidFallbackResult> {
+        let bare_target = request.bare_target;
+        let stanza = request.stanza;
+        let delivery = request.delivery;
+        let allowed = match Self::prepare_full_jid_fallback(port, request).await? {
+            FullJidFallbackPlan::Finished(result) => return Ok(result),
+            FullJidFallbackPlan::Targets(allowed) => allowed,
+        };
+        let local = Self::dispatch_local(port, stanza, delivery, false, &allowed);
+        let result = Self::dispatch_remote(port, bare_target, stanza, delivery, false, local).await;
+        Ok(if result.delivered {
+            FullJidFallbackResult::Delivered(result.accepted_full_jid)
+        } else {
+            FullJidFallbackResult::Undelivered
+        })
+    }
+
+    async fn prepare_full_jid_fallback<P: FullJidFallbackPort>(
+        port: &P,
+        request: FullJidFallback<'_>,
+    ) -> Result<FullJidFallbackPlan<P::Session>> {
         use northstar_message_core::{
             durable_full_no_match_recovers, full_no_match_route, FullNoMatchRoute,
         };
@@ -191,12 +246,16 @@ impl OnlineMessageRouter {
             bare_target,
             sender,
             recipient_id,
-            stanza,
+            stanza: _,
             delivery,
         } = request;
 
         match full_no_match_route(message_type) {
-            FullNoMatchRoute::Ignore => return Ok(FullJidFallbackResult::Dropped),
+            FullNoMatchRoute::Ignore => {
+                return Ok(FullJidFallbackPlan::Finished(
+                    FullJidFallbackResult::Dropped,
+                ))
+            }
             FullNoMatchRoute::Reject
                 if durable_full_no_match_recovers(message_type, delivery.is_some()) =>
             {
@@ -206,9 +265,15 @@ impl OnlineMessageRouter {
                     target = %full_target,
                     "exact full-JID route disappeared after durable admission; resource-affine row remains replayable"
                 );
-                return Ok(FullJidFallbackResult::Undelivered);
+                return Ok(FullJidFallbackPlan::Finished(
+                    FullJidFallbackResult::Undelivered,
+                ));
             }
-            FullNoMatchRoute::Reject => return Ok(FullJidFallbackResult::Rejected),
+            FullNoMatchRoute::Reject => {
+                return Ok(FullJidFallbackPlan::Finished(
+                    FullJidFallbackResult::Rejected,
+                ))
+            }
             FullNoMatchRoute::FallbackChat => {}
         }
 
@@ -236,20 +301,7 @@ impl OnlineMessageRouter {
                 Err(error) => return Err(error),
             }
         }
-        for (key, session) in allowed {
-            if port.try_local(&session, stanza.to_owned(), delivery) {
-                port.record_local_accept(delivery.is_some());
-                return Ok(FullJidFallbackResult::Delivered(Some(key)));
-            }
-        }
-        let remote = port
-            .route_remote_primary(bare_target, stanza, delivery)
-            .await;
-        if remote.delivered {
-            Ok(FullJidFallbackResult::Delivered(remote.accepted_full_jid))
-        } else {
-            Ok(FullJidFallbackResult::Undelivered)
-        }
+        Ok(FullJidFallbackPlan::Targets(allowed))
     }
 }
 

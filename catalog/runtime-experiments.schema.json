@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Northstar runtime experiment index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "purpose",
+    "required_families",
+    "families"
+  ],
+  "properties": {
+    "schema": {
+      "const": "northstar-runtime-experiments-v1"
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "required_families": {
+      "const": [
+        "startup",
+        "c2s",
+        "direct",
+        "session",
+        "federation",
+        "muc",
+        "mix",
+        "visibility",
+        "pubsub",
+        "upload",
+        "administration",
+        "cluster",
+        "workers",
+        "diagnostics",
+        "recovery",
+        "client"
+      ]
+    },
+    "families": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/family"
+      }
+    }
+  },
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "anchor"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anchor": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "family": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "production_owner",
+        "runtime_identities",
+        "invariants",
+        "boundaries",
+        "faults",
+        "budgets",
+        "experiments",
+        "privacy",
+        "gaps"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "production_owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "anchor"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "anchor": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "runtime_identities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "owner",
+              "coverage",
+              "interpretation"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "owner": {
+                "type": "string",
+                "minLength": 1
+              },
+              "coverage": {
+                "const": "static_boundary"
+              },
+              "interpretation": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "boundaries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "handoff",
+            "completion"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "handoff": {
+              "type": "string",
+              "minLength": 1
+            },
+            "completion": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "faults": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contract",
+            "source"
+          ],
+          "properties": {
+            "contract": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "anchor"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "anchor": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "experiments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "level",
+              "status",
+              "command",
+              "test",
+              "assertions",
+              "artifacts",
+              "cleanup"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "level": {
+                "enum": [
+                  "static",
+                  "deterministic_unit",
+                  "isolated_db",
+                  "wire",
+                  "operator_only"
+                ]
+              },
+              "status": {
+                "const": "declared"
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "test": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "anchor"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "assertions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "cleanup": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "privacy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

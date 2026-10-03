@@ -196,6 +196,10 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 # Keep native distributions independent of a system OpenSSL installation.
 openssl = { version = "0.10.81", features = ["vendored"] }
 
+[dev-dependencies]
+# Deterministic cancellation/deadline experiments run on a paused test clock.
+tokio = { version = "1.43", features = ["test-util"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

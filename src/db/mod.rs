@@ -22,6 +22,8 @@ pub(crate) mod upload_admin_repository;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 
+mod migration_preflight;
+
 /// The release migration set is part of the trusted binary. Both the explicit
 /// migrator and the runtime checksum verifier use these exact bytes instead of
 /// trusting a mutable working-directory `migrations/` tree.
@@ -204,10 +206,21 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
     .context("could not acquire the database policy migration lock")?;
 
     let migration_result = async {
-        MIGRATOR
-            .run(pool)
-            .await
-            .context("database migration failed")?;
+        // Keep admission and SQLx on the same session: a pool connection's
+        // search_path or CURRENT_USER must not differ between the check and
+        // its DDL. Release this second connection before canonicalization,
+        // which also uses the bounded migrator pool.
+        {
+            let mut migration_connection = pool
+                .acquire()
+                .await
+                .context("could not acquire the database migration connection")?;
+            migration_preflight::attest_schema_owner(&mut migration_connection).await?;
+            MIGRATOR
+                .run(&mut *migration_connection)
+                .await
+                .context("database migration failed")?;
+        }
         identity_migration::canonicalize_all_identity_storage(pool, domain)
             .await
             .context("atomic RFC 7622 A-label to U-label identity migration failed")

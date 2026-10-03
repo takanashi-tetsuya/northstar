@@ -1,16 +1,17 @@
 use super::{Action, ProtocolSession};
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 use crate::services::messaging::{
-    admit_offline_then_push, committed_live_delivery_has_fence, ArchiveWrite,
-    DurableAdmissionOutcome, FederationDelivery, FullJidFallback, FullJidFallbackResult,
-    IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
-    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OnlineMessageRouter,
-    OutboundPolicyDecision, PersonalMessageDestination, RemoteMucInviteAdmission,
-    RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
+    admit_offline_then_push, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
+    DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
+    DurableAdmissionOutcome, FederationDelivery, IdentityAuthority, LocalDelivery,
+    LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+    OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
+    RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
+use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_util::*;
 use crate::{
     abuse::{MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof},
@@ -18,9 +19,9 @@ use crate::{
 };
 use anyhow::Result;
 pub(crate) use northstar_message_core::{
-    bare_message_route, durable_direct_delivery_allowed, durable_full_no_match_recovers,
-    full_no_match_route, missing_user_message_should_error, undelivered_disposition,
-    BareMessageRoute, DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
+    bare_message_route, durable_direct_delivery_allowed, full_no_match_route,
+    missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
+    DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
 };
 use roxmltree::Node;
 use std::{future::Future, sync::atomic::Ordering};
@@ -108,25 +109,6 @@ fn direct_spool_eligibility(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LocalDirectLiveEffect {
-    Proceed,
-    AcceptedForRecovery,
-    Reject,
-}
-
-fn local_direct_live_effect(mode: DirectPostCommitMode, committed: bool) -> LocalDirectLiveEffect {
-    match mode {
-        DirectPostCommitMode::Live => LocalDirectLiveEffect::Proceed,
-        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected if committed => {
-            LocalDirectLiveEffect::AcceptedForRecovery
-        }
-        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
-            LocalDirectLiveEffect::Reject
-        }
-    }
-}
-
 /// An outbox wake is only a hint to process a row that has already committed.
 /// A failed or replayed admission must never send a new wake to the worker.
 async fn wake_federation_outbox_after_commit<F, W>(
@@ -157,6 +139,7 @@ impl ProtocolSession {
         raw: &str,
         client_raw: &str,
     ) -> Result<Action> {
+        self.enter_frame_stage(Stage::MessagePolicy);
         let telemetry = self.state.personal_message_telemetry();
         let _routing_timer = telemetry.start_routing_timer();
         let Some(user) = &self.authenticated else {
@@ -264,6 +247,7 @@ impl ProtocolSession {
                 set_root_attribute(&set_from(&routed_raw, bare_jid(from)), "to", to);
             let subject = format!("message:{}", user.id);
             let admission_origin_id = direct_origin_id(root);
+            self.enter_frame_stage(Stage::MessageAdmission);
             let admission = self
                 .state
                 .message_admission_service()
@@ -317,6 +301,7 @@ impl ProtocolSession {
                 }
             }
         }
+        self.enter_frame_stage(Stage::MessagePolicy);
         let direct_invite_admission = self.direct_invite_admission(root, user.id).await?;
         if direct_invite_admission == DirectInviteAdmission::Forbidden {
             return Ok(message_error(root, "auth", "forbidden"));
@@ -344,6 +329,7 @@ impl ProtocolSession {
                 return Ok(message_error(root, "cancel", "service-unavailable"));
             }
         }
+        self.enter_frame_stage(Stage::Handler);
         if let Some(action) = self.try_mix_message(root, &routed_raw).await? {
             if matches!(action, Action::None) {
                 self.finalize_message_admission(&mut message_admission_lease, "mix")
@@ -382,6 +368,7 @@ impl ProtocolSession {
             return Ok(action);
         }
 
+        self.enter_frame_stage(Stage::MessagePolicy);
         let target_domain = target_jid.domainpart();
         let remote_domain = (target_domain != self.state.local_domain()
             && target_domain != self.muc_domain()
@@ -509,6 +496,7 @@ impl ProtocolSession {
                     outbox_policy: self.state.federation_outbox().outbox_policy().into(),
                     cluster_authority: cluster_authority.as_ref(),
                 };
+                self.enter_frame_stage(Stage::MessageAdmission);
                 match self
                     .state
                     .message_service()
@@ -556,6 +544,7 @@ impl ProtocolSession {
                     }
                 }
             } else if personal_retraction {
+                self.enter_frame_stage(Stage::MessageAdmission);
                 match self
                     .apply_outbound_personal_retraction(
                         user.id, from, to, root, &writes, domain, &routed,
@@ -619,6 +608,7 @@ impl ProtocolSession {
                         limits: self.state.federation_outbox().outbox_policy(),
                     }),
                 };
+                self.enter_frame_stage(Stage::MessageAdmission);
                 match wake_federation_outbox_after_commit(
                     self.state
                         .message_service()
@@ -934,6 +924,7 @@ impl ProtocolSession {
             };
             let eligibility =
                 direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
+            self.enter_frame_stage(Stage::MessageAdmission);
             let admitted = self
                 .state
                 .message_service()
@@ -1060,6 +1051,7 @@ impl ProtocolSession {
                 ttl_days: offline_limits.ttl_days,
                 mam_backed: recipient_history_enabled,
             };
+            self.enter_frame_stage(Stage::MessageAdmission);
             match self
                 .apply_personal_retraction(
                     user.id,
@@ -1210,6 +1202,7 @@ impl ProtocolSession {
                 room_id,
                 cluster_authority: cluster_authority.as_ref(),
             };
+            self.enter_frame_stage(Stage::MessageAdmission);
             match self
                 .state
                 .message_service()
@@ -1265,199 +1258,70 @@ impl ProtocolSession {
             None
         };
         let live_delivery_id = durable_direct_invite.or(durable_c2s_delivery);
-        let live_delivery_message_id = live_delivery_id.unwrap_or(recipient_stable_id);
-        if live_delivery_id.is_some()
-            && !committed_live_delivery_has_fence(
-                self.state
-                    .message_service()
-                    .clustered_direct_admission_enabled(),
-                live_delivery_message_id,
-                live_claim_id,
-            )
-        {
-            // A clustered Stored outcome must carry its exact precommit
-            // reservation. Never turn an accepted row into an unfenced live
-            // delivery even if the health mode recovered after COMMIT.
-            self.state.personal_message_telemetry().post_accept_failed();
-            tracing::error!(recipient_id = %recipient.id, message_id = ?live_delivery_id,
-                "clustered durable direct admission lacked live reservation");
-            return Ok(Action::None);
-        }
-        let live_delivery = live_delivery_id.map(|message_id| crate::outbound::DurableDelivery {
-            recipient_id: recipient.id,
-            message_id,
-            claim_id: live_claim_id,
-        });
-        let deliver_all = bare_target && bare_message_route(message_type) == BareMessageRoute::All;
-        if local_direct {
-            // A mode transition can happen while policy reads or PoW
-            // finalization await. A committed row remains accepted for
-            // recovery, whereas an uncommitted transient stanza must fail.
-            match local_direct_live_effect(
-                self.state.message_service().direct_mode(),
-                live_delivery_id.is_some(),
-            ) {
-                LocalDirectLiveEffect::Proceed => {}
-                LocalDirectLiveEffect::AcceptedForRecovery => {
-                    self.state
-                        .message_service()
-                        .rearm_unrouted_live_direct(
-                            recipient.id,
-                            live_delivery_message_id,
-                            &mut live_claim_id,
-                        )
-                        .await;
-                    return Ok(Action::None);
-                }
-                LocalDirectLiveEffect::Reject => {
-                    return Ok(message_error(root, "wait", "service-unavailable"));
-                }
-            }
-        }
-        let route = OnlineMessageRouter::dispatch(
+        let delivery = match live_delivery_id {
+            Some(message_id) => DirectRouteDelivery::Committed(crate::outbound::DurableDelivery {
+                recipient_id: recipient.id,
+                message_id,
+                claim_id: live_claim_id,
+            }),
+            None => DirectRouteDelivery::Volatile,
+        };
+        self.enter_frame_stage(Stage::MessageRouting);
+        let outcome = DirectMessageRouter::route(
             &*self.state,
-            to,
-            &recipient_delivery,
-            live_delivery,
-            deliver_all,
-            &targets,
-        )
-        .await;
-        let mut delivered = route.delivered;
-        let mut delivered_key = route.accepted_full_jid;
-
-        // RFC 6121 §8.5.3.2 permits chat fallback after an exact resource
-        // disappears. The service preserves post-commit privacy/error behavior.
-        if !delivered && !bare_target {
-            if local_direct {
-                match local_direct_live_effect(
-                    self.state.message_service().direct_mode(),
-                    live_delivery_id.is_some(),
-                ) {
-                    LocalDirectLiveEffect::Proceed => {}
-                    LocalDirectLiveEffect::AcceptedForRecovery => {
-                        self.state
-                            .message_service()
-                            .rearm_unrouted_live_direct(
-                                recipient.id,
-                                live_delivery_message_id,
-                                &mut live_claim_id,
-                            )
-                            .await;
-                        return Ok(Action::None);
+            DirectRouteRequest {
+                message_type,
+                target: if bare_target {
+                    DirectRouteTarget::Bare(to)
+                } else {
+                    DirectRouteTarget::Full {
+                        jid: to,
+                        bare: &recipient_by,
                     }
-                    LocalDirectLiveEffect::Reject => {
-                        return Ok(message_error(root, "wait", "service-unavailable"));
-                    }
-                }
-            }
-            let fallback = OnlineMessageRouter::full_jid_fallback(
-                &*self.state,
-                FullJidFallback {
-                    message_type,
-                    full_target: to,
-                    bare_target: &recipient_by,
-                    sender: from,
-                    recipient_id: recipient.id,
-                    stanza: &recipient_delivery,
-                    delivery: live_delivery,
                 },
-            )
-            .await;
-            let fallback = match fallback {
-                Ok(fallback) => fallback,
-                Err(error) if live_delivery_id.is_some() => {
-                    self.state
-                        .message_service()
-                        .rearm_unrouted_live_direct(
-                            recipient.id,
-                            live_delivery_message_id,
-                            &mut live_claim_id,
-                        )
-                        .await;
-                    self.state.personal_message_telemetry().post_accept_failed();
-                    tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id,
-                        "full-JID fallback failed after durable admission; row remains recoverable");
-                    return Ok(Action::None);
-                }
-                Err(error) => return Err(error),
-            };
-            match fallback {
-                FullJidFallbackResult::Dropped => {
-                    self.state
-                        .message_service()
-                        .rearm_unrouted_live_direct(
-                            recipient.id,
-                            live_delivery_message_id,
-                            &mut live_claim_id,
-                        )
-                        .await;
-                    self.finalize_message_admission(
-                        &mut message_admission_lease,
-                        "full-target-drop",
-                    )
-                    .await;
-                    return Ok(Action::None);
-                }
-                FullJidFallbackResult::Rejected => {
-                    if live_delivery_id.is_some() {
-                        self.state
-                            .message_service()
-                            .rearm_unrouted_live_direct(
-                                recipient.id,
-                                live_delivery_message_id,
-                                &mut live_claim_id,
-                            )
-                            .await;
-                        self.state.personal_message_telemetry().post_accept_failed();
-                        tracing::warn!(recipient_id = %recipient.id, %recipient_stable_id,
-                            "full-JID fallback rejected after durable admission; row remains recoverable");
-                        return Ok(Action::None);
-                    }
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                FullJidFallbackResult::Undelivered => {}
-                FullJidFallbackResult::Delivered(key) => {
-                    delivered = true;
-                    delivered_key = key;
-                }
+                sender: from,
+                recipient_id: recipient.id,
+                stanza: &recipient_delivery,
+                delivery,
+                approved_targets: &targets,
+                enforce_direct_health: local_direct,
+            },
+        )
+        .await?;
+        let (delivered, delivered_key) = match outcome {
+            DirectRouteOutcome::Routed { accepted_full_jid } => (true, accepted_full_jid),
+            DirectRouteOutcome::Unrouted => (false, None),
+            DirectRouteOutcome::AcceptedForRecovery { stage, reason } => {
+                tracing::debug!(
+                    ?stage,
+                    ?reason,
+                    "accepted direct message deferred to durable ownership/recovery"
+                );
+                return Ok(Action::None);
             }
-        }
-
-        if !delivered {
-            self.state
-                .message_service()
-                .rearm_unrouted_live_direct(
-                    recipient.id,
-                    live_delivery_message_id,
-                    &mut live_claim_id,
+            DirectRouteOutcome::AcceptedBeforeDegradation => {
+                self.finalize_message_admission(
+                    &mut message_admission_lease,
+                    "online-before-degrade",
                 )
                 .await;
-        }
-
-        if local_direct {
-            match local_direct_live_effect(
-                self.state.message_service().direct_mode(),
-                live_delivery_id.is_some(),
-            ) {
-                LocalDirectLiveEffect::Proceed => {}
-                LocalDirectLiveEffect::AcceptedForRecovery => return Ok(Action::None),
-                LocalDirectLiveEffect::Reject if delivered => {
-                    // The live queue accepted the volatile stanza before the
-                    // transition. An error now would invite a duplicate.
-                    self.finalize_message_admission(
-                        &mut message_admission_lease,
-                        "online-before-degrade",
-                    )
-                    .await;
-                    return Ok(Action::None);
-                }
-                LocalDirectLiveEffect::Reject => {
-                    return Ok(message_error(root, "wait", "service-unavailable"));
-                }
+                return Ok(Action::None);
             }
-        }
+            DirectRouteOutcome::Dropped => {
+                self.finalize_message_admission(&mut message_admission_lease, "full-target-drop")
+                    .await;
+                return Ok(Action::None);
+            }
+            DirectRouteOutcome::Rejected(reason) => {
+                let kind = match reason {
+                    DirectRouteRejection::Unavailable => "wait",
+                    DirectRouteRejection::NoMatchingResource => "cancel",
+                };
+                return Ok(message_error(root, kind, "service-unavailable"));
+            }
+        };
 
+        self.enter_frame_stage(Stage::MessageFollowup);
         let mut stored_offline = false;
         if !delivered {
             if direct_delivery_mode == DirectDeliveryMode::VolatileExplicitNoStore {
@@ -1644,6 +1508,7 @@ impl ProtocolSession {
         let Some(lease) = lease.take() else {
             return;
         };
+        self.enter_frame_stage(Stage::MessageFollowup);
         if let Err(error) = self
             .state
             .message_admission_service()
@@ -1819,13 +1684,12 @@ fn message_pow_intent_payload(client_raw: &str) -> String {
 mod tests {
     use super::{
         bare_message_route, degraded_local_direct_eligible, direct_delivery_mode,
-        direct_spool_eligibility, durable_direct_delivery_allowed, durable_full_no_match_recovers,
-        full_no_match_route, local_direct_live_effect, message_pow_intent_payload,
-        missing_user_message_should_error, mixes_personal_retraction_and_direct_invite,
-        offline_storage_eligible, undelivered_disposition, wake_federation_outbox_after_commit,
-        BareMessageRoute, DirectDeliveryMode, DirectPostCommitMode, DirectSpoolEligibility,
-        DurableAdmissionOutcome, FullNoMatchRoute, LocalDirectLiveEffect, MessagePostCommit,
-        UndeliveredDisposition,
+        direct_spool_eligibility, durable_direct_delivery_allowed, full_no_match_route,
+        message_pow_intent_payload, missing_user_message_should_error,
+        mixes_personal_retraction_and_direct_invite, offline_storage_eligible,
+        undelivered_disposition, wake_federation_outbox_after_commit, BareMessageRoute,
+        DirectDeliveryMode, DirectSpoolEligibility, DurableAdmissionOutcome, FullNoMatchRoute,
+        MessagePostCommit, UndeliveredDisposition,
     };
     use crate::{
         abuse::{AbuseAction, PowIntent},
@@ -1833,6 +1697,7 @@ mod tests {
             set_from, set_root_attribute, strip_pow_element, strip_untrusted_direct_delays,
         },
     };
+    use northstar_message_core::durable_full_no_match_recovers;
     use roxmltree::Document;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -2006,27 +1871,6 @@ mod tests {
         assert_eq!(
             direct_spool_eligibility(false, true),
             DirectSpoolEligibility::LiveOnly
-        );
-    }
-
-    #[test]
-    fn mode_change_after_commit_preserves_recovery_without_live_effects() {
-        for mode in [
-            DirectPostCommitMode::SpoolOnly,
-            DirectPostCommitMode::Rejected,
-        ] {
-            assert_eq!(
-                local_direct_live_effect(mode, true),
-                LocalDirectLiveEffect::AcceptedForRecovery
-            );
-            assert_eq!(
-                local_direct_live_effect(mode, false),
-                LocalDirectLiveEffect::Reject
-            );
-        }
-        assert_eq!(
-            local_direct_live_effect(DirectPostCommitMode::Live, true),
-            LocalDirectLiveEffect::Proceed
         );
     }
 

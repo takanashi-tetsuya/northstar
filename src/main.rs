@@ -264,7 +264,7 @@ async fn run() -> Result<()> {
     if arguments != ["serve", "maintenance"]
         && std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")
     {
-        dotenvy::dotenv().ok();
+        config::load_dotenv()?;
     }
     if let Some(outcome) = identity_audit::maybe_run(&arguments).await? {
         return match outcome {

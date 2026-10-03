@@ -2,6 +2,122 @@ use super::*;
 use crate::services::mix::MamRsmPage;
 
 #[tokio::test]
+async fn transferred_mix_source_never_constructs_old_worker_acknowledgement() {
+    let completed = finish_mix_delivery_owner(
+        ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport,
+        || -> std::future::Ready<Result<bool>> {
+            panic!("a transferred lease cannot reach old-worker settlement")
+        },
+    )
+    .await
+    .unwrap();
+    assert!(completed);
+}
+
+#[tokio::test]
+async fn worker_owned_mix_source_acknowledges_once_and_preserves_fence_failure() {
+    for acknowledged in [true, false] {
+        let calls = std::cell::Cell::new(0);
+        let result = finish_mix_delivery_owner(
+            ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker,
+            || {
+                calls.set(calls.get() + 1);
+                async { Ok(acknowledged) }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, acknowledged);
+        assert_eq!(calls.get(), 1);
+    }
+    let error = finish_mix_delivery_owner(
+        ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker,
+        || async { anyhow::bail!("injected settlement backend failure") },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "injected settlement backend failure");
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_mix_acknowledgement_obeys_existing_attempt_deadline() {
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
+    let calls = std::cell::Cell::new(0);
+    let settlement = finish_mix_delivery_owner(
+        ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker,
+        || {
+            calls.set(calls.get() + 1);
+            bounded_mix_outbox_turn(&cancel, deadline, std::future::pending::<Result<bool>>())
+        },
+    );
+    tokio::pin!(settlement);
+    assert!(futures::poll!(&mut settlement).is_pending());
+    tokio::time::advance(MIX_OUTBOX_ATTEMPT_DEADLINE).await;
+    let error = settlement.await.unwrap_err();
+    assert!(mix_outbox_deadline_elapsed(&error));
+    assert_eq!(calls.get(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_mix_acknowledgement_obeys_cancellation_without_retry() {
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = std::cell::Cell::new(0);
+    let settlement = finish_mix_delivery_owner(
+        ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker,
+        || {
+            calls.set(calls.get() + 1);
+            bounded_mix_outbox_turn(
+                &cancel,
+                tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE,
+                std::future::pending::<Result<bool>>(),
+            )
+        },
+    );
+    tokio::pin!(settlement);
+    assert!(futures::poll!(&mut settlement).is_pending());
+    cancel.cancel();
+    let error = settlement.await.unwrap_err();
+    assert!(mix_outbox_is_shutting_down(&error));
+    assert_eq!(calls.get(), 1);
+}
+
+#[tokio::test]
+async fn sm_and_bosh_mix_handoffs_preserve_typed_transport_owner() {
+    for completion in [
+        crate::outbound::MixTransportCompletion::SmPersisted {
+            session_id: Uuid::from_u128(41),
+        },
+        crate::outbound::MixTransportCompletion::BoshPersisted {
+            session_id: Uuid::from_u128(43),
+        },
+    ] {
+        let source = crate::outbound::MixDelivery {
+            delivery_id: Uuid::from_u128(47),
+            lease_token: Uuid::from_u128(53),
+        };
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        let mut waiting = Box::pin(try_send_local_durable_mix(
+            &sender,
+            &disconnect,
+            "owned".to_owned(),
+            source,
+        ));
+        assert!(futures::poll!(&mut waiting).is_pending());
+        let item = consumer.recv().await.unwrap();
+        assert_eq!(item.mix_delivery(), Some(source));
+        // Dequeue is insufficient. Only the transport's typed completion
+        // resolves the same production waiter used by claimed MIX routing.
+        assert!(futures::poll!(&mut waiting).is_pending());
+        item.complete_mix_handoff(completion);
+        assert_eq!(waiting.await.unwrap(), completion);
+        assert!(!disconnect.is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn delivery_idle_scan_stays_bounded_and_retained_commits_bypass_backoff() {
     let broker = crate::services::mix::MixDeliveryWakeBroker::for_test();
     let mut wake = Some(broker.subscribe());

@@ -86,8 +86,12 @@ separate source/build-identity check.
 
 ### Local development
 
-This example starts a loopback-only development instance. Create a local
-PostgreSQL database and role, then update both database URLs in the copied file:
+This example starts a loopback-only development instance. First follow the
+[local database bootstrap](docs/DATABASE_ROLES.md#localhost-owner-only-development-mode)
+to create a dedicated PostgreSQL owner, database, and explicitly owner-held
+`public` schema. `CREATE DATABASE ... OWNER ...` alone is insufficient on
+PostgreSQL 15+ because `public` normally belongs to `pg_database_owner`.
+Then update both database URLs in the copied file:
 
 ```sh
 cp .env.development.example .env

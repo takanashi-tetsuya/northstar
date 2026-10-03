@@ -2361,7 +2361,7 @@ class XmppWebSocket:
             data.extend(chunk)
         return bytes(data)
 
-    def send(self, text: str, opcode: int = 1) -> None:
+    def send(self, text: str, opcode: int = 1, *, deadline: float | None = None) -> None:
         payload = text.encode()
         mask = os.urandom(4)
         first = 0x80 | opcode
@@ -2375,9 +2375,13 @@ class XmppWebSocket:
         if self._construction_deadline is None:
             # A preceding bounded receive must not leave a stale short socket
             # timeout behind for normal post-authentication protocol traffic.
-            self.sock.settimeout(10)
+            timeout = 10
         else:
-            self.sock.settimeout(self._construction_timeout())
+            timeout = self._construction_timeout()
+        if deadline is not None:
+            # An observer ACK must share its enclosing receive/barrier budget.
+            timeout = min(timeout, _remaining_deadline_timeout(deadline, "WebSocket send"))
+        self.sock.settimeout(timeout)
         self.sock.sendall(header + mask + masked)
 
     def send_with_pow(self, text: str, token: str) -> dict[str, str]:

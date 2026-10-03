@@ -67,6 +67,99 @@ a deployment shortcut. Production must provision separate migrator, runtime,
 storage, command and backup identities and run the exact post-migration grant
 reconciliation described below before starting the long-lived server.
 
+### Explicit fresh local bootstrap
+
+Use a **new, disposable database and dedicated non-superuser login**. The
+commands below assume PostgreSQL listens only on loopback and that its local
+administrator login is `postgres`; substitute your existing administrator if
+necessary. They do not modify a production installation or migrate an existing
+database to the development role model.
+
+Connect as that administrator (`psql -X -h 127.0.0.1 -U postgres -d postgres`)
+and run:
+
+```sql
+\set ON_ERROR_STOP on
+CREATE ROLE northstar_dev LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOINHERIT NOREPLICATION NOBYPASSRLS;
+\password northstar_dev
+CREATE DATABASE northstar_dev OWNER northstar_dev TEMPLATE template0 ENCODING 'UTF8';
+\quit
+```
+
+`\password` prompts for a local password rather than recording it in the SQL
+text. Connect to the **new database as its owner**
+(`psql -X -h 127.0.0.1 -U northstar_dev -d northstar_dev`) and run:
+
+```sql
+\set ON_ERROR_STOP on
+BEGIN;
+ALTER SCHEMA public OWNER TO CURRENT_USER;
+REVOKE ALL ON DATABASE northstar_dev FROM PUBLIC;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON TYPES FROM PUBLIC;
+COMMIT;
+
+SELECT current_user, current_database(),
+       pg_get_userbyid(nspowner) AS schema_owner,
+       nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+           AS directly_owned_by_current_user
+  FROM pg_namespace WHERE nspname = 'public';
+\quit
+```
+
+The final column must be `t`. PostgreSQL 15+ normally creates `public` with
+`pg_database_owner` as its owner. Database ownership confers effective schema
+privileges, but Northstar's owner-held capabilities intentionally require the
+schema's owner OID to match the migration login itself. The explicit
+`ALTER SCHEMA` above establishes that contract before any migrations run.
+The revocations preserve the fresh database's owner-only development shape;
+do not run production grant reconciliation for this local database.
+
+Copy `.env.development.example` to `.env` and set **both** `DATABASE_URL` and
+`MIGRATOR_DATABASE_URL` to this same local owner/database. Percent-encode any
+special characters in the URL's password. Keep the loopback host and reserved
+development domain. Then run `xmpp-server migrate` before starting the server
+(or `cargo run --release --locked -- migrate` from a source checkout).
+
+The migrator performs a read-only schema ownership preflight under the
+database policy lock, on the same connection that SQLx will use, before SQLx
+creates its migration ledger or applies DDL. It rejects missing/system schemas and indirect or foreign ownership with a
+bootstrap diagnostic; it never takes ownership automatically. This check does
+not replace migration checks, runtime catalog/ACL attestation, or production
+role attestation. Named isolated development schemas are supported when the
+same login directly owns the schema selected by `search_path`.
+
+If an older quickstart already stopped at migration 0114, do not delete or edit
+the SQLx ledger or migration files. For that disposable local database, first
+verify the existing objects belong to the intended local owner, explicitly
+correct `public` ownership while connected as that owner, and rerun `migrate`.
+Foreign-owned objects or third-party grants require deliberate administrator
+review; changing only the schema owner cannot repair those conditions.
+
+### Migration admission regression
+
+With a freshly built binary and PostgreSQL 15+ tools installed, run (the
+release-equivalent validation uses PostgreSQL 17):
+
+```sh
+python3 scripts/test-migration-preflight.py \
+  --binary target/debug/rust-xmpp-server \
+  --pg-bin /path/to/postgresql/17/bin \
+  --evidence /tmp/northstar-migration-preflight.json
+```
+
+This creates and stops its own private, TCP-only loopback PostgreSQL cluster.
+It uses a non-superuser database owner and checks default `pg_database_owner`,
+foreign, missing and system-schema rejection before any ledger or DDL change;
+explicit bootstrap; a quoted owner-held schema; exact source checksums and
+idempotent reruns; and recovery from the actual pre-0114 migration chain
+without changing already-applied ledger rows. It never connects to an existing
+application database. Run it as an ordinary OS user because `initdb` rejects
+root. Omit `--pg-bin` to use `pg_config --bindir`. The JSON evidence and
+adjacent logs identify each checked case.
+
 ## Secret files
 
 The deployment uses six password files and five URL files:

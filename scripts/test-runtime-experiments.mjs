@@ -39,6 +39,18 @@ for (const [label, mutate] of [
   ['missing measurable assertion', c => c.families[0].experiments[0].assertions = []],
   ['missing cleanup', c => c.families[0].experiments[0].cleanup = ''],
   ['missing command', c => c.families[0].experiments[0].command = ''],
+  ['missing executable contract', c => delete c.executable_contract],
+  ['unknown executable field', c => c.executable_contract.observed = true],
+  ['unsupported model', c => c.executable_contract.model = 'production-proven'],
+  ['changed capacity', c => c.executable_contract.policy.actor_capacity = 4097],
+  ['boolean capacity', c => c.executable_contract.policy.actor_capacity = true],
+  ['expiry comparator drift', c => c.executable_contract.clock.active = 'expires_at >= now'],
+  ['missing cancellation verdict', c => c.executable_contract.verdicts.pop()],
+  ['missing bounded evidence', c => c.executable_contract.budgets.splice(4, 1)],
+  ['unknown fault cut', c => c.executable_contract.semantic_cuts.push('durable_commit_unknown')],
+  ['missing concrete fixture', c => c.executable_contract.scenarios.pop()],
+  ['overclaimed model scope', c => c.executable_contract.scope = 'production proven'],
+  ['overclaimed identity mapping', c => c.executable_contract.identity = 'production MAC compatible'],
 ]) test(`rejects ${label}`, () => { const c = clone(); mutate(c); assert.throws(() => verifyRuntimeExperiments(c)); });
 const identityFamily = c => c.families.find(f => f.runtime_identities.length);
 for (const [label, mutate] of [
@@ -59,4 +71,10 @@ test('portable JSON schema keeps the same finite family and declaration vocabula
   assert.deepEqual(schema.properties.required_families.const, baseline.required_families);
   assert.equal(schema.$defs.family.properties.experiments.items.properties.status.const, 'declared');
   assert.equal(schema.$defs.family.properties.runtime_identities.items.properties.coverage.const, 'static_boundary');
+  assert.equal(schema.properties.schema.const, baseline.schema);
+  assert.equal(schema.$defs.admissionScenario.additionalProperties, false);
+  assert.equal(schema.$defs.admissionRow.additionalProperties, false);
+  assert.equal(schema.$defs.admissionCommand.additionalProperties, false);
+  assert.equal(schema.$defs.admissionCommand.properties.time_us.type, 'integer');
+  assert.deepEqual(schema.properties.executable_contract.properties.scenarios.const, baseline.executable_contract.scenarios);
 });

@@ -7,11 +7,12 @@
     "schema",
     "purpose",
     "required_families",
-    "families"
+    "families",
+    "executable_contract"
   ],
   "properties": {
     "schema": {
-      "const": "northstar-runtime-experiments-v1"
+      "const": "northstar-runtime-experiments-v2"
     },
     "purpose": {
       "type": "string",
@@ -43,6 +44,179 @@
       "maxItems": 16,
       "items": {
         "$ref": "#/$defs/family"
+      }
+    },
+    "executable_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "model",
+        "scope",
+        "implementation",
+        "fixtures",
+        "input_schema",
+        "identity",
+        "policy",
+        "policy_source",
+        "clock",
+        "normal_preflight",
+        "semantic_cuts",
+        "verdicts",
+        "budgets",
+        "termination",
+        "provenance",
+        "cleanup",
+        "limitations",
+        "scenarios"
+      ],
+      "properties": {
+        "schema": {
+          "const": "northstar-admission-scenario-v1"
+        },
+        "model": {
+          "const": "admission-fixture-v1"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "implementation": {
+          "$ref": "#/$defs/reference"
+        },
+        "fixtures": {
+          "$ref": "#/$defs/reference"
+        },
+        "input_schema": {
+          "const": "#/$defs/admissionScenario"
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "actor_capacity",
+            "accepted_ttl_us",
+            "pending_ttl_us",
+            "lease_us"
+          ],
+          "properties": {
+            "actor_capacity": {
+              "const": 4096,
+              "type": "integer"
+            },
+            "accepted_ttl_us": {
+              "const": 21600000000,
+              "type": "integer"
+            },
+            "pending_ttl_us": {
+              "const": 1800000000,
+              "type": "integer"
+            },
+            "lease_us": {
+              "const": 60000000,
+              "type": "integer"
+            }
+          }
+        },
+        "policy_source": {
+          "$ref": "#/$defs/reference"
+        },
+        "clock": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "domain",
+            "unit",
+            "active",
+            "expired"
+          ],
+          "properties": {
+            "domain": {
+              "const": "sql_model"
+            },
+            "unit": {
+              "const": "microsecond"
+            },
+            "active": {
+              "const": "expires_at > now"
+            },
+            "expired": {
+              "const": "expires_at <= now"
+            }
+          }
+        },
+        "normal_preflight": {
+          "type": "string",
+          "minLength": 1
+        },
+        "semantic_cuts": {
+          "const": [
+            "none",
+            "before_effect_cancel",
+            "reservation_commit_unknown"
+          ]
+        },
+        "verdicts": {
+          "const": [
+            "Pass",
+            "InvariantViolation",
+            "InvalidScenario",
+            "EnvironmentInterrupted",
+            "Inconclusive",
+            "Cancelled"
+          ]
+        },
+        "budgets": {
+          "const": [
+            "domain_us",
+            "wall_ms",
+            "steps",
+            "events",
+            "evidence_bytes",
+            "memory_bytes",
+            "files"
+          ]
+        },
+        "termination": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provenance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cleanup": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limitations": {
+          "const": [
+            "Proof consumption, rate-limit state, cryptography, shard capacity and SQL concurrency are not modeled",
+            "Unknown covers reservation transaction knowledge only, never durable-message commit",
+            "No PostgreSQL, stock wire, process loss, elapsed retention or endurance proof",
+            "Physical retained counts omit bounded shard/background cleanup; late-finalize 4097 assumes the expired pending row survives cleanup",
+            "Normal fixture preflight covers fresh two-actor actor-retention only, not all guard, queue, archive or shard limits"
+          ]
+        },
+        "scenarios": {
+          "const": [
+            "normal-mixed",
+            "capacity-4095-4096-4097",
+            "replay-payload-actor-conflict",
+            "ttl-before",
+            "ttl-at",
+            "ttl-after",
+            "pending-lease-reclaim",
+            "late-finalize-source-semantics",
+            "late-finalize-4097-candidate",
+            "reservation-unknown",
+            "cancel-before-reservation"
+          ]
+        }
       }
     }
   },
@@ -300,6 +474,359 @@
           "minItems": 1
         }
       }
+    },
+    "admissionRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor",
+        "key",
+        "payload_tag",
+        "lease",
+        "state",
+        "expires_at_us",
+        "lease_until_us"
+      ],
+      "properties": {
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "payload_tag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "accepted"
+          ]
+        },
+        "expires_at_us": {
+          "type": "integer",
+          "minimum": -9000000000000000,
+          "maximum": 9000000000000000
+        },
+        "lease_until_us": {
+          "type": "integer",
+          "minimum": -9000000000000000,
+          "maximum": 9000000000000000
+        }
+      }
+    },
+    "admissionCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "effect_id",
+        "actor",
+        "key",
+        "payload_tag",
+        "lease",
+        "causal_id",
+        "attempt",
+        "time_us",
+        "action",
+        "kind",
+        "cut"
+      ],
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "effect_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "payload_tag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "causal_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        },
+        "time_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9000000000000000
+        },
+        "action": {
+          "enum": [
+            "reserve",
+            "finalize"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "direct",
+            "muc",
+            "mix"
+          ]
+        },
+        "cut": {
+          "enum": [
+            "none",
+            "before_effect_cancel",
+            "reservation_commit_unknown"
+          ]
+        }
+      }
+    },
+    "admissionScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "model",
+        "scenario_id",
+        "purpose",
+        "policy",
+        "clock",
+        "actors",
+        "initial_rows",
+        "commands",
+        "budgets",
+        "termination",
+        "seed"
+      ],
+      "properties": {
+        "schema": {
+          "const": "northstar-admission-scenario-v1"
+        },
+        "model": {
+          "const": "admission-fixture-v1"
+        },
+        "scenario_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "purpose": {
+          "enum": [
+            "normal",
+            "capacity",
+            "replay",
+            "ttl",
+            "lease",
+            "unknown"
+          ]
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "actor_capacity",
+            "accepted_ttl_us",
+            "pending_ttl_us",
+            "lease_us"
+          ],
+          "properties": {
+            "actor_capacity": {
+              "const": 4096,
+              "type": "integer"
+            },
+            "accepted_ttl_us": {
+              "const": 21600000000,
+              "type": "integer"
+            },
+            "pending_ttl_us": {
+              "const": 1800000000,
+              "type": "integer"
+            },
+            "lease_us": {
+              "const": 60000000,
+              "type": "integer"
+            }
+          }
+        },
+        "clock": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "domain",
+            "unit",
+            "start_us"
+          ],
+          "properties": {
+            "domain": {
+              "const": "sql_model"
+            },
+            "unit": {
+              "const": "microsecond"
+            },
+            "start_us": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9000000000000000
+            }
+          }
+        },
+        "actors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+          }
+        },
+        "initial_rows": {
+          "type": "array",
+          "maxItems": 20000,
+          "items": {
+            "$ref": "#/$defs/admissionRow"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "maxItems": 20000,
+          "items": {
+            "$ref": "#/$defs/admissionCommand"
+          },
+          "minItems": 1
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "domain_us",
+            "wall_ms",
+            "steps",
+            "events",
+            "evidence_bytes",
+            "memory_bytes",
+            "files"
+          ],
+          "properties": {
+            "domain_us": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9000000000000000
+            },
+            "wall_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9000000000000000
+            },
+            "steps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20000
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20000
+            },
+            "evidence_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8388608
+            },
+            "memory_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9000000000000000
+            },
+            "files": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9000000000000000
+            }
+          }
+        },
+        "termination": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "after_commands",
+            "terminal_required"
+          ],
+          "properties": {
+            "after_commands": {
+              "const": "complete"
+            },
+            "terminal_required": {
+              "const": true,
+              "type": "boolean"
+            }
+          }
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Synthetic keys/payload tags only, not production MACs. Cross-field causal/time/capacity constraints are enforced by scripts/lib/experiment_contract.py; declarations are not observations."
     }
   }
 }

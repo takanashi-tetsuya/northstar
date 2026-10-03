@@ -483,6 +483,8 @@ jobs:
           python3 scripts/local-vm-lab-muc-mam.py --self-test
           python3 scripts/local-vm-lab-soak.py --self-test
           python3 scripts/test-finalize-soak.py
+          python3 scripts/test-experiment-contract.py
+          python3 scripts/test-integration-muc-matching.py
           python3 scripts/test-mixed-traffic-soak.py
           python3 scripts/test-frame-trace.py
           python3 scripts/test-room-db-experiments.py

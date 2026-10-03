@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
+import errno
 import hashlib
 import importlib.util
 import json
@@ -31,6 +32,8 @@ import traceback
 import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
+from lib.experiment_contract import InvalidScenario, mixed_workload, preflight_normal
+
 SOURCE = pathlib.Path(__file__).resolve().parents[1]
 NS = '{jabber:client}'
 MAM = '{urn:xmpp:mam:2}'
@@ -40,6 +43,62 @@ SID = '{urn:xmpp:sid:0}'
 SM = '{urn:xmpp:sm:3}'
 OMEMO = '{urn:xmpp:omemo:2}'
 SHUTDOWN_SECONDS = 20
+RESULT_SCHEMA = 'northstar-mixed-traffic-result-v1'
+
+
+class OperatorCancelled(BaseException):
+    """Only the explicit operator-signal handler creates this cancellation."""
+
+    def __init__(self, signum):
+        self.signum = int(signum)
+        super().__init__(f'operator signal {self.signum}')
+
+
+class DomainInvariantViolation(AssertionError):
+    """An observed contract failure, distinct from setup/fixture assertions."""
+
+    def __init__(self, code, location, message):
+        self.code, self.location = code, location
+        super().__init__(message)
+
+
+def domain_check(value, code, location, message):
+    if not value:
+        raise DomainInvariantViolation(code, location, message)
+
+
+def operator_interrupted(signum, _frame):
+    raise OperatorCancelled(signum)
+
+
+def interruption_origin(error):
+    if isinstance(error, OperatorCancelled):
+        return {'status': 'Cancelled', 'cause': 'OperatorSignal', 'signal': error.signum}
+    if isinstance(error, InterruptedError) or (isinstance(error, OSError) and error.errno == errno.EINTR):
+        return {'status': 'EnvironmentInterrupted', 'cause': 'EINTR'}
+    return None
+
+
+def retain_cleanup_interruption(report, error):
+    origin = interruption_origin(error)
+    if origin is not None:
+        report.setdefault('interruption', origin)
+
+
+def initialize_result(result):
+    result.setdefault('experiment_schema', RESULT_SCHEMA)
+    result.setdefault('execution', {'status': 'Running', 'phase': 'setup', 'cause': None})
+    result.setdefault('domain', {'status': 'NotStarted', 'first_invariant': None})
+    result.setdefault('evidence', {'workload_terminal': False, 'complete': False, 'gaps': []})
+    result.setdefault('verdict', 'Inconclusive')
+    result.setdefault('qualified', False)
+
+
+def evidence_gap(result, code):
+    result['evidence']['complete'] = False
+    gaps = result['evidence']['gaps']
+    if code not in gaps and len(gaps) < 16:
+        gaps.append(code)
 
 
 def stamp():
@@ -87,6 +146,8 @@ def source_identity():
             raise FileNotFoundError('source archive has no Git metadata')
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=SOURCE,
                                          stderr=subprocess.DEVNULL, text=True, timeout=5).strip()
+    except InterruptedError:
+        raise
     except (OSError, subprocess.SubprocessError):
         commit = None
     roots = ('src', 'crates', 'services', 'migrations', 'scripts', 'tests', 'web',
@@ -128,8 +189,40 @@ def candidate_database_port():
 
 
 def finalize_result(result, cleanup):
-    """Workload success is necessary, never sufficient, for a passing fixture."""
+    """Qualify structured runs without erasing prior failure or cancellation.
+
+    Legacy callers supplying only workload_status retain their old passed/failed
+    shape; that shape emits no structured Pass/qualification claim. The actual
+    runner always initializes RESULT_SCHEMA before setup or workload execution.
+    """
     result['cleanup'] = cleanup
+    if result.get('experiment_schema') == RESULT_SCHEMA:
+        if cleanup.get('interruption') is not None and result['execution']['status'] in ('Running', 'Completed'):
+            result['execution'] = {**cleanup['interruption'], 'phase': 'cleanup'}
+            evidence_gap(result, 'cleanup_interrupted')
+        clean_claim = cleanup.get('clean') is True and not cleanup.get('errors')
+        cleanup_status = cleanup.get('status')
+        if (cleanup_status not in ('Clean', 'NotRequired', 'Incomplete')
+                or (cleanup_status in ('Clean', 'NotRequired')) != clean_claim):
+            evidence_gap(result, 'cleanup_report_inconsistent')
+        clean = (clean_claim and cleanup.get('independent') is True
+                 and cleanup_status in ('Clean', 'NotRequired'))
+        execution, domain, evidence = result['execution'], result['domain'], result['evidence']
+        if domain['first_invariant'] is not None:
+            verdict = 'InvariantViolation'
+        elif execution['status'] == 'Cancelled':
+            verdict = 'Cancelled'
+        elif execution['status'] == 'EnvironmentInterrupted':
+            verdict = 'EnvironmentInterrupted'
+        elif (execution['status'] == 'Completed' and domain['status'] == 'Verified'
+              and result.get('workload_status') == 'passed' and evidence['workload_terminal'] is True
+              and evidence['complete'] is True and not evidence['gaps'] and clean):
+            verdict = 'Pass'
+        else:
+            verdict = 'Inconclusive'
+        result.update(verdict=verdict, qualified=verdict == 'Pass',
+                      status='passed' if verdict == 'Pass' else 'failed')
+        return result
     result['status'] = ('passed' if result.get('workload_status') == 'passed'
                         and cleanup.get('clean') is True else 'failed')
     return result
@@ -242,7 +335,8 @@ class OwnedFixture:
             self.database_port, self.output / f'{label}-diagnostics.jsonl', self.pg_environment)
 
     def stop(self):
-        report = {'clean': True, 'forced_kill': False, 'errors': []}
+        report = {'clean': True, 'independent': True, 'status': 'Clean',
+                  'forced_kill': False, 'errors': []}
         if self.server is not None:
             try:
                 if self.server.poll() is None:
@@ -257,6 +351,7 @@ class OwnedFixture:
                         try:
                             report['shutdown_diagnostics'] = self.capture('shutdown-timeout')
                         except Exception as error:
+                            retain_cleanup_interruption(report, error)
                             report['shutdown_diagnostics'] = {'status': 'unavailable',
                                                               'error_type': type(error).__name__}
                         finally:
@@ -266,6 +361,7 @@ class OwnedFixture:
                 if self.server.returncode != 0 or report['forced_kill']:
                     report['errors'].append('server did not exit cleanly inside the shutdown budget')
             except Exception as error:
+                retain_cleanup_interruption(report, error)
                 report['errors'].append(f'server cleanup failed: {type(error).__name__}')
         else:
             report['errors'].append('server was never started')
@@ -279,11 +375,13 @@ class OwnedFixture:
                 self.command(['pg_ctl', '-D', self.runtime / 'data', '-m', 'fast', '-w', '-t', '10', 'stop'],
                              'pgstop.log', timeout=15)
             except Exception as error:
+                retain_cleanup_interruption(report, error)
                 report['errors'].append(f'PostgreSQL fast stop failed: {type(error).__name__}')
                 try:
                     self.command(['pg_ctl', '-D', self.runtime / 'data', '-m', 'immediate', '-w', '-t', '5', 'stop'],
                                  'pgstop-immediate.log', timeout=10)
                 except Exception as fallback:
+                    retain_cleanup_interruption(report, fallback)
                     report['errors'].append(f'PostgreSQL immediate stop failed: {type(fallback).__name__}')
         report['listener_closed_checks'] = {name: listener_closed(address)
                                            for name, address in self.listeners.items()}
@@ -291,6 +389,7 @@ class OwnedFixture:
         if not all(report['listener_closed_checks'].values()):
             report['errors'].append('a fixture listener remains open')
         report['clean'] = not report['errors']
+        report['status'] = 'Clean' if report['clean'] else 'Incomplete'
         return report
 
 
@@ -334,7 +433,11 @@ class MixedTraffic:
         for peer in self.peers:
             try:
                 peer.close()
-            except Exception:
+            except (OperatorCancelled, InterruptedError):
+                raise
+            except Exception as error:
+                if interruption_origin(error) is not None:
+                    raise
                 peer.abort()
 
     def proc_sample(self, label):
@@ -374,18 +477,19 @@ class MixedTraffic:
                 self.acknowledge(peer, deadline)
             elif root.tag == SM + 'a':
                 handled = root.get('h', '')
-                check(handled.isdecimal() and int(handled) < 2**32, 'invalid server SM acknowledgement')
+                domain_check(handled.isdecimal() and int(handled) < 2**32,
+                             'sm_ack_range', 'observe.sm_ack', 'invalid server SM acknowledgement')
                 self.counts['sm_server_ack_responses'] += 1
         mid = root.get('id')
         if root.tag == NS + 'message' and mid and mid.startswith('soak-'):
             key = (peer.username, mid)
-            check(key in self.expected, f'unexpected delivery {key}: {frame}')
+            domain_check(key in self.expected, 'unexpected_live_delivery', 'observe.delivery', f'unexpected delivery {key}: {frame}')
             contract = self.expected[key]
-            check(root.get('type') == contract['type'], f'wrong delivery type {key}: {frame}')
-            check(root.get('from', '').split('/')[0] == contract['from'], f'wrong delivery sender {key}: {frame}')
-            check(contract['payload'] in frame, f'wrong or missing payload {key}: {frame}')
+            domain_check(root.get('type') == contract['type'], 'live_delivery_type', 'observe.delivery', f'wrong delivery type {key}: {frame}')
+            domain_check(root.get('from', '').split('/')[0] == contract['from'], 'live_delivery_sender', 'observe.delivery', f'wrong delivery sender {key}: {frame}')
+            domain_check(contract['payload'] in frame, 'live_delivery_payload', 'observe.delivery', f'wrong or missing payload {key}: {frame}')
             self.observed[key] += 1
-            check(self.observed[key] == 1, f'duplicate live delivery {key}')
+            domain_check(self.observed[key] == 1, 'duplicate_live_delivery', 'observe.delivery', f'duplicate live delivery {key}')
             self.counts['live_deliveries'] += 1
         return root
 
@@ -415,6 +519,14 @@ class MixedTraffic:
         while time.monotonic() < deadline:
             try:
                 frame = peer.receive(max(0.01, deadline - time.monotonic()))
+            except (OperatorCancelled, InterruptedError):
+                # Operator cancellation and ordinary EINTR have different
+                # verdicts; neither may be rewritten as a receive timeout.
+                raise
+            except OSError as error:
+                if error.errno == errno.EINTR:
+                    raise
+                raise TimeoutError(f'{label}; recipient={peer.username}; observed_frames={frames!r}; transport_error={error!r}') from error
             except Exception as error:
                 raise TimeoutError(f'{label}; recipient={peer.username}; observed_frames={frames!r}; transport_error={error!r}') from error
             root = self.observe(peer, frame, deadline=deadline)
@@ -577,9 +689,10 @@ class MixedTraffic:
                   'every stream must negotiate SM')
             check(self.counts['sm_inbound_stanzas'] > self.counts['live_deliveries'],
                   'SM accounting must include IQ, MAM and presence stanzas')
-        check(set(self.expected) == set(self.observed), 'missing expected live deliveries')
-        check(all((value == 1 for value in self.observed.values())), 'non-exact live delivery counts')
-        check(self.counts['live_deliveries'] == rounds * 4 + rounds // 10, 'wrong aggregate live delivery count')
+        domain_check(set(self.expected) == set(self.observed), 'live_delivery_set', 'terminal.delivery', 'missing expected live deliveries')
+        domain_check(all((value == 1 for value in self.observed.values())), 'live_delivery_cardinality', 'terminal.delivery', 'non-exact live delivery counts')
+        domain_check(self.counts['live_deliveries'] == rounds * 4 + rounds // 10,
+                     'live_delivery_aggregate', 'terminal.delivery', 'wrong aggregate live delivery count')
         self.proc_sample('terminal')
         ordered_latencies = sorted(self.latencies)
         self.result.update(
@@ -604,12 +717,34 @@ class MixedTraffic:
             observed_deliveries=sum(self.observed.values()),
             unique_observed_deliveries=len(self.observed),
         )
+        self.result['evidence'].update(workload_terminal=True, complete=True)
 
 
-def record_workload_failure(result, workload, error):
+def record_workload_failure(result, workload, error, phase='workload'):
     # Record before touching clients, sending a signal or starting diagnostics.
-    result.update(workload_status='failed', error=f'{type(error).__name__}: {error}',
-                  failed_at=stamp())
+    initialize_result(result)
+    result['workload_status'] = 'failed'
+    result.setdefault('error', f'{type(error).__name__}: {error}')
+    result.setdefault('failed_at', stamp())
+    previous_execution = result['execution']
+    if isinstance(error, OperatorCancelled):
+        result['execution'] = {'status': 'Cancelled', 'phase': phase, 'cause': 'OperatorSignal', 'signal': error.signum}
+    elif isinstance(error, InterruptedError) or (isinstance(error, OSError) and error.errno == errno.EINTR):
+        result['execution'] = {'status': 'EnvironmentInterrupted', 'phase': phase, 'cause': 'EINTR'}
+    elif phase == 'setup':
+        result['execution'] = {'status': 'EnvironmentInterrupted', 'phase': phase, 'cause': 'SetupFailure'}
+    elif isinstance(error, DomainInvariantViolation):
+        result['execution'] = {'status': 'Failed', 'phase': phase, 'cause': 'ObservedInvariant'}
+        result['domain']['status'] = 'InvariantViolation'
+        if result['domain']['first_invariant'] is None:
+            result['domain']['first_invariant'] = {'code': error.code, 'class': 'ObservedContract', 'location': error.location}
+    else:
+        result['execution'] = {'status': 'Failed', 'phase': phase, 'cause': 'UnclassifiedWorkloadFailure'}
+    if previous_execution['status'] not in ('Running', 'Completed'):
+        # Secondary bootstrap/cleanup failures must not rewrite the originating
+        # interruption/cancellation. A known invariant still wins the verdict.
+        result['execution'] = previous_execution
+    evidence_gap(result, 'workload_not_completed' if phase == 'workload' else 'setup_not_completed')
     if workload is not None:
         result['counters'] = dict(workload.counts)
         result['missing_deliveries'] = [
@@ -620,23 +755,36 @@ def record_workload_failure(result, workload, error):
 
 
 def run_owned_fixture(fixture, seconds, result, workload_factory=MixedTraffic):
+    initialize_result(result)
     workload = None
+    phase = 'setup'
     try:
         helpers = fixture.start()
         result['binary_sha256'] = fixture.binary_sha256
         workload = workload_factory(fixture, helpers, seconds, result)
+        phase = 'workload'
+        result['execution']['phase'] = phase
+        result['domain']['status'] = 'Unresolved'
         workload.run()
         result['workload_status'] = 'passed'
+        result['execution'] = {'status': 'Completed', 'phase': phase, 'cause': None}
+        if result['evidence']['workload_terminal'] is True and result['evidence']['complete'] is True:
+            result['domain']['status'] = 'Verified'
+        else:
+            evidence_gap(result, 'missing_workload_terminal')
     except BaseException as error:
-        record_workload_failure(result, workload, error)
+        record_workload_failure(result, workload, error, phase)
         emit('workload_failed', **result)
         traceback.print_exc()
         # Observation is best effort and never replaces the original error.
         try:
             result['failure_diagnostics'] = fixture.capture('workload-failure')
-        except Exception as diagnostic_error:
+            if result['failure_diagnostics'].get('status') in ('unavailable', 'deadline', 'partial', 'not_started'):
+                evidence_gap(result, 'failure_observation_incomplete')
+        except BaseException as diagnostic_error:
             result['failure_diagnostics'] = {'status': 'unavailable',
                                              'error_type': type(diagnostic_error).__name__}
+            evidence_gap(result, 'failure_observation_unavailable')
     finally:
         # One cleanup owner. Repeated operator signals cannot interrupt it
         # halfway and leave the owned database/server behind.
@@ -644,18 +792,25 @@ def run_owned_fixture(fixture, seconds, result, workload_factory=MixedTraffic):
                         for kind in (signal.SIGINT, signal.SIGTERM)}
         try:
             peer_error = None
+            peer_interruption = None
             if workload is not None:
                 try:
                     workload.close()
-                except Exception as error:
+                except BaseException as error:
                     peer_error = f'peer cleanup failed: {type(error).__name__}'
+                    peer_interruption = interruption_origin(error)
             try:
                 cleanup = fixture.stop()
-            except Exception as error:
-                cleanup = {'clean': False, 'errors': [f'fixture cleanup failed: {type(error).__name__}']}
+            except BaseException as error:
+                cleanup = {'clean': False, 'independent': True, 'status': 'Incomplete',
+                           'errors': [f'fixture cleanup failed: {type(error).__name__}']}
+                retain_cleanup_interruption(cleanup, error)
             if peer_error:
                 cleanup['clean'] = False
+                cleanup['status'] = 'Incomplete'
                 cleanup.setdefault('errors', []).append(peer_error)
+            if peer_interruption is not None:
+                cleanup.setdefault('interruption', peer_interruption)
             finalize_result(result, cleanup)
         finally:
             for kind, handler in old_handlers.items():
@@ -716,48 +871,106 @@ def parse_arguments(argv=None):
 
 def main(argv=None):
     args = parse_arguments(argv)
+    # Must precede output creation, source_identity's Git invocation, port
+    # selection, PostgreSQL tool discovery, signals and all fixture startup.
+    # Accounts are freshly created in the owned database. This is an offered
+    # workload upper bound, not supplied/observed admission outcomes.
+    try:
+        offered_workload = mixed_workload(args.duration_seconds)
+        preflight = preflight_normal(offered_workload)
+    except InvalidScenario as error:
+        emit('preflight_rejected', experiment_schema=RESULT_SCHEMA, verdict='InvalidScenario',
+             qualified=False, status='failed', reason=str(error),
+             execution={'status': 'NotStarted', 'phase': 'preflight', 'cause': 'InvalidScenario'},
+             domain={'status': 'NotStarted', 'first_invariant': None},
+             cleanup={'status': 'NotRequired', 'clean': True, 'owned': [], 'remaining': [], 'independent': True})
+        return 2
     started = time.monotonic()
-    output = args.output_dir
-    if output is None:
-        output = pathlib.Path(tempfile.mkdtemp(prefix='northstar-mixed-soak-'))
-    else:
-        output.mkdir(mode=0o700, parents=False)
-    output.chmod(0o700)
+    output, fixture, previous = None, None, {}
+    output_owned = False
     result = {
         'harness': 'scripts/mixed-traffic-soak.py', 'requested_seconds': args.duration_seconds,
-        'minimum_rounds': minimum_rounds(args.duration_seconds), 'output_directory': str(output),
-        'source': source_identity(), 'source_helper_sha256': digest(SOURCE / 'scripts/integration-wsl.py'),
-        'harness_sha256': digest(__file__), 'started_at': stamp(),
-        'trace_frames': args.trace_frames,
-        'stream_management': args.stream_management,
+        'minimum_rounds': minimum_rounds(args.duration_seconds), 'started_at': stamp(),
+        'trace_frames': args.trace_frames, 'stream_management': args.stream_management,
+        'preflight': preflight,
         'limitations': [
             'Single node, two live users; bounded smoke, not production load or endurance',
             'WebSocket SASL PLAIN on trusted loopback; no direct TCP TLS coverage',
             'Synthetic opaque OMEMO envelopes; no real-client encryption/decryption interoperability',
             'Isolated development-only database-role and ephemeral-secret exceptions'],
     }
-    database_port = args.database_port or candidate_database_port()
-    result['database_port'] = database_port
-    fixture = OwnedFixture(args.binary, output, database_port, args.trace_frames)
-    def interrupted(signum, _frame):
-        raise InterruptedError(f'operator signal {signum}')
-    previous = {kind: signal.signal(kind, interrupted) for kind in (signal.SIGINT, signal.SIGTERM)}
+    initialize_result(result)
     try:
+        for kind in (signal.SIGINT, signal.SIGTERM):
+            previous[kind] = signal.signal(kind, operator_interrupted)
+        output = args.output_dir
+        if output is None:
+            output = pathlib.Path(tempfile.mkdtemp(prefix='northstar-mixed-soak-'))
+        else:
+            output.mkdir(mode=0o700, parents=False)
+        output_owned = True
+        output.chmod(0o700)
+        result['output_directory'] = str(output)
+        (output / 'preflight.json').write_text(json.dumps({
+            'input': offered_workload, 'result': preflight,
+            'scope': 'Synthetic admission keys represent the offered upper bound, not production MACs or actual outcomes',
+        }, indent=2) + '\n')
+        result.update(source=source_identity(), source_helper_sha256=digest(SOURCE / 'scripts/integration-wsl.py'),
+                      harness_sha256=digest(__file__))
+        database_port = args.database_port or candidate_database_port()
+        result['database_port'] = database_port
+        fixture = OwnedFixture(args.binary, output, database_port, args.trace_frames)
         run_owned_fixture(fixture, args.duration_seconds, result)
+    except BaseException as error:
+        # Bootstrap (including tool discovery/source/port/constructor failures)
+        # is environmental. A setup assertion is never product proof.
+        record_workload_failure(result, None, error, phase='setup')
+        if 'cleanup' not in result:
+            if fixture is None:
+                cleanup = {'clean': True, 'independent': True, 'status': 'NotRequired', 'errors': []}
+            else:
+                try:
+                    cleanup = fixture.stop()
+                except BaseException as cleanup_error:
+                    cleanup = {'clean': False, 'independent': True, 'status': 'Incomplete',
+                               'errors': [f'fixture cleanup failed: {type(cleanup_error).__name__}']}
+                    retain_cleanup_interruption(cleanup, cleanup_error)
+            finalize_result(result, cleanup)
     finally:
         for kind, handler in previous.items():
-            signal.signal(kind, handler)
-    try:
-        result['source_unchanged_during_run'] = result['source'] == source_identity()
-    except Exception as error:
-        result['source_unchanged_during_run'] = False
-        result['source_verification_error'] = type(error).__name__
-    if not result['source_unchanged_during_run']:
-        result['status'] = 'failed'
-        result['source_error'] = 'source changed during qualification; binary provenance is ambiguous'
+            try:
+                signal.signal(kind, handler)
+            except BaseException as error:
+                evidence_gap(result, 'signal_handler_restore_failed')
+                if result['execution']['status'] in ('Running', 'Completed'):
+                    result['execution'] = {'status': 'EnvironmentInterrupted', 'phase': 'cleanup',
+                                           'cause': type(error).__name__}
+    if 'source' in result:
+        try:
+            result['source_unchanged_during_run'] = result['source'] == source_identity()
+        except BaseException as error:
+            result['source_unchanged_during_run'] = False
+            result['source_verification_error'] = type(error).__name__
+            if isinstance(error, (OperatorCancelled, InterruptedError)) and result['execution']['status'] == 'Completed':
+                result['execution'] = {'status': 'Cancelled' if isinstance(error, OperatorCancelled) else 'EnvironmentInterrupted',
+                                       'phase': 'provenance', 'cause': type(error).__name__}
+        if not result['source_unchanged_during_run']:
+            evidence_gap(result, 'source_identity_changed_or_unavailable')
+            result['source_error'] = 'source changed or unavailable during qualification; binary provenance is ambiguous'
     result['finished_at'] = stamp()
     result['total_seconds'] = round(time.monotonic() - started, 3)
-    (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    finalize_result(result, result['cleanup'])
+    if output_owned:
+        try:
+            with (output / 'result.json').open('x') as artifact:
+                artifact.write(json.dumps(result, indent=2) + '\n')
+        except OSError as error:
+            evidence_gap(result, 'terminal_artifact_write_failed')
+            result['result_write_error'] = type(error).__name__
+            origin = interruption_origin(error)
+            if origin is not None and result['execution']['status'] == 'Completed':
+                result['execution'] = {**origin, 'phase': 'evidence'}
+            finalize_result(result, result['cleanup'])
     emit('terminal_result', **result)
     return 0 if result['status'] == 'passed' else 1
 

@@ -20,8 +20,8 @@ export function readRuntimeExperiments() {
 }
 export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeInventory,
   read = relative => fs.readFileSync(path.join(root, relative), 'utf8') } = {}) {
-  fields(catalog, ['schema', 'purpose', 'required_families', 'families'], 'catalog');
-  requireValue(catalog.schema === 'northstar-runtime-experiments-v1', 'unsupported schema');
+  fields(catalog, ['schema', 'purpose', 'required_families', 'families', 'executable_contract'], 'catalog');
+  requireValue(catalog.schema === 'northstar-runtime-experiments-v2', 'unsupported schema');
   text(catalog.purpose, 'purpose');
   requireValue(JSON.stringify(catalog.required_families) === JSON.stringify(requiredFamilies), 'required-family list drift');
   nonempty(catalog.families, 'families');
@@ -37,6 +37,44 @@ export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeI
     try { source = read(value.path); } catch { throw new Error(`runtime experiments: ${label} source unavailable`); }
     requireValue(source.split(value.anchor).length === 2, `${label} anchor missing or ambiguous`);
   }
+  const contract = catalog.executable_contract;
+  fields(contract, ['schema', 'model', 'scope', 'implementation', 'fixtures', 'input_schema', 'identity',
+    'policy', 'policy_source', 'clock', 'normal_preflight', 'semantic_cuts', 'verdicts', 'budgets',
+    'termination', 'provenance', 'cleanup', 'limitations', 'scenarios'], 'executable contract');
+  requireValue(contract.schema === 'northstar-admission-scenario-v1' && contract.model === 'admission-fixture-v1',
+    'unsupported executable contract/model');
+  requireValue(contract.input_schema === '#/$defs/admissionScenario', 'missing executable input schema');
+  for (const key of ['scope', 'identity', 'normal_preflight', 'termination', 'provenance', 'cleanup']) text(contract[key], key);
+  requireValue(/model\/fixture/.test(contract.scope) && /not production-shared/.test(contract.scope), 'model scope must remain explicit');
+  requireValue(/synthetic/.test(contract.identity) && /no production MAC/.test(contract.identity), 'synthetic identity boundary missing');
+  for (const key of ['implementation', 'fixtures', 'policy_source']) reference(contract[key], `contract ${key}`);
+  fields(contract.policy, ['actor_capacity', 'accepted_ttl_us', 'pending_ttl_us', 'lease_us'], 'contract policy');
+  for (const [key, expected] of Object.entries({ actor_capacity: 4096, accepted_ttl_us: 21600000000,
+    pending_ttl_us: 1800000000, lease_us: 60000000 })) {
+    requireValue(Number.isSafeInteger(contract.policy[key]) && contract.policy[key] === expected, `contract ${key} policy drift`);
+  }
+  const policySource = read(contract.policy_source.path);
+  for (const expression of [
+    /MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 = 4_096;/,
+    /MESSAGE_ADMISSION_LEASE:[\s\S]*?from_secs\(60\);/,
+    /MESSAGE_ADMISSION_PENDING_TTL:[\s\S]*?from_secs\(30 \* 60\);/,
+    /MESSAGE_ADMISSION_ACCEPTED_TTL:[\s\S]*?from_secs\(6 \* 60 \* 60\);/,
+  ]) requireValue(expression.test(policySource), 'executable policy does not match production constants');
+  fields(contract.clock, ['domain', 'unit', 'active', 'expired'], 'contract clock');
+  requireValue(contract.clock.domain === 'sql_model' && contract.clock.unit === 'microsecond'
+    && contract.clock.active === 'expires_at > now' && contract.clock.expired === 'expires_at <= now', 'SQL expiry/clock drift');
+  for (const [key, expected] of Object.entries({
+    semantic_cuts: ['none', 'before_effect_cancel', 'reservation_commit_unknown'],
+    verdicts: ['Pass', 'InvariantViolation', 'InvalidScenario', 'EnvironmentInterrupted', 'Inconclusive', 'Cancelled'],
+    budgets: ['domain_us', 'wall_ms', 'steps', 'events', 'evidence_bytes', 'memory_bytes', 'files'],
+    scenarios: ['normal-mixed', 'capacity-4095-4096-4097', 'replay-payload-actor-conflict', 'ttl-before',
+      'ttl-at', 'ttl-after', 'pending-lease-reclaim', 'late-finalize-source-semantics', 'late-finalize-4097-candidate', 'reservation-unknown', 'cancel-before-reservation'],
+  })) requireValue(JSON.stringify(contract[key]) === JSON.stringify(expected), `contract ${key} drift`);
+  nonempty(contract.limitations, 'contract limitations');
+  contract.limitations.forEach(value => text(value, 'limitation'));
+  const portableSchema = JSON.parse(read('catalog/runtime-experiments.schema.json'));
+  requireValue(portableSchema.$defs?.admissionScenario?.additionalProperties === false,
+    'portable executable schema must reject unknown fields');
   for (const family of catalog.families) {
     fields(family, ['id', 'title', 'production_owner', 'runtime_identities', 'invariants', 'boundaries',
       'faults', 'budgets', 'experiments', 'privacy', 'gaps'], 'family');

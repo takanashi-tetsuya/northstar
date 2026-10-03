@@ -1,5 +1,5 @@
 {
-  "schema": "northstar-runtime-experiments-v1",
+  "schema": "northstar-runtime-experiments-v2",
   "purpose": "Supported in-process runtime ownership and reproducible experiment index; declarations are not execution evidence.",
   "required_families": [
     "startup",
@@ -225,6 +225,27 @@
             "command.result.json"
           ],
           "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "admission-fixture-contract",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-experiment-contract.py",
+          "test": {
+            "path": "scripts/test-experiment-contract.py",
+            "anchor": "class ContractCases(unittest.TestCase):"
+          },
+          "assertions": [
+            "Exact synthetic inputs and independent golden projections cover shared actor capacity, replay/conflict, SQL expiry and pending lease/finalization semantics",
+            "Normal over-cap offered workload is rejected before output, process, listener or tool startup",
+            "Unknown reservation knowledge, first mismatch, complete bounded evidence and independent cleanup are classified without manufacturing observations"
+          ],
+          "artifacts": [
+            "synthetic-cases.json",
+            "ordinary-tests.log",
+            "ordinary-result.json"
+          ],
+          "cleanup": "Pure stdlib model tests only; temporary input-parser files use TemporaryDirectory; no server, DB, child, listener or signal"
         }
       ],
       "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
@@ -1441,5 +1462,82 @@
         "No live browser/multi-device cryptographic qualification is claimed in this phase."
       ]
     }
-  ]
+  ],
+  "executable_contract": {
+    "schema": "northstar-admission-scenario-v1",
+    "model": "admission-fixture-v1",
+    "scope": "Stage 1 model/fixture contract only; not production-shared Rust or real adapter evidence",
+    "implementation": {
+      "path": "scripts/lib/experiment_contract.py",
+      "anchor": "def parse_scenario(value):"
+    },
+    "fixtures": {
+      "path": "scripts/test-experiment-contract.py",
+      "anchor": "def synthetic_cases():"
+    },
+    "input_schema": "#/$defs/admissionScenario",
+    "identity": "Precomputed synthetic admission keys, payload tags and leases; no production MAC compatibility claim",
+    "policy": {
+      "actor_capacity": 4096,
+      "accepted_ttl_us": 21600000000,
+      "pending_ttl_us": 1800000000,
+      "lease_us": 60000000
+    },
+    "policy_source": {
+      "path": "crates/northstar-abuse-policy/src/model.rs",
+      "anchor": "pub const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 = 4_096;"
+    },
+    "clock": {
+      "domain": "sql_model",
+      "unit": "microsecond",
+      "active": "expires_at > now",
+      "expired": "expires_at <= now"
+    },
+    "normal_preflight": "Hold all initial pending and new unobserved identities through the run; only initial accepted rows may free capacity at exact expiry",
+    "semantic_cuts": [
+      "none",
+      "before_effect_cancel",
+      "reservation_commit_unknown"
+    ],
+    "verdicts": [
+      "Pass",
+      "InvariantViolation",
+      "InvalidScenario",
+      "EnvironmentInterrupted",
+      "Inconclusive",
+      "Cancelled"
+    ],
+    "budgets": [
+      "domain_us",
+      "wall_ms",
+      "steps",
+      "events",
+      "evidence_bytes",
+      "memory_bytes",
+      "files"
+    ],
+    "termination": "Concrete ordered commands, required terminal and complete bounded evidence; known first mismatch survives interruption",
+    "provenance": "Exact listed source hashes and base commit in scoped synthetic corpus; predicted projection remains distinct from separately supplied actual evidence",
+    "cleanup": "Independent owned/remaining resource evidence; semantic Pass alone cannot qualify incomplete cleanup",
+    "limitations": [
+      "Proof consumption, rate-limit state, cryptography, shard capacity and SQL concurrency are not modeled",
+      "Unknown covers reservation transaction knowledge only, never durable-message commit",
+      "No PostgreSQL, stock wire, process loss, elapsed retention or endurance proof",
+      "Physical retained counts omit bounded shard/background cleanup; late-finalize 4097 assumes the expired pending row survives cleanup",
+      "Normal fixture preflight covers fresh two-actor actor-retention only, not all guard, queue, archive or shard limits"
+    ],
+    "scenarios": [
+      "normal-mixed",
+      "capacity-4095-4096-4097",
+      "replay-payload-actor-conflict",
+      "ttl-before",
+      "ttl-at",
+      "ttl-after",
+      "pending-lease-reclaim",
+      "late-finalize-source-semantics",
+      "late-finalize-4097-candidate",
+      "reservation-unknown",
+      "cancel-before-reservation"
+    ]
+  }
 }

@@ -18,8 +18,10 @@ health observers, nine top-level tasks and 33 AppState service accessors.
 5. Escalate to the appropriate isolated DB, wire or operator fixture if the
    narrower evidence cannot settle the question
 
-Every catalog experiment is `declared`. The validator never executes commands
-or changes that value to `passed`. Each mapped runtime identity is only
+The 23 indexed experiments remain `declared`. Catalog v2 additionally names an
+executable Stage 1 admission fixture contract and its 11 concrete synthetic
+cases. The validator never executes commands or changes a declaration to
+`passed`. Each mapped runtime identity is only
 `static_boundary` coverage: generic supervisor tests do not prove a worker's
 business logic. Fresh run results live in the delivered evidence package and
 completion matrix, never masquerade as evergreen source facts.
@@ -39,6 +41,61 @@ result. `catalog/runtime-experiments.schema.json` is the portable shape contract
 the dependency-free Node validator enforces shape plus repository semantics.
 These source-shape checks are drift detectors, not a general Rust parser or a
 runtime semantic-equivalence proof.
+
+## Executable fixture contract
+
+`scripts/lib/experiment_contract.py` defines bounded, versioned concrete actor,
+row, command, time, effect-cut, expectation, budget, provenance and cleanup
+inputs. `scripts/test-experiment-contract.py` supplies independently written
+golden projections. Its pure tests do not start services, sockets or child
+processes. Save a new corpus and replay it from the same scoped source bytes:
+
+```sh
+python3 -B scripts/test-experiment-contract.py --evidence-dir /tmp/northstar-stage1-cases
+python3 -B scripts/test-experiment-contract.py --replay-corpus /tmp/northstar-stage1-cases/synthetic-cases.json
+```
+
+The output directory must not exist. A changed source map, concrete case,
+projection, expected outcome or cleanup contract fails replay. Recalculating a
+damaged observation's embedded evaluation does not make it a valid baseline.
+`saved-counterexample.json` separately records a deliberate synthetic
+projection mismatch, manually reduced from six commands to the causal
+reserve/finalize pair with a passing positive control. This is an oracle probe,
+not an automatic shrinker or production-shared Rust replay.
+
+The model preserves the current 4,096 per-actor active admission limit,
+six-hour accepted retention, 30-minute pending retention and 60-second lease.
+Direct, MUC and MIX share actor occupancy. Cases cover capacity refusal,
+replay/payload/actor conflicts, expiry before/at/after its boundary, lease
+replacement, late finalization, reservation-commit uncertainty and cancellation
+before an effect. The late-finalization 4,097 case describes a source-predicate
+candidate conditional on an expired pending row surviving cleanup; it neither
+proves a live caller can reach it nor changes retention policy.
+
+The real `mixed-traffic-soak.py` entry point now runs the fresh two-sender offered
+workload through preflight before source queries, output creation, listener
+selection or fixture startup. Initial pending occupancy is conservatively held
+through the declared run because a later finalization can extend retention.
+Expected capacity refusal belongs in an explicitly declared capacity scenario;
+it cannot convert an invalid normal workload into a pass. Preflight does not
+prove all proof/rate, queue, archive or shard limits are satisfied.
+
+The existing fixture emits separate execution, domain, evidence and cleanup
+fields. Explicit operator cancellation remains `Cancelled`; ordinary EINTR or
+setup interruption is `EnvironmentInterrupted`. Typed observed contract
+violations retain the first invariant. Unclassified failures, source drift,
+missing terminal evidence or incomplete cleanup cannot qualify as `Pass`.
+Legacy `passed`/`failed` fields remain compatibility fields, not independent
+qualification. Pure mocks exercise those real fixture entry points; they do not
+constitute a live fixture run or Stage 6 resource enforcement.
+
+Only the explicit model domain clock is controlled. Synthetic keys, payload
+tags and leases do not establish production MAC compatibility, proof/rate state,
+locking, shard cleanup, durable-message commit or real adapter conformance.
+Reservation `Unknown` is not a durable-message receipt. Each saved run must bind
+its result to stable source hashes before and after the command; a post-run hash
+alone cannot establish which bytes were loaded. The rebuilding ledger records
+which new scope was actually accepted and which remains open.
 
 ## Families and evidence boundaries
 

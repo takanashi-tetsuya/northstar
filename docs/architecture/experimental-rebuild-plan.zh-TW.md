@@ -19,14 +19,14 @@ oracle、受控 corpus、真 SQL/wire artifacts 與有限 runner，不能因舊�
 基線 CI [37107644451](https://github.com/takanashi-tetsuya/northstar/actions/runs/37107644451)
 的 head 是上述 commit，conclusion 為 success；這只描述恢復基線的既有 CI。
 每次新實作都要記錄自己的 commit、案例集合、工具鏈、執行／未執行項與限制。
-`stage0-baseline.json` 保存本輪讀取的來源、config example 與工具鏈身分；尚未執行新的服務或 wire 實驗。
+`stage0-baseline.json` 保存本輪讀取的來源、config example 與工具鏈身分；該 source-only 記錄自身不包含服務或 wire 執行。
 
 ## 階段與退出條件
 
 | 階段 | 必須交付的 production 路徑與實驗能力 | 可判定退出的證據 | 本輪狀態 |
 |---|---|---|---|
-| 0 責任與基線 | 既有 admission、commit、handoff、write、ACK、settlement 權威；Unknown 與 recovery 分類 | 乾淨 Git 身分、責任表、實際／缺失能力稽核、獨立只讀審查 | 本輪 source-only 已驗收；遠端保存另核對 |
-| 1 可執行規格 | 延伸既有 catalog/harness；actor/identity 初態、混合負載、TTL/capacity、預期 outcome、故障語義、budgets、termination、provenance、cleanup | 不合法正常負載先拒絕；4095→4096→4097、retained pending、mixed identity、TTL 前／恰好／後；精確 oracle 與負向測試 | 未重建 |
+| 0 責任與基線 | 既有 admission、commit、handoff、write、ACK、settlement 權威；Unknown 與 recovery 分類 | 乾淨 Git 身分、責任表、實際／缺失能力稽核、獨立只讀審查 | 本輪 source-only 已驗收並保存於 d9eb2e2；CI runtime 缺口另列 |
+| 1 可執行規格 | 延伸既有 catalog/harness；actor/identity 初態、混合負載、TTL/capacity、預期 outcome、故障語義、budgets、termination、provenance、cleanup | 不合法正常負載先拒絕；4095→4096→4097、retained pending、mixed identity、TTL 前／恰好／後；精確 oracle 與負向測試 | 本輪限定 scope 已驗收；等待 remote checkpoint |
 | 2 Shared admission | production 與 controlled composition 呼叫相同 state/effect coordinator；SQL 交易內的 authority/version/fence 重驗不移除 | 正常、預期容量拒絕、replay、expiry、Unknown 的具體輸入與 effect order 可重播；重複／不符 completion 不推進 | 未重建 |
 | 3 Direct lifecycle | 真正 mode-aware durable commit 接入既有 DirectMessageRouter、UnroutedClaim、exact OutboundItem、native write 與 SM/BOSH owner | admission→commit→finalization→handoff→write→settlement 的責任可判定；取消、owner replacement、舊 token、partial write 與 delayed ACK cases | 未重建 |
 | 4 高風險域 | MUC gate/authority/admission/fanout、MIX atomic store/one-shot transfer、auth commit/write-or-exposure/publication、實際 worker claim/recovery | 每域 production 共用可控案例；auth write 後 failure/cancel；代表性縮減、mutation 與 saved replay | 未重建 |
@@ -41,6 +41,47 @@ Stage 5 的 SQL-aging 狀態不等同 production caller 可達性；Stage 6 的�
 2026-10-03 的新 Stage 0 獨立只讀審查已通過，僅涵蓋 recovered baseline 與本台帳的責任／缺口範圍。
 審查記錄見 `docs/evidence/experimental-rebuild/stage0-acceptance.json`；不沿用前一輪 acceptance，
 也不代表 Stage 1–6 已實作或 remote 保存已完成。下一階段寫入須先核對這次 remote commit/tree/delta。
+
+此交接條件已完成：remote commit `d9eb2e2dfa948f6a9d3e16b4ce0c08eca4f9c671`、
+tree `89d6279f05fc314923132c59c490e782f0fb5b6e` 經回讀，精確六檔新增、無其他修改或刪除。
+隨後的 [CI 37130305484](https://github.com/takanashi-tetsuya/northstar/actions/runs/37130305484)
+有 MUC controls owner-affiliation assertion 失敗及 required 匯總失敗；不能把 source-only acceptance
+寫成 runtime 穩定或 CI green。實際被選中的 peer frame 未保存，原因仍未確定，不能僅因 production
+沒有 delta 就斷言是 fixture。保留的只讀 triage 見
+`docs/evidence/experimental-rebuild/stage0-ci-muc-controls-triage.json`。
+
+隨後以獨立小 commit `5519ff7e497e71a72224ee72af66f14cb60ab128` 修正 controls-room fixture
+的 reply correlation，保留 exact owner／110／201 assertion 和原 deadline。九項純 fake
+receive/clock cases 與獨立 source review 通過；新 [CI 37132305774](https://github.com/takanashi-tetsuya/northstar/actions/runs/37132305774)
+為 32 success、1 schedule-only skip、0 failure，包含 PostgreSQL protocol integration。
+這是新 commit 的結果，不能倒推原失敗的 wire frame 或根因。terminal record 已另存。
+
+## Stage 1 新實作與證據
+
+Catalog v2 保留 16 families／71 runtime identities／23 declared experiments，另連到一個
+可執行 synthetic admission contract 和 11 個 exact cases。純模型預檢把 direct/MUC/MIX
+合計到同 actor，保守保留 initial pending occupancy，並保留現有 4096／6h／30m／60s。
+容量拒絕、replay／payload conflict、TTL 等號邊界、lease replacement、late finalize、
+reservation Unknown 和取消都有獨立 golden projection。prediction 與 supplied observation
+分開，固定 corpus 的 reader 不接受自行重算 evaluation 的損壞 observation。
+
+既有 mixed fixture 的真實 main／run_owned_fixture 路徑接上 preflight 與 structured
+execution/domain/evidence/cleanup。explicit operator cancellation、普通 EINTR、setup 錯誤、
+typed observed invariant 和缺失證據不再只依 legacy failed 混為一類。這些 entry point 在本輪
+以純 mocks 驗證；不是新 live fixture 執行或 Stage 6 的 resource enforcement。
+
+正式來源 map `c6d4c8ed879dc5bd29abb18a6b3632b4d0a3a2fe0bede58f3e1f659ae4484e62`
+的十檔 before／after 與 runner map 一致；actual HEAD 是 `5519ff7`，`d9eb2e2` 只作 declared
+reconstruction anchor。51 項純 contract/fixture tests、46 項 Node catalog tests、11 saved cases、
+9 項 MUC mocks 與 source/static checks 全部 exit 0。新增純 helper 已接入既有 CI，但本段
+不把尚未發布的 Stage 1 CI 當已執行。
+
+證據與 hash index 在 [stage1-verification.json](../evidence/experimental-rebuild/stage1-verification.json)，
+39 個原始檔保存在同目錄的 `stage1-model-evidence-v1.tar.gz`；final 與三次 historical attempts
+分開。reader false-success、fixture taxonomy 和 provenance 修正見 `stage1-review-findings.json`。
+保存的 6→2 是手動縮減 synthetic oracle mismatch，保留 reserve→finalize 因果；真正 shared Rust
+replay／自動縮減／SQL/wire conformance 仍在後續階段。late-finalize 4097 仍只是 conditional model
+candidate，不能列為已證實的 production cap bug。Stage 1 新獨立限定 acceptance 已通過；記錄見 `stage1-acceptance.json`。remote commit/tree/filelist 回讀仍是 Stage 2 寫入前置條件。
 
 ## 成功詞與現有權威
 
@@ -78,7 +119,7 @@ policy snapshot。保留現有 SQL revalidation 不表示補上此保證。Guard
 
 ## 本輪已知缺口
 
-- Catalog 現有 family/index/owner/source gate，尚沒有新的可執行 workload validity、precise oracle 或 replay artifact contract
+- Catalog 已新增 synthetic workload validity、precise oracle 與固定 corpus replay；production-shared workflow 與真 adapter evidence 尚未重建
 - Admission、mode-aware durable commit 與 handler continuation 仍未由可獨立於 AppState 的共同 workflow 驅動
 - Native typed lease、typed router 與 MUC accepted fanout owner 應重用；不建立另一套平行 routing／SQL authority
 - BOSH 仍有 actor-wide `auth_publication_pending`，歷史 exact queued-control marker 修正不在此基線

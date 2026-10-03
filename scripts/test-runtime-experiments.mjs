@@ -78,3 +78,26 @@ test('portable JSON schema keeps the same finite family and declaration vocabula
   assert.equal(schema.$defs.admissionCommand.properties.time_us.type, 'integer');
   assert.deepEqual(schema.properties.executable_contract.properties.scenarios.const, baseline.executable_contract.scenarios);
 });
+
+for (const [label, mutate] of [
+  ['missing controlled contract', c => delete c.controlled_contract],
+  ['unknown controlled field', c => c.controlled_contract.executed = true],
+  ['wrong controlled adapter', c => c.controlled_contract.adapter = 'real_adapter'],
+  ['wrong controlled binding', c => c.controlled_contract.binding_version = 'production-mac'],
+  ['missing controlled fixture', c => c.controlled_contract.scenarios.pop()],
+  ['missing controlled rejection', c => c.controlled_contract.rejection_scenarios.pop()],
+  ['duplicate controlled fixture', c => c.controlled_contract.scenarios.push(c.controlled_contract.scenarios[0])],
+  ['wrong controlled runner', c => c.controlled_contract.runner.anchor = 'not-an-executable-anchor'],
+  ['controlled scope overclaim', c => c.controlled_contract.scope = 'SQL and wire qualified'],
+]) test(`rejects ${label}`, () => { const c = clone(); mutate(c); assert.throws(() => verifyRuntimeExperiments(c)); });
+test('controlled portable schema rejects unknown and omitted nullable fields', () => {
+  const schema = JSON.parse(fs.readFileSync(path.join(root, 'catalog/runtime-experiments.schema.json'), 'utf8'));
+  for (const name of ['controlledAdmissionInput', 'controlledCommand', 'controlledCompletion', 'controlledGuard', 'controlledAdmissionOutput']) {
+    assert.equal(schema.$defs[name].additionalProperties, false);
+    assert.deepEqual([...schema.$defs[name].required].sort(), Object.keys(schema.$defs[name].properties).sort());
+  }
+  assert.equal(schema.$defs.controlledAdmissionInput.properties.budgets.properties.evidence_bytes.minimum, 2048);
+  assert.equal(schema.$defs.controlledCommand.properties.generation.minimum, 0);
+  assert.ok(schema.$defs.controlledCommand.required.includes('reconcile_of'));
+  assert.deepEqual(schema.properties.controlled_contract.properties.scenarios.const, baseline.controlled_contract.scenarios);
+});

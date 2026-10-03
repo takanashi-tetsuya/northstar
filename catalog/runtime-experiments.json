@@ -246,6 +246,25 @@
             "ordinary-result.json"
           ],
           "cleanup": "Pure stdlib model tests only; temporary input-parser files use TemporaryDirectory; no server, DB, child, listener or signal"
+        },
+        {
+          "id": "admission-controlled-oracle",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-controlled-admission.py",
+          "test": {
+            "path": "scripts/test-controlled-admission.py",
+            "anchor": "    def test_native_4097_counterexample_and_4096_positive_are_exact(self):"
+          },
+          "assertions": [
+            "Independent oracle, strict concrete inputs, exact4097 counterexample and4096 positive control; pure tests are distinct from externally built Rust corpus recording/replay"
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json",
+            "controlled-corpus/corpus.json"
+          ],
+          "cleanup": "Pure oracle tests use owned temporary files only; controlled record/replay runs only the externally supplied pure Rust binary on saved concrete inputs, with no service, listener or database"
         }
       ],
       "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
@@ -1538,6 +1557,118 @@
       "late-finalize-4097-candidate",
       "reservation-unknown",
       "cancel-before-reservation"
+    ]
+  },
+  "controlled_contract": {
+    "schema": "northstar-admission-controlled-input-v1",
+    "model": "admission-controlled-v1",
+    "adapter": "controlled_rust",
+    "binding_version": "synthetic-material-v1",
+    "scope": "Shared Rust admission reservation/finalization only; controlled adapter is not SQL, wire or durable-message evidence",
+    "implementation": {
+      "path": "scripts/lib/controlled_admission.py",
+      "anchor": "def evaluate(value, output, *, expected_failure=None):"
+    },
+    "runner": {
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "anchor": "pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {"
+    },
+    "fixtures": {
+      "path": "scripts/lib/controlled_admission.py",
+      "anchor": "def controlled_cases():"
+    },
+    "input_schema": "#/$defs/controlledAdmissionInput",
+    "output_schema": "#/$defs/controlledAdmissionOutput",
+    "scenarios": [
+      "normal-mixed",
+      "capacity-4095-4096-4097",
+      "replay-payload-actor-conflict",
+      "ttl-before",
+      "ttl-at",
+      "ttl-after",
+      "pending-lease-reclaim",
+      "late-finalize-source-semantics",
+      "late-finalize-4097-candidate",
+      "reservation-unknown",
+      "cancel-before-reservation",
+      "native-guard-allowed",
+      "native-guard-denial",
+      "native-capacity-rollback-proof",
+      "native-guard_memory-allowed",
+      "native-guard_memory-denied",
+      "native-guard_persistent-allowed",
+      "native-guard_persistent-denied",
+      "native-reservation-unknown-false",
+      "native-guard-unknown-false",
+      "native-reservation-unknown-true",
+      "native-guard-unknown-true",
+      "native-before-effect-cancel",
+      "native-precommit-error",
+      "native-commit-cancel",
+      "native-receipt-before-cancel",
+      "native-finalize-unknown",
+      "native-finalize-lost-fence",
+      "native-finalize-wrong-payload",
+      "native-finalize-receipt-cancel",
+      "native-reconcile-missing",
+      "native-reconcile-pending",
+      "native-reconcile-accepted-before",
+      "native-reconcile-accepted-at",
+      "native-reconcile-accepted-after",
+      "native-independent-authority-clocks",
+      "native-malformed-stale-duplicate-completions",
+      "native-no-valid-completion",
+      "native-finalize-fence-and-accepted-idempotency",
+      "native-bounded-cleanup-charge-release",
+      "native-late-finalize-4097",
+      "native-late-finalize-positive",
+      "native-evidence-event-gap",
+      "native-physical-shard-capacity"
+    ],
+    "rejection_scenarios": [
+      "wrong-schema",
+      "wrong-model",
+      "wrong-adapter",
+      "wrong-binding-version",
+      "unknown-root",
+      "unknown-initial",
+      "unknown-binding",
+      "unknown-command",
+      "unknown-times",
+      "unknown-guard",
+      "unknown-schedule",
+      "unknown-completion",
+      "unknown-budget",
+      "boolean-time",
+      "negative-time",
+      "invalid-key-hex",
+      "duplicate-key-binding",
+      "unknown-actor",
+      "forward-causal",
+      "empty-commands",
+      "budget-zero",
+      "unknown-cut",
+      "native-exact-only-cleanup",
+      "missing-completions",
+      "missing-stage1",
+      "missing-command-causal_id",
+      "missing-command-reconcile_of",
+      "missing-guard-origin_id",
+      "missing-guard-proof",
+      "missing-completion-reconcile",
+      "missing-completion-proof",
+      "duplicate-field",
+      "malformed-json",
+      "nonfinite-json"
+    ],
+    "provenance": "Trusted external driver source manifest, binary SHA256, Cargo.lock and Rust1.97.1 identity; exact input/source/binary checks before and after every saved-input execution",
+    "limitations": [
+      "Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
+      "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
+      "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
+      "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
+      "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
+      "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
     ]
   }
 }

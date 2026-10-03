@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
+import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2973,34 +2974,11 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
 
 const abuseSource = read('src/abuse.rs');
 const abuseProductionSource = abuseSource.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0];
-const messageAdmissionServiceSource = read('src/services/message_admission.rs');
-const messageAdmissionRepositorySource = read('src/db/message_admission_repository.rs');
-if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)
-    || !messageAdmissionServiceSource.includes('self.repository.accept(&lease.acceptance()).await')
-    || !messageAdmissionRepositorySource.includes('accept_message_admission(&self.pool, acceptance).await')) {
-  throw new Error('message admission acceptance must use the issued fence and repository transaction');
+if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
+  throw new Error('message admission acceptance must remain behind its issued service/repository fence');
 }
-const admissionAcceptanceStart = messageAdmissionRepositorySource.indexOf('pub(crate) async fn accept_message_admission(');
-const admissionAcceptanceEnd = messageAdmissionRepositorySource.indexOf('\nimpl MessageAdmissionRepository', admissionAcceptanceStart);
-const admissionAcceptanceBody = messageAdmissionRepositorySource.slice(admissionAcceptanceStart, admissionAcceptanceEnd);
-const admissionAcceptanceSteps = [
-  'pool.begin().await?',
-  'pg_advisory_xact_lock',
-  'FOR UPDATE',
-  'ct_eq(acceptance.payload_mac())',
-  'row.get::<String, _>("state") == "accepted"',
-  'row.get::<Uuid, _>("lease_token") == acceptance.lease_token()',
-  "SET state='accepted'",
-  'tx.commit().await?',
-];
-let previousAdmissionStep = -1;
-for (const step of admissionAcceptanceSteps) {
-  const position = admissionAcceptanceBody.indexOf(step, previousAdmissionStep + 1);
-  if (position < 0) {
-    throw new Error(`message admission acceptance lost ordered fence step: ${step}`);
-  }
-  previousAdmissionStep = position;
-}
+// Ordered SQL authority and extracted pure fence decisions are checked together.
+verifyAdmissionBoundaries(readAdmissionSources());
 for (const typeName of [
   'PersonalMessageContentKeyring',
   'PersonalRetractionContentKeyring',

@@ -20,7 +20,7 @@ export function readRuntimeExperiments() {
 }
 export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeInventory,
   read = relative => fs.readFileSync(path.join(root, relative), 'utf8') } = {}) {
-  fields(catalog, ['schema', 'purpose', 'required_families', 'families', 'executable_contract'], 'catalog');
+  fields(catalog, ['schema', 'purpose', 'required_families', 'families', 'executable_contract', 'controlled_contract'], 'catalog');
   requireValue(catalog.schema === 'northstar-runtime-experiments-v2', 'unsupported schema');
   text(catalog.purpose, 'purpose');
   requireValue(JSON.stringify(catalog.required_families) === JSON.stringify(requiredFamilies), 'required-family list drift');
@@ -75,6 +75,31 @@ export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeI
   const portableSchema = JSON.parse(read('catalog/runtime-experiments.schema.json'));
   requireValue(portableSchema.$defs?.admissionScenario?.additionalProperties === false,
     'portable executable schema must reject unknown fields');
+  const controlled = catalog.controlled_contract;
+  fields(controlled, ['schema', 'model', 'adapter', 'binding_version', 'scope', 'implementation', 'runner',
+    'fixtures', 'input_schema', 'output_schema', 'scenarios', 'rejection_scenarios', 'provenance', 'limitations'], 'controlled contract');
+  requireValue(controlled.schema === 'northstar-admission-controlled-input-v1'
+    && controlled.model === 'admission-controlled-v1' && controlled.adapter === 'controlled_rust'
+    && controlled.binding_version === 'synthetic-material-v1', 'unsupported controlled contract');
+  requireValue(controlled.input_schema === '#/$defs/controlledAdmissionInput'
+    && controlled.output_schema === '#/$defs/controlledAdmissionOutput', 'controlled schema reference drift');
+  for (const key of ['implementation', 'runner', 'fixtures']) reference(controlled[key], `controlled ${key}`);
+  for (const key of ['scope', 'provenance']) text(controlled[key], `controlled ${key}`);
+  requireValue(/reservation\/finalization/.test(controlled.scope) && /not SQL/.test(controlled.scope), 'controlled scope overclaim');
+  requireValue(/external driver/.test(controlled.provenance) && /before and after/.test(controlled.provenance), 'controlled provenance boundary missing');
+  for (const key of ['scenarios', 'rejection_scenarios', 'limitations']) {
+    nonempty(controlled[key], `controlled ${key}`);
+    controlled[key].forEach(value => text(value, `controlled ${key}`));
+    requireValue(new Set(controlled[key]).size === controlled[key].length, `controlled duplicate ${key}`);
+    requireValue(JSON.stringify(controlled[key]) === JSON.stringify(portableSchema.properties.controlled_contract.properties[key].const),
+      `controlled ${key} portable schema drift`);
+  }
+  for (const name of ['controlledAdmissionInput', 'controlledCommand', 'controlledCompletion', 'controlledGuard',
+    'controlledTimes', 'controlledAdmissionOutput', 'controlledEvent']) {
+    requireValue(portableSchema.$defs[name]?.additionalProperties === false
+      && JSON.stringify([...portableSchema.$defs[name].required].sort())
+        === JSON.stringify(Object.keys(portableSchema.$defs[name].properties).sort()), `controlled ${name} exact fields missing`);
+  }
   for (const family of catalog.families) {
     fields(family, ['id', 'title', 'production_owner', 'runtime_identities', 'invariants', 'boundaries',
       'faults', 'budgets', 'experiments', 'privacy', 'gaps'], 'family');

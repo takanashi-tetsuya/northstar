@@ -1,4 +1,5 @@
 use crate::db::abuse_actor_state_repository::DbActorState;
+use crate::services::message_admission::{begin_command, operation, witness::AdmissionWitness};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
@@ -736,6 +737,43 @@ pub struct MessageAdmissionRequest<'a> {
     pub proof: Option<&'a PowProof>,
 }
 
+pub(crate) fn validate_message_admission_request(
+    request: &MessageAdmissionRequest<'_>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        request.actor_id != Uuid::nil(),
+        "message admission actor must not be nil"
+    );
+    anyhow::ensure!(
+        crate::jid::canonical_bare_key(request.account_bare)
+            .is_ok_and(|value| value == request.account_bare),
+        "message admission account must be a canonical bare JID"
+    );
+    anyhow::ensure!(
+        crate::jid::canonicalize(request.normalized_target)
+            .is_ok_and(|value| value == request.normalized_target),
+        "message admission target must already be canonical"
+    );
+    anyhow::ensure!(
+        !request.normalized_payload.is_empty() && request.normalized_payload.len() <= 1_048_576,
+        "message admission payload must contain 1 byte to 1 MiB"
+    );
+    anyhow::ensure!(
+        !request.pow_intent_payload.is_empty() && request.pow_intent_payload.len() <= 1_048_576,
+        "message PoW intent payload must contain 1 byte to 1 MiB"
+    );
+    if let Some(origin_id) = request.origin_id {
+        anyhow::ensure!(
+            !origin_id.is_empty()
+                && origin_id.len() <= 1_024
+                && !origin_id.chars().any(char::is_control),
+            "message origin-id must contain 1 to 1024 non-control bytes"
+        );
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct MessageDedupeCandidate {
     pub(crate) key_id: String,
@@ -754,12 +792,18 @@ pub(crate) struct MessageDedupeIdentity {
     pub(crate) candidates: Vec<MessageDedupeCandidate>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MessageAdmissionLease {
     admission_key: Vec<u8>,
     payload_mac: Vec<u8>,
     lease_token: Uuid,
     pub(crate) offline_dedupe: MessageDedupeIdentity,
+}
+
+impl std::fmt::Debug for MessageAdmissionLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MessageAdmissionLease { authority: [redacted] }")
+    }
 }
 
 /// The exact admission fence handed to the database after message delivery.
@@ -882,6 +926,7 @@ pub(crate) trait AbusePersistence: Send + Sync {
         actor_state_keys: &'a [String],
         challenge_id: Option<Uuid>,
         decide: VerificationPolicy<'a>,
+        witness: Option<&'a AdmissionWitness>,
     ) -> AbusePersistenceFuture<'a, std::result::Result<WorkRequirement, GuardError>>;
 
     fn current_requirement<'a>(
@@ -902,6 +947,7 @@ pub(crate) trait AbusePersistence: Send + Sync {
         request: &'a MessageAdmissionRequest<'r>,
         candidates: &'a [MessageAdmissionCandidate],
         offline_dedupe: MessageDedupeIdentity,
+        witness: &'a AdmissionWitness,
     ) -> AbusePersistenceFuture<'a, MessageAdmissionStart>;
 
     fn cleanup<'a>(
@@ -1651,36 +1697,17 @@ impl AbuseGuard {
         &self,
         request: &MessageAdmissionRequest<'_>,
     ) -> anyhow::Result<MessageAdmissionStart> {
-        anyhow::ensure!(
-            request.actor_id != Uuid::nil(),
-            "message admission actor must not be nil"
-        );
-        anyhow::ensure!(
-            crate::jid::canonical_bare_key(request.account_bare)
-                .is_ok_and(|value| value == request.account_bare),
-            "message admission account must be a canonical bare JID"
-        );
-        anyhow::ensure!(
-            crate::jid::canonicalize(request.normalized_target)
-                .is_ok_and(|value| value == request.normalized_target),
-            "message admission target must already be canonical"
-        );
-        anyhow::ensure!(
-            !request.normalized_payload.is_empty() && request.normalized_payload.len() <= 1_048_576,
-            "message admission payload must contain 1 byte to 1 MiB"
-        );
-        anyhow::ensure!(
-            !request.pow_intent_payload.is_empty() && request.pow_intent_payload.len() <= 1_048_576,
-            "message PoW intent payload must contain 1 byte to 1 MiB"
-        );
-        if let Some(origin_id) = request.origin_id {
-            anyhow::ensure!(
-                !origin_id.is_empty()
-                    && origin_id.len() <= 1_024
-                    && !origin_id.chars().any(char::is_control),
-                "message origin-id must contain 1 to 1024 non-control bytes"
-            );
-        }
+        let (_, witness) = operation(begin_command(request)?);
+        self.begin_message_admission_observed(request, &witness)
+            .await
+    }
+
+    pub(crate) async fn begin_message_admission_observed(
+        &self,
+        request: &MessageAdmissionRequest<'_>,
+        witness: &AdmissionWitness,
+    ) -> anyhow::Result<MessageAdmissionStart> {
+        validate_message_admission_request(request)?;
 
         let Some((identity_kind, identity_value)) = message_admission_identity(request) else {
             let intent = PowIntent::xmpp(
@@ -1688,15 +1715,26 @@ impl AbuseGuard {
                 "/xmpp/message",
                 request.pow_intent_payload.as_bytes(),
             );
-            let result = self
-                .verify_or_allow_v2(
+            // This may commit proof/actor state, but never a reservation row.
+            let result = if self.persistence.is_some() {
+                self.verify_persistent_bound_observed(
                     AbuseAction::Message,
                     request.subject,
                     request.actors,
                     request.proof,
-                    &intent,
+                    Some(&intent),
+                    Some(witness),
                 )
-                .await?;
+                .await?
+            } else {
+                self.verify_memory_bound(
+                    AbuseAction::Message,
+                    request.subject,
+                    request.actors,
+                    request.proof,
+                    Some(&intent),
+                )
+            };
             return Ok(match result {
                 Ok(requirement) => MessageAdmissionStart::Proceed {
                     lease: None,
@@ -1758,7 +1796,7 @@ impl AbuseGuard {
                 .collect(),
         };
         persistence
-            .begin_message_admission(self, request, &candidate_material, offline_dedupe)
+            .begin_message_admission(self, request, &candidate_material, offline_dedupe, witness)
             .await
     }
 
@@ -2196,6 +2234,19 @@ impl AbuseGuard {
         proof: Option<&PowProof>,
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
+        self.verify_persistent_bound_observed(action, subject, actors, proof, intent, None)
+            .await
+    }
+
+    async fn verify_persistent_bound_observed(
+        &self,
+        action: AbuseAction,
+        subject: &str,
+        actors: &[String],
+        proof: Option<&PowProof>,
+        intent: Option<&PowIntent>,
+        witness: Option<&AdmissionWitness>,
+    ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
         let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
         let keys = self.persistent_actor_state_keys(action, actors);
@@ -2217,6 +2268,7 @@ impl AbuseGuard {
                         challenge,
                     )
                 }),
+                witness,
             )
             .await
     }

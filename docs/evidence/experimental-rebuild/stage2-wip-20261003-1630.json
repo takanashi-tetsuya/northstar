@@ -1,0 +1,43 @@
+{
+  "schema": "northstar-unaccepted-source-checkpoint-v1",
+  "status": "WorkInProgressNotAccepted",
+  "recorded_at": "2026-10-03T16:32:50.023397+00:00",
+  "purpose": "Durable recovery of ongoing Stage2 source work, including known defects, before further correction",
+  "base_commit": "2bdfed95c4516ce34296c5fa57a3eb3be49d158d",
+  "scope": "Current shared admission core, production integration and controlled runner/oracle drafts. This is not Stage2 completion, correctness qualification, production readiness or permission to deploy.",
+  "known_review_blockers": [
+    {
+      "id": "unknown-prospective-authority",
+      "finding": "CommitCallEntered retains scope but loses prepared reservation fence after commit error/drop."
+    },
+    {
+      "id": "begin-expected-authority",
+      "finding": "Jointly changing Reserved result and receipt to an unrelated fence can pass completion checks."
+    },
+    {
+      "id": "actual-coordinator-projection",
+      "finding": "Controlled output derives some status from schedule/transaction instead of actual coordinator outcome."
+    },
+    {
+      "id": "multi-unresolved-knowledge",
+      "finding": "Later effects can collapse caller bounds to privileged injected world despite earlier unresolved effects."
+    },
+    {
+      "id": "shrink-exact-target",
+      "finding": "Reader can accept a self-consistent reduced Pass rather than requiring original exact target invariant to survive."
+    }
+  ],
+  "additional_limits": [
+    "actor_policy_us currently accompanies scripted guard outcomes; actor-policy time behavior is not established",
+    "Reconcile observation needs SQL observed_at",
+    "Server service test target is still compiling; no final stable-source evidence has been frozen"
+  ],
+  "checks": "No overall Stage2 check or acceptance result is asserted by this checkpoint. Earlier iterative outputs are diagnostic only and may predate current edits.",
+  "unexecuted": [
+    "New service/DB/wire/fault execution",
+    "Full final controlled replay/shrink conformance",
+    "Stage2 final acceptance",
+    "Stages3-6 rebuild"
+  ],
+  "cancelled": "72-hour soak remains cancelled"
+}

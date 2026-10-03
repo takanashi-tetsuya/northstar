@@ -1,5 +1,6 @@
 //! PostgreSQL implementation of the anti-abuse persistence port.
 
+use crate::services::message_admission::witness::AdmissionWitness;
 use crate::{
     abuse::{
         AbuseGuard, AbusePersistence, AbusePersistenceFuture, FailurePolicy, IssueDecision,
@@ -40,6 +41,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         actor_state_keys: &'a [String],
         challenge_id: Option<Uuid>,
         decide: VerificationPolicy<'a>,
+        witness: Option<&'a AdmissionWitness>,
     ) -> AbusePersistenceFuture<
         'a,
         std::result::Result<crate::abuse::WorkRequirement, crate::abuse::GuardError>,
@@ -50,6 +52,7 @@ impl AbusePersistence for PostgresAbusePersistence {
                 actor_state_keys,
                 challenge_id,
                 decide,
+                witness,
             )
             .await
         })
@@ -82,6 +85,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         request: &'a MessageAdmissionRequest<'r>,
         candidates: &'a [MessageAdmissionCandidate],
         offline_dedupe: MessageDedupeIdentity,
+        witness: &'a AdmissionWitness,
     ) -> AbusePersistenceFuture<'a, MessageAdmissionStart> {
         Box::pin(async move {
             message_admission_repository::begin_message_admission(
@@ -90,6 +94,7 @@ impl AbusePersistence for PostgresAbusePersistence {
                 request,
                 candidates,
                 offline_dedupe,
+                witness,
             )
             .await
         })

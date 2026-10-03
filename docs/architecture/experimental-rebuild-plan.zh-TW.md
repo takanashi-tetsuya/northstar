@@ -26,8 +26,8 @@ oracle、受控 corpus、真 SQL/wire artifacts 與有限 runner，不能因舊�
 | 階段 | 必須交付的 production 路徑與實驗能力 | 可判定退出的證據 | 本輪狀態 |
 |---|---|---|---|
 | 0 責任與基線 | 既有 admission、commit、handoff、write、ACK、settlement 權威；Unknown 與 recovery 分類 | 乾淨 Git 身分、責任表、實際／缺失能力稽核、獨立只讀審查 | 本輪 source-only 已驗收並保存於 d9eb2e2；CI runtime 缺口另列 |
-| 1 可執行規格 | 延伸既有 catalog/harness；actor/identity 初態、混合負載、TTL/capacity、預期 outcome、故障語義、budgets、termination、provenance、cleanup | 不合法正常負載先拒絕；4095→4096→4097、retained pending、mixed identity、TTL 前／恰好／後；精確 oracle 與負向測試 | 本輪限定 scope 已驗收；等待 remote checkpoint |
-| 2 Shared admission | production 與 controlled composition 呼叫相同 state/effect coordinator；SQL 交易內的 authority/version/fence 重驗不移除 | 正常、預期容量拒絕、replay、expiry、Unknown 的具體輸入與 effect order 可重播；重複／不符 completion 不推進 | 未重建 |
+| 1 可執行規格 | 延伸既有 catalog/harness；actor/identity 初態、混合負載、TTL/capacity、預期 outcome、故障語義、budgets、termination、provenance、cleanup | 不合法正常負載先拒絕；4095→4096→4097、retained pending、mixed identity、TTL 前／恰好／後；精確 oracle 與負向測試 | 本輪限定 scope 已驗收並保存於 2bdfed9 |
+| 2 Shared admission | production 與 controlled composition 呼叫相同 state/effect coordinator；SQL 交易內的 authority/version/fence 重驗不移除 | 正常、預期容量拒絕、replay、expiry、Unknown 的具體輸入與 effect order 可重播；重複／不符 completion 不推進 | 窄設計已只讀審查；實作中，未驗收 |
 | 3 Direct lifecycle | 真正 mode-aware durable commit 接入既有 DirectMessageRouter、UnroutedClaim、exact OutboundItem、native write 與 SM/BOSH owner | admission→commit→finalization→handoff→write→settlement 的責任可判定；取消、owner replacement、舊 token、partial write 與 delayed ACK cases | 未重建 |
 | 4 高風險域 | MUC gate/authority/admission/fanout、MIX atomic store/one-shot transfer、auth commit/write-or-exposure/publication、實際 worker claim/recovery | 每域 production 共用可控案例；auth write 後 failure/cancel；代表性縮減、mutation 與 saved replay | 未重建 |
 | 5 Real adapters | 相同 observable contract 的 PostgreSQL／stock wire／independent peer；另落實已批准的 exact SM binding retention | 每個 model assumption 有 exact conformance 或明列限制；SQL 與 caller knowledge 分開；來源、binary、schema、roles、cleanup 明確 | 未重建；新增 service/fault 執行先另列範圍與安全判定 |
@@ -81,7 +81,7 @@ reconstruction anchor。51 項純 contract/fixture tests、46 項 Node catalog t
 分開。reader false-success、fixture taxonomy 和 provenance 修正見 `stage1-review-findings.json`。
 保存的 6→2 是手動縮減 synthetic oracle mismatch，保留 reserve→finalize 因果；真正 shared Rust
 replay／自動縮減／SQL/wire conformance 仍在後續階段。late-finalize 4097 仍只是 conditional model
-candidate，不能列為已證實的 production cap bug。Stage 1 新獨立限定 acceptance 已通過；記錄見 `stage1-acceptance.json`。remote commit/tree/filelist 回讀仍是 Stage 2 寫入前置條件。
+candidate，不能列為已證實的 production cap bug。Stage 1 新獨立限定 acceptance 已通過；記錄見 `stage1-acceptance.json`。此持久交接已完成：remote commit `2bdfed95c4516ce34296c5fa57a3eb3be49d158d`、tree `bd3b8b30aa448b7bc476d1c3ada2a11762df41bf`，精確 17 檔 delta 與 archive blob 回讀吻合，本地已乾淨快進。其 [CI 37135039680](https://github.com/takanashi-tetsuya/northstar/actions/runs/37135039680) 已完成，32 success／1 schedule-only skip／0 failure；終態摘要見 `stage1-ci-terminal.json`。
 
 ## 成功詞與現有權威
 
@@ -178,3 +178,17 @@ resource exhaustion 等執行先提交明確 scope 與安全判定；不得把�
 遠端寫入以 fresh head 為 parent，拒絕 head drift 與 force update；完成後重新核對 commit、tree 及每項 delta。
 進入下一階段前必須能從 remote 找回當前成果。未完成的子退出標記 work-in-progress，不能等待所有階段完成
 才備份，也不能把發布 commit 當作執行驗收。
+
+## Stage 2 進行中
+
+在 `2bdfed9` 的乾淨來源先執行既有 abuse-policy 普通單元測試，26 項通過、0 failed／ignored；
+已保存 same-case 名單、來源與新 binary SHA256，作改造前基準。這不包含真 SQL 或舊／新 adapter
+等價證明。新設計分開 reservation、finalization 與 GuardOnly transaction knowledge，並要求
+正式 service 使用同一 coordinator、正式 SQL 鎖內分支使用同一純 decision；目前仍在實作。
+共同核心的 saved-input Rust replay 與 exact oracle 也在本階段建立，不能沿用 Stage 1 synthetic
+通過來關閉這項退出。
+
+Stage 2 另保存明確未驗收的 source WIP checkpoint：`stage2-wip-20261003-1630.json`。
+它保留五項已知 review blocker，供工作區遺失時恢復與定位；不代表 Stage 2 tests 或退出通過。
+修正 prospective authority、completion expected fence、actual coordinator projection、多個未决
+operation 的 caller uncertainty，以及 shrink exact-target reader 後，仍須重新凍結來源與驗證。

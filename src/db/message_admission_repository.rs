@@ -6,12 +6,22 @@ use crate::{
         MessageDedupeIdentity, PersistentVerificationInput, PowIntent,
     },
     db::{abuse_actor_state_repository, abuse_verification_repository},
-    services::message_admission::MessageAdmissionRepository,
+    services::message_admission::{
+        acceptance_fence,
+        witness::{commit_observed, AdmissionWitness},
+        MessageAdmissionRepository,
+    },
 };
 use anyhow::Result;
+use northstar_abuse_policy::admission_execution::{
+    BeginCommitPurpose, CommitFact, FinalizeSuccess, TransactionScope,
+};
+use northstar_abuse_policy::admission_transaction::{
+    self as decision, AdmissionCandidate, AdmissionFence, AdmissionRow, BeginRowDecision,
+    CapacityDecision, FinalizeDecision, ReconcileObservation, RowState,
+};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -34,6 +44,7 @@ pub(crate) async fn begin_message_admission(
     request: &MessageAdmissionRequest<'_>,
     candidates: &[MessageAdmissionCandidate],
     offline_dedupe: MessageDedupeIdentity,
+    witness: &AdmissionWitness,
 ) -> Result<MessageAdmissionStart> {
     let candidate_keys = candidates
         .iter()
@@ -66,7 +77,7 @@ pub(crate) async fn begin_message_admission(
     .await?;
     let rows = sqlx::query(
         "SELECT admission_key,key_id,actor_id,payload_mac,state,
-                lease_token,lease_expires_at
+                lease_token,lease_expires_at,expires_at
          FROM abuse_message_admissions
          WHERE admission_key=ANY($1::bytea[])
          ORDER BY admission_key FOR UPDATE",
@@ -74,47 +85,35 @@ pub(crate) async fn begin_message_admission(
     .bind(&candidate_keys)
     .fetch_all(&mut *tx)
     .await?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "message admission exists under multiple rotation keys"
-    );
+    let locked_rows = rows.iter().map(admission_row).collect::<Result<Vec<_>>>()?;
+    let candidates = candidates
+        .iter()
+        .map(|candidate| AdmissionCandidate {
+            key_id: candidate.key_id.clone(),
+            admission_key: candidate.admission_key.clone(),
+            payload_mac: candidate.payload_mac.clone(),
+        })
+        .collect::<Vec<_>>();
+    let row_decision = decision::decide_begin(request.actor_id, &candidates, &locked_rows, now)?;
     let state_keys = guard.persistent_actor_state_keys(AbuseAction::Message, request.actors);
-    if let Some(row) = rows.first() {
-        let stored_key: Vec<u8> = row.get("admission_key");
-        let stored_key_id: String = row.get("key_id");
-        let stored_payload_mac: Vec<u8> = row.get("payload_mac");
-        let exact = candidates.iter().any(|candidate| {
-            candidate.key_id == stored_key_id
-                && bool::from(
-                    stored_key
-                        .as_slice()
-                        .ct_eq(candidate.admission_key.as_slice()),
-                )
-                && bool::from(
-                    stored_payload_mac
-                        .as_slice()
-                        .ct_eq(candidate.payload_mac.as_slice()),
-                )
-        }) && row.get::<Uuid, _>("actor_id") == request.actor_id;
-        if !exact {
+    match row_decision {
+        BeginRowDecision::Conflict => {
             tx.rollback().await?;
             return Ok(MessageAdmissionStart::Conflict);
         }
-        if row.get::<String, _>("state") == "accepted" {
-            tx.commit().await?;
+        BeginRowDecision::ReplayAccepted => {
+            commit_observed(
+                tx,
+                witness,
+                TransactionScope::RatedBegin(BeginCommitPurpose::ReplayRead),
+                CommitFact::ReplayAccepted,
+            )
+            .await?;
             return Ok(MessageAdmissionStart::ReplayAccepted);
         }
-        let lease_expires_at: chrono::DateTime<chrono::Utc> = row.get("lease_expires_at");
-        if lease_expires_at > now {
-            let retry_after_seconds = u64::try_from(
-                lease_expires_at
-                    .signed_duration_since(now)
-                    .num_milliseconds()
-                    .saturating_add(999)
-                    / 1_000,
-            )
-            .unwrap_or(u64::MAX)
-            .max(1);
+        BeginRowDecision::InProgress {
+            retry_after_seconds,
+        } => {
             let mut requirement =
                 abuse_actor_state_repository::apply_in_tx(&mut tx, &state_keys, |states, now| {
                     guard.current_requirement_decision(
@@ -127,41 +126,62 @@ pub(crate) async fn begin_message_admission(
                 .await?;
             requirement.retry_after_seconds =
                 requirement.retry_after_seconds.max(retry_after_seconds);
-            tx.commit().await?;
+            commit_observed(
+                tx,
+                witness,
+                TransactionScope::RatedBegin(BeginCommitPurpose::PendingRequirement),
+                CommitFact::InProgress,
+            )
+            .await?;
             return Ok(MessageAdmissionStart::InProgress { requirement });
         }
-        let lease_token = Uuid::new_v4();
-        sqlx::query(
-            "UPDATE abuse_message_admissions
-             SET lease_token=$2,lease_expires_at=$3,updated_at=$4
-             WHERE admission_key=$1",
-        )
-        .bind(&stored_key)
-        .bind(lease_token)
-        .bind(now + duration(northstar_abuse_policy::MESSAGE_ADMISSION_LEASE))
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        let requirement =
-            abuse_actor_state_repository::apply_in_tx(&mut tx, &state_keys, |states, now| {
-                guard.current_requirement_decision(
-                    AbuseAction::Message,
-                    request.actors,
-                    states,
-                    now,
-                )
-            })
+        BeginRowDecision::Reclaim => {
+            let row = locked_rows.first().expect("reclaim requires locked row");
+            let lease_token = Uuid::new_v4();
+            sqlx::query(
+                "UPDATE abuse_message_admissions
+                 SET lease_token=$2,lease_expires_at=$3,updated_at=$4
+                 WHERE admission_key=$1",
+            )
+            .bind(&row.admission_key)
+            .bind(lease_token)
+            .bind(decision::lease_expiry(now))
+            .bind(now)
+            .execute(&mut *tx)
             .await?;
-        tx.commit().await?;
-        return Ok(MessageAdmissionStart::Proceed {
-            lease: Some(MessageAdmissionLease::new(
-                stored_key,
-                stored_payload_mac,
+            let requirement =
+                abuse_actor_state_repository::apply_in_tx(&mut tx, &state_keys, |states, now| {
+                    guard.current_requirement_decision(
+                        AbuseAction::Message,
+                        request.actors,
+                        states,
+                        now,
+                    )
+                })
+                .await?;
+            let fence = AdmissionFence {
+                admission_key: row.admission_key.clone(),
+                payload_mac: row.payload_mac.clone(),
                 lease_token,
-                offline_dedupe,
-            )),
-            requirement,
-        });
+            };
+            commit_observed(
+                tx,
+                witness,
+                TransactionScope::RatedBegin(BeginCommitPurpose::Reclaim),
+                CommitFact::Reserved(fence),
+            )
+            .await?;
+            return Ok(MessageAdmissionStart::Proceed {
+                lease: Some(MessageAdmissionLease::new(
+                    row.admission_key.clone(),
+                    row.payload_mac.clone(),
+                    lease_token,
+                    offline_dedupe,
+                )),
+                requirement,
+            });
+        }
+        BeginRowDecision::VerifyGuard => {}
     }
 
     let intent = PowIntent::xmpp(
@@ -192,7 +212,13 @@ pub(crate) async fn begin_message_admission(
     let requirement = match guard_outcome {
         Ok(requirement) => requirement,
         Err(error) => {
-            tx.commit().await?;
+            commit_observed(
+                tx,
+                witness,
+                TransactionScope::RatedBegin(BeginCommitPurpose::GuardDenial),
+                CommitFact::Denied,
+            )
+            .await?;
             return Ok(MessageAdmissionStart::Denied(error));
         }
     };
@@ -224,7 +250,7 @@ pub(crate) async fn begin_message_admission(
     .bind(now)
     .fetch_one(&mut *tx)
     .await?;
-    if active_for_user >= northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER {
+    if decision::decide_actor_capacity(active_for_user) == CapacityDecision::Limited {
         tx.rollback().await?;
         return Ok(MessageAdmissionStart::CapacityLimited);
     }
@@ -237,9 +263,8 @@ pub(crate) async fn begin_message_admission(
     .bind(capacity_shard)
     .bind(northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD)
     .fetch_optional(&mut *tx)
-    .await?
-    .is_some();
-    if !capacity_reserved {
+    .await?;
+    if decision::decide_shard_reservation(capacity_reserved) == CapacityDecision::Limited {
         tx.rollback().await?;
         return Ok(MessageAdmissionStart::CapacityLimited);
     }
@@ -257,11 +282,22 @@ pub(crate) async fn begin_message_admission(
     .bind(&primary.payload_mac)
     .bind(request.proof.map(|proof| proof.challenge_id))
     .bind(lease_token)
-    .bind(now + duration(northstar_abuse_policy::MESSAGE_ADMISSION_LEASE))
-    .bind(now + duration(northstar_abuse_policy::MESSAGE_ADMISSION_PENDING_TTL))
+    .bind(decision::lease_expiry(now))
+    .bind(decision::pending_expiry(now))
     .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
+    let fence = AdmissionFence {
+        admission_key: primary.admission_key.clone(),
+        payload_mac: primary.payload_mac.clone(),
+        lease_token,
+    };
+    commit_observed(
+        tx,
+        witness,
+        TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+        CommitFact::Reserved(fence),
+    )
+    .await?;
     Ok(MessageAdmissionStart::Proceed {
         lease: Some(MessageAdmissionLease::new(
             primary.admission_key.clone(),
@@ -273,17 +309,30 @@ pub(crate) async fn begin_message_admission(
     })
 }
 
-fn duration(value: std::time::Duration) -> chrono::Duration {
-    chrono::Duration::seconds(i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
+fn admission_row(row: &sqlx::postgres::PgRow) -> Result<AdmissionRow> {
+    let state = match row.get::<String, _>("state").as_str() {
+        "pending" => RowState::Pending,
+        "accepted" => RowState::Accepted,
+        _ => anyhow::bail!("invalid message admission state"),
+    };
+    Ok(AdmissionRow {
+        admission_key: row.get("admission_key"),
+        key_id: row.get("key_id"),
+        actor_id: row.get("actor_id"),
+        payload_mac: row.get("payload_mac"),
+        state,
+        lease_token: row.get("lease_token"),
+        lease_expires_at: row.get("lease_expires_at"),
+        expires_at: row.get("expires_at"),
+    })
 }
 
-/// Finalize only the exact lease issued before routing. This transaction
-/// remains independent of the durable message/outbox write: callers invoke it
-/// after that write accepts the stanza and report any failure separately.
-pub(crate) async fn accept_message_admission(
+/// Independent finalization. Accepted identity precedes token comparison.
+async fn accept_observed(
     pool: &PgPool,
     acceptance: &MessageAdmissionAcceptance<'_>,
-) -> Result<()> {
+    witness: &AdmissionWitness,
+) -> Result<FinalizeDecision> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(northstar_abuse_policy::message_admission_lock_id(
@@ -292,56 +341,106 @@ pub(crate) async fn accept_message_admission(
         .execute(&mut *tx)
         .await?;
     let row = sqlx::query(
-        "SELECT payload_mac,state,lease_token FROM abuse_message_admissions
-         WHERE admission_key=$1 FOR UPDATE",
-    )
-    .bind(acceptance.admission_key())
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(row) = row else {
-        anyhow::bail!("message admission disappeared before acceptance");
+        "SELECT admission_key,key_id,actor_id,payload_mac,state,lease_token,lease_expires_at,expires_at
+         FROM abuse_message_admissions WHERE admission_key=$1 FOR UPDATE",
+    ).bind(acceptance.admission_key()).fetch_optional(&mut *tx).await?;
+    let row = row.as_ref().map(admission_row).transpose()?;
+    let fence = acceptance_fence(acceptance);
+    let result = decision::decide_finalize(row.as_ref(), &fence);
+    let success = match result {
+        FinalizeDecision::AlreadyAccepted => FinalizeSuccess::AlreadyAccepted,
+        FinalizeDecision::AcceptPending => {
+            let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *tx)
+                .await?;
+            sqlx::query(
+                "UPDATE abuse_message_admissions
+                 SET state='accepted',accepted_at=$2,updated_at=$2,expires_at=$3
+                 WHERE admission_key=$1",
+            )
+            .bind(acceptance.admission_key())
+            .bind(now)
+            .bind(decision::accepted_expiry(now))
+            .execute(&mut *tx)
+            .await?;
+            FinalizeSuccess::PendingAccepted
+        }
+        FinalizeDecision::Missing
+        | FinalizeDecision::PayloadConflict
+        | FinalizeDecision::LostFence => return Ok(result),
     };
-    let stored_mac: Vec<u8> = row.get("payload_mac");
-    anyhow::ensure!(
-        bool::from(stored_mac.as_slice().ct_eq(acceptance.payload_mac())),
-        "message admission payload changed before acceptance"
-    );
-    if row.get::<String, _>("state") == "accepted" {
-        tx.commit().await?;
-        return Ok(());
-    }
-    anyhow::ensure!(
-        row.get::<Uuid, _>("lease_token") == acceptance.lease_token(),
-        "message admission fencing lease was lost before acceptance"
-    );
-    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE abuse_message_admissions
-         SET state='accepted',accepted_at=$2,updated_at=$2,expires_at=$3
-         WHERE admission_key=$1",
+    commit_observed(
+        tx,
+        witness,
+        TransactionScope::AdmissionFinalize,
+        CommitFact::Finalized {
+            fence,
+            result: success,
+        },
     )
-    .bind(acceptance.admission_key())
-    .bind(now)
-    .bind(
-        now + chrono::Duration::seconds(
-            i64::try_from(northstar_abuse_policy::MESSAGE_ADMISSION_ACCEPTED_TTL.as_secs())
-                .unwrap_or(i64::MAX),
-        ),
-    )
-    .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
-    Ok(())
+    Ok(result)
+}
+
+#[cfg(test)]
+pub(crate) async fn accept_message_admission(
+    pool: &PgPool,
+    acceptance: &MessageAdmissionAcceptance<'_>,
+) -> Result<()> {
+    let (_, witness) = crate::services::message_admission::operation(
+        northstar_abuse_policy::admission_execution::Command::Finalize(acceptance_fence(
+            acceptance,
+        )),
+    );
+    match accept_observed(pool, acceptance, &witness).await? {
+        FinalizeDecision::AlreadyAccepted | FinalizeDecision::AcceptPending => Ok(()),
+        FinalizeDecision::Missing => {
+            anyhow::bail!("message admission disappeared before acceptance")
+        }
+        FinalizeDecision::PayloadConflict => {
+            anyhow::bail!("message admission payload changed before acceptance")
+        }
+        FinalizeDecision::LostFence => {
+            anyhow::bail!("message admission fencing lease was lost before acceptance")
+        }
+    }
 }
 
 impl MessageAdmissionRepository for PostgresMessageAdmissionRepository {
-    async fn begin(&self, request: &MessageAdmissionRequest<'_>) -> Result<MessageAdmissionStart> {
-        self.guard.begin_message_admission(request).await
+    async fn begin(
+        &self,
+        request: &MessageAdmissionRequest<'_>,
+        witness: &AdmissionWitness,
+    ) -> Result<MessageAdmissionStart> {
+        self.guard
+            .begin_message_admission_observed(request, witness)
+            .await
     }
-
-    async fn accept(&self, acceptance: &MessageAdmissionAcceptance<'_>) -> Result<()> {
-        accept_message_admission(&self.pool, acceptance).await
+    async fn accept(
+        &self,
+        acceptance: &MessageAdmissionAcceptance<'_>,
+        witness: &AdmissionWitness,
+    ) -> Result<FinalizeDecision> {
+        accept_observed(&self.pool, acceptance, witness).await
+    }
+    async fn reconcile(&self, fence: &AdmissionFence) -> Result<ReconcileObservation> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(northstar_abuse_policy::message_admission_lock_id(
+                &fence.admission_key,
+            ))
+            .execute(&mut *tx)
+            .await?;
+        let row = sqlx::query(
+            "SELECT admission_key,key_id,actor_id,payload_mac,state,lease_token,lease_expires_at,expires_at
+             FROM abuse_message_admissions WHERE admission_key=$1 FOR UPDATE",
+        ).bind(&fence.admission_key).fetch_optional(&mut *tx).await?;
+        let row = row.as_ref().map(admission_row).transpose()?;
+        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let observation = decision::reconcile(row.as_ref(), fence, now);
+        tx.rollback().await?;
+        Ok(observation)
     }
 }

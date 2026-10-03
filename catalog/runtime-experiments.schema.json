@@ -8,7 +8,8 @@
     "purpose",
     "required_families",
     "families",
-    "executable_contract"
+    "executable_contract",
+    "controlled_contract"
   ],
   "properties": {
     "schema": {
@@ -215,6 +216,157 @@
             "late-finalize-4097-candidate",
             "reservation-unknown",
             "cancel-before-reservation"
+          ]
+        }
+      }
+    },
+    "controlled_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "model",
+        "adapter",
+        "binding_version",
+        "scope",
+        "implementation",
+        "runner",
+        "fixtures",
+        "input_schema",
+        "output_schema",
+        "scenarios",
+        "rejection_scenarios",
+        "provenance",
+        "limitations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "northstar-admission-controlled-input-v1"
+        },
+        "model": {
+          "const": "admission-controlled-v1"
+        },
+        "adapter": {
+          "const": "controlled_rust"
+        },
+        "binding_version": {
+          "const": "synthetic-material-v1"
+        },
+        "scope": {
+          "const": "Shared Rust admission reservation/finalization only; controlled adapter is not SQL, wire or durable-message evidence"
+        },
+        "implementation": {
+          "$ref": "#/$defs/reference"
+        },
+        "runner": {
+          "$ref": "#/$defs/reference"
+        },
+        "fixtures": {
+          "$ref": "#/$defs/reference"
+        },
+        "input_schema": {
+          "const": "#/$defs/controlledAdmissionInput"
+        },
+        "output_schema": {
+          "const": "#/$defs/controlledAdmissionOutput"
+        },
+        "scenarios": {
+          "const": [
+            "normal-mixed",
+            "capacity-4095-4096-4097",
+            "replay-payload-actor-conflict",
+            "ttl-before",
+            "ttl-at",
+            "ttl-after",
+            "pending-lease-reclaim",
+            "late-finalize-source-semantics",
+            "late-finalize-4097-candidate",
+            "reservation-unknown",
+            "cancel-before-reservation",
+            "native-guard-allowed",
+            "native-guard-denial",
+            "native-capacity-rollback-proof",
+            "native-guard_memory-allowed",
+            "native-guard_memory-denied",
+            "native-guard_persistent-allowed",
+            "native-guard_persistent-denied",
+            "native-reservation-unknown-false",
+            "native-guard-unknown-false",
+            "native-reservation-unknown-true",
+            "native-guard-unknown-true",
+            "native-before-effect-cancel",
+            "native-precommit-error",
+            "native-commit-cancel",
+            "native-receipt-before-cancel",
+            "native-finalize-unknown",
+            "native-finalize-lost-fence",
+            "native-finalize-wrong-payload",
+            "native-finalize-receipt-cancel",
+            "native-reconcile-missing",
+            "native-reconcile-pending",
+            "native-reconcile-accepted-before",
+            "native-reconcile-accepted-at",
+            "native-reconcile-accepted-after",
+            "native-independent-authority-clocks",
+            "native-malformed-stale-duplicate-completions",
+            "native-no-valid-completion",
+            "native-finalize-fence-and-accepted-idempotency",
+            "native-bounded-cleanup-charge-release",
+            "native-late-finalize-4097",
+            "native-late-finalize-positive",
+            "native-evidence-event-gap",
+            "native-physical-shard-capacity"
+          ]
+        },
+        "rejection_scenarios": {
+          "const": [
+            "wrong-schema",
+            "wrong-model",
+            "wrong-adapter",
+            "wrong-binding-version",
+            "unknown-root",
+            "unknown-initial",
+            "unknown-binding",
+            "unknown-command",
+            "unknown-times",
+            "unknown-guard",
+            "unknown-schedule",
+            "unknown-completion",
+            "unknown-budget",
+            "boolean-time",
+            "negative-time",
+            "invalid-key-hex",
+            "duplicate-key-binding",
+            "unknown-actor",
+            "forward-causal",
+            "empty-commands",
+            "budget-zero",
+            "unknown-cut",
+            "native-exact-only-cleanup",
+            "missing-completions",
+            "missing-stage1",
+            "missing-command-causal_id",
+            "missing-command-reconcile_of",
+            "missing-guard-origin_id",
+            "missing-guard-proof",
+            "missing-completion-reconcile",
+            "missing-completion-proof",
+            "duplicate-field",
+            "malformed-json",
+            "nonfinite-json"
+          ]
+        },
+        "provenance": {
+          "const": "Trusted external driver source manifest, binary SHA256, Cargo.lock and Rust1.97.1 identity; exact input/source/binary checks before and after every saved-input execution"
+        },
+        "limitations": {
+          "const": [
+            "Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
+            "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
+            "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
+            "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
+            "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
+            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
           ]
         }
       }
@@ -827,6 +979,1138 @@
         }
       },
       "description": "Synthetic keys/payload tags only, not production MACs. Cross-field causal/time/capacity constraints are enforced by scripts/lib/experiment_contract.py; declarations are not observations."
+    },
+    "controlledGuard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_bare",
+        "normalized_target",
+        "origin_id",
+        "normalized_payload",
+        "pow_intent_payload",
+        "subject",
+        "actors",
+        "proof",
+        "allowed",
+        "actor_sequence_delta"
+      ],
+      "properties": {
+        "account_bare": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "normalized_target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "origin_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        },
+        "normalized_payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "pow_intent_payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "actors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "proof": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "challenge_id",
+                "nonce"
+              ],
+              "properties": {
+                "challenge_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "nonce": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[\\x00-\\x7f]+$"
+                }
+              }
+            }
+          ]
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "actor_sequence_delta": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
+    "controlledCompletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_uuid",
+        "effect_number",
+        "generation",
+        "attempt",
+        "action",
+        "actor",
+        "key",
+        "payload_tag",
+        "lease",
+        "guard",
+        "reconcile_of"
+      ],
+      "properties": {
+        "operation_uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "effect_number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9000000000000000
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        },
+        "action": {
+          "enum": [
+            "reserve",
+            "finalize",
+            "reconcile",
+            "guard_memory",
+            "guard_persistent"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "payload_tag": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "lease": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "guard": {
+          "$ref": "#/$defs/controlledGuard"
+        },
+        "reconcile_of": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        }
+      }
+    },
+    "controlledTimes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "admission_us",
+        "actor_policy_us",
+        "finalize_us",
+        "reconcile_us"
+      ],
+      "properties": {
+        "admission_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9000000000000000
+        },
+        "actor_policy_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9000000000000000
+        },
+        "finalize_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9000000000000000
+        },
+        "reconcile_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9000000000000000
+        }
+      }
+    },
+    "controlledCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "effect_id",
+        "operation_uuid",
+        "effect_number",
+        "causal_id",
+        "attempt",
+        "generation",
+        "action",
+        "kind",
+        "actor",
+        "key",
+        "payload_tag",
+        "lease",
+        "candidates",
+        "times",
+        "guard",
+        "schedule",
+        "reconcile_of"
+      ],
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "effect_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "operation_uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "effect_number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9000000000000000
+        },
+        "causal_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "action": {
+          "enum": [
+            "reserve",
+            "finalize",
+            "reconcile",
+            "guard_memory",
+            "guard_persistent"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "direct",
+            "muc",
+            "mix"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "payload_tag": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "lease": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+          },
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true
+        },
+        "times": {
+          "$ref": "#/$defs/controlledTimes"
+        },
+        "guard": {
+          "$ref": "#/$defs/controlledGuard"
+        },
+        "schedule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cut",
+            "world_commit",
+            "cleanup",
+            "locked_keys",
+            "completions"
+          ],
+          "properties": {
+            "cut": {
+              "enum": [
+                "none",
+                "before_effect_cancel",
+                "precommit_error",
+                "commit_unknown",
+                "commit_cancel",
+                "receipt_before_cancel"
+              ]
+            },
+            "world_commit": {
+              "type": "boolean"
+            },
+            "cleanup": {
+              "enum": [
+                "exact_key_only",
+                "bounded_skip_locked"
+              ]
+            },
+            "locked_keys": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+              },
+              "minItems": 0,
+              "maxItems": 40000,
+              "uniqueItems": true
+            },
+            "completions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/controlledCompletion"
+              },
+              "minItems": 0,
+              "maxItems": 16
+            }
+          }
+        },
+        "reconcile_of": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        }
+      }
+    },
+    "controlledAdmissionInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "model",
+        "adapter",
+        "binding_version",
+        "scenario_id",
+        "scope",
+        "initial",
+        "bindings",
+        "commands",
+        "budgets",
+        "stage1"
+      ],
+      "properties": {
+        "schema": {
+          "const": "northstar-admission-controlled-input-v1"
+        },
+        "model": {
+          "const": "admission-controlled-v1"
+        },
+        "adapter": {
+          "const": "controlled_rust"
+        },
+        "binding_version": {
+          "const": "synthetic-material-v1"
+        },
+        "scenario_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "scope": {
+          "const": "reservation_finalization_only"
+        },
+        "initial": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rows",
+            "actor_sequences",
+            "proofs"
+          ],
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/admissionRow"
+              },
+              "minItems": 0,
+              "maxItems": 40000
+            },
+            "actor_sequences": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 64,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              }
+            },
+            "proofs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              "minItems": 0,
+              "maxItems": 40000,
+              "uniqueItems": true
+            }
+          }
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "actors",
+            "keys",
+            "payloads",
+            "leases"
+          ],
+          "properties": {
+            "actors": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "label",
+                  "uuid"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                  },
+                  "uuid": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "label",
+                  "key_id",
+                  "hex"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                  },
+                  "key_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                  },
+                  "hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 40512
+            },
+            "payloads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "label",
+                  "hex"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                  },
+                  "hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 512
+            },
+            "leases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "label",
+                  "uuid"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                  },
+                  "uuid": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 40512
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/controlledCommand"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "steps",
+            "events",
+            "evidence_bytes"
+          ],
+          "properties": {
+            "steps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "evidence_bytes": {
+              "type": "integer",
+              "minimum": 2048,
+              "maximum": 8388608
+            }
+          }
+        },
+        "stage1": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scenario",
+                "sha256"
+              ],
+              "properties": {
+                "scenario": {
+                  "$ref": "#/$defs/admissionScenario"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "controlledEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "operation_id",
+        "effect_id",
+        "causal_id",
+        "attempt",
+        "generation",
+        "action",
+        "kind",
+        "times",
+        "domain",
+        "execution",
+        "knowledge",
+        "scope",
+        "world",
+        "caller",
+        "completion",
+        "reconcile"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "effect_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "causal_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "action": {
+          "enum": [
+            "reserve",
+            "finalize",
+            "reconcile",
+            "guard_memory",
+            "guard_persistent"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "direct",
+            "muc",
+            "mix"
+          ]
+        },
+        "times": {
+          "$ref": "#/$defs/controlledTimes"
+        },
+        "domain": {
+          "enum": [
+            "Proceed",
+            "ReplayAccepted",
+            "InProgress",
+            "Denied",
+            "Conflict",
+            "CapacityLimited",
+            "Missing",
+            "AlreadyAccepted",
+            "LeaseLost",
+            "Accepted",
+            "GuardOnlyAllowed",
+            "GuardOnlyDenied",
+            "ReconcileExactPending",
+            "ReconcileExactAccepted",
+            "ReconcileMissing",
+            "ReconcileSuperseded",
+            "ReconcileConflicting",
+            "NotRequested",
+            "BackendFailure",
+            "Unknown",
+            "ReceiptPreserved",
+            "AwaitingCompletion",
+            "IntegrityFailure"
+          ]
+        },
+        "execution": {
+          "enum": [
+            "Completed",
+            "Cancelled"
+          ]
+        },
+        "knowledge": {
+          "enum": [
+            "NoCommitRequested",
+            "CommitCallEntered",
+            "ReceiptKnown"
+          ]
+        },
+        "scope": {
+          "enum": [
+            null,
+            "RatedBegin.NewReservation",
+            "RatedBegin.Reclaim",
+            "RatedBegin.ReplayRead",
+            "RatedBegin.PendingRequirement",
+            "RatedBegin.GuardDenial",
+            "AdmissionFinalize",
+            "GuardOnlyVerification"
+          ]
+        },
+        "world": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "committed",
+            "result",
+            "active",
+            "retained",
+            "row_state",
+            "expires_at_us",
+            "lease",
+            "actor_sequence",
+            "proof_present"
+          ],
+          "properties": {
+            "committed": {
+              "type": "boolean"
+            },
+            "result": {
+              "enum": [
+                "Proceed",
+                "ReplayAccepted",
+                "InProgress",
+                "Denied",
+                "Conflict",
+                "CapacityLimited",
+                "Missing",
+                "AlreadyAccepted",
+                "LeaseLost",
+                "Accepted",
+                "GuardOnlyAllowed",
+                "GuardOnlyDenied",
+                "ReconcileExactPending",
+                "ReconcileExactAccepted",
+                "ReconcileMissing",
+                "ReconcileSuperseded",
+                "ReconcileConflicting",
+                "NotRequested",
+                "BackendFailure",
+                "Unknown",
+                "ReceiptPreserved",
+                "AwaitingCompletion",
+                "IntegrityFailure"
+              ]
+            },
+            "active": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40256
+            },
+            "retained": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40256
+            },
+            "row_state": {
+              "enum": [
+                "Absent",
+                "pending",
+                "accepted"
+              ]
+            },
+            "expires_at_us": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9000000000000000,
+                  "maximum": 9000021600000000
+                }
+              ]
+            },
+            "lease": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                }
+              ]
+            },
+            "actor_sequence": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1002560
+            },
+            "proof_present": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          }
+        },
+        "caller": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "active_min",
+            "active_max",
+            "retained_min",
+            "retained_max",
+            "reservation_receipt",
+            "reservation",
+            "finalization_receipt",
+            "unresolved"
+          ],
+          "properties": {
+            "active_min": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40256
+            },
+            "active_max": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40256
+            },
+            "retained_min": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40256
+            },
+            "retained_max": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40256
+            },
+            "reservation_receipt": {
+              "type": "boolean"
+            },
+            "reservation": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "operation_id",
+                    "effect_id",
+                    "key",
+                    "payload_tag",
+                    "lease",
+                    "applies_to_command"
+                  ],
+                  "properties": {
+                    "operation_id": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                    },
+                    "effect_id": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                    },
+                    "key": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                    },
+                    "payload_tag": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                    },
+                    "lease": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                    },
+                    "applies_to_command": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              ]
+            },
+            "finalization_receipt": {
+              "type": "boolean"
+            },
+            "unresolved": {
+              "type": "boolean"
+            }
+          }
+        },
+        "completion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "accepted",
+            "pending",
+            "rejections"
+          ],
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "pending": {
+              "type": "boolean"
+            },
+            "rejections": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "index",
+                  "reason",
+                  "pending_preserved",
+                  "receipt_preserved"
+                ],
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 15
+                  },
+                  "reason": {
+                    "enum": [
+                      "Correlation",
+                      "Kind",
+                      "Request",
+                      "Knowledge",
+                      "AlreadyCompleted"
+                    ]
+                  },
+                  "pending_preserved": {
+                    "type": "boolean"
+                  },
+                  "receipt_preserved": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "minItems": 0,
+              "maxItems": 16
+            }
+          }
+        },
+        "reconcile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observation",
+                "lease",
+                "retention",
+                "unresolved_operation_preserved"
+              ],
+              "properties": {
+                "observation": {
+                  "enum": [
+                    "ExactPending",
+                    "ExactAccepted",
+                    "Missing",
+                    "Superseded",
+                    "Conflicting"
+                  ]
+                },
+                "lease": {
+                  "enum": [
+                    null,
+                    "Current",
+                    "Expired"
+                  ]
+                },
+                "retention": {
+                  "enum": [
+                    null,
+                    "Current",
+                    "Expired"
+                  ]
+                },
+                "unresolved_operation_preserved": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "controlledAdmissionOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "adapter",
+        "model",
+        "scenario_id",
+        "input_sha256",
+        "execution",
+        "terminal",
+        "evidence_complete",
+        "projection",
+        "compatibility_projection",
+        "limitations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "northstar-admission-controlled-output-v1"
+        },
+        "adapter": {
+          "const": "controlled_rust"
+        },
+        "model": {
+          "const": "admission-controlled-v1"
+        },
+        "scenario_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "execution": {
+          "enum": [
+            "Completed",
+            "Cancelled",
+            "Inconclusive",
+            "EnvironmentInterrupted"
+          ]
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "evidence_complete": {
+          "type": "boolean"
+        },
+        "projection": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/controlledEvent"
+          },
+          "minItems": 0,
+          "maxItems": 4096
+        },
+        "compatibility_projection": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array"
+            }
+          ]
+        },
+        "limitations": {
+          "const": [
+            "Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
+            "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
+            "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
+            "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
+            "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
+            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
+          ]
+        }
+      }
     }
   }
 }

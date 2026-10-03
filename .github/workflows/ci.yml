@@ -438,6 +438,7 @@ jobs:
           node scripts/check-tracked-sensitive-files.mjs --include-untracked
           node scripts/check-runtime-migration-boundary.mjs
           node scripts/check-architecture-boundaries.mjs
+          node --test scripts/test-admission-execution.mjs
           node scripts/check-runtime-experiments.mjs
           node --test scripts/test-runtime-experiments.mjs
           node scripts/check-execution-boundaries.mjs

@@ -1,5 +1,5 @@
 {
-  "scope": "SHA-256 inventory of the published historical source paths after documentation-only correction; not execution or acceptance evidence",
+  "scope": "SHA-256 inventory of published historical source Git blob bytes after documentation correction and Git line-ending normalization; checkout may apply .gitattributes; not execution or acceptance evidence",
   "files": {
     ".cargo/audit.toml": "86e2068fa25a206d87355fa3b3c9a86737d4f8d29945c678a1c1bdf305a0ff5e",
     ".dockerignore": "e5705836c85480c8c86db3f2b213c8a3d003b9f2e4e031e6575c76f46f17bfba",
@@ -775,7 +775,7 @@
     "scripts/database-role-boundary-wsl.sh": "9dd7cef4d6c351991f3dd54b1336a3433bd51270a488d51f90ff658719fa8108",
     "scripts/dev/build.sh": "8dd27e96312c913fd73b31264ebb5537c47118e77f44d01e0f2bf25c803acb94",
     "scripts/dev/build_and_start.sh": "82527f4f9e6a0bf3cd1f3256809e3c9d9f78e31828fa23c3b8ebd18745ef5c8b",
-    "scripts/dev/start.bat": "cb4ede1c28bff19b0d49a49baedaaac80e0e2c9c0850eb0c87581a600bdd0e49",
+    "scripts/dev/start.bat": "d66d8a1ee4e78f2aaa17cfa5877f34c2aa11e8abb2dabfaf668d8a093fbabf2f",
     "scripts/dev/start_server.sh": "694e28fb6704ccc5244029863b41ffadb270e8d49e73187e5bb646cd1ce8cfb1",
     "scripts/direct-admission-db-wsl.sh": "898f3e6f4af81978a0ddb429c867593b6e4423b3765da824f94d7e63e49308eb",
     "scripts/direct-spool-wake-db-wsl.sh": "4104baa78dc124d944146ef63e11696163eaf308bb5001ec0a18ceeb6f86f593",

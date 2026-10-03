@@ -12,5 +12,13 @@
       "published_sha256": "b747dada1fe6c55ef7cdc09e626914b04510265677f65f04b590ff79a9c2bad9",
       "change": "Replace unverified historical completion/results assertions with a historical-status notice; runtime code unchanged"
     }
+  ],
+  "git_representation_adjustments": [
+    {
+      "path": "scripts/dev/start.bat",
+      "original_sha256": "cb4ede1c28bff19b0d49a49baedaaac80e0e2c9c0850eb0c87581a600bdd0e49",
+      "published_sha256": "d66d8a1ee4e78f2aaa17cfa5877f34c2aa11e8abb2dabfaf668d8a093fbabf2f",
+      "change": "Normalize CRLF to LF in Git blob as required by existing .gitattributes. Checkout restores CRLF, byte-identical to archived script; command content and execution behavior unchanged."
+    }
   ]
 }

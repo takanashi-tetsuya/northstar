@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "stage": 0,
+  "date_utc": "2026-10-03",
+  "verdict": "AcceptedSourceResponsibilityBaseline",
+  "source_commit": "4f1b3b9032b98004eec2160172d5af3acbcc16b8",
+  "source_tree": "5f9d26383daa2b6bc467966a84df74c756f94e37",
+  "independent_review": true,
+  "scope": "New read-only review of this recovered source, authority definitions, complete stage exits and actual missing capabilities. Not old acceptance, runtime validation or remote-persistence proof.",
+  "reviewed_sha256": {
+    "docs/architecture/experimental-rebuild-plan.zh-TW.md": "d80662c57541f2e491dfa620563bbea979981e119a1663f8b934c8b91a0a25cb",
+    "docs/evidence/experimental-rebuild/stage0-baseline.json": "6cdf4214c274657f498b5af6337fa021e4a32f9dc6f66a47f728920ddbd2032a",
+    "docs/handoff/2026-10-03/experimental-authority-audit.md": "2affa5ebfcb236c038ea9601cb4152cb417f32c7e9ce3351c7f954404b1cbe76",
+    "docs/handoff/2026-10-03/experimental-domain-gap-audit.md": "9a7035ded2324b97bf4f5314bbe902d4fb9ffaa18ebb2f308de0103643a7e34d"
+  },
+  "final_ledger_sha256": "6ea075be049d0f8b48713df084b99c5741421672f7b65180bee8849f358a100c",
+  "post_review_change": "Ledger Stage0 status and acceptance-record reference only; no production changes.",
+  "resolved_findings": [
+    "Already-accepted exact key/payload returns before pending lease-token comparison",
+    "Direct privacy/blocking remain separate precommit queries",
+    "Guard-only persistence excluded from reservation witness claim",
+    "Both generic and real mode-aware durable commit consumers named",
+    "Before/after same-case observable obligations and intentional differences explicit",
+    "Full authority/domain audits included in durable file list"
+  ],
+  "new_product_tests_executed": false,
+  "stages_1_through_6": "not rebuilt",
+  "sm_retention_policy": "approved, not yet implemented"
+}

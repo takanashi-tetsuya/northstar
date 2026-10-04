@@ -799,19 +799,95 @@ impl Case {
                     }
                 }
             }
-            // The BOSH and replacement bridges remain deliberately unavailable
-            // until their real private helpers are wired into this same entry.
-            RecipientOwner::Bosh { .. } | RecipientOwner::NativeReplacement { .. } => {
-                return Err(Rejection::UnsupportedOwner)
+            RecipientOwner::NativeReplacement {
+                frame_id,
+                initial_row,
+                old,
+                replacement,
+                replacement_claim_id,
+            } => {
+                if self.originals.len() != 1
+                    || self.originals[0].frame_id != *frame_id
+                    || !matches!(&self.drive, Drive::ReplaceBeforeOldAckRead { frame_id: target } if target == frame_id)
+                    || Some(&old.connection_id) != self.identities.connection_id.get()
+                    || Some(&replacement.connection_id)
+                        != self.identities.replacement_connection_id.get()
+                    || Some(replacement_claim_id) != self.identities.replacement_claim_id.get()
+                    || old.connection_id == replacement.connection_id
+                {
+                    return Err(Rejection::IdentityBinding);
+                }
+                let Transaction::Stored {
+                    recipient_id,
+                    delivery_id,
+                    live_claim_id,
+                    ..
+                } = &self.direct_repository[0].transaction
+                else {
+                    return Err(Rejection::IdentityBinding);
+                };
+                let expected_initial = northstar_delivery_core::TransportOwnershipSource::C2s(
+                    northstar_delivery_core::DurableDelivery {
+                        recipient_id: recipient_id.0,
+                        message_id: delivery_id.0,
+                        claim_id: live_claim_id.get().map(|id| id.0),
+                    },
+                );
+                if initial_row.actual() != expected_initial
+                    || !self.policy[0].clustered
+                    || live_claim_id.get() != Some(delivery_id)
+                    || self.direct_repository[0].admitted_mode != Mode::Live
+                    || self.direct_repository[0].commit != CommitCut::Complete
+                    || !matches!(
+                        self.direct_repository[0].completion,
+                        Completion::Return { mode: Mode::Live }
+                    )
+                {
+                    return Err(Rejection::IdentityBinding);
+                }
+                for (native, claim) in [
+                    (old, self.identities.native_claim_id.get()),
+                    (replacement, Some(replacement_claim_id)),
+                ] {
+                    let Source::C2s {
+                        recipient_id: returned_recipient,
+                        message_id,
+                        claim_id,
+                    } = &native.fence.returned_source
+                    else {
+                        return Err(Rejection::IdentityBinding);
+                    };
+                    if returned_recipient != recipient_id
+                        || message_id != delivery_id
+                        || claim_id.get() != claim
+                        || claim.is_none()
+                        || native.ack.commit != CommitCut::Complete
+                        || native.write.flush != Flush::Ok
+                        || native.write.fail_after_accepted_bytes.get().is_some()
+                    {
+                        return Err(Rejection::IdentityBinding);
+                    }
+                    if native.write.chunk_limit == 0 || native.write.chunk_limit > 4096 {
+                        return Err(Rejection::Limit);
+                    }
+                }
+                if self.identities.native_claim_id.get() == Some(replacement_claim_id) {
+                    return Err(Rejection::IdentityBinding);
+                }
             }
+            // BOSH stays unavailable until its real private helpers are wired.
+            RecipientOwner::Bosh { .. } => return Err(Rejection::UnsupportedOwner),
         }
-        if [
-            self.identities.bosh_session_id.get(),
-            self.identities.replacement_connection_id.get(),
-            self.identities.replacement_claim_id.get(),
-        ]
-        .iter()
-        .any(Option::is_some)
+        if self.identities.bosh_session_id.get().is_some()
+            || (!matches!(
+                self.recipient_owner,
+                RecipientOwner::NativeReplacement { .. }
+            ) && [
+                self.identities.replacement_connection_id.get(),
+                self.identities.replacement_claim_id.get(),
+            ]
+            .iter()
+            .any(Option::is_some))
             || (!matches!(self.recipient_owner, RecipientOwner::Sm { .. })
                 && [
                     self.identities.sm_session_id.get(),
@@ -853,9 +929,13 @@ impl Case {
                     return Err(Rejection::IdentityBinding);
                 }
             }
-            Drive::DropBoshBindCommit { .. } | Drive::ReplaceBeforeOldAckRead { .. } => {
-                return Err(Rejection::UnsupportedOwner)
+            Drive::ReplaceBeforeOldAckRead { frame_id } => {
+                if !matches!(&self.recipient_owner, RecipientOwner::NativeReplacement { frame_id: owner, .. } if owner == frame_id)
+                {
+                    return Err(Rejection::IdentityBinding);
+                }
             }
+            Drive::DropBoshBindCommit { .. } => return Err(Rejection::UnsupportedOwner),
         }
         Ok(())
     }
@@ -1241,6 +1321,35 @@ pub(crate) enum RecipientEvidence {
         outbound_h: u32,
         acked_h: u32,
         mix_handoffs: Vec<MixHandoff>,
+    },
+    NativeReplacement {
+        old: Box<NativeEvidence>,
+        replacement: Box<NativeEvidence>,
+        row_events: Vec<RowEvent>,
+        row_after: Option<Source>,
+        replacement_dequeued: Dequeue,
+    },
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum RowEvent {
+    Replace {
+        seq: u32,
+        recipient_id: Id,
+        message_id: Id,
+        before_claim_id: Id,
+        after_claim_id: Id,
+    },
+    AuthorityRead {
+        seq: u32,
+        source: Source,
+        current_claim_id: Option<Id>,
+        matches: bool,
+    },
+    Delete {
+        seq: u32,
+        source: Source,
     },
 }
 

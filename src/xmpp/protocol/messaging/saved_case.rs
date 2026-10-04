@@ -1,6 +1,6 @@
 //! Single ignored, bounded saved-input composition entry. Repository effects
 //! and writer responses are controlled; production preparation and owners run.
-//! None/native and SM paths are connected; BOSH/C13 remain unsupported.
+//! Native, SM and replacement paths are connected; BOSH remains unsupported.
 use super::*;
 use crate::direct_replay as wire;
 use crate::outbound::{
@@ -730,12 +730,152 @@ impl SmMetadata {
         }
     }
 }
+/// C13's single already-authorized replacement boundary. This is one bounded
+/// committed-row view, not SQL locking, a lease clock, or a retry executor.
+struct ReplacementControl {
+    row: Arc<Mutex<Option<DurableDelivery>>>,
+    old_connection: Uuid,
+    new_connection: Uuid,
+    old: DurableDelivery,
+    replacement: DurableDelivery,
+    sequence: Sequence,
+    gate_sender: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    gate_receiver: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    waiting: AtomicBool,
+    events: Mutex<Vec<wire::RowEvent>>,
+    dequeued: Mutex<Option<(OutboundItem, wire::Dequeue)>>,
+}
+impl ReplacementControl {
+    fn new(
+        row: Arc<Mutex<Option<DurableDelivery>>>,
+        old_connection: Uuid,
+        new_connection: Uuid,
+        old: DurableDelivery,
+        replacement: DurableDelivery,
+        sequence: Sequence,
+    ) -> Self {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        Self {
+            row,
+            old_connection,
+            new_connection,
+            old,
+            replacement,
+            sequence,
+            gate_sender: Mutex::new(Some(sender)),
+            gate_receiver: Mutex::new(Some(receiver)),
+            waiting: AtomicBool::new(false),
+            events: Mutex::new(vec![]),
+            dequeued: Mutex::new(None),
+        }
+    }
+    async fn before_read(&self, connection: Uuid, source: DurableDelivery) -> Result<()> {
+        if connection == self.old_connection {
+            anyhow::ensure!(
+                source == self.old,
+                "old ACK source differs from its fenced invocation"
+            );
+            let receiver = self
+                .gate_receiver
+                .lock()
+                .unwrap()
+                .take()
+                .context("old authority-read gate reused")?;
+            self.waiting.store(true, Ordering::SeqCst);
+            receiver
+                .await
+                .context("old authority-read gate was abandoned")?;
+        } else {
+            anyhow::ensure!(
+                connection == self.new_connection && source == self.replacement,
+                "replacement ACK source differs from its invocation"
+            );
+        }
+        Ok(())
+    }
+    fn replace_and_dequeue(&self, live_xml: &str) -> Result<()> {
+        {
+            let mut row = self.row.lock().unwrap();
+            anyhow::ensure!(
+                *row == Some(self.old),
+                "replacement did not find the actual old fenced row"
+            );
+            *row = Some(self.replacement);
+        }
+        self.events.lock().unwrap().push(wire::RowEvent::Replace {
+            seq: next(&self.sequence),
+            recipient_id: wire::Id(self.old.recipient_id),
+            message_id: wire::Id(self.old.message_id),
+            before_claim_id: wire::Id(self.old.claim_id.context("old fenced claim missing")?),
+            after_claim_id: wire::Id(
+                self.replacement
+                    .claim_id
+                    .context("replacement claim missing")?,
+            ),
+        });
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let sender = OutboundSender::new(sender);
+        sender
+            .try_send_durable(live_xml.to_owned(), self.replacement)
+            .map_err(|_| anyhow::anyhow!("replacement replay queue refused its item"))?;
+        let item = receiver
+            .try_recv()
+            .context("replacement replay item was not dequeued")?;
+        let observed = wire::Dequeue {
+            seq: next(&self.sequence),
+            source: item.durable_source.map(Into::into),
+            xml: item.stanza.clone(),
+        };
+        anyhow::ensure!(
+            self.dequeued
+                .lock()
+                .unwrap()
+                .replace((item, observed))
+                .is_none(),
+            "replacement replay item was produced twice"
+        );
+        Ok(())
+    }
+    fn release_old(&self) -> Result<()> {
+        self.gate_sender
+            .lock()
+            .unwrap()
+            .take()
+            .context("old authority-read release reused")?
+            .send(())
+            .map_err(|_| anyhow::anyhow!("old owner dropped before release"))
+    }
+    fn read(&self, source: DurableDelivery, current_claim: Option<Uuid>, matches: bool) {
+        self.events
+            .lock()
+            .unwrap()
+            .push(wire::RowEvent::AuthorityRead {
+                seq: next(&self.sequence),
+                source: TransportOwnershipSource::C2s(source).into(),
+                current_claim_id: current_claim.map(wire::Id),
+                matches,
+            });
+    }
+    fn delete_committed(&self, source: DurableDelivery) {
+        let removed = self.row.lock().unwrap().take();
+        assert!(
+            removed == Some(source),
+            "committed-view deletion changed its exact row"
+        );
+        self.events.lock().unwrap().push(wire::RowEvent::Delete {
+            seq: next(&self.sequence),
+            source: TransportOwnershipSource::C2s(source).into(),
+        });
+    }
+}
+
 struct NativePort<'a> {
     spec: Option<&'a wire::NativeSpec>,
     connection_id: Uuid,
     row: Arc<Mutex<Option<DurableDelivery>>>,
     log: Arc<NativeLog>,
     recorder: &'a mut sm::Recorder,
+    replacement: Option<Arc<ReplacementControl>>,
 }
 impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
@@ -794,6 +934,9 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
                 .context("SM-owned source reached native ACK")?
                 .ack
                 .commit;
+            if let Some(control) = &self.replacement {
+                control.before_read(self.connection_id, source).await?;
+            }
             let current = (*self.row.lock().unwrap())
                 .ok_or_else(|| anyhow::anyhow!("claimed row missing"))?;
             anyhow::ensure!(
@@ -804,11 +947,15 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
             let expected = source
                 .claim_id
                 .ok_or_else(|| anyhow::anyhow!("native saved fixture requires a fenced claim"))?;
+            let matches = native_write::claimed_c2s_ack_matches(expected, current.claim_id);
+            if let Some(control) = &self.replacement {
+                control.read(source, current.claim_id, matches);
+            }
             anyhow::ensure!(
-                native_write::claimed_c2s_ack_matches(expected, current.claim_id),
+                matches,
                 "offline delivery claim was lost before acknowledgement"
             );
-            native_write::commit_observed(
+            let committed = native_write::commit_observed(
                 async {
                     self.log.prefix();
                     match ack_cut {
@@ -820,7 +967,9 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
                             Err(std::io::Error::other("controlled native ACK COMMIT error"))
                         }
                         wire::CommitCut::Complete => {
-                            *self.row.lock().unwrap() = None;
+                            if self.replacement.is_none() {
+                                *self.row.lock().unwrap() = None;
+                            }
                             Ok(())
                         }
                     }
@@ -829,10 +978,17 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
                 AckDisposition::Deleted,
             )
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from);
+            self.log.prefix();
+            committed?;
+            if let Some(control) = &self.replacement {
+                // C13 models the committed view, not SQL's prospective DELETE.
+                // Receipt is already retained; no await/cut precedes this update.
+                control.delete_committed(source);
+            }
+            Ok(())
         }
         .await;
-        self.log.prefix();
         self.log.acks.lock().unwrap()[index].returned = Some(result.is_ok());
         result
     }
@@ -916,6 +1072,7 @@ struct NativePlan<'a> {
     connection_id: wire::Id,
     native: Option<&'a wire::NativeSpec>,
     write: &'a wire::WriteScript,
+    replacement: Option<Arc<ReplacementControl>>,
 }
 
 #[derive(Default)]
@@ -1040,6 +1197,7 @@ async fn run_native(
         row,
         log: log.clone(),
         recorder,
+        replacement: plan.replacement.clone(),
     };
     let mut writer = ScriptedWriter {
         script: plan.write,
@@ -1058,8 +1216,20 @@ async fn run_native(
     };
     let mut runner = Box::pin(NativeWriteRunner::new(observation.clone(), child));
     let dropped = matches!(&case.drive, wire::Drive::DropNativeAckCommit { frame_id: target } | wire::Drive::DropSmCheckpointCommit { frame_id: target } if *target == frame_id);
-    let actual = futures::poll!(&mut runner);
-    let polls = vec![sequence.lock().unwrap().polled(&actual)];
+    let mut actual = futures::poll!(&mut runner);
+    let mut polls = vec![sequence.lock().unwrap().polled(&actual)];
+    if let Some(control) = &plan.replacement {
+        if plan.connection_id.0 == control.old_connection {
+            anyhow::ensure!(
+                actual.is_pending() && control.waiting.load(Ordering::SeqCst),
+                "old native authority-read gate was not reached"
+            );
+            control.replace_and_dequeue(&item.stanza)?;
+            control.release_old()?;
+            actual = futures::poll!(&mut runner);
+            polls.push(sequence.lock().unwrap().polled(&actual));
+        }
+    }
     let failed = matches!(&actual, std::task::Poll::Ready(Err(_)));
     if dropped {
         let entered = match case.drive {
@@ -1093,6 +1263,118 @@ async fn run_native(
         polls,
     };
     Ok((evidence, dropped, failed))
+}
+
+async fn run_replacement(
+    case: &wire::Case,
+    frame_id: wire::Id,
+    item: OutboundItem,
+    row: Arc<Mutex<Option<DurableDelivery>>>,
+    sequence: Sequence,
+) -> Result<wire::RecipientEvidence> {
+    let wire::RecipientOwner::NativeReplacement {
+        initial_row,
+        old,
+        replacement,
+        ..
+    } = &case.recipient_owner
+    else {
+        anyhow::bail!("replacement owner input missing");
+    };
+    anyhow::ensure!(
+        *row.lock().unwrap() == initial_row.actual().c2s(),
+        "initial replacement row differs from actual direct COMMIT history"
+    );
+    let old_source = old
+        .fence
+        .returned_source
+        .actual()
+        .c2s()
+        .context("old native fence family")?;
+    let new_source = replacement
+        .fence
+        .returned_source
+        .actual()
+        .c2s()
+        .context("replacement native fence family")?;
+    let control = Arc::new(ReplacementControl::new(
+        row.clone(),
+        old.connection_id.0,
+        replacement.connection_id.0,
+        old_source,
+        new_source,
+        sequence.clone(),
+    ));
+    let mut old_recorder = sm::Recorder::new(old.connection_id.0, None, &[], sequence.clone())?;
+    let mut old_receivers = ItemReceivers::default();
+    let mut handoffs = vec![];
+    let (old_evidence, dropped, failed) = run_native(
+        NativeInput {
+            case,
+            frame_id,
+            plan: NativePlan {
+                connection_id: old.connection_id,
+                native: Some(old),
+                write: &old.write,
+                replacement: Some(control.clone()),
+            },
+            item,
+            row: row.clone(),
+            sequence: sequence.clone(),
+        },
+        &mut old_recorder,
+        &mut old_receivers,
+        &mut handoffs,
+    )
+    .await?;
+    anyhow::ensure!(
+        !dropped && !failed,
+        "old native write failed outside the declared ACK authority rejection"
+    );
+    let (replacement_item, replacement_dequeued) = control
+        .dequeued
+        .lock()
+        .unwrap()
+        .take()
+        .context("replacement channel handoff missing")?;
+    let mut new_recorder =
+        sm::Recorder::new(replacement.connection_id.0, None, &[], sequence.clone())?;
+    let mut new_receivers = ItemReceivers::default();
+    let (replacement_evidence, dropped, failed) = run_native(
+        NativeInput {
+            case,
+            frame_id,
+            plan: NativePlan {
+                connection_id: replacement.connection_id,
+                native: Some(replacement),
+                write: &replacement.write,
+                replacement: Some(control.clone()),
+            },
+            item: replacement_item,
+            row: row.clone(),
+            sequence,
+        },
+        &mut new_recorder,
+        &mut new_receivers,
+        &mut handoffs,
+    )
+    .await?;
+    anyhow::ensure!(
+        !dropped && !failed && handoffs.is_empty(),
+        "replacement native write did not complete"
+    );
+    let row_events = control.events.lock().unwrap().clone();
+    let row_after = row
+        .lock()
+        .unwrap()
+        .map(|source| TransportOwnershipSource::C2s(source).into());
+    Ok(wire::RecipientEvidence::NativeReplacement {
+        old: Box::new(old_evidence),
+        replacement: Box::new(replacement_evidence),
+        row_events,
+        row_after,
+        replacement_dequeued,
+    })
 }
 
 struct OriginalRun {
@@ -1474,6 +1756,7 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                             connection_id: native.connection_id,
                             native: Some(native),
                             write: &native.write,
+                            replacement: None,
                         },
                         item,
                         row: run.row.clone(),
@@ -1530,6 +1813,7 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                                 connection_id: *connection_id,
                                 native: None,
                                 write,
+                                replacement: None,
                             },
                             item,
                             row: run.row.clone(),
@@ -1563,6 +1847,21 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                     mix_handoffs,
                 };
             }
+            wire::RecipientOwner::NativeReplacement { frame_id, .. }
+                if *frame_id == case.originals[index].frame_id =>
+            {
+                let item = run
+                    .target
+                    .take()
+                    .context("replacement owner has no original dequeued item")?;
+                anyhow::ensure!(
+                    item.transport_receipt.is_none() && item.transport_write_receipt.is_none(),
+                    "routed item acquired synthetic receipts"
+                );
+                recipient =
+                    run_replacement(case, *frame_id, item, run.row.clone(), sequence.clone())
+                        .await?;
+            }
             _ => {}
         }
         anyhow::ensure!(
@@ -1595,4 +1894,84 @@ async fn replay_saved_case() -> Result<()> {
         Err(reason) => wire::Envelope::rejected(&input, reason),
     };
     wire::emit(&evidence)
+}
+
+#[cfg(test)]
+mod replacement_gate_tests {
+    use super::*;
+    fn source(claim: u128) -> DurableDelivery {
+        DurableDelivery {
+            recipient_id: Uuid::from_u128(2),
+            message_id: Uuid::from_u128(13),
+            claim_id: Some(Uuid::from_u128(claim)),
+        }
+    }
+    fn control() -> ReplacementControl {
+        ReplacementControl::new(
+            Arc::new(Mutex::new(Some(source(6)))),
+            Uuid::from_u128(3),
+            Uuid::from_u128(11),
+            source(6),
+            source(10),
+            Arc::new(Mutex::new(wire::Sequence::default())),
+        )
+    }
+
+    // These exercise only the private row/gate/channel fixture seam. They do
+    // not execute an original, application, native writer, saved Case or SQL.
+    #[tokio::test]
+    async fn wrong_source_does_not_consume_gate_and_abandoned_read_does_not_replace() {
+        let control = control();
+        assert!(control
+            .before_read(Uuid::from_u128(3), source(99))
+            .await
+            .is_err());
+        assert!(control.gate_receiver.lock().unwrap().is_some());
+        assert!(!control.waiting.load(Ordering::SeqCst));
+        let mut old = Box::pin(control.before_read(Uuid::from_u128(3), source(6)));
+        assert!(futures::poll!(&mut old).is_pending());
+        drop(old);
+        assert!(control.release_old().is_err());
+        assert!(*control.row.lock().unwrap() == Some(source(6)));
+        assert!(control.events.lock().unwrap().is_empty());
+        assert!(control.dequeued.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn replacement_dequeue_preserves_actual_bytes_and_current_claim_comparison() {
+        let control = control();
+        let mut old = Box::pin(control.before_read(Uuid::from_u128(3), source(6)));
+        assert!(futures::poll!(&mut old).is_pending());
+        let xml = "<message id='replacement'/>";
+        control.replace_and_dequeue(xml).unwrap();
+        let (item, observed) = control.dequeued.lock().unwrap().take().unwrap();
+        assert_eq!(item.stanza, xml);
+        assert_eq!(observed.xml, item.stanza);
+        assert!(item.c2s_delivery() == Some(source(10)));
+        assert!(observed.source.as_ref().unwrap().actual() == item.durable_source.unwrap());
+        control.release_old().unwrap();
+        assert!(matches!(
+            futures::poll!(&mut old),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        drop(old);
+        let current = control.row.lock().unwrap().unwrap();
+        assert!(
+            !northstar_delivery_core::native_write::claimed_c2s_ack_matches(
+                Uuid::from_u128(6),
+                current.claim_id
+            )
+        );
+        assert!(
+            northstar_delivery_core::native_write::claimed_c2s_ack_matches(
+                Uuid::from_u128(10),
+                current.claim_id
+            )
+        );
+        assert_eq!(control.events.lock().unwrap().len(), 1);
+        assert!(matches!(
+            control.events.lock().unwrap()[0],
+            wire::RowEvent::Replace { .. }
+        ));
+    }
 }

@@ -1,0 +1,302 @@
+{
+  "schema": "northstar-stage3-sm-replacement-ordinary-result-v1",
+  "status": "LimitedComponentScopePassed_ProfileIncomplete",
+  "base_commit": "de91e49e02af2c3fe84d4340973907b62e454d4b",
+  "base_tree": "6381839a673d6434a190145b3392010f3dd6486d",
+  "scope": "Ordinary Rust validation of the partial saved-entry SM recorder and C13 replacement gate, with isolated component tests. The ignored saved-case entry and complete profiles were not run.",
+  "changed_sources": {
+    "src/direct_replay.rs": {
+      "bytes": 62942,
+      "sha256": "30f39ee8abb66af03be3ab0441d05beb68ca939a0000b803ae5e0e6bd0ac57bf"
+    },
+    "src/xmpp/protocol/messaging/saved_case.rs": {
+      "bytes": 76077,
+      "sha256": "ff17e5572642c5dce1a8b32162a7c770e0fd009ffe5f794045aaa618023d5126"
+    }
+  },
+  "unchanged_sm_component": {
+    "path": "src/xmpp/protocol/messaging/saved_case/sm.rs",
+    "bytes": 24237,
+    "sha256": "a8fef9b462bb7b6d4d029c03503ce308ac20ec92e2583fc78a7a3b0e0c19abf7"
+  },
+  "source_scope": {
+    "files": 234,
+    "bytes": 8803925,
+    "manifest_sha256": "0e6f8a2561c8b971ee413f78329a17b73c09a4fd5c68f2d73a8ccb474692aceb",
+    "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+    "base_paths_result": "stage3-saved-entry-ordinary-results.json",
+    "recipe": "Start with source_scope.paths from base_paths_result, excluding .py. Add the unchanged_sm_component path and the five drift_scripts; add every literal single-quoted src/...rs or crates/...rs path in those scripts, sort unique. Read base_commit bytes with the two changed_sources substituted.",
+    "drift_scripts": [
+      "scripts/check-admission-execution.mjs",
+      "scripts/check-execution-boundaries.mjs",
+      "scripts/test-admission-execution.mjs",
+      "scripts/test-execution-boundaries.mjs",
+      "scripts/check-architecture-boundaries.mjs"
+    ],
+    "literal_path_pattern": "'((?:src|crates)/[^']+\\.rs)'",
+    "python_excluded": true,
+    "claim": "Scoped source/drift-check stability only, not complete saved-profile build provenance."
+  },
+  "checks": {
+    "format_check": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.059078207",
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true
+    },
+    "gates": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "7.227156643",
+      "log_bytes": 17859,
+      "log_sha256": "4779f66ce0a3a5d1fb95d4ad79bf0ec451a628dac09a364b7f5d2d28dfbc8a8c",
+      "source_unchanged": true
+    },
+    "execution_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.464720175",
+      "log_bytes": 40,
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339",
+      "source_unchanged": true
+    },
+    "admission_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.186166100",
+      "log_bytes": 207,
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1",
+      "source_unchanged": true
+    },
+    "architecture_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "1.606347774",
+      "log_bytes": 183,
+      "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36",
+      "source_unchanged": true
+    },
+    "compile": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "85.505607776",
+      "log_bytes": 149,
+      "log_sha256": "4af56455a6869a3e7926197ed053cb05d5d15f7dd612a8c8cacc5841135997c8",
+      "source_unchanged": true
+    },
+    "clippy": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "100.139086159",
+      "log_bytes": 149,
+      "log_sha256": "e217a079429857b78d4fa8b407d7c74be80e879c511f9b3f958dbf1985da3ad6",
+      "source_unchanged": true
+    },
+    "inventory_core": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.197017109",
+      "log_bytes": 3895,
+      "log_sha256": "5a5beefb8b5736ac052919e4065d8bc596b72b5daaf6b0fbb26bd15f5ff8b5ac",
+      "source_unchanged": true
+    },
+    "inventory_server": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "158.694490685",
+      "log_bytes": 171883,
+      "log_sha256": "3b1de2e34ed5325f7a73218dab19ccde0b2fc6bb6aaa03b07fff08e159607584",
+      "source_unchanged": true
+    },
+    "graphs": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.437208743",
+      "log_bytes": 229,
+      "log_sha256": "98531953498d151c17dc8ce2da2481e595005efc41a110f420e10f1a3456eef6",
+      "source_unchanged": true
+    }
+  },
+  "rust_tests": {
+    "inventories": {
+      "core": 38,
+      "server": 1857
+    },
+    "selected": 29,
+    "ran": 29,
+    "passed": 29,
+    "failed": 0,
+    "ignored": 0,
+    "selection": [
+      {
+        "target": "core",
+        "name": "native_write::claimed_token_tests::old_claim_is_rejected_after_replacement_while_current_claim_still_matches"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::supplied_frame_identity_preserves_initial_policy_and_actual_runner_retirement"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::empty_tagged_variants_reject_unknown_and_duplicate_keys"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::named_objects_reject_root_and_nested_positional_arrays"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::required_nullable_keeps_null_distinct_from_missing_and_preserves_nested_errors"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::canonical_primitives_reject_uuid_aliases_nonintegers_and_bad_hex"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::simple_enums_reject_object_forms_at_nested_boundaries"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::abnormal_terminal_remains_visible_under_existing_crate_info_filter"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_publication_cancel_and_panic_keep_exact_last_stage"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_publication_trace_classifies_transport_results_without_payload"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_room_stage_traces_retain_failure_and_cancel_without_payload"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_trace_pairs_deferred_bosh_publication_with_its_origin"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_trace_terminal_cardinality_and_privacy_cover_every_exit"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::completed_frame_leaves_convenience_calls_without_a_retired_owner"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::deferred_publication_retains_origin_after_later_bosh_frame"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::enclosing_cancellation_observes_last_stage_once"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::outer_owner_retires_after_child_drop_at_every_runner_boundary"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::pending_frame_times_out_at_its_policy_budget"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::pending_publication_outlives_frame_budget_until_owner_cancels"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::policy_preserves_transport_specific_inline_auth_budget"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::publication_is_observed_without_introducing_a_deadline"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::replacing_current_frame_preserves_the_old_retained_owner_and_terminal"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::single_child_destructor_panic_keeps_order_and_original_payload"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::successful_and_failed_frames_keep_typed_outcomes_and_stage"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::websocket_inline_sasl2_has_a_separate_bounded_handler_budget"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::protocol::messaging::saved_case::sm::tests::initial_live_charge_and_retired_record_handles_use_actual_sm_state"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::protocol::messaging::saved_case::sm::tests::cancelled_record_keeps_actual_checkpoint_entry_and_no_nested_poll"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::protocol::messaging::saved_case::replacement_gate_tests::wrong_source_does_not_consume_gate_and_abandoned_read_does_not_replace"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::protocol::messaging::saved_case::replacement_gate_tests::replacement_dequeue_preserves_actual_bytes_and_current_claim_comparison"
+      }
+    ],
+    "unit_log_map_sha256": "86b9c76ad77795696d7f8c31ca02fa4aceda94d275c16b07ff7a7dc7e4dd9eac",
+    "unit_log_map_encoding": "UTF-8 sorted compact JSON mapping exact full name to log SHA256, no trailing newline",
+    "scope": "Previous25 pure parser/frame/claim controls plus2 isolated real-SM/governor/fake-persistence methods and2 isolated row/oneshot/channel/claim-predicate methods. Each was inventory-verified and invoked once with its full name and --exact. None calls run_case, run_native, the ignored entry, SQL, sockets or an external process."
+  },
+  "node_tests": {
+    "passed": 269,
+    "failed": 0,
+    "skipped": 0
+  },
+  "test_binaries": {
+    "core": {
+      "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+      "bytes": 4150968,
+      "sha256": "0d2736022141f41e72784db7846f841c9c3e6fb3ca6eabd064004a4d4636ec66"
+    },
+    "server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 203365640,
+      "sha256": "d7a667911786e15e30aca8acce3218db27b9ef36d9f52ed208eebbc04b884809"
+    }
+  },
+  "generated_graphs": {
+    "files": 10,
+    "unchanged": true,
+    "manifest_sha256": "a22687f44421bff82ca3e20d99f6148ee3c2c1893e701b1cca6fac93c1316fde"
+  },
+  "source_change": "C13 connects the old real native runner through one pre-authority-read Pending gate, an exact controlled token replacement and real replacement channel/dequeue. Old token6 rejects against current10 before COMMIT, old retirement precedes the new positive owner, and the replacement committed-view Delete follows its retained wrapper receipt synchronously. This describes reviewed source; the whole C13 case has not executed.",
+  "bounds": {
+    "per_command_timeout_seconds": 600,
+    "kill_after_seconds": 5,
+    "per_log_bytes": 4194304,
+    "completed_commands": 39,
+    "source_unchanged_for_every_command": true
+  },
+  "parent_ci": {
+    "commit": "de91e49e02af2c3fe84d4340973907b62e454d4b",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37241311888",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "Prior SM/oracle WIP source; separate from these local checks and the new C13 delta."
+  },
+  "limitations": [
+    "BOSH remains UnsupportedOwner in the Rust saved entry. The fixed16/fixed4 profiles remain closed by DirectCaseIncomplete. No record/replay/mutation/shrink or ignored saved-entry invocation occurred.",
+    "Isolated component tests do not establish whole C08/C09/C13 case conformance or the report Stage3 old-owner exit. Actual saved-case evidence and independent oracle qualification remain pending.",
+    "C13 row replacement is a controlled authority transition. Committed-view deletion is a test-adapter observation; prospective SQL DELETE ordering, reclaim/expiry reachability and live SQL fidelity are not proven.",
+    "Concurrent Python namespace/matcher work is excluded from this checkpoint and every source-after map; no Python suite is claimed as rerun here. The previous WIP namespace finding remains historical until a separately bound Python result is saved.",
+    "Final complete source membership, build/derivation record, measured <=128MiB runnable artifact and fixed fact/frame/contract budget qualification remain pending.",
+    "Full Stage3, real SQL/clock/crypto/wire, unresolved TLS response/EOF diagnosis and later resource/retention work remain open."
+  ]
+}

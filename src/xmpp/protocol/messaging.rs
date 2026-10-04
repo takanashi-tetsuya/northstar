@@ -11,6 +11,10 @@ use crate::services::messaging::{
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
+use crate::services::{
+    message_admission::witness::DirectOperationHandle,
+    messaging::direct_workflow::{preserved_transaction, LocalPreparation, PreparedLocalDirect},
+};
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_util::*;
 use crate::{
@@ -18,6 +22,10 @@ use crate::{
     state::bare_jid,
 };
 use anyhow::Result;
+use northstar_message_application::{
+    direct_commit::TransactionOutcome,
+    direct_lifecycle::{OriginalAdmission, PreparationAdmission},
+};
 pub(crate) use northstar_message_core::{
     bare_message_route, durable_direct_delivery_allowed, full_no_match_route,
     missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
@@ -25,6 +33,598 @@ pub(crate) use northstar_message_core::{
 };
 use roxmltree::Node;
 use std::{future::Future, sync::atomic::Ordering};
+
+/// One validated original. Rating is selected here by the existing predicate;
+/// callers cannot manufacture a no-admission branch by supplying a boolean.
+struct OriginalDirectMessage<'a> {
+    actor_id: uuid::Uuid,
+    sender: &'a str,
+    target: &'a str,
+    routed_raw: &'a str,
+    origin_id: Option<String>,
+    stanza_id: Option<&'a str>,
+    admission: OriginalAdmissionKind,
+}
+
+enum OriginalAdmissionKind {
+    Rated(String),
+    NoAdmissionRequired,
+}
+
+impl<'a> OriginalDirectMessage<'a> {
+    fn capture(
+        root: Node<'a, '_>,
+        actor_id: uuid::Uuid,
+        sender: &'a str,
+        target: &'a str,
+        routed_raw: &'a str,
+    ) -> Self {
+        let admission = if is_abuse_rated_message(root) {
+            OriginalAdmissionKind::Rated(set_root_attribute(
+                &set_from(routed_raw, bare_jid(sender)),
+                "to",
+                target,
+            ))
+        } else {
+            OriginalAdmissionKind::NoAdmissionRequired
+        };
+        Self {
+            actor_id,
+            sender,
+            target,
+            routed_raw,
+            origin_id: direct_origin_id(root),
+            stanza_id: root.attribute("id"),
+            admission,
+        }
+    }
+    fn rated_payload(&self) -> Option<&str> {
+        match &self.admission {
+            OriginalAdmissionKind::Rated(payload) => Some(payload),
+            OriginalAdmissionKind::NoAdmissionRequired => None,
+        }
+    }
+    fn project_local<'b>(
+        &'b self,
+        authority: LocalProjectionAuthority<'b>,
+        encrypted: bool,
+        retraction: Option<&str>,
+    ) -> LocalOriginalProjection<'a, 'b> {
+        // These transformations stay at their original local preparation point,
+        // after generated stanza IDs and before the original policy awaits.
+        let rewritten = set_from(self.routed_raw, self.sender);
+        let routed = strip_stanza_ids_by_domain(&rewritten, authority.domain);
+        let sender_archive = add_stanza_id(
+            &rewritten,
+            bare_jid(self.sender),
+            authority.sender_stable_id,
+        );
+        let recipient_delivery = if authority.recipient_id == self.actor_id {
+            sender_archive.clone()
+        } else {
+            add_stanza_id(
+                &routed,
+                authority.recipient_bare,
+                authority.recipient_stable_id,
+            )
+        };
+        let archive = |stanza: &str| {
+            if encrypted {
+                if let Some(target) = retraction {
+                    super::retractions::encrypted_retraction_archive(stanza, target)
+                } else {
+                    encrypted_archive_stanza(stanza)
+                }
+            } else {
+                stanza.to_owned()
+            }
+        };
+        let sender_archive_stanza = archive(&sender_archive);
+        let recipient_archive_stanza = archive(&recipient_delivery);
+        LocalOriginalProjection {
+            source: self,
+            authority,
+            encrypted,
+            rewritten,
+            sender_archive,
+            recipient_delivery,
+            sender_archive_stanza,
+            recipient_archive_stanza,
+        }
+    }
+}
+
+struct LocalProjectionAuthority<'a> {
+    recipient_id: uuid::Uuid,
+    recipient_bare: &'a str,
+    sender_stable_id: uuid::Uuid,
+    recipient_stable_id: uuid::Uuid,
+    domain: &'a str,
+}
+
+struct LocalOriginalProjection<'source, 'a> {
+    source: &'a OriginalDirectMessage<'source>,
+    authority: LocalProjectionAuthority<'a>,
+    encrypted: bool,
+    rewritten: String,
+    sender_archive: String,
+    recipient_delivery: String,
+    sender_archive_stanza: String,
+    recipient_archive_stanza: String,
+}
+
+struct DelayedLocalProjection<'source, 'local, 'a> {
+    local: &'a LocalOriginalProjection<'source, 'local>,
+    stanza: String,
+    archive_policy: LocalArchivePolicy,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LocalArchivePolicy {
+    sender_enabled: bool,
+    recipient_enabled: bool,
+}
+
+#[cfg(test)]
+mod direct_preparation_tests {
+    use super::*;
+    use crate::services::message_admission::{
+        witness::AdmissionWitness, MessageAdmissionRepository, MessageAdmissionService,
+    };
+    use northstar_abuse_policy::{
+        admission_execution::{Effect, ReconcileResult},
+        admission_transaction::FinalizeDecision,
+    };
+    use uuid::Uuid;
+
+    struct MemoryGuard;
+    impl MessageAdmissionRepository for MemoryGuard {
+        async fn begin(
+            &self,
+            _: &MessageAdmissionRequest<'_>,
+            _: &AdmissionWitness,
+        ) -> Result<MessageAdmissionStart> {
+            Ok(MessageAdmissionStart::Proceed {
+                lease: None,
+                requirement: crate::abuse::WorkRequirement {
+                    action: "message".into(),
+                    step: 0,
+                    work_factor: 1,
+                    max_work_factor: 1,
+                    hard_wait_seconds: 0,
+                    retry_after_seconds: 0,
+                    cooldown_seconds: 0,
+                    approximate_max_device_seconds: 0,
+                    notice: String::new(),
+                },
+            })
+        }
+        async fn accept(
+            &self,
+            _: &crate::abuse::MessageAdmissionAcceptance<'_>,
+            _: &AdmissionWitness,
+        ) -> Result<FinalizeDecision> {
+            panic!("preparation does not finalize")
+        }
+        async fn reconcile(&self, _: &Effect) -> Result<ReconcileResult> {
+            panic!("preparation does not reconcile")
+        }
+    }
+
+    async fn owner(source: &OriginalDirectMessage<'_>) -> DirectOperationHandle {
+        let owner = DirectOperationHandle::new(Uuid::new_v4());
+        if let Some(payload) = source.rated_payload() {
+            let request = MessageAdmissionRequest {
+                actor_id: source.actor_id,
+                account_bare: bare_jid(source.sender),
+                normalized_target: source.target,
+                origin_id: source.origin_id.as_deref(),
+                normalized_payload: payload,
+                pow_intent_payload: source.routed_raw,
+                subject: "message",
+                actors: &[],
+                proof: None,
+            };
+            let effect = owner.begin(&request).unwrap();
+            MessageAdmissionService::new(MemoryGuard)
+                .begin_message_admission_retained(&request, &effect)
+                .await
+                .unwrap();
+        }
+        owner
+    }
+
+    fn command<'a>(
+        local: &'a LocalOriginalProjection<'_, '_>,
+        delayed: &'a DelayedLocalProjection<'_, '_, '_>,
+    ) -> ValidatedPersonalMessage<'a> {
+        let source = local.source;
+        ValidatedPersonalMessage {
+            local_actor_id: Some(source.actor_id),
+            archives: &[],
+            identity: source.origin_id.as_deref().map(|origin| MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
+                actor_scope_raw: bare_jid(source.sender),
+                actor_scope: bare_jid(source.sender),
+                target_scope: bare_jid(source.target),
+                value: origin,
+                payload: &local.rewritten,
+            }),
+            destination: PersonalMessageDestination::Local(LocalDelivery {
+                delivery_id: local.authority.recipient_stable_id,
+                recipient_id: local.authority.recipient_id,
+                recipient_bare_jid: local.authority.recipient_bare,
+                sender_jid: source.sender,
+                stanza: &delayed.stanza,
+                encrypted: local.encrypted,
+                mam_backed: delayed.archive_policy.recipient_enabled,
+            }),
+        }
+    }
+
+    fn authority(target: &str, own: bool) -> LocalProjectionAuthority<'_> {
+        LocalProjectionAuthority {
+            recipient_id: Uuid::from_u128(if own { 1 } else { 2 }),
+            recipient_bare: bare_jid(target),
+            sender_stable_id: Uuid::from_u128(10),
+            recipient_stable_id: Uuid::from_u128(if own { 10 } else { 20 }),
+            domain: "example.test",
+        }
+    }
+
+    #[tokio::test]
+    async fn preparation_preserves_full_bare_delayed_live_self_and_unrated_controls() {
+        for (raw, target, own, rated) in [
+            ("<message to='bob@EXAMPLE.test/phone'><body>hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/></message>", "bob@example.test/phone", false, true),
+            ("<message to='bob@example.test'><store xmlns='urn:xmpp:hints'/></message>", "bob@example.test", false, false),
+            ("<message to='alice@example.test'><body>self</body></message>", "alice@example.test", true, true),
+        ] {
+            let document = roxmltree::Document::parse(raw).unwrap();
+            let source = OriginalDirectMessage::capture(document.root_element(), Uuid::from_u128(1), "alice@example.test/device", target, raw);
+            assert_eq!(source.rated_payload().is_some(), rated);
+            let owner = owner(&source).await;
+            let local = source.project_local(authority(target, own), false, None);
+            let delayed = local.delayed(chrono::DateTime::from_timestamp(100, 0).unwrap(), LocalArchivePolicy::default());
+            assert_ne!(delayed.stanza, local.recipient_delivery);
+            if own { assert_eq!(local.sender_archive, local.recipient_delivery); }
+            let command = command(&local, &delayed);
+            if let Some(identity) = command.identity {
+                assert_eq!(identity.target_scope, bare_jid(target));
+                assert_ne!(identity.payload, source.rated_payload().unwrap());
+            }
+            let prepared = delayed.bind(owner.clone(), command, DirectSpoolEligibility::Eligible).unwrap();
+            assert_eq!(*prepared.command(), command);
+            assert_eq!(owner.snapshot().reservation.is_some(), rated);
+            assert!(owner.snapshot().direct.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn independently_changed_actor_origin_full_target_or_source_payload_cannot_reuse_admission(
+    ) {
+        let raw = "<message to='bob@example.test/phone'><body>hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/></message>";
+        let document = roxmltree::Document::parse(raw).unwrap();
+        let original = OriginalDirectMessage::capture(
+            document.root_element(),
+            Uuid::from_u128(1),
+            "alice@example.test/device",
+            "bob@example.test/phone",
+            raw,
+        );
+        for field in 0..4 {
+            let owner = owner(&original).await;
+            let changed_raw = match field {
+                1 => raw.replace("id='origin'", "id='other'"),
+                2 => raw.replace("/phone", "/other"),
+                3 => raw.replace("hello", "changed"),
+                _ => raw.to_owned(),
+            };
+            let document = roxmltree::Document::parse(&changed_raw).unwrap();
+            let target = if field == 2 {
+                "bob@example.test/other"
+            } else {
+                "bob@example.test/phone"
+            };
+            let changed = OriginalDirectMessage::capture(
+                document.root_element(),
+                Uuid::from_u128(if field == 0 { 99 } else { 1 }),
+                "alice@example.test/device",
+                target,
+                &changed_raw,
+            );
+            let local = changed.project_local(authority(target, false), false, None);
+            let delayed = local.delayed(
+                chrono::DateTime::from_timestamp(100, 0).unwrap(),
+                LocalArchivePolicy::default(),
+            );
+            let before = owner.snapshot();
+            assert!(delayed
+                .bind(
+                    owner.clone(),
+                    command(&local, &delayed),
+                    DirectSpoolEligibility::Eligible
+                )
+                .is_err());
+            assert_eq!(owner.snapshot(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_prepared_identity_payload_or_stored_projection_is_rejected_before_effect_issue(
+    ) {
+        let raw = "<message to='bob@example.test'><body>hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/></message>";
+        let document = roxmltree::Document::parse(raw).unwrap();
+        let source = OriginalDirectMessage::capture(
+            document.root_element(),
+            Uuid::from_u128(1),
+            "alice@example.test/device",
+            "bob@example.test",
+            raw,
+        );
+        let local = source.project_local(authority(source.target, false), false, None);
+        let delayed = local.delayed(
+            chrono::DateTime::from_timestamp(100, 0).unwrap(),
+            LocalArchivePolicy::default(),
+        );
+        for field in 0..3 {
+            let owner = owner(&source).await;
+            let before = owner.snapshot();
+            let mut changed = command(&local, &delayed);
+            match field {
+                0 => changed.identity.as_mut().unwrap().payload = "changed source payload",
+                1 => changed.identity.as_mut().unwrap().value = "other-origin",
+                2 => {
+                    let PersonalMessageDestination::Local(mut destination) = changed.destination
+                    else {
+                        unreachable!()
+                    };
+                    destination.stanza = "changed stored projection";
+                    changed.destination = PersonalMessageDestination::Local(destination);
+                }
+                _ => unreachable!(),
+            }
+            assert!(delayed
+                .bind(owner.clone(), changed, DirectSpoolEligibility::Eligible)
+                .is_err());
+            assert_eq!(owner.snapshot(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn valid_unrated_frame_does_not_acquire_the_rated_normalized_payload_limit() {
+        let prefix = "<message to='bob@example.test'><store xmlns='urn:xmpp:hints'/><!--";
+        let suffix = "--></message>";
+        let raw = format!(
+            "{prefix}{}{suffix}",
+            "x".repeat(1_048_576 - prefix.len() - suffix.len())
+        );
+        let document = roxmltree::Document::parse(&raw).unwrap();
+        let source = OriginalDirectMessage::capture(
+            document.root_element(),
+            Uuid::from_u128(1),
+            "alice@example.test/device",
+            "bob@example.test",
+            &raw,
+        );
+        assert!(source.rated_payload().is_none());
+        let owner = owner(&source).await;
+        let local = source.project_local(authority(source.target, false), false, None);
+        let delayed = local.delayed(
+            chrono::DateTime::from_timestamp(100, 0).unwrap(),
+            LocalArchivePolicy::default(),
+        );
+        assert!(delayed.stanza.len() > 1_048_576);
+        delayed
+            .bind(
+                owner.clone(),
+                command(&local, &delayed),
+                DirectSpoolEligibility::Eligible,
+            )
+            .unwrap();
+        assert!(owner.snapshot().reservation.is_none());
+    }
+
+    #[tokio::test]
+    async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_changed_views() {
+        for own in [false, true] {
+            let target = if own {
+                "alice@example.test"
+            } else {
+                "bob@example.test"
+            };
+            let raw = format!("<message to='{target}'><body>hello</body></message>");
+            let document = roxmltree::Document::parse(&raw).unwrap();
+            let source = OriginalDirectMessage::capture(
+                document.root_element(),
+                Uuid::from_u128(1),
+                "alice@example.test/device",
+                target,
+                &raw,
+            );
+            let local = source.project_local(authority(target, own), false, None);
+            for (sender_enabled, recipient_enabled) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let delayed = local.delayed(
+                    chrono::DateTime::from_timestamp(100, 0).unwrap(),
+                    LocalArchivePolicy {
+                        sender_enabled,
+                        recipient_enabled,
+                    },
+                );
+                let sender = ArchiveWrite {
+                    id: local.authority.sender_stable_id,
+                    owner_id: source.actor_id,
+                    peer_jid: target,
+                    stanza: &local.sender_archive_stanza,
+                    encrypted: false,
+                    stanza_id: None,
+                };
+                let recipient = ArchiveWrite {
+                    id: local.authority.recipient_stable_id,
+                    owner_id: local.authority.recipient_id,
+                    peer_jid: source.sender,
+                    stanza: &local.recipient_archive_stanza,
+                    encrypted: false,
+                    stanza_id: None,
+                };
+                let mut writes = Vec::new();
+                if sender_enabled {
+                    writes.push(sender.clone());
+                }
+                if recipient_enabled && !own {
+                    writes.push(recipient);
+                }
+                let mut valid = command(&local, &delayed);
+                valid.archives = &writes;
+                let owner = owner(&source).await;
+                let before = owner.snapshot();
+                if !writes.is_empty() {
+                    let mut missing = valid;
+                    missing.archives = &[];
+                    assert!(delayed
+                        .bind(owner.clone(), missing, DirectSpoolEligibility::Eligible)
+                        .is_err());
+                }
+                let duplicated = vec![sender.clone(), sender];
+                let mut duplicate = valid;
+                duplicate.archives = &duplicated;
+                assert!(delayed
+                    .bind(owner.clone(), duplicate, DirectSpoolEligibility::Eligible)
+                    .is_err());
+                let mut changed_mam = valid;
+                let PersonalMessageDestination::Local(mut destination) = changed_mam.destination
+                else {
+                    unreachable!()
+                };
+                destination.mam_backed = !recipient_enabled;
+                changed_mam.destination = PersonalMessageDestination::Local(destination);
+                assert!(delayed
+                    .bind(owner.clone(), changed_mam, DirectSpoolEligibility::Eligible)
+                    .is_err());
+                assert_eq!(owner.snapshot(), before);
+                let prepared = delayed
+                    .bind(owner, valid, DirectSpoolEligibility::Eligible)
+                    .unwrap();
+                assert_eq!(
+                    prepared.command().archives.len(),
+                    usize::from(sender_enabled) + usize::from(recipient_enabled && !own)
+                );
+                let PersonalMessageDestination::Local(destination) = prepared.command().destination
+                else {
+                    unreachable!()
+                };
+                assert_eq!(destination.mam_backed, recipient_enabled);
+            }
+        }
+    }
+}
+
+impl<'source, 'local> LocalOriginalProjection<'source, 'local> {
+    fn delayed(
+        &self,
+        at: chrono::DateTime<chrono::Utc>,
+        archive_policy: LocalArchivePolicy,
+    ) -> DelayedLocalProjection<'source, 'local, '_> {
+        DelayedLocalProjection {
+            local: self,
+            stanza: add_delay_from(&self.recipient_delivery, at, Some(self.authority.domain)),
+            archive_policy,
+        }
+    }
+}
+
+impl DelayedLocalProjection<'_, '_, '_> {
+    fn bind<'a>(
+        &self,
+        owner: DirectOperationHandle,
+        command: ValidatedPersonalMessage<'a>,
+        eligibility: DirectSpoolEligibility,
+    ) -> Result<PreparedLocalDirect<'a>> {
+        let source = self.local.source;
+        let authority = &self.local.authority;
+        let PersonalMessageDestination::Local(destination) = command.destination else {
+            anyhow::bail!("prepared direct is not local");
+        };
+        anyhow::ensure!(
+            destination.recipient_id == authority.recipient_id
+                && destination.delivery_id == authority.recipient_stable_id
+                && destination.encrypted == self.local.encrypted
+                && destination.mam_backed == self.archive_policy.recipient_enabled,
+            "prepared direct destination mismatch"
+        );
+        let expected_owners = [
+            self.archive_policy
+                .sender_enabled
+                .then_some(source.actor_id),
+            (self.archive_policy.recipient_enabled && authority.recipient_id != source.actor_id)
+                .then_some(authority.recipient_id),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        anyhow::ensure!(
+            command.archives.len() == expected_owners.len(),
+            "prepared direct archive set mismatch"
+        );
+        for (projection, expected_owner) in command.archives.iter().zip(expected_owners) {
+            anyhow::ensure!(
+                projection.owner_id == expected_owner,
+                "prepared direct archive order/owner mismatch"
+            );
+            let (id, peer, stanza) = if projection.owner_id == source.actor_id {
+                (
+                    authority.sender_stable_id,
+                    source.target,
+                    self.local.sender_archive_stanza.as_str(),
+                )
+            } else if projection.owner_id == authority.recipient_id {
+                (
+                    authority.recipient_stable_id,
+                    source.sender,
+                    self.local.recipient_archive_stanza.as_str(),
+                )
+            } else {
+                anyhow::bail!("prepared direct archive owner mismatch");
+            };
+            anyhow::ensure!(
+                projection.id == id
+                    && projection.peer_jid == peer
+                    && projection.stanza == stanza
+                    && projection.encrypted == self.local.encrypted
+                    && projection.stanza_id == source.stanza_id,
+                "prepared direct archive projection mismatch"
+            );
+        }
+        let admission = match &source.admission {
+            OriginalAdmissionKind::Rated(payload) => {
+                PreparationAdmission::Rated(OriginalAdmission {
+                    actor_id: source.actor_id,
+                    account_bare: bare_jid(source.sender),
+                    normalized_target: source.target,
+                    origin_id: source.origin_id.as_deref(),
+                    normalized_payload: payload,
+                })
+            }
+            OriginalAdmissionKind::NoAdmissionRequired => PreparationAdmission::NoAdmissionRequired,
+        };
+        PreparedLocalDirect::bind(
+            owner,
+            LocalPreparation {
+                actor_id: source.actor_id,
+                sender_bare: bare_jid(source.sender),
+                sender_full: source.sender,
+                target_bare: bare_jid(source.target),
+                origin_id: source.origin_id.as_deref(),
+                identity_payload: &self.local.rewritten,
+                stored_stanza: &self.stanza,
+                admission,
+            },
+            command,
+            eligibility,
+        )
+    }
+}
 
 fn mixes_personal_retraction_and_direct_invite(root: Node<'_, '_>) -> bool {
     let has_retraction = root.children().any(|node| {
@@ -241,19 +841,17 @@ impl ProtocolSession {
         // envelope and untrusted direct delay assertions are consumed.
         let routed_raw = strip_untrusted_direct_delays(&strip_pow_element(raw), None);
         let pow_intent_payload = message_pow_intent_payload(client_raw);
+        let original_direct = OriginalDirectMessage::capture(root, user.id, from, to, &routed_raw);
         let mut message_admission_lease = None;
-        if is_abuse_rated_message(root) {
-            let normalized_admission_payload =
-                set_root_attribute(&set_from(&routed_raw, bare_jid(from)), "to", to);
+        if let Some(normalized_admission_payload) = original_direct.rated_payload() {
             let subject = format!("message:{}", user.id);
-            let admission_origin_id = direct_origin_id(root);
             self.enter_frame_stage(Stage::MessageAdmission);
             let request = MessageAdmissionRequest {
                 actor_id: user.id,
                 account_bare: bare_jid(from),
                 normalized_target: to,
-                origin_id: admission_origin_id.as_deref(),
-                normalized_payload: &normalized_admission_payload,
+                origin_id: original_direct.origin_id.as_deref(),
+                normalized_payload: normalized_admission_payload,
                 pow_intent_payload: &pow_intent_payload,
                 subject: &subject,
                 actors: &actors,
@@ -720,36 +1318,26 @@ impl ProtocolSession {
             uuid::Uuid::new_v4()
         };
         let recipient_by = format!("{}@{}", recipient.username, self.state.local_domain());
-        let rewritten = set_from(&routed_raw, from);
-        let routed = strip_stanza_ids_by_domain(&rewritten, self.state.local_domain());
-        let sender_archive = add_stanza_id(&rewritten, bare_jid(from), sender_stable_id);
-        let recipient_delivery = if recipient.id == user.id {
-            sender_archive.clone()
-        } else {
-            add_stanza_id(&routed, &recipient_by, recipient_stable_id)
-        };
         let encrypted = is_encrypted(root);
+        let local_projection = original_direct.project_local(
+            LocalProjectionAuthority {
+                recipient_id: recipient.id,
+                recipient_bare: &recipient_by,
+                sender_stable_id,
+                recipient_stable_id,
+                domain: self.state.local_domain(),
+            },
+            encrypted,
+            personal_retraction_target.as_deref(),
+        );
+        let rewritten = local_projection.rewritten.as_str();
+        let sender_archive = local_projection.sender_archive.as_str();
+        let recipient_delivery = local_projection.recipient_delivery.as_str();
+        let sender_archive_stanza = local_projection.sender_archive_stanza.as_str();
+        let recipient_archive_stanza = local_projection.recipient_archive_stanza.as_str();
         let durable_content_allowed = encrypted || !self.state.archive_requires_encryption();
         let persistence_allowed = personal_retraction || offline_storage_permitted(root);
         let archive_allowed_by_stanza = personal_retraction || mam_storage_eligible(root);
-        let sender_archive_stanza = if encrypted {
-            if let Some(target_id) = personal_retraction_target.as_deref() {
-                super::retractions::encrypted_retraction_archive(&sender_archive, target_id)
-            } else {
-                encrypted_archive_stanza(&sender_archive)
-            }
-        } else {
-            sender_archive.clone()
-        };
-        let recipient_archive_stanza = if encrypted {
-            if let Some(target_id) = personal_retraction_target.as_deref() {
-                super::retractions::encrypted_retraction_archive(&recipient_delivery, target_id)
-            } else {
-                encrypted_archive_stanza(&recipient_delivery)
-            }
-        } else {
-            recipient_delivery.clone()
-        };
         let stanza_id = root.attribute("id");
         let sender_history_enabled = self
             .state
@@ -865,7 +1453,7 @@ impl ProtocolSession {
         // consumed before any resource can observe a duplicate. The exact
         // sanitized client payload (without random server stanza-ids) is the
         // collision-safe replay value.
-        let origin_id = direct_origin_id(root);
+        let origin_id = original_direct.origin_id.as_deref();
         let exact_full_target_can_route = bare_target
             || message_type == "chat"
             || !targets.is_empty()
@@ -887,7 +1475,7 @@ impl ProtocolSession {
                     id: sender_stable_id,
                     owner_id: user.id,
                     peer_jid: to,
-                    stanza: &sender_archive_stanza,
+                    stanza: sender_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
@@ -897,12 +1485,12 @@ impl ProtocolSession {
                     id: recipient_stable_id,
                     owner_id: recipient.id,
                     peer_jid: from,
-                    stanza: &recipient_archive_stanza,
+                    stanza: recipient_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
             }
-            let identity = origin_id.as_deref().map(|identity_value| {
+            let identity = origin_id.map(|identity_value| {
                 let actor_scope = bare_jid(from);
                 let target_scope = bare_jid(to);
                 MessageIdentity {
@@ -911,13 +1499,15 @@ impl ProtocolSession {
                     actor_scope,
                     target_scope,
                     value: identity_value,
-                    payload: &rewritten,
+                    payload: rewritten,
                 }
             });
-            let delayed_delivery = add_delay_from(
-                &recipient_delivery,
+            let delayed_projection = local_projection.delayed(
                 chrono::Utc::now(),
-                Some(self.state.local_domain()),
+                LocalArchivePolicy {
+                    sender_enabled: sender_history_enabled,
+                    recipient_enabled: recipient_history_enabled,
+                },
             );
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user.id),
@@ -928,7 +1518,7 @@ impl ProtocolSession {
                     recipient_id: recipient.id,
                     recipient_bare_jid: &recipient_by,
                     sender_jid: from,
-                    stanza: &delayed_delivery,
+                    stanza: &delayed_projection.stanza,
                     encrypted,
                     mam_backed: recipient_history_enabled,
                 }),
@@ -936,11 +1526,21 @@ impl ProtocolSession {
             let eligibility =
                 direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
             self.enter_frame_stage(Stage::MessageAdmission);
-            let admitted = self
-                .state
-                .message_service()
-                .admit_personal_message_with_mode(&admission, eligibility)
-                .await;
+            let service = self.state.message_service();
+            let admitted = if let Some(operation) = self.message_operation() {
+                match delayed_projection.bind(operation, admission, eligibility) {
+                    Ok(prepared) => {
+                        service
+                            .admit_prepared_personal_message_with_mode(&prepared)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                service
+                    .admit_personal_message_with_mode(&admission, eligibility)
+                    .await
+            };
             match admitted.map(|result| (result.commit, result.mode, result.live_claim_id)) {
                 Ok((
                     DurableAdmissionOutcome::Stored {
@@ -1008,7 +1608,46 @@ impl ProtocolSession {
                     return Ok(message_error(root, "cancel", "service-unavailable"));
                 }
                 Err(error) => {
-                    tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission failed atomically");
+                    if let Some(confirmed) = preserved_transaction(&error) {
+                        match confirmed {
+                            TransactionOutcome::Stored {
+                                recipient_id,
+                                delivery_id,
+                                live_claim_id,
+                                ..
+                            } => {
+                                self.state.personal_message_telemetry().post_accept_failed();
+                                self.finalize_message_admission(
+                                    &mut message_admission_lease,
+                                    "local-durable-c2s-continuation-unknown",
+                                )
+                                .await;
+                                let mut claim = *live_claim_id;
+                                service
+                                    .rearm_unrouted_live_direct(
+                                        *recipient_id,
+                                        *delivery_id,
+                                        &mut claim,
+                                    )
+                                    .await;
+                                // Storage is positively known; returned routing
+                                // mode is not. Do not fabricate a live route.
+                                return Ok(Action::None);
+                            }
+                            TransactionOutcome::Replay { .. } => {
+                                self.finalize_message_admission(
+                                    &mut message_admission_lease,
+                                    "local-durable-c2s-replay-continuation-unknown",
+                                )
+                                .await;
+                                return Ok(Action::None);
+                            }
+                            TransactionOutcome::AccountUnavailable => {
+                                return Ok(message_error(root, "cancel", "service-unavailable"))
+                            }
+                        }
+                    }
+                    tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission did not return a confirmed result");
                     return Ok(message_error(root, "wait", "resource-constraint"));
                 }
             }
@@ -1029,7 +1668,7 @@ impl ProtocolSession {
                     id: sender_stable_id,
                     owner_id: user.id,
                     peer_jid: to,
-                    stanza: &sender_archive_stanza,
+                    stanza: sender_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
@@ -1039,13 +1678,13 @@ impl ProtocolSession {
                     id: recipient_stable_id,
                     owner_id: recipient.id,
                     peer_jid: from,
-                    stanza: &recipient_archive_stanza,
+                    stanza: recipient_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
             }
             let delayed_delivery = add_delay_from(
-                &recipient_delivery,
+                recipient_delivery,
                 chrono::Utc::now(),
                 Some(self.state.local_domain()),
             );
@@ -1161,18 +1800,15 @@ impl ProtocolSession {
                     bare_jid: recipient_by.clone(),
                 },
             )?;
-            let delayed = add_delay_from(
-                &recipient_delivery,
-                chrono::Utc::now(),
-                Some(bare_jid(from)),
-            );
+            let delayed =
+                add_delay_from(recipient_delivery, chrono::Utc::now(), Some(bare_jid(from)));
             let mut writes = Vec::with_capacity(2);
             if sender_history_enabled {
                 writes.push(ArchiveWrite {
                     id: sender_stable_id,
                     owner_id: user.id,
                     peer_jid: to,
-                    stanza: &sender_archive_stanza,
+                    stanza: sender_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
@@ -1182,12 +1818,12 @@ impl ProtocolSession {
                     id: recipient_stable_id,
                     owner_id: recipient.id,
                     peer_jid: from,
-                    stanza: &recipient_archive_stanza,
+                    stanza: recipient_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
             }
-            let identity = origin_id.as_deref().map(|identity_value| {
+            let identity = origin_id.map(|identity_value| {
                 let actor_scope = bare_jid(from);
                 let target_scope = bare_jid(to);
                 MessageIdentity {
@@ -1196,7 +1832,7 @@ impl ProtocolSession {
                     actor_scope,
                     target_scope,
                     value: identity_value,
-                    payload: &rewritten,
+                    payload: rewritten,
                 }
             });
             let invitation = LocalMucInviteAdmission {
@@ -1292,7 +1928,7 @@ impl ProtocolSession {
                 },
                 sender: from,
                 recipient_id: recipient.id,
-                stanza: &recipient_delivery,
+                stanza: recipient_delivery,
                 delivery,
                 approved_targets: &targets,
                 enforce_direct_health: local_direct,
@@ -1377,7 +2013,7 @@ impl ProtocolSession {
                     }
                     UndeliveredDisposition::StoreOffline => {
                         let delayed = add_delay_from(
-                            &recipient_archive_stanza,
+                            recipient_archive_stanza,
                             chrono::Utc::now(),
                             Some(self.state.local_domain()),
                         );
@@ -1450,7 +2086,7 @@ impl ProtocolSession {
                 || self.state.message_service().direct_mode() == DirectPostCommitMode::Live)
         {
             if let Some(delivered_key) = delivered_key.as_deref() {
-                self.send_received_carbons(bare_jid(to), Some(delivered_key), &recipient_delivery)
+                self.send_received_carbons(bare_jid(to), Some(delivered_key), recipient_delivery)
                     .await;
             }
         }
@@ -1472,7 +2108,7 @@ impl ProtocolSession {
                     id: sender_stable_id,
                     owner_id: user.id,
                     peer_jid: to,
-                    stanza: &sender_archive_stanza,
+                    stanza: sender_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
@@ -1482,7 +2118,7 @@ impl ProtocolSession {
                     id: recipient_stable_id,
                     owner_id: recipient.id,
                     peer_jid: from,
-                    stanza: &recipient_archive_stanza,
+                    stanza: recipient_archive_stanza,
                     encrypted,
                     stanza_id,
                 });
@@ -1504,7 +2140,7 @@ impl ProtocolSession {
             let delivered_self = (recipient.id == user.id)
                 .then_some(delivered_key.as_deref())
                 .flatten();
-            self.send_sent_carbons(from, &sender_archive, delivered_self, None)
+            self.send_sent_carbons(from, sender_archive, delivered_self, None)
                 .await;
         }
         self.state.personal_message_telemetry().message_routed();

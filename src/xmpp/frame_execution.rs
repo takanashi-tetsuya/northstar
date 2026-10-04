@@ -472,7 +472,10 @@ impl Observation {
                 _ => TerminalReason::BackendFailure,
             };
             let snapshot = progress.direct_operation.retire(reason);
-            if snapshot.reservation.is_some() || snapshot.finalization.is_some() {
+            if snapshot.reservation.is_some()
+                || snapshot.finalization.is_some()
+                || snapshot.direct.is_some()
+            {
                 // Never print the snapshot, command, payload, fence, or lease.
                 // These are admission facts only; direct storage is not inferred.
                 tracing::debug!(target: "rust_xmpp_server::xmpp::direct_lifecycle",
@@ -480,6 +483,7 @@ impl Observation {
                     classification = ?snapshot.classification(),
                     reservation = ?snapshot.reservation,
                     finalization = ?snapshot.finalization,
+                    direct = ?snapshot.direct,
                     terminal = ?snapshot.terminal,
                     "frame admission ownership retired"
                 );

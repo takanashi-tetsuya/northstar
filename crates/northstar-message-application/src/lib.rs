@@ -4,6 +4,7 @@
 //! implementation can run. It intentionally knows nothing about PostgreSQL,
 //! sockets, XML, global server state or post-commit providers.
 
+pub mod direct_commit;
 pub mod direct_lifecycle;
 
 use northstar_message_core::{
@@ -21,8 +22,9 @@ pub enum InvalidMessageCommand {
 }
 
 /// Persistence port for the single authoritative personal-message commit.
-/// The implementation must atomically commit every projection present in the
-/// command or return an error without a partial user-visible admission.
+/// The implementation must commit the command's projections atomically.
+/// A returned error, including loss of a COMMIT response, does not by itself
+/// establish whether that atomic transaction committed or rolled back.
 pub trait PersonalMessageCommitRepository {
     type Error;
 

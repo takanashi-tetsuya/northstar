@@ -355,9 +355,71 @@ pub(crate) async fn admit_personal_history_with_direct_fence(
         writes,
         outbox,
         delivery,
-        Some((cluster, eligibility)),
+        Some(DirectCommitContext {
+            cluster: Some((cluster, eligibility)),
+            observer: None,
+        }),
     )
     .await
+}
+
+struct DirectCommitContext<'a> {
+    cluster: Option<(
+        &'a crate::cluster::ClusterAdmission,
+        crate::cluster::DirectSpoolEligibility,
+    )>,
+    observer: Option<&'a dyn northstar_message_application::direct_commit::DirectCommitObserver>,
+}
+
+pub(crate) async fn admit_personal_history_observed_direct(
+    pool: &PgPool,
+    identity: Option<&PersonalHistoryIdentity<'_>>,
+    writes: &[PersonalArchiveWrite<'_>],
+    delivery: &PersonalC2sDeliveryAdmission<'_>,
+    cluster: Option<&crate::cluster::ClusterAdmission>,
+    eligibility: crate::cluster::DirectSpoolEligibility,
+    observer: &dyn northstar_message_application::direct_commit::DirectCommitObserver,
+) -> Result<(
+    PersonalHistoryAdmission,
+    crate::cluster::DirectPostCommitMode,
+    Option<Uuid>,
+)> {
+    admit_personal_history_inner(
+        pool,
+        identity,
+        writes,
+        None,
+        Some(delivery),
+        Some(DirectCommitContext {
+            cluster: cluster.map(|cluster| (cluster, eligibility)),
+            observer: Some(observer),
+        }),
+    )
+    .await
+}
+
+fn direct_transaction_outcome(
+    outcome: &PersonalHistoryAdmission,
+    delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
+    live_claim_id: Option<Uuid>,
+) -> Result<northstar_message_application::direct_commit::TransactionOutcome> {
+    use northstar_message_application::direct_commit::TransactionOutcome;
+    Ok(match outcome {
+        PersonalHistoryAdmission::Stored(ids) => {
+            let delivery = delivery
+                .ok_or_else(|| anyhow::anyhow!("observed local transaction lacked delivery"))?;
+            TransactionOutcome::Stored {
+                recipient_id: delivery.recipient_id,
+                delivery_id: delivery.id,
+                archive_ids: ids.clone(),
+                live_claim_id,
+            }
+        }
+        PersonalHistoryAdmission::Replay(ids) => TransactionOutcome::Replay {
+            archive_ids: ids.clone(),
+        },
+        PersonalHistoryAdmission::AccountUnavailable => TransactionOutcome::AccountUnavailable,
+    })
 }
 
 async fn admit_personal_history_inner(
@@ -366,15 +428,14 @@ async fn admit_personal_history_inner(
     writes: &[PersonalArchiveWrite<'_>],
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
-    cluster: Option<(
-        &crate::cluster::ClusterAdmission,
-        crate::cluster::DirectSpoolEligibility,
-    )>,
+    context: Option<DirectCommitContext<'_>>,
 ) -> Result<(
     PersonalHistoryAdmission,
     crate::cluster::DirectPostCommitMode,
     Option<Uuid>,
 )> {
+    let (cluster, observer) =
+        context.map_or((None, None), |context| (context.cluster, context.observer));
     let mut transaction = pool.begin().await?;
     if let Some((cluster, eligibility)) = cluster {
         super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
@@ -427,7 +488,18 @@ async fn admit_personal_history_inner(
                 .await?;
             }
         }
-        transaction.commit().await?;
+        if let Some(observer) = observer {
+            let fact = direct_transaction_outcome(&outcome, c2s_delivery, live_claim_id)?;
+            crate::services::messaging::direct_workflow::commit_observed(
+                transaction.commit(),
+                observer,
+                fact,
+                turn.admitted_mode(),
+            )
+            .await?;
+        } else {
+            transaction.commit().await?;
+        }
         let admitted_mode = turn.finish();
         if admitted_mode == crate::cluster::DirectPostCommitMode::Live
             && cluster.direct_mode() != crate::cluster::DirectPostCommitMode::Live
@@ -437,7 +509,18 @@ async fn admit_personal_history_inner(
             admitted_mode
         }
     } else {
-        transaction.commit().await?;
+        if let Some(observer) = observer {
+            let fact = direct_transaction_outcome(&outcome, c2s_delivery, None)?;
+            crate::services::messaging::direct_workflow::commit_observed(
+                transaction.commit(),
+                observer,
+                fact,
+                crate::cluster::DirectPostCommitMode::Live,
+            )
+            .await?;
+        } else {
+            transaction.commit().await?;
+        }
         crate::cluster::DirectPostCommitMode::Live
     };
     Ok((outcome, mode, live_claim_id))

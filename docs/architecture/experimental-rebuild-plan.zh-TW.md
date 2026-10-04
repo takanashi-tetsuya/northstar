@@ -1,7 +1,7 @@
 # Northstar 實驗架構現況
 
 更新：2026-10-04。Stage0／1與Stage2 reservation/finalization受控子退出已驗收。
-目前來源：`464f9f7a1a7f785b2518a397383308bc5faa1db1`。
+來源版本與測試 hash 見下列結果索引。
 
 ## 階段與退出條件
 
@@ -10,7 +10,7 @@
 | 0 基線 | 固定來源；admission、commit、handoff、write、ACK、settlement各有明確權威；Unknown不當rollback | 已驗收 |
 | 1 規格 | actor共用容量／TTL、初態與混合負載預檢；精確oracle；取消、中斷、缺證據與cleanup分判 | 限定synthetic／fixture scope已驗收 |
 | 2 Shared admission | production與controlled共用transitions；真實outcome、完整effect/fence關聯；可保存、重播、縮減的正常／拒絕／replay／expiry／Unknown案例 | Reservation/finalization子退出已驗收 |
-| 3 Direct lifecycle | 真mode-aware commit連接既有router、exact queue item、write及SM/BOSH owner；取消、partial write、replacement與stale ACK不丟失責任 | [owner初批通過](../evidence/experimental-rebuild/stage3-retained-admission-results.json)，其餘未完成 |
+| 3 Direct lifecycle | 真mode-aware commit連接既有router、exact queue item、write及SM/BOSH owner；取消、partial write、replacement與stale ACK不丟失責任 | [owner／commit初批通過](../evidence/experimental-rebuild/stage3-direct-commit-results.json)，其餘未完成 |
 | 4 高風險域 | MUC/MIX、auth publication（含write/exposure後failure/cancel）、worker claim/recovery皆有production共用受控案例及跨域組合 | 未完成 |
 | 5 Real adapters | PostgreSQL交易／鎖／fence／Unknown與模型相符；stock wire與獨立peer；確切版本及cleanup | 未完成 |
 | 6 有限qualification | 有效負載、資源／事件／時間界限、backpressure／recovery觀測及獨立cleanup；缺terminal不能Pass | 未完成；72h soak已取消 |

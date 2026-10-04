@@ -1,6 +1,7 @@
 //! Personal-message policy and atomic admission through a persistence port.
 
 mod direct_route;
+pub(crate) mod direct_workflow;
 pub(crate) use direct_route::{
     DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
     DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
@@ -15,13 +16,16 @@ use crate::abuse::MessageDedupeIdentity;
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 use crate::outbound::DurableDelivery;
 use anyhow::Result;
+use northstar_message_application::direct_commit::{
+    CommitError as DirectCommitError, DirectCommitRepository,
+};
 use northstar_message_application::{
     CommitError, MessageApplication, PersonalMessageCommitRepository,
 };
 pub(crate) use northstar_message_core::{
-    ArchiveProjection as ArchiveWrite, FederationDelivery, IdentityAuthority, LocalDelivery,
-    MessageCommit as DurableAdmissionOutcome, MessageIdentity, MessagePostCommit,
-    PersonalMessageDestination, ValidatedPersonalMessage,
+    ArchiveProjection as ArchiveWrite, DirectPersonalMessageAdmission, FederationDelivery,
+    IdentityAuthority, LocalDelivery, MessageCommit as DurableAdmissionOutcome, MessageIdentity,
+    MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use std::future::Future;
 use uuid::Uuid;
@@ -56,16 +60,6 @@ pub(crate) enum OfflineAdmissionOutcome {
     Replay,
     QuotaExceeded,
     RecipientUnavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DirectPersonalMessageAdmission {
-    pub(crate) commit: DurableAdmissionOutcome,
-    pub(crate) mode: DirectPostCommitMode,
-    /// Initial PostgreSQL reservation for a newly stored clustered local
-    /// delivery whose transaction admitted a Live handoff. This remains Some
-    /// if health degrades immediately after commit so protocol can rearm it.
-    pub(crate) live_claim_id: Option<Uuid>,
 }
 
 /// A clustered committed C2S row may enter a live queue only with the exact
@@ -383,17 +377,17 @@ pub(crate) struct LocalMucInviteAdmission<'a> {
 }
 
 /// Each admission commits all requested history, delivery and affiliation
-/// changes together. A denial or error must leave no partial admission.
+/// changes atomically. An error after requesting COMMIT can leave its outcome
+/// unknown; it is not evidence that an atomic admission rolled back.
 pub(crate) trait MessageRepository:
-    PersonalMessageCommitRepository<Error = anyhow::Error> + Clone + Send + Sync
+    PersonalMessageCommitRepository<Error = anyhow::Error>
+    + DirectCommitRepository<Error = anyhow::Error>
+    + Clone
+    + Send
+    + Sync
 {
     fn direct_mode(&self) -> DirectPostCommitMode;
     fn clustered_direct_admission_enabled(&self) -> bool;
-    fn commit_direct<'a>(
-        &'a self,
-        request: &'a ValidatedPersonalMessage<'a>,
-        eligibility: DirectSpoolEligibility,
-    ) -> impl Future<Output = Result<DirectPersonalMessageAdmission>> + Send + 'a;
     fn release_live_direct_claim(
         &self,
         recipient_id: Uuid,
@@ -476,9 +470,20 @@ impl<R: MessageRepository> MessageService<R> {
         request: &ValidatedPersonalMessage<'_>,
         eligibility: DirectSpoolEligibility,
     ) -> Result<DirectPersonalMessageAdmission> {
-        northstar_message_application::validate_authority(request)
-            .map_err(|error| anyhow::anyhow!("invalid personal-message command: {error:?}"))?;
-        self.repository.commit_direct(request, eligibility).await
+        self.personal
+            .commit_direct(request, eligibility, None)
+            .await
+            .map_err(direct_commit_error)
+    }
+
+    pub(crate) async fn admit_prepared_personal_message_with_mode(
+        &self,
+        prepared: &direct_workflow::PreparedLocalDirect<'_>,
+    ) -> Result<DirectPersonalMessageAdmission> {
+        self.personal
+            .commit_direct(prepared.command(), prepared.eligibility(), Some(prepared))
+            .await
+            .map_err(direct_commit_error)
     }
 
     /// Rearm recovery only when the initial live reservation still owns the
@@ -622,6 +627,20 @@ impl<R: MessageRepository> MessageService<R> {
                 anyhow::bail!("invalid personal-message command: {error:?}")
             }
             Err(CommitError::Repository(error)) => Err(error),
+        }
+    }
+}
+
+fn direct_commit_error(error: DirectCommitError<anyhow::Error>) -> anyhow::Error {
+    match error {
+        DirectCommitError::Invalid(error) => {
+            anyhow::anyhow!("invalid personal-message command: {error:?}")
+        }
+        DirectCommitError::Observation { error, outcome } => {
+            direct_workflow::continuation_error(error.into(), outcome)
+        }
+        DirectCommitError::Repository { error, outcome } => {
+            direct_workflow::continuation_error(error, outcome)
         }
     }
 }

@@ -7,6 +7,7 @@ use crate::{
     services::{messaging::*, muc::DurableMucInviteOutcome, privacy::PrivacyStanzaKind},
 };
 use anyhow::Result;
+use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::PersonalMessageCommitRepository;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -36,9 +37,21 @@ impl PersonalMessageCommitRepository for PostgresMessageRepository {
         request: &'a ValidatedPersonalMessage<'a>,
     ) -> Result<DurableAdmissionOutcome> {
         Ok(self
-            .commit_with_mode(request, DirectSpoolEligibility::LiveOnly)
+            .commit_with_mode(request, DirectSpoolEligibility::LiveOnly, None)
             .await?
             .commit)
+    }
+}
+
+impl DirectCommitRepository for PostgresMessageRepository {
+    type Error = anyhow::Error;
+    async fn commit_direct<'a>(
+        &'a self,
+        request: &'a ValidatedPersonalMessage<'a>,
+        eligibility: DirectSpoolEligibility,
+        observer: Option<&'a dyn DirectCommitObserver>,
+    ) -> Result<DirectPersonalMessageAdmission> {
+        self.commit_with_mode(request, eligibility, observer).await
     }
 }
 
@@ -47,6 +60,7 @@ impl PostgresMessageRepository {
         &self,
         request: &ValidatedPersonalMessage<'_>,
         eligibility: DirectSpoolEligibility,
+        observer: Option<&dyn DirectCommitObserver>,
     ) -> Result<DirectPersonalMessageAdmission> {
         let identity = request
             .identity
@@ -56,6 +70,10 @@ impl PostgresMessageRepository {
         let archives = persistence_archive_writes(request.archives);
         let (outcome, post_commit, post_commit_mode, live_claim_id) = match request.destination {
             PersonalMessageDestination::Federation(destination) => {
+                anyhow::ensure!(
+                    observer.is_none(),
+                    "local direct observer cannot witness federation"
+                );
                 let outbox = db::PersonalS2sOutboxAdmission {
                     local_actor_id: destination.local_actor_id,
                     target_domain: destination.target_domain,
@@ -75,7 +93,7 @@ impl PostgresMessageRepository {
                         &archives,
                         Some(&outbox),
                         None,
-                        eligibility,
+                        (eligibility, None),
                     )
                     .await?;
                 (
@@ -109,7 +127,7 @@ impl PostgresMessageRepository {
                         &archives,
                         None,
                         Some(&delivery),
-                        eligibility,
+                        (eligibility, observer),
                     )
                     .await?;
                 (
@@ -137,12 +155,31 @@ impl PostgresMessageRepository {
         archives: &[db::PersonalArchiveWrite<'_>],
         outbox: Option<&db::PersonalS2sOutboxAdmission<'_>>,
         delivery: Option<&db::PersonalC2sDeliveryAdmission<'_>>,
-        eligibility: DirectSpoolEligibility,
+        admission: (DirectSpoolEligibility, Option<&dyn DirectCommitObserver>),
     ) -> Result<(
         db::PersonalHistoryAdmission,
         DirectPostCommitMode,
         Option<Uuid>,
     )> {
+        let (eligibility, observer) = admission;
+        if let Some(observer) = observer {
+            anyhow::ensure!(
+                outbox.is_none(),
+                "local direct observer cannot witness an outbox"
+            );
+            let delivery = delivery
+                .ok_or_else(|| anyhow::anyhow!("local direct observer requires delivery"))?;
+            return db::archive::admit_personal_history_observed_direct(
+                pool,
+                identity,
+                archives,
+                delivery,
+                self.cluster.as_ref(),
+                eligibility,
+                observer,
+            )
+            .await;
+        }
         let Some(cluster) = self.cluster.as_ref() else {
             // Standalone repository fixtures and single-node operation retain
             // the existing transaction behavior without a cluster fence.
@@ -263,13 +300,6 @@ impl MessageRepository for PostgresMessageRepository {
             .is_some_and(ClusterAdmission::is_enabled)
     }
 
-    async fn commit_direct<'a>(
-        &'a self,
-        request: &'a ValidatedPersonalMessage<'a>,
-        eligibility: DirectSpoolEligibility,
-    ) -> Result<DirectPersonalMessageAdmission> {
-        self.commit_with_mode(request, eligibility).await
-    }
     async fn release_live_direct_claim(
         &self,
         recipient_id: Uuid,

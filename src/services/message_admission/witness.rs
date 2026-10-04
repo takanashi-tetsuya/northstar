@@ -8,6 +8,8 @@ use northstar_message_application::direct_lifecycle::OperationSnapshot;
 use northstar_message_application::direct_lifecycle::{
     AdmissionEffectHandle, AdmissionGrant, DirectLifecycle, OperationSummary, TerminalReason,
 };
+use northstar_message_application::{direct_commit, direct_lifecycle::PreparationAdmission};
+use northstar_message_core::DirectPersonalMessageAdmission;
 use sqlx::{Postgres, Transaction};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -77,6 +79,57 @@ impl DirectOperationHandle {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retire(reason)
+    }
+
+    pub(crate) fn prepare_direct(
+        &self,
+        admission: PreparationAdmission<'_>,
+        command: direct_commit::DirectCommandFacts,
+    ) -> anyhow::Result<direct_commit::DirectEffect> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .prepare_direct(admission, command)?)
+    }
+    pub(crate) fn start_direct(
+        &self,
+        effect: &direct_commit::DirectEffect,
+    ) -> Result<(), direct_commit::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .start_direct(effect)
+    }
+    pub(crate) fn prepare_direct_commit(
+        &self,
+        effect: &direct_commit::DirectEffect,
+        prepared: direct_commit::PreparedCommit,
+    ) -> Result<(), direct_commit::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enter_direct_commit(effect, prepared)
+    }
+    pub(crate) fn receive_direct_commit(
+        &self,
+        effect: &direct_commit::DirectEffect,
+        prepared: direct_commit::PreparedCommit,
+    ) -> Result<(), direct_commit::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .receive_direct_commit(effect, prepared)
+    }
+    pub(crate) fn complete_direct(
+        &self,
+        effect: &direct_commit::DirectEffect,
+        result: Option<DirectPersonalMessageAdmission>,
+    ) -> Result<direct_commit::ExecutionOutcome, direct_commit::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .complete_direct(effect, result)
     }
 }
 

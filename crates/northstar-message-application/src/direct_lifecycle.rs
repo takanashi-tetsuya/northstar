@@ -4,6 +4,7 @@
 //! does not infer a durable message commit, route, or scheduled recovery from
 //! either admission transaction. No I/O, clock, entropy, or async Drop lives here.
 
+use crate::direct_commit;
 use northstar_abuse_policy::{
     admission_execution::{
         BeginRequest, BeginResult, Command, CommitFact, CommitWitness, Completion,
@@ -12,7 +13,23 @@ use northstar_abuse_policy::{
     },
     admission_transaction::AdmissionFence,
 };
+use northstar_message_core::DirectPersonalMessageAdmission;
 use uuid::Uuid;
+
+/// Purpose-specific admission projection derived by the private protocol
+/// source adapter. No XML parsing or new normalization policy lives here.
+pub struct OriginalAdmission<'a> {
+    pub actor_id: Uuid,
+    pub account_bare: &'a str,
+    pub normalized_target: &'a str,
+    pub origin_id: Option<&'a str>,
+    pub normalized_payload: &'a str,
+}
+
+pub enum PreparationAdmission<'a> {
+    Rated(OriginalAdmission<'a>),
+    NoAdmissionRequired,
+}
 
 /// An effect handle can only be issued by its operation. It is not admission authority. The complete command remains
 /// bound to it; an operation ID or a caller-selected effect number is not enough.
@@ -62,6 +79,7 @@ pub enum Rejected {
     Fence,
     Grant,
     Request,
+    Direct(direct_commit::Rejected),
     Completion(CompletionRejected),
 }
 
@@ -137,24 +155,82 @@ impl AdmissionSummary {
 
 /// Payload-free retirement projection. AdmissionObserved describes transaction
 /// knowledge only; phase and terminal reason still distinguish unfinished work.
-/// It is never evidence of a direct-message commit, transfer, or settlement.
+/// Reservation/finalization alone never prove a direct commit. Only the direct
+/// receipt outcome identifies a confirmed transaction; none of these facts
+/// establishes transport transfer or settlement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OperationSummary {
     pub operation: Uuid,
     pub reservation: Option<AdmissionSummary>,
     pub finalization: Option<AdmissionSummary>,
+    pub direct: Option<DirectSummary>,
     pub terminal: Option<TerminalReason>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectSummary {
+    pub phase: EffectPhase,
+    pub knowledge: CommitKnowledgeClass,
+    pub confirmed_outcome: Option<DirectOutcomeClass>,
+    pub receipt_admitted_mode: Option<northstar_message_core::DirectPostCommitMode>,
+    pub returned_mode: Option<northstar_message_core::DirectPostCommitMode>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectOutcomeClass {
+    Stored,
+    Replay,
+    AccountUnavailable,
+}
+
+fn direct_summary(state: &direct_commit::Snapshot) -> DirectSummary {
+    let receipt = match &state.knowledge {
+        direct_commit::Knowledge::ReceiptKnown(receipt) => Some(receipt),
+        _ => None,
+    };
+    DirectSummary {
+        phase: if state.outcome.is_some() {
+            EffectPhase::Finished
+        } else if state.started {
+            EffectPhase::Waiting
+        } else {
+            EffectPhase::Issued
+        },
+        knowledge: match state.knowledge {
+            direct_commit::Knowledge::NoCommitRequested => CommitKnowledgeClass::NoCommitRequested,
+            direct_commit::Knowledge::CommitCallEntered(_) => {
+                CommitKnowledgeClass::CommitCallEntered
+            }
+            direct_commit::Knowledge::ReceiptKnown(_) => CommitKnowledgeClass::ReceiptKnown,
+        },
+        confirmed_outcome: receipt.map(|receipt| match receipt.prepared.outcome {
+            direct_commit::TransactionOutcome::Stored { .. } => DirectOutcomeClass::Stored,
+            direct_commit::TransactionOutcome::Replay { .. } => DirectOutcomeClass::Replay,
+            direct_commit::TransactionOutcome::AccountUnavailable => {
+                DirectOutcomeClass::AccountUnavailable
+            }
+        }),
+        receipt_admitted_mode: receipt.map(|receipt| receipt.prepared.admitted_mode),
+        returned_mode: match &state.outcome {
+            Some(direct_commit::ExecutionOutcome::Completed(result)) => Some(result.mode),
+            _ => None,
+        },
+    }
 }
 
 impl OperationSummary {
     pub fn classification(&self) -> TerminalClassification {
-        if [self.reservation, self.finalization]
-            .into_iter()
-            .flatten()
-            .any(|execution| execution.knowledge == CommitKnowledgeClass::CommitCallEntered)
+        if self
+            .direct
+            .is_some_and(|direct| direct.knowledge == CommitKnowledgeClass::CommitCallEntered)
+            || [self.reservation, self.finalization]
+                .into_iter()
+                .flatten()
+                .any(|execution| execution.knowledge == CommitKnowledgeClass::CommitCallEntered)
         {
             TerminalClassification::TerminalUnresolved
-        } else if self.reservation.is_some() || self.finalization.is_some() {
+        } else if self.reservation.is_some() || self.finalization.is_some() || self.direct.is_some()
+        {
             TerminalClassification::AdmissionObserved
         } else {
             TerminalClassification::NoAdmission
@@ -182,6 +258,7 @@ pub struct OperationSnapshot {
     pub operation: Uuid,
     pub reservation: Option<AdmissionSnapshot>,
     pub finalization: Option<AdmissionSnapshot>,
+    pub direct: Option<direct_commit::Snapshot>,
     pub terminal: Option<TerminalReason>,
 }
 
@@ -194,6 +271,7 @@ impl OperationSnapshot {
             operation: self.operation,
             reservation: self.reservation.as_ref().map(summarize),
             finalization: self.finalization.as_ref().map(summarize),
+            direct: self.direct.as_ref().map(direct_summary),
             terminal: self.terminal,
         }
         .classification()
@@ -242,6 +320,7 @@ pub struct DirectLifecycle {
     attempt: u32,
     reservation: Option<AdmissionExecution>,
     finalization: Option<AdmissionExecution>,
+    direct: Option<direct_commit::Execution>,
     terminal: Option<TerminalReason>,
 }
 
@@ -253,6 +332,7 @@ impl DirectLifecycle {
             attempt,
             reservation: None,
             finalization: None,
+            direct: None,
             terminal: None,
         }
     }
@@ -278,7 +358,7 @@ impl DirectLifecycle {
     /// this owned request. No new message-size policy is imposed by this core.
     pub fn begin(&mut self, request: BeginRequest) -> Result<AdmissionEffectHandle, Rejected> {
         self.ensure_open()?;
-        if self.reservation.is_some() {
+        if self.reservation.is_some() || self.direct.is_some() {
             return Err(Rejected::AlreadyStarted);
         }
         let execution = AdmissionExecution::new(self.correlation(1), Command::Begin(request));
@@ -317,6 +397,16 @@ impl DirectLifecycle {
         self.ensure_open()?;
         if self.finalization.is_some() {
             return Err(Rejected::AlreadyStarted);
+        }
+        if let Some(direct) = &self.direct {
+            let state = direct.state();
+            if state.outcome.is_none()
+                || !matches!(&state.knowledge,
+                direct_commit::Knowledge::ReceiptKnown(receipt)
+                if matches!(receipt.prepared.outcome, direct_commit::TransactionOutcome::Stored { .. } | direct_commit::TransactionOutcome::Replay { .. }))
+            {
+                return Err(Rejected::Direct(direct_commit::Rejected::Knowledge));
+            }
         }
         let Some(AdmissionGrant::Reserved(expected)) = self.admission_grant() else {
             return Err(Rejected::ReservationRequired);
@@ -443,6 +533,7 @@ impl DirectLifecycle {
             operation: self.operation,
             reservation: self.reservation.as_ref().map(AdmissionExecution::snapshot),
             finalization: self.finalization.as_ref().map(AdmissionExecution::snapshot),
+            direct: self.direct.as_ref().map(direct_commit::Execution::snapshot),
             terminal: self.terminal,
         }
     }
@@ -462,8 +553,91 @@ impl DirectLifecycle {
             operation: self.operation,
             reservation: self.reservation.as_ref().map(summarize),
             finalization: self.finalization.as_ref().map(summarize),
+            direct: self
+                .direct
+                .as_ref()
+                .map(|execution| direct_summary(execution.state())),
             terminal: self.terminal,
         }
+    }
+
+    pub fn prepare_direct(
+        &mut self,
+        admission: PreparationAdmission<'_>,
+        command: direct_commit::DirectCommandFacts,
+    ) -> Result<direct_commit::DirectEffect, Rejected> {
+        self.ensure_open()?;
+        if self.direct.is_some() || self.finalization.is_some() {
+            return Err(Rejected::AlreadyStarted);
+        }
+        match admission {
+            PreparationAdmission::NoAdmissionRequired => {
+                if self.reservation.is_some() {
+                    return Err(Rejected::Request);
+                }
+            }
+            PreparationAdmission::Rated(original) => {
+                let Some(begin) = &self.reservation else {
+                    return Err(Rejected::ReservationRequired);
+                };
+                let Command::Begin(expected) = &begin.handle.effect.command else {
+                    return Err(Rejected::Request);
+                };
+                if expected.actor_id != original.actor_id
+                    || command.actor_id != original.actor_id
+                    || expected.account_bare != original.account_bare
+                    || expected.normalized_target != original.normalized_target
+                    || expected.origin_id.as_deref() != original.origin_id
+                    || expected.normalized_payload != original.normalized_payload
+                {
+                    return Err(Rejected::Request);
+                }
+                if self.admission_grant().is_none() {
+                    return Err(Rejected::ReservationRequired);
+                }
+            }
+        }
+        let execution = direct_commit::Execution::new(self.correlation(3), command);
+        let effect = execution.effect().clone();
+        self.direct = Some(execution);
+        Ok(effect)
+    }
+
+    fn direct_execution(
+        &mut self,
+    ) -> Result<&mut direct_commit::Execution, direct_commit::Rejected> {
+        if self.terminal.is_some() {
+            return Err(direct_commit::Rejected::AlreadyCompleted);
+        }
+        self.direct.as_mut().ok_or(direct_commit::Rejected::Command)
+    }
+
+    pub fn start_direct(
+        &mut self,
+        effect: &direct_commit::DirectEffect,
+    ) -> Result<(), direct_commit::Rejected> {
+        self.direct_execution()?.start(effect)
+    }
+    pub fn enter_direct_commit(
+        &mut self,
+        effect: &direct_commit::DirectEffect,
+        prepared: direct_commit::PreparedCommit,
+    ) -> Result<(), direct_commit::Rejected> {
+        self.direct_execution()?.enter_commit(effect, prepared)
+    }
+    pub fn receive_direct_commit(
+        &mut self,
+        effect: &direct_commit::DirectEffect,
+        prepared: direct_commit::PreparedCommit,
+    ) -> Result<(), direct_commit::Rejected> {
+        self.direct_execution()?.received(effect, prepared)
+    }
+    pub fn complete_direct(
+        &mut self,
+        effect: &direct_commit::DirectEffect,
+        result: Option<DirectPersonalMessageAdmission>,
+    ) -> Result<direct_commit::ExecutionOutcome, direct_commit::Rejected> {
+        self.direct_execution()?.complete(effect, result)
     }
 }
 
@@ -879,5 +1053,112 @@ mod tests {
                 "retained request leaked through Debug"
             );
         }
+    }
+
+    #[test]
+    fn direct_receipt_kind_and_unreturned_mode_stay_separate_from_admission_finalization() {
+        use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
+        for kind in 0..3 {
+            let (mut lifecycle, grant) = reserved(100 + kind);
+            let original = request();
+            let begin_snapshot = lifecycle.snapshot().reservation;
+            let effect = lifecycle
+                .prepare_direct(
+                    PreparationAdmission::Rated(OriginalAdmission {
+                        actor_id: original.actor_id,
+                        account_bare: &original.account_bare,
+                        normalized_target: &original.normalized_target,
+                        origin_id: original.origin_id.as_deref(),
+                        normalized_payload: &original.normalized_payload,
+                    }),
+                    direct_commit::DirectCommandFacts {
+                        actor_id: original.actor_id,
+                        recipient_id: Uuid::from_u128(30),
+                        delivery_id: Uuid::from_u128(31),
+                        archive_ids: vec![],
+                        eligibility: DirectSpoolEligibility::Eligible,
+                    },
+                )
+                .unwrap();
+            lifecycle.start_direct(&effect).unwrap();
+            assert!(lifecycle.finalize(&grant).is_err());
+            let outcome = match kind {
+                0 => direct_commit::TransactionOutcome::Stored {
+                    recipient_id: Uuid::from_u128(30),
+                    delivery_id: Uuid::from_u128(31),
+                    archive_ids: vec![],
+                    live_claim_id: None,
+                },
+                1 => direct_commit::TransactionOutcome::Replay {
+                    archive_ids: vec![Uuid::from_u128(99)],
+                },
+                _ => direct_commit::TransactionOutcome::AccountUnavailable,
+            };
+            let prepared = direct_commit::PreparedCommit {
+                correlation: effect.correlation(),
+                outcome,
+                admitted_mode: DirectPostCommitMode::Live,
+            };
+            lifecycle
+                .enter_direct_commit(&effect, prepared.clone())
+                .unwrap();
+            lifecycle.receive_direct_commit(&effect, prepared).unwrap();
+            lifecycle.complete_direct(&effect, None).unwrap();
+            let finalized = lifecycle.finalize(&grant);
+            assert_eq!(finalized.is_ok(), kind != 2);
+            assert_eq!(lifecycle.snapshot().reservation, begin_snapshot);
+            let summary = lifecycle.retire(TerminalReason::Cancelled).direct.unwrap();
+            assert_eq!(
+                summary.confirmed_outcome,
+                Some(match kind {
+                    0 => DirectOutcomeClass::Stored,
+                    1 => DirectOutcomeClass::Replay,
+                    _ => DirectOutcomeClass::AccountUnavailable,
+                })
+            );
+            assert_eq!(
+                summary.receipt_admitted_mode,
+                Some(DirectPostCommitMode::Live)
+            );
+            assert_eq!(summary.returned_mode, None);
+        }
+    }
+
+    #[test]
+    fn direct_promotion_after_finalization_and_begin_after_unrated_promotion_are_inert() {
+        use northstar_message_core::DirectSpoolEligibility;
+        let facts = direct_commit::DirectCommandFacts {
+            actor_id: request().actor_id,
+            recipient_id: Uuid::from_u128(30),
+            delivery_id: Uuid::from_u128(31),
+            archive_ids: vec![],
+            eligibility: DirectSpoolEligibility::Eligible,
+        };
+        let (mut rated, grant) = reserved(201);
+        rated.finalize(&grant).unwrap();
+        let original = request();
+        let before = rated.snapshot();
+        assert_eq!(
+            rated.prepare_direct(
+                PreparationAdmission::Rated(OriginalAdmission {
+                    actor_id: original.actor_id,
+                    account_bare: &original.account_bare,
+                    normalized_target: &original.normalized_target,
+                    origin_id: original.origin_id.as_deref(),
+                    normalized_payload: &original.normalized_payload,
+                }),
+                facts.clone()
+            ),
+            Err(Rejected::AlreadyStarted)
+        );
+        assert_eq!(rated.snapshot(), before);
+        let mut unrated = DirectLifecycle::new(Uuid::from_u128(202), 0, 1);
+        unrated
+            .prepare_direct(PreparationAdmission::NoAdmissionRequired, facts)
+            .unwrap();
+        let before = unrated.snapshot();
+        assert_eq!(unrated.begin(request()), Err(Rejected::AlreadyStarted));
+        assert_eq!(unrated.snapshot(), before);
+        assert!(before.reservation.is_none());
     }
 }

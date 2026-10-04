@@ -389,6 +389,7 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
                 if error
                     .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
                     .is_some()
+                    && observation.may_restore_superseded()
                 {
                     self.sm.unacked.pop_back();
                     self.sm.outbound_h = self.sm.outbound_h.wrapping_sub(1);
@@ -613,6 +614,8 @@ mod tests {
         BeforeCommit,
         DuringCommit,
         CommitError,
+        TypedAfterCommitError,
+        TypedAfterReceipt,
         AfterReceiptPending,
         AfterReceiptError,
         RollbackPending,
@@ -638,14 +641,25 @@ mod tests {
         fn event(&self, event: &'static str) {
             self.events.lock().unwrap().push(event);
         }
+        fn mislabeled_supersession(&self, request: &sm_ownership::Request) -> anyhow::Error {
+            let message_id = request
+                .binding()
+                .remaining
+                .iter()
+                .flatten()
+                .find_map(|source| source.c2s())
+                .unwrap()
+                .message_id;
+            crate::outbound::DurableDeliverySuperseded { message_id }.into()
+        }
         async fn commit(&self, request: &sm_ownership::Request, fact: CommitFact) -> Result<()> {
             self.event("commit");
-            sm_ownership::commit_observed(
+            let committed = sm_ownership::commit_observed(
                 async {
                     if self.cut == Cut::DuringCommit {
                         std::future::pending::<()>().await;
                     }
-                    if self.cut == Cut::CommitError {
+                    if matches!(self.cut, Cut::CommitError | Cut::TypedAfterCommitError) {
                         return Err(std::io::Error::other("injected COMMIT response loss"));
                     }
                     Ok(())
@@ -653,8 +667,16 @@ mod tests {
                 request,
                 fact,
             )
-            .await?;
+            .await;
+            if self.cut == Cut::TypedAfterCommitError {
+                assert!(committed.is_err());
+                return Err(self.mislabeled_supersession(request));
+            }
+            committed?;
             self.event("receipt");
+            if self.cut == Cut::TypedAfterReceipt {
+                return Err(self.mislabeled_supersession(request));
+            }
             // These cuts are synthetic: the current SQL adapter has no await
             // between its successful COMMIT callback and outcome conversion.
             if self.cut == Cut::AfterReceiptPending {
@@ -1598,6 +1620,134 @@ mod tests {
                 native.snapshot().ack,
                 northstar_delivery_core::native_write::AckKnowledge::NotRequested
             );
+        }
+    }
+    impl crate::bosh::BoshRecordPort for NativeSm<'_> {
+        async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
+            <Self as crate::xmpp::direct_delivery::DirectWritePort>::record(self, item).await
+        }
+    }
+    #[tokio::test]
+    async fn actual_sm_record_clears_bosh_source_before_fifo_and_preserves_prior_sm_ownership_on_refusal(
+    ) {
+        for full in [false, true] {
+            for use_mix in [false, true] {
+                let mut fixture = Fixture::new(true, vec![]);
+                fixture.port.rotate = use_mix;
+                let (item, mut mix_receipt) = if use_mix {
+                    let (item, receipt) =
+                        OutboundItem::durable_mix("<message id='sm-bosh-mix'/>".to_owned(), mix());
+                    (item, Some(receipt))
+                } else {
+                    (c2s_item(), None)
+                };
+                let (tx, mut c2s_receipt) = tokio::sync::mpsc::unbounded_channel();
+                let item = OutboundItem {
+                    transport_receipt: Some(tx),
+                    ..item
+                };
+                let pointer = item.stanza.as_ptr();
+                let size = item.stanza.len();
+                let mut record = NativeSm {
+                    turn: fixture.turn(),
+                    native_calls: AtomicU64::new(0),
+                };
+                let (accepted, items, bytes, bosh) =
+                    crate::bosh::sm_record_composition(&mut record, item, full).await;
+                assert_eq!(accepted, !full);
+                assert_eq!(record.turn.sm.unacked.len(), 1);
+                assert_eq!(record.turn.sm.outbound_h, 11);
+                let sm = record
+                    .turn
+                    .sm
+                    .current_operation
+                    .as_ref()
+                    .unwrap()
+                    .snapshot();
+                assert_eq!(sm.summary().knowledge, KnowledgeClass::ReceiptKnown);
+                assert!(sm.notification_attempted);
+                if let Some(receipt) = mix_receipt.as_mut() {
+                    assert_eq!(
+                        record.turn.sm.unacked[0]
+                            .source
+                            .unwrap()
+                            .mix()
+                            .unwrap()
+                            .lease_token,
+                        Uuid::from_u128(999)
+                    );
+                    assert_eq!(
+                        receipt.try_recv().unwrap(),
+                        crate::outbound::MixTransportCompletion::SmPersisted {
+                            session_id: record.turn.sm.db_id.unwrap()
+                        }
+                    );
+                    assert!(c2s_receipt.try_recv().is_err());
+                } else {
+                    assert_eq!(
+                        record.turn.sm.unacked[0].source,
+                        Some(TransportOwnershipSource::C2s(c2s()))
+                    );
+                    c2s_receipt.try_recv().unwrap();
+                }
+                let bosh = bosh.snapshot();
+                assert!(bosh.transfers.is_empty());
+                assert_eq!(bosh.keep_running, Some(!full));
+                if full {
+                    assert_eq!(items.len(), 2);
+                    assert_eq!(bytes, "<presence/>".len() * 2);
+                } else {
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0].stanza.as_ptr(), pointer);
+                    assert_eq!(bytes, size);
+                    assert!(items[0].durable_source.is_none());
+                    assert!(items[0].mix_handoff.is_none());
+                    assert!(items[0].transport_receipt.is_some());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mislabeled_typed_supersession_after_commit_keeps_fifo_h_and_original_error() {
+        // Adapter-mismatch hardening. Current SQL emits this typed error only
+        // before COMMIT; the fake drives the real wrapper before relabeling.
+        for cut in [
+            Cut::Superseded,
+            Cut::TypedAfterCommitError,
+            Cut::TypedAfterReceipt,
+        ] {
+            let mut fixture = Fixture::new(true, vec![]);
+            fixture.port.cut = cut;
+            let error = fixture.record(&c2s_item()).await.unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                    .unwrap()
+                    .message_id,
+                c2s().message_id
+            );
+            let restored = cut == Cut::Superseded;
+            assert_eq!(fixture.sm.unacked.len(), usize::from(!restored));
+            assert_eq!(fixture.sm.outbound_h, if restored { 10 } else { 11 });
+            assert_eq!(fixture.sm.acked_h, 10);
+            let snapshot = fixture.snapshot();
+            assert_eq!(snapshot.restored, restored);
+            assert!(!snapshot.notification_attempted);
+            assert_eq!(
+                snapshot.summary().knowledge,
+                match cut {
+                    Cut::Superseded => KnowledgeClass::NoCommitRequested,
+                    Cut::TypedAfterCommitError => KnowledgeClass::CommitCallEntered,
+                    _ => KnowledgeClass::ReceiptKnown,
+                }
+            );
+            assert_eq!(fixture.port.events().contains(&"commit"), !restored);
+            assert_eq!(
+                fixture.port.events().contains(&"receipt"),
+                cut == Cut::TypedAfterReceipt
+            );
+            assert_eq!(fixture.port.events().contains(&"shrink"), restored);
         }
     }
 }

@@ -8,6 +8,8 @@
 
 mod action;
 mod ownership;
+#[cfg(test)]
+pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
 
 use crate::state::{AppState, ClientConnectionGuard};
 use crate::transport_parsing::parse_bosh_frame;
@@ -1040,44 +1042,43 @@ impl BoshActor {
 
     async fn record_and_push_item(
         &mut self,
-        mut item: crate::outbound::OutboundItem,
+        item: crate::outbound::OutboundItem,
         operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
-        let managed_by_sm = match self.protocol.record_outbound_item(&item).await {
-            Ok(managed) => managed,
-            Err(error) if superseded_bosh_message_id(&error).is_some() => {
-                tracing::debug!(?error, "superseded durable BOSH/SM item skipped");
-                return true;
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to record BOSH outbound item");
-                return false;
-            }
+        let mut output = ownership::Output {
+            items: &mut self.output,
+            bytes: &mut self.output_bytes,
+            max_stanzas: self.max_output_stanzas,
+            max_bytes: self.max_output_bytes,
         };
-        if managed_by_sm {
-            // The SM sequence entry now owns this fence. A later BOSH response
-            // acknowledgement must not complete it before the XEP-0198 h.
-            item.durable_source = None;
-            item.mix_handoff = None;
-        } else if let Some(source) = item.mix_delivery() {
-            let mut output = ownership::Output {
-                items: &mut self.output,
-                bytes: &mut self.output_bytes,
-                max_stanzas: self.max_output_stanzas,
-                max_bytes: self.max_output_bytes,
-            };
-            let port = ownership::ServiceTransfer {
-                service: &self.mix_service,
-            };
-            return match ownership::transfer_and_push(&mut output, item, operation, &port).await {
-                Ok(accepted) => accepted,
-                Err(error) => {
-                    tracing::error!(?error, delivery_id = %source.delivery_id, session_id = %self.delivery_session_id, "failed to persist MIX BOSH transport ownership");
-                    false
-                }
-            };
+        let transfer = ownership::ServiceTransfer {
+            service: &self.mix_service,
+        };
+        match ownership::record_and_push(
+            &mut output,
+            item,
+            operation,
+            &mut self.protocol,
+            &transfer,
+        )
+        .await
+        {
+            Ok(accepted) => accepted,
+            Err(ownership::RecordPushError::Record(error))
+                if superseded_bosh_message_id(&error).is_some() =>
+            {
+                tracing::debug!(?error, "superseded durable BOSH/SM item skipped");
+                true
+            }
+            Err(ownership::RecordPushError::Record(error)) => {
+                tracing::error!(?error, "failed to record BOSH outbound item");
+                false
+            }
+            Err(ownership::RecordPushError::Transfer { source, error }) => {
+                tracing::error!(?error, delivery_id = %source.delivery_id, session_id = %self.delivery_session_id, "failed to persist MIX BOSH transport ownership");
+                false
+            }
         }
-        self.push_output_item(item)
     }
 
     async fn queue_outbound(

@@ -272,6 +272,12 @@ impl Observation {
     pub fn appended(&self) {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).appended = true;
     }
+    /// A typed adapter error cannot erase an entered or confirmed COMMIT.
+    /// Current SQL emits supersession only before this boundary.
+    pub fn may_restore_superseded(&self) -> bool {
+        let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.terminal.is_none() && state.knowledge == Knowledge::NoCommitRequested
+    }
     pub fn restored(&self) {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).restored = true;
     }

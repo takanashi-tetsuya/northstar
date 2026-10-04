@@ -2,7 +2,10 @@
 //! transfers; response binding, replay and ACK remain separate boundaries.
 //! The outer owner has constant-size setup. Transfer metadata is allocated
 //! lazily inside the existing timed actor child, bounded by its FIFO/action
-//! flow. It owns no body, item, channel, capacity lease or background task.
+//! flow. The actor's T <= 2S+1 bound is a logical record count; Vec capacity
+//! and allocator/RSS bytes require separate measurement. No metadata cap or
+//! new traffic rejection is introduced here. It owns no body, item, channel,
+//! capacity lease or background task.
 use crate::MixDelivery;
 use std::{
     future::Future,
@@ -70,6 +73,7 @@ pub struct TransferSnapshot {
     pub source: MixDelivery,
     pub knowledge: TransferKnowledge,
     pub returned_source: Option<MixDelivery>,
+    pub return_matches_receipt: bool,
     pub local_entered: bool,
     pub source_applied: bool,
     pub notification_attempted: bool,
@@ -79,7 +83,8 @@ impl std::fmt::Debug for TransferSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BoshTransferSnapshot")
             .field("knowledge", &self.knowledge)
-            .field("return_matched", &self.returned_source.is_some())
+            .field("return_observed", &self.returned_source.is_some())
+            .field("return_matches_receipt", &self.return_matches_receipt)
             .field("local_entered", &self.local_entered)
             .field("source_applied", &self.source_applied)
             .field("notification_attempted", &self.notification_attempted)
@@ -92,6 +97,7 @@ pub struct Snapshot {
     pub scope: Scope,
     pub transfers: Vec<TransferSnapshot>,
     pub terminal: Option<Terminal>,
+    pub keep_running: Option<bool>,
 }
 impl std::fmt::Debug for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -106,10 +112,12 @@ pub struct Summary {
     pub transfers: usize,
     pub commit_unknown: usize,
     pub receipt_known: usize,
+    pub mismatched_returns: usize,
     pub notification_attempted: usize,
     pub queue_accepted: usize,
     pub queue_refused: usize,
     pub terminal: Option<Terminal>,
+    pub keep_running: Option<bool>,
 }
 impl Snapshot {
     pub fn summary(&self) -> Summary {
@@ -128,6 +136,13 @@ impl Snapshot {
                 .iter()
                 .filter(|transfer| matches!(transfer.knowledge, TransferKnowledge::ReceiptKnown(_)))
                 .count(),
+            mismatched_returns: self
+                .transfers
+                .iter()
+                .filter(|transfer| {
+                    transfer.returned_source.is_some() && !transfer.return_matches_receipt
+                })
+                .count(),
             notification_attempted: self
                 .transfers
                 .iter()
@@ -144,6 +159,7 @@ impl Snapshot {
                 .filter(|transfer| transfer.queue_accepted == Some(false))
                 .count(),
             terminal: self.terminal,
+            keep_running: self.keep_running,
         }
     }
 }
@@ -160,6 +176,7 @@ impl Operation {
             scope,
             transfers: Vec::new(),
             terminal: None,
+            keep_running: None,
         })))
     }
     pub fn snapshot(&self) -> Snapshot {
@@ -181,6 +198,7 @@ impl Operation {
             source,
             knowledge: TransferKnowledge::NoCommitRequested,
             returned_source: None,
+            return_matches_receipt: false,
             local_entered: false,
             source_applied: false,
             notification_attempted: false,
@@ -194,8 +212,17 @@ impl Operation {
         })
     }
     pub fn retire(&self, terminal: Terminal) -> Summary {
+        self.finish(terminal, None)
+    }
+    pub fn returned(&self, keep_running: bool) -> Summary {
+        self.finish(Terminal::Returned, Some(keep_running))
+    }
+    fn finish(&self, terminal: Terminal, keep_running: Option<bool>) -> Summary {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.terminal.get_or_insert(terminal);
+        if state.terminal.is_none() {
+            state.terminal = Some(terminal);
+            state.keep_running = keep_running;
+        }
         state.summary()
     }
 }
@@ -233,9 +260,15 @@ impl TransferRequest {
         }
         Ok(transfer)
     }
+    /// A pre-I/O state check, not a consuming start permit. The private item
+    /// helper makes one port call, and enter_commit separately admits one
+    /// COMMIT. This method alone does not exclude concurrent SQL invocations.
     pub fn validate_for_io(&self) -> Result<(), Rejected> {
         let mut state = self.operation.0.lock().unwrap_or_else(|e| e.into_inner());
-        if self.validate(&mut state)?.knowledge != TransferKnowledge::NoCommitRequested {
+        let transfer = self.validate(&mut state)?;
+        if transfer.knowledge != TransferKnowledge::NoCommitRequested
+            || transfer.returned_source.is_some()
+        {
             return Err(Rejected::State);
         }
         Ok(())
@@ -243,7 +276,9 @@ impl TransferRequest {
     pub fn enter_commit(&self, current: MixDelivery) -> Result<TransferCommitPermit, Rejected> {
         let mut state = self.operation.0.lock().unwrap_or_else(|e| e.into_inner());
         let transfer = self.validate(&mut state)?;
-        if transfer.knowledge != TransferKnowledge::NoCommitRequested {
+        if transfer.knowledge != TransferKnowledge::NoCommitRequested
+            || transfer.returned_source.is_some()
+        {
             return Err(Rejected::State);
         }
         // SQL generates a new UUID but does not assert token inequality.
@@ -261,12 +296,17 @@ impl TransferRequest {
         {
             let mut state = self.operation.0.lock().unwrap_or_else(|e| e.into_inner());
             let transfer = self.validate(&mut state)?;
-            if transfer.knowledge != TransferKnowledge::ReceiptKnown(current)
-                || transfer.returned_source.is_some()
-            {
+            if transfer.returned_source.is_some() {
+                return Err(Rejected::State);
+            }
+            // Retain the actual return independently. A later positive COMMIT
+            // callback must not retroactively accept this rejected return.
+            transfer.returned_source = Some(current);
+            transfer.return_matches_receipt =
+                transfer.knowledge == TransferKnowledge::ReceiptKnown(current);
+            if !transfer.return_matches_receipt {
                 return Err(Rejected::Receipt);
             }
-            transfer.returned_source = Some(current);
         }
         Ok(Transferred {
             request: self,
@@ -310,7 +350,11 @@ impl Transferred {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let transfer = self.request.validate(&mut state)?;
-            if transfer.returned_source != Some(self.current) || transfer.local_entered {
+            if !transfer.return_matches_receipt
+                || transfer.returned_source != Some(self.current)
+                || transfer.knowledge != TransferKnowledge::ReceiptKnown(self.current)
+                || transfer.local_entered
+            {
                 return Err(Rejected::State);
             }
             transfer.local_entered = true;
@@ -394,4 +438,245 @@ pub async fn transfer_commit_observed<E>(
     future.await.map_err(CompletionError::Repository)?;
     permit.received();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        pin::Pin,
+        sync::atomic::{AtomicBool, Ordering},
+        task::{Context, Poll, Waker},
+    };
+    fn old() -> MixDelivery {
+        MixDelivery {
+            delivery_id: Uuid::from_u128(11),
+            lease_token: Uuid::from_u128(12),
+        }
+    }
+    fn current() -> MixDelivery {
+        MixDelivery {
+            lease_token: Uuid::from_u128(13),
+            ..old()
+        }
+    }
+    fn operation() -> Operation {
+        Operation::new(Scope {
+            session_id: Uuid::from_u128(14),
+            ttl_seconds: 86_400,
+            kind: OperationKind::Outbound,
+        })
+    }
+    fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+        future.poll(&mut Context::from_waker(Waker::noop()))
+    }
+    #[test]
+    fn closed_request_preserves_original_scope_and_rejects_retargeting_before_commit_poll() {
+        let operation = operation();
+        let request = operation.begin_transfer(old()).unwrap();
+        assert_eq!(request.source(), old());
+        assert_eq!(request.session_id(), Uuid::from_u128(14));
+        assert_eq!(request.ttl_seconds(), 86_400);
+        // Checking I/O state does not consume a SQL-start permit.
+        request.validate_for_io().unwrap();
+        request.validate_for_io().unwrap();
+        let before = operation.snapshot();
+        let polled = AtomicBool::new(false);
+        let mut future = Box::pin(transfer_commit_observed(
+            async {
+                polled.store(true, Ordering::SeqCst);
+                Ok::<_, std::io::Error>(())
+            },
+            &request,
+            MixDelivery {
+                delivery_id: Uuid::nil(),
+                ..current()
+            },
+        ));
+        assert!(matches!(
+            poll_once(future.as_mut()),
+            Poll::Ready(Err(CompletionError::Binding(Rejected::Source)))
+        ));
+        drop(future);
+        assert!(!polled.load(Ordering::SeqCst));
+        assert_eq!(operation.snapshot(), before);
+        for change in 0..3 {
+            let mut changed = TransferRequest {
+                operation: operation.clone(),
+                index: 0,
+                source: old(),
+                scope: before.scope,
+            };
+            match change {
+                0 => changed.scope.session_id = Uuid::nil(),
+                1 => changed.scope.ttl_seconds = 300,
+                _ => changed.source.lease_token = Uuid::nil(),
+            }
+            assert_eq!(changed.validate_for_io(), Err(Rejected::Source));
+            assert_eq!(operation.snapshot(), before);
+        }
+    }
+    #[test]
+    fn commit_drop_error_and_receipt_remain_distinct_without_rollback_inference() {
+        for cut in 0..3 {
+            let operation = operation();
+            let request = operation.begin_transfer(old()).unwrap();
+            let mut future = Box::pin(transfer_commit_observed(
+                async {
+                    if cut == 0 {
+                        std::future::pending::<()>().await;
+                    }
+                    if cut == 1 {
+                        Err(std::io::Error::other("COMMIT response loss"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                &request,
+                current(),
+            ));
+            let result = poll_once(future.as_mut());
+            assert_eq!(result.is_pending(), cut == 0);
+            drop(future);
+            let summary = operation.retire(Terminal::Cancelled);
+            assert_eq!(summary.receipt_known, usize::from(cut == 2));
+            assert_eq!(summary.commit_unknown, usize::from(cut != 2));
+            assert_eq!(
+                operation.snapshot().transfers[0].knowledge,
+                if cut == 2 {
+                    TransferKnowledge::ReceiptKnown(current())
+                } else {
+                    TransferKnowledge::CommitCallEntered(current())
+                }
+            );
+            assert!(matches!(
+                request.enter_commit(current()),
+                Err(Rejected::Retired)
+            ));
+        }
+    }
+    #[test]
+    fn actual_mismatched_and_bare_returns_never_authorize_local_continuation() {
+        for committed in [false, true] {
+            let operation = operation();
+            let request = operation.begin_transfer(old()).unwrap();
+            if committed {
+                request.enter_commit(current()).unwrap().received();
+            }
+            let returned = MixDelivery {
+                lease_token: Uuid::from_u128(15),
+                ..current()
+            };
+            assert!(matches!(request.returned(returned), Err(Rejected::Receipt)));
+            let snapshot = operation.snapshot();
+            let transfer = snapshot.transfers[0];
+            assert_eq!(transfer.returned_source, Some(returned));
+            assert!(!transfer.return_matches_receipt);
+            assert!(!transfer.local_entered);
+            assert_eq!(snapshot.summary().mismatched_returns, 1);
+            assert_eq!(snapshot.summary().receipt_known, usize::from(committed));
+        }
+    }
+    #[test]
+    fn late_receipt_does_not_retroactively_accept_an_earlier_rejected_return() {
+        let operation = operation();
+        let request = operation.begin_transfer(old()).unwrap();
+        let permit = request.enter_commit(current()).unwrap();
+        assert!(matches!(
+            request.returned(current()),
+            Err(Rejected::Receipt)
+        ));
+        operation.retire(Terminal::Cancelled);
+        permit.received();
+        let transfer = operation.snapshot().transfers[0];
+        assert_eq!(
+            transfer.knowledge,
+            TransferKnowledge::ReceiptKnown(current())
+        );
+        assert_eq!(transfer.returned_source, Some(current()));
+        assert!(!transfer.return_matches_receipt);
+        assert!(!transfer.local_entered);
+    }
+    #[test]
+    fn same_source_invocations_and_old_owners_cannot_share_receipt_authority() {
+        let first = operation();
+        let second = operation();
+        let a = first.begin_transfer(old()).unwrap();
+        let b = second.begin_transfer(old()).unwrap();
+        b.enter_commit(current()).unwrap().received();
+        assert!(matches!(a.returned(current()), Err(Rejected::Receipt)));
+        let before = first.snapshot();
+        let continuation = b.returned(current()).unwrap();
+        second.retire(Terminal::Cancelled);
+        assert!(matches!(continuation.begin_local(), Err(Rejected::Retired)));
+        assert_eq!(first.snapshot(), before);
+        assert!(matches!(
+            second.begin_transfer(old()),
+            Err(Rejected::Retired)
+        ));
+    }
+    #[test]
+    fn exact_local_continuation_retains_commit_and_notification_on_fifo_refusal() {
+        for accepted in [false, true] {
+            let operation = operation();
+            let request = operation.begin_transfer(old()).unwrap();
+            // Equal tokens are valid if that is the actual SQL-returned value.
+            request.enter_commit(old()).unwrap().received();
+            let local = request.returned(old()).unwrap().begin_local().unwrap();
+            assert_eq!(local.current(), old());
+            assert_eq!(local.session_id(), Uuid::from_u128(14));
+            local.source_applied();
+            local.notification_attempted();
+            local.queue_returned(accepted);
+            let snapshot = operation.snapshot();
+            assert_eq!(
+                snapshot.transfers[0].knowledge,
+                TransferKnowledge::ReceiptKnown(old())
+            );
+            assert!(snapshot.transfers[0].notification_attempted);
+            assert_eq!(snapshot.transfers[0].queue_accepted, Some(accepted));
+        }
+    }
+    #[test]
+    fn terminal_kind_keep_running_and_lazy_metadata_are_separate_facts() {
+        let operation = operation();
+        assert_eq!(operation.0.lock().unwrap().transfers.capacity(), 0);
+        // A finite maximum logical actor-flow shape, not an allocator/RSS cap.
+        let s = 2_048;
+        for _ in 0..(2 * s + 1) {
+            drop(operation.begin_transfer(old()).unwrap());
+        }
+        assert_eq!(operation.snapshot().transfers.len(), 2 * s + 1);
+        let summary = operation.returned(false);
+        assert_eq!(summary.terminal, Some(Terminal::Returned));
+        assert_eq!(summary.keep_running, Some(false));
+        assert_eq!(operation.returned(true), summary);
+        assert_eq!(operation.retire(Terminal::Cancelled), summary);
+    }
+    #[test]
+    fn debug_redacts_retained_original_committed_and_mismatched_return_tokens() {
+        let operation = operation();
+        let request = operation.begin_transfer(old()).unwrap();
+        request.enter_commit(current()).unwrap().received();
+        let request_debug = format!("{request:?}");
+        let wrong = MixDelivery {
+            lease_token: Uuid::from_u128(15),
+            ..current()
+        };
+        assert!(request.returned(wrong).is_err());
+        let snapshot = operation.snapshot();
+        assert_eq!(snapshot.transfers[0].source, old());
+        assert_eq!(
+            snapshot.transfers[0].knowledge,
+            TransferKnowledge::ReceiptKnown(current())
+        );
+        assert_eq!(snapshot.transfers[0].returned_source, Some(wrong));
+        let debug = format!(
+            "{request_debug} {operation:?} {snapshot:?} {:?} {:?} {:?}",
+            snapshot.scope, snapshot.transfers[0], snapshot.transfers[0].knowledge
+        );
+        for id in 11..=15 {
+            assert!(!debug.contains(&Uuid::from_u128(id).to_string()));
+        }
+    }
 }

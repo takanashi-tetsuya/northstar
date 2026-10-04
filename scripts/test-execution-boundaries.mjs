@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -326,3 +326,49 @@ rejectsSm('SM SQL cannot bypass its explicit rollback observation', 'smDb', 'che
 rejectsSm('SM empty batch cannot invent a transaction receipt', 'smDb', 'acknowledge_transport_sources_observed', /request\.no_persistence\(\)\?;/g, 'request.invented_receipt()?;', /unpersisted SQL ACK/);
 rejectsSm('SM batch cannot bypass its COMMIT observation', 'smDb', 'acknowledge_transport_sources_observed', /sm_ownership::commit_observed/g, 'sm_ownership::unobserved_commit', /unpersisted SQL ACK/);
 rejectsSm('SM runner cannot lose its panic marker', 'smOwner', 'poll', /this\.poll_in_progress\s*=\s*true;/g, 'this.poll_in_progress = false;', /panic marker/);
+rejectsSm('SM typed error cannot erase independently known COMMIT', 'smOwner', 'record_source', /&&\s*observation\.may_restore_superseded\(\)/g, '', /typed supersession/);
+rejectsSm('SM restoration cannot invert its no-COMMIT condition', 'smCore', 'may_restore_superseded', /state\.knowledge\s*==\s*Knowledge::NoCommitRequested/g, 'state.knowledge != Knowledge::NoCommitRequested', /independent active no-COMMIT/);
+
+test('BOSH pending transfer and actual item owner satisfy their source gate', () => verifyBoshTransferBoundaries(baseline));
+test('BOSH transfer comments do not supply executable receipt authority', () => {
+  verifyBoshTransferBoundaries({ ...baseline, boshCore: `/* permit.received(); */\n${baseline.boshCore}` });
+});
+function rejectsBosh(name, file, pattern, replacement, expected) {
+  test(name, () => {
+    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\b/);
+    const production = testModule < 0 ? baseline[file] : baseline[file].slice(0, testModule);
+    assert.equal([...production.matchAll(pattern)].length, 1, 'BOSH mutation must match exactly once in production source');
+    const source = production.replace(pattern, replacement) + baseline[file].slice(production.length);
+    assert.notEqual(source, baseline[file], 'BOSH mutation must change source');
+    assert.throws(() => verifyBoshTransferBoundaries({ ...baseline, [file]: source }), expected);
+  });
+}
+rejectsBosh('BOSH cannot expand its existing backend timer', 'bosh', /const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs\(5\);/g, 'const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(6);', /existing backend timeout/);
+rejectsBosh('BOSH request cannot substitute another operation', 'bosh', /self\.accept_request\(\*request,\s*response,\s*&operation\)/g, 'self.accept_request(*request, response, &other_operation)', /Request must retain/);
+rejectsBosh('BOSH outbound cannot substitute another operation', 'bosh', /self\.queue_outbound\(stanza,\s*&operation\)/g, 'self.queue_outbound(stanza, &other_operation)', /Outbound must retain/);
+rejectsBosh('BOSH actor cannot replace its item at the shared helper', 'bosh', /ownership::record_and_push\(\s*&mut output,\s*item,/g, 'ownership::record_and_push(&mut output, other_item,', /same item/);
+rejectsBosh('BOSH transfer errors cannot become record-side supersession', 'bosh', /Err\(ownership::RecordPushError::Record\(error\)\)\s*if superseded_bosh_message_id/g, 'Err(ownership::RecordPushError::Transfer { source, error }) if superseded_bosh_message_id', /record-only supersession/);
+rejectsBosh('BOSH record port must see the original item', 'boshOwner', /record\s*\.record\(&item\)/g, 'record.record(&other_item)', /record its actual item/);
+rejectsBosh('BOSH cannot clear source on the unowned branch', 'boshOwner', /if managed_by_sm\s*\{/g, 'if !managed_by_sm {', /clear SM-owned/);
+rejectsBosh('BOSH SM transfer must clear the durable source', 'boshOwner', /item\.durable_source = None;/g, '', /clear SM-owned/);
+rejectsBosh('BOSH SM transfer must clear the old MIX handoff', 'boshOwner', /item\.mix_handoff = None;/g, '', /clear SM-owned/);
+rejectsBosh('BOSH transfer cannot skip its existing capacity precheck', 'boshOwner', /if !output\.can_push\(&item\)/g, 'if false', /own the original item/);
+rejectsBosh('BOSH transfer cannot replace the prepared request', 'boshOwner', /port\.transfer\(&prepared\.request\)/g, 'port.transfer(&other_request)', /exact returned continuation/);
+rejectsBosh('BOSH transfer cannot substitute its return', 'boshOwner', /prepared\.returned\(returned\)\?\.push\(output\)/g, 'prepared.returned(other_source)?.push(output)', /exact returned continuation/);
+rejectsBosh('BOSH local continuation cannot skip receipt authority', 'boshOwner', /self\.transferred\.begin_local\(\)\?/g, 'invent_local_authority()', /exact source mutation/);
+rejectsBosh('BOSH item cannot receive a different rotated source', 'boshOwner', /TransportOwnershipSource::Mix\(local\.current\(\)\)/g, 'TransportOwnershipSource::Mix(other_source)', /exact source mutation/);
+rejectsBosh('BOSH handoff cannot name another session', 'boshOwner', /session_id: local\.session_id\(\),/g, 'session_id: other_session,', /notification attempt/);
+rejectsBosh('BOSH cannot discard the actual FIFO result', 'boshOwner', /local\.queue_returned\(accepted\);/g, 'local.queue_returned(true);', /actual FIFO result/);
+rejectsBosh('BOSH MIX service cannot replace the closed request', 'mixService', /self\.repository\.transfer_mix_delivery_to_bosh\(request\)/g, 'self.repository.transfer_mix_delivery_to_bosh(other_request)', /same closed request/);
+rejectsBosh('BOSH repository cannot discard the closed request', 'mixRepository', /db::mix::transfer_mix_delivery_to_bosh\(&self\.pool,\s*request\)/g, 'db::mix::transfer_mix_delivery_to_bosh(&self.pool, other_request)', /same closed request/);
+rejectsBosh('BOSH SQL cannot replace the bound source', 'mixDb', /let source = request\.source\(\);/g, 'let source = other_source;', /closed inputs/);
+rejectsBosh('BOSH SQL cannot replace the bound session', 'mixDb', /let session_id = request\.session_id\(\);/g, 'let session_id = other_session;', /closed inputs/);
+rejectsBosh('BOSH SQL cannot bypass the COMMIT observer', 'mixDb', /bosh_ownership::transfer_commit_observed/g, 'bosh_ownership::unobserved_commit', /actual COMMIT receipt/);
+rejectsBosh('BOSH commit helper must await its actual future', 'boshCore', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /COMMIT wrapper/);
+rejectsBosh('BOSH commit helper cannot erase a known receipt', 'boshCore', /permit\.received\(\);/g, '', /COMMIT wrapper/);
+rejectsBosh('BOSH return cannot substitute the observed source', 'boshCore', /transfer\.returned_source = Some\(current\);/g, 'transfer.returned_source = Some(other_source);', /actual return/);
+rejectsBosh('BOSH return cannot fabricate receipt agreement', 'boshCore', /transfer\.return_matches_receipt\s*=\s*transfer\.knowledge == TransferKnowledge::ReceiptKnown\(current\);/g, 'transfer.return_matches_receipt = true;', /matching receipt authority/);
+rejectsBosh('BOSH return cannot accept an unmatched receipt', 'boshCore', /if !transfer\.return_matches_receipt\s*\{/g, 'if false {', /matching receipt authority/);
+rejectsBosh('BOSH Drop must destroy the child first', 'boshOwner', /drop\(self\.child\.take\(\)\);/g, '', /destroy its child/);
+rejectsBosh('BOSH poll must preserve caught panic knowledge', 'boshOwner', /this\.poll_in_progress = true;/g, 'this.poll_in_progress = false;', /actual timeout\/return/);
+rejectsBosh('BOSH poll must retain the actual keep-running result', 'boshOwner', /result\.as_ref\(\)\.ok\(\)\.copied\(\)/g, 'Some(true)', /keep_running/);

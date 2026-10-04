@@ -24,6 +24,9 @@ const files = {
   smCore: 'crates/northstar-delivery-core/src/sm_ownership.rs',
   smPrepared: 'src/services/sm/ownership.rs',
   smDb: 'src/db/sm.rs',
+  boshOwner: 'src/bosh/ownership.rs',
+  boshCore: 'crates/northstar-delivery-core/src/bosh_ownership.rs',
+  mixRepository: 'src/db/mix_repository.rs',
 };
 
 function requireBoundary(condition, message) {
@@ -209,11 +212,14 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
     'self.sm.outbound_h=self.sm.outbound_h.wrapping_add(1);',
     'self.sm.unacked.push_back(SmUnackedStanza::with_source(stanza.to_owned(),source));',
     'observation.appended();', 'self.checkpoint_in_turn(observation).await',
-    'iferror.downcast_ref::<crate::outbound::DurableDeliverySuperseded>().is_some(){',
+    'iferror.downcast_ref::<crate::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
     'self.sm.unacked.pop_back();', 'self.sm.outbound_h=self.sm.outbound_h.wrapping_sub(1);', 'observation.restored();'],
   'SM recording must append before checkpoint and restore only typed supersession');
   requireBoundary(count(record, 'pop_back(') === 1 && count(record, '.await') === 1,
     'SM recording must retain its one checkpoint await and one typed restoration');
+  const restoration = normalize(body(smCore, 'pub\\s+fn\\s+may_restore_superseded\\b'));
+  requireBoundary(restoration.endsWith('state.terminal.is_none()&&state.knowledge==Knowledge::NoCommitRequested'),
+    'SM typed restoration must respect independent active no-COMMIT knowledge');
   const checkpoint = normalize(body(smOwner, 'async\\s+fn\\s+checkpoint_in_turn\\b'));
   ordered(checkpoint, ['self.port.reserve_snapshot(live_bytes)',
     'self.view.snapshot(self.sm,self.sm.unacked.iter().cloned().collect())',
@@ -279,6 +285,79 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
   ordered(poll, ['this.poll_in_progress=true;', '.poll(cx)',
     'drop(this.child.take());this.poll_in_progress=false;this.observation.finish(Terminal::Returned);'],
   'SM turn must preserve child-first normal completion and its panic marker');
+}
+
+// Pending BOSH transfer only. Response binding, exposure, cache and ACK are
+// distinct later owners. This gate detects selected source-wiring drift.
+export function verifyBoshTransferBoundaries({ bosh, boshOwner, boshCore, mixService, mixRepository, mixDb }) {
+  const normalize = value => compact(value).replace(/,\)/g, ')');
+  requireBoundary(normalize(codeOnly(bosh)).includes('constBOSH_BACKEND_OPERATION_TIMEOUT:Duration=Duration::from_secs(5);'),
+    'BOSH must retain its existing backend timeout');
+  const actor = normalize(body(bosh, 'async\\s+fn\\s+run_loop\\b'));
+  requireBoundary(count(actor, 'ownership::OperationRunner::new(') === 4 &&
+    count(actor, 'tokio::time::timeout(BOSH_BACKEND_OPERATION_TIMEOUT,') === 4 &&
+    count(actor, 'self.begin_ownership_operation(') === 4,
+  'BOSH must observe the four existing timed actor operations');
+  for (const kind of ['Request', 'Outbound']) {
+    const call = kind === 'Request' ? 'self.accept_request(*request,response,&operation)' : 'self.queue_outbound(stanza,&operation)';
+    ordered(actor, [`letoperation=self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::${kind});`,
+      'ownership::OperationRunner::new(operation.clone(),tokio::time::timeout(BOSH_BACKEND_OPERATION_TIMEOUT,', call],
+    `BOSH ${kind} must retain the same outer operation before its child`);
+  }
+  const wrapper = normalize(body(bosh, 'async\\s+fn\\s+record_and_push_item\\b'));
+  requireBoundary(count(wrapper, 'ownership::record_and_push(') === 1 &&
+    wrapper.includes('ownership::record_and_push(&mutoutput,item,operation,&mutself.protocol,&transfer).await') &&
+    wrapper.includes('Err(ownership::RecordPushError::Record(error))ifsuperseded_bosh_message_id(&error).is_some()=>') &&
+    !wrapper.includes('Err(ownership::RecordPushError::Transfer{source,error})if'),
+  'BOSH actor must delegate the same item and keep record-only supersession separate from transfer errors');
+  const record = normalize(body(boshOwner, 'async\\s+fn\\s+record_and_push\\b'));
+  requireBoundary(record.startsWith('letmanaged_by_sm=record.record(&item).await.map_err(RecordPushError::Record)?;'),
+    'BOSH must record its actual item before a capacity precheck');
+  ordered(record, ['ifmanaged_by_sm{item.durable_source=None;item.mix_handoff=None;}',
+    'elseifletSome(source)=item.mix_delivery(){',
+    'returntransfer_and_push(output,item,operation,transfer).await.map_err(|error|RecordPushError::Transfer{source,error});',
+    'Ok(output.push(item))'],
+  'BOSH must clear SM-owned source/handoff only after actual record and preserve its exact transfer/FIFO continuation');
+  const transfer = normalize(body(boshOwner, 'async\\s+fn\\s+transfer_and_push\\b'));
+  requireBoundary(transfer === 'if!output.can_push(&item){returnOk(false);}letprepared=PreparedTransferItem::new(item,operation)?;letreturned=port.transfer(&prepared.request).await?;prepared.returned(returned)?.push(output)',
+    'BOSH transfer must own the original item and consume only its exact returned continuation');
+  const transferred = body(boshOwner, 'impl\\s+TransferredItem\\b');
+  const push = normalize(body(transferred, 'fn\\s+push\\b'));
+  ordered(push, ['letlocal=self.transferred.begin_local()?;', 'letmutitem=self.item;',
+    'item.durable_source=Some(TransportOwnershipSource::Mix(local.current()));', 'local.source_applied();',
+    'item.complete_mix_handoff(MixTransportCompletion::BoshPersisted{session_id:local.session_id(),});',
+    'local.notification_attempted();', 'letaccepted=output.push(item);', 'local.queue_returned(accepted);'],
+  'BOSH must retain exact source mutation, notification attempt and actual FIFO result independently');
+  const service = normalize(body(mixService, 'pub\\s*\\(crate\\)\\s+async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
+  requireBoundary(service === 'let_admission=self.outbox_db_admission_guard().await;self.repository.transfer_mix_delivery_to_bosh(request).await',
+    'BOSH MIX service must retain existing admission and forward the same closed request');
+  const repository = normalize(body(mixRepository, 'async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
+  requireBoundary(repository === 'db::mix::transfer_mix_delivery_to_bosh(&self.pool,request).await',
+    'BOSH MIX repository must forward the same closed request');
+  const sql = normalize(body(mixDb, 'pub\\s+async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
+  ordered(sql, ['request.validate_for_io()?;', 'letsource=request.source();', 'letsession_id=request.session_id();',
+    'letttl_seconds=request.ttl_seconds();', 'ttl_seconds.clamp(1,300)', 'pool.begin().await?',
+    'anyhow::ensure!(inserted==1);',
+    'northstar_delivery_core::bosh_ownership::transfer_commit_observed(transaction.commit(),request,transferred).await?;',
+    'Ok(transferred)'],
+  'BOSH SQL transfer must use the closed inputs and retain its actual COMMIT receipt before returning');
+  const commit = normalize(body(boshCore, 'pub\\s+async\\s+fn\\s+transfer_commit_observed\\b'));
+  requireBoundary(commit === 'letpermit=request.enter_commit(current).map_err(CompletionError::Binding)?;future.await.map_err(CompletionError::Repository)?;permit.received();Ok(())',
+    'BOSH COMMIT wrapper must bind the actual preparation and retain only a successful receipt');
+  const request = body(boshCore, 'impl\\s+TransferRequest\\b');
+  const returned = normalize(body(request, 'pub\\s+fn\\s+returned\\b'));
+  ordered(returned, ['self.validate(&mutstate)?;', 'transfer.returned_source=Some(current);',
+    'transfer.return_matches_receipt=transfer.knowledge==TransferKnowledge::ReceiptKnown(current);',
+    'if!transfer.return_matches_receipt{returnErr(Rejected::Receipt);}', 'Ok(Transferred{request:self,current,})'],
+  'BOSH must retain the actual return separately and reject it without matching receipt authority');
+  const runnerDrop = normalize(body(boshOwner, 'impl<F>\\s+Drop\\s+for\\s+OperationRunner<F>'));
+  requireBoundary(runnerDrop === 'fndrop(&mutself){drop(self.child.take());ifself.poll_in_progress{self.observation.finish(Terminal::Panicked,None);}}',
+    'BOSH operation must destroy its child before retirement and retain caught panic');
+  const runner = body(boshOwner, 'impl<F:\\s*Future<Output\\s*=\\s*Result<bool,\\s*tokio::time::error::Elapsed>>>\\s+Future\\s+for\\s+OperationRunner<F>');
+  const poll = normalize(body(runner, 'fn\\s+poll\\b'));
+  ordered(poll, ['this.poll_in_progress=true;', '.poll(cx)', 'drop(this.child.take());',
+    'this.poll_in_progress=false;', 'this.observation.finish(ifresult.is_err(){Terminal::TimedOut}else{Terminal::Returned},result.as_ref().ok().copied());'],
+  'BOSH operation must retain actual timeout/return and keep_running after child destruction');
 }
 
 export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction }) {
@@ -463,5 +542,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   verifyNativeAckService(sources.mixService);
   verifyNativeWriteBoundaries(sources);
   verifySmOwnershipBoundaries(sources);
+  verifyBoshTransferBoundaries(sources);
   console.log('Execution publication boundaries passed');
 }

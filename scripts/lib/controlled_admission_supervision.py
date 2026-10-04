@@ -193,7 +193,7 @@ def decode_direct_frame(stdout):
     payload_start, payload_end = header_end + 1, header_end + 1 + size
     need(stdout[payload_end:payload_end + len(DIRECT_FRAME_END)] == DIRECT_FRAME_END,
          'direct_frame_truncated_or_trailer')
-    return strict_json(stdout[payload_start:payload_end], DIRECT_FRAME_BYTES)
+    return strict_json(stdout[payload_start:payload_end], DIRECT_FRAME_BYTES, utf8_text=True)
 
 
 class SupervisionError(ValueError):
@@ -230,7 +230,7 @@ def object_hash(value):
     return fingerprint(canonical(value).encode())
 
 
-def strict_json(data, maximum):
+def strict_json(data, maximum, *, utf8_text=False):
     need(type(data) is bytes and len(data) <= maximum, 'json_byte_budget')
     def pairs(items):
         result = {}
@@ -239,6 +239,11 @@ def strict_json(data, maximum):
             result[key] = value
         return result
     try:
+        # Stage3 frames require UTF-8 text. Passing bytes directly to json.loads
+        # would also accept a BOM and auto-detect UTF-16/32. Legacy keeps its
+        # existing byte-decoder behavior through the unchanged default.
+        if utf8_text:
+            data = data.decode('utf-8')
         return json.loads(data, object_pairs_hook=pairs,
                           parse_constant=lambda _: (_ for _ in ()).throw(SupervisionError('nonfinite_json')))
     except (UnicodeError, ValueError, RecursionError) as error:

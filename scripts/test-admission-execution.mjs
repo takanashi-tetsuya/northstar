@@ -83,6 +83,24 @@ function rejectsDirect(name, field, pattern, replacement) {
     assert.throws(() => verifyAdmissionBoundaries({ ...sources, [field]: changed }), /admission boundary:/);
   });
 }
+rejectsDirect('production frame reuses a fixed identity', 'frame',
+  /Self::initialize\(transport, frame, Uuid::new_v4\(\)\)/g,
+  'Self::initialize(transport, frame, Uuid::nil())');
+rejectsDirect('production frame bypasses the shared initializer', 'frame',
+  /Self::initialize\(transport, frame, Uuid::new_v4\(\)\)/g,
+  'Self::unrelated_initialize(transport, frame, Uuid::new_v4())');
+rejectsDirect('saved frame replaces its supplied identity', 'frame',
+  /Self::initialize\(transport, frame, operation_id\)/g,
+  'Self::initialize(transport, frame, Uuid::nil())');
+rejectsDirect('saved frame constructor becomes production code', 'frame',
+  /#\[cfg\(test\)\]\s+pub\(super\) fn for_saved_case/g,
+  'pub(super) fn for_saved_case');
+rejectsDirect('shared frame replaces the runtime sequence', 'frame',
+  /sequence: NEXT_SEQUENCE\.fetch_add\(1, Ordering::Relaxed\)/g,
+  'sequence: 1');
+rejectsDirect('shared frame replaces the actual frame policy', 'frame',
+  /policy: Policy::for_frame\(transport, frame\)/g,
+  'policy: unrelated_policy()');
 rejectsDirect('publicly replaceable applied result', 'directWorkflow',
   /actual: anyhow::Result<DirectPersonalMessageAdmission>,/g,
   'pub(crate) actual: anyhow::Result<DirectPersonalMessageAdmission>,');

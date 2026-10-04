@@ -130,7 +130,7 @@ fn admission_state(value: direct_lifecycle::AdmissionSnapshot) -> wire::Admissio
         admission::ExecutionState::Finished(_) => Some(wire::AdmissionReturned::Error),
     };
     wire::AdmissionEvidence {
-        correlation: value.effect.correlation.into(),
+        correlation: value.witness.effect().correlation.into(),
         started: value.effect_started,
         knowledge,
         returned,
@@ -1401,7 +1401,9 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                 let (evidence, dropped) =
                     run_native(case, *frame_id, native, item, run.row, sequence.clone()).await?;
                 cancelled |= dropped;
-                recipient = wire::RecipientEvidence::Native { native: evidence };
+                recipient = wire::RecipientEvidence::Native {
+                    native: Box::new(evidence),
+                };
             }
         }
         anyhow::ensure!(

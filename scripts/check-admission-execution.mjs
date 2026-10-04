@@ -260,8 +260,19 @@ export function verifyAdmissionBoundaries(sources) {
     && grant.includes('BeginResult::GuardOnly(GuardDecision::Allowed)'),
     'admission grant must follow the real successful coordinator completion');
   const newFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+new\\b'));
-  requireAdmission(newFrame.includes('direct_operation:DirectOperationHandle::new(operation_id)'),
-    'each frame must own its own operation before the handler runs');
+  requireAdmission(newFrame === 'Self::initialize(transport,frame,Uuid::new_v4())',
+    'production frames must preserve fresh identity through the shared initializer');
+  const initializeFrame = compact(body(sources.frame, 'fn\\s+initialize\\b'));
+  requireAdmission(initializeFrame === 'Self(Arc::new(Progress{' +
+    'operation_id,direct_operation:DirectOperationHandle::new(operation_id),' +
+    'sequence:NEXT_SEQUENCE.fetch_add(1,Ordering::Relaxed),' +
+    'policy:Policy::for_frame(transport,frame),stage:AtomicU8::new(Stage::Validationasu8),' +
+    'started:tokio::time::Instant::now(),outcome:AtomicU8::new(Outcome::Pendingasu8),}))',
+  'the shared initializer must retain the exact owner, sequence, policy and initial observation');
+  const savedFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+for_saved_case\\b'));
+  requireAdmission(savedFrame === 'Self::initialize(transport,frame,operation_id)' &&
+    /#\[cfg\(test\)\]\s*pub\(super\)\s+fn\s+for_saved_case\b/.test(codeOnly(sources.frame)),
+  'the test-only frame constructor must use the same initializer and supplied identity');
   const runFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+run\\b'));
   ordered(runFrame, ['letobservation=Observation::new(', 'FrameRunner{',
     'child:Some(Box::pin(asyncmove{tokio::time::timeout(budget,future).await}))'],

@@ -226,6 +226,20 @@ class DirectFrameTests(unittest.TestCase):
         self.assertEqual(supervision.decode_direct_frame(self.frame()), {'fact': 1})
         self.assertEqual(supervision.decode_direct_frame(self.frame(before=b'variable timing 99s\n', after=b'')), {'fact': 1})
 
+    def test_frame_payload_is_utf8_text_without_bom_or_encoding_autodetection(self):
+        text = '{"fact":"caf\u00e9"}'
+        self.assertEqual(supervision.decode_direct_frame(self.frame(text.encode('utf-8'))), {'fact': 'caf\u00e9'})
+        invalid = [b'\xef\xbb\xbf' + text.encode('utf-8')]
+        invalid += ['{"fact":1}'.encode(encoding) for encoding in
+                    ('utf-16', 'utf-16-le', 'utf-16-be', 'utf-32', 'utf-32-le', 'utf-32-be')]
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(supervision.SupervisionError):
+                supervision.decode_direct_frame(self.frame(payload))
+
+    def test_legacy_json_byte_decoder_behavior_is_unchanged(self):
+        for payload in (b'\xef\xbb\xbf{"fact":1}', '{"fact":1}'.encode('utf-16')):
+            self.assertEqual(supervision.strict_json(payload, 128), {'fact': 1})
+
     def test_missing_duplicate_truncated_extra_end_and_bad_json_frames_fail(self):
         malformed = [b'running 0 tests\ntest result: ok\n', self.frame() + self.frame(),
                      self.frame(after=b'')[:-1], self.frame() + b'\x1eEND\n',

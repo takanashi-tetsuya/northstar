@@ -46,6 +46,7 @@ Reconcile保留實際返回的effect與as-of，但尚無production runtime consu
 4097反例以前一個過期pending row仍存留為前提，尚未證明production caller可達性。
 舊相容案例的首個failure在case8/op-1，native／shrink目標在op-2。
 
+[Saved-case初版普通檢查](../evidence/experimental-rebuild/stage3-saved-entry-ordinary-results.json)已通過；完整transport觀測、oracle與固定profile仍未啟用。
 Stage3須保留reservation、durable message commit、finalization各自的Unknown／receipt與外層取消owner。
 Queue接受不等於write或peer ACK；可恢復storage不等於已排程retry。Guard-only沒有durable reservation receipt。
 Stage5才驗真SQL／clock／crypto／wire fidelity；成功的有限supervision不證明所有OS資源或fault邊界。

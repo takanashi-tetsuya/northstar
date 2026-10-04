@@ -362,7 +362,7 @@ pub(crate) enum RecipientOwner {
         received_rid: u64,
         governor: Governor,
         extra_items: Vec<Item>,
-        recording: BoshRecording,
+        recording: Box<BoshRecording>,
         mix_transfer: Nullable<MixTransfer>,
         request_xml: String,
         initial_renewal: CommitCut,
@@ -412,7 +412,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 pub(crate) fn unhex(value: &str) -> Result<Vec<u8>, Rejection> {
-    if value.len() % 2 != 0
+    if !value.len().is_multiple_of(2)
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -765,7 +765,7 @@ pub(crate) fn emit(envelope: &Envelope) -> anyhow::Result<()> {
         "direct evidence frame cap exceeded"
     );
     let mut stdout = std::io::stdout().lock();
-    write!(stdout, "\x1eNORTHSTAR_DIRECT_CASE_V1 {}\n", payload.len())?;
+    writeln!(stdout, "\x1eNORTHSTAR_DIRECT_CASE_V1 {}", payload.len())?;
     stdout.write_all(&payload)?;
     stdout.write_all(b"\n\x1eEND\n")?;
     stdout.flush()?;
@@ -1088,7 +1088,7 @@ pub(crate) struct NativeEvidence {
 #[serde(tag = "kind")]
 pub(crate) enum RecipientEvidence {
     None,
-    Native { native: NativeEvidence },
+    Native { native: Box<NativeEvidence> },
 }
 
 /// One bounded observation counter across the case. It records call order;

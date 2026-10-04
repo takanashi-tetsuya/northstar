@@ -591,7 +591,7 @@ mod tests {
         let snapshot = retained.snapshot();
         assert_eq!(snapshot.terminal, Some(TerminalReason::Cancelled));
         let begin = snapshot.reservation.unwrap();
-        assert_eq!(begin.effect.correlation.operation, id);
+        assert_eq!(begin.witness.effect().correlation.operation, id);
         assert!(!begin.effect_started);
         assert!(matches!(
             begin.witness.knowledge(),

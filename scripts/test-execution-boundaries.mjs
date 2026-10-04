@@ -82,8 +82,31 @@ rejects('backend publication outcome cannot report completed', 'frame',
   'Self::BackendFailure => Outcome::BackendFailure,',
   'Self::BackendFailure => Outcome::Completed,', /result-to-outcome classification/);
 rejects('frame runner cannot apply inline budget to every transport', 'frame',
-  'match tokio::time::timeout(self.0.policy.budget, future).await {',
-  'match tokio::time::timeout(INLINE_AUTH_BUDGET, future).await {', /transport-specific policy budget/);
+  'let budget = self.0.policy.budget;',
+  'let budget = INLINE_AUTH_BUDGET;', /transport-specific policy budget/);
+rejects('frame observation must exist before child polling', 'frame',
+  'pub(super) fn run<T>(', 'pub(super) async fn run<T>(', /production body/);
+rejects('frame timer cannot start in the synchronous constructor', 'frame',
+  'child: Some(Box::pin(async move {\n                tokio::time::timeout(budget, future).await\n            })),',
+  'child: Some(Box::pin(tokio::time::timeout(budget, future))),', /first-poll timer/);
+rejects('frame runner must remember a panic across an outer catch', 'frame',
+  'this.poll_in_progress = true;', 'this.poll_in_progress = false;', /retain panic knowledge/);
+rejects('normal pending must clear the panic marker', 'frame',
+  'Poll::Pending => {\n                this.poll_in_progress = false;\n                return Poll::Pending;\n            }',
+  'Poll::Pending => { return Poll::Pending; }', /retain panic knowledge/);
+rejects('ready child destruction must precede clearing the panic marker', 'frame',
+  'drop(this.child.take());\n        this.poll_in_progress = false;',
+  'this.poll_in_progress = false;\n        drop(this.child.take());', /destroy the ready child/);
+rejects('frame backend failure cannot become completed', 'frame',
+  'this.observation.finish(Outcome::BackendFailure);',
+  'this.observation.finish(Outcome::Completed);', /typed terminal result/);
+rejects('frame timeout cannot become backend failure', 'frame',
+  'this.observation.finish(Outcome::TimedOut);',
+  'this.observation.finish(Outcome::BackendFailure);', /typed terminal result/);
+rejects('runner drop cannot omit child destruction', 'frame',
+  'drop(self.child.take());', '', /destroy the child first/);
+rejects('runner drop cannot forget a caught panic', 'frame',
+  'if self.poll_in_progress {', 'if std::thread::panicking() {', /preserve a caught panic/);
 rejects('deferral behind a dead condition is not originating ownership', 'protocol',
   'self.frame_executions.defer_publication(execution);',
   'if false { self.frame_executions.defer_publication(execution); }', /reviewed live condition/);

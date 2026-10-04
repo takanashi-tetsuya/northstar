@@ -85,6 +85,14 @@ function body(source, declaration) {
 
 function compact(source) { return source.replace(/\s+/g, ''); }
 function count(source, text) { return source.split(text).length - 1; }
+function ordered(source, steps, message) {
+  let previous = -1;
+  for (const step of steps) {
+    const index = source.indexOf(step, previous + 1);
+    requireBoundary(index >= 0, message);
+    previous = index;
+  }
+}
 
 export function readExecutionSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
@@ -115,9 +123,34 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
     requireBoundary(frameCode.includes(`const${name}:Duration=Duration::from_secs(${seconds});`),
       `${name} reviewed budget changed`);
   }
-  const run = compact(body(frame, 'async\\s+fn\\s+run\\b'));
-  requireBoundary(run.includes('matchtokio::time::timeout(self.0.policy.budget,future).await{'),
-    'frame execution must consume its transport-specific policy budget');
+  // The synchronous constructor owns observation before the child is polled;
+  // the inner async wrapper still starts the existing timer on its first poll.
+  // Result and destruction checks follow the actual runner, not an unused
+  // legacy async body. These remain lexical drift checks, not execution proof.
+  const run = compact(body(frame, 'pub\\(super\\)\\s+fn\\s+run\\b'));
+  ordered(run, ['letobservation=Observation::new(',
+    'letbudget=self.0.policy.budget;', 'FrameRunner{',
+    'child:Some(Box::pin(asyncmove{tokio::time::timeout(budget,future).await}))'],
+  'frame execution must preserve its transport-specific policy budget and first-poll timer');
+  requireBoundary(count(run, '.await') === 1 && count(run, 'tokio::time::timeout(') === 1
+    && run.includes('poll_in_progress:false') && !/spawn|select!/.test(run),
+  'frame execution must retain one first-poll timer without a new task');
+  const runner = body(frame, 'impl<F,\\s*T>\\s+Future\\s+for\\s+FrameRunner<F>');
+  const poll = compact(body(runner, 'fn\\s+poll\\b'));
+  ordered(poll, ['this.poll_in_progress=true;', '.poll(cx)',
+    'Poll::Pending=>{this.poll_in_progress=false;returnPoll::Pending;}',
+    'drop(this.child.take());this.poll_in_progress=false;', 'Poll::Ready(matchresult{'],
+  'frame runner must retain panic knowledge and destroy the ready child before terminal observation');
+  for (const branch of [
+    'Ok(Ok(value))=>{this.observation.finish(Outcome::Completed);Ok(value)}',
+    'Ok(Err(error))=>{this.observation.finish(Outcome::BackendFailure);Err(FrameFailure::Backend(error))}',
+    'Err(_)=>{this.observation.finish(Outcome::TimedOut);Err(FrameFailure::TimedOut)}',
+  ]) {
+    requireBoundary(poll.includes(branch), 'frame runner must preserve each typed terminal result');
+  }
+  const runnerDrop = compact(body(frame, 'impl<F>\\s+Drop\\s+for\\s+FrameRunner<F>'));
+  requireBoundary(runnerDrop === 'fndrop(&mutself){drop(self.child.take());ifself.poll_in_progress{self.observation.finish(Outcome::Panicked);}}',
+    'frame runner drop must destroy the child first and preserve a caught panic');
   const policy = compact(body(frame, 'fn\\s+for_frame\\b'));
   requireBoundary(policy.startsWith('letinline=transport==ClientTransport::WebSocket&&is_inline_auth(frame);') &&
     policy.includes('budget:ifinline{INLINE_AUTH_BUDGET}else{FRAME_BUDGET}'),

@@ -6,8 +6,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const paths = {
   execution: 'crates/northstar-abuse-policy/src/admission_execution.rs',
   transaction: 'crates/northstar-abuse-policy/src/admission_transaction.rs',
+  lifecycle: 'crates/northstar-message-application/src/direct_lifecycle.rs',
   service: 'src/services/message_admission.rs',
   witness: 'src/services/message_admission/witness.rs',
+  frame: 'src/xmpp/frame_execution.rs',
+  messaging: 'src/xmpp/protocol/messaging.rs',
   repository: 'src/db/message_admission_repository.rs',
   verification: 'src/db/abuse_verification_repository.rs',
   actor: 'src/db/abuse_actor_state_repository.rs',
@@ -98,7 +101,7 @@ export function readAdmissionSources() {
 }
 
 export function verifyAdmissionBoundaries(sources) {
-  for (const name of ['execution', 'transaction']) {
+  for (const name of ['execution', 'transaction', 'lifecycle']) {
     const code = codeOnly(sources[name]);
     requireAdmission(!/\b(?:AppState|sqlx|tokio|getrandom|rand|rand_core)\b|std\s*::\s*(?:fs|net|process|thread|env)\b|(?:Utc|SystemTime|Instant)\s*::\s*now\s*\(|Uuid\s*::\s*new_/u.test(code),
       `${name} core regained ambient authority, time, entropy or executor access`);
@@ -140,6 +143,58 @@ export function verifyAdmissionBoundaries(sources) {
     requireAdmission(count(driver, 'witness.snapshot()') === 1 && driver.includes('observed.knowledge().clone()'),
       `${name} completion must use the single independently observed snapshot`);
   }
+  // Protect the actual frame-backed path as well as the convenience drivers.
+  // These anchors detect source drift; the Rust drop/fake-port tests establish
+  // the behavior independently, and neither gate proves SQL conformance.
+  const retainedBegin = compact(body(sources.service, 'pub\\(crate\\)\\s+async\\s+fn\\s+begin_message_admission_retained\\b'));
+  ordered(retainedBegin, ['retained.start(&begin_command(request)?)?',
+    'self.repository.begin(request,&witness).await', 'retained.complete(completion)?',
+    'matchoutcome{'], 'retained begin');
+  requireAdmission(retainedBegin.includes('retained.admission_grant()')
+    && retainedBegin.includes('Some(AdmissionGrant::Reserved(')
+    && retainedBegin.includes('Some(AdmissionGrant::GuardOnly('),
+    'retained begin must consume the actual closed admission grant');
+  const retainedFinalize = compact(body(sources.service, 'pub\\(crate\\)\\s+async\\s+fn\\s+accept_message_admission_retained\\b'));
+  ordered(retainedFinalize, ['letacceptance=lease.acceptance();',
+    'retained.start(&Command::Finalize(acceptance_fence(&acceptance)))?',
+    'self.repository.accept(&acceptance,&witness).await', 'retained.complete(completion)?'],
+  'retained finalization');
+  const lifecycleComplete = compact(body(sources.lifecycle, 'pub\\s+fn\\s+complete\\b'));
+  ordered(lifecycleComplete, ['execution.coordinator.observe_witness(&execution.witness)?',
+    'execution.coordinator.complete(Completion{'], 'outer owner completion');
+  const startEffect = compact(body(sources.lifecycle, 'pub\\s+fn\\s+start_effect\\b'));
+  ordered(startEffect, ['self.validate_request(handle,command)?', 'ifexecution.started{',
+    'execution.started=true'], 'single repository invocation');
+  const retainedRequest = compact(body(sources.lifecycle, 'pub\\s+fn\\s+validate_request\\b'));
+  requireAdmission(retainedRequest.includes('execution.handle.effect.command!=*command'),
+    'retained input must match the complete immutable command');
+  for (const method of ['enter_commit', 'record_receipt']) {
+    const owned = compact(body(sources.lifecycle, `pub\\s+fn\\s+${method}\\b`));
+    ordered(owned, ['execution.coordinator.pending().is_none()',
+      `execution.witness.${method}(`], `finished effect ${method}`);
+  }
+  const grant = compact(body(sources.lifecycle, 'pub\\s+fn\\s+admission_grant\\b'));
+  requireAdmission(grant.includes('ExecutionState::Finished(ExecutionOutcome::Completed{')
+    && grant.includes('execution.coordinator.state()')
+    && grant.includes('BeginResult::Reserved(')
+    && grant.includes('BeginResult::GuardOnly(GuardDecision::Allowed)'),
+    'admission grant must follow the real successful coordinator completion');
+  const newFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+new\\b'));
+  requireAdmission(newFrame.includes('direct_operation:DirectOperationHandle::new(operation_id)'),
+    'each frame must own its own operation before the handler runs');
+  const runFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+run\\b'));
+  ordered(runFrame, ['letobservation=Observation::new(', 'FrameRunner{',
+    'child:Some(Box::pin(asyncmove{tokio::time::timeout(budget,future).await}))'],
+  'frame observation and unchanged first-poll deadline');
+  const runnerDrop = compact(body(sources.frame, 'impl<F>\\s+Drop\\s+for\\s+FrameRunner<F>'));
+  requireAdmission(runnerDrop.includes('drop(self.child.take());'),
+    'frame runner must destroy its child before ordinary observation field drop');
+  const messaging = compact(codeOnly(sources.messaging));
+  requireAdmission(messaging.includes('operation.begin(&request)')
+    && messaging.includes('begin_message_admission_retained(&request,&retained).await')
+    && messaging.includes('operation.finalize(retained_lease)')
+    && messaging.includes('accept_message_admission_retained(&lease,&retained).await'),
+    'actual protocol begin/finalize must use the retained frame operation');
   const begin = compact(body(sources.repository, 'pub\\(crate\\)\\s+async\\s+fn\\s+begin_message_admission\\b'));
   const beginDecision = begin.indexOf('decision::decide_begin(');
   const fetchedRows = begin.indexOf('.fetch_all(&mut*tx).await?');
@@ -192,7 +247,8 @@ export function verifyAdmissionBoundaries(sources) {
     'LIMIT 128 FOR UPDATE SKIP LOCKED', 'active_records < $2', 'expires_at > $2', 'expires_at <= $2']) {
     requireAdmission(sources.repository.includes(anchor), `admission SQL authority lost ${anchor}`);
   }
-  return { scope: 'source-shape drift detector only', shared_cores: 2, service_commands: 3,
+  return { scope: 'source-shape drift detector only', shared_cores: 3, service_commands: 5,
+    retained_frame_owner: true,
     transaction_scopes: ['rated_begin', 'finalize', 'guard_only'], real_adapter_qualification: false };
 }
 

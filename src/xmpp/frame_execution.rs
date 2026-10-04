@@ -14,12 +14,16 @@
 //! authentication recovery after bytes have already reached the client.
 
 use super::protocol::ClientTransport;
+use crate::services::message_admission::witness::DirectOperationHandle;
+use northstar_message_application::direct_lifecycle::TerminalReason;
 use std::{
     future::Future,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, AtomicU8, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::Duration,
 };
 use uuid::Uuid;
@@ -222,6 +226,7 @@ fn is_inline_auth(frame: &str) -> bool {
 
 struct Progress {
     operation_id: Uuid,
+    direct_operation: DirectOperationHandle,
     sequence: u64,
     policy: Policy,
     stage: AtomicU8,
@@ -262,6 +267,15 @@ impl SessionExecutions {
             execution.enter(stage);
         }
     }
+
+    pub(super) fn direct_operation(&self) -> Option<DirectOperationHandle> {
+        self.current
+            .as_ref()
+            .filter(|execution| {
+                execution.0.outcome.load(Ordering::Relaxed) == Outcome::Pending as u8
+            })
+            .map(FrameExecution::direct_operation)
+    }
 }
 
 #[derive(Debug)]
@@ -272,14 +286,20 @@ pub(crate) enum FrameFailure {
 
 impl FrameExecution {
     pub(super) fn new(transport: ClientTransport, frame: &str) -> Self {
+        let operation_id = Uuid::new_v4();
         Self(Arc::new(Progress {
-            operation_id: Uuid::new_v4(),
+            operation_id,
+            direct_operation: DirectOperationHandle::new(operation_id),
             sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             policy: Policy::for_frame(transport, frame),
             stage: AtomicU8::new(Stage::Validation as u8),
             started: tokio::time::Instant::now(),
             outcome: AtomicU8::new(Outcome::Pending as u8),
         }))
+    }
+
+    pub(super) fn direct_operation(&self) -> DirectOperationHandle {
+        self.0.direct_operation.clone()
     }
 
     pub(super) fn enter(&self, stage: Stage) {
@@ -307,24 +327,20 @@ impl FrameExecution {
         );
     }
 
-    pub(super) async fn run<T>(
+    pub(super) fn run<T>(
         &self,
         future: impl Future<Output = anyhow::Result<T>>,
-    ) -> Result<T, FrameFailure> {
-        let mut observation = Observation::new(self.clone(), "frame", Some(self.0.policy.budget));
-        match tokio::time::timeout(self.0.policy.budget, future).await {
-            Ok(Ok(value)) => {
-                observation.finish(Outcome::Completed);
-                Ok(value)
-            }
-            Ok(Err(error)) => {
-                observation.finish(Outcome::BackendFailure);
-                Err(FrameFailure::Backend(error))
-            }
-            Err(_) => {
-                observation.finish(Outcome::TimedOut);
-                Err(FrameFailure::TimedOut)
-            }
+    ) -> impl Future<Output = Result<T, FrameFailure>> {
+        // Construct the observation before the child is first polled, so
+        // dropping even an unpolled runner retires its already-owned operation.
+        let observation = Observation::new(self.clone(), "frame", Some(self.0.policy.budget));
+        let budget = self.0.policy.budget;
+        FrameRunner {
+            child: Some(Box::pin(async move {
+                tokio::time::timeout(budget, future).await
+            })),
+            observation,
+            poll_in_progress: false,
         }
     }
 
@@ -339,6 +355,72 @@ impl FrameExecution {
         let result = future.await;
         observation.finish(result.outcome());
         result.transport_succeeded()
+    }
+}
+
+/// Explicit destruction order: the entire child/timeout future is dropped
+/// before the outer observation snapshots and retires admission ownership.
+/// This also applies when the returned runner has never been polled.
+struct FrameRunner<F> {
+    child: Option<Pin<Box<F>>>,
+    observation: Observation,
+    // Normal exits clear this only after child polling and ready destruction.
+    // Unwinding leaves the fact available even after an outer catch_unwind.
+    poll_in_progress: bool,
+}
+
+impl<F, T> Future for FrameRunner<F>
+where
+    F: Future<Output = Result<anyhow::Result<T>, tokio::time::error::Elapsed>>,
+{
+    type Output = Result<T, FrameFailure>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.poll_in_progress = true;
+        let result = match this
+            .child
+            .as_mut()
+            .expect("frame polled after completion")
+            .as_mut()
+            .poll(cx)
+        {
+            Poll::Pending => {
+                this.poll_in_progress = false;
+                return Poll::Pending;
+            }
+            Poll::Ready(result) => result,
+        };
+        // A ready child's destructor may still release operation-local state.
+        // Complete that destruction before emitting the terminal snapshot.
+        drop(this.child.take());
+        this.poll_in_progress = false;
+        Poll::Ready(match result {
+            Ok(Ok(value)) => {
+                this.observation.finish(Outcome::Completed);
+                Ok(value)
+            }
+            Ok(Err(error)) => {
+                this.observation.finish(Outcome::BackendFailure);
+                Err(FrameFailure::Backend(error))
+            }
+            Err(_) => {
+                this.observation.finish(Outcome::TimedOut);
+                Err(FrameFailure::TimedOut)
+            }
+        })
+    }
+}
+
+impl<F> Drop for FrameRunner<F> {
+    fn drop(&mut self) {
+        drop(self.child.take());
+        if self.poll_in_progress {
+            // Preserve a child poll/destructor panic even when a caller caught
+            // its original payload before finally destroying this runner.
+            self.observation.finish(Outcome::Panicked);
+        }
+        // Observation's ordinary field destructor now runs with no child.
     }
 }
 
@@ -381,6 +463,28 @@ impl Observation {
         }
         self.finished = true;
         let progress = &self.execution.0;
+        if self.phase == "frame" {
+            let reason = match outcome {
+                Outcome::Completed => TerminalReason::Completed,
+                Outcome::TimedOut => TerminalReason::TimedOut,
+                Outcome::Cancelled => TerminalReason::Cancelled,
+                Outcome::Panicked => TerminalReason::Panicked,
+                _ => TerminalReason::BackendFailure,
+            };
+            let snapshot = progress.direct_operation.retire(reason);
+            if snapshot.reservation.is_some() || snapshot.finalization.is_some() {
+                // Never print the snapshot, command, payload, fence, or lease.
+                // These are admission facts only; direct storage is not inferred.
+                tracing::debug!(target: "rust_xmpp_server::xmpp::direct_lifecycle",
+                    operation_id = %snapshot.operation,
+                    classification = ?snapshot.classification(),
+                    reservation = ?snapshot.reservation,
+                    finalization = ?snapshot.finalization,
+                    terminal = ?snapshot.terminal,
+                    "frame admission ownership retired"
+                );
+            }
+        }
         progress.outcome.store(outcome as u8, Ordering::Relaxed);
         let stage = Stage::from_raw(progress.stage.load(Ordering::Relaxed)).label();
         let elapsed_ms = progress.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -547,6 +651,181 @@ mod tests {
 
     fn outcome(execution: &FrameExecution) -> u8 {
         execution.0.outcome.load(Ordering::Relaxed)
+    }
+
+    struct ChildDropMarker {
+        owner: DirectOperationHandle,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Drop for ChildDropMarker {
+        fn drop(&mut self) {
+            assert_eq!(
+                self.owner.snapshot().terminal,
+                None,
+                "owner retired before child destruction"
+            );
+            self.dropped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn outer_owner_retires_after_child_drop_at_every_runner_boundary() {
+        for cut in 0..5 {
+            let execution = execution();
+            let owner = execution.direct_operation();
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let marker = ChildDropMarker {
+                owner: owner.clone(),
+                dropped: dropped.clone(),
+            };
+            let child = async move {
+                let _marker = marker;
+                if cut == 4 {
+                    std::panic::panic_any("frame-child-original-panic");
+                }
+                if cut != 3 {
+                    pending::<()>().await;
+                }
+                Ok(())
+            };
+            let mut runner = Box::pin(execution.run(child));
+            if cut == 1 {
+                assert!(futures::poll!(&mut runner).is_pending());
+            } else if cut == 2 {
+                assert!(futures::poll!(&mut runner).is_pending());
+                tokio::time::advance(FRAME_BUDGET).await;
+                assert!(matches!(
+                    futures::poll!(&mut runner),
+                    Poll::Ready(Err(FrameFailure::TimedOut))
+                ));
+            } else if cut == 3 {
+                assert!(matches!(futures::poll!(&mut runner), Poll::Ready(Ok(()))));
+            } else if cut == 4 {
+                let payload = AssertUnwindSafe(&mut runner)
+                    .catch_unwind()
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    payload.downcast_ref::<&str>(),
+                    Some(&"frame-child-original-panic")
+                );
+            }
+            drop(runner);
+            assert!(dropped.load(Ordering::Relaxed));
+            assert_eq!(
+                owner.snapshot().terminal,
+                Some(match cut {
+                    0 | 1 => TerminalReason::Cancelled,
+                    2 => TerminalReason::TimedOut,
+                    3 => TerminalReason::Completed,
+                    4 => TerminalReason::Panicked,
+                    _ => unreachable!(),
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn single_child_destructor_panic_keeps_order_and_original_payload() {
+        struct PanickingChild {
+            owner: DirectOperationHandle,
+            dropped: Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl Future for PanickingChild {
+            type Output = Result<anyhow::Result<()>, tokio::time::error::Elapsed>;
+            fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+                Poll::Ready(Ok(Ok(())))
+            }
+        }
+        impl Drop for PanickingChild {
+            fn drop(&mut self) {
+                assert_eq!(self.owner.snapshot().terminal, None);
+                self.dropped.store(true, Ordering::Relaxed);
+                std::panic::panic_any("frame-drop-original-panic");
+            }
+        }
+        let execution = execution();
+        let owner = execution.direct_operation();
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut runner = Box::pin(FrameRunner {
+            child: Some(Box::pin(PanickingChild {
+                owner: owner.clone(),
+                dropped: dropped.clone(),
+            })),
+            observation: Observation::new(execution, "frame", Some(FRAME_BUDGET)),
+            poll_in_progress: false,
+        });
+        let payload = AssertUnwindSafe(&mut runner)
+            .catch_unwind()
+            .await
+            .unwrap_err();
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"frame-drop-original-panic")
+        );
+        assert!(dropped.load(Ordering::Relaxed));
+        assert_eq!(
+            owner.snapshot().terminal,
+            None,
+            "outer runner has not been destroyed"
+        );
+        drop(runner);
+        assert_eq!(owner.snapshot().terminal, Some(TerminalReason::Panicked));
+    }
+
+    #[tokio::test]
+    async fn replacing_current_frame_preserves_the_old_retained_owner_and_terminal() {
+        let mut executions = SessionExecutions::default();
+        let original = executions.begin(ClientTransport::Bosh, "<message/>");
+        let old_owner = original.direct_operation();
+        let request = crate::abuse::MessageAdmissionRequest {
+            actor_id: Uuid::from_u128(100),
+            account_bare: "alice@example.test",
+            normalized_target: "bob@example.test/resource",
+            origin_id: Some("origin"),
+            normalized_payload: "<message/>",
+            pow_intent_payload: "<message/>",
+            subject: "message",
+            actors: &[],
+            proof: None,
+        };
+        let _effect = old_owner.begin(&request).unwrap();
+        let runner = original.run(async { pending::<anyhow::Result<()>>().await });
+        drop(runner);
+        let old_snapshot = old_owner.snapshot();
+        let later = executions.begin(ClientTransport::Bosh, "<iq/>");
+        later.run(async { Ok(()) }).await.unwrap();
+        assert_eq!(old_owner.snapshot(), old_snapshot);
+        assert_eq!(old_snapshot.terminal, Some(TerminalReason::Cancelled));
+        assert!(!old_snapshot.reservation.unwrap().effect_started);
+        assert_ne!(
+            old_snapshot.operation,
+            later.direct_operation().snapshot().operation
+        );
+        drop(executions);
+        assert_eq!(
+            old_owner.snapshot().terminal,
+            Some(TerminalReason::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_frame_leaves_convenience_calls_without_a_retired_owner() {
+        let mut executions = SessionExecutions::default();
+        let original = executions.begin(ClientTransport::Tcp, "<message/>");
+        let retained = executions.direct_operation().expect("active frame owner");
+        original.run(async { Ok(()) }).await.unwrap();
+        let terminal = retained.snapshot();
+        // ProtocolSession::message_operation uses this exact selector. A
+        // direct handle() call after process_frame() therefore keeps using the
+        // convenience service path instead of attaching the retired operation.
+        assert!(executions.direct_operation().is_none());
+        let later = executions.begin(ClientTransport::Tcp, "<message/>");
+        assert!(executions.direct_operation().is_some());
+        later.run(async { Ok(()) }).await.unwrap();
+        assert!(executions.direct_operation().is_none());
+        assert_eq!(retained.snapshot(), terminal);
     }
 
     #[test]

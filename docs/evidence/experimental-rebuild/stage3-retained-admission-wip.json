@@ -1,0 +1,142 @@
+{
+  "base_commit": "59c7698925309c08b5aa6854c895c41b986f956d",
+  "current_correction": {
+    "change": "A poll-in-progress marker preserves Panicked when a surrounding catch ends the unwind before runner destruction. Child destruction precedes terminal observation; original panic payload propagates normally. Existing failing assertion stays unchanged; one Ready-destructor panic regression was added.",
+    "path": "src/xmpp/frame_execution.rs",
+    "sha256": "12eb6a1b28a7685f17a22127e5833616070ae557652d77b536fd060322680f03",
+    "validation": "Source review and formatting only so far. Corrected-source compile, Clippy and pure tests are pending; previous checks do not certify this new source."
+  },
+  "current_source": {
+    "Cargo.lock": {
+      "bytes": 124382,
+      "sha256": "e0643f62c211698be0afcd0f2d467f0673f86b6f1adb842f51116e2d1221a53e"
+    },
+    "crates/northstar-message-application/Cargo.toml": {
+      "bytes": 471,
+      "sha256": "7bb936d3124a8c53995d9f8f25e65306074b3e82416c8c97851f0f30421e3d8f"
+    },
+    "crates/northstar-message-application/src/direct_lifecycle.rs": {
+      "bytes": 30282,
+      "sha256": "4ae1dc688b93b40b69ebad0a8ff8d9d9652ba2c7b664c0014631e186fa206491"
+    },
+    "crates/northstar-message-application/src/lib.rs": {
+      "bytes": 8126,
+      "sha256": "abe0cc605e488c5764cce3a9e48df411d1b056effd5fe04e581ca7465c77d8a1"
+    },
+    "scripts/check-admission-execution.mjs": {
+      "bytes": 16256,
+      "sha256": "d8cea0ef6cd3006cf9f981adaebc7180ca59ea4d819f2b7c553f85a9c6bbff69"
+    },
+    "scripts/test-admission-execution.mjs": {
+      "bytes": 6978,
+      "sha256": "88c6c1384f05c78263d763daba4118376d2154fa8dee03aea30d4e0a371877d3"
+    },
+    "src/services/message_admission.rs": {
+      "bytes": 30158,
+      "sha256": "c7dad616f71a55745472694b8bd38b76c59d9a03a80a942d69e33fcc0bab5851"
+    },
+    "src/services/message_admission/witness.rs": {
+      "bytes": 11228,
+      "sha256": "e6e0b90a31931849f1abb11823721f0483d8297a3bcecb268c73752d4caafbe9"
+    },
+    "src/xmpp/frame_execution.rs": {
+      "bytes": 51323,
+      "sha256": "12eb6a1b28a7685f17a22127e5833616070ae557652d77b536fd060322680f03"
+    },
+    "src/xmpp/protocol.rs": {
+      "bytes": 110998,
+      "sha256": "91b5296c0b290cdd2482919785f9859a9a481ed9566fb2084ebbe8c1fc902a7f"
+    },
+    "src/xmpp/protocol/messaging.rs": {
+      "bytes": 90288,
+      "sha256": "65d8b47eb5d44e3e758bd4689ddf8430c02d96c7f7200ccc87a4c192fbfa72b2"
+    }
+  },
+  "generated_graphs": {
+    "docs/architecture/generated/compile-time.dot": {
+      "bytes": 70415,
+      "sha256": "dd3f72a4ac3ba2d90ff4954daccbc02970786ecb0219b6b23a300d85eddc0cc5"
+    },
+    "docs/architecture/generated/compile-time.json": {
+      "bytes": 106427,
+      "sha256": "2159409c673eec2389eb0fe4431e2266ab3b04714a53143feebeeb51a2ef750b"
+    },
+    "docs/architecture/generated/compile-time.mmd": {
+      "bytes": 154480,
+      "sha256": "bc968d63bd3924b8eb7eb1c44544d7216b11733da85de9f56df996f0d406a606"
+    },
+    "docs/architecture/generated/graphs.json": {
+      "bytes": 131844,
+      "sha256": "70498ed074ad8f95fc6ae63a27f82f24e69cd06a3b6cdbf949e1ec88a60c68b5"
+    }
+  },
+  "limits": [
+    "Retained bounded private BeginRequest material stays in the effect/coordinator/witness until the last owner handle is dropped; Debug and terminal logging are redacted.",
+    "No persistent registry or automatic reconciliation consumer is provided. TerminalUnresolved does not establish rollback or scheduled recovery.",
+    "Stage3 full direct lifecycle, native/SM/BOSH controlled cases and saved replay remain pending.",
+    "Real SQL/wire/clock/crypto and resource/fault conformance remain later-stage obligations.",
+    "This source checkpoint is not Stage3 acceptance."
+  ],
+  "previous_checks": {
+    "application": {
+      "exit": 0,
+      "log_sha256": "397b608f7d586e2746be6fcc8554d592b7f2fd138611c76d6ba53ca4bbd26a61",
+      "tests": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "clippy": {
+      "exit": 0,
+      "log_sha256": "c2e4f62d38899fe0b20ee244b8c9e513e6570cbbc23f32ae76700fa41b9d45e4",
+      "tests": []
+    },
+    "compile": {
+      "exit": 0,
+      "log_sha256": "1af148fdb5032c8c9357cde3f872b750984fbdb3914192439deed2a94150fbdd",
+      "tests": []
+    },
+    "frame": {
+      "exit": 101,
+      "log_sha256": "cb9741fda70cf9d535cdb2357a3912c63a86fd0cf780de83d17779077ff74c66",
+      "tests": [
+        "test result: FAILED. 16 passed; 1 failed; 0 ignored; 0 measured; 1746 filtered out; finished in 0.01s"
+      ]
+    },
+    "graphs": {
+      "exit": 0,
+      "log_sha256": "cd8b855d14341a438ad19126b6aa792bf62961dd878161ffedd872e0fa8ee5c6",
+      "tests": []
+    },
+    "service": {
+      "exit": 0,
+      "log_sha256": "948d082a2bb849984eca79a60c533975dba47440710c710c0bb7711e2b009e94",
+      "tests": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1755 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s"
+      ]
+    },
+    "witness": {
+      "exit": 0,
+      "log_sha256": "75349e42722a6c586873ba1acf342d00df4950128c18d7b6229bb929ccfba418",
+      "tests": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1761 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s"
+      ]
+    }
+  },
+  "retained_failures": [
+    {
+      "kind": "ClippyLargeEnumVariant",
+      "scope": "RetainedAdmission inline payload made AdmissionWitness272 bytes. Boxing only that variant and constructor passed the subsequent recorded ordinary checks."
+    },
+    {
+      "kind": "PanicClassifiedAsCancelled",
+      "log_sha256": "cb9741fda70cf9d535cdb2357a3912c63a86fd0cf780de83d17779077ff74c66",
+      "result": "16 frame tests passed,1 failed; current poll marker correction is not yet executed.",
+      "source_sha256": "74f84673ca9d8d66145dcbfc486213f84583169172763dd22cb035623df100de"
+    }
+  ],
+  "schema": "northstar-stage3-retained-admission-wip-v1",
+  "scope": "Per-frame retained admission owner, actual retained begin/finalize service paths, closed grants, explicit child-before-retirement and payload-free terminal summary. No durable message transaction, router or transport integration in this batch.",
+  "status": "WorkInProgressNotAccepted"
+}

@@ -8,8 +8,9 @@ description = "Capability-injected personal-message application service for Nort
 publish = false
 
 [dependencies]
+northstar-abuse-policy = { path = "../northstar-abuse-policy" }
 northstar-message-core = { path = "../northstar-message-core" }
+uuid = "1.12"
 
 [dev-dependencies]
 tokio = { version = "1.43", features = ["macros", "rt"] }
-uuid = "1.12"

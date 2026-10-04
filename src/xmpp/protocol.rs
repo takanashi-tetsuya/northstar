@@ -716,6 +716,12 @@ impl ProtocolSession {
         self.frame_executions.enter(stage);
     }
 
+    pub(super) fn message_operation(
+        &self,
+    ) -> Option<crate::services::message_admission::witness::DirectOperationHandle> {
+        self.frame_executions.direct_operation()
+    }
+
     pub(crate) fn local_domain(&self) -> &str {
         self.state.local_domain()
     }

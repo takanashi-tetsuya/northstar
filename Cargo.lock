@@ -2058,6 +2058,7 @@ dependencies = [
 name = "northstar-message-application"
 version = "0.1.0"
 dependencies = [
+ "northstar-abuse-policy",
  "northstar-message-core",
  "tokio",
  "uuid",

@@ -4,6 +4,8 @@
 //! implementation can run. It intentionally knows nothing about PostgreSQL,
 //! sockets, XML, global server state or post-commit providers.
 
+pub mod direct_lifecycle;
+
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };

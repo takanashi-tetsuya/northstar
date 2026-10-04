@@ -248,21 +248,32 @@ impl ProtocolSession {
             let subject = format!("message:{}", user.id);
             let admission_origin_id = direct_origin_id(root);
             self.enter_frame_stage(Stage::MessageAdmission);
-            let admission = self
-                .state
-                .message_admission_service()
-                .begin_message_admission(&MessageAdmissionRequest {
-                    actor_id: user.id,
-                    account_bare: bare_jid(from),
-                    normalized_target: to,
-                    origin_id: admission_origin_id.as_deref(),
-                    normalized_payload: &normalized_admission_payload,
-                    pow_intent_payload: &pow_intent_payload,
-                    subject: &subject,
-                    actors: &actors,
-                    proof: proof.as_ref(),
-                })
-                .await;
+            let request = MessageAdmissionRequest {
+                actor_id: user.id,
+                account_bare: bare_jid(from),
+                normalized_target: to,
+                origin_id: admission_origin_id.as_deref(),
+                normalized_payload: &normalized_admission_payload,
+                pow_intent_payload: &pow_intent_payload,
+                subject: &subject,
+                actors: &actors,
+                proof: proof.as_ref(),
+            };
+            let service = self.state.message_admission_service();
+            let admission = if let Some(operation) = self.message_operation() {
+                match operation.begin(&request) {
+                    Ok(retained) => {
+                        service
+                            .begin_message_admission_retained(&request, &retained)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                // Direct handle() callers retain the established convenience
+                // path. Production process_frame() always supplies an owner.
+                service.begin_message_admission(&request).await
+            };
             match admission {
                 Ok(MessageAdmissionStart::Proceed { lease, requirement }) => {
                     debug_assert_eq!(requirement.action, "message");
@@ -1505,16 +1516,27 @@ impl ProtocolSession {
         lease: &mut Option<MessageAdmissionLease>,
         route: &'static str,
     ) {
-        let Some(lease) = lease.take() else {
+        let Some(retained_lease) = lease.as_ref() else {
             return;
         };
+        // Retain the exact fence outside the cancellable accept future before
+        // consuming the protocol's lease. Reservation knowledge stays separate.
+        let retained = self
+            .message_operation()
+            .map(|operation| operation.finalize(retained_lease));
+        let lease = lease.take().expect("lease checked above");
         self.enter_frame_stage(Stage::MessageFollowup);
-        if let Err(error) = self
-            .state
-            .message_admission_service()
-            .accept_message_admission(&lease)
-            .await
-        {
+        let service = self.state.message_admission_service();
+        let result = match retained {
+            Some(Ok(retained)) => {
+                service
+                    .accept_message_admission_retained(&lease, &retained)
+                    .await
+            }
+            Some(Err(error)) => Err(error),
+            None => service.accept_message_admission(&lease).await,
+        };
+        if let Err(error) = result {
             // The route has already accepted the stanza. Returning an error
             // would encourage a duplicate retry, so expose the remaining
             // at-least-once recovery window only through logs and metrics.

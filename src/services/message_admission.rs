@@ -13,7 +13,7 @@ use northstar_abuse_policy::admission_execution::{
 };
 use northstar_abuse_policy::admission_transaction::{AdmissionFence, FinalizeDecision};
 use uuid::Uuid;
-use witness::AdmissionWitness;
+use witness::{AdmissionWitness, RetainedAdmission};
 
 pub(crate) trait MessageAdmissionRepository: Send + Sync {
     fn begin(
@@ -125,6 +125,75 @@ fn begin_result(result: &MessageAdmissionStart, knowledge: &Knowledge) -> BeginR
 impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
+    }
+
+    /// Production frame callers create `retained` synchronously outside this
+    /// future. Dropping this await cannot discard its witness or exact command.
+    pub(crate) async fn begin_message_admission_retained(
+        &self,
+        request: &MessageAdmissionRequest<'_>,
+        retained: &RetainedAdmission,
+    ) -> Result<MessageAdmissionStart> {
+        retained.start(&begin_command(request)?)?;
+        let witness = retained.witness();
+        let result = self.repository.begin(request, &witness).await;
+        let knowledge = witness.snapshot().knowledge().clone();
+        let completion = match &result {
+            Ok(value) => EffectResult::Begin(begin_result(value, &knowledge)),
+            Err(error) => EffectResult::Failed(failure(error)),
+        };
+        let outcome = retained.complete(completion)?;
+        match outcome {
+            ExecutionOutcome::Completed {
+                result: EffectResult::Begin(_),
+                ..
+            } => {
+                // Only an accepted Stage2 completion issues authority. Guard
+                // success remains distinct from a durable reservation receipt.
+                use northstar_message_application::direct_lifecycle::AdmissionGrant;
+                match (&result, retained.admission_grant()) {
+                    (
+                        Ok(MessageAdmissionStart::Proceed { lease: Some(_), .. }),
+                        Some(AdmissionGrant::Reserved(_)),
+                    )
+                    | (
+                        Ok(MessageAdmissionStart::Proceed { lease: None, .. }),
+                        Some(AdmissionGrant::GuardOnly(_)),
+                    ) => {}
+                    (Ok(MessageAdmissionStart::Proceed { .. }), _) => {
+                        anyhow::bail!("completed admission lacked its matching grant");
+                    }
+                    _ => {}
+                }
+                result
+            }
+            other => Err(error_for(other)),
+        }
+    }
+
+    pub(crate) async fn accept_message_admission_retained(
+        &self,
+        lease: &MessageAdmissionLease,
+        retained: &RetainedAdmission,
+    ) -> Result<()> {
+        let acceptance = lease.acceptance();
+        retained.start(&Command::Finalize(acceptance_fence(&acceptance)))?;
+        let witness = retained.witness();
+        let result = self.repository.accept(&acceptance, &witness).await;
+        let completion = match &result {
+            Ok(decision) => EffectResult::Finalize(*decision),
+            Err(error) => EffectResult::Failed(failure(error)),
+        };
+        match retained.complete(completion)? {
+            ExecutionOutcome::Completed {
+                result:
+                    EffectResult::Finalize(
+                        FinalizeDecision::AcceptPending | FinalizeDecision::AlreadyAccepted,
+                    ),
+                ..
+            } => Ok(()),
+            other => Err(error_for(other)),
+        }
     }
 
     pub(crate) async fn begin_message_admission(
@@ -441,5 +510,263 @@ mod tests {
             ..request()
         };
         assert!(begin_command(&request).is_err());
+    }
+
+    #[tokio::test]
+    async fn retained_service_preserves_stage2_results_and_exact_finalization_grant() {
+        use witness::DirectOperationHandle;
+        for mode in [
+            Mode::Memory,
+            Mode::GuardReceipt,
+            Mode::ReservedReceipt,
+            Mode::MissingReceipt,
+            Mode::Busy,
+            Mode::Conflict,
+            Mode::CommitUnknown,
+        ] {
+            let service = MessageAdmissionService::new(Repository(mode));
+            let request = request();
+            let owner = DirectOperationHandle::new(Uuid::new_v4());
+            let retained = owner.begin(&request).unwrap();
+            let actual = service
+                .begin_message_admission_retained(&request, &retained)
+                .await;
+            let ordinary = service.begin_message_admission(&request).await;
+            match (&actual, &ordinary) {
+                (
+                    Ok(MessageAdmissionStart::Proceed { lease: actual, .. }),
+                    Ok(MessageAdmissionStart::Proceed {
+                        lease: ordinary, ..
+                    }),
+                ) => {
+                    assert_eq!(actual.is_some(), ordinary.is_some());
+                    assert_eq!(
+                        owner
+                            .snapshot()
+                            .reservation
+                            .unwrap()
+                            .has_durable_reservation_receipt(),
+                        actual.is_some()
+                    );
+                }
+                (Ok(MessageAdmissionStart::Conflict), Ok(MessageAdmissionStart::Conflict)) => {}
+                (Err(actual), Err(ordinary)) => {
+                    assert_eq!(
+                        crate::abuse::is_abuse_state_busy(actual),
+                        crate::abuse::is_abuse_state_busy(ordinary)
+                    );
+                    if let (Some(actual), Some(ordinary)) = (
+                        actual.downcast_ref::<AdmissionExecutionError>(),
+                        ordinary.downcast_ref::<AdmissionExecutionError>(),
+                    ) {
+                        // Correlation now uses the originating frame ID; the
+                        // Stage2 outcome class and authority facts stay intact.
+                        assert_eq!(
+                            std::mem::discriminant(&actual.outcome),
+                            std::mem::discriminant(&ordinary.outcome)
+                        );
+                    } else {
+                        assert_eq!(actual.to_string(), ordinary.to_string());
+                    }
+                }
+                other => panic!("retained/convenience disagreement: {other:?}"),
+            }
+            if let Ok(MessageAdmissionStart::Proceed {
+                lease: Some(lease), ..
+            }) = actual
+            {
+                let reservation = owner.snapshot().reservation;
+                let finalization = owner.finalize(&lease).unwrap();
+                service
+                    .accept_message_admission_retained(&lease, &finalization)
+                    .await
+                    .unwrap();
+                assert_eq!(owner.snapshot().reservation, reservation);
+                assert!(matches!(
+                    owner.snapshot().finalization.unwrap().witness.knowledge(),
+                    Knowledge::ReceiptKnown(_)
+                ));
+                assert!(owner.finalize(&lease).is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_service_rejects_changed_input_and_duplicate_effect_before_repository_io() {
+        struct MustNotRun;
+        impl MessageAdmissionRepository for MustNotRun {
+            async fn begin(
+                &self,
+                _: &MessageAdmissionRequest<'_>,
+                _: &AdmissionWitness,
+            ) -> Result<MessageAdmissionStart> {
+                panic!("mismatched request reached repository")
+            }
+            async fn accept(
+                &self,
+                _: &MessageAdmissionAcceptance<'_>,
+                _: &AdmissionWitness,
+            ) -> Result<FinalizeDecision> {
+                panic!("unexpected accept")
+            }
+            async fn reconcile(&self, _: &Effect) -> Result<ReconcileResult> {
+                panic!("unexpected read")
+            }
+        }
+        let owner = witness::DirectOperationHandle::new(Uuid::new_v4());
+        let original = request();
+        let retained = owner.begin(&original).unwrap();
+        let before = owner.snapshot();
+        let changed = MessageAdmissionRequest {
+            normalized_target: "other@example.test",
+            ..original
+        };
+        assert!(MessageAdmissionService::new(MustNotRun)
+            .begin_message_admission_retained(&changed, &retained)
+            .await
+            .is_err());
+        assert_eq!(owner.snapshot(), before);
+        MessageAdmissionService::new(Repository(Mode::Memory))
+            .begin_message_admission_retained(&request(), &retained)
+            .await
+            .unwrap();
+        assert!(MessageAdmissionService::new(MustNotRun)
+            .begin_message_admission_retained(&request(), &retained)
+            .await
+            .is_err());
+    }
+
+    #[derive(Clone, Copy)]
+    enum CancelCut {
+        BeforeCommit,
+        DuringCommit,
+        AfterReceipt,
+    }
+
+    struct CancellableRepository(CancelCut);
+
+    impl CancellableRepository {
+        async fn stop(
+            &self,
+            witness: &AdmissionWitness,
+            scope: TransactionScope,
+            fact: CommitFact,
+        ) {
+            if !matches!(self.0, CancelCut::BeforeCommit) {
+                let prepared = witness.prepare(scope, fact).unwrap();
+                if matches!(self.0, CancelCut::AfterReceipt) {
+                    witness.received(prepared);
+                }
+            }
+            std::future::pending::<()>().await;
+        }
+    }
+
+    impl MessageAdmissionRepository for CancellableRepository {
+        async fn begin(
+            &self,
+            _: &MessageAdmissionRequest<'_>,
+            witness: &AdmissionWitness,
+        ) -> Result<MessageAdmissionStart> {
+            self.stop(
+                witness,
+                TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+                CommitFact::Reserved(acceptance_fence(&lease().acceptance())),
+            )
+            .await;
+            unreachable!()
+        }
+        async fn accept(
+            &self,
+            acceptance: &MessageAdmissionAcceptance<'_>,
+            witness: &AdmissionWitness,
+        ) -> Result<FinalizeDecision> {
+            self.stop(
+                witness,
+                TransactionScope::AdmissionFinalize,
+                CommitFact::Finalized {
+                    fence: acceptance_fence(acceptance),
+                    result: FinalizeSuccess::PendingAccepted,
+                },
+            )
+            .await;
+            unreachable!()
+        }
+        async fn reconcile(&self, _: &Effect) -> Result<ReconcileResult> {
+            panic!("cancellation does not schedule reconciliation")
+        }
+    }
+
+    fn assert_cancel_cut(knowledge: &Knowledge, cut: CancelCut) {
+        assert!(matches!(
+            (knowledge, cut),
+            (Knowledge::NoCommitRequested, CancelCut::BeforeCommit)
+                | (Knowledge::CommitCallEntered(_), CancelCut::DuringCommit)
+                | (Knowledge::ReceiptKnown(_), CancelCut::AfterReceipt)
+        ));
+    }
+
+    #[tokio::test]
+    async fn retained_begin_survives_unpolled_and_each_commit_cut_without_inventing_grant() {
+        for cut in [
+            CancelCut::BeforeCommit,
+            CancelCut::DuringCommit,
+            CancelCut::AfterReceipt,
+        ] {
+            let owner = witness::DirectOperationHandle::new(Uuid::new_v4());
+            let request = request();
+            let retained = owner.begin(&request).unwrap();
+            let service = MessageAdmissionService::new(CancellableRepository(cut));
+            drop(service.begin_message_admission_retained(&request, &retained));
+            assert!(!owner.snapshot().reservation.unwrap().effect_started);
+            let mut future =
+                Box::pin(service.begin_message_admission_retained(&request, &retained));
+            assert!(futures::poll!(&mut future).is_pending());
+            drop(future);
+            let snapshot = owner.snapshot().reservation.unwrap();
+            assert_cancel_cut(snapshot.witness.knowledge(), cut);
+            assert!(matches!(
+                snapshot.state,
+                northstar_abuse_policy::admission_execution::ExecutionState::Waiting(_)
+            ));
+            assert!(retained.admission_grant().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_finalize_cancellation_keeps_begin_receipt_and_exact_fence() {
+        for cut in [
+            CancelCut::BeforeCommit,
+            CancelCut::DuringCommit,
+            CancelCut::AfterReceipt,
+        ] {
+            let owner = witness::DirectOperationHandle::new(Uuid::new_v4());
+            let request = request();
+            let begin = owner.begin(&request).unwrap();
+            let MessageAdmissionStart::Proceed {
+                lease: Some(lease), ..
+            } = MessageAdmissionService::new(Repository(Mode::ReservedReceipt))
+                .begin_message_admission_retained(&request, &begin)
+                .await
+                .unwrap()
+            else {
+                panic!("reserved lease")
+            };
+            let reservation = owner.snapshot().reservation;
+            let retained = owner.finalize(&lease).unwrap();
+            let service = MessageAdmissionService::new(CancellableRepository(cut));
+            let mut future = Box::pin(service.accept_message_admission_retained(&lease, &retained));
+            assert!(futures::poll!(&mut future).is_pending());
+            drop(future);
+            drop(lease);
+            let snapshot = owner.snapshot();
+            assert_eq!(snapshot.reservation, reservation);
+            let finalization = snapshot.finalization.unwrap();
+            assert_cancel_cut(finalization.witness.knowledge(), cut);
+            assert_eq!(
+                finalization.witness.effect().command,
+                Command::Finalize(acceptance_fence(&self::lease().acceptance()))
+            );
+        }
     }
 }

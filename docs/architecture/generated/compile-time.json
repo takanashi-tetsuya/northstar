@@ -2682,6 +2682,10 @@
     ],
     [
       "northstar-message-application",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-message-application",
       "northstar-message-core"
     ],
     [

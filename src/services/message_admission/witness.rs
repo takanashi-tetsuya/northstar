@@ -1,45 +1,197 @@
 //! Operation-local knowledge at the real SQL COMMIT await. No async Drop work.
 use northstar_abuse_policy::admission_execution::{
-    CommitFact, CommitWitness, Effect, PreparedCommit, Receipt, TransactionScope,
+    Command, CommitFact, CommitWitness, Effect, EffectResult, ExecutionOutcome, PreparedCommit,
+    Receipt, TransactionScope,
+};
+#[cfg(test)]
+use northstar_message_application::direct_lifecycle::OperationSnapshot;
+use northstar_message_application::direct_lifecycle::{
+    AdmissionEffectHandle, AdmissionGrant, DirectLifecycle, OperationSummary, TerminalReason,
 };
 use sqlx::{Postgres, Transaction};
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+
+/// The outer frame creates this owner before polling the handler. Clones name
+/// the same operation; a later frame gets a different owner, never a reset slot.
+#[derive(Clone)]
+pub(crate) struct DirectOperationHandle(Arc<Mutex<DirectLifecycle>>);
+
+impl std::fmt::Debug for DirectOperationHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DirectOperationHandle { authority: [redacted] }")
+    }
+}
+
+impl DirectOperationHandle {
+    pub(crate) fn new(operation: Uuid) -> Self {
+        Self(Arc::new(Mutex::new(DirectLifecycle::new(operation, 0, 1))))
+    }
+
+    pub(crate) fn begin(
+        &self,
+        request: &crate::abuse::MessageAdmissionRequest<'_>,
+    ) -> anyhow::Result<RetainedAdmission> {
+        // The existing validator runs before cloning any authority input.
+        let Command::Begin(request) = super::begin_command(request)? else {
+            unreachable!("begin_command always constructs Begin")
+        };
+        let handle = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .begin(request)?;
+        Ok(RetainedAdmission {
+            owner: self.clone(),
+            handle,
+        })
+    }
+
+    pub(crate) fn finalize(
+        &self,
+        lease: &crate::abuse::MessageAdmissionLease,
+    ) -> anyhow::Result<RetainedAdmission> {
+        let fence = super::acceptance_fence(&lease.acceptance());
+        let mut operation = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(AdmissionGrant::Reserved(grant)) = operation.admission_grant() else {
+            anyhow::bail!("finalization requires a completed reservation grant");
+        };
+        anyhow::ensure!(
+            grant.fence() == &fence,
+            "finalization reservation fence mismatch"
+        );
+        let handle = operation.finalize(&grant)?;
+        Ok(RetainedAdmission {
+            owner: self.clone(),
+            handle,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> OperationSnapshot {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).snapshot()
+    }
+
+    pub(crate) fn retire(&self, reason: TerminalReason) -> OperationSummary {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retire(reason)
+    }
+}
+
+/// An exact pre-I/O handle, not a reservation or durable-message capability.
+#[derive(Clone, Debug)]
+pub(crate) struct RetainedAdmission {
+    owner: DirectOperationHandle,
+    handle: AdmissionEffectHandle,
+}
+
+impl RetainedAdmission {
+    pub(crate) fn start(&self, command: &Command) -> anyhow::Result<()> {
+        self.owner
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .start_effect(&self.handle, command)?;
+        Ok(())
+    }
+
+    pub(crate) fn witness(&self) -> AdmissionWitness {
+        AdmissionWitness::Retained(Box::new(self.clone()))
+    }
+
+    pub(crate) fn complete(&self, result: EffectResult) -> anyhow::Result<ExecutionOutcome> {
+        self.owner
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .complete(&self.handle, result)
+            .map_err(|error| match error {
+                northstar_message_application::direct_lifecycle::Rejected::Completion(error) => {
+                    error.into()
+                }
+                other => other.into(),
+            })
+    }
+
+    pub(crate) fn admission_grant(&self) -> Option<AdmissionGrant> {
+        self.owner
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .admission_grant()
+    }
+}
 
 #[derive(Clone, Debug)]
-pub(crate) struct AdmissionWitness(Arc<Mutex<CommitWitness>>);
+pub(crate) enum AdmissionWitness {
+    Standalone(Arc<Mutex<CommitWitness>>),
+    Retained(Box<RetainedAdmission>),
+}
 
 impl AdmissionWitness {
     pub(crate) fn new(effect: Effect) -> Self {
-        Self(Arc::new(Mutex::new(CommitWitness::new(effect))))
+        Self::Standalone(Arc::new(Mutex::new(CommitWitness::new(effect))))
     }
     pub(crate) fn snapshot(&self) -> CommitWitness {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        match self {
+            Self::Standalone(state) => state.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            Self::Retained(retained) => retained
+                .owner
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .witness(&retained.handle)
+                .expect("issued admission effect handle")
+                .clone(),
+        }
     }
     pub(super) fn prepare(
         &self,
         scope: TransactionScope,
         fact: CommitFact,
     ) -> anyhow::Result<PreparedCommit> {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = PreparedCommit {
-            correlation: state.effect().correlation,
+            correlation: self.snapshot().effect().correlation,
             scope,
             fact,
         };
         // Retain the exact prospective fact without claiming a positive receipt.
-        state.enter_commit(prepared.clone())?;
+        match self {
+            Self::Standalone(state) => state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .enter_commit(prepared.clone())?,
+            Self::Retained(retained) => retained
+                .owner
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .enter_commit(&retained.handle, prepared.clone())?,
+        }
         Ok(prepared)
     }
     pub(super) fn received(&self, prepared: PreparedCommit) {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_receipt(Receipt {
-                correlation: prepared.correlation,
-                scope: prepared.scope,
-                fact: prepared.fact,
-            })
-            .expect("prevalidated operation-local admission receipt");
+        let receipt = Receipt {
+            correlation: prepared.correlation,
+            scope: prepared.scope,
+            fact: prepared.fact,
+        };
+        match self {
+            Self::Standalone(state) => state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .record_receipt(receipt)
+                .expect("prevalidated operation-local admission receipt"),
+            Self::Retained(retained) => retained
+                .owner
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .record_receipt(&retained.handle, receipt)
+                .expect("prevalidated retained admission receipt"),
+        }
     }
 }
 

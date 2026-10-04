@@ -1,0 +1,340 @@
+{
+  "schema": "northstar.stage3.sm-owner-results.v1",
+  "status": "OrdinaryValidationPassedScopeLimited",
+  "base_commit": "179642909f71fc38971b462736b11948500e7ae7",
+  "scope": "Actual SM record, checkpoint and client-acknowledgement ownership helper with retained per-turn facts",
+  "behavior": [
+    "A receiving SM turn owner exists before its child is polled; the child binds the actual ordered FIFO cut, including source-less slots, before persistence",
+    "Borrowed preparation binds the complete snapshot, policy and acknowledged projection through the service/database conversion",
+    "Existing SQL transactions retain COMMIT entry and successful receipt, or the explicit updated-false rollback entry and successful receipt",
+    "Record appends before checkpoint and restores only typed supersession; returned rotations must match the independently retained receipt before local application",
+    "ACK uses the existing h arithmetic, preserves separate persisted/nonpersisted paths, and retains FIFO/h application before a later fallible capacity step",
+    "Actual native lease composition delegates recording to the real SM helper and checks that persisted SM invokes no native fence or ACK"
+  ],
+  "validation": {
+    "checks": {
+      "format_check": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.122383102",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "gates": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "5.300685235",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 11842,
+        "log_sha256": "b50b5e0914a79adc8e509645093b25e556348edf2c477b8a1134d066b711ae14"
+      },
+      "execution_gate": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.358288567",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 40,
+        "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+      },
+      "architecture_gate": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "1.510708794",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 183,
+        "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36"
+      },
+      "admission_gate": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.144916442",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 207,
+        "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+      },
+      "compile": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "146.564294239",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 413,
+        "log_sha256": "f053f294d270cf0020c67e1529296d8a576cd2b73b740a3c78f7814e5f6bee26"
+      },
+      "clippy": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "179.542432992",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 413,
+        "log_sha256": "a4eed1a950bee13a57c48d2a2ecd9eafba6b5da1a18369abc8534e4a7802c035"
+      },
+      "graphs": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.429747934",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 229,
+        "log_sha256": "e38a265a5bd35a61e776fb027cd8494eb98955b13e9dabb9c1169c472dd8a008"
+      }
+    },
+    "rust": {
+      "selected": 23,
+      "ran": 23,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "node": {
+      "passed": 182,
+      "failed": 0,
+      "skipped": 0
+    },
+    "exact_tests": [
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::ordered_cut_rejects_changed_scope_plain_slot_and_h_decision_inertly"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::commit_fact_rejects_duplicate_rotations_and_inexact_settlement_inertly"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::rollback_entry_error_drop_and_receipt_are_distinct_from_commit"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::commit_response_loss_stays_unknown_and_positive_receipt_survives_retirement"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::invocation_binding_and_old_retained_observations_are_independent"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::nonpersisted_empty_and_absent_unclaimed_keep_exact_source_semantics"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "sm_ownership::tests::snapshot_and_owner_debug_redact_exact_claim_and_lease_tokens"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::record_limits_and_real_governor_reject_before_append_or_persistence"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::nonpersisted_record_keeps_fifo_without_claiming_sm_ownership"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::record_wraps_h_and_restores_only_typed_supersession"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::record_drop_preserves_append_and_exact_commit_or_rollback_knowledge"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::record_rotations_precede_actual_mix_notification_and_wrong_return_is_rejected"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::acknowledgement_uses_existing_h_rules_for_invalid_zero_delta_and_wrap"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::acknowledgement_binds_mixed_prefix_plain_slots_and_returned_suffix_rotations"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::acknowledgement_failure_and_drop_never_erase_known_transaction_receipt"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::injected_post_ack_capacity_failure_keeps_committed_fifo_and_h"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::nonpersisted_plain_ack_skips_commit_while_persisted_plain_ack_commits"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::nonpersisted_fake_authority_distinguishes_absent_c2s_and_strict_mix_failure"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::private_preparation_rejects_changed_epoch_whole_cut_payload_and_projection"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::replaced_turn_slot_keeps_old_receipt_and_full_snapshot_independent"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::turn_owner_drops_child_before_summary_and_preserves_caught_panic"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::real_sm_record_composes_with_native_lease_without_native_fence_or_ack"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "db::sm_repository::sm_owner_tests::converted_checkpoint_projection_binds_all_snapshot_fields_without_io"
+      }
+    ],
+    "inventory_counts": {
+      "core": 18,
+      "server": 1805
+    },
+    "unit_log_manifest_sha256": "9b677315fa4d052d051873420eddbb6b9dd5c4f1e1b4ba34a3858e751513ab9d",
+    "test_binaries": {
+      "core": {
+        "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+        "bytes": 3377552,
+        "sha256": "1f4352c80a23cb910802926dbe1ae9dd4df6fe204830ff5d8b56fe1d46c74f73"
+      },
+      "server": {
+        "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+        "bytes": 196372488,
+        "sha256": "5541353121e6610038926f75dbf19fc74b14c9c6ae917e3fe50c8ffedc8fe135"
+      }
+    },
+    "graph_count_unchanged": 10,
+    "command_limits": {
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "maximum_log_bytes": 4194304,
+      "cargo_locked": true,
+      "cargo_offline": true,
+      "jobs": 1,
+      "debug_info": 0,
+      "incremental": false
+    },
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "shell_exit_code": 0
+  },
+  "retained_failures": [
+    {
+      "scope": "initial local ordinary batch",
+      "phase": "Clippy",
+      "exit_code": 101,
+      "reason": "redundant local binding in new compatibility test",
+      "rust_tests_executed": 0,
+      "correction": "remove redundant test-only rebind; keep all assertions",
+      "source_manifest_sha256": "152a1ab9a667b7a84648084a1f9b76f813b2e384c8040c95292b3f7c4094cd3c",
+      "log_sha256": "c031cf124d5ceb208ecc90cea3696bb5ddf423f76721be0af38d936ced6254af",
+      "log_bytes": 1091
+    }
+  ],
+  "limits": [
+    "Owner-before-child refers to the helper child after the real async callback enters; dropping the outer callback before its first poll does not create an observation",
+    "Fake persistence ports and synthetic commit futures do not establish SQL/MVCC/COMMIT-response fidelity",
+    "Post-receipt pending/error cuts are controlled continuations; the current SQL adapter has no explicit await between its COMMIT callback and outcome conversion",
+    "Existing prefix/suffix and snapshot clone order is preserved by source comparison; unit event logs do not instrument allocator calls",
+    "Retained source metadata, temporary settlement vectors and rotation-uniqueness BTreeSet indexes are additional allocations outside unchanged governor accounting",
+    "The void notification observation records an attempt; tests separately inspect actual in-process one-shot/channel receivers",
+    "No live SQL, product sockets, wire, process-loss or recovery workload is qualified by this local batch",
+    "BOSH ownership, composed saved-case replay/mutation/shrinking and full Stage3 acceptance remain open",
+    "The approved SM original-live-lease retention policy change remains separate and unimplemented",
+    "Test binaries include build metadata for the checked base; later builds may replace these paths. Recorded hashes identify the actual executions, not every future rebuild."
+  ],
+  "source": {
+    "base_commit": "179642909f71fc38971b462736b11948500e7ae7",
+    "manifest_sha256": "2f604632978afa92268c0bcc7f810cb1e40f73d7422d90b479bdeb8d19336245",
+    "manifest_encoding": "SHA-256 of UTF-8 JSON with sorted keys, compact comma/colon separators and no trailing newline",
+    "files": {
+      "crates/northstar-delivery-core/src/lib.rs": {
+        "sha256": "71a94b11a8e6c34f1a1a2e9364f2a761525730a64a1bf8ba7981d66615514c33",
+        "bytes": 7961
+      },
+      "crates/northstar-delivery-core/src/sm_ownership.rs": {
+        "sha256": "f7febff9e050415bda3e55fbddb138563111c2a43b71fe5ab6cc1d848dcd23ac",
+        "bytes": 30109
+      },
+      "src/db/sm.rs": {
+        "sha256": "d917e1a239addbd72bb335b24ef0a624d236d5f6e20e28d38b8c09cb8f934b0e",
+        "bytes": 70519
+      },
+      "src/db/sm_repository.rs": {
+        "sha256": "9b70146f6edb863b14c8b1670bb7e4ef4111de7e5445d3d1f43ce427fff6a1fd",
+        "bytes": 24774
+      },
+      "src/services/sm.rs": {
+        "sha256": "ecadd446c0e9546a9fb44d78968a4d279ac9f244b9a510adf7e61ee495d7c339",
+        "bytes": 69064
+      },
+      "src/services/sm/ownership.rs": {
+        "sha256": "88466197fabe879b19a98409e47f6f8458fba340199a82b14d08592dc26bc80a",
+        "bytes": 7604
+      },
+      "src/xmpp/protocol.rs": {
+        "sha256": "e871ac458c4020e565499c9ffd98c475f19a8510dcf56a87b2a39ea9ea7f9842",
+        "bytes": 105894
+      },
+      "src/xmpp/protocol/sm.rs": {
+        "sha256": "5fa3216c3347de19ca93672351f5e029c563c4f46cf1daa7a953453bf7a5b78f",
+        "bytes": 76289
+      },
+      "src/xmpp/protocol/sm_owner.rs": {
+        "sha256": "78f6ef8c3ef14e515aec732847c43411b505c1c1dbbc794dea7e21ab1bae109c",
+        "bytes": 60076
+      },
+      "src/xmpp/direct_delivery.rs": {
+        "sha256": "b081be78b5d1b8962e3eb4c69e80f54d96713c14e20205830faa6a0dae2437c8",
+        "bytes": 39506
+      },
+      "scripts/check-execution-boundaries.mjs": {
+        "sha256": "57918ed5d98c9413b028f3c795a8292009b7570fa25a1ed0d2a89637d3310e3a",
+        "bytes": 35442
+      },
+      "scripts/test-execution-boundaries.mjs": {
+        "sha256": "383847665edabf75b44d11994b58875fb2822a6d8f35c78e8c638ddc1fe4dadd",
+        "bytes": 31102
+      }
+    },
+    "unchanged_during_all_commands": true
+  },
+  "test_fixture_refinement": "The empty-FIFO wrap case sets both outbound_h and acked_h to MAX; the Debug case retains an actual claim before checking redaction. All original assertions remain.",
+  "prior_wip_ci": {
+    "commit": "179642909f71fc38971b462736b11948500e7ae7",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37210822561",
+    "conclusion": "failure",
+    "jobs": {
+      "success": 27,
+      "failure": 4,
+      "skipped": 2
+    },
+    "failures": [
+      "Unformatted source",
+      "Concrete repository type named in protocol module",
+      "Unused legacy SQL conveniences",
+      "Required aggregate"
+    ],
+    "corrections": [
+      "Formatted source",
+      "Generic borrowed SmRepository port, with zero protocol DB references",
+      "Preserved legacy convenience call paths"
+    ],
+    "record_sha256": "76ccd82bfae881d20e6a8fcaa11b5e5ca887ac92f621681e97e288fbdd65bed0",
+    "qualification": "Prior WIP CI is not current source acceptance. Its protocol integration passed; the earlier TLS timeout root cause remains unknown."
+  },
+  "preceding_slice": "stage3-native-write-results.json"
+}

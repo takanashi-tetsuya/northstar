@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 /// Existing persistence authority; the closed ACK request carries the exact
 /// fenced source and the observation for this invocation together.
-trait DirectWritePort {
+pub(super) trait DirectWritePort {
     fn record(&mut self, item: &OutboundItem) -> impl Future<Output = Result<bool>> + Send;
     fn fence_c2s(
         &self,
@@ -167,7 +167,7 @@ impl<'a> DirectWriteLease<'a> {
     ) -> Result<Self> {
         Self::prepare_with(session, item, observation).await
     }
-    async fn prepare_with<P: DirectWritePort>(
+    pub(super) async fn prepare_with<P: DirectWritePort>(
         port: &mut P,
         item: &'a OutboundItem,
         observation: &Observation,
@@ -236,7 +236,7 @@ impl WrittenDirectLease<'_> {
     pub(super) async fn settle(self, session: &ProtocolSession) {
         self.settle_with(session).await;
     }
-    async fn settle_with<P: DirectWritePort>(self, port: &P) {
+    pub(super) async fn settle_with<P: DirectWritePort>(self, port: &P) {
         // Full local write was retained by the writer helper before either
         // notification and before this first settlement await.
         self.item.confirm_transport_write();

@@ -98,7 +98,32 @@ impl SmRepository for PostgresSmRepository {
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
         if let Some(prepared) = observation {
-            prepared.validate_projection(session_id, connection_id, database_projection(&snapshot), &[], ownership::CheckpointPolicy { ttl_seconds, live_lease_seconds, max_stanzas, max_bytes })?;
+            prepared.validate_projection(
+                session_id,
+                connection_id,
+                database_projection(&snapshot),
+                &[],
+                ownership::CheckpointPolicy {
+                    ttl_seconds,
+                    live_lease_seconds,
+                    max_stanzas,
+                    max_bytes,
+                },
+            )?;
+        }
+        if observation.is_none() {
+            return Ok(db::checkpoint_sm_session_with_ownership_resolution(
+                &self.pool,
+                session_id,
+                connection_id,
+                &snapshot,
+                ttl_seconds,
+                live_lease_seconds,
+                max_stanzas,
+                max_bytes,
+            )
+            .await?
+            .into());
         }
         Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
             &self.pool,
@@ -138,32 +163,53 @@ impl SmRepository for PostgresSmRepository {
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
         if let Some(prepared) = observation {
-            prepared.validate_projection(session_id, connection_id, database_projection(&snapshot), acknowledged, ownership::CheckpointPolicy { ttl_seconds, live_lease_seconds, max_stanzas, max_bytes })?;
-        }
-        Ok(
-            db::sm::checkpoint_sm_session_and_acknowledge_observed(
-                &self.pool,
+            prepared.validate_projection(
                 session_id,
                 connection_id,
-                &snapshot,
+                database_projection(&snapshot),
                 acknowledged,
-                ttl_seconds,
-                live_lease_seconds,
-                max_stanzas,
-                max_bytes,
-                observation.map(|prepared| prepared.request()),
-            )
-            .await?
-            .into(),
+                ownership::CheckpointPolicy {
+                    ttl_seconds,
+                    live_lease_seconds,
+                    max_stanzas,
+                    max_bytes,
+                },
+            )?;
+        }
+        Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
+            &self.pool,
+            session_id,
+            connection_id,
+            &snapshot,
+            acknowledged,
+            ttl_seconds,
+            live_lease_seconds,
+            max_stanzas,
+            max_bytes,
+            observation.map(|prepared| prepared.request()),
         )
+        .await?
+        .into())
     }
     async fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
-        if let Some(prepared) = observation { prepared.validate_sources(sources)?; }
-        db::sm::acknowledge_transport_sources_observed(&self.pool, sources, observation.map(|prepared| prepared.request())).await
+        if let Some(prepared) = observation {
+            prepared.validate_sources(sources)?;
+        }
+        match observation {
+            Some(prepared) => {
+                db::sm::acknowledge_transport_sources_observed(
+                    &self.pool,
+                    sources,
+                    Some(prepared.request()),
+                )
+                .await
+            }
+            None => db::acknowledge_transport_sources(&self.pool, sources).await,
+        }
     }
     async fn reserve_binding(
         &self,
@@ -539,9 +585,144 @@ impl From<db::SmResumePending> for SmResumePending {
 }
 
 fn database_projection(snapshot: &db::SmSessionSnapshot) -> ownership::SnapshotProjection<'_> {
-    let db::SmSessionSnapshot { inbound_h, outbound_h, acked_h, available, carbons, priority, blocklist_requested, roster_requested,
-        active_privacy_list, privacy_requested, peer_ip, user_agent_id, joined_rooms, directed_presence, last_presence, unacked } = snapshot;
-    ownership::SnapshotProjection { inbound_h: *inbound_h, outbound_h: *outbound_h, acked_h: *acked_h, available: *available, carbons: *carbons, priority: *priority,
-        blocklist_requested: *blocklist_requested, roster_requested: *roster_requested, active_privacy_list, privacy_requested: *privacy_requested,
-        peer_ip: *peer_ip, user_agent_id: *user_agent_id, joined_rooms, directed_presence, last_presence, unacked }
+    let db::SmSessionSnapshot {
+        inbound_h,
+        outbound_h,
+        acked_h,
+        available,
+        carbons,
+        priority,
+        blocklist_requested,
+        roster_requested,
+        active_privacy_list,
+        privacy_requested,
+        peer_ip,
+        user_agent_id,
+        joined_rooms,
+        directed_presence,
+        last_presence,
+        unacked,
+    } = snapshot;
+    ownership::SnapshotProjection {
+        inbound_h: *inbound_h,
+        outbound_h: *outbound_h,
+        acked_h: *acked_h,
+        available: *available,
+        carbons: *carbons,
+        priority: *priority,
+        blocklist_requested: *blocklist_requested,
+        roster_requested: *roster_requested,
+        active_privacy_list,
+        privacy_requested: *privacy_requested,
+        peer_ip: *peer_ip,
+        user_agent_id: *user_agent_id,
+        joined_rooms,
+        directed_presence,
+        last_presence,
+        unacked,
+    }
+}
+
+#[cfg(test)]
+mod sm_owner_tests {
+    use super::*;
+    use crate::outbound::SmUnackedStanza;
+    use northstar_delivery_core::sm_ownership::{Observation, Purpose, Scope};
+    #[test]
+    fn converted_checkpoint_projection_binds_all_snapshot_fields_without_io() {
+        let session_id = Uuid::from_u128(801);
+        let connection_id = Uuid::from_u128(802);
+        let snapshot = SmSessionSnapshot {
+            inbound_h: 1,
+            outbound_h: 3,
+            acked_h: 2,
+            available: true,
+            carbons: true,
+            priority: 7,
+            blocklist_requested: true,
+            roster_requested: true,
+            active_privacy_list: Some("private-list".to_owned()),
+            privacy_requested: true,
+            peer_ip: "192.0.2.1".parse().unwrap(),
+            user_agent_id: Some(Uuid::from_u128(803)),
+            joined_rooms: vec![SmMucMembership {
+                room_jid: "room@example.test".to_owned(),
+                nick: "nick".to_owned(),
+            }],
+            directed_presence: vec!["peer@example.test".to_owned()],
+            last_presence: Some("<presence/>".to_owned()),
+            unacked: vec![SmUnackedStanza::plain(
+                "<message>private-body</message>".to_owned(),
+            )],
+        };
+        let whole = snapshot.unacked.clone().into();
+        let observation = Observation::new(Scope {
+            purpose: Purpose::Checkpoint,
+            session_id: Some(session_id),
+            connection_id,
+            inbound_h: 1,
+            outbound_h: 3,
+            acked_h: 2,
+            queued: 1,
+        });
+        let policy = ownership::CheckpointPolicy {
+            ttl_seconds: 60,
+            live_lease_seconds: 30,
+            max_stanzas: 10,
+            max_bytes: 1000,
+        };
+        let prepared = ownership::PreparedCheckpoint::bind(
+            &observation,
+            session_id,
+            connection_id,
+            &whole,
+            &snapshot,
+            &[],
+            policy,
+        )
+        .unwrap();
+        let converted = db::SmSessionSnapshot::from(&snapshot);
+        prepared
+            .validate_projection(
+                session_id,
+                connection_id,
+                database_projection(&converted),
+                &[],
+                policy,
+            )
+            .unwrap();
+        let before = observation.snapshot();
+        for field in 0..16 {
+            let mut changed = db::SmSessionSnapshot::from(&snapshot);
+            match field {
+                0 => changed.inbound_h += 1,
+                1 => changed.outbound_h += 1,
+                2 => changed.acked_h += 1,
+                3 => changed.available = false,
+                4 => changed.carbons = false,
+                5 => changed.priority = 0,
+                6 => changed.blocklist_requested = false,
+                7 => changed.roster_requested = false,
+                8 => changed.active_privacy_list = None,
+                9 => changed.privacy_requested = false,
+                10 => changed.peer_ip = "192.0.2.2".parse().unwrap(),
+                11 => changed.user_agent_id = None,
+                12 => changed.joined_rooms.clear(),
+                13 => changed.directed_presence.clear(),
+                14 => changed.last_presence = None,
+                _ => changed.unacked[0].stanza.push_str("changed"),
+            }
+            assert!(prepared
+                .validate_projection(
+                    session_id,
+                    connection_id,
+                    database_projection(&changed),
+                    &[],
+                    policy
+                )
+                .is_err());
+            assert_eq!(observation.snapshot(), before);
+        }
+        assert!(!format!("{prepared:?} {:?}", observation.snapshot()).contains("private-body"));
+    }
 }

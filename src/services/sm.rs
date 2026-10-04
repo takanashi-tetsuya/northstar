@@ -824,7 +824,9 @@ impl<R: SmRepository> SmService<R> {
         sources: &[crate::outbound::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
-        self.repository.acknowledge_delivery_batch(sources, observation).await
+        self.repository
+            .acknowledge_delivery_batch(sources, observation)
+            .await
     }
     pub(crate) async fn reserve_binding(
         &self,

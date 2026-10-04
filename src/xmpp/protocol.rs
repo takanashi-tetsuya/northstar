@@ -1109,9 +1109,12 @@ impl ProtocolSession {
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
         sm_owner::SmTurnRunner::new(observation.clone(), async move {
             let result = turn.record_item(item, &observation).await;
-            if result.is_err() { observation.returned_error(); }
+            if result.is_err() {
+                observation.returned_error();
+            }
             result
-        }).await
+        })
+        .await
     }
 
     async fn record_outbound_with_source(
@@ -1122,10 +1125,15 @@ impl ProtocolSession {
         let mut turn = self.sm_transport_turn();
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
         sm_owner::SmTurnRunner::new(observation.clone(), async move {
-            let result = turn.record_source(stanza, durable_source, &observation).await;
-            if result.is_err() { observation.returned_error(); }
+            let result = turn
+                .record_source(stanza, durable_source, &observation)
+                .await;
+            if result.is_err() {
+                observation.returned_error();
+            }
             result
-        }).await
+        })
+        .await
     }
 
     pub fn record_replayed(&self) {
@@ -1134,28 +1142,42 @@ impl ProtocolSession {
 
     fn sm_snapshot_view(&self) -> sm_owner::SmSnapshotView<'_> {
         sm_owner::SmSnapshotView {
-            available: &self.available, carbons: &self.carbons, priority: &self.priority,
-            blocklist_requested: &self.blocklist_requested, roster_requested: &self.roster_requested,
-            privacy_active: &self.privacy_active, privacy_requested: &self.privacy_requested,
-            peer_ip: &self.peer_ip, user_agent_id: &self.user_agent_id,
-            joined_rooms: &self.joined_rooms, directed_presence: &self.directed_presence,
+            available: &self.available,
+            carbons: &self.carbons,
+            priority: &self.priority,
+            blocklist_requested: &self.blocklist_requested,
+            roster_requested: &self.roster_requested,
+            privacy_active: &self.privacy_active,
+            privacy_requested: &self.privacy_requested,
+            peer_ip: &self.peer_ip,
+            user_agent_id: &self.user_agent_id,
+            joined_rooms: &self.joined_rooms,
+            directed_presence: &self.directed_presence,
             last_presence: &self.last_presence,
         }
     }
 
-    fn sm_transport_turn(&mut self) -> sm_owner::SmTransportTurn<'_, sm_owner::RealSmPort<'_>> {
+    fn sm_transport_turn(
+        &mut self,
+    ) -> sm_owner::SmTransportTurn<'_, impl sm_owner::SmOwnerPort + '_> {
         // Constructing the borrowed view performs no atomic reads or cloning.
         // Snapshot/accounting sampling remains at its original call sites.
         sm_owner::SmTransportTurn {
             sm: &mut self.sm,
             view: sm_owner::SmSnapshotView {
-            available: &self.available, carbons: &self.carbons, priority: &self.priority,
-            blocklist_requested: &self.blocklist_requested, roster_requested: &self.roster_requested,
-            privacy_active: &self.privacy_active, privacy_requested: &self.privacy_requested,
-            peer_ip: &self.peer_ip, user_agent_id: &self.user_agent_id,
-            joined_rooms: &self.joined_rooms, directed_presence: &self.directed_presence,
-            last_presence: &self.last_presence,
-        },
+                available: &self.available,
+                carbons: &self.carbons,
+                priority: &self.priority,
+                blocklist_requested: &self.blocklist_requested,
+                roster_requested: &self.roster_requested,
+                privacy_active: &self.privacy_active,
+                privacy_requested: &self.privacy_requested,
+                peer_ip: &self.peer_ip,
+                user_agent_id: &self.user_agent_id,
+                joined_rooms: &self.joined_rooms,
+                directed_presence: &self.directed_presence,
+                last_presence: &self.last_presence,
+            },
             policy: &self.sm_runtime_policy,
             connection_id: self.connection_id,
             port: sm_owner::RealSmPort {
@@ -1197,9 +1219,12 @@ impl ProtocolSession {
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Checkpoint);
         sm_owner::SmTurnRunner::new(observation.clone(), async move {
             let result = turn.checkpoint_in_turn(&observation).await;
-            if result.is_err() { observation.returned_error(); }
+            if result.is_err() {
+                observation.returned_error();
+            }
             result
-        }).await
+        })
+        .await
     }
 
     pub(crate) fn apply_sm_ownership_resolution(

@@ -19,6 +19,11 @@ const files = {
   nativeCore: 'crates/northstar-delivery-core/src/native_write.rs',
   replayDb: 'src/db/replay.rs',
   mixDb: 'src/db/mix.rs',
+  smProtocol: 'src/xmpp/protocol/sm.rs',
+  smOwner: 'src/xmpp/protocol/sm_owner.rs',
+  smCore: 'crates/northstar-delivery-core/src/sm_ownership.rs',
+  smPrepared: 'src/services/sm/ownership.rs',
+  smDb: 'src/db/sm.rs',
 };
 
 function requireBoundary(condition, message) {
@@ -172,6 +177,108 @@ export function verifyNativeWriteBoundaries({ transport, nativeWrite, nativeCore
   const mix = normalize(body(mixDb, 'async\\s+fn\\s+acknowledge_mix_delivery_observed\\b'));
   requireBoundary(count(mix, 'commit_observed(') === 1 && mix.includes('commit_observed(transaction.commit(),observation,ifremoved{AckDisposition::Deleted}else{AckDisposition::NoMatchingMix}).await?;'),
     'actual MIX ACK transaction must retain the deleted versus no-match COMMIT receipt');
+}
+
+// These are source-wiring checks for the production SM helper. The exact
+// continuation tests establish behavior; this gate only detects selected
+// bypasses and ordering drift and makes no SQL or memory-bound claim.
+export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smCore, smPrepared, smDb }) {
+  const normalize = value => compact(value).replace(/,\)/g, ')');
+  for (const [source, name, purpose, call] of [
+    [protocol, 'record_outbound_item', 'Record', 'turn.record_item(item,&observation).await'],
+    [protocol, 'record_outbound_with_source', 'Record', 'turn.record_source(stanza,durable_source,&observation).await'],
+    [protocol, 'checkpoint_sm', 'Checkpoint', 'turn.checkpoint_in_turn(&observation).await'],
+    [smProtocol, 'acknowledge', 'Acknowledge{h}', 'turn.acknowledge(h,&observation).await'],
+  ]) {
+    const entry = normalize(body(source, `async\\s+fn\\s+${name}\\b`));
+    ordered(entry, ['letmutturn=self.sm_transport_turn();',
+      `letobservation=turn.start(northstar_delivery_core::sm_ownership::Purpose::${purpose});`,
+      'SmTurnRunner::new(observation.clone(),asyncmove{', `letresult=${call};`,
+      'ifresult.is_err(){observation.returned_error();}', 'result}).await'],
+    `SM ${name} must retain one observation outside its actual child`);
+    requireBoundary(count(entry, 'turn.start(') === 1 && count(entry, 'SmTurnRunner::new(') === 1,
+      `SM ${name} must create one turn owner`);
+  }
+  const item = normalize(body(smOwner, 'async\\s+fn\\s+record_item\\b'));
+  ordered(item, ['item.validate_durable_source_shape()', 'durable_delivery_managed_by_sm(',
+    'self.record_source(&item.stanza,item.durable_source,observation).await?;',
+    'ifmanaged_by_sm{', 'item.complete_mix_handoff(', 'item.confirm_transport_ownership();', 'observation.notification_attempted();'],
+  'SM recording must retain the real item through persistence before ownership notification');
+  const record = normalize(body(smOwner, 'async\\s+fn\\s+record_source\\b'));
+  ordered(record, ['self.port.recorded();', 'ifself.sm.enabled&&super::is_counted_stanza(stanza){',
+    'self.sm.outbound_h=self.sm.outbound_h.wrapping_add(1);',
+    'self.sm.unacked.push_back(SmUnackedStanza::with_source(stanza.to_owned(),source));',
+    'observation.appended();', 'self.checkpoint_in_turn(observation).await',
+    'iferror.downcast_ref::<crate::outbound::DurableDeliverySuperseded>().is_some(){',
+    'self.sm.unacked.pop_back();', 'self.sm.outbound_h=self.sm.outbound_h.wrapping_sub(1);', 'observation.restored();'],
+  'SM recording must append before checkpoint and restore only typed supersession');
+  requireBoundary(count(record, 'pop_back(') === 1 && count(record, '.await') === 1,
+    'SM recording must retain its one checkpoint await and one typed restoration');
+  const checkpoint = normalize(body(smOwner, 'async\\s+fn\\s+checkpoint_in_turn\\b'));
+  ordered(checkpoint, ['self.port.reserve_snapshot(live_bytes)',
+    'self.view.snapshot(self.sm,self.sm.unacked.iter().cloned().collect())',
+    'PreparedCheckpoint::bind(observation,id,self.connection_id,&self.sm.unacked,&snapshot,&[],self.checkpoint_policy())?',
+    'tokio::time::timeout(std::time::Duration::from_secs(5),self.port.checkpoint(&prepared)).await',
+    'prepared.request().validate_checkpoint_return(outcome.updated,&rotations)?;',
+    'anyhow::ensure!(outcome.updated);',
+    'ProtocolSession::apply_sm_ownership_resolution_to_unacked(&mutself.sm.unacked,&outcome.ownership);',
+    'observation.ownership_applied();'],
+  'SM checkpoint must bind its snapshot and returned receipt before applying rotations');
+  const ack = normalize(body(smOwner, 'async\\s+fn\\s+acknowledge\\b'));
+  ordered(ack, ['northstar_xep_0198::acknowledgement_delta(self.sm.acked_h,h,self.sm.unacked.len())',
+    'observation.h_decision(Some(delta));',
+    'self.sm.unacked.iter().take(delta).cloned().collect::<Vec<_>>()',
+    'self.sm.unacked.iter().skip(delta).cloned().collect::<VecDeque<_>>()',
+    'self.port.reserve_snapshot(clone_bytes)?;',
+    'snapshot.acked_h=h;',
+    'PreparedCheckpoint::bind(observation,id,self.connection_id,&self.sm.unacked,&snapshot,&acknowledged,self.checkpoint_policy())?',
+    'tokio::time::timeout(std::time::Duration::from_secs(5),self.port.checkpoint(&prepared)).await',
+    'prepared.request().validate_checkpoint_return(outcome.updated,&rotations)?;',
+    'ProtocolSession::apply_sm_ownership_resolution_to_unacked(&mutremaining,&outcome.ownership);'],
+  'SM ACK must preserve actual h arithmetic, clone order and exact persisted cut');
+  ordered(ack, ['PreparedBatch::bind(',
+    'tokio::time::timeout(std::time::Duration::from_secs(5),self.port.acknowledge_batch(&prepared)).await',
+    'prepared.request().validate_batch_return()?;',
+    'self.sm.unacked=remaining;self.sm.acked_h=h;observation.ack_applied(h);',
+    'self.view.resident_bytes(self.sm)', 'self.port.shrink(capacity,live_bytes)',
+    'observation.capacity_completed(result.is_ok());result?;'],
+  'SM ACK must preserve separate batch authority and retain local apply before fallible shrink');
+  requireBoundary(count(checkpoint, '.await') === 1 && count(ack, '.await') === 2,
+    'SM persistence must keep its existing bounded awaits');
+  const prepared = body(smPrepared, "impl<'a>\\s+PreparedCheckpoint<'a>");
+  const projection = normalize(body(prepared, 'fn\\s+validate_projection\\b'));
+  ordered(projection, ['session_id==self.session_id()&&connection_id==self.connection_id()',
+    'snapshot==SnapshotProjection::from(self.snapshot)&&acknowledged==self.acknowledged&&policy==self.policy',
+    'self.request.validate_binding(self.request.binding())?;'],
+  'SM prepared persistence must compare the entire immutable projection');
+  for (const [name, entered, completed] of [
+    ['commit_observed', 'request.enter_commit(fact)', 'permit.received();'],
+    ['rollback_observed', 'request.rollback_entered()', 'permit.completed();'],
+  ]) {
+    const turn = normalize(body(smCore, `pub\\s+async\\s+fn\\s+${name}\\b`));
+    requireBoundary(turn === `letpermit=${entered}.map_err(CompletionError::Binding)?;future.await.map_err(CompletionError::Repository)?;${completed}Ok(())`,
+      `SM ${name} must bind before the real future and retain only its successful receipt`);
+  }
+  const sql = normalize(body(smDb, 'async\\s+fn\\s+checkpoint_sm_session_and_acknowledge_observed\\b'));
+  ordered(sql, ['request.validate_binding(binding)?;', 'validate_snapshot(snapshot,max_stanzas,max_bytes)?;',
+    'pool.begin().await?', 'update_snapshot(', 'if!updated{',
+    'rollback_observed(transaction.rollback(),request).await?;', 'updated:false',
+    'replace_queue_inner(', 'CommitFact::Checkpoint{',
+    'commit_observed(transaction.commit(),request,fact).await?;', 'updated:true'],
+  'SM SQL checkpoint must preserve rollback and COMMIT observations around its actual transaction');
+  const batch = normalize(body(smDb, 'async\\s+fn\\s+acknowledge_transport_sources_observed\\b'));
+  ordered(batch, ['request.validate_binding(request.binding())?;', 'ifsources.is_empty(){', 'request.no_persistence()?;',
+    'pool.begin().await?', 'CommitFact::UnpersistedAck{',
+    'commit_observed(transaction.commit(),request,fact).await?;'],
+  'SM unpersisted SQL ACK must retain no-call and actual commit authority separately');
+  const runnerDrop = normalize(body(smOwner, 'impl<F>\\s+Drop\\s+for\\s+SmTurnRunner<F>'));
+  requireBoundary(runnerDrop === 'fndrop(&mutself){drop(self.child.take());ifself.poll_in_progress{self.observation.finish(Terminal::Panicked);}}',
+    'SM turn must destroy its child before retiring and retain a caught panic');
+  const runner = body(smOwner, 'impl<F:\\s*Future>\\s+Future\\s+for\\s+SmTurnRunner<F>');
+  const poll = normalize(body(runner, 'fn\\s+poll\\b'));
+  ordered(poll, ['this.poll_in_progress=true;', '.poll(cx)',
+    'drop(this.child.take());this.poll_in_progress=false;this.observation.finish(Terminal::Returned);'],
+  'SM turn must preserve child-first normal completion and its panic marker');
 }
 
 export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction }) {
@@ -355,5 +462,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   verifyRoomExecutionBoundaries(sources);
   verifyNativeAckService(sources.mixService);
   verifyNativeWriteBoundaries(sources);
+  verifySmOwnershipBoundaries(sources);
   console.log('Execution publication boundaries passed');
 }

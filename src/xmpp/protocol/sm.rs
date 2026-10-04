@@ -1357,12 +1357,16 @@ impl ProtocolSession {
 
     pub(crate) async fn acknowledge(&mut self, h: u32) -> Result<bool> {
         let mut turn = self.sm_transport_turn();
-        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Acknowledge { h });
+        let observation =
+            turn.start(northstar_delivery_core::sm_ownership::Purpose::Acknowledge { h });
         super::sm_owner::SmTurnRunner::new(observation.clone(), async move {
             let result = turn.acknowledge(h, &observation).await;
-            if result.is_err() { observation.returned_error(); }
+            if result.is_err() {
+                observation.returned_error();
+            }
             result
-        }).await
+        })
+        .await
     }
 
     pub(crate) fn reset_sm(&mut self) {

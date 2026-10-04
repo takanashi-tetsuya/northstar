@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -274,3 +274,55 @@ rejectsNativeWrite('C2S transaction cannot bypass the observer', 'replayDb', /\b
 rejectsNativeWrite('C2S absent row cannot be called a deletion', 'replayDb', /AckDisposition::AbsentUnclaimed/g, 'AckDisposition::Deleted', /checked deletion/);
 rejectsNativeWrite('MIX transaction cannot bypass the observer', 'mixDb', /\bcommit_observed\(/g, 'unobserved_commit(', /actual MIX ACK transaction/);
 rejectsNativeWrite('MIX no-match cannot be called a deletion', 'mixDb', /AckDisposition::NoMatchingMix/g, 'AckDisposition::Deleted', /actual MIX ACK transaction/);
+
+test('SM production ownership paths satisfy their source gate', () => verifySmOwnershipBoundaries(baseline));
+test('SM comments cannot provide additional executable effects', () => {
+  verifySmOwnershipBoundaries({ ...baseline, smOwner: `/* pool.begin(); request.no_persistence(); */\n${baseline.smOwner}` });
+});
+function rejectsSm(name, file, method, pattern, replacement, expected) {
+  test(name, () => {
+    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\b/);
+    const production = testModule < 0 ? baseline[file] : baseline[file].slice(0, testModule);
+    const declaration = new RegExp(`\\bfn\\s+${method}\\b`, 'g');
+    const matches = [...production.matchAll(declaration)];
+    assert.equal(matches.length, 1, 'SM mutation must select one actual method');
+    const start = matches[0].index;
+    // These reviewed methods contain no nested function declarations. Keep
+    // unrelated methods out of a targeted mutation without executing Rust.
+    const following = /\n\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+/.exec(production.slice(start + matches[0][0].length));
+    const end = following ? start + matches[0][0].length + following.index : production.length;
+    const selected = baseline[file].slice(start, end);
+    assert.equal([...selected.matchAll(pattern)].length, 1, 'SM mutation must match exactly once inside its selected method');
+    const source = baseline[file].slice(0, start) + selected.replace(pattern, replacement) + baseline[file].slice(end);
+    assert.notEqual(source, baseline[file], 'SM mutation must change source');
+    assert.throws(() => verifySmOwnershipBoundaries({ ...baseline, [file]: source }), expected);
+  });
+}
+rejectsSm('SM record entry cannot substitute its owner', 'protocol', 'record_outbound_item', /turn\.record_item\(item,\s*&observation\)/g, 'turn.record_item(item, &other_observation)', /record_outbound_item/);
+rejectsSm('SM checkpoint entry cannot omit its child owner', 'protocol', 'checkpoint_sm', /sm_owner::SmTurnRunner::new/g, 'unobserved_runner', /checkpoint_sm/);
+rejectsSm('SM ACK entry cannot substitute h', 'smProtocol', 'acknowledge', /turn\.acknowledge\(h,\s*&observation\)/g, 'turn.acknowledge(other_h, &observation)', /SM acknowledge/);
+rejectsSm('SM item cannot substitute its body before recording', 'smOwner', 'record_item', /self\.record_source\(&item\.stanza,\s*item\.durable_source,\s*observation\)/g, 'self.record_source(other_stanza, item.durable_source, observation)', /real item/);
+rejectsSm('SM item cannot discard its checkpoint failure', 'smOwner', 'record_item', /\.await\?;/g, '.await.ok();', /real item/);
+rejectsSm('SM item cannot omit the ownership notification attempt', 'smOwner', 'record_item', /observation\.notification_attempted\(\);/g, '', /ownership notification/);
+rejectsSm('SM record cannot stop advancing h', 'smOwner', 'record_source', /self\.sm\.outbound_h\.wrapping_add\(1\)/g, 'self.sm.outbound_h', /append before checkpoint/);
+rejectsSm('SM record cannot restore after every checkpoint error', 'smOwner', 'record_source', /error\s*\.downcast_ref::<crate::outbound::DurableDeliverySuperseded>\(\)\s*\.is_some\(\)/g, 'true', /typed supersession/);
+rejectsSm('SM record cannot omit its retained append fact', 'smOwner', 'record_source', /observation\.appended\(\);/g, '', /append before checkpoint/);
+rejectsSm('SM record cannot omit typed restoration', 'smOwner', 'record_source', /self\.sm\.unacked\.pop_back\(\);/g, '', /typed supersession/);
+rejectsSm('SM checkpoint cannot skip transient reservation', 'smOwner', 'checkpoint_in_turn', /self\s*\.port\s*\.reserve_snapshot\(live_bytes\)/g, 'unobserved_reservation()', /bind its snapshot/);
+rejectsSm('SM checkpoint cannot expand its existing deadline', 'smOwner', 'checkpoint_in_turn', /Duration::from_secs\(5\)/g, 'Duration::from_secs(6)', /bind its snapshot/);
+rejectsSm('SM checkpoint cannot apply an unvalidated return', 'smOwner', 'checkpoint_in_turn', /validate_checkpoint_return\(outcome\.updated,\s*&rotations\)/g, 'accept_unchecked_result(outcome.updated, &rotations)', /returned receipt/);
+rejectsSm('SM ACK cannot replace actual counter arithmetic', 'smOwner', 'acknowledge', /northstar_xep_0198::acknowledgement_delta/g, 'invented_delta', /actual h arithmetic/);
+rejectsSm('SM ACK cannot select another prefix', 'smOwner', 'acknowledge', /\.take\(delta\)/g, '.take(delta + 1)', /exact persisted cut/);
+rejectsSm('SM ACK cannot erase separate batch authority', 'smOwner', 'acknowledge', /prepared\.request\(\)\.validate_batch_return\(\)\?;/g, '', /separate batch authority/);
+rejectsSm('SM ACK cannot erase local h application evidence', 'smOwner', 'acknowledge', /observation\.ack_applied\(h\);/g, '', /local apply/);
+rejectsSm('SM ACK cannot flatten capacity failure', 'smOwner', 'acknowledge', /result\?;/g, 'drop(result);', /fallible shrink/);
+rejectsSm('SM prepared view cannot omit payload projection equality', 'smPrepared', 'validate_projection', /snapshot\s*==\s*SnapshotProjection::from\(self\.snapshot\)/g, 'true', /entire immutable projection/);
+rejectsSm('SM prepared view cannot omit policy equality', 'smPrepared', 'validate_projection', /policy\s*==\s*self\.policy/g, 'true', /entire immutable projection/);
+rejectsSm('SM COMMIT cannot skip its real future', 'smCore', 'commit_observed', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /commit_observed/);
+rejectsSm('SM COMMIT cannot lose a known receipt', 'smCore', 'commit_observed', /permit\.received\(\);/g, '', /commit_observed/);
+rejectsSm('SM rollback cannot claim success without awaiting it', 'smCore', 'rollback_observed', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /rollback_observed/);
+rejectsSm('SM SQL cannot bypass its COMMIT observation', 'smDb', 'checkpoint_sm_session_and_acknowledge_observed', /sm_ownership::commit_observed/g, 'sm_ownership::unobserved_commit', /SQL checkpoint/);
+rejectsSm('SM SQL cannot bypass its explicit rollback observation', 'smDb', 'checkpoint_sm_session_and_acknowledge_observed', /sm_ownership::rollback_observed/g, 'sm_ownership::unobserved_rollback', /SQL checkpoint/);
+rejectsSm('SM empty batch cannot invent a transaction receipt', 'smDb', 'acknowledge_transport_sources_observed', /request\.no_persistence\(\)\?;/g, 'request.invented_receipt()?;', /unpersisted SQL ACK/);
+rejectsSm('SM batch cannot bypass its COMMIT observation', 'smDb', 'acknowledge_transport_sources_observed', /sm_ownership::commit_observed/g, 'sm_ownership::unobserved_commit', /unpersisted SQL ACK/);
+rejectsSm('SM runner cannot lose its panic marker', 'smOwner', 'poll', /this\.poll_in_progress\s*=\s*true;/g, 'this.poll_in_progress = false;', /panic marker/);

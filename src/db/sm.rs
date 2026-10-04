@@ -427,7 +427,19 @@ pub async fn checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
     max_stanzas: usize,
     max_bytes: usize,
 ) -> Result<SmCheckpointOutcome> {
-    checkpoint_sm_session_and_acknowledge_observed(pool, id, connection_id, snapshot, acknowledged, ttl_seconds, live_lease_seconds, max_stanzas, max_bytes, None).await
+    checkpoint_sm_session_and_acknowledge_observed(
+        pool,
+        id,
+        connection_id,
+        snapshot,
+        acknowledged,
+        ttl_seconds,
+        live_lease_seconds,
+        max_stanzas,
+        max_bytes,
+        None,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -445,10 +457,24 @@ pub(crate) async fn checkpoint_sm_session_and_acknowledge_observed(
 ) -> Result<SmCheckpointOutcome> {
     if let Some(request) = observation {
         let binding = request.binding();
-        anyhow::ensure!(binding.session_id == Some(id) && binding.connection_id == connection_id
-            && binding.inbound_h == snapshot.inbound_h && binding.outbound_h == snapshot.outbound_h && binding.acked_h == snapshot.acked_h
-            && binding.acknowledged.iter().copied().eq(acknowledged.iter().map(|entry| entry.source))
-            && binding.remaining.iter().copied().eq(snapshot.unacked.iter().map(|entry| entry.source)), "SM database projection changed its bound cut");
+        anyhow::ensure!(
+            binding.session_id == Some(id)
+                && binding.connection_id == connection_id
+                && binding.inbound_h == snapshot.inbound_h
+                && binding.outbound_h == snapshot.outbound_h
+                && binding.acked_h == snapshot.acked_h
+                && binding
+                    .acknowledged
+                    .iter()
+                    .copied()
+                    .eq(acknowledged.iter().map(|entry| entry.source))
+                && binding
+                    .remaining
+                    .iter()
+                    .copied()
+                    .eq(snapshot.unacked.iter().map(|entry| entry.source)),
+            "SM database projection changed its bound cut"
+        );
         request.validate_binding(binding)?;
     }
     validate_snapshot(snapshot, max_stanzas, max_bytes)?;
@@ -467,24 +493,49 @@ pub(crate) async fn checkpoint_sm_session_and_acknowledge_observed(
     .await?;
     if !updated {
         if let Some(request) = observation {
-            northstar_delivery_core::sm_ownership::rollback_observed(transaction.rollback(), request).await?;
-        } else { transaction.rollback().await?; }
+            northstar_delivery_core::sm_ownership::rollback_observed(
+                transaction.rollback(),
+                request,
+            )
+            .await?;
+        } else {
+            transaction.rollback().await?;
+        }
         return Ok(SmCheckpointOutcome {
             updated: false,
             ownership: SmQueueOwnershipResolution::default(),
         });
     }
     let mut settled = observation.map(|_| Vec::new());
-    let ownership = replace_queue_inner(&mut transaction, id, &snapshot.unacked, acknowledged, settled.as_mut()).await?;
+    let ownership = replace_queue_inner(
+        &mut transaction,
+        id,
+        &snapshot.unacked,
+        acknowledged,
+        settled.as_mut(),
+    )
+    .await?;
     if let Some(request) = observation {
         let fact = northstar_delivery_core::sm_ownership::CommitFact::Checkpoint {
-            rotations: ownership.mix_rotations.iter().map(|rotation| northstar_delivery_core::sm_ownership::MixRotation { previous: rotation.previous, current: rotation.current }).collect(),
+            rotations: ownership
+                .mix_rotations
+                .iter()
+                .map(
+                    |rotation| northstar_delivery_core::sm_ownership::MixRotation {
+                        previous: rotation.previous,
+                        current: rotation.current,
+                    },
+                )
+                .collect(),
             settled: settled.expect("observed checkpoint owns settlement facts"),
         };
         // Transaction atomicity is unchanged. A lost COMMIT response leaves
         // this entire prepared outcome unknown; it does not prove rollback.
-        northstar_delivery_core::sm_ownership::commit_observed(transaction.commit(), request, fact).await?;
-    } else { transaction.commit().await?; }
+        northstar_delivery_core::sm_ownership::commit_observed(transaction.commit(), request, fact)
+            .await?;
+    } else {
+        transaction.commit().await?;
+    }
     Ok(SmCheckpointOutcome {
         updated: true,
         ownership,
@@ -1471,12 +1522,22 @@ pub(crate) async fn acknowledge_transport_sources_observed(
     observation: Option<&northstar_delivery_core::sm_ownership::Request>,
 ) -> Result<()> {
     if let Some(request) = observation {
-        anyhow::ensure!(request.binding().session_id.is_none()
-            && sources.iter().copied().eq(request.binding().acknowledged.iter().flatten().copied()), "SM database acknowledgement sources changed");
+        anyhow::ensure!(
+            request.binding().session_id.is_none()
+                && sources.iter().copied().eq(request
+                    .binding()
+                    .acknowledged
+                    .iter()
+                    .flatten()
+                    .copied()),
+            "SM database acknowledgement sources changed"
+        );
         request.validate_binding(request.binding())?;
     }
     if sources.is_empty() {
-        if let Some(request) = observation { request.no_persistence()?; }
+        if let Some(request) = observation {
+            request.no_persistence()?;
+        }
         return Ok(());
     }
 
@@ -1589,7 +1650,9 @@ pub(crate) async fn acknowledge_transport_sources_observed(
     let mut absent_unclaimed = observation.map(|_| Vec::new());
     for (delivery, present) in c2s.iter().zip(present_c2s) {
         if !present {
-            if let Some(absent) = absent_unclaimed.as_mut() { absent.push(*delivery); }
+            if let Some(absent) = absent_unclaimed.as_mut() {
+                absent.push(*delivery);
+            }
             continue;
         }
         let removed = sqlx::query(
@@ -1607,7 +1670,9 @@ pub(crate) async fn acknowledge_transport_sources_observed(
             removed == 1,
             "durable C2S delivery disappeared during acknowledgement"
         );
-        if let Some(deleted) = deleted.as_mut() { deleted.push(crate::outbound::TransportOwnershipSource::C2s(*delivery)); }
+        if let Some(deleted) = deleted.as_mut() {
+            deleted.push(crate::outbound::TransportOwnershipSource::C2s(*delivery));
+        }
     }
     for delivery in &mix {
         let removed = sqlx::query(
@@ -1623,15 +1688,21 @@ pub(crate) async fn acknowledge_transport_sources_observed(
             removed == 1,
             "MIX delivery lease changed during acknowledgement"
         );
-        if let Some(deleted) = deleted.as_mut() { deleted.push(crate::outbound::TransportOwnershipSource::Mix(*delivery)); }
+        if let Some(deleted) = deleted.as_mut() {
+            deleted.push(crate::outbound::TransportOwnershipSource::Mix(*delivery));
+        }
     }
     if let Some(request) = observation {
         let fact = northstar_delivery_core::sm_ownership::CommitFact::UnpersistedAck {
             deleted: deleted.expect("observed acknowledgement owns deletion facts"),
-            absent_unclaimed: absent_unclaimed.expect("observed acknowledgement owns absent-row facts"),
+            absent_unclaimed: absent_unclaimed
+                .expect("observed acknowledgement owns absent-row facts"),
         };
-        northstar_delivery_core::sm_ownership::commit_observed(transaction.commit(), request, fact).await?;
-    } else { transaction.commit().await?; }
+        northstar_delivery_core::sm_ownership::commit_observed(transaction.commit(), request, fact)
+            .await?;
+    } else {
+        transaction.commit().await?;
+    }
     tracing::debug!(
         c2s = c2s.len(),
         mix = mix.len(),
@@ -1804,7 +1875,9 @@ async fn replace_queue_inner(
             deleted == 1,
             "SM acknowledged durable delivery row was not present"
         );
-        if let Some(settled) = settled.as_deref_mut() { settled.push(crate::outbound::TransportOwnershipSource::C2s(delivery)); }
+        if let Some(settled) = settled.as_deref_mut() {
+            settled.push(crate::outbound::TransportOwnershipSource::C2s(delivery));
+        }
     }
     let mut completed_mix = completed
         .values()
@@ -1813,7 +1886,9 @@ async fn replace_queue_inner(
     completed_mix.sort_unstable_by_key(|delivery| delivery.delivery_id);
     for delivery in completed_mix {
         delete_completed_mix_source_from_sm(transaction, delivery).await?;
-        if let Some(settled) = settled.as_deref_mut() { settled.push(crate::outbound::TransportOwnershipSource::Mix(delivery)); }
+        if let Some(settled) = settled.as_deref_mut() {
+            settled.push(crate::outbound::TransportOwnershipSource::Mix(delivery));
+        }
     }
     Ok(ownership)
 }

@@ -1,6 +1,6 @@
 //! Single ignored, bounded saved-input composition entry. Repository effects
 //! and writer responses are controlled; production preparation and owners run.
-//! This first checkpoint supports only None/native recipients, not full Stage3.
+//! None/native and SM paths are connected; BOSH/C13 remain unsupported.
 use super::*;
 use crate::direct_replay as wire;
 use crate::outbound::{
@@ -15,6 +15,7 @@ use crate::services::message_admission::{
 use crate::services::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
+use anyhow::Context;
 use northstar_abuse_policy::{
     admission_execution as admission, admission_transaction::FinalizeDecision,
 };
@@ -30,6 +31,8 @@ use std::{
     },
 };
 use uuid::Uuid;
+
+mod sm;
 
 type Sequence = Arc<Mutex<wire::Sequence>>;
 fn next(sequence: &Sequence) -> u32 {
@@ -694,6 +697,7 @@ impl NativeLog {
 
 #[derive(Default)]
 struct SmMetadata {
+    peer_ip: Option<std::net::IpAddr>,
     available: Option<Arc<AtomicBool>>,
     carbons: AtomicBool,
     priority: std::sync::atomic::AtomicI16,
@@ -715,7 +719,10 @@ impl SmMetadata {
             roster_requested: &self.roster,
             privacy_active: &self.privacy,
             privacy_requested: &self.privacy_requested,
-            peer_ip: &std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            peer_ip: self
+                .peer_ip
+                .as_ref()
+                .unwrap_or(&std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
             user_agent_id: &None,
             joined_rooms: &self.rooms,
             directed_presence: &self.directed,
@@ -723,71 +730,23 @@ impl SmMetadata {
         }
     }
 }
-struct DisabledSmPort {
-    log: Arc<NativeLog>,
-}
-impl crate::xmpp::protocol::sm_owner::SmOwnerPort for DisabledSmPort {
-    fn recorded(&self) {
-        self.log.prefix();
-    }
-    fn reserve_snapshot(&self, _: usize) -> Result<crate::services::sm_capacity::SmCapacityLease> {
-        anyhow::bail!("disabled SM requested capacity")
-    }
-    fn grow(&self, _: &crate::services::sm_capacity::SmCapacityLease, _: usize) -> Result<()> {
-        anyhow::bail!("disabled SM requested growth")
-    }
-    fn shrink(&self, _: &crate::services::sm_capacity::SmCapacityLease, _: usize) -> Result<()> {
-        anyhow::bail!("disabled SM requested shrink")
-    }
-    async fn checkpoint(
-        &self,
-        _: &crate::services::sm::ownership::PreparedCheckpoint<'_>,
-    ) -> Result<crate::services::sm::SmCheckpointOutcome> {
-        anyhow::bail!("disabled SM requested persistence")
-    }
-    async fn acknowledge_batch(
-        &self,
-        _: &crate::services::sm::ownership::PreparedBatch<'_>,
-    ) -> Result<()> {
-        anyhow::bail!("disabled SM requested acknowledgement")
-    }
-}
 struct NativePort<'a> {
-    spec: &'a wire::NativeSpec,
+    spec: Option<&'a wire::NativeSpec>,
+    connection_id: Uuid,
     row: Arc<Mutex<Option<DurableDelivery>>>,
     log: Arc<NativeLog>,
-    sm: crate::xmpp::protocol::SmSubstate,
-    metadata: SmMetadata,
-    policy: crate::xmpp::protocol::SmRuntimePolicy,
-    sm_observations: Vec<northstar_delivery_core::sm_ownership::Observation>,
+    recorder: &'a mut sm::Recorder,
 }
 impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
-        use crate::xmpp::protocol::sm_owner::{SmTransportTurn, SmTurnRunner};
-        let mut turn = SmTransportTurn {
-            sm: &mut self.sm,
-            view: self.metadata.view(),
-            policy: &self.policy,
-            connection_id: self.spec.connection_id.0,
-            port: DisabledSmPort {
-                log: self.log.clone(),
-            },
-        };
-        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
-        self.sm_observations.push(observation.clone());
-        SmTurnRunner::new(observation.clone(), async move {
-            let result = turn.record_item(item, &observation).await;
-            if result.is_err() {
-                observation.returned_error();
-            }
-            result
-        })
-        .await
+        self.log.prefix();
+        self.recorder.record(item).await
     }
     async fn fence_c2s(&self, source: DurableDelivery) -> Result<DurableDelivery> {
         self.log.prefix();
         let returned = self
             .spec
+            .context("SM-owned source reached native fence")?
             .fence
             .returned_source
             .actual()
@@ -830,6 +789,11 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
         };
         self.log.prefix();
         let result: Result<()> = async {
+            let ack_cut = self
+                .spec
+                .context("SM-owned source reached native ACK")?
+                .ack
+                .commit;
             let current = (*self.row.lock().unwrap())
                 .ok_or_else(|| anyhow::anyhow!("claimed row missing"))?;
             anyhow::ensure!(
@@ -847,7 +811,7 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
             native_write::commit_observed(
                 async {
                     self.log.prefix();
-                    match self.spec.ack.commit {
+                    match ack_cut {
                         wire::CommitCut::Pending => {
                             self.log.ack_pending.store(true, Ordering::SeqCst);
                             std::future::pending::<std::io::Result<()>>().await
@@ -879,7 +843,7 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
         anyhow::bail!("unexpected native MIX ACK")
     }
     fn connection_id(&self) -> Uuid {
-        self.spec.connection_id.0
+        self.connection_id
     }
 }
 
@@ -948,58 +912,144 @@ impl tokio::io::AsyncWrite for ScriptedWriter<'_> {
     }
 }
 
-async fn run_native(
-    case: &wire::Case,
+struct NativePlan<'a> {
+    connection_id: wire::Id,
+    native: Option<&'a wire::NativeSpec>,
+    write: &'a wire::WriteScript,
+}
+
+#[derive(Default)]
+struct ItemReceivers {
+    mix: Option<(
+        Uuid,
+        tokio::sync::oneshot::Receiver<crate::outbound::MixTransportCompletion>,
+    )>,
+    ownership: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
+}
+impl ItemReceivers {
+    fn observe_mix(&mut self, sequence: &Sequence, output: &mut Vec<wire::MixHandoff>) {
+        let Some((delivery_id, mut receiver)) = self.mix.take() else {
+            return;
+        };
+        use crate::outbound::MixTransportCompletion as Completion;
+        let result = match receiver.try_recv() {
+            Ok(Completion::SmPersisted { session_id }) => wire::MixHandoffResult::SmPersisted {
+                session_id: wire::Id(session_id),
+            },
+            Ok(Completion::BoshPersisted { session_id }) => wire::MixHandoffResult::BoshPersisted {
+                session_id: wire::Id(session_id),
+            },
+            Ok(Completion::SocketFenced { connection_id }) => {
+                wire::MixHandoffResult::SocketFenced {
+                    connection_id: wire::Id(connection_id),
+                }
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => wire::MixHandoffResult::Empty,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                wire::MixHandoffResult::Closed
+            }
+        };
+        output.push(wire::MixHandoff {
+            seq: next(sequence),
+            delivery_id: wire::Id(delivery_id),
+            result,
+        });
+    }
+    fn observe_ownership(&mut self, sequence: &Sequence) -> Vec<wire::ReceiptObservation> {
+        self.ownership
+            .as_mut()
+            .map(|receiver| wire::ReceiptObservation {
+                seq: next(sequence),
+                result: match receiver.try_recv() {
+                    Ok(()) => "Received",
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => "Empty",
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => "Closed",
+                },
+            })
+            .into_iter()
+            .collect()
+    }
+}
+fn fixture_item(value: &wire::Item) -> Result<(OutboundItem, ItemReceivers)> {
+    let mut receivers = ItemReceivers::default();
+    let item = match value {
+        wire::Item::Plain {
+            xml,
+            transport_receipt: false,
+        } => OutboundItem::plain(xml.clone()),
+        wire::Item::Plain {
+            xml,
+            transport_receipt: true,
+        } => {
+            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            receivers.ownership = Some(receiver);
+            OutboundItem::with_transport_receipt(xml.clone(), sender)
+        }
+        wire::Item::Mix { xml, source } => {
+            let source = source
+                .actual()
+                .mix()
+                .ok_or_else(|| anyhow::anyhow!("fixture MIX source family"))?;
+            let (item, receiver) = OutboundItem::durable_mix(xml.clone(), source);
+            receivers.mix = Some((source.delivery_id, receiver));
+            item
+        }
+    };
+    Ok((item, receivers))
+}
+
+struct NativeInput<'a> {
+    case: &'a wire::Case,
     frame_id: wire::Id,
-    spec: &wire::NativeSpec,
+    plan: NativePlan<'a>,
     item: OutboundItem,
     row: Arc<Mutex<Option<DurableDelivery>>>,
     sequence: Sequence,
-) -> Result<(wire::NativeEvidence, bool)> {
+}
+async fn run_native(
+    input: NativeInput<'_>,
+    recorder: &mut sm::Recorder,
+    receivers: &mut ItemReceivers,
+    mix_handoffs: &mut Vec<wire::MixHandoff>,
+) -> Result<(wire::NativeEvidence, bool, bool)> {
     use crate::xmpp::direct_delivery::{DirectWriteLease, NativeWriteRunner};
-    // This enclosing callback has now been polled. The real observation is
-    // retained before its child prepare/write/ACK future receives a first poll.
+    let NativeInput {
+        case,
+        frame_id,
+        plan,
+        item,
+        row,
+        sequence,
+    } = input;
+    // The receiving callback has been polled; this independent observation is
+    // retained before the child prepare/write/ACK future receives a first poll.
     let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
     let log = Arc::new(NativeLog {
         observation: observation.clone(),
-        sequence,
+        sequence: sequence.clone(),
         prefixes: Mutex::new(vec![]),
         writes: Mutex::new(vec![]),
         flushes: Mutex::new(vec![]),
         acks: Mutex::new(vec![]),
         ack_pending: AtomicBool::new(false),
     });
+    let sm_pending = recorder.pending_marker();
     let mut port = NativePort {
-        spec,
+        spec: plan.native,
+        connection_id: plan.connection_id.0,
         row,
         log: log.clone(),
-        sm: crate::xmpp::protocol::SmSubstate::default(),
-        metadata: SmMetadata::default(),
-        sm_observations: vec![],
-        policy: crate::xmpp::protocol::SmRuntimePolicy {
-            session: crate::state::SmSessionPolicy {
-                require_same_device: true,
-                resume_timeout_seconds: 60,
-                live_lease_seconds: 30,
-                claim_lease_seconds: 10,
-                max_per_account: 4,
-                max_global: 100,
-            },
-            buffer: crate::state::SmBufferLimits {
-                max_unacked_stanzas: 32,
-                max_unacked_bytes: 16_384,
-                max_snapshot_bytes: 32_768,
-            },
-            ip_binding: "none".to_owned(),
-        },
+        recorder,
     };
     let mut writer = ScriptedWriter {
-        script: &spec.write,
+        script: plan.write,
         accepted: 0,
         log: log.clone(),
     };
     let child = async {
         let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+        log.prefix();
+        receivers.observe_mix(&sequence, mix_handoffs);
         let written = lease
             .write(|stanza| crate::xmpp::send(&mut writer, stanza))
             .await?;
@@ -1007,37 +1057,42 @@ async fn run_native(
         Ok::<_, anyhow::Error>(())
     };
     let mut runner = Box::pin(NativeWriteRunner::new(observation.clone(), child));
-    let dropped = matches!(&case.drive, wire::Drive::DropNativeAckCommit { frame_id: target } if *target == frame_id);
+    let dropped = matches!(&case.drive, wire::Drive::DropNativeAckCommit { frame_id: target } | wire::Drive::DropSmCheckpointCommit { frame_id: target } if *target == frame_id);
     let actual = futures::poll!(&mut runner);
+    let polls = vec![sequence.lock().unwrap().polled(&actual)];
+    let failed = matches!(&actual, std::task::Poll::Ready(Err(_)));
     if dropped {
+        let entered = match case.drive {
+            wire::Drive::DropNativeAckCommit { .. } => log.ack_pending.load(Ordering::SeqCst),
+            wire::Drive::DropSmCheckpointCommit { .. } => sm_pending.load(Ordering::SeqCst),
+            _ => false,
+        };
         anyhow::ensure!(
-            actual.is_pending() && log.ack_pending.load(Ordering::SeqCst),
-            "native ACK drop cut was not reached"
+            actual.is_pending() && entered,
+            "native selected drop cut was not reached"
         );
     } else {
-        // Write/flush errors are actual writer outcomes, not fixture failures.
-        // All non-cut controlled ports are ready; unexpected Pending is not.
         anyhow::ensure!(actual.is_ready(), "unexpected pending native owner");
     }
     drop(runner);
+    port.recorder.capture_retired();
+    log.prefix();
+    receivers.observe_mix(&sequence, mix_handoffs);
+    let ownership_receipts = receivers.observe_ownership(&sequence);
     let state = native_state(&observation);
-    // No receipts are fabricated for the actual direct router item.
-    anyhow::ensure!(
-        item.transport_receipt.is_none() && item.transport_write_receipt.is_none(),
-        "unexpected routed-item receipt provenance"
-    );
     let evidence = wire::NativeEvidence {
         frame_id,
-        connection_id: spec.connection_id,
+        connection_id: plan.connection_id,
         state,
         write_calls: log.writes.lock().unwrap().clone(),
         flush_calls: log.flushes.lock().unwrap().clone(),
         ack_calls: log.acks.lock().unwrap().clone(),
-        ownership_receipts: vec![],
+        ownership_receipts,
         write_receipts: vec![],
         prefixes: log.prefixes.lock().unwrap().clone(),
+        polls,
     };
-    Ok((evidence, dropped))
+    Ok((evidence, dropped, failed))
 }
 
 struct OriginalRun {
@@ -1302,6 +1357,7 @@ async fn run_original(case: &wire::Case, index: usize, sequence: Sequence) -> Re
     let mut runner = Box::pin(frame.run(child));
     let cancelled = matches!(&case.drive, wire::Drive::DropDirectCommit { frame_id } | wire::Drive::DropRearm { frame_id } if *frame_id == original.frame_id);
     let actual = futures::poll!(&mut runner);
+    let polls = vec![log.sequence.lock().unwrap().polled(&actual)];
     if cancelled {
         let reached = match &case.drive {
             wire::Drive::DropDirectCommit { .. } => log.direct_pending.load(Ordering::SeqCst),
@@ -1323,6 +1379,7 @@ async fn run_original(case: &wire::Case, index: usize, sequence: Sequence) -> Re
             std::task::Poll::Pending => anyhow::bail!("unexpected pending controlled frame"),
         }
     }
+    log.prefix();
     let state = original_state(&owner);
     let mut target = None;
     if state
@@ -1378,6 +1435,7 @@ async fn run_original(case: &wire::Case, index: usize, sequence: Sequence) -> Re
             route,
             terminal: state.terminal,
             prefixes,
+            polls,
         },
         target,
         row,
@@ -1393,18 +1451,119 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
     for index in 0..case.originals.len() {
         let mut run = run_original(case, index, sequence.clone()).await?;
         cancelled |= run.cancelled;
-        if let wire::RecipientOwner::Native { frame_id, native } = &case.recipient_owner {
-            if *frame_id == case.originals[index].frame_id {
+        match &case.recipient_owner {
+            wire::RecipientOwner::Native { frame_id, native }
+                if *frame_id == case.originals[index].frame_id =>
+            {
                 let item = run.target.take().ok_or_else(|| {
                     anyhow::anyhow!("declared native owner has no dequeued target")
                 })?;
-                let (evidence, dropped) =
-                    run_native(case, *frame_id, native, item, run.row, sequence.clone()).await?;
+                anyhow::ensure!(
+                    item.transport_receipt.is_none() && item.transport_write_receipt.is_none(),
+                    "routed item acquired synthetic receipts"
+                );
+                let mut recorder =
+                    sm::Recorder::new(native.connection_id.0, None, &[], sequence.clone())?;
+                let mut receivers = ItemReceivers::default();
+                let mut mix_handoffs = vec![];
+                let (evidence, dropped, _failed) = run_native(
+                    NativeInput {
+                        case,
+                        frame_id: *frame_id,
+                        plan: NativePlan {
+                            connection_id: native.connection_id,
+                            native: Some(native),
+                            write: &native.write,
+                        },
+                        item,
+                        row: run.row.clone(),
+                        sequence: sequence.clone(),
+                    },
+                    &mut recorder,
+                    &mut receivers,
+                    &mut mix_handoffs,
+                )
+                .await?;
+                anyhow::ensure!(mix_handoffs.is_empty(), "C2S target acquired MIX handoff");
                 cancelled |= dropped;
                 recipient = wire::RecipientEvidence::Native {
                     native: Box::new(evidence),
                 };
             }
+            wire::RecipientOwner::Sm {
+                frame_id,
+                connection_id,
+                config,
+                extra_items,
+                record_replies,
+                write,
+                ack,
+            } if *frame_id == case.originals[index].frame_id => {
+                let target = run
+                    .target
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("declared SM owner has no dequeued target"))?;
+                anyhow::ensure!(
+                    target.transport_receipt.is_none() && target.transport_write_receipt.is_none(),
+                    "routed item acquired synthetic receipts"
+                );
+                let mut recorder = sm::Recorder::new(
+                    connection_id.0,
+                    Some(config),
+                    record_replies,
+                    sequence.clone(),
+                )?;
+                let mut items = VecDeque::from([(target, ItemReceivers::default())]);
+                for item in extra_items {
+                    items.push_back(fixture_item(item)?);
+                }
+                let mut native_writes = vec![];
+                let mut mix_handoffs = vec![];
+                let mut dropped = false;
+                let mut failed = false;
+                while let Some((item, mut receivers)) = items.pop_front() {
+                    let (evidence, was_dropped, did_fail) = run_native(
+                        NativeInput {
+                            case,
+                            frame_id: *frame_id,
+                            plan: NativePlan {
+                                connection_id: *connection_id,
+                                native: None,
+                                write,
+                            },
+                            item,
+                            row: run.row.clone(),
+                            sequence: sequence.clone(),
+                        },
+                        &mut recorder,
+                        &mut receivers,
+                        &mut mix_handoffs,
+                    )
+                    .await?;
+                    native_writes.push(evidence);
+                    dropped = was_dropped;
+                    failed = did_fail;
+                    if dropped || failed {
+                        break;
+                    }
+                }
+                if !dropped && !failed {
+                    anyhow::ensure!(recorder.replies_exhausted(), "unconsumed SM record replies");
+                    if let Some(ack) = ack.get() {
+                        recorder.acknowledge(ack).await?;
+                    }
+                }
+                cancelled |= dropped;
+                recipient = wire::RecipientEvidence::Sm {
+                    native_writes,
+                    sm_turns: recorder.evidence(),
+                    fifo_after: recorder.fifo(),
+                    outbound_h: recorder.sm.outbound_h,
+                    acked_h: recorder.sm.acked_h,
+                    mix_handoffs,
+                };
+            }
+            _ => {}
         }
         anyhow::ensure!(
             run.target.is_none(),

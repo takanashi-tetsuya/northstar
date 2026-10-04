@@ -536,7 +536,11 @@ class DirectInventoryTests(unittest.TestCase):
         directories = {'scripts', 'scripts/lib'}
         absent_names = ('scripts/lib.py', 'scripts/lib.pyc', 'scripts/lib/__init__.py',
                         'scripts/lib/__init__.pyc', 'scripts/lib/__pycache__',
-                        'scripts/lib/direct_case', 'scripts/lib/direct_case.pyc')
+                        'scripts/lib/direct_case', 'scripts/lib/direct_case.pyc',
+                        'scripts/xml', 'scripts/xml.py', 'scripts/xml.pyc',
+                        'scripts/_elementtree', 'scripts/_elementtree.py', 'scripts/_elementtree.pyc',
+                        'scripts/pyexpat', 'scripts/pyexpat.py', 'scripts/pyexpat.pyc',
+                        'scripts/contextlib', 'scripts/contextlib.py', 'scripts/contextlib.pyc')
         def metadata(path, *, missing_ok=False):
             name = str(Path(path).relative_to(root))
             if missing_ok:
@@ -558,6 +562,241 @@ class DirectInventoryTests(unittest.TestCase):
                 patch.object(supervision.os, 'scandir', return_value=self.Entries([SimpleNamespace(name='lib.abi3.so')])), \
                 self.assertRaisesRegex(supervision.SupervisionError, 'helper_native_import_alternative'):
             supervision.check_direct_import_layout(root)
+        for stem in supervision.DIRECT_PARSER_IMPORTS:
+            with self.subTest(parser_stem=stem), patch.object(supervision, '_path_metadata', side_effect=metadata), \
+                    patch.object(supervision.os, 'scandir', return_value=self.Entries([SimpleNamespace(name=stem + '.abi3.so')])), \
+                    self.assertRaisesRegex(supervision.SupervisionError, 'helper_native_import_alternative'):
+                supervision.check_direct_import_layout(root)
+
+
+class NativeLiteralAndLedgerTests(unittest.TestCase):
+    def fixtures(self):
+        return {item['id']: item for item in direct_case.native_fixtures()}
+
+    def test_ten_native_literals_have_exact_ids_outcomes_and_rejection_reasons(self):
+        fixtures = self.fixtures()
+        self.assertEqual(list(fixtures), ['C01', 'C02', 'C03', 'C04', 'C05', 'C06', 'C07', 'R01', 'R02', 'R03'])
+        for identity, fixture in fixtures.items():
+            self.assertLessEqual(len(fixture['bytes']), 65536)
+            if identity.startswith('C'):
+                self.assertEqual(direct_case.parse_native_input(fixture['bytes']), fixture['value'])
+                self.assertEqual(fixture['expected_verdict'], 'Cancelled' if identity in ('C02', 'C05', 'C06') else 'Pass')
+            else:
+                self.assertEqual(direct_case.rejection_reason(fixture['bytes']), fixture['reason'])
+        self.assertEqual([fixtures[name]['reason'] for name in ('R01', 'R02', 'R03')],
+                         ['DuplicateKey', 'UnknownField', 'IdentityBinding'])
+
+    def test_uuid_literals_and_validator_have_exact_canonical_spelling(self):
+        self.assertEqual(direct_case._uuid(101), '00000000-0000-0000-0000-000000000065')
+        self.assertEqual(direct_case._uuid(20101), '00000000-0000-0000-0000-000000004e85')
+        direct_case._id('00000000-0000-0000-0000-000000004e85')
+        for invalid in ('00000000000000000000000000004e85', '00000000-0000-0000-0000-000000004E85',
+                        '00000000-0000-0000-0000-000000004e8g', 101):
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case._id(invalid)
+
+    def test_fixed_mutation_deletes_only_prefix_and_keeps_exact_target(self):
+        original = self.fixtures()['C07']
+        m1, m2, m3, m4 = direct_case.mutation_fixtures()
+        self.assertEqual(m1['bytes'], original['bytes'])
+        self.assertEqual(m2['bytes'], m4['bytes'])
+        expected = copy.deepcopy(original['value'])
+        expected['identities']['originals'].pop(0)
+        for field in ('originals', 'policy', 'admission', 'direct_repository', 'route'):
+            expected[field].pop(0)
+        self.assertEqual(m2['value'], expected)
+        expected['recipient_owner']['native']['write']['fail_after_accepted_bytes'] = 1
+        self.assertEqual(m3['value'], expected)
+        self.assertEqual([item['expected_verdict'] for item in (m1, m2, m3, m4)],
+                         ['InvariantViolation', 'InvariantViolation', 'Pass', 'InvariantViolation'])
+        for item in (m1, m2, m3, m4):
+            value = direct_case.parse_native_input(item['bytes'])
+            self.assertEqual(value['recipient_owner']['frame_id'], direct_case._uuid(702))
+            self.assertEqual(value['recipient_owner']['native']['fence']['returned_source'],
+                             direct_case._c2s(direct_case._uuid(20702), direct_case._uuid(6)))
+
+    def test_health_remote_and_unused_role_literals_match_consumed_branches(self):
+        fixtures = self.fixtures()
+        for fixture in list(fixtures.values())[:7]:
+            for original, policy in zip(fixture['value']['originals'], fixture['value']['policy']):
+                self.assertEqual(policy['degraded_spool_eligible'], '/' not in original['target'])
+        for name, slot, expected in (('C01', 0, 3), ('C02', 0, 3), ('C06', 0, 2), ('C07', 1, 3)):
+            self.assertEqual(fixtures[name]['value']['route'][slot]['health_modes'], ['Live'] * expected)
+        self.assertEqual(fixtures['C06']['value']['route'][0]['remote_primary_returns'], [False])
+        for name in ('C03', 'C04', 'C05'):
+            self.assertIsNone(fixtures[name]['value']['identities']['connection_id'])
+            self.assertTrue(all(not item['health_modes'] for item in fixtures[name]['value']['route']))
+        self.assertEqual(fixtures['C07']['value']['route'][0]['health_modes'], [])
+
+    def test_c01_xml_ledger_matches_independent_literal_tree_and_archive_roles(self):
+        ledger = direct_case.derive_native_ledger(self.fixtures()['C01']['value'])
+        original = ledger['originals'][0]
+        expected_live = (
+            '<message from="alice@example.test/device" type="chat" id="m" to="bob@example.test/phone">'
+            '<body>x</body><origin-id xmlns="urn:xmpp:sid:0" id="o"/>'
+            '<stanza-id xmlns="urn:xmpp:sid:0" id="00000000-0000-0000-0000-000000004e85" '
+            'by="bob@example.test"/></message>')
+        self.assertEqual(original['projection']['live_xml'], direct_case._tree(direct_case._xml(expected_live)))
+        stored = original['projection']['stored_xml']
+        self.assertEqual(stored[3][-1][0], '{urn:xmpp:delay}delay')
+        self.assertEqual(dict(stored[3][-1][1]), {'from': 'example.test', 'stamp': '1970-01-01T00:01:40Z'})
+        self.assertEqual([item['peer_jid'] for item in original['projection']['archives']],
+                         ['bob@example.test/phone', 'alice@example.test/device'])
+        self.assertEqual([item['owner_id'] for item in original['projection']['archives']],
+                         [direct_case._uuid(1), direct_case._uuid(2)])
+        self.assertTrue(original['prepared']['mam_backed'])
+        self.assertEqual(original['prepared']['eligibility'], 'LiveOnly')
+        self.assertEqual(original['prepared']['identity']['actor_scope'], 'alice@example.test')
+        self.assertIsNone(original['source']['claim_id'])
+        self.assertEqual(ledger['native']['fenced_source']['claim_id'], direct_case._uuid(6))
+
+    def test_ledger_separates_transactions_modes_unknowns_and_unrated_prefix(self):
+        fixtures = self.fixtures()
+        c02 = direct_case.derive_native_ledger(fixtures['C02']['value'])
+        self.assertEqual(c02['originals'][0]['finalize']['commit'], 'Error')
+        self.assertEqual(c02['native']['ack']['commit'], 'Pending')
+        self.assertEqual(c02['originals'][0]['terminal'], 'Completed')
+        first, second = direct_case.derive_native_ledger(fixtures['C03']['value'])['originals']
+        self.assertEqual((first['prepared']['eligibility'], second['prepared']['eligibility']), ('Eligible', 'Eligible'))
+        self.assertEqual((first['direct']['admitted_mode'], first['direct']['returned_mode'], first['route_action']),
+                         ('SpoolOnly', 'SpoolOnly', 'None'))
+        self.assertEqual((second['direct']['admitted_mode'], second['direct']['returned_mode'], second['route_action']),
+                         ('Live', 'SpoolOnly', 'Rearm'))
+        c04 = direct_case.derive_native_ledger(fixtures['C04']['value'])['originals'][0]
+        self.assertIsNone(c04['direct']['returned_mode'])
+        self.assertEqual(c04['direct']['preserved_transaction']['kind'], 'Stored')
+        c05 = direct_case.derive_native_ledger(fixtures['C05']['value'])['originals'][0]
+        self.assertIsNone(c05['finalize'])
+        self.assertEqual(c05['terminal'], 'Cancelled')
+        unrated = direct_case.derive_native_ledger(fixtures['C07']['value'])['originals'][0]
+        self.assertIsNone(unrated['begin'])
+        self.assertIsNone(unrated['finalize'])
+        self.assertIsNone(unrated['prepared']['identity'])
+        self.assertFalse(unrated['projection']['rated'])
+        self.assertEqual(unrated['route_action'], 'None')
+
+    def test_ledger_depends_on_input_semantics_not_case_name_or_output(self):
+        value = self.fixtures()['C01']['value']
+        expected = direct_case.derive_native_ledger(value)
+        renamed = copy.deepcopy(value)
+        renamed['case_id'] = 'some-other-label'
+        self.assertEqual(direct_case.derive_native_ledger(renamed), expected)
+        changed = copy.deepcopy(value)
+        changed['originals'][0]['xml'] = changed['originals'][0]['xml'].replace('>x<', '>different body<')
+        self.assertNotEqual(direct_case.derive_native_ledger(changed)['originals'][0]['projection'],
+                            expected['originals'][0]['projection'])
+        with self.assertRaises(direct_case.DirectCaseIncomplete):
+            direct_case.fixture_plan(supervision.DIRECT_PROFILE)
+
+
+class NativeEvidenceAndSafetyTests(unittest.TestCase):
+    def synthetic(self, *, flush=True, accepted=None, ack=True):
+        """Isolated synthetic facts, never an expected full Rust transcript."""
+        value = direct_case.mutation_fixtures()[1]['value']
+        native_input = value['recipient_owner']['native']
+        frame = value['recipient_owner']['frame_id']
+        source = copy.deepcopy(native_input['fence']['returned_source'])
+        original_source = direct_case._c2s(direct_case._uuid(20702), direct_case._uuid(20702))
+        raw = value['originals'][0]['xml'].encode('utf-8')
+        retained = raw if accepted is None else raw[:accepted]
+        counter = 0
+        def seq():
+            nonlocal counter
+            counter += 1
+            return counter
+        original_state = {'begin': None, 'finalize': None, 'direct': None, 'handoff': None, 'terminal': 'Completed'}
+        original = {'frame_id': frame, 'projection': None, 'prepared': None, 'begin': None, 'finalize': None,
+                    'direct': None, 'continuation': None, 'terminal': 'Completed',
+                    'prefixes': [{'seq': seq(), 'state': original_state}], 'polls': [{'seq': seq(), 'result': 'Ready'}],
+                    'route': {'health_reads': [], 'enqueue': [],
+                              'dequeued': [{'seq': seq(), 'source': original_source, 'xml': raw.decode('utf-8')}],
+                              'queue_remaining': [], 'backpressure_disconnected': False,
+                              'remote_calls': [], 'rearm_calls': [], 'handoff': None}}
+        prepared = {'original': original_source, 'preparation': 'Prepared', 'managed_by_sm': False,
+                    'fence_entered': True, 'returned_fence': source, 'writer_entered': False,
+                    'writer_result': None, 'write_decision': None, 'ack': {'kind': 'NotRequested'},
+                    'ack_returned': None, 'terminal': None}
+        native = {'frame_id': frame, 'connection_id': native_input['connection_id'], **copy.deepcopy(prepared),
+                  'prefixes': [{'seq': seq(), 'state': copy.deepcopy(prepared)}],
+                  'write_calls': [{'seq': seq(), 'offered_len': len(raw), 'offered_sha256': direct_case._hash(raw),
+                                   'accepted_bytes_hex': retained.hex(), 'result': 'Accepted'}],
+                  'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [], 'write_receipts': [], 'polls': []}
+        if flush:
+            native['flush_calls'].append({'seq': seq(), 'result': 'Ok'})
+        native.update(writer_entered=True, writer_result='FullWrite', write_decision='Written', terminal='Returned')
+        if ack:
+            native['ack_calls'].append({'seq': seq(), 'source': source, 'returned': True})
+            native.update(ack={'kind': 'ReceiptKnown', 'fact': {'source': source, 'disposition': 'Deleted'}}, ack_returned=True)
+        native['prefixes'].append({'seq': seq(), 'state': {name: copy.deepcopy(native[name])
+                                                        for name in direct_case.NATIVE_STATE_FIELDS.split()}})
+        native['polls'].append({'seq': seq(), 'result': 'Ready'})
+        payload = {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                   'input_sha256': direct_case._hash(direct_case._encoded(value)), 'rejection': None,
+                   'execution': 'Complete', 'originals': [original], 'recipient': {'kind': 'Native', 'native': native}}
+        return value, payload
+
+    def test_valid_synthetic_utf8_dto_is_closed_and_true_unsafe_facts_remain_decodable(self):
+        value, payload = self.synthetic(flush=False)
+        self.assertEqual(direct_case.validate_native_evidence(payload), payload)
+        violations = direct_case.native_safety_findings(value, payload)
+        self.assertEqual([item['id'] for item in violations], ['NativeAckWithoutSuccessfulFlush'])
+        self.assertEqual(violations[0]['class'], 'Safety')
+        self.assertEqual(violations[0]['target'], {'frame_id': direct_case._uuid(702),
+                         'connection_id': direct_case._uuid(3), 'owner': 'Tcp',
+                         'source': direct_case._c2s(direct_case._uuid(20702), direct_case._uuid(6))})
+
+    def test_complete_write_with_prior_flush_and_short_write_without_ack_controls(self):
+        value, payload = self.synthetic()
+        self.assertEqual(direct_case.native_safety_findings(value, payload), [])
+        value, payload = self.synthetic(flush=False, accepted=1, ack=False)
+        payload['recipient']['native']['writer_result'] = 'Failed'
+        payload['recipient']['native']['write_decision'] = 'Withhold'
+        self.assertEqual(direct_case.native_safety_findings(value, payload), [])
+
+    def test_missing_bytes_wrong_offered_hash_and_wrong_source_cannot_satisfy_ack(self):
+        value, payload = self.synthetic(accepted=1)
+        self.assertIn('NativeAckWithoutCompleteWrite', [item['id'] for item in direct_case.native_safety_findings(value, payload)])
+        value, payload = self.synthetic()
+        payload['recipient']['native']['write_calls'][0]['offered_sha256'] = '0' * 64
+        self.assertIn('NativeAckWithoutCompleteWrite', [item['id'] for item in direct_case.native_safety_findings(value, payload)])
+        value, payload = self.synthetic()
+        payload['recipient']['native']['ack_calls'][0]['source'] = direct_case._c2s(direct_case._uuid(20702), direct_case._uuid(10))
+        direct_case.validate_native_evidence(payload)
+        self.assertIn('NativeAckWithoutMatchingFence', [item['id'] for item in direct_case.native_safety_findings(value, payload)])
+
+    def test_flush_before_last_write_does_not_flush_the_dequeued_bytes(self):
+        value, payload = self.synthetic()
+        native = payload['recipient']['native']
+        native['write_calls'][0]['seq'], native['flush_calls'][0]['seq'] = (
+            native['flush_calls'][0]['seq'], native['write_calls'][0]['seq'])
+        self.assertIn('NativeAckWithoutSuccessfulFlush', [item['id'] for item in direct_case.native_safety_findings(value, payload)])
+
+    def test_dto_rejects_bool_float_unknown_missing_and_duplicate_sequence(self):
+        _value, payload = self.synthetic()
+        variants = []
+        for bad_number in (True, 1.0):
+            bad = copy.deepcopy(payload)
+            bad['recipient']['native']['write_calls'][0]['offered_len'] = bad_number
+            variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['native']['ack']['extra'] = True
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        del bad['recipient']['native']['ack_returned']
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['native']['ack_calls'][0]['seq'] = 1
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.validate_native_evidence(bad)
+
+    def test_no_fixture_qualification_is_available_from_partial_predicates(self):
+        value, payload = self.synthetic(flush=False)
+        with self.assertRaises(direct_case.DirectCaseIncomplete):
+            direct_case.evaluate_fixture({'value': value}, {}, payload, supervision.NO_FLUSH_PROFILE)
+        with self.assertRaises(direct_case.DirectCaseIncomplete):
+            direct_case.require_implemented()
 
 
 if __name__ == '__main__':

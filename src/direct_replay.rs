@@ -667,25 +667,160 @@ impl Case {
                     return Err(Rejection::Limit);
                 }
             }
-            // This first vertical source checkpoint is intentionally incomplete.
-            // Known future variants decode strictly, then stop before owners,
-            // frames, repository ports or writers are created or polled.
-            RecipientOwner::Sm { .. }
-            | RecipientOwner::Bosh { .. }
-            | RecipientOwner::NativeReplacement { .. } => return Err(Rejection::UnsupportedOwner),
+            RecipientOwner::Sm {
+                frame_id,
+                connection_id,
+                config,
+                extra_items,
+                record_replies,
+                write,
+                ack,
+            } => {
+                if !self
+                    .originals
+                    .iter()
+                    .any(|original| original.frame_id == *frame_id)
+                    || Some(connection_id) != self.identities.connection_id.get()
+                    || config.session_id.get() != self.identities.sm_session_id.get()
+                    || config.session_id.get().is_none()
+                    || !config.enabled
+                    || !config.resume_allowed
+                    || config.outbound_h != config.acked_h
+                    || self.identities.native_claim_id.get().is_some()
+                    || config.peer_ip.parse::<std::net::IpAddr>().is_err()
+                {
+                    return Err(Rejection::IdentityBinding);
+                }
+                if extra_items.len() > 3
+                    || items + extra_items.len() > 4
+                    || record_replies.len() != 1 + extra_items.len()
+                    || config.governor.max_bytes < config.governor.max_snapshot_bytes
+                    || config.governor.max_recovery_bytes < config.governor.max_snapshot_bytes
+                    || config.governor.max_recovery_jobs == 0
+                    || config.governor.max_snapshot_bytes == 0
+                    || write.chunk_limit == 0
+                    || write.chunk_limit > 4096
+                    || write
+                        .fail_after_accepted_bytes
+                        .get()
+                        .is_some_and(|bytes| *bytes != 1)
+                {
+                    return Err(Rejection::Limit);
+                }
+                let mut mix = None;
+                for item in extra_items {
+                    let xml = match item {
+                        Item::Plain { xml, .. } => xml,
+                        Item::Mix { xml, source } => {
+                            let Source::Mix {
+                                delivery_id,
+                                lease_token,
+                            } = source
+                            else {
+                                return Err(Rejection::IdentityBinding);
+                            };
+                            if mix.is_some()
+                                || Some(delivery_id) != self.identities.mix_delivery_id.get()
+                                || Some(lease_token) != self.identities.mix_old_token.get()
+                                || self.identities.mix_new_token.get().is_none()
+                            {
+                                return Err(Rejection::IdentityBinding);
+                            }
+                            mix = Some(source.actual());
+                            xml
+                        }
+                    };
+                    xml_bytes += xml.len();
+                    if xml.len() > 4096 || roxmltree::Document::parse(xml).is_err() {
+                        return Err(Rejection::Limit);
+                    }
+                }
+                if xml_bytes > 16384 {
+                    return Err(Rejection::Limit);
+                }
+                if mix.is_none()
+                    && [
+                        self.identities.mix_delivery_id.get(),
+                        self.identities.mix_old_token.get(),
+                        self.identities.mix_new_token.get(),
+                    ]
+                    .iter()
+                    .any(Option::is_some)
+                {
+                    return Err(Rejection::IdentityBinding);
+                }
+                let drop_sm = matches!(&self.drive, Drive::DropSmCheckpointCommit { frame_id: target } if target == frame_id);
+                for (index, reply) in record_replies.iter().enumerate() {
+                    if !reply.updated
+                        || (reply.commit == CommitCut::Pending) != (drop_sm && index == 0)
+                    {
+                        return Err(Rejection::IdentityBinding);
+                    }
+                    let newly_entering = index
+                        .checked_sub(1)
+                        .and_then(|index| extra_items.get(index))
+                        .and_then(|item| match item {
+                            Item::Mix { source, .. } => Some(source.actual()),
+                            Item::Plain { .. } => None,
+                        });
+                    if let Some(previous) = newly_entering {
+                        if reply.rotations.len() != 1 {
+                            return Err(Rejection::IdentityBinding);
+                        }
+                        let rotation = &reply.rotations[0];
+                        let Source::Mix {
+                            delivery_id,
+                            lease_token,
+                        } = &rotation.current
+                        else {
+                            return Err(Rejection::IdentityBinding);
+                        };
+                        if rotation.previous.actual() != previous
+                            || Some(delivery_id) != self.identities.mix_delivery_id.get()
+                            || Some(lease_token) != self.identities.mix_new_token.get()
+                        {
+                            return Err(Rejection::IdentityBinding);
+                        }
+                    } else if !reply.rotations.is_empty() {
+                        return Err(Rejection::IdentityBinding);
+                    }
+                }
+                if drop_sm && ack.get().is_some() {
+                    return Err(Rejection::IdentityBinding);
+                }
+                if let Some(ack) = ack.get() {
+                    // Existing SM-owned MIX suffixes retain their last returned
+                    // token. This profile has no re-rotation-on-ACK scenario.
+                    if !ack.reply.updated
+                        || ack.reply.commit != CommitCut::Complete
+                        || !ack.reply.rotations.is_empty()
+                    {
+                        return Err(Rejection::IdentityBinding);
+                    }
+                }
+            }
+            // The BOSH and replacement bridges remain deliberately unavailable
+            // until their real private helpers are wired into this same entry.
+            RecipientOwner::Bosh { .. } | RecipientOwner::NativeReplacement { .. } => {
+                return Err(Rejection::UnsupportedOwner)
+            }
         }
-        // No future transport role may silently leak into this native slice.
         if [
-            self.identities.sm_session_id.get(),
             self.identities.bosh_session_id.get(),
-            self.identities.mix_delivery_id.get(),
-            self.identities.mix_old_token.get(),
-            self.identities.mix_new_token.get(),
             self.identities.replacement_connection_id.get(),
             self.identities.replacement_claim_id.get(),
         ]
         .iter()
         .any(Option::is_some)
+            || (!matches!(self.recipient_owner, RecipientOwner::Sm { .. })
+                && [
+                    self.identities.sm_session_id.get(),
+                    self.identities.mix_delivery_id.get(),
+                    self.identities.mix_old_token.get(),
+                    self.identities.mix_new_token.get(),
+                ]
+                .iter()
+                .any(Option::is_some))
         {
             return Err(Rejection::IdentityBinding);
         }
@@ -712,9 +847,15 @@ impl Case {
                     return Err(Rejection::IdentityBinding);
                 }
             }
-            Drive::DropSmCheckpointCommit { .. }
-            | Drive::DropBoshBindCommit { .. }
-            | Drive::ReplaceBeforeOldAckRead { .. } => return Err(Rejection::UnsupportedOwner),
+            Drive::DropSmCheckpointCommit { frame_id } => {
+                if !matches!(&self.recipient_owner, RecipientOwner::Sm { frame_id: owner, .. } if owner == frame_id)
+                {
+                    return Err(Rejection::IdentityBinding);
+                }
+            }
+            Drive::DropBoshBindCommit { .. } | Drive::ReplaceBeforeOldAckRead { .. } => {
+                return Err(Rejection::UnsupportedOwner)
+            }
         }
         Ok(())
     }
@@ -1014,6 +1155,7 @@ pub(crate) struct OriginalEvidence {
     pub(crate) route: RouteEvidence,
     pub(crate) terminal: Option<&'static str>,
     pub(crate) prefixes: Vec<OriginalPrefix>,
+    pub(crate) polls: Vec<DriverPoll>,
 }
 #[derive(Clone, Serialize)]
 pub(crate) struct NativeFact {
@@ -1083,26 +1225,161 @@ pub(crate) struct NativeEvidence {
     pub(crate) ownership_receipts: Vec<ReceiptObservation>,
     pub(crate) write_receipts: Vec<ReceiptObservation>,
     pub(crate) prefixes: Vec<NativePrefix>,
+    pub(crate) polls: Vec<DriverPoll>,
 }
 #[derive(Serialize)]
 #[serde(tag = "kind")]
 pub(crate) enum RecipientEvidence {
     None,
-    Native { native: Box<NativeEvidence> },
+    Native {
+        native: Box<NativeEvidence>,
+    },
+    Sm {
+        native_writes: Vec<NativeEvidence>,
+        sm_turns: Vec<SmEvidence>,
+        fifo_after: Vec<Slot>,
+        outbound_h: u32,
+        acked_h: u32,
+        mix_handoffs: Vec<MixHandoff>,
+    },
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct DriverPoll {
+    pub(crate) seq: u32,
+    pub(crate) result: &'static str,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum SmPurpose {
+    Record,
+    Checkpoint,
+    Acknowledge { h: u32 },
+}
+#[derive(Clone, Serialize)]
+pub(crate) struct SmScope {
+    pub(crate) purpose: SmPurpose,
+    pub(crate) session_id: Option<Id>,
+    pub(crate) connection_id: Id,
+    pub(crate) inbound_h: u32,
+    pub(crate) outbound_h: u32,
+    pub(crate) acked_h: u32,
+    pub(crate) queued: u32,
+}
+#[derive(Clone, Serialize)]
+pub(crate) struct SmBinding {
+    pub(crate) session_id: Option<Id>,
+    pub(crate) connection_id: Id,
+    pub(crate) inbound_h: u32,
+    pub(crate) outbound_h: u32,
+    pub(crate) acked_h: u32,
+    pub(crate) whole: Vec<Option<Source>>,
+    pub(crate) acknowledged: Vec<Option<Source>>,
+    pub(crate) remaining: Vec<Option<Source>>,
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum SmHDecision {
+    NotRequested,
+    Invalid,
+    Prefix { count: u32 },
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum SmFact {
+    Checkpoint {
+        rotations: Vec<Rotation>,
+        settled: Vec<Source>,
+    },
+    UnpersistedAck {
+        deleted: Vec<Source>,
+        absent_unclaimed: Vec<Source>,
+    },
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum SmKnowledge {
+    NotRequested,
+    NoCommitRequested,
+    NoPersistence,
+    RollbackCallEntered,
+    RollbackKnown,
+    CommitCallEntered { fact: SmFact },
+    ReceiptKnown { fact: SmFact },
+}
+#[derive(Clone, Serialize)]
+pub(crate) struct SmState {
+    pub(crate) scope: SmScope,
+    pub(crate) binding: Option<SmBinding>,
+    pub(crate) h_decision: SmHDecision,
+    pub(crate) knowledge: SmKnowledge,
+    pub(crate) appended: bool,
+    pub(crate) restored: bool,
+    pub(crate) ownership_applied: bool,
+    pub(crate) acknowledged_h_applied: Option<u32>,
+    pub(crate) notification_attempted: bool,
+    pub(crate) capacity_completed: Option<bool>,
+    pub(crate) returned_updated: Option<bool>,
+    pub(crate) returned_error: bool,
+    pub(crate) record_managed_by_sm: Option<bool>,
+    pub(crate) terminal: Option<&'static str>,
+}
+#[derive(Clone, Serialize)]
+pub(crate) struct SmPrefix {
+    pub(crate) seq: u32,
+    pub(crate) state: SmState,
+}
+#[derive(Serialize)]
+pub(crate) struct SmEvidence {
+    #[serde(flatten)]
+    pub(crate) state: SmState,
+    pub(crate) prefixes: Vec<SmPrefix>,
+    pub(crate) polls: Vec<DriverPoll>,
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum MixHandoffResult {
+    SmPersisted { session_id: Id },
+    BoshPersisted { session_id: Id },
+    SocketFenced { connection_id: Id },
+    Empty,
+    Closed,
+}
+#[derive(Clone, Serialize)]
+pub(crate) struct MixHandoff {
+    pub(crate) seq: u32,
+    pub(crate) delivery_id: Id,
+    pub(crate) result: MixHandoffResult,
 }
 
 /// One bounded observation counter across the case. It records call order;
 /// it neither advances futures nor supplies permissions or domain verdicts.
 #[derive(Default)]
-pub(crate) struct Sequence(u32);
+pub(crate) struct Sequence {
+    observations: u32,
+    polls: u32,
+}
 impl Sequence {
     pub(crate) fn next(&mut self) -> u32 {
         assert!(
-            (self.0 as usize) < MAX_FACTS,
+            (self.observations as usize) < MAX_FACTS,
             "direct observation cap exceeded"
         );
-        self.0 += 1;
-        self.0
+        self.observations += 1;
+        self.observations
+    }
+    pub(crate) fn polled<T>(&mut self, actual: &std::task::Poll<T>) -> DriverPoll {
+        assert!(self.polls < 64, "direct driver poll cap exceeded");
+        self.polls += 1;
+        DriverPoll {
+            seq: self.next(),
+            result: if actual.is_ready() {
+                "Ready"
+            } else {
+                "Pending"
+            },
+        }
     }
 }
 

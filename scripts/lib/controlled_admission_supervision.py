@@ -81,6 +81,12 @@ DIRECT_ARGUMENTS = ('--exact', DIRECT_ENTRY, '--ignored', '--nocapture',
 DIRECT_FRAME_TAG = b'\x1eNORTHSTAR_DIRECT_CASE_V1 '
 DIRECT_FRAME_END = b'\n\x1eEND\n'
 DIRECT_FRAME_BYTES = 128 * 1024
+# ElementTree imports xml/ElementPath, optional _elementtree and the Expat
+# parser, plus contextlib. Its remaining top-level imports are already loaded
+# by this module's stdlib imports (copy -> weakref, re -> functools/collections,
+# pathlib -> io/warnings). Guard the added scripts-first resolutions before the
+# direct oracle import, including the accelerator and pure-Python fallback.
+DIRECT_PARSER_IMPORTS = ('xml', '_elementtree', 'pyexpat', 'contextlib')
 # Fixed audited local build boundary. These roots do not come from the supplied
 # hash-map keys, Cargo execution, or a runtime dependency-discovery pass.
 DIRECT_LOCAL_CRATES = tuple('''
@@ -972,11 +978,13 @@ def check_direct_import_layout(root):
     stems = ('controlled_admission_supervision', 'controlled_admission', 'experiment_contract', 'direct_case')
     absent = ['scripts/lib.py', 'scripts/lib.pyc', 'scripts/lib/__init__.py',
               'scripts/lib/__init__.pyc', 'scripts/lib/__pycache__']
+    for name in DIRECT_PARSER_IMPORTS:
+        absent.extend(('scripts/' + name, 'scripts/' + name + '.py', 'scripts/' + name + '.pyc'))
     for stem in stems:
         absent.extend(('scripts/lib/' + stem, 'scripts/lib/' + stem + '.pyc'))
     for name in absent:
         need(_path_metadata(root / name, missing_ok=True) is None, 'helper_import_alternative')
-    for directory, names in (('scripts', ('lib',)), ('scripts/lib', ('__init__',) + stems)):
+    for directory, names in (('scripts', ('lib',) + DIRECT_PARSER_IMPORTS), ('scripts/lib', ('__init__',) + stems)):
         metadata = _path_metadata(root / directory)
         need(stat.S_ISDIR(metadata.st_mode), 'helper_directory')
         # Examine names only, never unrelated script contents or environments.

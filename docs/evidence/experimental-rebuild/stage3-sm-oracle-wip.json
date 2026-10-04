@@ -1,0 +1,141 @@
+{
+  "schema": "northstar-stage3-sm-oracle-wip-v1",
+  "status": "WorkInProgressNotAccepted",
+  "base_commit": "1761b3d122b6cd25476bce3b46ef44cf5788779f",
+  "base_tree": "4f58d72ee795612a43bf1b84d6fa725b2ff74dd0",
+  "scope": "Coherent partial direct saved-entry SM observations and independent Native/None Python oracle helpers. Full fixed-profile execution remains disabled.",
+  "source_files": {
+    "src/direct_replay.rs": {
+      "sha256": "01a2d02da46ed7e03d7a43fca9c70718f743c17c684d577474ff74c9a12ac877",
+      "bytes": 58432
+    },
+    "src/xmpp/protocol/messaging/saved_case.rs": {
+      "sha256": "ce04d91fa13d094f050a94598442720a39c5db464458aeccdc35d70fd1c49619",
+      "bytes": 62288
+    },
+    "src/xmpp/protocol/messaging/saved_case/sm.rs": {
+      "sha256": "a8fef9b462bb7b6d4d029c03503ce308ac20ec92e2583fc78a7a3b0e0c19abf7",
+      "bytes": 24237
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "sha256": "0db2a1f77f844cc3d7f5782738e44caf3bed784ada100ecd0087b86508de77c8",
+      "bytes": 109638
+    },
+    "scripts/lib/direct_case.py": {
+      "sha256": "48abb49dd820a17acd79e1868fc8279ba6078688e2962dd05003c3cf614e60e1",
+      "bytes": 52054
+    },
+    "scripts/test-direct-case.py": {
+      "sha256": "aef40a303443236e51ecf817ffd9715722a1af5359e4c05eabd01031ba324510",
+      "bytes": 51336
+    },
+    "scripts/capture-controlled-admission.py": {
+      "sha256": "b2803ae1e2ba7fb704a05ca79e8f312a75e258a478a8d6725ea1ba0e613e7853",
+      "bytes": 13712
+    },
+    "scripts/run-controlled-admission.py": {
+      "sha256": "bd6ac59916ee2507ab11f6845a2d92185cba6fa530235313a904545dce9f8e31",
+      "bytes": 1709
+    }
+  },
+  "source_manifest_sha256": "e4d8f23a39cc835892008c5ece85c6de12c99f4aee407aa304b9f79643bbe522",
+  "source_manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+  "source_bytes": 373406,
+  "source_changes": [
+    "scripts/lib/controlled_admission_supervision.py",
+    "scripts/lib/direct_case.py",
+    "scripts/test-direct-case.py",
+    "src/direct_replay.rs",
+    "src/xmpp/protocol/messaging/saved_case.rs",
+    "src/xmpp/protocol/messaging/saved_case/sm.rs"
+  ],
+  "implemented_source": [
+    "Actual original/native poll results, post-retirement and transaction-prefix observations; same single ignored saved entry.",
+    "Private SM child module shares actual SmTransportTurn, memory governor and recorder with native/BOSH ports. SM C08/C09 source paths retain typed MIX receiver outcomes and cancellation knowledge.",
+    "Concrete C01-C07/R01-R03 and M1-M4 input bytes; strict recursive Native/None input/evidence DTO helpers, input-derived XML/authority obligations and isolated native Safety predicates.",
+    "Full-JID and bare fixture eligibility flags match the declared two-policy-boolean adapter contract. The oracle does not introduce an extra hidden target-form eligibility predicate.",
+    "Finite v3 import-alternative checks cover the added XML/parser imports for the bound Python3.12.14 runtime; UUID literals use direct canonical hex formatting."
+  ],
+  "validation": {
+    "checks": {
+      "format_check": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.054384640",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "python_ast": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.063400999",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "direct_mock": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.250818881",
+        "timeout_seconds": 120,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 6940,
+        "log_sha256": "4c737bf27598e27ff5eb57801216c25b969767667fb372d429841e0726221c6f"
+      }
+    },
+    "python_mock_tests": {
+      "previous_methods": 27,
+      "new_methods": 13,
+      "ran": 40,
+      "passed": 40,
+      "failed": 0,
+      "unittest_seconds": "0.105",
+      "shell_seconds": "0.250818881",
+      "guard_sha256": "03a3e01886955c4371cf7dc122ee761ae584f3d79ef8c99cae0f6f6f4248e9e2",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      },
+      "scope": "Finite in-process literal/XML/DTO/Safety helpers and mocked existing caller/worker/import boundaries. This does not execute the Rust entry, a saved corpus, SQL, sockets or services."
+    },
+    "legacy113_rerun": false,
+    "rust_compiled": false,
+    "rust_clippy_run": false,
+    "rust_unit_execution": false,
+    "rust_regression_source_only": [
+      "xmpp::protocol::messaging::saved_case::sm::tests::initial_live_charge_and_retired_record_handles_use_actual_sm_state",
+      "xmpp::protocol::messaging::saved_case::sm::tests::cancelled_record_keeps_actual_checkpoint_entry_and_no_nested_poll"
+    ],
+    "format_only": "rustfmt parsed/formatted the three Rust paths, with children explicitly listed; no compiler or test binary was invoked."
+  },
+  "incomplete_boundaries": [
+    "DirectCaseIncomplete remains unconditional in require_implemented and all runner-facing fixture/evaluate/shrink/provenance entry points; caller collection and worker store/Hello remain unreachable for v3.",
+    "BOSH and NativeReplacement/C13 still reject UnsupportedOwner in the Rust entry. Their full owner/output variants and fixture ledgers remain unfinished.",
+    "Native/None transaction/prefix/correlation and exact ACK-target fixture matching, the complete16/4 inventory and deterministic fact/frame/evaluation preflight remain unfinished. Forty helper tests do not qualify any whole saved case.",
+    "Closed trusted build/derivation-record validation, final complete project-local membership, measured runnable artifact and contract-size qualification remain pending.",
+    "Rust compilation and both new SM component tests remain pending at this milestone. The prior ordinary successes and prior CI do not qualify these new Rust bytes.",
+    "Full Stage3, SQL/clock/crypto/wire fidelity, unresolved TLS diagnosis and later resource/retention obligations remain open."
+  ],
+  "parent_ci": {
+    "commit": "1761b3d122b6cd25476bce3b46ef44cf5788779f",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37238811701",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "Prior saved source only; this partial source delta had not been published during that run."
+  },
+  "pending_source_corrections": [
+    "The partial XML ledger leaves the fixed unqualified message/body tags unchanged and its XML helper accepts only an unqualified message root. Production set_from injects the jabber:client default namespace; the input-derived normalized/live/archive/stored expectations and inspected output parser must preserve that namespace before whole-case qualification. The current40 helper tests do not establish this production XML correspondence."
+  ]
+}

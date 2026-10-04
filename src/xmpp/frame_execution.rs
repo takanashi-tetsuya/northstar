@@ -286,7 +286,10 @@ pub(crate) enum FrameFailure {
 
 impl FrameExecution {
     pub(super) fn new(transport: ClientTransport, frame: &str) -> Self {
-        let operation_id = Uuid::new_v4();
+        Self::initialize(transport, frame, Uuid::new_v4())
+    }
+
+    fn initialize(transport: ClientTransport, frame: &str, operation_id: Uuid) -> Self {
         Self(Arc::new(Progress {
             operation_id,
             direct_operation: DirectOperationHandle::new(operation_id),
@@ -296,6 +299,15 @@ impl FrameExecution {
             started: tokio::time::Instant::now(),
             outcome: AtomicU8::new(Outcome::Pending as u8),
         }))
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_saved_case(
+        transport: ClientTransport,
+        frame: &str,
+        operation_id: Uuid,
+    ) -> Self {
+        Self::initialize(transport, frame, operation_id)
     }
 
     pub(super) fn direct_operation(&self) -> DirectOperationHandle {
@@ -537,6 +549,55 @@ mod tests {
     use super::*;
     use futures::FutureExt;
     use std::{future::pending, io::Write, panic::AssertUnwindSafe, sync::Mutex, task::Poll};
+
+    #[tokio::test]
+    async fn supplied_frame_identity_preserves_initial_policy_and_actual_runner_retirement() {
+        let id = Uuid::from_u128(101);
+        let raw = "<message type='chat'/>";
+        let frame = FrameExecution::for_saved_case(ClientTransport::Tcp, raw, id);
+        let policy = Policy::for_frame(ClientTransport::Tcp, raw);
+        assert_eq!(frame.0.operation_id, id);
+        assert_eq!(frame.0.policy.budget, policy.budget);
+        assert_eq!(frame.0.policy.transport, policy.transport);
+        assert_eq!(frame.0.policy.operation, policy.operation);
+        assert_eq!(
+            frame.0.stage.load(Ordering::Relaxed),
+            Stage::Validation as u8
+        );
+        assert_eq!(
+            frame.0.outcome.load(Ordering::Relaxed),
+            Outcome::Pending as u8
+        );
+        let retained = frame.direct_operation();
+        let mut runner = Box::pin(frame.run(async {
+            let request = crate::abuse::MessageAdmissionRequest {
+                actor_id: Uuid::from_u128(1),
+                account_bare: "alice@example.test",
+                normalized_target: "bob@example.test",
+                origin_id: None,
+                normalized_payload: raw,
+                pow_intent_payload: raw,
+                subject: "message",
+                actors: &[],
+                proof: None,
+            };
+            let _issued = retained.begin(&request).unwrap();
+            pending::<()>().await;
+            Ok(())
+        }));
+        assert!(retained.snapshot().reservation.is_none());
+        assert!(futures::poll!(&mut runner).is_pending());
+        drop(runner);
+        let snapshot = retained.snapshot();
+        assert_eq!(snapshot.terminal, Some(TerminalReason::Cancelled));
+        let begin = snapshot.reservation.unwrap();
+        assert_eq!(begin.effect.correlation.operation, id);
+        assert!(!begin.effect_started);
+        assert!(matches!(
+            begin.witness.knowledge(),
+            northstar_abuse_policy::admission_execution::Knowledge::NoCommitRequested
+        ));
+    }
 
     #[derive(Clone, Default)]
     struct TraceCapture(Arc<Mutex<Vec<u8>>>);

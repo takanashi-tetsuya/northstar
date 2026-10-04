@@ -6,6 +6,34 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// The claimed-row branch only. The repository still resolves the exact row,
+/// holds its lock, checks missing/unclaimed ownership and performs the DELETE
+/// compare-and-set atomically. No expiry or rotation requirement is added.
+pub fn claimed_c2s_ack_matches(
+    expected_claim: uuid::Uuid,
+    current_claim: Option<uuid::Uuid>,
+) -> bool {
+    current_claim == Some(expected_claim)
+}
+
+#[cfg(test)]
+mod claimed_token_tests {
+    use super::claimed_c2s_ack_matches;
+    use uuid::Uuid;
+
+    #[test]
+    fn old_claim_is_rejected_after_replacement_while_current_claim_still_matches() {
+        let old = Uuid::from_u128(6);
+        let replacement = Uuid::from_u128(10);
+        assert!(claimed_c2s_ack_matches(old, Some(old)));
+        assert!(!claimed_c2s_ack_matches(old, Some(replacement)));
+        assert!(claimed_c2s_ack_matches(replacement, Some(replacement)));
+        assert!(!claimed_c2s_ack_matches(old, None));
+        // Only this claimed-token comparison is exercised; no elapsed lease,
+        // SQL row selection, lock, or replacement authority is inferred.
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Rejected {
     State,

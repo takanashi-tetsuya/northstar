@@ -39,6 +39,9 @@ pub(crate) use northstar_message_core::{
 use roxmltree::Node;
 use std::{future::Future, sync::atomic::Ordering};
 
+#[cfg(test)]
+mod saved_case;
+
 /// One validated original. Rating is selected here by the existing predicate;
 /// callers cannot manufacture a no-admission branch by supplying a boolean.
 struct OriginalDirectMessage<'a> {

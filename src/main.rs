@@ -13,6 +13,8 @@ mod config;
 mod connection_actors;
 mod crl;
 mod db;
+#[cfg(test)]
+mod direct_replay;
 mod error;
 mod identity_audit;
 mod jid;

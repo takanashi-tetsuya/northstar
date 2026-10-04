@@ -1,0 +1,144 @@
+{
+  "schema": "northstar-stage3-saved-entry-wip-v1",
+  "status": "WorkInProgressNotAccepted",
+  "stage3": "Open",
+  "base_commit": "cefbb01e98f4c2e00f0e43541fb47426cc6b960b",
+  "base_tree": "a49e35250e76d8bc9f269fb2fc6fa6f1f6e50820",
+  "source_manifest": {
+    "crates/northstar-delivery-core/src/native_write.rs": {
+      "bytes": 26833,
+      "sha256": "f820496d4657bcd237517722b87aa0ffd88e46f6865cd19eb97292888d8d9c1c"
+    },
+    "src/db/replay.rs": {
+      "bytes": 87952,
+      "sha256": "bf46a48ffa07cc3f535a9e2b2c695dceef11cfb9e77fcde7fd428e5e9548ef9b"
+    },
+    "src/services/message_admission/witness.rs": {
+      "bytes": 14813,
+      "sha256": "9f4e5ce8ab02a5dfbbc1cdc2a2b82793d3a8c4d523a7c7759b4ea5a5c22d1d26"
+    },
+    "src/xmpp/frame_execution.rs": {
+      "bytes": 53948,
+      "sha256": "abdd820a8487758ed39206564878f749c41e08976e56924df2d3b43d666f5252"
+    },
+    "src/main.rs": {
+      "bytes": 54963,
+      "sha256": "d8a296aad619a861e14802cd09c8c11e7f0530e0876dfc55a5ff38e54923fb56"
+    },
+    "src/xmpp/protocol/messaging.rs": {
+      "bytes": 127480,
+      "sha256": "0c8cc624ead114f3cf5403c61b6597966b1a979cd828e648a2aa04bbf160aaf0"
+    },
+    "src/direct_replay.rs": {
+      "bytes": 48214,
+      "sha256": "087e1148e501c00e9846a3ab68d6dcb024e795621408a9d278f1456cad3fc272"
+    },
+    "src/xmpp/protocol/messaging/saved_case.rs": {
+      "bytes": 56262,
+      "sha256": "59349dbb57af7999e2d39bca32b577d3d745fe495fce8a448acc55bdbc3cb213"
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "bytes": 108685,
+      "sha256": "6c7e13f1251cc6112924246e87decb7772b9021849a26198e95e66cdf13fe603"
+    },
+    "scripts/lib/direct_case.py": {
+      "bytes": 2238,
+      "sha256": "a720a02f075929aeb9db79f85caabd51534c3567ab02c8c56386541b1a2afe3f"
+    },
+    "scripts/test-direct-case.py": {
+      "bytes": 34155,
+      "sha256": "5917529f180cfe82a857e6e187a2b1ed892dddc11e39de7cfdbec7fc895027e3"
+    },
+    "scripts/capture-controlled-admission.py": {
+      "bytes": 13712,
+      "sha256": "b2803ae1e2ba7fb704a05ca79e8f312a75e258a478a8d6725ea1ba0e613e7853"
+    },
+    "scripts/run-controlled-admission.py": {
+      "bytes": 1709,
+      "sha256": "bd6ac59916ee2507ab11f6845a2d92185cba6fa530235313a904545dce9f8e31"
+    }
+  },
+  "source_manifest_sha256": "02f66078ba7788589c07a3d39be257424790a195b744ed59b27efab040abc96b",
+  "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+  "implemented_source": [
+    "A test-only strict direct-case DTO/framing boundary and one ignored entry connect actual XML preparation, retained admission, the application pair/shared continuation, prepared router/real queue and native write/ACK helpers.",
+    "Shared frame initialization preserves production policy while permitting literal test operation identity; a private controlled witness helper and the existing claimed-token comparison provide the narrow test seams.",
+    "Input decoding rejects positional struct arrays, extra fields on empty tagged variants, non-string simple enums and missing explicit nullable fields. Native observations retain offered length/hash and all actual accepted bytes, avoiding repeated offered-tail serialization.",
+    "The existing Python supervision topology carries closed fixed16 and fixed4 profiles through contracts, framing, verified regular input descriptors, owner counts, immutable prefixes and saved readers. Legacy fixed82 branches and existing regression assertions remain.",
+    "V3 prior authority binds exact canonical saved contract-file bytes externally, separately from the receipt object hash. Preflight checks per-case inputs/evaluations, first invariant and saved shrink relation before starts.",
+    "Fixed project-local inventory/absence checks cover Rust source roots, migration membership, workspace manifests, embedded/helper inputs and import/build alternatives. The new profile permits1024 files/64MiB, while legacy limits remain."
+  ],
+  "implementation_boundary": [
+    "Native/None is the first connected Rust source path. SM, BOSH and NativeReplacement inputs currently reject UnsupportedOwner before frame/port effects; their same-entry implementations remain pending.",
+    "The Python DirectCaseIncomplete gate rejects before caller collect and worker store/Hello. No Stage3 Rust child can be released through these incomplete profiles.",
+    "The literal fixed corpus, complete wire projection validation, independent oracle/semantic filtering and executable build/derivation record interpretation remain incomplete.",
+    "The final literal fixtures still need deterministic observation-count/frame-size checks. A generic4KiB XML bound does not guarantee compatibility with256 observations or a128KiB frame.",
+    "Project-local source binding plus Cargo.lock/compiler/exact binary identity is not full external supply-chain reproducibility. Final record/replay contracts and runnable artifact sizes remain unqualified."
+  ],
+  "ordinary_evidence": {
+    "rust_format": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "rust_paths": [
+        "crates/northstar-delivery-core/src/native_write.rs",
+        "src/db/replay.rs",
+        "src/services/message_admission/witness.rs",
+        "src/xmpp/frame_execution.rs",
+        "src/main.rs",
+        "src/xmpp/protocol/messaging.rs",
+        "src/direct_replay.rs",
+        "src/xmpp/protocol/messaging/saved_case.rs"
+      ],
+      "python_unchanged": true
+    },
+    "python_ast": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.054119560",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true,
+      "scope": "AST parsing only; no project import or test/driver execution"
+    },
+    "rust_compile": false,
+    "clippy": false,
+    "rust_unit_execution": false,
+    "python_mock_execution": false,
+    "ignored_entry_execution": false,
+    "strip_build_or_derivation": false
+  },
+  "regression_source": {
+    "new_rust_ordinary_candidates": 7,
+    "new_python_test_methods": 25,
+    "scope": "Parser/binding and in-process helper/mocked boundaries only; test bodies are source, not passed execution evidence.",
+    "ignored_entry": "xmpp::protocol::messaging::saved_case::replay_saved_case"
+  },
+  "planned_fixed_profile": {
+    "semantic_cases": 13,
+    "schema_rejections": 3,
+    "record_starts": 16,
+    "replay_starts": 16,
+    "mutation_shrink_record_starts": 4,
+    "mutation_replay_starts": 4,
+    "execution_status": "NotExecuted"
+  },
+  "prior_ci": {
+    "commit": "cefbb01e98f4c2e00f0e43541fb47426cc6b960b",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37230626282",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "Previous fixture/continuation checkpoint only; does not qualify this WIP."
+  },
+  "remaining": [
+    "Complete the same-entry SM/BOSH/old-owner composition and independent schema/oracle; retain planned Cancelled separately from normative Safety and fixture completion.",
+    "Perform ordinary compile/lint and exact finite unit/mock verification after source review; preserve any failures.",
+    "Prepare and measure exact baseline/mutated runnable artifacts and source/build records before separately bounded record/replay/mutation/shrink and reader checks.",
+    "Real SQL/clock/wire fidelity, the unresolved TLS response/EOF issue, SM retention policy and later-stage qualification remain open."
+  ]
+}

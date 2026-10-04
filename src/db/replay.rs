@@ -1294,7 +1294,10 @@ pub(crate) async fn acknowledge_durable_deliveries_observed(
             }
             (Some(row), Some(expected_claim)) => {
                 anyhow::ensure!(
-                    row.try_get::<Option<Uuid>, _>("delivery_claim_id")? == Some(expected_claim),
+                    northstar_delivery_core::native_write::claimed_c2s_ack_matches(
+                        expected_claim,
+                        row.try_get::<Option<Uuid>, _>("delivery_claim_id")?,
+                    ),
                     "offline delivery claim was lost before acknowledgement"
                 );
                 present.push(true);

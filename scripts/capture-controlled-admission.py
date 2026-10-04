@@ -26,11 +26,15 @@ RESULT_SCHEMA = 'northstar-controlled-caller-result-v1'
 
 
 def fixed_arguments(contract):
-    return [supervision.TIMEOUT_PATH, *supervision.TIMEOUT_ARGUMENTS, contract['caller']['python'],
-            '-I', '-S', '-B', str(Path(contract['root']) / 'scripts/run-controlled-admission.py'),
-            '--contract-json', supervision.canonical(contract),
-            '--contract-sha256', supervision.object_hash(contract), '--run-id', contract['run_id'],
-            '--mode', contract['mode']]
+    arguments = [supervision.TIMEOUT_PATH, *supervision.TIMEOUT_ARGUMENTS, contract['caller']['python'],
+                 '-I', '-S', '-B', str(Path(contract['root']) / 'scripts/run-controlled-admission.py'),
+                 '--contract-json', supervision.canonical(contract),
+                 '--contract-sha256', supervision.object_hash(contract), '--run-id', contract['run_id'],
+                 '--mode', contract['mode']]
+    profile = supervision.contract_profile(contract)
+    if not profile['legacy']:
+        arguments.extend(('--profile', profile['id']))
+    return arguments
 
 
 def verify_material(contract):
@@ -38,6 +42,8 @@ def verify_material(contract):
     supervision.need(str(Path(__file__).resolve()) ==
                      str(Path(contract['root']) / 'scripts/capture-controlled-admission.py'), 'caller_source_root')
     supervision.need(str(Path(sys.executable).resolve()) == contract['caller']['python'], 'caller_python_path')
+    if not supervision.contract_profile(contract)['legacy']:
+        supervision._check_worker_sources(contract)
     identities = {}
     materials = [(Path(supervision.TIMEOUT_PATH), contract['caller']['timeout_sha256'],
                   contract['budgets']['binary_bytes']),
@@ -220,6 +226,8 @@ def run(contract, invocation_id):
     directory = supervision.caller_directory(contract['evidence_dir'])
     supervision.need(not directory.exists() and not directory.is_symlink(), 'caller_destination_exists')
     before = verify_material(contract)
+    if not supervision.contract_profile(contract)['legacy']:
+        supervision.direct_preflight(contract)
     observation = collect(contract)
     try:
         stable = verify_material(contract) == before

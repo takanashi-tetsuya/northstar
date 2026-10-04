@@ -301,6 +301,24 @@ pub(crate) async fn commit_observed(
 }
 
 #[cfg(test)]
+pub(crate) async fn saved_case_commit_observed<F>(
+    commit: F,
+    witness: &AdmissionWitness,
+    scope: TransactionScope,
+    fact: CommitFact,
+) -> anyhow::Result<()>
+where
+    F: std::future::Future<Output = anyhow::Result<()>>,
+{
+    // Controlled transaction knowledge only: this does not execute the SQL
+    // Transaction wrapper. The real retained service still owns completion.
+    let prepared = witness.prepare(scope, fact)?;
+    commit.await?;
+    witness.received(prepared);
+    Ok(())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use northstar_abuse_policy::admission_execution::{

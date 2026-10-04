@@ -26,6 +26,10 @@ import time
 
 
 CONTRACT_SCHEMA = 'northstar-controlled-execution-contract-v2'
+DIRECT_CONTRACT_SCHEMA = 'northstar-controlled-execution-contract-v3'
+LEGACY_PROFILE = 'stage2-admission-fixed82-v2'  # Internal only: v2 has no profile field.
+DIRECT_PROFILE = 'stage3-direct-fixed16-v1'
+NO_FLUSH_PROFILE = 'stage3-direct-no-flush-fixed4-v1'
 CASE_SCHEMA = 'northstar-controlled-case-v2'
 RESULT_SCHEMA = 'northstar-controlled-case-result-v2'
 CORPUS_SCHEMA = 'northstar-admission-controlled-corpus-v2'
@@ -68,6 +72,128 @@ PROPOSED_BUDGETS = {
     'source_bytes': 64 * 1024 ** 2,
     'binary_bytes': 128 * 1024 ** 2,
 }
+DIRECT_HELPER_FILES = HELPER_FILES | frozenset({
+    'scripts/lib/direct_case.py', 'scripts/test-direct-case.py',
+})
+DIRECT_ENTRY = 'xmpp::protocol::messaging::saved_case::replay_saved_case'
+DIRECT_ARGUMENTS = ('--exact', DIRECT_ENTRY, '--ignored', '--nocapture',
+                    '--test-threads=1', '--color', 'never', '--format', 'pretty')
+DIRECT_FRAME_TAG = b'\x1eNORTHSTAR_DIRECT_CASE_V1 '
+DIRECT_FRAME_END = b'\n\x1eEND\n'
+DIRECT_FRAME_BYTES = 128 * 1024
+# Fixed audited local build boundary. These roots do not come from the supplied
+# hash-map keys, Cargo execution, or a runtime dependency-discovery pass.
+DIRECT_LOCAL_CRATES = tuple('''
+northstar-abuse-policy northstar-xep-core northstar-xep-0045 northstar-xep-0016
+northstar-auth-core northstar-xmpp-types northstar-xml-framing northstar-xml-builder
+northstar-xep-0059 northstar-xep-0060 northstar-xep-0115 northstar-xep-0191
+northstar-xep-0198 northstar-xep-0215 northstar-xep-0280 northstar-xep-0313
+northstar-xep-0352 northstar-xep-0357 northstar-xep-0359 northstar-xep-0363
+northstar-xep-0085 northstar-xep-0184 northstar-xep-0092 northstar-xep-0199
+northstar-xep-0202 northstar-xep-0308 northstar-xep-0333 northstar-xep-0380
+northstar-xep-0444 northstar-xep-0461 northstar-web-surface northstar-message-core
+northstar-message-application northstar-session-core northstar-delivery-core
+northstar-presence-core northstar-room-core northstar-room-application
+northstar-pubsub-application northstar-pubsub-core northstar-roster-core
+northstar-roster-application northstar-archive-core northstar-archive-application
+northstar-upload-core northstar-upload-application northstar-session-application
+northstar-federation-core northstar-federation-application northstar-protocol-runtime
+'''.split())
+DIRECT_OTHER_MEMBERS = tuple('''
+crates/foundation-security crates/foundation-postgres crates/foundation-db-test
+crates/foundation-eventing-postgres crates/foundation-kms crates/foundation-eventing
+crates/foundation-telemetry crates/foundation-contracts crates/foundation-service-runtime
+crates/northstar-test-harness services/protocol-registry services/identity
+services/session-directory services/xmpp-edge services/message-ingress
+services/delivery-router services/xep-0313-mam services/federation-outbox
+services/s2s-edge services/xep-0045-muc services/xep-0060-pubsub
+services/xep-0363-upload services/roster-authority services/xep-0191-blocking
+services/admin-orchestrator tools/data-split-migrator tools/db-bootstrap
+tools/restore-verifier tools/kafka-policy-generator tools/catalog-validator
+tools/architecture-validator
+'''.split())
+DIRECT_PACKAGE_ROOTS = ('',) + tuple('crates/' + name for name in DIRECT_LOCAL_CRATES)
+DIRECT_SOURCE_ROOTS = tuple((name + '/' if name else '') + 'src' for name in DIRECT_PACKAGE_ROOTS)
+DIRECT_MANIFEST_FILES = frozenset(
+    (name + '/' if name else '') + 'Cargo.toml' for name in DIRECT_PACKAGE_ROOTS + DIRECT_OTHER_MEMBERS)
+DIRECT_EMBEDDED_FILES = frozenset({
+    'docs/openapi.yaml', '.env.development.example', 'deploy/Caddyfile',
+    'deploy/postgres-init/lib/apply-northstar-grants.sql',
+    'deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql',
+    'deploy/postgres-init/lib/northstar-capability-manifest.sql',
+    'deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql',
+    'crates/northstar-abuse-policy/MIGRATION.md',
+})
+DIRECT_FIXED_FILES = DIRECT_MANIFEST_FILES | DIRECT_EMBEDDED_FILES | DIRECT_HELPER_FILES | frozenset({
+    'Cargo.lock', 'rust-toolchain.toml',
+})
+DIRECT_BUILD_ABSENCES = tuple((name + '/' if name else '') + 'build.rs' for name in DIRECT_PACKAGE_ROOTS) + (
+    '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'src/lib.rs',
+)
+
+
+def fixed_profile(profile_id=LEGACY_PROFILE):
+    """Source-fixed choices only; no supplied counts, callbacks or child argv."""
+    need(profile_id in (LEGACY_PROFILE, DIRECT_PROFILE, NO_FLUSH_PROFILE), 'execution_profile')
+    legacy = profile_id == LEGACY_PROFILE
+    counts = PLAN_COUNTS.copy() if legacy else (
+        {'normal': 13, 'rejection': 3, 'shrink': 0, 'total': 16} if profile_id == DIRECT_PROFILE else
+        {'normal': 0, 'rejection': 0, 'shrink': 4, 'total': 4})
+    budgets = PROPOSED_BUDGETS.copy()
+    if not legacy:
+        budgets.update(launches=counts['total'], case_ms=5000, input_bytes=64 * 1024,
+                       stdout_bytes=256 * 1024, evaluation_bytes=256 * 1024,
+                       evidence_bytes=32 * 1024 ** 2)
+    shrink_start = 78 if legacy else 0
+    return {'id': profile_id, 'legacy': legacy, 'counts': counts, 'budgets': budgets,
+            'helpers': HELPER_FILES if legacy else DIRECT_HELPER_FILES,
+            'ids': None if legacy else tuple([f'C{index:02d}' for index in range(1, 14)] + ['R01', 'R02', 'R03'])
+                   if profile_id == DIRECT_PROFILE else ('M1', 'M2', 'M3', 'M4'),
+            'kinds': ('normal',) * counts['normal'] + ('rejection',) * counts['rejection'] +
+                     ('shrink',) * counts['shrink'],
+            'result_schema': RESULT_SCHEMA if legacy else 'northstar-direct-case-result-v1',
+            'corpus_schema': CORPUS_SCHEMA if legacy else 'northstar-direct-controlled-corpus-v1',
+            'shrink': None if not counts['shrink'] else
+                      {'schema': SHRINK_SCHEMA if legacy else 'northstar-direct-no-flush-shrink-v1',
+                       'attempts': list(range(shrink_start, shrink_start + 4)),
+                       'original': shrink_start, 'candidate': shrink_start + 1,
+                       'positive_control': shrink_start + 2, 'reduced': shrink_start + 3}}
+
+
+def contract_profile(contract):
+    need(type(contract) is dict, 'execution_contract_fields')
+    if contract.get('schema') == CONTRACT_SCHEMA:
+        need('profile' not in contract, 'legacy_profile_field')
+        return fixed_profile()
+    need(contract.get('schema') == DIRECT_CONTRACT_SCHEMA and
+         contract.get('profile') in (DIRECT_PROFILE, NO_FLUSH_PROFILE), 'execution_contract_version_or_profile')
+    return fixed_profile(contract['profile'])
+
+
+def child_arguments(binary, input_path, profile_id=LEGACY_PROFILE):
+    profile = fixed_profile(profile_id)
+    return [binary, input_path] if profile['legacy'] else [binary, *DIRECT_ARGUMENTS]
+
+
+def decode_direct_frame(stdout):
+    """Decode framing only. The independent oracle must validate the exact DTO.
+
+    Variable libtest diagnostics stay in the raw hashed stream. Neither a test
+    footer nor a syntactically valid payload supplies semantic authority.
+    """
+    need(type(stdout) is bytes and len(stdout) <= 256 * 1024, 'direct_stdout_budget')
+    need(stdout.count(DIRECT_FRAME_TAG) == 1 and stdout.count(b'\x1eEND\n') == 1,
+         'direct_frame_count')
+    start = stdout.index(DIRECT_FRAME_TAG) + len(DIRECT_FRAME_TAG)
+    header_end = stdout.find(b'\n', start, start + 8)
+    need(header_end != -1, 'direct_frame_length_header')
+    length_bytes = stdout[start:header_end]
+    need(re.fullmatch(rb'[1-9][0-9]{0,5}', length_bytes) is not None, 'direct_frame_length')
+    size = number(int(length_bytes), 1, DIRECT_FRAME_BYTES)
+    payload_start, payload_end = header_end + 1, header_end + 1 + size
+    need(stdout[payload_end:payload_end + len(DIRECT_FRAME_END)] == DIRECT_FRAME_END,
+         'direct_frame_truncated_or_trailer')
+    return strict_json(stdout[payload_start:payload_end], DIRECT_FRAME_BYTES)
 
 
 class SupervisionError(ValueError):
@@ -125,12 +251,14 @@ def valid_hash(value):
 
 def validate_contract(value):
     """Validate an externally trusted contract; saved evidence is not authority."""
-    exact(value, 'schema run_id mode root binary evidence_dir replay_dir replay_authority provenance helper_source_files budgets plan_counts caller',
+    profile = contract_profile(value)
+    additional = '' if profile['legacy'] else ' profile case_inventory build_record'
+    exact(value, 'schema run_id mode root binary evidence_dir replay_dir replay_authority provenance helper_source_files budgets plan_counts caller' + additional,
           'execution_contract_fields')
-    need(value['schema'] == CONTRACT_SCHEMA, 'execution_contract_version')
     need(type(value['run_id']) is str and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}', value['run_id']), 'run_id')
     need(value['mode'] in ('record', 'replay'), 'exclusive_mode')
-    for name in ('root', 'binary', 'evidence_dir'):
+    for name in (('root', 'binary', 'evidence_dir') if profile['legacy'] else
+                 ('root', 'binary', 'evidence_dir', 'build_record')):
         need(type(value[name]) is str and Path(value[name]).is_absolute() and
              '..' not in Path(value[name]).parts, 'absolute_' + name)
     need(bool(Path(value['evidence_dir']).name), 'evidence_destination_root')
@@ -143,26 +271,48 @@ def validate_contract(value):
         need(value['replay_authority'] is None, 'unexpected_replay_authority')
     else:
         authority = value['replay_authority']
-        exact(authority, 'contract capture caller_evidence', 'external_replay_authority')
-        need(type(authority['contract']) is dict and authority['contract'].get('mode') == 'record', 'prior_record_contract')
-        need(validate_owner_capture(authority['capture'], authority['contract'],
-                                    caller_evidence=authority['caller_evidence'])['FixtureMatched'], 'prior_fixture_unmatched')
-    need(type(value['plan_counts']) is dict and value['plan_counts'] == PLAN_COUNTS and
+        if profile['legacy']:
+            exact(authority, 'contract capture caller_evidence', 'external_replay_authority')
+            need(type(authority['contract']) is dict and authority['contract'].get('mode') == 'record', 'prior_record_contract')
+            need(validate_owner_capture(authority['capture'], authority['contract'],
+                                        caller_evidence=authority['caller_evidence'])['FixtureMatched'], 'prior_fixture_unmatched')
+        else:
+            # Prior fields become authority only after canonical saved bytes are
+            # matched to this external hash by replay_source, before Hello/start.
+            exact(authority, 'prior_contract_file_sha256 capture caller_evidence', 'external_replay_authority')
+            valid_hash(authority['prior_contract_file_sha256'])
+            need(type(authority['capture']) is dict and type(authority['caller_evidence']) is dict,
+                 'external_prior_evidence')
+    need(type(value['plan_counts']) is dict and value['plan_counts'] == profile['counts'] and
          all(type(item) is int for item in value['plan_counts'].values()), 'fixed_plan_counts')
-    exact(value['budgets'], ' '.join(PROPOSED_BUDGETS), 'budget_fields')
-    # Version 2 deliberately supports this single reviewed finite proposal only.
-    for name, proposed in PROPOSED_BUDGETS.items():
+    exact(value['budgets'], ' '.join(profile['budgets']), 'budget_fields')
+    for name, proposed in profile['budgets'].items():
         need(type(value['budgets'][name]) is int and value['budgets'][name] == proposed, 'budget:' + name)
     helpers = value['helper_source_files']
-    need(type(helpers) is dict and set(helpers) == HELPER_FILES, 'helper_source_scope')
+    need(type(helpers) is dict and set(helpers) == profile['helpers'], 'helper_source_scope')
     provenance = value['provenance']
-    exact(provenance, 'schema model adapter binding_version source_sha256 source_files binary_sha256 cargo_lock_sha256 toolchain',
+    exact(provenance, 'schema model adapter binding_version source_sha256 source_files binary_sha256 cargo_lock_sha256 toolchain' +
+          ('' if profile['legacy'] else ' compiler_sha256 artifact_role build_record_file_sha256'),
           'provenance_fields')
-    need(type(provenance['source_files']) is dict and len(provenance['source_files']) <= 512, 'source_scope')
-    need(provenance['schema'] == 'northstar-admission-controlled-provenance-v1' and
-         provenance['model'] == 'admission-controlled-v1' and provenance['adapter'] == 'controlled_rust' and
-         provenance['binding_version'] == 'synthetic-material-v1' and type(provenance['toolchain']) is str and
-         provenance['toolchain'].startswith('rustc 1.97.1 '), 'provenance_version')
+    need(type(provenance['source_files']) is dict and
+         len(provenance['source_files']) <= (512 if profile['legacy'] else 1024), 'source_scope')
+    if profile['legacy']:
+        need(provenance['schema'] == 'northstar-admission-controlled-provenance-v1' and
+             provenance['model'] == 'admission-controlled-v1' and provenance['binding_version'] == 'synthetic-material-v1',
+             'provenance_version')
+    else:
+        need(provenance['schema'] == 'northstar-direct-controlled-provenance-v1' and
+             provenance['model'] == 'direct-controlled-v1' and
+             provenance['binding_version'] == 'project-local-build-material-v1' and
+             provenance['artifact_role'] == ('baseline' if profile['id'] == DIRECT_PROFILE else 'no-flush'),
+             'direct_provenance_version')
+        valid_hash(provenance['compiler_sha256'])
+        valid_hash(provenance['build_record_file_sha256'])
+        need(provenance['source_files'].get('Cargo.lock') == provenance['cargo_lock_sha256'],
+             'direct_lockfile_binding')
+        validate_case_inventory(value['case_inventory'], profile['id'])
+    need(provenance['adapter'] == 'controlled_rust' and type(provenance['toolchain']) is str and
+         provenance['toolchain'].startswith('rustc 1.97.1 '), 'provenance_toolchain_adapter')
     for name, value_hash in provenance['source_files'].items():
         need(type(name) is str and not Path(name).is_absolute() and '..' not in Path(name).parts and
              str(Path(name)) == name and '\\' not in name, 'source_path')
@@ -184,12 +334,36 @@ def validate_contract(value):
     return copy.deepcopy(value)
 
 
+def validate_case_inventory(inventory, profile_id):
+    profile = fixed_profile(profile_id)
+    need(not profile['legacy'] and type(inventory) is list and len(inventory) == profile['counts']['total'],
+         'direct_inventory_count')
+    if profile_id == DIRECT_PROFILE:
+        identities = profile['ids']
+        cancelled = {'C02', 'C05', 'C06', 'C09', 'C11'}
+        verdicts = [('Cancelled' if identity in cancelled else 'Pass') if identity.startswith('C') else
+                    'InvalidScenario' for identity in identities]
+    else:
+        identities = profile['ids']
+        verdicts = ['InvariantViolation', 'InvariantViolation', 'Pass', 'InvariantViolation']
+    for index, item in enumerate(inventory):
+        exact(item, 'id kind bytes sha256 expected_verdict', 'direct_inventory_fields')
+        need(item['id'] == identities[index] and item['kind'] == profile['kinds'][index] and
+             item['expected_verdict'] == verdicts[index], 'direct_inventory_identity')
+        number(item['bytes'], 1, profile['budgets']['input_bytes'])
+        valid_hash(item['sha256'])
+
+
 def caller_mechanism_hash(contract):
     """Identity of this fixed caller composition, never an executable command DSL."""
-    return object_hash({'caller': contract['caller'], 'source_sha256': contract['provenance']['source_sha256'],
-                        'timeout': TIMEOUT_PATH, 'timeout_arguments': TIMEOUT_ARGUMENTS,
-                        'owner': str(Path(contract['root']) / 'scripts/run-controlled-admission.py'),
-                        'python_arguments': ['-I', '-S', '-B']})
+    value = {'caller': contract['caller'], 'source_sha256': contract['provenance']['source_sha256'],
+             'timeout': TIMEOUT_PATH, 'timeout_arguments': TIMEOUT_ARGUMENTS,
+             'owner': str(Path(contract['root']) / 'scripts/run-controlled-admission.py'),
+             'python_arguments': ['-I', '-S', '-B']}
+    profile = contract_profile(contract)
+    if not profile['legacy']:
+        value['owner_profile_arguments'] = ['--profile', profile['id']]
+    return object_hash(value)
 
 
 def caller_directory(evidence_directory):
@@ -208,9 +382,9 @@ def validate_reference(value):
     return value
 
 
-def validate_prefix_reference(value, completed):
+def validate_prefix_reference(value, completed, profile_id=LEGACY_PROFILE):
     validate_reference(value)
-    number(completed, 0, PLAN_COUNTS['total'])
+    number(completed, 0, fixed_profile(profile_id)['counts']['total'])
     need(value['file'] == f'prefix-{completed:03d}.json' and value['bytes'] <= MAX_PREFIX, 'prefix_generation_reference')
 
 
@@ -229,11 +403,18 @@ def validate_case_record(value, contract, index, case_id, kind):
     exact(value, 'schema run_id contract_sha256 index id kind input stdout stderr process observation stop_kind', 'case_fields')
     need(value['schema'] == CASE_SCHEMA and value['run_id'] == contract['run_id'] and
          value['contract_sha256'] == object_hash(contract), 'case_contract')
-    number(value['index'], 0, PLAN_COUNTS['total'] - 1)
+    profile = contract_profile(contract)
+    number(value['index'], 0, profile['counts']['total'] - 1)
     need(value['index'] == index and value['id'] == case_id and value['kind'] == kind and
-         kind in ('normal', 'rejection', 'shrink'), 'case_identity')
+         (kind in ('normal', 'rejection', 'shrink') if profile['legacy'] else
+          kind == profile['kinds'][value['index']]), 'case_identity')
     validate_reference(value['input'])
     need(value['input']['bytes'] <= contract['budgets']['input_bytes'], 'input_bound')
+    if not profile['legacy']:
+        inventory = contract['case_inventory'][index]
+        need(value['id'] == inventory['id'] and value['kind'] == inventory['kind'] and
+             value['input']['bytes'] == inventory['bytes'] and value['input']['sha256'] == inventory['sha256'],
+             'case_inventory_binding')
     validate_stream(value['stdout'], contract['budgets']['stdout_bytes'])
     validate_stream(value['stderr'], contract['budgets']['stderr_bytes'])
     process = value['process']
@@ -264,7 +445,7 @@ def validate_case_record(value, contract, index, case_id, kind):
          'not_started_process')
     if value['observation'] == 'Complete':
         need(process['registered'] and process['released'] and process['reaped'] and
-             process['returncode'] in (0, 2) and value['stdout']['complete'] and
+             process['returncode'] in ((0, 2) if profile['legacy'] else (0,)) and value['stdout']['complete'] and
              value['stderr']['complete'] and value['stderr']['reference']['bytes'] == 0, 'complete_observation')
         need(process['wall_ms'] <= contract['budgets']['case_ms'], 'complete_capture_exceeds_case_deadline')
     if value['observation'] == 'OutputLimit':
@@ -284,6 +465,7 @@ def validate_owner_capture(capture, expected_contract, *, caller_evidence=None):
     Missing that external evidence deliberately prevents qualification.
     """
     contract = validate_contract(expected_contract)
+    profile = contract_profile(contract)
     exact(capture, 'schema owner_exit_status stdout_complete receipt', 'capture_fields')
     need(capture['schema'] == CAPTURE_SCHEMA and capture['stdout_complete'] is True and
          type(capture['owner_exit_status']) is int, 'caller_capture')
@@ -296,7 +478,7 @@ def validate_owner_capture(capture, expected_contract, *, caller_evidence=None):
          'actual_owner_exit_status')
     for name in ('completed', 'fixture_matched', 'launches'):
         number(receipt[name], 0, contract['budgets']['launches'])
-    need(receipt['fixture_matched'] <= receipt['completed'] <= PLAN_COUNTS['total'] and
+    need(receipt['fixture_matched'] <= receipt['completed'] <= profile['counts']['total'] and
          receipt['completed'] <= receipt['launches'] + 1, 'receipt_counts')
     number(receipt['unexpected_children'], 0, contract['budgets']['launches'] + 1)
     need(type(receipt['cleanup_complete']) is bool, 'cleanup_boolean')
@@ -305,7 +487,7 @@ def validate_owner_capture(capture, expected_contract, *, caller_evidence=None):
         if receipt[name] is not None:
             validate_reference(receipt[name])
             if name == 'prefix':
-                validate_prefix_reference(receipt[name], receipt['completed'])
+                validate_prefix_reference(receipt[name], receipt['completed'], profile['id'])
             else:
                 need(receipt[name]['file'] == 'corpus.json' and receipt[name]['bytes'] <= MAX_PREFIX, 'receipt_reference')
     need(receipt['status'] in ('FixtureMatched', 'UnexpectedStop', 'Cancelled', 'EnvironmentInterrupted'), 'receipt_status')
@@ -324,8 +506,8 @@ def validate_owner_capture(capture, expected_contract, *, caller_evidence=None):
                   receipt['prefix'] is not None and receipt['terminal'] is not None and receipt['interruption_kind'] is None)
     complete = (supervised and receipt['status'] == 'FixtureMatched' and receipt['owner_exit_status'] == 0 and
                 receipt['worker_exit_status'] == 0 and receipt['cleanup_complete'] is True and
-                receipt['unexpected_children'] == 0 and receipt['completed'] == PLAN_COUNTS['total'] and
-                receipt['fixture_matched'] == PLAN_COUNTS['total'] and receipt['launches'] == PLAN_COUNTS['total'] and
+                receipt['unexpected_children'] == 0 and receipt['completed'] == profile['counts']['total'] and
+                receipt['fixture_matched'] == profile['counts']['total'] and receipt['launches'] == profile['counts']['total'] and
                 receipt['prefix'] is not None and receipt['terminal'] is not None and receipt['stop'] is None and
                 receipt['stop_kind'] is None)
     need(receipt['status'] != 'FixtureMatched' or complete, 'false_supervision_completion')
@@ -356,7 +538,8 @@ class EvidenceStore:
     Failed fsync/rename is a storage interruption, not durable success. Space
     means bytes written here, not a filesystem-wide or memory reservation.
     """
-    def __init__(self, directory, budgets):
+    def __init__(self, directory, budgets, profile_id=LEGACY_PROFILE):
+        self.profile_id = fixed_profile(profile_id)['id']
         self.directory = Path(directory)
         self.directory.mkdir(mode=0o700, parents=False, exist_ok=False)
         self.budgets = budgets
@@ -418,11 +601,11 @@ class EvidenceStore:
     def prefix(self, value, *, terminal=False):
         data = encoded(value)
         need(len(data) <= MAX_PREFIX, 'prefix_byte_budget')
-        number(self.prefix_generation, 0, PLAN_COUNTS['total'])
+        number(self.prefix_generation, 0, fixed_profile(getattr(self, 'profile_id', LEGACY_PROFILE))['counts']['total'])
         need(len(value['cases']) == self.prefix_generation, 'prefix_generation_sequence')
         name = f'prefix-{self.prefix_generation:03d}.json'
         # Count both temporary/final names during installation conservatively.
-        # All prior generations remain counted and readable; at most 83 total.
+        # Every acknowledged generation remains counted and readable.
         self._admit(2 * len(data), terminal)
         temporary = self.directory / '.prefix.next'
         with temporary.open('xb') as stream:
@@ -455,8 +638,11 @@ def read_reference(directory, reference, maximum):
     return data
 
 
-def fixture_plan(controlled):
+def fixture_plan(controlled, profile_id=LEGACY_PROFILE):
     """One source-fixed mode: 44 normal + 34 negatives + the full four-run tail."""
+    profile = fixed_profile(profile_id)
+    if not profile['legacy']:
+        return controlled.fixture_plan(profile_id)
     cases, rejections = controlled.controlled_cases(), controlled.rejection_cases()
     need(len(cases) == PLAN_COUNTS['normal'] and len(rejections) == PLAN_COUNTS['rejection'], 'source_plan_count_changed')
     result = [{'id': value['scenario_id'], 'kind': 'normal', 'value': value,
@@ -475,7 +661,20 @@ def fixture_plan(controlled):
     return result
 
 
-def evaluate_fixture(controlled, fixture, record, stdout):
+def validate_fixture_inventory(plan, contract):
+    """A supplied inventory cannot replace the independently fixed literal plan."""
+    profile = contract_profile(contract)
+    need(not profile['legacy'] and type(plan) is list and len(plan) == profile['counts']['total'],
+         'direct_fixed_plan_count')
+    for index, fixture in enumerate(plan):
+        entry = contract['case_inventory'][index]
+        need(type(fixture['bytes']) is bytes and fixture['id'] == entry['id'] and
+             fixture['kind'] == profile['kinds'][index] and fixture['kind'] == entry['kind'] and
+             len(fixture['bytes']) == entry['bytes'] and fingerprint(fixture['bytes']) == entry['sha256'] and
+             fixture['expected_verdict'] == entry['expected_verdict'], 'direct_fixed_inventory_binding')
+
+
+def evaluate_fixture(controlled, fixture, record, stdout, profile_id=LEGACY_PROFILE):
     """Called only after the bounded observation is durably saved.
 
     FixtureMatched includes intentional Cancelled/Inconclusive and the exact
@@ -483,7 +682,14 @@ def evaluate_fixture(controlled, fixture, record, stdout):
     """
     if record['observation'] != 'Complete':
         return None, None, False, record['observation']
+    profile = fixed_profile(profile_id)
     try:
+        if not profile['legacy']:
+            need(record['process']['returncode'] == 0, 'direct_entry_exit')
+            payload = decode_direct_frame(stdout)
+            # Input-derived expectations must already exist in fixture. The
+            # module validates the DTO, applies Safety, then fixture equality.
+            return controlled.evaluate_fixture(fixture, record, payload, profile_id)
         actual = controlled.loads(stdout, PROPOSED_BUDGETS['stdout_bytes'])
         if fixture['kind'] == 'rejection':
             expected = {'schema': controlled.REJECTION_SCHEMA, 'class': 'InvalidScenario', 'reason': fixture['reason']}
@@ -500,7 +706,9 @@ def evaluate_fixture(controlled, fixture, record, stdout):
         return None, None, False, 'MalformedOrUnexpectedOutput:' + type(error).__name__
 
 
-def shrink_relations(controlled, observations):
+def shrink_relations(controlled, observations, profile_id=LEGACY_PROFILE):
+    if not fixed_profile(profile_id)['legacy']:
+        return controlled.shrink_relations(observations)
     need(len(observations) == 4, 'shrink_tail_incomplete')
     original, candidate, positive, reduced = observations
     target = controlled.shrink_target(*original)
@@ -512,9 +720,14 @@ def shrink_relations(controlled, observations):
 
 def validate_result(value, record_reference, contract, fixture, index):
     exact(value, 'schema run_id contract_sha256 index id kind observation observation_loss evaluation fixture_status stop stop_kind interruption_kind', 'result_fields')
-    need(value['schema'] == RESULT_SCHEMA and value['run_id'] == contract['run_id'] and
+    need(value['schema'] == contract_profile(contract)['result_schema'] and value['run_id'] == contract['run_id'] and
          value['contract_sha256'] == object_hash(contract) and type(value['index']) is int and
          value['index'] == index and value['id'] == fixture['id'] and value['kind'] == fixture['kind'], 'result_identity')
+    profile = contract_profile(contract)
+    if not profile['legacy']:
+        number(index, 0, profile['counts']['total'] - 1)
+        need(value['id'] == contract['case_inventory'][index]['id'] and
+             value['kind'] == profile['kinds'][index], 'result_inventory_binding')
     need(value['observation'] == record_reference, 'result_observation_binding')
     if value['observation'] is not None:
         validate_reference(value['observation'])
@@ -542,28 +755,43 @@ def validate_result(value, record_reference, contract, fixture, index):
 
 
 def replay_source(directory, current_contract):
-    """Read strict v2 metadata; v1 and seven-field historical executions fail."""
+    """Validate saved metadata against separately trusted record authority."""
+    profile = contract_profile(current_contract)
     authority = current_contract['replay_authority']
-    contract = validate_contract(authority['contract'])
-    need(strict_json(read_bounded(Path(directory) / 'contract.json', MAX_CONTRACT), MAX_CONTRACT) == contract,
-         'saved_contract_differs_from_external_authority')
+    reader = read_bounded if profile['legacy'] else read_regular_bounded
+    data = reader(Path(directory) / 'contract.json', MAX_CONTRACT)
+    if profile['legacy']:
+        contract = validate_contract(authority['contract'])
+        need(strict_json(data, MAX_CONTRACT) == contract, 'saved_contract_differs_from_external_authority')
+    else:
+        # Hash the complete bytes BEFORE trusting any saved fields. Require the
+        # same canonical serialization as the immutable writer, including LF.
+        need(fingerprint(data) == authority['prior_contract_file_sha256'], 'external_prior_contract_hash')
+        value = strict_json(data, MAX_CONTRACT)
+        need(encoded(value) == data, 'noncanonical_prior_contract')
+        contract = validate_contract(value)
+        need(contract_profile(contract)['id'] == profile['id'] and
+             contract['case_inventory'] == current_contract['case_inventory'], 'replay_profile_inventory')
     need(contract['mode'] == 'record' and contract['provenance'] == current_contract['provenance'] and
          contract['helper_source_files'] == current_contract['helper_source_files'] and
-         contract['budgets'] == current_contract['budgets'], 'replay_source_contract')
+         contract['budgets'] == current_contract['budgets'] and
+         contract['plan_counts'] == current_contract['plan_counts'], 'replay_source_contract')
     capture = strict_json(read_bounded(caller_directory(directory) / 'caller-capture.json', MAX_CONTROL * 2), MAX_CONTROL * 2)
     need(capture == authority['capture'] and validate_owner_capture(capture, contract,
          caller_evidence=authority['caller_evidence'])['FixtureMatched'], 'prior_owner_capture_incomplete')
     manifest_ref = capture['receipt']['terminal']
     manifest = strict_json(read_reference(directory, manifest_ref, MAX_PREFIX), MAX_PREFIX)
     exact(manifest, 'schema contract_sha256 cases shrink first_invariant first_unexpected_stop complete', 'corpus_fields')
-    need(manifest['schema'] == CORPUS_SCHEMA and manifest['contract_sha256'] == object_hash(contract) and
+    need(manifest['schema'] == profile['corpus_schema'] and manifest['contract_sha256'] == object_hash(contract) and
          manifest['complete'] is True and manifest['first_unexpected_stop'] is None and
-         type(manifest['cases']) is list and len(manifest['cases']) == PLAN_COUNTS['total'], 'corpus_completion')
-    need(manifest['shrink'] == {'schema': SHRINK_SCHEMA, 'attempts': [78, 79, 80, 81],
-                               'original': 78, 'candidate': 79, 'positive_control': 80, 'reduced': 81}, 'shrink_v2_roles')
+         type(manifest['cases']) is list and len(manifest['cases']) == profile['counts']['total'], 'corpus_completion')
+    need(manifest['shrink'] == profile['shrink'], 'shrink_v2_roles' if profile['legacy'] else 'direct_shrink_roles')
     for index, entry in enumerate(manifest['cases']):
         exact(entry, 'index id kind observation result fixture_status', 'corpus_entry_fields')
         need(type(entry['index']) is int and entry['index'] == index and entry['fixture_status'] == 'FixtureMatched', 'corpus_entry_order')
+        if not profile['legacy']:
+            need(entry['kind'] == profile['kinds'][index] and
+                 entry['id'] == contract['case_inventory'][index]['id'], 'direct_corpus_inventory')
         validate_reference(entry['observation'])
         validate_reference(entry['result'])
     prefix = strict_json(read_reference(directory, capture['receipt']['prefix'], MAX_PREFIX), MAX_PREFIX)
@@ -590,9 +818,32 @@ def verify_prior_case(controlled, directory, prior, fixture, index):
     need(result['fixture_status'] == 'FixtureMatched', 'saved_fixture_unmatched')
     saved_evaluation = strict_json(read_reference(directory, result['evaluation'], contract['budgets']['evaluation_bytes']),
                                   contract['budgets']['evaluation_bytes'])
-    output, evaluation, matched, _ = evaluate_fixture(controlled, fixture, record, stdout)
+    output, evaluation, matched, _ = evaluate_fixture(controlled, fixture, record, stdout,
+                                                     contract_profile(contract)['id'])
     need(matched and evaluation == saved_evaluation, 'saved_evaluation_changed')
     return output, evaluation
+
+
+def validate_direct_prior(controlled, directory, prior, plan):
+    """Recheck aggregate claims from verified cases before any replay start."""
+    contract, manifest = prior
+    profile = contract_profile(contract)
+    need(not profile['legacy'] and len(plan) == profile['counts']['total'], 'direct_prior_plan')
+    first_invariant, shrink_observations = None, []
+    for index, fixture in enumerate(plan):
+        output, evaluation = verify_prior_case(controlled, directory, prior, fixture, index)
+        if type(evaluation.get('invariant')) is dict and first_invariant is None:
+            entry = manifest['cases'][index]
+            result = strict_json(read_reference(directory, entry['result'], MAX_CASE_METADATA), MAX_CASE_METADATA)
+            validate_result(result, entry['observation'], contract, fixture, index)
+            first_invariant = {'index': index, 'evaluation': result['evaluation'],
+                               'class': evaluation['invariant']['class']}
+        if fixture['kind'] == 'shrink':
+            shrink_observations.append((fixture['value'], output, evaluation))
+    need(first_invariant == manifest['first_invariant'], 'saved_first_invariant_changed')
+    need(len(shrink_observations) == profile['counts']['shrink'], 'direct_prior_shrink_count')
+    if shrink_observations:
+        shrink_relations(controlled, shrink_observations, profile['id'])
 
 
 def _prctl(option, value):
@@ -686,54 +937,219 @@ def _exchange(channel, run_id, message, reply_kind, deadline, descriptor=None):
                 os.close(received_fd)
 
 
+def _path_metadata(path, *, missing_ok=False):
+    """No-follow metadata only; never traverse a symlinked parent."""
+    path = Path(path)
+    need(path.is_absolute(), 'inventory_absolute_path')
+    current = Path(path.anchor)
+    metadata = os.lstat(current)
+    for component in path.parts[1:]:
+        need(stat.S_ISDIR(metadata.st_mode), 'inventory_parent_directory')
+        current = current / component
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            if missing_ok:
+                return None
+            raise
+        need(not stat.S_ISLNK(metadata.st_mode), 'inventory_symlink')
+    return metadata
+
+
+def check_direct_import_layout(root):
+    """Exact project-helper alternatives, also required by trusted preparation.
+
+    Entry scripts themselves already rely on supervision. Their trusted invoker
+    must verify helpers and these absences before that first project import.
+    This repeat protects the worker's later oracle import; -B alone cannot.
+    """
+    root = Path(root)
+    stems = ('controlled_admission_supervision', 'controlled_admission', 'experiment_contract', 'direct_case')
+    absent = ['scripts/lib.py', 'scripts/lib.pyc', 'scripts/lib/__init__.py',
+              'scripts/lib/__init__.pyc', 'scripts/lib/__pycache__']
+    for stem in stems:
+        absent.extend(('scripts/lib/' + stem, 'scripts/lib/' + stem + '.pyc'))
+    for name in absent:
+        need(_path_metadata(root / name, missing_ok=True) is None, 'helper_import_alternative')
+    for directory, names in (('scripts', ('lib',)), ('scripts/lib', ('__init__',) + stems)):
+        metadata = _path_metadata(root / directory)
+        need(stat.S_ISDIR(metadata.st_mode), 'helper_directory')
+        # Examine names only, never unrelated script contents or environments.
+        with os.scandir(root / directory) as entries:
+            for entry in entries:
+                need(not any(entry.name == name + '.so' or
+                             (entry.name.startswith(name + '.') and entry.name.endswith('.so'))
+                             for name in names), 'helper_native_import_alternative')
+    for stem in stems:
+        need(stat.S_ISREG(_path_metadata(root / 'scripts/lib' / (stem + '.py')).st_mode),
+             'helper_regular_source')
+
+
+def check_direct_inventory(contract):
+    """Compare fixed local build input membership with externally bound keys.
+
+    Only expected source directories are descended. Unexpected directories and
+    all symlinks fail without scanning their contents. This is project-local
+    material binding, not external tool/dependency supply-chain reproduction.
+    """
+    need(not contract_profile(contract)['legacy'], 'direct_inventory_profile')
+    root = Path(contract['root'])
+    source_keys = set(contract['provenance']['source_files'])
+    check_direct_import_layout(root)
+    for name in DIRECT_BUILD_ABSENCES:
+        need(_path_metadata(root / name, missing_ok=True) is None, 'automatic_build_input_present')
+    discovered = set()
+    for source_root in DIRECT_SOURCE_ROOTS:
+        leaves = {name for name in source_keys if name.startswith(source_root + '/')}
+        need(leaves and all(name.endswith('.rs') for name in leaves), 'fixed_source_root_inventory')
+        expected_children = {}
+        for name in leaves:
+            path = Path(name)
+            while str(path) != source_root:
+                parent = str(path.parent)
+                expected_children.setdefault(parent, set()).add(path.name)
+                path = path.parent
+        pending = [source_root]
+        while pending:
+            directory = pending.pop()
+            need(stat.S_ISDIR(_path_metadata(root / directory).st_mode), 'source_directory_type')
+            with os.scandir(root / directory) as entries:
+                entries = list(entries)
+            need({entry.name for entry in entries} == expected_children[directory], 'source_directory_membership')
+            for entry in entries:
+                name = directory + '/' + entry.name
+                metadata = entry.stat(follow_symlinks=False)
+                if name in expected_children:
+                    need(stat.S_ISDIR(metadata.st_mode), 'source_subdirectory_type')
+                    pending.append(name)
+                else:
+                    need(name in leaves and stat.S_ISREG(metadata.st_mode), 'source_regular_leaf')
+                    discovered.add(name)
+    migrations = {name for name in source_keys if Path(name).parent == Path('migrations')}
+    need(migrations and stat.S_ISDIR(_path_metadata(root / 'migrations').st_mode), 'migration_inventory')
+    with os.scandir(root / 'migrations') as entries:
+        entries = list(entries)
+    need({'migrations/' + entry.name for entry in entries} == migrations, 'migration_directory_membership')
+    need(all(stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode) for entry in entries), 'migration_regular_leaf')
+    discovered.update(migrations)
+    for name in DIRECT_FIXED_FILES:
+        need(stat.S_ISREG(_path_metadata(root / name).st_mode), 'fixed_material_regular_file')
+        discovered.add(name)
+    need(discovered == source_keys, 'fixed_source_inventory_equality')
+
+
+def read_regular_bounded(path, maximum):
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        before = _input_identity(descriptor)
+        need(before[5] <= maximum, 'regular_file_byte_budget')
+        with os.fdopen(os.dup(descriptor), 'rb') as stream:
+            data = stream.read(maximum + 1)
+        need(len(data) <= maximum and _input_identity(descriptor) == before, 'regular_file_changed')
+        return data
+    finally:
+        os.close(descriptor)
+
+
 def _check_worker_sources(contract):
     """Hashes execute only in the limited worker, before dynamic project import."""
     need(Path(__file__).resolve() == Path(contract['root']) / 'scripts/lib/controlled_admission_supervision.py',
          'executing_helper_root_changed')
     source_files = contract['provenance']['source_files']
+    profile = contract_profile(contract)
     need(set(contract['helper_source_files']).issubset(source_files), 'helper_scope')
+    if not profile['legacy']:
+        check_direct_inventory(contract)
     used = 0
     # Helpers first. No controlled-admission/project module has been imported yet.
-    for name in list(sorted(HELPER_FILES)) + sorted(set(source_files) - HELPER_FILES):
+    for name in list(sorted(profile['helpers'])) + sorted(set(source_files) - profile['helpers']):
         path = Path(name)
         need(type(name) is str and not path.is_absolute() and '..' not in path.parts and
              str(path) == name and '\\' not in name, 'source_path')
-        data = read_bounded(Path(contract['root']) / path, contract['budgets']['source_bytes'] - used)
+        reader = read_bounded if profile['legacy'] else read_regular_bounded
+        data = reader(Path(contract['root']) / path, contract['budgets']['source_bytes'] - used)
         used += len(data)
         need(fingerprint(data) == source_files[name], 'source_identity_changed')
     need(object_hash(source_files) == contract['provenance']['source_sha256'], 'source_manifest_hash')
+    if not profile['legacy']:
+        check_direct_inventory(contract)
 
 
-def _child_bootstrap(expected_parent, ceiling, ready_write, gate_read, stdout_write, stderr_write, binary, binary_fd, input_path):
+def check_current_material(controlled, contract):
+    if contract_profile(contract)['legacy']:
+        controlled.check_current_provenance(contract['binary'], contract['provenance'], contract['root'])
+    else:
+        controlled.check_current_provenance(contract)
+
+
+def direct_preflight(contract):
+    """Caller preparation; worker independently repeats every check before Hello.
+
+    The incomplete oracle stops here before the caller can start GNU timeout.
+    Trusted invoking preparation must precede the first supervision import.
+    """
+    contract = validate_contract(contract)
+    profile = contract_profile(contract)
+    need(not profile['legacy'], 'direct_preflight_profile')
+    _check_worker_sources(contract)
+    from . import direct_case as controlled
+    controlled.require_implemented()
+    controlled.validate_provenance(contract['provenance'])
+    check_current_material(controlled, contract)
+    plan = fixture_plan(controlled, profile['id'])
+    validate_fixture_inventory(plan, contract)
+    prior = replay_source(contract['replay_dir'], contract) if contract['mode'] == 'replay' else None
+    if prior is not None:
+        validate_direct_prior(controlled, contract['replay_dir'], prior, plan)
+    return controlled, plan, prior
+
+
+def _child_bootstrap(expected_parent, ceiling, ready_write, gate_read, stdout_write, stderr_write,
+                     binary, binary_fd, input_path, profile_id=LEGACY_PROFILE, input_fd=None):
     try:
+        profile = fixed_profile(profile_id)
         _parent_death(expected_parent)
         _limits(PROPOSED_BUDGETS['rust_cpu_soft_s'], PROPOSED_BUDGETS['rust_cpu_hard_s'])
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        _close_except({ready_write, gate_read, stdout_write, stderr_write, binary_fd}, ceiling)
+        keep = {ready_write, gate_read, stdout_write, stderr_write, binary_fd}
+        if not profile['legacy']:
+            number(input_fd, 3, ceiling - 1)
+            keep.add(input_fd)
+        else:
+            need(input_fd is None, 'legacy_input_descriptor')
+        _close_except(keep, ceiling)
         need(os.write(ready_write, b'R') == 1, 'bootstrap_ready_write')
         os.close(ready_write)
         need(os.read(gate_read, 1) == b'G', 'registration_gate_closed')
         os.close(gate_read)
         need(os.getppid() == expected_parent, 'parent_changed_before_exec')
+        if not profile['legacy']:
+            os.dup2(input_fd, 0)
+            os.close(input_fd)
         os.dup2(stdout_write, 1)
         os.dup2(stderr_write, 2)
         os.close(stdout_write)
         os.close(stderr_write)
         # The retained descriptor prevents pathname substitution, not writes to
         # the same inode. Frozen workspace plus before/after hashes remain required.
-        os.execve(binary_fd, [binary, input_path], {'LANG': 'C', 'LC_ALL': 'C'})
+        os.execve(binary_fd, child_arguments(binary, input_path, profile_id), {'LANG': 'C', 'LC_ALL': 'C'})
     except BaseException:
         os._exit(125)
 
 
-def capture_child(channel, contract, index, input_path, binary_fd, deadline, ceiling):
+def capture_child(channel, contract, index, input_path, binary_fd, deadline, ceiling, *, input_fd=None):
     """Register while our direct child is unreaped; release only after owner ACK.
 
     EOF/complete JSON does not mean exit. Both stream EOFs and a terminal reap
     are required. Collector stops at cap+one observed byte and asks the owner to
     kill the exact pidfd, then reaps within the same case deadline.
     """
+    profile = contract_profile(contract)
+    if not profile['legacy']:
+        number(input_fd, 3, ceiling - 1)
+    else:
+        need(input_fd is None, 'legacy_input_descriptor')
     started = _now()
     pipes = [os.pipe2(os.O_CLOEXEC) for _ in range(4)]
     (out_read, out_write), (err_read, err_write), (ready_read, ready_write), (gate_read, gate_write) = pipes
@@ -752,7 +1168,7 @@ def capture_child(channel, contract, index, input_path, binary_fd, deadline, cei
         child_pid = os.fork()
         if child_pid == 0:
             _child_bootstrap(expected_parent, ceiling, ready_write, gate_read, out_write, err_write,
-                             contract['binary'], binary_fd, str(input_path))
+                             contract['binary'], binary_fd, str(input_path), profile['id'], input_fd)
             os._exit(125)
         process['pid'] = child_pid
         for fd in (out_write, err_write, ready_write, gate_read):
@@ -817,7 +1233,7 @@ def capture_child(channel, contract, index, input_path, binary_fd, deadline, cei
         process['wall_ms'] = max(0, (_now() - started) // 1_000_000)
     if child_pid is None:
         failure = 'NotStarted'
-    if failure is None and (process['returncode'] not in (0, 2) or observed['stderr']):
+    if failure is None and (process['returncode'] not in ((0, 2) if profile['legacy'] else (0,)) or observed['stderr']):
         failure = 'ProcessFailure'
     return {'process': process, 'observation': failure or 'Complete',
             'stop_kind': None if failure is None else 'ResourceInterrupted' if failure == 'OutputLimit' else 'EnvironmentInterrupted',
@@ -838,11 +1254,13 @@ class OwnerProtocol:
     No oracle, file/hash work, generic process executor, or process-tree scan.
     Numeric PIDs are diagnostic/correlation values only, never signal targets.
     """
-    def __init__(self, run_id, mode, contract_sha256, started):
+    def __init__(self, run_id, mode, contract_sha256, started, profile_id=LEGACY_PROFILE):
+        self.profile = fixed_profile(profile_id)
+        self.budgets, self.counts = self.profile['budgets'], self.profile['counts']
         self.run_id, self.mode, self.contract_sha256 = run_id, mode, contract_sha256
         self.started = started
-        self.work_deadline = started + PROPOSED_BUDGETS['whole_work_ms'] * 1_000_000
-        self.startup_deadline = min(self.work_deadline, started + PROPOSED_BUDGETS['startup_ms'] * 1_000_000)
+        self.work_deadline = started + self.budgets['whole_work_ms'] * 1_000_000
+        self.startup_deadline = min(self.work_deadline, started + self.budgets['startup_ms'] * 1_000_000)
         self.case_deadline = None
         self.finalization_deadline = None
         self.case_index = None
@@ -875,7 +1293,7 @@ class OwnerProtocol:
 
     def accept(self, message, descriptors, now):
         self.controls += 1
-        need(self.controls <= 8 * PROPOSED_BUDGETS['launches'] + 16 and now < self.deadline(), 'owner_control_deadline_or_budget')
+        need(self.controls <= 8 * self.budgets['launches'] + 16 and now < self.deadline(), 'owner_control_deadline_or_budget')
         need(type(message) is dict and message.get('run_id') == self.run_id and not self.done, 'control_run_identity')
         kind = message.get('type')
         need(kind in ('Hello', 'Begin', 'Launch', 'Register', 'AbortChild', 'Reaped', 'CaseReady', 'Done'), 'control_type')
@@ -884,27 +1302,32 @@ class OwnerProtocol:
         need(message.get('role') == role, 'control_role')
         need(len(descriptors) == (1 if kind == 'Register' else 0), 'control_rights_count')
         if kind == 'Hello':
-            exact(message, 'type run_id index role contract_sha256 total prefix', 'hello_fields')
+            exact(message, 'type run_id index role contract_sha256 total prefix' +
+                  ('' if self.profile['legacy'] else ' profile'), 'hello_fields')
+            if not self.profile['legacy']:
+                need(message['profile'] == self.profile['id'], 'hello_profile_identity')
             need(self.phase == 'bootstrap' and message['index'] == -1 and
                  message['contract_sha256'] == self.contract_sha256 and type(message['total']) is int and
-                 message['total'] == PLAN_COUNTS['total'], 'hello_identity')
-            validate_prefix_reference(message['prefix'], 0)
+                 message['total'] == self.counts['total'], 'hello_identity')
+            validate_prefix_reference(message['prefix'], 0, self.profile['id'])
             self.prefix, self.phase = message['prefix'], 'idle'
             reply = 'Ready'
         elif kind == 'Begin':
             exact(message, 'type run_id index role id kind', 'begin_fields')
             need(self.phase == 'idle' and self.stop is None and self.child_fd is None and
-                 message['index'] == self.completed and self.completed < PLAN_COUNTS['total'], 'case_sequence')
-            expected_kind = 'normal' if self.completed < 44 else 'rejection' if self.completed < 78 else 'shrink'
+                 message['index'] == self.completed and self.completed < self.counts['total'], 'case_sequence')
+            expected_kind = self.profile['kinds'][self.completed]
             need(message['kind'] == expected_kind and type(message['id']) is str and
                  re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}', message['id']), 'case_kind_identity')
+            if not self.profile['legacy']:
+                need(message['id'] == self.profile['ids'][self.completed], 'case_fixed_identity')
             self.case_index = message['index']
-            self.case_deadline = min(self.work_deadline, now + PROPOSED_BUDGETS['case_ms'] * 1_000_000)
+            self.case_deadline = min(self.work_deadline, now + self.budgets['case_ms'] * 1_000_000)
             self.phase, reply = 'preparing', 'CaseStarted'
         elif kind == 'Launch':
             exact(message, 'type run_id index role', 'launch_fields')
             need(self.phase == 'preparing' and message['index'] == self.case_index and
-                 self.launches < PROPOSED_BUDGETS['launches'], 'launch_budget_or_sequence')
+                 self.launches < self.budgets['launches'], 'launch_budget_or_sequence')
             self.launches += 1  # A reserved start counts even if fork/setup fails.
             self.phase, reply = 'registering', 'LaunchAllowed'
         elif kind == 'Register':
@@ -941,7 +1364,7 @@ class OwnerProtocol:
             need(message['interruption_kind'] in (None,) + INTERRUPTION_KINDS and
                  (message['stop_kind'] not in INTERRUPTION_KINDS or message['interruption_kind'] == message['stop_kind']),
                  'case_ready_interruption_kind')
-            validate_prefix_reference(message['prefix'], self.completed + 1)
+            validate_prefix_reference(message['prefix'], self.completed + 1, self.profile['id'])
             self._reference(message['result'], f'{self.case_index:03d}.result.json', MAX_CASE_METADATA)
             if message['observation'] is not None:
                 self._reference(message['observation'], f'{self.case_index:03d}.observation.json', MAX_CASE_METADATA)
@@ -959,7 +1382,7 @@ class OwnerProtocol:
                 self.fail(message['stop'], message['stop_kind'])
                 if self.interruption_kind is None:
                     self.interruption_kind = message['interruption_kind']
-                self.finalization_deadline = min(self.work_deadline, now + PROPOSED_BUDGETS['cleanup_ms'] * 1_000_000)
+                self.finalization_deadline = min(self.work_deadline, now + self.budgets['cleanup_ms'] * 1_000_000)
                 _signal_owned(self.child_fd)
             self.completed += 1
             self.prefix = message['prefix']
@@ -970,7 +1393,7 @@ class OwnerProtocol:
                  type(message['complete']) is bool and message['prefix'] == self.prefix, 'done_sequence')
             self._reference(message['terminal'], 'corpus.json', MAX_PREFIX)
             if message['complete']:
-                need(self.completed == self.matched == self.launches == PLAN_COUNTS['total'] and
+                need(self.completed == self.matched == self.launches == self.counts['total'] and
                      self.stop is None and self.child_fd is None, 'done_plan_incomplete')
             else:
                 need(self.stop is not None, 'done_missing_stop')
@@ -1056,9 +1479,9 @@ def _receipt_write(receipt):
             select.select([], [1], [], _remaining(deadline))
 
 
-def owner_main(contract_bytes, *, run_id, mode, contract_sha256):
+def owner_main(contract_bytes, *, run_id, mode, contract_sha256, profile_id=LEGACY_PROFILE):
     """Fresh dedicated interpreter only. No filesystem/hash/project work here."""
-    state = OwnerProtocol(run_id, mode, contract_sha256, _now())
+    state = OwnerProtocol(run_id, mode, contract_sha256, _now(), profile_id)
     channel = worker_channel = None
     worker_fd = gate_read = gate_write = None
     cleanup_deadline = None
@@ -1094,7 +1517,7 @@ def owner_main(contract_bytes, *, run_id, mode, contract_sha256):
         worker_pid = os.fork()
         if worker_pid == 0:
             _worker_bootstrap(expected_parent, worker_channel, gate_read, contract_bytes,
-                              run_id, mode, contract_sha256, state.startup_deadline, ceiling)
+                              run_id, mode, contract_sha256, state.startup_deadline, ceiling, profile_id)
             os._exit(125)
         state.worker_pid = worker_pid
         worker_channel.close()
@@ -1206,6 +1629,38 @@ def _verified_binary(contract):
         raise
 
 
+def _input_identity(descriptor):
+    metadata = os.fstat(descriptor)
+    need(stat.S_ISREG(metadata.st_mode), 'input_regular_file')
+    return tuple(getattr(metadata, name) for name in
+                 ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+
+
+def _verified_input(contract, path, reference):
+    """Hash, verify and rewind the same regular descriptor retained through gate."""
+    validate_reference(reference)
+    need(reference['bytes'] <= contract['budgets']['input_bytes'], 'input_bound')
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        identity = _input_identity(descriptor)
+        need(identity[5] == reference['bytes'], 'input_file_size')
+        value, size = hashlib.sha256(), 0
+        while True:
+            chunk = os.read(descriptor, min(65536, reference['bytes'] + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            need(size <= reference['bytes'], 'input_grew_beyond_bound')
+            value.update(chunk)
+        need(size == reference['bytes'] and value.hexdigest() == reference['sha256'] and
+             _input_identity(descriptor) == identity, 'retained_input_identity')
+        need(os.lseek(descriptor, 0, os.SEEK_SET) == 0, 'input_rewind')
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def save_observation(store, contract, fixture, index, input_reference, capture):
     """Commit raw bounded observations before any output parser/oracle/assertion."""
     record = {'schema': CASE_SCHEMA, 'run_id': contract['run_id'], 'contract_sha256': object_hash(contract),
@@ -1235,24 +1690,40 @@ def _prefix(contract, cases, first_invariant, first_stop):
             'cases': cases, 'first_invariant': first_invariant, 'first_unexpected_stop': first_stop}
 
 
-def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_deadline, ceiling):
+def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_deadline, ceiling,
+                profile_id=LEGACY_PROFILE):
     """Limited worker: all project imports, fixture work and persistence live here."""
     contract = validate_contract(strict_json(contract_bytes, MAX_CONTRACT))
+    profile = contract_profile(contract)
     need(contract['run_id'] == run_id and contract['mode'] == mode and object_hash(contract) == contract_sha256,
          'external_contract_identity')
+    need(profile['id'] == profile_id, 'external_profile_identity')
     _check_worker_sources(contract)
-    from . import controlled_admission as controlled
+    if profile['legacy']:
+        from . import controlled_admission as controlled
+    else:
+        from . import direct_case as controlled
+        controlled.require_implemented()
     controlled.validate_provenance(contract['provenance'])
-    controlled.check_current_provenance(contract['binary'], contract['provenance'], contract['root'])
-    plan = fixture_plan(controlled)
+    check_current_material(controlled, contract)
+    plan = fixture_plan(controlled) if profile['legacy'] else fixture_plan(controlled, profile['id'])
+    if not profile['legacy']:
+        validate_fixture_inventory(plan, contract)
     prior = replay_source(contract['replay_dir'], contract) if mode == 'replay' else None
-    store = EvidenceStore(contract['evidence_dir'], contract['budgets'])
+    if prior is not None and not profile['legacy']:
+        # Complete prior-case revalidation precedes Hello, including oracle
+        # reevaluation. No later bad case may be discovered after a new start.
+        validate_direct_prior(controlled, contract['replay_dir'], prior, plan)
+    store = EvidenceStore(contract['evidence_dir'], contract['budgets'], profile['id'])
     store.json('contract.json', contract, maximum=MAX_CONTRACT, terminal=True)
     cases, shrink_observations = [], []
     first_invariant = first_stop = None
     prefix_reference = store.prefix(_prefix(contract, cases, first_invariant, first_stop), terminal=True)
-    work_deadline = _exchange(channel, run_id, {'type': 'Hello', 'index': -1, 'role': 'worker',
-                                              'contract_sha256': contract_sha256, 'total': len(plan), 'prefix': prefix_reference},
+    hello = {'type': 'Hello', 'index': -1, 'role': 'worker',
+             'contract_sha256': contract_sha256, 'total': len(plan), 'prefix': prefix_reference}
+    if not profile['legacy']:
+        hello['profile'] = profile['id']
+    work_deadline = _exchange(channel, run_id, hello,
                               'Ready', startup_deadline)
     for index, fixture in enumerate(plan):
         deadline = _exchange(channel, run_id, {'type': 'Begin', 'index': index, 'role': 'worker',
@@ -1272,13 +1743,18 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
             prior_semantics = verify_prior_case(controlled, contract['replay_dir'], prior, fixture, index) if prior else None
             failure_kind, phase = 'EnvironmentInterrupted', 'provenance_validation'
             _check_worker_sources(contract)
-            controlled.check_current_provenance(contract['binary'], contract['provenance'], contract['root'])
+            check_current_material(controlled, contract)
             binary_fd = _verified_binary(contract)
-            binary_identity = _binary_identity(binary_fd)
+            input_fd = None
             try:
+                binary_identity = _binary_identity(binary_fd)
+                if not profile['legacy']:
+                    input_fd = _verified_input(contract, store.directory / input_reference['file'], input_reference)
+                    input_identity = _input_identity(input_fd)
                 launched = True
                 failure_kind, phase = 'EnvironmentInterrupted', 'capture'
-                capture = capture_child(channel, contract, index, store.directory / input_reference['file'], binary_fd, deadline, ceiling)
+                arguments = (channel, contract, index, store.directory / input_reference['file'], binary_fd, deadline, ceiling)
+                capture = capture_child(*arguments) if profile['legacy'] else capture_child(*arguments, input_fd=input_fd)
                 if capture['stop_kind'] is not None:
                     stop, stop_kind, stop_phase = capture['observation'], capture['stop_kind'], 'capture'
                     interruption_kind = capture['stop_kind']
@@ -1289,16 +1765,20 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
                 failure_kind, phase = 'EnvironmentInterrupted', 'observation_validation'
                 validate_case_record(record, contract, index, fixture['id'], fixture['kind'])
                 need(_binary_identity(binary_fd) == binary_identity, 'binary_metadata_changed_during_execution')
+                if input_fd is not None:
+                    need(_input_identity(input_fd) == input_identity, 'input_metadata_changed_during_execution')
             finally:
+                if input_fd is not None:
+                    os.close(input_fd)
                 os.close(binary_fd)
             # This immutable commit precedes all semantic checks, including a
             # source/input-change failure following an otherwise valid process.
             failure_kind, phase = 'EnvironmentInterrupted', 'post_execution_provenance'
             _check_worker_sources(contract)
-            controlled.check_current_provenance(contract['binary'], contract['provenance'], contract['root'])
+            check_current_material(controlled, contract)
             need(read_reference(store.directory, input_reference, contract['budgets']['input_bytes']) == fixture['bytes'], 'input_changed')
             failure_kind, phase = 'EnvironmentInterrupted', 'oracle'
-            output, evaluation, matched, stop = evaluate_fixture(controlled, fixture, record, capture['bytes']['stdout'])
+            output, evaluation, matched, stop = evaluate_fixture(controlled, fixture, record, capture['bytes']['stdout'], profile['id'])
             stop_kind = None if matched else 'FixtureMismatch' if record['observation'] == 'Complete' else record['stop_kind']
             if not matched:
                 stop_phase = 'oracle' if record['observation'] == 'Complete' else 'capture'
@@ -1315,8 +1795,8 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
             if matched and fixture['kind'] == 'shrink':
                 failure_kind, phase = 'FixtureMismatch', 'shrink_relation'
                 shrink_observations.append((fixture['value'], output, evaluation))
-                if len(shrink_observations) == PLAN_COUNTS['shrink']:
-                    shrink_relations(controlled, shrink_observations)
+                if len(shrink_observations) == profile['counts']['shrink']:
+                    shrink_relations(controlled, shrink_observations, profile['id'])
             if matched and index == len(plan) - 1 and prior is not None:
                 failure_kind, phase = 'InvalidArtifact', 'first_invariant_validation'
                 need(first_invariant == prior[1]['first_invariant'], 'saved_first_invariant_changed')
@@ -1352,7 +1832,7 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
                 interruption_kind = stop_kind
             first_stop = {'index': index, 'reason': stop, 'stop_kind': stop_kind,
                           'interruption_kind': interruption_kind, 'phase': stop_phase or phase}
-        result = {'schema': RESULT_SCHEMA, 'run_id': run_id, 'contract_sha256': contract_sha256,
+        result = {'schema': profile['result_schema'], 'run_id': run_id, 'contract_sha256': contract_sha256,
                   'index': index, 'id': fixture['id'], 'kind': fixture['kind'], 'observation': observation_reference,
                   'observation_loss': observation_loss,
                   'evaluation': evaluation_reference, 'fixture_status': 'FixtureMatched' if matched else 'UnexpectedStop',
@@ -1374,10 +1854,9 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
                                   'CaseSaved', deadline)
         if not matched:
             break
-    complete = len(cases) == len(plan) and first_stop is None and len(shrink_observations) == PLAN_COUNTS['shrink']
-    terminal = {'schema': CORPUS_SCHEMA, 'contract_sha256': contract_sha256, 'cases': cases,
-                'shrink': {'schema': SHRINK_SCHEMA, 'attempts': [78, 79, 80, 81],
-                           'original': 78, 'candidate': 79, 'positive_control': 80, 'reduced': 81},
+    complete = len(cases) == len(plan) and first_stop is None and len(shrink_observations) == profile['counts']['shrink']
+    terminal = {'schema': profile['corpus_schema'], 'contract_sha256': contract_sha256, 'cases': cases,
+                'shrink': profile['shrink'],
                 'first_invariant': first_invariant, 'first_unexpected_stop': first_stop, 'complete': complete}
     terminal_reference = store.json('corpus.json', terminal, maximum=MAX_PREFIX, terminal=True)
     _exchange(channel, run_id, {'type': 'Done', 'index': len(cases), 'role': 'worker', 'complete': complete,
@@ -1385,7 +1864,8 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
     return 0 if complete else 2
 
 
-def _worker_bootstrap(expected_parent, channel, gate_read, contract_bytes, run_id, mode, contract_sha256, deadline, ceiling):
+def _worker_bootstrap(expected_parent, channel, gate_read, contract_bytes, run_id, mode, contract_sha256, deadline, ceiling,
+                      profile_id=LEGACY_PROFILE):
     try:
         _parent_death(expected_parent)
         _limits(PROPOSED_BUDGETS['worker_cpu_s'], PROPOSED_BUDGETS['worker_cpu_s'])
@@ -1402,7 +1882,7 @@ def _worker_bootstrap(expected_parent, channel, gate_read, contract_bytes, run_i
         finally:
             if null > 2:
                 os.close(null)
-        status = worker_main(channel, contract_bytes, run_id, mode, contract_sha256, deadline, ceiling)
+        status = worker_main(channel, contract_bytes, run_id, mode, contract_sha256, deadline, ceiling, profile_id)
     except BaseException:
         status = 2  # The owner records missing terminal, then bounded cleanup.
     os._exit(status)

@@ -1,0 +1,86 @@
+{
+  "additional_source_guards": [
+    "Full pending ACK correlation",
+    "Prior FixtureMatched receipt and complete manifest consistency",
+    "Terminal wait status validation",
+    "Setup/NotStarted process representation",
+    "Parent-directory sync and capture deadline validation"
+  ],
+  "base_commit": "0f385711feaca15ea483feaa8934483278cebb2d",
+  "prior_checkpoint_ci": {
+    "applies_to_this_uncommitted_source": false,
+    "commit": "0f385711feaca15ea483feaa8934483278cebb2d",
+    "failure": 0,
+    "skipped": 1,
+    "success": 32,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37175092497"
+  },
+  "remaining_limits": [
+    "The external caller mechanism and real receipt/exit capture have not been delivered or verified.",
+    "All new mocked regression bodies, the two separate 82-launch record/replay plans and actual shrink qualification remain unexecuted locally.",
+    "Resource budgets are uncalibrated proposals: AS is not RSS; 1400 CPU-seconds is only nominal post-setup allowance.",
+    "Real SQL/wire conformance, actor-policy clock scope and production outer ownership remain open; Stage2 is not accepted.",
+    "Earlier syntax checks predate these three review fixes and are historical only; no runtime failure was erased or rerun."
+  ],
+  "review": {
+    "reviewed_source_matches_check": true,
+    "scope": "Read-only source review of all five frozen paths, including the three corrections and mocked regression source; no execution qualification",
+    "status": "SourceSemanticReviewPassed"
+  },
+  "schema": "northstar-source-checkpoint-v1",
+  "source_corrections": [
+    "Typed resource/process/environment/protocol/storage stops remain interrupted even after clean shutdown; fixture mismatch and cleanup are separate facts.",
+    "At most 83 immutable prefix generations retain the previously acknowledged bytes; evidence accounting includes retained generations and temporary installation peak.",
+    "Actual bounded raw streams and observation metadata are saved before strict validation; a later failure never retries the same raw filenames with an empty fabricated capture."
+  ],
+  "source_files": {
+    "docs/architecture/controlled-admission-validation-handoff.zh-TW.md": {
+      "bytes": 17195,
+      "sha256": "d37822a3793c5aece87d9bbbd1e4475aefdfa8573e23453eed5fdc71d4e084eb"
+    },
+    "scripts/lib/controlled_admission.py": {
+      "bytes": 112557,
+      "sha256": "526922ae45d484626d846eda5b696780ab5ae2418e506b078a4d650809aff12c"
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "bytes": 79670,
+      "sha256": "978df9e8bb6d00f8f7c1de48cb33322cb832638dcde30e4b0083faa8261914f1"
+    },
+    "scripts/run-controlled-admission.py": {
+      "bytes": 1453,
+      "sha256": "d48e54f0c84dd4952393c7acd733eeee24bd6082b2931ad464493e1c66f7caaa"
+    },
+    "scripts/test-controlled-admission.py": {
+      "bytes": 108583,
+      "sha256": "41c5a6ad915e6b907fe6bc266a3c29c7dd5795565d1a38c2b6b525cb94980dbf"
+    }
+  },
+  "source_unchanged_during_check": true,
+  "stage2_accepted": false,
+  "status": "ImplementedSyntaxCheckedNotExecuted",
+  "verification": {
+    "dedicated_regression_bodies_executed": false,
+    "exit_codes": {
+      "scripts/lib/controlled_admission.py": 0,
+      "scripts/lib/controlled_admission_supervision.py": 0,
+      "scripts/run-controlled-admission.py": 0,
+      "scripts/test-controlled-admission.py": 0
+    },
+    "operation": "Parse each listed .py file to AST, then compile the AST to a code object; never exec, eval, or import project code.",
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "reproduce_argv": [
+      "python3",
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      "import ast,pathlib,sys; [(compile(ast.parse(pathlib.Path(p).read_bytes(), filename=p), p, \"exec\", dont_inherit=True)) for p in sys.argv[1:]]",
+      "scripts/lib/controlled_admission.py",
+      "scripts/lib/controlled_admission_supervision.py",
+      "scripts/run-controlled-admission.py",
+      "scripts/test-controlled-admission.py"
+    ],
+    "rust_record_replay_or_shrink_executed": false,
+    "services_or_fault_experiments_executed": false
+  }
+}

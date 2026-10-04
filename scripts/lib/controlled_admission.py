@@ -1,7 +1,8 @@
 """Independent oracle and source-bound replay for the controlled Rust adapter.
 
-This module never treats prediction as observation. run_saved_input invokes the
-supplied Rust executable on a complete saved input; no build or service starts.
+This module never treats prediction as observation. Historical v1 execution is
+disabled; new runs must use run-controlled-admission.py and its strict external
+execution contract, gated worker and caller-captured owner receipt.
 Inputs and projections use synthetic labels only. SQL/MVCC, crypto, durable
 message commit, process loss and real signals are outside this adapter's scope.
 """
@@ -136,35 +137,12 @@ def check_current_provenance(binary, expected, root=ROOT):
 
 
 def run_saved_input(path, binary, *, expected_provenance, root=ROOT):
-    """Run only the externally built Rust binary, rechecking exact bytes afterward.
+    """Fail closed: seven-field v1 observations cannot launch or qualify v2 runs.
 
-    The runner's input and event hard bounds are checked before its work. Wall
-    duration is measured; this driver does not inject cancellation or OS signals.
-    Rejection fixtures intentionally bypass Python semantic input validation so
-    the actual Rust parser has to reject the concrete malformed bytes itself.
+    The historical readers below remain useful for explicitly mocked regression
+    source. Patching this function in a test cannot create a supervised receipt.
     """
-    path, binary = Path(path).resolve(), Path(binary).resolve()
-    require(path.is_file() and binary.is_file(), 'missing_input_or_binary')
-    require(path.stat().st_size <= MAX_INPUT_BYTES, 'byte_budget')
-    before_input = sha256_file(path)
-    check_current_provenance(binary, expected_provenance, root)
-    started = time.monotonic_ns()
-    completed = subprocess.run([str(binary), str(path)], capture_output=True, check=False)
-    elapsed = (time.monotonic_ns() - started) // 1_000_000
-    check_current_provenance(binary, expected_provenance, root)
-    require(sha256_file(path) == before_input, 'input_changed')
-    require(len(completed.stdout) <= MAX_OUTPUT_BYTES and len(completed.stderr) <= 4096, 'output_budget')
-    require(completed.returncode in (0, 2), 'unexpected_runner_exit')
-    require(not completed.stderr, 'unexpected_runner_stderr')
-    output = loads(completed.stdout, MAX_OUTPUT_BYTES)
-    if completed.returncode == 2:
-        fields(output, 'schema class reason', 'rejection')
-        require(output['schema'] == REJECTION_SCHEMA and output['class'] == 'InvalidScenario', 'rejection_class')
-        label(output['reason'], 'rejection_reason')
-    return {'command': [str(binary), str(path)], 'returncode': completed.returncode,
-            'wall_ms': elapsed, 'input_file_sha256': before_input,
-            'stdout_sha256': hashlib.sha256(completed.stdout).hexdigest(), 'output': output,
-            'provenance': copy.deepcopy(expected_provenance)}
+    raise InvalidScenario('supervised_entry_required: scripts/run-controlled-admission.py')
 
 
 def materialize_bindings(rows, commands, actors=()):

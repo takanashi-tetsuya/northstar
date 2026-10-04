@@ -317,3 +317,26 @@ Effect 改為 `Box<Effect>` 及五個 constructors，不改內容 equality／red
 accepted row 的舊 token 已驗證。Reconcile service 目前尚無 production runtime caller；
 Stage3 outer ownership／recovery 尚未接上。Actor-policy clock 仍是 scripted，真 SQL／replay
 與 bounded execution supervision 仍待完成，Stage2 仍未驗收。
+
+
+## Controlled admission 有限 supervisor 來源整合
+
+`0f385711` 已保存第一個未完成 supervisor checkpoint；其普通 CI
+[37175092497](https://github.com/takanashi-tetsuya/northstar/actions/runs/37175092497)
+完成32 success／1 schedule-only skip。該結果不涵蓋本次整合。
+
+目前來源把入口限制為固定 owner、worker、單一 Rust child，採 exact pidfd registration／ACK
+再 release，保留受限 raw observation、同一 fixed plan 的語義 oracle 與獨立 cleanup。
+source review 發現的三項邊界已修正：環境／resource interruption 不因清理完成變成正常
+fixture mismatch；最多83個不可變 prefix 世代保留先前已確認 bytes；actual observation
+先保存再驗證，後續失敗不以空 capture 重寫同名 raw。這些是來源實作，尚無執行證明。
+
+四個 Python 檔案已完成 AST 與 code-object compilation，exit0；五個相關來源的前後 hash
+相同。沒有 import／執行 project modules、新測試、82-case runner、record／replay、SQL、
+服務或 fault。簡短來源與重錄命令見
+[有限 supervisor 來源檢查](../evidence/experimental-rebuild/stage2-bounded-supervision-source-check.json)。
+完整舊紀錄繼續保留，本次不重複提交全 repo maps 或 raw logs。
+
+外部 caller 的實際 deadline／receipt／exit capture 仍未交付，不能用 JSON 宣稱代替監督。
+[交接文件](controlled-admission-validation-handoff.zh-TW.md) 列有精確介面和未校準 budgets；
+下一次執行方案仍需收斂這項前置條件。Stage2 仍未驗收，Stage3–6 及已取消 soak 的界線不變。

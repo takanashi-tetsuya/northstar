@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure oracle tests or explicitly supplied controlled Rust record/replay. No build."""
+"""Pure/mocked regression source. Dedicated Rust execution has a separate owner."""
 import argparse
 import copy
 import hashlib
@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 from lib import controlled_admission as controlled
+from lib import controlled_admission_supervision as supervision
 
 
 class IndependentOracleTests(unittest.TestCase):
@@ -955,55 +956,700 @@ class ShrinkReaderTests(unittest.TestCase):
 
 
 class DriverTests(unittest.TestCase):
+    def test_legacy_unbounded_execution_is_closed_before_any_launch(self):
+        with patch.object(controlled.subprocess, 'run', side_effect=AssertionError('legacy launch is forbidden')):
+            with self.assertRaisesRegex(controlled.InvalidScenario, 'supervised_entry_required'):
+                controlled.run_saved_input('/unused/input', '/unused/binary', expected_provenance={})
+
+    def test_regression_cli_cannot_select_dedicated_record_or_replay(self):
+        for option in ('--evidence-dir', '--replay'):
+            with self.subTest(option=option), patch.object(controlled, 'record_corpus') as record, \
+                    patch.object(controlled, 'replay_corpus') as replay, self.assertRaises(SystemExit):
+                main([option, '/unused', '--binary', '/unused/binary', '--trusted-provenance', '/unused/provenance'])
+            record.assert_not_called()
+            replay.assert_not_called()
+
+
+class SupervisionSchemaTests(unittest.TestCase):
+    """Source-only mocked regressions; no subprocess, resource or fault experiment."""
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        (self.root / 'source.rs').write_text('source bytes')
-        (self.root / 'Cargo.lock').write_text('lock bytes')
-        self.binary = self.root / 'controlled-admission'
-        self.binary.write_text('not executable; subprocess explicitly mocked')
-        files = {'source.rs': controlled.sha256_file(self.root / 'source.rs')}
-        self.provenance = {'schema': 'northstar-admission-controlled-provenance-v1', 'model': controlled.MODEL,
+        helpers = {name: '1' * 64 for name in supervision.HELPER_FILES}
+        self.contract = {
+            'schema': supervision.CONTRACT_SCHEMA, 'run_id': 'mock-run', 'mode': 'record',
+            'root': '/mock/root', 'binary': '/mock/runner', 'evidence_dir': '/mock/new-evidence',
+            'replay_dir': None, 'replay_authority': None,
+            'provenance': {'schema': 'northstar-admission-controlled-provenance-v1', 'model': controlled.MODEL,
                            'adapter': controlled.ADAPTER, 'binding_version': controlled.BINDING_VERSION,
-                           'source_sha256': controlled.digest(files), 'source_files': files,
-                           'binary_sha256': controlled.sha256_file(self.binary),
-                           'cargo_lock_sha256': controlled.sha256_file(self.root / 'Cargo.lock'),
-                           'toolchain': 'rustc 1.97.1 (test identity only)'}
-        self.value = controlled.scenario('driver-input', [controlled.controlled_command(1)])
-        self.path = self.root / 'input.json'
-        self.path.write_text(controlled.canonical(self.value))
+                           'source_files': helpers.copy(), 'source_sha256': supervision.object_hash(helpers),
+                           'binary_sha256': '2' * 64, 'cargo_lock_sha256': '3' * 64,
+                           'toolchain': 'rustc 1.97.1 (mock identity)'},
+            'helper_source_files': helpers, 'budgets': supervision.PROPOSED_BUDGETS.copy(),
+            'plan_counts': supervision.PLAN_COUNTS.copy(),
+        }
 
-    def test_driver_invokes_saved_binary_input_and_never_predicts(self):
-        fixture_output = {'schema': controlled.REJECTION_SCHEMA, 'class': 'InvalidScenario', 'reason': 'schema'}
-        mocked = SimpleNamespace(returncode=2, stdout=controlled.canonical(fixture_output).encode(), stderr=b'')
-        with patch.object(controlled.subprocess, 'run', return_value=mocked) as run, \
-                patch.object(controlled, 'predict', side_effect=AssertionError('must not substitute prediction')):
-            result = controlled.run_saved_input(self.path, self.binary, expected_provenance=self.provenance, root=self.root)
-        run.assert_called_once_with([str(self.binary), str(self.path)], capture_output=True, check=False)
-        self.assertEqual(result['output'], fixture_output)
-        self.assertEqual(result['returncode'], 2)
+    @staticmethod
+    def reference(name='mock.json', data=b''):
+        return {'file': name, 'bytes': len(data), 'sha256': supervision.fingerprint(data)}
 
-    def test_wrong_source_binary_lock_refuses_before_execution(self):
-        for name in ('source.rs', 'controlled-admission', 'Cargo.lock'):
-            with self.subTest(name=name):
-                path = self.root / name
-                original = path.read_bytes()
-                path.write_bytes(original + b'changed')
-                with patch.object(controlled.subprocess, 'run', side_effect=AssertionError('must not launch')):
-                    with self.assertRaises(controlled.InvalidScenario):
-                        controlled.run_saved_input(self.path, self.binary, expected_provenance=self.provenance, root=self.root)
-                path.write_bytes(original)
+    def record(self, stdout=b'{}', *, kind='normal', status=0):
+        return {'schema': supervision.CASE_SCHEMA, 'run_id': self.contract['run_id'],
+                'contract_sha256': supervision.object_hash(self.contract), 'index': 0, 'id': 'mock-case', 'kind': kind,
+                'input': self.reference('input.json'),
+                'stdout': {'reference': self.reference('stdout.bin', stdout), 'observed_bytes': len(stdout), 'complete': True},
+                'stderr': {'reference': self.reference('stderr.bin'), 'observed_bytes': 0, 'complete': True},
+                'process': {'pid': 123, 'identity': 'unreaped-direct-child-pidfd', 'registered': True,
+                            'released': True, 'reaped': True, 'wait_status': status,
+                            'returncode': supervision.os.waitstatus_to_exitcode(status), 'wall_ms': 1},
+                'observation': 'Complete', 'stop_kind': None}
 
-    def test_source_or_input_change_during_execution_invalidates_result(self):
-        for path in (self.root / 'source.rs', self.path, self.binary):
-            original = path.read_bytes()
-            def mutate(*_args, **_kwargs):
-                path.write_bytes(original + b'changed')
-                return SimpleNamespace(returncode=0, stdout=b'{}', stderr=b'')
-            with patch.object(controlled.subprocess, 'run', side_effect=mutate), self.assertRaises(controlled.InvalidScenario):
-                controlled.run_saved_input(self.path, self.binary, expected_provenance=self.provenance, root=self.root)
-            path.write_bytes(original)
+    def test_contract_rejects_boolean_limits_missing_helpers_extra_budget_and_combined_modes(self):
+        supervision.validate_contract(self.contract)
+        variants = []
+        for key, value in (('launches', True), ('launches', 164), ('case_ms', 0), ('whole_work_ms', 600001)):
+            bad = copy.deepcopy(self.contract)
+            bad['budgets'][key] = value
+            variants.append(bad)
+        bad = copy.deepcopy(self.contract)
+        bad['helper_source_files'].pop(next(iter(bad['helper_source_files'])))
+        variants.append(bad)
+        bad = copy.deepcopy(self.contract)
+        bad['budgets']['rss_hard_cap'] = 1024 ** 3
+        variants.append(bad)
+        bad = copy.deepcopy(self.contract)
+        bad['mode'] = 'record-and-replay'
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(supervision.SupervisionError):
+                supervision.validate_contract(bad)
+
+    def test_common_case_validator_applies_to_rejection_and_all_shrink_records(self):
+        for kind in ('normal', 'rejection', 'shrink'):
+            value = self.record(kind=kind, status=512 if kind == 'rejection' else 0)
+            supervision.validate_case_record(value, self.contract, 0, 'mock-case', kind)
+            for key, bad_value in (('wall_ms', True), ('returncode', True), ('wait_status', 0x7f), ('registered', False)):
+                malformed = copy.deepcopy(value)
+                malformed['process'][key] = bad_value
+                with self.subTest(kind=kind, field=key), self.assertRaises(supervision.SupervisionError):
+                    supervision.validate_case_record(malformed, self.contract, 0, 'mock-case', kind)
+
+    def test_complete_capture_wall_boundary_is_contract_bounded(self):
+        value = self.record()
+        value['process']['wall_ms'] = self.contract['budgets']['case_ms']
+        supervision.validate_case_record(value, self.contract, 0, 'mock-case', 'normal')
+        value['process']['wall_ms'] += 1
+        with self.assertRaisesRegex(supervision.SupervisionError, 'complete_capture_exceeds_case_deadline'):
+            supervision.validate_case_record(value, self.contract, 0, 'mock-case', 'normal')
+
+    def test_historical_seven_field_execution_never_becomes_supervised(self):
+        historical = {'command': ['/old/runner', '/old/input'], 'returncode': 0, 'wall_ms': 1,
+                      'input_file_sha256': '1' * 64, 'stdout_sha256': '2' * 64, 'output': {}, 'provenance': {}}
+        with self.assertRaises(supervision.SupervisionError):
+            supervision.validate_case_record(historical, self.contract, 0, 'mock-case', 'normal')
+        with self.assertRaises(supervision.SupervisionError):
+            supervision.validate_owner_capture({'schema': 'northstar-admission-controlled-corpus-v1'}, self.contract)
+
+    def test_prefix_output_cannot_be_parsed_into_an_invariant(self):
+        record = self.record(b'{"apparently":"valid"}')
+        record['observation'] = 'OutputLimit'
+        record['stop_kind'] = 'ResourceInterrupted'
+        record['stdout']['complete'] = False
+        fixture = {'kind': 'normal', 'value': None}
+        with patch.object(controlled, 'loads', side_effect=AssertionError('truncated prefix must not be parsed')):
+            output, evaluation, matched, reason = supervision.evaluate_fixture(controlled, fixture, record, b'{}')
+        self.assertIsNone(output)
+        self.assertIsNone(evaluation)
+        self.assertFalse(matched)
+        self.assertEqual(reason, 'OutputLimit')
+
+    def test_stream_cap_plus_one_is_a_lower_bound_not_full_length(self):
+        stream = {'reference': self.reference('prefix.bin', b'abc'), 'observed_bytes': 4, 'complete': False}
+        supervision.validate_stream(stream, 3)
+        for changes in ({'observed_bytes': 5}, {'complete': True}, {'observed_bytes': True}):
+            with self.assertRaises(supervision.SupervisionError):
+                supervision.validate_stream(dict(stream, **changes), 3)
+
+    def test_expected_domain_negatives_still_match_the_entire_fixed_fixture(self):
+        cancelled = controlled.scenario('cancelled-fixture', [controlled.controlled_command(1, cut='commit_cancel')])
+        missing = controlled.controlled_command(1)
+        missing['schedule']['completions'][0]['attempt'] += 1
+        inconclusive = controlled.scenario('inconclusive-fixture', [missing])
+        for value, verdict in ((cancelled, 'Cancelled'), (inconclusive, 'Inconclusive'),
+                               (controlled.late_candidate(), 'InvariantViolation'),
+                               (controlled.late_candidate(positive=True), 'Pass')):
+            output = controlled.expected_output(value)
+            raw = controlled.canonical(output).encode()
+            record = self.record(raw)
+            fixture = {'kind': 'normal', 'value': value}
+            actual, evaluation, matched, reason = supervision.evaluate_fixture(controlled, fixture, record, raw)
+            self.assertEqual(actual, output)
+            self.assertEqual(evaluation['verdict'], verdict)
+            self.assertTrue(matched)
+            self.assertIsNone(reason)
+            self.assertEqual(evaluation['qualified'], verdict == 'Pass')
+
+    def test_rejection_requires_exact_reason_output_and_actual_exit_two(self):
+        expected = {'schema': controlled.REJECTION_SCHEMA, 'class': 'InvalidScenario', 'reason': 'fields'}
+        fixture = {'kind': 'rejection', 'reason': 'fields'}
+        for code, output, match in ((512, expected, True), (0, expected, False),
+                                     (512, dict(expected, reason='schema'), False),
+                                     (512, dict(expected, extra=True), False)):
+            raw = controlled.canonical(output).encode()
+            result = supervision.evaluate_fixture(controlled, fixture, self.record(raw, kind='rejection', status=code), raw)
+            self.assertEqual(result[2], match)
+
+    def test_malformed_complete_output_is_saved_as_an_unexpected_stop(self):
+        output, evaluation, matched, reason = supervision.evaluate_fixture(
+            controlled, {'kind': 'normal', 'value': None}, self.record(b'{'), b'{')
+        self.assertIsNone(output)
+        self.assertIsNone(evaluation)
+        self.assertFalse(matched)
+        self.assertTrue(reason.startswith('MalformedOrUnexpectedOutput:'))
+
+    def test_not_started_observation_has_no_invented_pid_or_wait_status(self):
+        record = self.record(b'')
+        record['process'].update(pid=None, identity=None, registered=False, released=False,
+                                 reaped=False, wait_status=None, returncode=None)
+        record['observation'] = 'NotStarted'
+        record['stop_kind'] = 'EnvironmentInterrupted'
+        supervision.validate_case_record(record, self.contract, 0, 'mock-case', 'normal')
+        record['process']['pid'] = 123
+        with self.assertRaises(supervision.SupervisionError):
+            supervision.validate_case_record(record, self.contract, 0, 'mock-case', 'normal')
+
+
+class OwnerProtocolTests(unittest.TestCase):
+    def setUp(self):
+        self.state = supervision.OwnerProtocol('mock-run', 'record', '1' * 64, 0)
+        self.state.worker_pid = 100
+        self.prefix = SupervisionSchemaTests.reference('prefix-000.json')
+
+    def send(self, packet_type, *, role='worker', index=-1, now=1, descriptors=(), **data):
+        return self.state.accept(dict(type=packet_type, run_id='mock-run', role=role, index=index, **data), list(descriptors), now)
+
+    def begin(self):
+        self.send('Hello', contract_sha256='1' * 64, total=82, prefix=self.prefix)
+        return self.send('Begin', index=0, id='fixed-case', kind='normal')
+
+    def register(self):
+        self.begin()
+        self.send('Launch', index=0, role='rust')
+        with patch.object(supervision.signal, 'pidfd_send_signal') as probe, \
+                patch.object(supervision.select, 'select', return_value=([], [], [])), \
+                patch.object(supervision.os, 'getpid', return_value=99):
+            response = self.send('Register', index=0, role='rust', pid=101, descriptors=[20])
+        probe.assert_called_once_with(20, 0)
+        return response
+
+    def test_registration_ack_binds_ordinal_role_and_exact_run(self):
+        response = self.register()
+        self.assertEqual((response['type'], response['run_id'], response['index'], response['role']),
+                         ('Registered', 'mock-run', 0, 'rust'))
+        self.assertEqual(self.state.child_fd, 20)
+        for changes in ({'index': 1}, {'role': 'worker'}, {'run_id': 'another-run'}):
+            response = dict(response, **changes)
+            with patch.object(supervision, '_send_packet'), patch.object(supervision, '_remaining', return_value=0.01), \
+                    patch.object(supervision.select, 'select', return_value=([object()], [], [])), \
+                    patch.object(supervision, '_receive_packet', return_value=(response, [])), \
+                    self.assertRaises(supervision.SupervisionError):
+                supervision._exchange(object(), 'mock-run', {'type': 'Register', 'index': 0, 'role': 'rust', 'pid': 101},
+                                      'Registered', 100)
+
+    def test_case_deadline_covers_preparation_and_clips_to_remaining_whole_work(self):
+        response = self.begin()
+        self.assertEqual(response['deadline_ns'], 30_000_000_001)
+        with self.assertRaises(supervision.SupervisionError):
+            self.send('Launch', index=0, role='rust', now=response['deadline_ns'])
+        self.state = supervision.OwnerProtocol('mock-run', 'record', '1' * 64, 0)
+        self.state.phase = 'idle'
+        response = self.send('Begin', index=0, id='last-window', kind='normal', now=599_000_000_000)
+        self.assertEqual(response['deadline_ns'], 600_000_000_000)
+
+    def test_no_launch_at_cap_no_second_child_and_no_reap_without_kernel_exit(self):
+        self.begin()
+        self.state.launches = 128
+        with self.assertRaises(supervision.SupervisionError):
+            self.send('Launch', index=0, role='rust')
+        self.state = supervision.OwnerProtocol('mock-run', 'record', '1' * 64, 0)
+        self.state.worker_pid = 100
+        self.register()
+        with self.assertRaises(supervision.SupervisionError):
+            self.send('Register', index=0, role='rust', pid=102, descriptors=[21])
+        with patch.object(supervision.select, 'select', return_value=([], [], [])), self.assertRaises(supervision.SupervisionError):
+            self.send('Reaped', index=0, role='rust', pid=101, wait_status=0)
+
+    def test_signal_sent_never_means_reaped_and_json_alone_cannot_finish_a_case(self):
+        self.register()
+        with patch.object(supervision, '_signal_owned') as kill:
+            self.send('AbortChild', index=0, role='rust')
+        kill.assert_called_once_with(20)
+        self.assertEqual(self.state.phase, 'running')
+        with self.assertRaises(supervision.SupervisionError):
+            self.send('CaseReady', index=0, fixture_status='FixtureMatched', prefix=SupervisionSchemaTests.reference('prefix-001.json'),
+                      observation=SupervisionSchemaTests.reference('000.observation.json'),
+                      result=SupervisionSchemaTests.reference('000.result.json'), stop=None, stop_kind=None, interruption_kind=None)
+
+    def test_before_registration_worker_death_is_incomplete_even_when_bootstrap_reaped(self):
+        self.begin()
+        self.send('Launch', index=0, role='rust')
+        with patch.object(supervision.os, 'waitpid', side_effect=[(100, 9), (101, 9), ChildProcessError()]):
+            self.assertTrue(self.state.reap())
+        self.assertEqual(self.state.worker_exit_status, -9)
+        self.assertEqual(self.state.unexpected_children, 1)
+        self.assertEqual(self.state.stop, 'WorkerExitedBeforeTerminal')
+        self.assertFalse(self.state.done)
+
+    def test_registered_worker_death_keeps_exact_child_handle_for_cleanup(self):
+        self.register()
+        with patch.object(supervision.os, 'waitpid', side_effect=[(100, 9), (0, 0)]):
+            self.assertFalse(self.state.reap())
+        self.assertEqual(self.state.child_fd, 20)
+        with patch.object(supervision, '_signal_owned') as signal_handle, \
+                patch.object(self.state, 'reap', return_value=True), \
+                patch.object(supervision, '_now', return_value=0):
+            self.assertTrue(supervision._cleanup(self.state, 19))
+        self.assertEqual([call.args[0] for call in signal_handle.call_args_list], [20, 19])
+
+    def test_typed_resource_stop_survives_case_ready_and_clean_terminal(self):
+        self.register()
+        with patch.object(supervision.select, 'select', return_value=([20], [], [])), patch.object(supervision.os, 'close'):
+            self.send('Reaped', index=0, role='rust', pid=101, wait_status=9)
+        self.send('CaseReady', index=0, fixture_status='UnexpectedStop',
+                  prefix=SupervisionSchemaTests.reference('prefix-001.json'),
+                  observation=SupervisionSchemaTests.reference('000.observation.json'),
+                  result=SupervisionSchemaTests.reference('000.result.json'), stop='OutputLimit',
+                  stop_kind='ResourceInterrupted', interruption_kind='ResourceInterrupted')
+        self.send('Done', index=1, complete=False, prefix=self.state.prefix,
+                  terminal=SupervisionSchemaTests.reference('corpus.json'))
+        with patch.object(supervision.os, 'waitpid', side_effect=[(100, 512), ChildProcessError()]):
+            self.assertTrue(self.state.reap())
+        self.assertEqual(self.state.worker_exit_status, 2)
+        self.assertEqual(self.state.interruption_kind, 'ResourceInterrupted')
+        self.assertTrue(self.state.done)
+
+    def test_no_terminal_ack_after_wrong_run_extra_fields_or_missing_tail(self):
+        self.begin()
+        self.state.phase = 'idle'
+        for completed in (0, 78, 81):
+            self.state.completed = self.state.matched = self.state.launches = completed
+            self.state.case_index = self.state.case_deadline = None
+            with self.assertRaises(supervision.SupervisionError):
+                self.send('Done', index=completed, complete=True, prefix=self.prefix,
+                          terminal=SupervisionSchemaTests.reference('corpus.json'))
+
+
+class SupervisionPersistenceTests(unittest.TestCase):
+    def test_new_private_directory_fsyncs_parent_entry_before_its_own_contents(self):
+        with patch.object(Path, 'mkdir') as mkdir, patch.object(supervision.os, 'open', side_effect=[30, 31]) as opened, \
+                patch.object(supervision.os, 'fsync') as fsync, patch.object(supervision.os, 'close'):
+            supervision.EvidenceStore('/mock/new-evidence', supervision.PROPOSED_BUDGETS)
+        mkdir.assert_called_once_with(mode=0o700, parents=False, exist_ok=False)
+        self.assertEqual([call.args[0] for call in opened.call_args_list], [Path('/mock'), Path('/mock/new-evidence')])
+        self.assertEqual([call.args[0] for call in fsync.call_args_list], [30, 31])
+
+    def test_reservation_preserves_terminal_reserve_and_prefix_temp_peak(self):
+        store = object.__new__(supervision.EvidenceStore)
+        store.budgets = supervision.PROPOSED_BUDGETS.copy()
+        store.reservation = 0
+        request = 3 + store.budgets['stdout_bytes'] + store.budgets['stderr_bytes'] + store.budgets['evaluation_bytes'] + \
+            2 * supervision.MAX_CASE_METADATA + 2 * supervision.MAX_PREFIX
+        store.used = store.budgets['evidence_bytes'] - store.budgets['terminal_reserve_bytes'] - request
+        store.reserve_case(3)
+        self.assertEqual(store.reservation, request)
+        store.release_case()
+        store.used += 1
+        with self.assertRaisesRegex(supervision.SupervisionError, 'evidence_reservation_exhausted'):
+            store.reserve_case(3)
+
+    def test_unacknowledged_prefix_generation_preserves_previous_exact_bytes(self):
+        store = object.__new__(supervision.EvidenceStore)
+        store.directory = Path('/mock/evidence')
+        store.budgets = supervision.PROPOSED_BUDGETS.copy()
+        store.used, store.reservation, store.prefix_generation = 0, 1024 ** 2, 0
+        pending, installed = {}, {}
+        stream = unittest.mock.MagicMock()
+        stream.__enter__.return_value = stream
+        stream.write.side_effect = lambda data: pending.update(data=data) or len(data)
+        def install(_source, destination):
+            self.assertNotIn(destination.name, installed)
+            installed[destination.name] = pending['data']
+        with patch.object(Path, 'open', return_value=stream), patch.object(Path, 'unlink'), \
+                patch.object(supervision.os, 'fsync'), patch.object(store, '_sync_directory'), \
+                patch.object(supervision.os, 'link', side_effect=install), \
+                patch.object(supervision.os, 'replace', side_effect=AssertionError('acknowledged snapshots are immutable')):
+            acknowledged = store.prefix({'cases': []}, terminal=True)
+            pending_reference = store.prefix({'cases': [{'index': 0}]})
+        self.assertEqual((acknowledged['file'], pending_reference['file']), ('prefix-000.json', 'prefix-001.json'))
+        self.assertEqual(supervision.fingerprint(installed[acknowledged['file']]), acknowledged['sha256'])
+        self.assertEqual(store.used, sum(len(data) for data in installed.values()))
+        self.assertEqual(store.prefix_generation, 2)
+        # Worker death before CaseReady cannot change the owner's old reference.
+        state = supervision.OwnerProtocol('mock', 'record', '1' * 64, 0)
+        state.accept({'type': 'Hello', 'run_id': 'mock', 'index': -1, 'role': 'worker',
+                      'contract_sha256': '1' * 64, 'total': 82, 'prefix': acknowledged}, [], 1)
+        self.assertEqual(state.prefix, acknowledged)
+        self.assertEqual(supervision.fingerprint(installed[state.prefix['file']]), state.prefix['sha256'])
+
+    def test_prefix_generation_bound_is_initial_plus_82_cases(self):
+        store = object.__new__(supervision.EvidenceStore)
+        store.prefix_generation = 83
+        with patch.object(Path, 'open', side_effect=AssertionError('no extra generation')), \
+                self.assertRaises(supervision.SupervisionError):
+            store.prefix({'cases': [{}] * 83})
+
+    def test_unsupported_resource_installation_is_not_a_soft_fallback(self):
+        with patch.object(supervision.resource, 'setrlimit', side_effect=OSError('unsupported')), \
+                patch.object(supervision.os, 'fork', side_effect=AssertionError('must not fork')):
+            with self.assertRaises(OSError):
+                supervision._limits(60, 60)
+
+    def test_parent_check_occurs_after_parent_death_setup(self):
+        sequence = []
+        with patch.object(supervision, '_prctl', side_effect=lambda *_: sequence.append('parent-death')) as parent_death, \
+                patch.object(supervision.os, 'getppid', side_effect=lambda: sequence.append('parent-check') or 42):
+            supervision._parent_death(42)
+        self.assertEqual(sequence, ['parent-death', 'parent-check'])
+        parent_death.assert_called_once_with(1, supervision.signal.SIGKILL)
+        with patch.object(supervision, '_prctl'), patch.object(supervision.os, 'getppid', return_value=43):
+            with self.assertRaises(supervision.SupervisionError):
+                supervision._parent_death(42)
+
+    def test_raw_malformed_bytes_are_committed_before_any_oracle_call(self):
+        fixture_case = SupervisionSchemaTests()
+        fixture_case.setUp()
+        contract = fixture_case.contract
+        record = fixture_case.record(b'{')
+        capture = {'process': record['process'], 'observation': 'Complete', 'stop_kind': None,
+                   'bytes': {'stdout': b'{', 'stderr': b''}, 'observed': {'stdout': 1, 'stderr': 0},
+                   'complete': {'stdout': True, 'stderr': True}}
+        calls = []
+        store = SimpleNamespace(
+            immutable=lambda name, data: calls.append(('raw', name, data)) or fixture_case.reference(name, data),
+            json=lambda name, value: calls.append(('observation', name, value)) or fixture_case.reference(name))
+        fixture = {'id': 'mock-case', 'kind': 'normal', 'value': None}
+        with patch.object(controlled, 'loads', side_effect=AssertionError('save must precede parse')):
+            saved, reference = supervision.save_observation(store, contract, fixture, 0, record['input'], capture)
+        self.assertEqual([call[0] for call in calls], ['raw', 'raw', 'observation'])
+        self.assertEqual(calls[0][2], b'{')
+        self.assertEqual(reference['file'], '000.observation.json')
+        result = supervision.evaluate_fixture(controlled, fixture, saved, b'{')
+        self.assertFalse(result[2])
+        self.assertIsNone(result[1])
+
+    def test_failed_fsync_never_returns_a_durable_reference(self):
+        store = object.__new__(supervision.EvidenceStore)
+        store.directory = Path('/mock/evidence')
+        store.budgets = supervision.PROPOSED_BUDGETS.copy()
+        store.used, store.reservation = 0, 100
+        stream = unittest.mock.MagicMock()
+        with patch.object(Path, 'open', return_value=stream), \
+                patch.object(supervision.os, 'fsync', side_effect=OSError('storage failure')):
+            with self.assertRaises(OSError):
+                store.immutable('failed.bin', b'bytes')
+        self.assertEqual(store.used, 5)
+        self.assertEqual(store.reservation, 95)
+
+    def test_binary_metadata_refuses_privileged_exec_and_unsupported_capability_checks(self):
+        metadata = SimpleNamespace(st_mode=supervision.stat.S_IFREG | 0o755, st_dev=1, st_ino=2,
+                                   st_uid=1000, st_gid=1000, st_size=100, st_mtime_ns=1, st_ctime_ns=1)
+        for mode, capability, error in ((metadata.st_mode | supervision.stat.S_ISUID, b'', None),
+                                         (metadata.st_mode | supervision.stat.S_ISGID, b'', None),
+                                         (metadata.st_mode, b'file-capabilities', None),
+                                         (metadata.st_mode, b'', OSError(supervision.errno.ENOTSUP, 'unsupported'))):
+            variant = copy.copy(metadata)
+            variant.st_mode = mode
+            with patch.object(supervision.os, 'fstat', return_value=variant), \
+                    patch.object(supervision.os, 'getxattr', return_value=capability, side_effect=error), \
+                    self.assertRaises(supervision.SupervisionError):
+                supervision._binary_identity(21)
+        with patch.object(supervision.os, 'fstat', return_value=metadata), \
+                patch.object(supervision.os, 'getxattr', side_effect=OSError(supervision.errno.ENODATA, 'no capability')):
+            self.assertEqual(supervision._binary_identity(21)[5], 100)
+
+
+class CaptureLifecycleTests(unittest.TestCase):
+    def capture(self, reads, readiness, reaps, *, limit=None, pidfd_error=None):
+        fixture = SupervisionSchemaTests()
+        fixture.setUp()
+        if limit is not None:
+            fixture.contract['budgets']['stdout_bytes'] = limit
+        packets = []
+        def exchange(_channel, _run_id, message, _reply, deadline, descriptor=None):
+            packets.append((message['type'], descriptor))
+            return deadline
+        with patch.object(supervision.os, 'pipe2', side_effect=[(10, 11), (12, 13), (14, 15), (16, 17)]), \
+                patch.object(supervision.os, 'getpid', return_value=42), \
+                patch.object(supervision.os, 'fork', return_value=99), \
+                patch.object(supervision.os, 'pidfd_open', side_effect=pidfd_error, return_value=20), \
+                patch.object(supervision.os, 'read', side_effect=reads), \
+                patch.object(supervision.os, 'write', return_value=1) as release, \
+                patch.object(supervision.os, 'waitpid', side_effect=reaps) as wait, \
+                patch.object(supervision.os, 'set_blocking'), patch.object(supervision.os, 'close'), \
+                patch.object(supervision.os, 'kill', side_effect=AssertionError('numeric PID signal forbidden')), \
+                patch.object(supervision.select, 'select', side_effect=readiness), \
+                patch.object(supervision, '_now', return_value=0), patch.object(supervision, '_remaining', return_value=0.01), \
+                patch.object(supervision, '_exchange', side_effect=exchange):
+            result = supervision.capture_child(object(), fixture.contract, 0, Path('/mock/input'), 21, 1000, 128)
+        return result, packets, release, wait
+
+    def test_complete_json_and_eof_wait_for_actual_terminal_reap(self):
+        result, packets, release, wait = self.capture(
+            [b'R', b'{}', b'', b''], [([14], [], []), ([10, 12], [], []), ([10], [], []), ([], [], [])],
+            [(0, 0), (0, 0), (99, 0)])
+        self.assertEqual(wait.call_count, 3)
+        self.assertEqual(packets, [('Launch', None), ('Register', 20), ('Reaped', None)])
+        release.assert_called_once_with(17, b'G')
+        self.assertEqual(result['observation'], 'Complete')
+        self.assertTrue(result['process']['reaped'])
+
+    def test_overflow_keeps_only_prefix_plus_observed_sentinel_then_requires_reap(self):
+        result, packets, _release, wait = self.capture(
+            [b'R', b'abcd', b''], [([14], [], []), ([10, 12], [], [])], [(99, 9)], limit=3)
+        self.assertEqual(result['bytes']['stdout'], b'abc')
+        self.assertEqual(result['observed']['stdout'], 4)
+        self.assertFalse(result['complete']['stdout'])
+        self.assertEqual(result['observation'], 'OutputLimit')
+        self.assertEqual(result['stop_kind'], 'ResourceInterrupted')
+        self.assertEqual(packets[-2:], [('AbortChild', None), ('Reaped', None)])
+        self.assertEqual(wait.call_count, 1)
+
+    def test_pidfd_failure_never_releases_gate_or_claims_reap(self):
+        result, packets, release, wait = self.capture([b'R'], [([14], [], [])], [], pidfd_error=OSError('unsupported'))
+        release.assert_not_called()
+        wait.assert_not_called()
+        self.assertEqual(packets, [('Launch', None)])
+        self.assertFalse(result['process']['registered'])
+        self.assertFalse(result['process']['released'])
+        self.assertFalse(result['process']['reaped'])
+        self.assertEqual(result['observation'], 'EnvironmentInterrupted')
+        self.assertEqual(result['stop_kind'], 'EnvironmentInterrupted')
+
+    def test_child_bootstrap_orders_parent_limits_and_private_gate_before_exec(self):
+        calls = []
+        with patch.object(supervision, '_parent_death', side_effect=lambda *_: calls.append('parent-death/check')), \
+                patch.object(supervision, '_limits', side_effect=lambda *_: calls.append('limits')), \
+                patch.object(supervision.resource, 'setrlimit'), \
+                patch.object(supervision, '_close_except', side_effect=lambda *_: calls.append('close-unrelated')), \
+                patch.object(supervision.os, 'write', side_effect=lambda *_: calls.append('bootstrap-ready') or 1), \
+                patch.object(supervision.os, 'read', side_effect=lambda *_: calls.append('private-gate') or b'G'), \
+                patch.object(supervision.os, 'getppid', return_value=42), patch.object(supervision.os, 'close'), \
+                patch.object(supervision.os, 'dup2'), \
+                patch.object(supervision.os, 'execve', side_effect=lambda *_: calls.append('exec')):
+            supervision._child_bootstrap(42, 128, 10, 11, 12, 13, '/mock/binary', 21, '/mock/input')
+        self.assertEqual(calls, ['parent-death/check', 'limits', 'close-unrelated', 'bootstrap-ready', 'private-gate', 'exec'])
+
+
+class CallerReceiptTests(unittest.TestCase):
+    def setUp(self):
+        fixture = SupervisionSchemaTests()
+        fixture.setUp()
+        self.contract = fixture.contract
+        self.receipt = {'schema': supervision.RECEIPT_SCHEMA, 'run_id': self.contract['run_id'],
+                        'contract_sha256': supervision.object_hash(self.contract), 'mode': 'record',
+                        'owner_exit_status': 0, 'status': 'FixtureMatched', 'completed': 82,
+                        'fixture_matched': 82, 'launches': 82, 'worker_exit_status': 0,
+                        'cleanup_complete': True, 'unexpected_children': 0,
+                        'prefix': fixture.reference('prefix-082.json'), 'terminal': fixture.reference('corpus.json'),
+                        'stop': None, 'stop_kind': None, 'interruption_kind': None}
+
+    def capture(self):
+        return {'schema': supervision.CAPTURE_SCHEMA, 'owner_exit_status': self.receipt['owner_exit_status'],
+                'stdout_complete': True, 'receipt': copy.deepcopy(self.receipt)}
+
+    def authority(self):
+        return {'schema': 'northstar-controlled-external-caller-v1', 'invocation_id': 'mock-executor-run',
+                'mechanism_sha256': '4' * 64, 'owner_exit_status': self.receipt['owner_exit_status'],
+                'receipt_sha256': supervision.fingerprint(supervision.encoded(self.receipt)),
+                'startup_limit_ms': 10000, 'total_limit_ms': 617000, 'observed_total_ms': 1234, 'stdout_complete': True}
+
+    def test_caller_receipt_requires_separate_trusted_mechanism_and_actual_exit(self):
+        self.assertEqual(supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority()),
+                         {'FixtureMatched': True, 'supervision_complete': True})
+        with self.assertRaises(supervision.SupervisionError):
+            supervision.validate_owner_capture(self.capture(), self.contract)
+        for field, value in (('owner_exit_status', 2), ('stdout_complete', False)):
+            capture = self.capture()
+            capture[field] = value
+            with self.assertRaises(supervision.SupervisionError):
+                supervision.validate_owner_capture(capture, self.contract, caller_evidence=self.authority())
+        caller = self.authority()
+        caller['receipt_sha256'] = '0' * 64
+        with self.assertRaises(supervision.SupervisionError):
+            supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=caller)
+
+    def test_known_clean_mismatch_keeps_lifecycle_separate_from_fixture_match(self):
+        self.receipt.update(owner_exit_status=2, worker_exit_status=2, status='UnexpectedStop', completed=1,
+                            fixture_matched=0, launches=1, stop='FixtureMismatch', stop_kind='FixtureMismatch',
+                            prefix=SupervisionSchemaTests.reference('prefix-001.json'))
+        result = supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority())
+        self.assertEqual(result, {'FixtureMatched': False, 'supervision_complete': True})
+        replay = copy.deepcopy(self.contract)
+        replay.update(mode='replay', replay_dir='/mock/prior',
+                      replay_authority={'contract': self.contract, 'capture': self.capture(), 'caller_evidence': self.authority()})
+        with self.assertRaisesRegex(supervision.SupervisionError, 'prior_fixture_unmatched'):
+            supervision.validate_contract(replay)
+
+    def test_resource_environment_and_storage_stops_stay_incomplete_after_clean_reap(self):
+        original = copy.deepcopy(self.receipt)
+        for kind in supervision.INTERRUPTION_KINDS:
+            self.receipt = dict(original, owner_exit_status=2, worker_exit_status=2,
+                                status='EnvironmentInterrupted', completed=1, fixture_matched=0, launches=1,
+                                prefix=SupervisionSchemaTests.reference('prefix-001.json'),
+                                stop='bounded actual interruption', stop_kind=kind, interruption_kind=kind)
+            self.assertEqual(supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority()),
+                             {'FixtureMatched': False, 'supervision_complete': False})
+            self.receipt['status'] = 'UnexpectedStop'
+            with self.assertRaisesRegex(supervision.SupervisionError, 'interruption_is_not_clean_mismatch'):
+                supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority())
+
+    def test_later_owner_interruption_does_not_replace_first_fixture_stop(self):
+        state = supervision.OwnerProtocol('mock', 'record', '1' * 64, 0)
+        state.fail('first mismatch', 'FixtureMismatch')
+        state.fail('later deadline', 'ResourceInterrupted')
+        self.assertEqual((state.stop, state.stop_kind, state.interruption_kind),
+                         ('first mismatch', 'FixtureMismatch', 'ResourceInterrupted'))
+
+    def test_missing_tail_cleanup_or_worker_terminal_never_qualifies(self):
+        original = copy.deepcopy(self.receipt)
+        for changes in ({'completed': 78, 'fixture_matched': 78, 'launches': 78},
+                        {'cleanup_complete': False}, {'worker_exit_status': None},
+                        {'terminal': None}, {'unexpected_children': 1}, {'owner_exit_status': True}):
+            self.receipt = dict(original, **changes)
+            with self.subTest(changes=changes), self.assertRaises(supervision.SupervisionError):
+                supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority())
+
+
+class OwnerSetupTests(unittest.TestCase):
+    def test_sigchld_default_and_receipt_setup_precede_first_fork(self):
+        order = []
+        def forbid_real_fork():
+            order.append('fork-boundary')
+            raise OSError('mocked stop before process creation')
+        with patch.object(supervision, '_limits'), patch.object(supervision, '_prctl'), \
+                patch.object(supervision, '_prepare_receipt', side_effect=lambda: order.append('receipt-ready')), \
+                patch.object(supervision.signal, 'signal', side_effect=lambda sig, _handler: order.append(('signal', sig))), \
+                patch.object(supervision.resource, 'getrlimit', return_value=(128, 128)), \
+                patch.object(supervision.resource, 'setrlimit'), patch.object(supervision, '_close_except'), \
+                patch.object(supervision.socket, 'socketpair', return_value=(unittest.mock.MagicMock(), unittest.mock.MagicMock())), \
+                patch.object(supervision.os, 'pipe2', return_value=(30, 31)), patch.object(supervision.os, 'close'), \
+                patch.object(supervision.os, 'fork', side_effect=forbid_real_fork), \
+                patch.object(supervision, '_cleanup', return_value=True), patch.object(supervision, '_receipt_write'), \
+                patch.object(supervision, '_now', return_value=0):
+            self.assertEqual(supervision.owner_main(b'{}', run_id='mock', mode='record', contract_sha256='1' * 64), 2)
+        self.assertLess(order.index('receipt-ready'), order.index('fork-boundary'))
+        self.assertLess(order.index(('signal', supervision.signal.SIGCHLD)), order.index('fork-boundary'))
+
+    def test_receipt_capability_failure_prevents_process_creation(self):
+        with patch.object(supervision, '_limits'), \
+                patch.object(supervision, '_prepare_receipt', side_effect=supervision.SupervisionError('unsupported receipt')), \
+                patch.object(supervision.os, 'fork') as fork, patch.object(supervision, '_cleanup', return_value=True), \
+                patch.object(supervision, '_receipt_write'):
+            self.assertEqual(supervision.owner_main(b'{}', run_id='mock', mode='record', contract_sha256='1' * 64), 2)
+        fork.assert_not_called()
+
+
+class WorkerFailurePersistenceTests(unittest.TestCase):
+    class MemoryStore:
+        def __init__(self, budgets, *, fail_stderr=False):
+            self.budgets, self.fail_stderr = budgets, fail_stderr
+            self.directory = Path('/mock/new-evidence')
+            self.reservation = 0
+            self.data, self.writes = {}, []
+
+        def reserve_case(self, _size):
+            self.reservation = 100 * 1024 ** 2
+
+        def release_case(self):
+            self.reservation = 0
+
+        def immutable(self, name, data, *, terminal=False):
+            self.writes.append(name)
+            if name in self.data:
+                raise FileExistsError(name)
+            if self.fail_stderr and name.endswith('.stderr.bin'):
+                raise OSError('mocked stderr persistence failure')
+            self.data[name] = data
+            return SupervisionSchemaTests.reference(name, data)
+
+        def json(self, name, value, *, maximum=supervision.MAX_CASE_METADATA, terminal=False):
+            data = supervision.encoded(value)
+            supervision.need(len(data) <= maximum, 'mock metadata bound')
+            return self.immutable(name, data, terminal=terminal)
+
+        def prefix(self, value, *, terminal=False):
+            return self.json(f'prefix-{len(value["cases"]):03d}.json', value,
+                             maximum=supervision.MAX_PREFIX, terminal=terminal)
+
+    def run_mocked_case(self, *, wall_ms, fail_stderr=False):
+        fixtures = SupervisionSchemaTests()
+        fixtures.setUp()
+        contract = fixtures.contract
+        fixture = {'id': 'mock-case', 'kind': 'normal', 'value': None, 'bytes': b'{}', 'reason': None}
+        record = fixtures.record(b'{}')
+        record['process']['wall_ms'] = wall_ms
+        captured = {'process': record['process'], 'observation': 'Complete', 'stop_kind': None,
+                    'bytes': {'stdout': b'{}', 'stderr': b''}, 'observed': {'stdout': 2, 'stderr': 0},
+                    'complete': {'stdout': True, 'stderr': True}}
+        store = self.MemoryStore(contract['budgets'], fail_stderr=fail_stderr)
+        packets = []
+        def exchange(_channel, _run_id, packet, _reply, _deadline, descriptor=None):
+            packets.append(packet)
+            return 10 ** 12
+        with patch.object(supervision, '_check_worker_sources'), \
+                patch.object(controlled, 'check_current_provenance'), \
+                patch.object(supervision, 'fixture_plan', return_value=[fixture]), \
+                patch.object(supervision, 'EvidenceStore', return_value=store), \
+                patch.object(supervision, '_verified_binary', return_value=21), \
+                patch.object(supervision, '_binary_identity', return_value=('stable-metadata',)), \
+                patch.object(supervision, 'capture_child', return_value=captured), \
+                patch.object(supervision, '_exchange', side_effect=exchange), \
+                patch.object(supervision, 'read_reference', return_value=b'{}'), patch.object(supervision.os, 'close'), \
+                patch.object(controlled, 'loads', side_effect=AssertionError('invalid observation must stop before oracle')):
+            status = supervision.worker_main(object(), supervision.encoded(contract), contract['run_id'], 'record',
+                                             supervision.object_hash(contract), 10 ** 12, 128)
+        self.assertEqual(status, 2)
+        return store, packets
+
+    def test_actual_invalid_observation_is_saved_once_before_validation_failure(self):
+        store, packets = self.run_mocked_case(wall_ms=30001)
+        saved = supervision.strict_json(store.data['000.observation.json'], supervision.MAX_CASE_METADATA)
+        self.assertEqual(saved['process']['wall_ms'], 30001)
+        self.assertEqual(saved['process']['pid'], 123)
+        self.assertEqual(store.writes.count('000.stdout.bin'), 1)
+        result = supervision.strict_json(store.data['000.result.json'], supervision.MAX_CASE_METADATA)
+        self.assertEqual(result['observation']['file'], '000.observation.json')
+        self.assertEqual(result['stop_kind'], 'EnvironmentInterrupted')
+        self.assertEqual(result['interruption_kind'], 'EnvironmentInterrupted')
+        ready = next(packet for packet in packets if packet['type'] == 'CaseReady')
+        self.assertEqual(ready['stop_kind'], 'EnvironmentInterrupted')
+
+    def test_partial_raw_save_never_retries_names_or_manufactures_empty_observation(self):
+        store, _packets = self.run_mocked_case(wall_ms=1, fail_stderr=True)
+        self.assertEqual(store.data['000.stdout.bin'], b'{}')
+        self.assertEqual(store.writes.count('000.stdout.bin'), 1)
+        self.assertNotIn('000.observation.json', store.data)
+        result = supervision.strict_json(store.data['000.result.json'], supervision.MAX_CASE_METADATA)
+        self.assertIsNone(result['observation'])
+        self.assertEqual(result['stop_kind'], 'StorageInterrupted')
+        self.assertEqual(result['observation_loss']['phase'], 'observation_persistence')
+        self.assertTrue(result['observation_loss']['capture_available'])
+        terminal = supervision.strict_json(store.data['corpus.json'], supervision.MAX_PREFIX)
+        self.assertEqual(terminal['first_unexpected_stop']['phase'], 'observation_persistence')
+        self.assertIn('mocked stderr persistence failure', terminal['first_unexpected_stop']['reason'])
+
+    def test_cleanup_uses_existing_absolute_deadline_without_restarting_budget(self):
+        state = supervision.OwnerProtocol('mock', 'record', '1' * 64, 0)
+        with patch.object(supervision, '_now', return_value=100), patch.object(supervision, '_signal_owned'), \
+                patch.object(state, 'reap') as reap:
+            self.assertFalse(supervision._cleanup(state, 19, deadline=100))
+        reap.assert_not_called()
+        self.assertEqual(state.stop, 'CleanupDeadline')
+
+    def test_resource_failure_has_no_unsupervised_launch_fallback(self):
+        with patch.object(supervision, '_limits', side_effect=OSError('resource enforcement unavailable')), \
+                patch.object(supervision.os, 'fork') as fork, patch.object(supervision, '_cleanup', return_value=True), \
+                patch.object(supervision, '_receipt_write'):
+            self.assertEqual(supervision.owner_main(b'{}', run_id='mock', mode='record', contract_sha256='1' * 64), 2)
+        fork.assert_not_called()
 
 
 def main(argv=None):
@@ -1014,19 +1660,8 @@ def main(argv=None):
     group.add_argument('--evidence-dir', type=Path)
     group.add_argument('--replay', type=Path)
     args, remaining = parser.parse_known_args(argv)
-    if args.evidence_dir or args.replay:
-        parser.error('--binary and --trusted-provenance are required') if not args.binary or not args.trusted_provenance else None
-        trusted = controlled.read_json(args.trusted_provenance)
-        try:
-            result = controlled.record_corpus(args.evidence_dir, args.binary, expected_provenance=trusted) if args.evidence_dir else \
-                controlled.replay_corpus(args.replay, args.binary, expected_provenance=trusted)
-        except (controlled.InvalidScenario, OSError) as error:
-            print(json.dumps({'verdict': 'InvalidScenario', 'reason': str(error)}))
-            return 2
-        print(json.dumps(result, sort_keys=True))
-        return 0
-    if args.binary or args.trusted_provenance:
-        parser.error('record or replay mode required with binary/provenance')
+    if args.evidence_dir or args.replay or args.binary or args.trusted_provenance:
+        parser.error('dedicated execution requires scripts/run-controlled-admission.py and an external execution contract')
     return 0 if unittest.main(argv=[sys.argv[0]] + remaining, exit=False).result.wasSuccessful() else 1
 
 

@@ -103,7 +103,18 @@ export function verifyFederatedRouteBoundaries(sources) {
   requireMatch(compactBody('record_local_accept'), /self\.0\.s2s_online_queue_telemetry\(\)\.accepted\(durable\);/, 'S2S local acceptance must retain federation queue telemetry and delivery kind');
   requireMatch(compactBody('post_accept_failed'), /self\.0\.s2s_inbound_delivery_telemetry\(\)\.post_accept_failed\(\);/, 'S2S post-accept failures must retain federation telemetry');
   if (/\bpersonal_message_telemetry\s*\(/.test(adapter)) throw new Error('S2S adapter must not record C2S origin telemetry');
-  requireMatch(compactBody('try_local'), /OnlineRoutePort::try_local\(self\.0,session,stanza,delivery\)/, 'S2S adapter must preserve the exact local delivery tuple');
+  const localEntries = [...adapter.matchAll(/\bfn\s+try_local\s*\(/g)];
+  if (localEntries.length !== 1) {
+    throw new Error('S2S adapter must have one owned local enqueue entry');
+  }
+  const localStart = localEntries[0].index;
+  const localSignature = adapter.slice(localStart, adapter.indexOf('{', localStart)).replace(/\s+/g, '');
+  if (localSignature !== 'fntry_local(&self,session:&Self::Session,enqueue:crate::outbound::RouteEnqueue,)->Result<(),crate::outbound::RouteSendError>') {
+    throw new Error('S2S adapter must accept an owned local enqueue and preserve its refusal type');
+  }
+  if (compactBody('try_local') !== 'OnlineRoutePort::try_local(self.0,session,enqueue)') {
+    throw new Error('S2S adapter must forward the exact owned local enqueue and return its refusal unchanged');
+  }
   requireMatch(compactBody('route_available_remote'), /self\.0\.route_s2s_message_to_available_remote_resources\(jid,stanza,delivery\)\.await/, 'S2S fanout must use its federation remote adapter');
   const primary = compactBody('route_remote_primary');
   requireMatch(primary, /self\.0\.route_s2s_message_to_remote_primary\(jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');

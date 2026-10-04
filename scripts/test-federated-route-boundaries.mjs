@@ -5,8 +5,9 @@ import { readFederatedRouteSources, verifyFederatedRouteBoundaries } from './che
 const baseline = readFederatedRouteSources();
 function rejectsMutation(name, file, before, after, expected) {
   test(name, () => {
-    assert.ok(baseline[file].includes(before), `mutation fixture no longer matches: ${before}`);
+    assert.equal(baseline[file].split(before).length - 1, 1, `mutation fixture must match exactly once: ${before}`);
     const changed = { ...baseline, [file]: baseline[file].replace(before, after) };
+    assert.notEqual(changed[file], baseline[file], 'mutation must change source');
     assert.throws(() => verifyFederatedRouteBoundaries(changed), expected);
   });
 }
@@ -30,6 +31,14 @@ test('irrelevant strings, nested comments and character braces are masked', () =
       'fn record_local_accept(&self, durable: bool) {\n/* one /* two */ } */ let brace = \'}\'; let text = "personal_message_telemetry() }"; let raw = r#" } "#;'),
   });
 });
+test('an unrelated declaration cannot spoof the owned entry signature', () => {
+  const before = ') -> Result<(), crate::outbound::RouteSendError> {';
+  assert.equal(baseline.adapter.split(before).length - 1, 1);
+  const changed = baseline.adapter.replace(before, ') -> Result<(), anyhow::Error> {')
+    + '\nfn fake_fntry_local(&self, session: &Self::Session, enqueue: crate::outbound::RouteEnqueue,) -> Result<(), crate::outbound::RouteSendError> {}';
+  assert.notEqual(changed, baseline.adapter);
+  assert.throws(() => verifyFederatedRouteBoundaries({ ...baseline, adapter: changed }), /owned local enqueue and preserve its refusal type/);
+});
 
 rejectsMutation('adapter module cannot disappear', 'inbound', 'mod direct_route;', '// mod direct_route;', /module must stay registered/);
 rejectsMutation('adapter import cannot disappear', 'inbound', 'use direct_route::S2sDirectRoutePort;', '// use direct_route::S2sDirectRoutePort;', /import its origin-specific adapter/);
@@ -47,7 +56,16 @@ rejectsMutation('queue telemetry cannot lose durable classification', 'adapter',
 rejectsMutation('postaccept telemetry cannot switch to C2S', 'adapter', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.0.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
 rejectsMutation('comments cannot satisfy postaccept telemetry', 'adapter', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', '// self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', /federation telemetry/);
 rejectsMutation('additional C2S telemetry cannot be double counted', 'adapter', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();\n self.0.personal_message_telemetry().post_accept_failed();', /must not record C2S/);
-rejectsMutation('local adapter cannot discard durable claim', 'adapter', 'OnlineRoutePort::try_local(self.0, session, stanza, delivery)', 'OnlineRoutePort::try_local(self.0, session, stanza, None)', /exact local delivery tuple/);
+rejectsMutation('local adapter cannot substitute the owned item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, other_enqueue)', /exact owned local enqueue/);
+rejectsMutation('local adapter cannot clone the owned item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, enqueue.clone())', /exact owned local enqueue/);
+rejectsMutation('local adapter cannot substitute the session', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, other_session, enqueue)', /exact owned local enqueue/);
+rejectsMutation('local adapter cannot erase the refused item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, enqueue).map_err(|_| anyhow::anyhow!("refused"))', /exact owned local enqueue/);
+rejectsMutation('local adapter cannot discard the refusal result', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'let _ = OnlineRoutePort::try_local(self.0, session, enqueue); Ok(())', /exact owned local enqueue/);
+rejectsMutation('local adapter cannot drop before forwarding', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'drop(enqueue); OnlineRoutePort::try_local(self.0, session, replacement)', /exact owned local enqueue/);
+rejectsMutation('local adapter cannot forward twice', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, enqueue); OnlineRoutePort::try_local(self.0, session, enqueue)', /exact owned local enqueue/);
+rejectsMutation('local adapter must take ownership', 'adapter', 'enqueue: crate::outbound::RouteEnqueue,', 'enqueue: &crate::outbound::RouteEnqueue,', /owned local enqueue and preserve its refusal type/);
+rejectsMutation('local adapter must retain the typed refusal', 'adapter', ') -> Result<(), crate::outbound::RouteSendError> {', ') -> Result<(), anyhow::Error> {', /owned local enqueue and preserve its refusal type/);
+rejectsMutation('local adapter cannot add a second entry', 'adapter', '    fn try_local(', '    fn try_local(&self) {}\n    fn try_local(', /one owned local enqueue entry/);
 rejectsMutation('fanout adapter cannot switch routing origins', 'adapter', '.route_s2s_message_to_available_remote_resources(jid, stanza, delivery)', '.route_personal_message_to_available_remote_resources(jid, stanza, delivery)', /federation remote adapter/);
 rejectsMutation('primary adapter cannot switch routing origins', 'adapter', '.route_s2s_message_to_remote_primary(jid, stanza, delivery)', '.route_personal_message_to_remote_primary(jid, stanza, delivery)', /federation remote adapter/);
 rejectsMutation('remote receipt cannot discard Carbon exclusion', 'adapter', 'accepted_full_jid: routed.accepted_full_jid,', 'accepted_full_jid: None,', /receipt must preserve/);

@@ -1,0 +1,71 @@
+{
+  "schema": "northstar-stage3-federated-gate-results-v1",
+  "status": "PassedNarrowSourceDriftCorrection",
+  "base_commit": "983eb5c5d6b3cbd4bb24dcd7a397412367c9ac01",
+  "base_tree": "7a639e431552796bc286d8687ec4c1b9d58cb208",
+  "problem": "The federation source gate expected the old stanza/delivery argument tuple after the S2S adapter changed to an owned RouteEnqueue. It failed before later predicates.",
+  "change": "Check the one actual method signature, owned RouteEnqueue, typed RouteSendError and exact forwarding tail expression. Preserve all inbound/remote/telemetry/rearm checks. Mutation inputs must match once and change source; new cases reject item/session substitution, cloning, dropped/refabricated refusal, early drop, duplicate entry/call and unrelated signature spoof.",
+  "source": {
+    "scripts/check-federated-route-boundaries.mjs": {
+      "bytes": 7446,
+      "sha256": "3e52e4594b75fc5ce80c33eb81e2751787f6bf8cbd33c964276b6a36b5c5b7e4"
+    },
+    "scripts/test-federated-route-boundaries.mjs": {
+      "bytes": 10035,
+      "sha256": "73793d0943649982a5d462d3064b65fe856d3f008c5f1666fbc1e52fc9ed68d0"
+    },
+    "src/s2s/inbound.rs": {
+      "bytes": 154857,
+      "sha256": "b17e92901291d7ae024c3247d3c091c48c5ae97a13fd30a0282671bc7a5ef9cc"
+    },
+    "src/s2s/inbound/direct_route.rs": {
+      "bytes": 2857,
+      "sha256": "f2383e384b57cb980a512461e767e5f3c78bc6d4db1aedadd1c382f93397d42a"
+    }
+  },
+  "checks": {
+    "tests": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.616114203",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 2434,
+      "log_sha256": "d3cbea0ccf569a48d9dee63fcbe44e8f8199d7336b3f4dca48706302bfc85044"
+    },
+    "direct_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.083166599",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 85,
+      "log_sha256": "04d69f480bdd4b24cd8a5fdb842115a04a98b705872fd408bfbd19f013f60dca"
+    }
+  },
+  "unit_results": {
+    "selected": 38,
+    "ran": 38,
+    "passed": 38,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0
+  },
+  "reproduce": [
+    "node --test scripts/test-federated-route-boundaries.mjs",
+    "node scripts/check-federated-route-boundaries.mjs"
+  ],
+  "prior_ci_failure": {
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37203172554",
+    "job": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37203172554/job/111438837201",
+    "error": "S2S adapter must preserve the exact local delivery tuple",
+    "prior_checker_sha256": "8c883b7b8f800eba8ed6194409e18d87df1962c581101c34815e5d186f6fa3c2"
+  },
+  "limits": [
+    "This checkpoint changes two JavaScript source-drift files only, plus this result. Referenced Rust bytes are unchanged from the base commit.",
+    "These tests only read source and mutate strings in memory. They are not Rust, SQL, network or transport execution and do not establish full Stage3 acceptance.",
+    "Concurrent native write/settlement work is excluded. This result does not claim new remote CI success."
+  ]
+}

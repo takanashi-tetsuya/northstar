@@ -1,0 +1,205 @@
+{
+  "comparison": {
+    "evaluations_byte_equal": 82,
+    "pid_wall_equality_required": false,
+    "raw_rust_stdout_byte_equal": 82,
+    "saved_inputs_byte_equal": 82,
+    "stage1_archive_sha256": "83769f5c4ca3b164363fca1c709bc2202e0e3059d6848356e5472269f888c8d3",
+    "stage1_compatibility_cases": 11,
+    "stage1_limit": "Before is an independently specified synthetic model, not a previous production PostgreSQL execution."
+  },
+  "independent_review": {
+    "exact_parser_negative_fixtures": 34,
+    "per_run_immutable_prefixes": 83,
+    "per_run_unique_references": 496,
+    "record": "Accepted for fixed-plan record conformance",
+    "record_native_events": 80,
+    "replay": "Accepted for actual saved-input replay conformance",
+    "shrink_relation": "Canonical original -> delete unrelated op-7 and prune unused bindings -> exact first accepted actor-a row removal positive control -> reduced. Same semantic op-2 reserve Proceed/4096 -> finalize Accepted/4097 target; positive control4096."
+  },
+  "persistence": "Exact inputs/outputs/caller evidence and record binary are preserved in separate private user artifacts. Public Git stores source and this compact hash index; no private artifact locator is included.",
+  "plan": {
+    "launch_cap_per_invocation": 128,
+    "normal": 44,
+    "parser_rejections": 34,
+    "shrink": 4,
+    "starts_per_invocation": 82
+  },
+  "provenance": {
+    "adapter": "controlled_rust",
+    "binary_sha256": "4fbeb389e32790823cb53446b9e16cd428ee6763136e374fd00878c9c44210df",
+    "binding_version": "synthetic-material-v1",
+    "cargo_lock_sha256": "0d09ff49434ab23b611ea95e966b208b86322495572ef505666e08673e34bedb",
+    "model": "admission-controlled-v1",
+    "schema": "northstar-admission-controlled-provenance-v1",
+    "source_sha256": "f12cc2906006ccbb5c5a59697c9df03a9c422c667e22c49866807a279a83d138",
+    "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "remaining": [
+    "Stage2 reservation/finalization sub-exit accepted; see stage2-acceptance.json. Full direct lifecycle and real adapter obligations remain carried forward.",
+    "Real PostgreSQL locks/MVCC/commit-response fidelity, SQL observed-at, actual guard-policy/SQL clocks and cryptographic verification remain Stage5.",
+    "Production outer cancellation/recovery ownership, durable direct commit/routing/write/ACK remain Stage3.",
+    "Resource/fault boundaries and whole-system qualification are not established by these successful bounded invocations.",
+    "4097 requires the expired pending row to survive cleanup; production caller reachability is unproved.",
+    "First legacy compatibility invariant is case8/op-1; native/shrink target is op-2.",
+    "72-hour soak remains cancelled."
+  ],
+  "runs": {
+    "record": {
+      "actual_capture_adapter_tool_exit_status": 0,
+      "caller_elapsed_ms": 37581,
+      "contract_canonical_sha256": "c13ea1aa4d6193fedec8f94ac335205c38225a5fdab95d004f3d796b68c15ee7",
+      "domain_verdict_counts": {
+        "Cancelled": 5,
+        "Inconclusive": 2,
+        "InvalidScenario": 34,
+        "InvariantViolation": 5,
+        "Pass": 36
+      },
+      "first_unexpected_stop": null,
+      "owner_exit_status": 0,
+      "private_bundle": {
+        "bytes": 6982157,
+        "file_name": "Northstar-controlled-admission-record-20261004.zip",
+        "manifest_sha256": "1df1452c38e9baf7723771eb5d9cd2a5199783fb32ea28d65a57042999d058c6",
+        "member_count": 587,
+        "sha256": "772e6b4d1f9cc9b604c311993157d34871889bc36bf6739cfc184f8e969b7ff3"
+      },
+      "qualification": {
+        "FixtureMatched": true,
+        "supervision_complete": true
+      },
+      "receipt": {
+        "cleanup_complete": true,
+        "completed": 82,
+        "fixture_matched": 82,
+        "interruption_kind": null,
+        "launches": 82,
+        "status": "FixtureMatched",
+        "stop": null,
+        "stop_kind": null,
+        "unexpected_children": 0,
+        "worker_exit_status": 0
+      },
+      "reference_files": {
+        "caller/caller-capture.json": {
+          "bytes": 768,
+          "sha256": "63130e6f12433e61774b321f2c266b8ad5af275c4d9dccf017479024c439de29"
+        },
+        "caller/caller-evidence.json": {
+          "bytes": 415,
+          "sha256": "2bd5b74694560f16c116e9228d80be3e22539b491ddf03b61e7ef2e8596e9111"
+        },
+        "caller/caller-result.json": {
+          "bytes": 736,
+          "sha256": "95b7b8671d9bbf8b2ef173646334dc293601d835866befadb3ccd8065d5802c8"
+        },
+        "caller/owner.stdout.bin": {
+          "bytes": 661,
+          "sha256": "463bde1b69e2bae3b68f3bc7cadf9e52f1cdc09d5591385ce380e43c99e68bc5"
+        },
+        "caller/timeout.stderr.bin": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "evidence/contract.json": {
+          "bytes": 7108,
+          "sha256": "5e7f5a9c8fce8ebe7239b70c737e3a060165d7d961ba04c017c8f8302df7cc3b"
+        },
+        "evidence/corpus.json": {
+          "bytes": 29604,
+          "sha256": "1302001fa23853db9560e51281656cde19629c551225b1936c32d2fa0a673aae"
+        },
+        "evidence/prefix-082.json": {
+          "bytes": 29472,
+          "sha256": "904d992f3dba14637e877da8d14067b810fb1aa7afcf4bc728aeda6ac50106c4"
+        }
+      },
+      "run_id": "stage2-record-20261004-a",
+      "source_unchanged": true,
+      "timeout_exit_status": 0
+    },
+    "replay": {
+      "actual_capture_adapter_tool_exit_status": 0,
+      "caller_elapsed_ms": 64899,
+      "contract_canonical_sha256": "6e67a8e2527caf4ccb003a882a2e0fb5bda0852a4ed699c6cf1cffa3cf741713",
+      "domain_verdict_counts": {
+        "Cancelled": 5,
+        "Inconclusive": 2,
+        "InvalidScenario": 34,
+        "InvariantViolation": 5,
+        "Pass": 36
+      },
+      "first_unexpected_stop": null,
+      "owner_exit_status": 0,
+      "private_bundle": {
+        "bytes": 6014021,
+        "file_name": "Northstar-controlled-admission-replay-20261004.zip",
+        "manifest_sha256": "fea3ee57bc31beb5dcc0709fcc9b4a32e7cabc83200523a075de2901ecd622a5",
+        "member_count": 586,
+        "sha256": "716eb4f8275172de2a4d00c0a5cf39cdf8c65b2644b85fe1c7f1ad5e631cbce0"
+      },
+      "qualification": {
+        "FixtureMatched": true,
+        "supervision_complete": true
+      },
+      "receipt": {
+        "cleanup_complete": true,
+        "completed": 82,
+        "fixture_matched": 82,
+        "interruption_kind": null,
+        "launches": 82,
+        "status": "FixtureMatched",
+        "stop": null,
+        "stop_kind": null,
+        "unexpected_children": 0,
+        "worker_exit_status": 0
+      },
+      "reference_files": {
+        "caller/caller-capture.json": {
+          "bytes": 768,
+          "sha256": "687198fad3aeee607b4798f8379c016cacd9c2475c498489fc23b7cb7e28e70d"
+        },
+        "caller/caller-evidence.json": {
+          "bytes": 415,
+          "sha256": "33d69eb9cc5a4f032f3401cf1cf99e784214663acfdb5295e31ac8b9761c97dc"
+        },
+        "caller/caller-result.json": {
+          "bytes": 736,
+          "sha256": "5609218d891c326105ebeb38dd3a1925237491b32aae8266af9b4d2081983333"
+        },
+        "caller/owner.stdout.bin": {
+          "bytes": 661,
+          "sha256": "458460a5d19be808ee61c2708aca9e81b06a815f930c9397211a6fdae1c3be93"
+        },
+        "caller/timeout.stderr.bin": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "evidence/contract.json": {
+          "bytes": 15519,
+          "sha256": "16d46abcb1f4ef11bf6dfbc24473840576fa54edb457dd1ce42a7d3f37f00e87"
+        },
+        "evidence/corpus.json": {
+          "bytes": 29604,
+          "sha256": "6ded00bc6daa6a22e031b9823add61d1be843bcf5115b3c9514881591fcdbf88"
+        },
+        "evidence/prefix-082.json": {
+          "bytes": 29472,
+          "sha256": "5c2774f3801f381cd6d62f2303ad961bf047440c9390fbba57215fcf855d7f2a"
+        }
+      },
+      "run_id": "stage2-replay-20261004-a",
+      "source_unchanged": true,
+      "timeout_exit_status": 0
+    }
+  },
+  "schema": "northstar-stage2-record-replay-results-v1",
+  "source_commit": "1a9d7cbdfa6eaf90febec839f189282d2e1218fa",
+  "source_scope": {
+    "bytes": 1172456,
+    "files": 41,
+    "sha256": "f12cc2906006ccbb5c5a59697c9df03a9c422c667e22c49866807a279a83d138"
+  },
+  "source_tree": "6787043ec17b44ed1444d8ed25833f8d257e9c22"
+}

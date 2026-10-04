@@ -1,34 +1,44 @@
 # Controlled admission：來源修正後的獨立驗證交接
 
-這份清單區分已完成的普通驗證與仍待執行的專項。Stage 2 仍未驗收；Stage 3–6 也未因此完成。
-固定Rust CLI已普通build，113項pure／mocked regression已在300s預算內完整通過，
-tripwire記錄zero blocked attempts；來源與歷次失敗見[普通驗證結果](../evidence/experimental-rebuild/stage2-ordinary-build-unit-results.json)。
-這些結果不包含Rust record/replay、shrinker、SQL、服務或process/fault experiments。
-後續專項仍必須固定exact source identity並取得獨立review。
-目前來源已修正先前五個 blocker：prospective fence、獨立 witness binding、actual coordinator
-projection、shrink exact target/history、多 Unknown caller knowledge。此前的格式／語法／普通normal/test target編譯與source review之外，本輪增加上述完整pure/mock驗證。
-後續 observed_at source 修正保留實際 SQL 分類時間及完整 reconciliation effect，controlled output
-改為 v4；這項來源／編譯成果仍未經真 SQL 或 saved replay 驗證。
+這份清單區分已完成的受控驗證與後續production／real-adapter義務。Stage2 reservation/finalization
+受控子退出已獨立驗收，見[接受範圍](../evidence/experimental-rebuild/stage2-acceptance.json)。
+完整direct lifecycle／outer ownership、real adapters及Stage3–6未因此完成。
 
-## 已有與尚缺的證據
+## 現在已有的證據
 
-- `247522e9`、`cca8f120`、`280da7d8`、`87ec1c2` 的既有 CI 各自完整成功，32 jobs 成功、1個 schedule-only skip
-- CI 的 Rust test job 是 workspace/all-targets/all-features；其結果只屬各自 exact commit
-- `.github/workflows/ci.yml` 目前沒有執行 `scripts/test-controlled-admission.py`，不可把普通 CI 當作 dedicated Python reader/oracle 通過
-- 本輪尚未執行目前 v4 Rust CLI 的 saved corpus、真實 replay、縮減或相容 projection 重播；普通 CI 的 Rust 測試不等於這些專項
-- 最新`10cecb74`普通CI完整成功32／1；本地113項pure/mock已通過，仍不能代替真Rust replay或SQL conformance
+- Exact commit `1a9d7cbdfa6eaf90febec839f189282d2e1218fa`、tree
+  `6787043ec17b44ed1444d8ed25833f8d257e9c22`，固定 41 檔來源與 Rust binary 綁定
+- Offline／locked 普通 build，以及完整 113 項 pure/mock suite 已通過；兩次 120s 不完整
+  與一次 fixture error 保留於[普通結果](../evidence/experimental-rebuild/stage2-ordinary-build-unit-results.json)
+- 兩次分開的有限執行：record 82 starts／37,581ms，saved-input replay 82 starts／64,899ms；
+  caller、timeout、owner、worker 皆 exit0，完整 receipt 與 cleanup 均成立
+- 每次固定44 normal、34 parser negatives、4 shrink roles；domain 分別為36 Pass、5預期Safety、
+  5 Cancelled、2 Inconclusive、34 InvalidScenario。FixtureMatched不會把這些語義改成全部Pass
+- 82份 input、Rust stdout、evaluation 在 replay 與 record 逐位元相同；PID／wall 等執行資料另驗，
+  不作相等要求。每次83份 immutable prefix及496個唯一reference已獨立唯讀核對
+- 保存的3→2縮減保留同一op-2 cap target與cleanup-survival前提；精確一列移除的positive control為4096。
+  舊相容案例最早Safety為case8/op-1，不能與native/shrink的op-2混用
+- [51項具名Rust CI矩陣](../evidence/experimental-rebuild/stage2-named-rust-ci-matrix.md)補上
+  multi-Unknown、proof歧義、first-failure、witness/effect與as-of的來源斷言；251項ignored全部排除
+- [Record/replay短索引](../evidence/experimental-rebuild/stage2-record-replay-results.json)保存
+  contract、source、binary、receipt與私有證據包hash。原始輸入輸出及binary已持久保存；公開Git不放私有定位資訊
 
-## 下一步驗證與必要退出
+現行 production repository 在原SQL交易與鎖之下使用相同純decision，service消耗相同Coordinator；
+controlled Rust從具體saved commands/effect order取得真正outcomes，獨立Python oracle另行比對。
+Prospective fence仍是未確認準備，與獨立retained witness／positive receipt分開；cancelled Waiting、
+多Unknown alternatives、actual coordinator projection和reconcile實際as-of均保留各自scope。
 
-1. 先固定新 commit/tree、dirty patch、實際 source scope、Cargo.lock、toolchain、features及新建 binary SHA256；外層保留 build/check 前後相同來源 map
-2. 已執行完整113項pure/mock oracle／reader regression；兩次120s未完成及一項fixture error保留，修正後300s通過。後續來源改動需重驗受影響項，且不得把此結果當實際Rust replay
-3. 用新建的 trusted Rust CLI 錄下完整 concrete inputs、effect order及真實 outcomes；prediction不能標作observed。比較既有同案例前後行為，刻意修正另列
-4. 從保存檔真正重播每個case和固定 rejection fixture。移除或修改input、output、schema、correlation、target、provenance都須拒絕；不能接受自洽但錯誤的期待值
-5. 執行固定3→2 counterexample縮減。原始／候選／positive control／reduced順序與因果關係要成立；保持同一cap failure target，positive control為精確既定的一列移除並得4096
-6. 對multi-Unknown核對人工推導的bounds：在空initial storage、同actor不同key、TTL尚未到期且無其他filter／proof歧義的例子，A Unknown後B confirmed保留[1,2]，兩個Unknown保留[0,2]；TTL／真正交付的reconcile可縮小當前集合但不改寫歷史Unknown
-7. 確認未知proof view、空集合、view／row／modeled-byte不足都不能猜測hidden world；null bounds及停止原因、compact first-failure summaries、Stage1 incomplete prefix必須正確；詳細event／receipt仍可受evidence budget裁切，不能宣稱完整歷史都已保存
-8. 核對 reconciliation 的實際分類時間與完整 effect／attempt／unresolved／requested fence，確認只有已交付 observation 的時間可縮小 caller alternatives；Scripted 時間不是 SQL conformance
-9. 取得針對以上實際artifact的獨立驗收，才討論Stage2 reservation/finalization子退出。SQL observed_at 的真 adapter 證據、actor-clock範圍與後續production ownership仍須逐項交接
+## Stage 2 收口證據與後續交接
+
+1. 用單一 reader-only 腳本在原record的byte copy上檢查actual v2 `replay_source`／`verify_prior_case`。
+   原始record、外部prior authority與41檔bound source不改；先後完整82案正例，中間22個篡改。
+   已在300s預算內實際完成，83.220093秒、exit0、zero blocked attempts；原582檔、41source、script與contract不變。精確結果见[reader短紀錄](../evidence/experimental-rebuild/stage2-v2-reader-results.json)，未用舊v1 mocked readers或34個Rust parser negatives替代
+2. 區分reference/authenticity rejection與更深oracle branch。所有local refs重算後若固定外部authority
+   不吻合，應明列為authority拒絕，不冒稱已執行該變造的semantic oracle
+3. 短before/after矩陣分開：Stage1獨立synthetic model11案→目前Rust相容projection；原既有具名
+   regression的前後CI；目前record→saved replay。前者不是舊production SQL的實測等價證明
+4. 獨立最終子退出審查已通過；真SQL、actor-policy clock和後續production ownership逐項交接。
+   新source/test/docs checkpoint仍須remote exact-save回讀，review本身不代表已持久保存
 
 目前 `reconcile_message_admission` 仍沒有 production runtime caller；保留它的 sample／effect 不代表
 Stage3 已接上 recovery owner。ExactAccepted 沿用 accepted-before-token 語義，返回的 fence 綁定
@@ -36,8 +46,7 @@ Stage3 已接上 recovery owner。ExactAccepted 沿用 accepted-before-token 語
 
 Caller-model 的64 successor／1,000,000 row-copy／64MiB serialized-state 上限不等於 OS RSS。
 原本在 subprocess 完成後才檢查 captured output 的 v1 執行入口已關閉；歷史 readers 只保留給
-明確 mocked regression source，不能取得新 supervised qualification。這不是授權執行 SQL、
-服務、process-loss、故障注入、dedicated corpus 或已取消 soak。
+明確 mocked regression source，不能取得新 supervised qualification。目前專項只涵蓋上述兩次本地JSON record／replay；不涵蓋SQL、服務、process-loss、故障注入或已取消soak。
 
 ## 新窄型 supervisor 的來源契約
 
@@ -123,11 +132,11 @@ file／hash；worker 在下一個 CaseReady 被接收前死亡，也不會改掉
 獨立 run_id／mode／contract SHA256，以及固定 caller 的 total／receipt capture。輸出目錄必須新建；
 replay 不覆寫 record artifacts。
 
-## 供後續安全判定的精確介面（尚未執行）
+## 已使用的精確介面與重錄參考
 
-實際 capture adapter 的 argv 如下；尖括號是尚待可信 build／caller 提供的資料，不是已存在的 artifact。
-應以 argument array 傳遞 compact JSON，避免把路徑或 JSON 插值成 shell code。這份介面說明沒有授權
-執行，也不宣稱已驗證 caller enforcement。
+實際 capture adapter 的 argv 形式如下；尖括號是每次重錄須重新核對的可信資料。
+本輪實際 contract與tool identities已由前述短索引綁定。應以argument array傳遞compact JSON，
+避免把路徑或JSON插值成shell code。此參考不會自動授權新的執行或擴大已驗證的監督範圍。
 
 ```text
 <reviewed-python-executable> -I -S -B <absolute-root>/scripts/capture-controlled-admission.py
@@ -244,9 +253,9 @@ timeout 的固定 timer semantics，並不是 hostile-process／whole-system cle
 目前 Debian patched binary 的 runtime verification。adapter 自身的 actual terminal outcome 必須由可信
 invoker 觀察；post-work保存失敗即使留下完整檔案也不能採為 caller authority。
 
-Caller的pure/mock regression已完成；尚未執行真實timeout包裹的controlled workload、
-record／replay 或任何82-run artifacts。真正的 reviewed Python hash、contract、capture 與執行安全判定
-仍待完成；不能把保存的 JSON 當自我授權的 enforcement 證據。
+Caller的pure/mock regression與上述兩次timeout包裹的82-case record／replay已實際完成。
+這只證明固定素材在該執行環境的成功路徑與有限觀察，不證明所有timeout、bootstrap、OS資源或
+process-loss邊界。Trusted invoking executor的實際exit仍是必要authority，保存JSON本身不是自我授權。
 
 此controlled composition不證明真PostgreSQL transaction、real-clock、cryptographic verification、
 wire、process loss或production readiness；252個historical ignored tests也不是新DB驗證。

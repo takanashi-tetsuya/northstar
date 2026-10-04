@@ -1,0 +1,545 @@
+{
+  "schema": "northstar-stage2-named-rust-ci-matrix-v1",
+  "commit": "1a9d7cbdfa6eaf90febec839f189282d2e1218fa",
+  "tree": "6787043ec17b44ed1444d8ed25833f8d257e9c22",
+  "run": {
+    "id": 37182739788,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37182739788",
+    "head_sha": "1a9d7cbdfa6eaf90febec839f189282d2e1218fa",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "job": {
+    "id": 111378407905,
+    "name": "Rust test",
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37182739788/job/111378407905",
+    "status": "completed",
+    "conclusion": "success",
+    "command": "cargo test --workspace --all-targets --all-features --locked"
+  },
+  "method": "Read existing job logs and exact-commit source; no project execution, rerun, source/remote write or new service. Count only exact named '.. ok' lines whose test functions and assertions were read. Cargo stdout/stderr headers interleave, so crate/source attribution uses exact source namespaces, not the nearest Running header. Log line ordinals refer to the decoded job log, not GitHub step anchors. Test source references use F#:line; F# resolves to the immutable file URL and Git blob listed in source_files.",
+  "finding": {
+    "direct_named_passes": 51,
+    "shared_core_and_transaction": 19,
+    "controlled_harness": 26,
+    "service_and_witness": 6,
+    "interpretation": "Positive exact-commit execution evidence for the mapped pure/shared-core obligations, independently of the fixed-82 plan. These 51 named unit functions are not 51 additional disjoint corpus scenarios and must not be added to the 82-case count. Not an overall Stage2 acceptance verdict."
+  },
+  "matrix": [
+    {
+      "id": "S2-full-effect-witness-fence",
+      "obligation": "Shared coordinator validates the complete effect, retained preparation and fence before consuming or upgrading state",
+      "tests": [
+        "T05",
+        "T09",
+        "T08",
+        "T11",
+        "T02",
+        "T07",
+        "T14",
+        "T01"
+      ],
+      "established": "Direct shared-core assertions mutate ten guard fields, correlation/kind, fifteen observation fields, and prepared scope/fence/receipt; wrong delivery preserves state, valid delivery succeeds once, repeats are monotone or rejected. AlreadyAccepted binds the request fence without requiring the old stored token.",
+      "limit": "Finite in-memory typed coordinator cases; not real database commit, task ownership or exhaustive generation."
+    },
+    {
+      "id": "S2-cancellation-receipt",
+      "obligation": "Distinguish precommit failure, commit uncertainty, retained receipt and dropped continuation",
+      "tests": [
+        "T06",
+        "T10",
+        "T40",
+        "T36",
+        "T41",
+        "T50",
+        "T51"
+      ],
+      "established": "Guard-only versus reservation Unknown remains distinct; cancellation before completion leaves Waiting/AwaitingCompletion and no manufactured result; a positive receipt or prospective reservation survives an actually dropped synthetic future.",
+      "limit": "The Rust service witness adapter is exercised, but this does not qualify production outer ownership or real connection/process cancellation (Stage 3/5)."
+    },
+    {
+      "id": "S2-multi-unknown-proof",
+      "obligation": "Caller knowledge retains correlated alternatives and proof/sequence/fence ambiguity instead of selecting the injected world",
+      "tests": [
+        "T26",
+        "T27",
+        "T31",
+        "T42",
+        "T28",
+        "T29",
+        "T23"
+      ],
+      "established": "Both earlier worlds survive a later confirmed reservation; all four injected two-Unknown masks retain four possible states; no-commit/cancel does not choose a world; TTL narrows active counts without deleting history. A missing proof stops as KnowledgeModelIncomplete despite actual Completed/ReceiptKnown. Equal occupancy does not merge distinct proofs, sequences or fences, and inconsistent observations preserve old views.",
+      "limit": "Finite controlled model and direct helper calls; not arbitrary real SQL state or a universal proof of all schedules."
+    },
+    {
+      "id": "S2-budget-first-failure",
+      "obligation": "Stop within bounded evidence/view budgets while retaining an observed failure and incomplete classification",
+      "tests": [
+        "T24",
+        "T33",
+        "T45",
+        "T20"
+      ],
+      "established": "A one-event budget yields an empty bounded projection and Inconclusive. A seventh Unknown stops after a 64-view prefix without fabricating bounds. Active=4097 safety failure at index zero remains recorded even when its detail is omitted. The maximal root preserves all summary classes within its constant bound.",
+      "limit": "Evidence/model bounds only; not OS wall time, RAM/CPU/process-group supervision or all first-failure precedence paths."
+    },
+    {
+      "id": "S2-actual-outcome-projection",
+      "obligation": "Project actual coordinator state and unmapped material instead of reconstructing success from a saved cut",
+      "tests": [
+        "T34",
+        "T21",
+        "T43"
+      ],
+      "established": "Identical input projects different actual Completed/ReceiptPreserved/Unknown states; unmapped correlation/fence material remains visibly unmapped; rejected undelivered error results leave AwaitingCompletion/Inconclusive.",
+      "limit": "Tests call controlled Rust projection directly; independent Python oracle, disk capture and external worker transport need separate evidence."
+    },
+    {
+      "id": "S2-reconcile-asof",
+      "obligation": "Bind each delivered reconcile observation to its exact effect, unresolved target, fence and observed-at sample",
+      "tests": [
+        "T12",
+        "T15",
+        "T18",
+        "T19",
+        "T22",
+        "T44",
+        "T39",
+        "T37",
+        "T49"
+      ],
+      "established": "Twelve altered inner-effect fields reject before consumption. All five reconcile classifications retain the supplied sample; microsecond lease/retention boundaries are independent. Actual returned time differing from scripted input drives delivered projection, filtering and caller counts; undelivered data cannot filter views or rewrite prior Unknown history. The service mock returns sample 123456 and the exact request.",
+      "limit": "Repository is synthetic/mocked; no actual SQL snapshot/sample atomicity, wire transport or production reconcile caller is qualified here."
+    },
+    {
+      "id": "S2-input-replay-boundaries",
+      "obligation": "Reject malformed/saved request inputs and replay stale deliveries without consuming the valid completion",
+      "tests": [
+        "T25",
+        "T30",
+        "T32",
+        "T35",
+        "T38",
+        "T46",
+        "T17",
+        "T16",
+        "T13"
+      ],
+      "established": "Saved guard mismatch then valid then duplicate produces Request/AlreadyCompleted with preserved state. Missing valid delivery never qualifies terminal. Unknown/duplicate fields and omitted explicit nulls reject; changed finalize fence cannot gain receipt authority; oversize payload is rejected before ownership conversion. Pure transaction predicates cover actor/payload identity, duplicate rows, millisecond rounding, replay/finalize and distinct capacity/expiry thresholds.",
+      "limit": "These are in-memory saved values and pure predicates, not the CLI replay binary or full fixed-82 corpus execution; no SQL lock/cleanup conformance is inferred."
+    },
+    {
+      "id": "S2-service-bridge-redaction",
+      "obligation": "Consume shared results only with required receipt knowledge while preserving busy/Unknown classification and redaction",
+      "tests": [
+        "T03",
+        "T47",
+        "T48",
+        "T04"
+      ],
+      "established": "Fabricated receipt-free success is rejected; memory denial requires none. Service mock modes preserve Proceed/Conflict/Busy/Unknown, retain the prepared reservation in Unknown and redact private sentinel payloads.",
+      "limit": "A real service wrapper with fake Repository modes; not production task ownership or real PostgreSQL/wire behavior."
+    }
+  ],
+  "tests": [
+    {
+      "id": "T01",
+      "source": "F1:963",
+      "decoded_log_line": 464,
+      "exact_ci_line": "2026-10-04T06:29:34.6336193Z test admission_execution::tests::already_accepted_observation_binds_request_fence_without_stored_token_equality ... ok"
+    },
+    {
+      "id": "T02",
+      "source": "F1:760",
+      "decoded_log_line": 465,
+      "exact_ci_line": "2026-10-04T06:29:34.6373896Z test admission_execution::tests::completion_neither_supplies_a_witness_nor_upgrades_observed_preparation ... ok"
+    },
+    {
+      "id": "T03",
+      "source": "F1:1004",
+      "decoded_log_line": 466,
+      "exact_ci_line": "2026-10-04T06:29:34.6403714Z test admission_execution::tests::fake_success_without_receipt_is_rejected_and_memory_denial_needs_none ... ok"
+    },
+    {
+      "id": "T04",
+      "source": "F1:1102",
+      "decoded_log_line": 467,
+      "exact_ci_line": "2026-10-04T06:29:34.6423510Z test admission_execution::tests::debug_and_rejection_errors_are_payload_free ... ok"
+    },
+    {
+      "id": "T05",
+      "source": "F1:578",
+      "decoded_log_line": 468,
+      "exact_ci_line": "2026-10-04T06:29:34.6453806Z test admission_execution::tests::every_guard_input_field_is_bound_before_pending_is_consumed ... ok"
+    },
+    {
+      "id": "T06",
+      "source": "F1:633",
+      "decoded_log_line": 470,
+      "exact_ci_line": "2026-10-04T06:29:34.6458392Z test admission_execution::tests::guard_only_and_reservation_unknown_scopes_never_conflate ... ok"
+    },
+    {
+      "id": "T07",
+      "source": "F1:849",
+      "decoded_log_line": 471,
+      "exact_ci_line": "2026-10-04T06:29:34.6493608Z test admission_execution::tests::observation_is_monotone_and_identical_repeats_are_idempotent ... ok"
+    },
+    {
+      "id": "T08",
+      "source": "F1:804",
+      "decoded_log_line": 472,
+      "exact_ci_line": "2026-10-04T06:29:34.6522007Z test admission_execution::tests::observation_checks_full_effect_before_changing_retained_knowledge ... ok"
+    },
+    {
+      "id": "T09",
+      "source": "F1:607",
+      "decoded_log_line": 473,
+      "exact_ci_line": "2026-10-04T06:29:34.6551879Z test admission_execution::tests::operation_effect_attempt_generation_and_kind_reject_without_consumption ... ok"
+    },
+    {
+      "id": "T10",
+      "source": "F1:677",
+      "decoded_log_line": 474,
+      "exact_ci_line": "2026-10-04T06:29:34.6574003Z test admission_execution::tests::positive_witness_survives_stale_completion_and_cancelled_continuation ... ok"
+    },
+    {
+      "id": "T11",
+      "source": "F1:719",
+      "decoded_log_line": 475,
+      "exact_ci_line": "2026-10-04T06:29:34.6576377Z test admission_execution::tests::swapped_reservation_result_and_receipt_cannot_replace_observed_fence ... ok"
+    },
+    {
+      "id": "T12",
+      "source": "F1:1016",
+      "decoded_log_line": 476,
+      "exact_ci_line": "2026-10-04T06:29:34.6578886Z test admission_execution::tests::reconciliation_retains_sample_and_rejects_relabelled_inner_effect_before_consumption ... ok"
+    },
+    {
+      "id": "T13",
+      "source": "F2:357",
+      "decoded_log_line": 477,
+      "exact_ci_line": "2026-10-04T06:29:34.6581621Z test admission_transaction::tests::admission_capacity_and_expiry_predicates_are_distinct ... ok"
+    },
+    {
+      "id": "T14",
+      "source": "F1:928",
+      "decoded_log_line": 478,
+      "exact_ci_line": "2026-10-04T06:29:34.6583651Z test admission_execution::tests::witness_rejects_a_receipt_that_changes_the_prepared_fact ... ok"
+    },
+    {
+      "id": "T15",
+      "source": "F2:411",
+      "decoded_log_line": 479,
+      "exact_ci_line": "2026-10-04T06:29:34.6585767Z test admission_transaction::tests::every_reconcile_classification_retains_the_exact_sample ... ok"
+    },
+    {
+      "id": "T16",
+      "source": "F2:382",
+      "decoded_log_line": 480,
+      "exact_ci_line": "2026-10-04T06:29:34.6587988Z test admission_transaction::tests::finalize_preserves_accepted_before_token_and_late_pending ... ok"
+    },
+    {
+      "id": "T17",
+      "source": "F2:277",
+      "decoded_log_line": 481,
+      "exact_ci_line": "2026-10-04T06:29:34.6590173Z test admission_transaction::tests::locked_begin_identity_rotation_and_retry_millisecond_semantics ... ok"
+    },
+    {
+      "id": "T18",
+      "source": "F2:449",
+      "decoded_log_line": 482,
+      "exact_ci_line": "2026-10-04T06:29:34.6592893Z test admission_transaction::tests::reconcile_keeps_independent_lease_and_retention_boundaries ... ok"
+    },
+    {
+      "id": "T19",
+      "source": "F2:470",
+      "decoded_log_line": 483,
+      "exact_ci_line": "2026-10-04T06:29:34.6595365Z test admission_transaction::tests::reconcile_keeps_retention_boundary_for_both_states ... ok"
+    },
+    {
+      "id": "T20",
+      "source": "F4:1433",
+      "decoded_log_line": 733,
+      "exact_ci_line": "2026-10-04T06:29:41.9950498Z test controlled_admission::execution::knowledge_budget_tests::maximal_root_with_all_summaries_fits_minimum_evidence_without_detail ... ok"
+    },
+    {
+      "id": "T21",
+      "source": "F3:220",
+      "decoded_log_line": 734,
+      "exact_ci_line": "2026-10-04T06:29:41.9990819Z test controlled_admission::tests::actual_unbound_and_out_of_input_range_values_remain_observation_failures ... ok"
+    },
+    {
+      "id": "T22",
+      "source": "F4:1382",
+      "decoded_log_line": 735,
+      "exact_ci_line": "2026-10-04T06:29:42.0040530Z test controlled_admission::execution::knowledge_budget_tests::delivered_reconcile_time_drives_projection_filtering_and_caller_bounds ... ok"
+    },
+    {
+      "id": "T23",
+      "source": "F4:1445",
+      "decoded_log_line": 736,
+      "exact_ci_line": "2026-10-04T06:29:42.0043129Z test controlled_admission::execution::knowledge_budget_tests::inconsistent_observation_preserves_previous_views_instead_of_inventing_a_world ... ok"
+    },
+    {
+      "id": "T24",
+      "source": "F3:403",
+      "decoded_log_line": 737,
+      "exact_ci_line": "2026-10-04T06:29:42.0046348Z test controlled_admission::tests::budget_exhaustion_preserves_bounded_prefix_and_inconclusive ... ok"
+    },
+    {
+      "id": "T25",
+      "source": "F3:54",
+      "decoded_log_line": 738,
+      "exact_ci_line": "2026-10-04T06:29:42.0047155Z test controlled_admission::tests::concrete_saved_completion_rejects_full_guard_mismatch_then_accepts_once ... ok"
+    },
+    {
+      "id": "T26",
+      "source": "F3:458",
+      "decoded_log_line": 739,
+      "exact_ci_line": "2026-10-04T06:29:42.0049654Z test controlled_admission::tests::confirmed_later_reservation_preserves_both_earlier_unknown_worlds ... ok"
+    },
+    {
+      "id": "T27",
+      "source": "F3:478",
+      "decoded_log_line": 740,
+      "exact_ci_line": "2026-10-04T06:29:42.0089217Z test controlled_admission::tests::independent_unknowns_keep_four_correlated_states_for_every_injected_world ... ok"
+    },
+    {
+      "id": "T28",
+      "source": "F3:566",
+      "decoded_log_line": 741,
+      "exact_ci_line": "2026-10-04T06:29:42.0103209Z test controlled_admission::tests::missing_proof_in_a_possible_view_is_model_incomplete_not_pruned_by_allowed ... ok"
+    },
+    {
+      "id": "T29",
+      "source": "F3:589",
+      "decoded_log_line": 742,
+      "exact_ci_line": "2026-10-04T06:29:42.0106110Z test controlled_admission::tests::equal_occupancy_does_not_merge_different_proofs_sequences_or_fences ... ok"
+    },
+    {
+      "id": "T30",
+      "source": "F3:131",
+      "decoded_log_line": 743,
+      "exact_ci_line": "2026-10-04T06:29:42.0124418Z test controlled_admission::tests::no_valid_saved_completion_never_qualifies_terminal ... ok"
+    },
+    {
+      "id": "T31",
+      "source": "F3:493",
+      "decoded_log_line": 744,
+      "exact_ci_line": "2026-10-04T06:29:42.0136918Z test controlled_admission::tests::no_commit_failure_or_cancellation_cannot_select_a_prior_view ... ok"
+    },
+    {
+      "id": "T32",
+      "source": "F3:354",
+      "decoded_log_line": 745,
+      "exact_ci_line": "2026-10-04T06:29:42.0145046Z test controlled_admission::tests::parser_rejects_unknown_fields_and_duplicate_nested_maps ... ok"
+    },
+    {
+      "id": "T33",
+      "source": "F3:625",
+      "decoded_log_line": 746,
+      "exact_ci_line": "2026-10-04T06:29:42.0176482Z test controlled_admission::tests::attempted_fanout_stops_without_dropping_alternatives_or_actual_outcome ... ok"
+    },
+    {
+      "id": "T34",
+      "source": "F3:179",
+      "decoded_log_line": 747,
+      "exact_ci_line": "2026-10-04T06:29:42.0194196Z test controlled_admission::tests::projection_observes_altered_core_classification_instead_of_saved_cut ... ok"
+    },
+    {
+      "id": "T35",
+      "source": "F3:367",
+      "decoded_log_line": 748,
+      "exact_ci_line": "2026-10-04T06:29:42.0219398Z test controlled_admission::tests::parser_requires_explicit_null_fields_in_every_saved_request ... ok"
+    },
+    {
+      "id": "T36",
+      "source": "F3:114",
+      "decoded_log_line": 749,
+      "exact_ci_line": "2026-10-04T06:29:42.0222428Z test controlled_admission::tests::receipt_before_cancellation_is_preserved_without_caller_completion ... ok"
+    },
+    {
+      "id": "T37",
+      "source": "F3:527",
+      "decoded_log_line": 750,
+      "exact_ci_line": "2026-10-04T06:29:42.0223613Z test controlled_admission::tests::only_delivered_reconciliation_filters_current_views_and_never_rewrites_history ... ok"
+    },
+    {
+      "id": "T38",
+      "source": "F3:323",
+      "decoded_log_line": 751,
+      "exact_ci_line": "2026-10-04T06:29:42.0226914Z test controlled_admission::tests::rejected_finalize_preserves_original_receipt_without_authorizing_changed_fence ... ok"
+    },
+    {
+      "id": "T39",
+      "source": "F3:262",
+      "decoded_log_line": 752,
+      "exact_ci_line": "2026-10-04T06:29:42.0230241Z test controlled_admission::tests::rejected_reconcile_delivery_cannot_publish_repository_observation ... ok"
+    },
+    {
+      "id": "T40",
+      "source": "F3:79",
+      "decoded_log_line": 753,
+      "exact_ci_line": "2026-10-04T06:29:42.0232923Z test controlled_admission::tests::returned_unknown_and_cancelled_commit_have_distinct_coordinator_observations ... ok"
+    },
+    {
+      "id": "T41",
+      "source": "F3:247",
+      "decoded_log_line": 754,
+      "exact_ci_line": "2026-10-04T06:29:42.0236226Z test controlled_admission::tests::stage1_cancel_translation_keeps_native_waiting_observation ... ok"
+    },
+    {
+      "id": "T42",
+      "source": "F3:509",
+      "decoded_log_line": 755,
+      "exact_ci_line": "2026-10-04T06:29:42.0238898Z test controlled_admission::tests::ttl_narrows_active_occupancy_without_erasing_retention_or_unknown_history ... ok"
+    },
+    {
+      "id": "T43",
+      "source": "F3:143",
+      "decoded_log_line": 756,
+      "exact_ci_line": "2026-10-04T06:29:42.0240161Z test controlled_admission::tests::undelivered_failure_does_not_manufacture_an_outcome_from_the_cut ... ok"
+    },
+    {
+      "id": "T44",
+      "source": "F3:275",
+      "decoded_log_line": 757,
+      "exact_ci_line": "2026-10-04T06:29:42.0243225Z test controlled_admission::tests::successive_reconcile_samples_keep_their_own_effect_and_unknown_target ... ok"
+    },
+    {
+      "id": "T45",
+      "source": "F3:643",
+      "decoded_log_line": 765,
+      "exact_ci_line": "2026-10-04T06:29:42.1865503Z test controlled_admission::tests::actual_capacity_failure_is_retained_even_when_its_detail_exceeds_event_budget ... ok"
+    },
+    {
+      "id": "T46",
+      "source": "F5:437",
+      "decoded_log_line": 2582,
+      "exact_ci_line": "2026-10-04T06:29:44.1287393Z test services::message_admission::tests::admission_request_limits_are_checked_before_ownership_conversion ... ok"
+    },
+    {
+      "id": "T47",
+      "source": "F5:362",
+      "decoded_log_line": 2583,
+      "exact_ci_line": "2026-10-04T06:29:44.1289634Z test services::message_admission::tests::admission_service_consumes_shared_outcome_and_requires_reservation_receipt ... ok"
+    },
+    {
+      "id": "T48",
+      "source": "F5:387",
+      "decoded_log_line": 2584,
+      "exact_ci_line": "2026-10-04T06:29:44.1291738Z test services::message_admission::tests::admission_service_preserves_busy_and_redacts_unknown_backend_error ... ok"
+    },
+    {
+      "id": "T49",
+      "source": "F5:411",
+      "decoded_log_line": 2585,
+      "exact_ci_line": "2026-10-04T06:29:44.1293271Z test services::message_admission::tests::reconciliation_service_returns_the_repository_sample_and_request ... ok"
+    },
+    {
+      "id": "T50",
+      "source": "F6:71",
+      "decoded_log_line": 2586,
+      "exact_ci_line": "2026-10-04T06:29:44.1294500Z test services::message_admission::witness::tests::positive_receipt_survives_dropped_continuation ... ok"
+    },
+    {
+      "id": "T51",
+      "source": "F6:109",
+      "decoded_log_line": 2587,
+      "exact_ci_line": "2026-10-04T06:29:44.1295565Z test services::message_admission::witness::tests::prospective_reservation_survives_dropped_continuation_without_a_receipt ... ok"
+    }
+  ],
+  "source_files": [
+    {
+      "id": "F1",
+      "path": "crates/northstar-abuse-policy/src/admission_execution.rs",
+      "git_blob": "13e9cca3d19700e47b8080683728f46e5123b5a8",
+      "sha256": "9ef2ceefd43a5062fd3f2ba78985c2baab1a61e82e66329a553e6e1d3927daa9",
+      "url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-abuse-policy/src/admission_execution.rs"
+    },
+    {
+      "id": "F2",
+      "path": "crates/northstar-abuse-policy/src/admission_transaction.rs",
+      "git_blob": "57c681de3bd5315314e60f67440047037386e63a",
+      "sha256": "9761825a4db3a4f24528f485b87faa92bc4fad8cbaf57e2ba7eeb72fb179d158",
+      "url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-abuse-policy/src/admission_transaction.rs"
+    },
+    {
+      "id": "F3",
+      "path": "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+      "git_blob": "11279c35f6a41d3304a79487562d2b419dd53c4d",
+      "sha256": "d0deeb4c9ac5c88ee93fe368366fd23efd1fc1fa808fb9a7a89bd0cd5e79fd37",
+      "url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-test-harness/src/controlled_admission/mod.rs"
+    },
+    {
+      "id": "F4",
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "git_blob": "98e12aba19619ea07a4b97ada23512eba262b0a2",
+      "sha256": "f23f5cc04bc9130a02a11c43316cd7eb64688b5ad925d1dc99f0141a1361a4e1",
+      "url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-test-harness/src/controlled_admission/execution.rs"
+    },
+    {
+      "id": "F5",
+      "path": "src/services/message_admission.rs",
+      "git_blob": "0cd7b364cb8e9b0a6eedc8a02a0cb19c759c04fb",
+      "sha256": "372b12883af756ad1cf5490991a88ef6bec1710eb257bef8e56224cbd2c4b154",
+      "url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/src/services/message_admission.rs"
+    },
+    {
+      "id": "F6",
+      "path": "src/services/message_admission/witness.rs",
+      "git_blob": "63c6dcaf8ec5688441d190031687856f233cee0a",
+      "sha256": "924963bf7d060fa30a70008db60603385b1efd42dc3fb7eb245d5ef6e261c0ea",
+      "url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/src/services/message_admission/witness.rs"
+    }
+  ],
+  "excluded": {
+    "ignored_named_lines_in_this_job": 251,
+    "ignored_claim": "The historical 252-ignore figure was not used. This exact job contains 251 named ignored lines and its server summary reports 251. None are passed evidence.",
+    "ignored_related_examples": [
+      {
+        "log_line": 1690,
+        "test_line": "2026-10-04T06:29:42.5602045Z test abuse::tests::postgres_accepts_one_thousand_independent_actor_decisions ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 1691,
+        "test_line": "2026-10-04T06:29:42.5632070Z test abuse::tests::postgres_challenge_capacity_is_concurrent_restart_safe_and_hard_limited ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 1692,
+        "test_line": "2026-10-04T06:29:42.5638682Z test abuse::tests::postgres_challenges_are_one_use_restart_safe_and_deidentified ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 1693,
+        "test_line": "2026-10-04T06:29:42.5639733Z test abuse::tests::postgres_message_admission_capacity_and_cleanup_are_bounded ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 1694,
+        "test_line": "2026-10-04T06:29:42.5640944Z test abuse::tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 1695,
+        "test_line": "2026-10-04T06:29:42.5642103Z test abuse::tests::postgres_parallel_message_challenges_are_independent_bounded_and_one_use ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 1696,
+        "test_line": "2026-10-04T06:29:42.5643114Z test abuse::tests::postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof ... ignored, requires an isolated TEST_DATABASE_URL PostgreSQL database"
+      },
+      {
+        "log_line": 2043,
+        "test_line": "2026-10-04T06:29:43.1380653Z test db::archive::history_identity_pg_tests::personal_message_admission_accepts_maximum_scope_with_bounded_identity_index ... ignored, requires TEST_DATABASE_URL; uses and removes a random isolated schema"
+      }
+    ],
+    "unrelated": "Other namespaces (MUC, upload, cluster, operation journal, TLS, etc.) and the harness's generic process/readiness/socket helpers are not counted. The replay CLI target reports zero tests; compiling that target is not execution acceptance."
+  },
+  "remaining_gaps": [
+    "Real PostgreSQL reconcile observed_at/snapshot semantics and row/lock/cleanup conformance are not established by mocked repository/pure transaction tests.",
+    "Production outer ownership, task lifecycle, real SQL/wire and connection/process cancellation remain Stage3/5 obligations.",
+    "This job is Rust-only; Python oracle/shrinker/supervisor and the separately recorded 113 pure/mock suite need their own evidence.",
+    "Saved evidence-reader tamper rejection, including v2, is not established by these Rust tests. It needs separate exact-source execution evidence.",
+    "No claim is made here that the fixed82 capture/replay campaign or all clock/resource combinations ran or passed.",
+    "A coverage matrix is evidence for an independent acceptance decision, not acceptance itself."
+  ],
+  "privacy": "Only exact public test-status lines, source links/hashes and scoped summaries; no full raw logs, credentials, random runtime paths or duplicate 33-job list."
+}

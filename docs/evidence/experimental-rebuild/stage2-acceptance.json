@@ -1,0 +1,77 @@
+{
+  "accepted_scope": [
+    "Production repository selects shared pure admission/finalization decisions under the retained transaction/lock authorities; service consumes the shared Coordinator.",
+    "Prepared prospective authority and confirmed receipts remain distinct and independently bound to the immutable full effect.",
+    "Actual coordinator/witness outcomes, finite multiple-Unknown alternatives and delivered reconcile as-of remain explicit.",
+    "Fixed82 actual record and saved-input replay match independent expected output/evaluation; parser negatives, exact3-to2 target preservation and4096 control remain distinct.",
+    "Actual v2 saved-reader checks accept two complete82-case positives and reject22 mutations at exact intended phases, including self-consistent local rehash with fixed external authority."
+  ],
+  "binary_sha256": "4fbeb389e32790823cb53446b9e16cd428ee6763136e374fd00878c9c44210df",
+  "carry_forward": {
+    "stage3": [
+      "Full mode-aware durable direct transaction, routing/write/ACK workflow",
+      "Production outer dropped-future ownership and unresolved recovery capability/lifecycle",
+      "Production reconciliation scheduling/consumer and guard-only reconstruction limits"
+    ],
+    "stage5": [
+      "Actual PostgreSQL lock/MVCC/rollback/unknown-COMMIT and sampled-time contract",
+      "Production guard-policy/SQL clocks and cryptographic verification",
+      "Stock wire/transport conformance and approved exact SM binding retention"
+    ],
+    "stage6": [
+      "Resource/recovery qualification; successful supervision is not exhaustive OS/resource/fault-boundary qualification",
+      "Cancelled72-hour soak stays excluded"
+    ]
+  },
+  "comparison_limit": "Five unchanged test bodies and eleven independent model-to-Rust examples give finite compatibility evidence, not whole-product behavioral equivalence.",
+  "counterexample_limit": "4097 is conditional on an expired pending row surviving cleanup; no live SQL defect or production caller reachability is proved. Legacy first failurecase8/op-1 and native/shrinkop-2 are distinct.",
+  "date": "2026-10-04",
+  "evidence": {
+    "comparison_existing_rust_tests": 5,
+    "comparison_stage1_model_cases": 11,
+    "named_rust_ci_tests": 51,
+    "ordinary_pure_mock_tests": 113,
+    "record_starts": 82,
+    "replay_starts": 82,
+    "v2_reader_scenarios": 24,
+    "warning": "Counts describe different and potentially overlapping evidence units and must not be added into a single scenario count."
+  },
+  "evidence_files": {
+    "stage2-existing-rust-before-after.json": {
+      "bytes": 10605,
+      "sha256": "bd7e9f2cfcb8c052fa7e2ccac5f8722c352488e3494878d99153a8c7abd13b49"
+    },
+    "stage2-named-rust-ci-matrix.json": {
+      "bytes": 27194,
+      "sha256": "06ad732a08d39fc74572b13798a9866b0fc483028b75a1c48d5749cc1a5d8ec9"
+    },
+    "stage2-ordinary-build-unit-results.json": {
+      "bytes": 8729,
+      "sha256": "c5ede989f4beb57f8d469319db292f0d685c24f99021025f8f6ae4f7c5325057"
+    },
+    "stage2-record-replay-results.json": {
+      "bytes": 8375,
+      "sha256": "21a89ab5325298bc53cea78ffe5228c599cb80f5fbc631b5f71b2e43aff7443b"
+    },
+    "stage2-v2-reader-results.json": {
+      "bytes": 14072,
+      "sha256": "2f3cd1b665e129d6c42fd3c6d99f0c6b3a21379c79fd55191bbfc86417abcd7c"
+    }
+  },
+  "reader_source_sha256": "9fef7bca868459f1b7e477677f78a83fd14a424cd73f7ca348339fd9ec1c70c7",
+  "remote_handoff": "Acceptance precedes a separate exact checkpoint commit/tree/delta read-back. The acceptance record itself does not assert publication completed.",
+  "review_method": "Independent source and artifact review reused the recorded actual executions; reviewer performed read/hash comparisons without new project execution.",
+  "runtime_source_commit": "1a9d7cbdfa6eaf90febec839f189282d2e1218fa",
+  "runtime_source_tree": "6787043ec17b44ed1444d8ed25833f8d257e9c22",
+  "schema": "northstar-stage2-acceptance-v1",
+  "source_entry_points": [
+    "crates/northstar-abuse-policy/src/admission_execution.rs",
+    "crates/northstar-abuse-policy/src/admission_transaction.rs",
+    "src/services/message_admission.rs",
+    "src/services/message_admission/witness.rs",
+    "src/db/message_admission_repository.rs",
+    "crates/northstar-test-harness/src/controlled_admission/"
+  ],
+  "source_manifest_sha256": "f12cc2906006ccbb5c5a59697c9df03a9c422c667e22c49866807a279a83d138",
+  "verdict": "AcceptedReservationFinalizationSubExit"
+}

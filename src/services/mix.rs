@@ -1219,9 +1219,7 @@ pub(crate) trait MixRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn transfer_mix_delivery_to_bosh(
         &self,
-        source: crate::outbound::MixDelivery,
-        session_id: Uuid,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
     fn renew_mix_delivery_lease(
         &self,
@@ -2271,14 +2269,10 @@ impl<R: MixRepository> MixService<R> {
     /// processing remains responsible for the final exact source deletion.
     pub(crate) async fn transfer_mix_delivery_to_bosh(
         &self,
-        source: crate::outbound::MixDelivery,
-        session_id: Uuid,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> Result<crate::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
-        self.repository
-            .transfer_mix_delivery_to_bosh(source, session_id, ttl_seconds)
-            .await
+        self.repository.transfer_mix_delivery_to_bosh(request).await
     }
 
     pub(crate) async fn renew_mix_delivery_lease(

@@ -1248,12 +1248,11 @@ impl MixRepository for PostgresMixRepository {
     }
     async fn transfer_mix_delivery_to_bosh(
         &self,
-        source: crate::outbound::MixDelivery,
-        session_id: Uuid,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> Result<crate::outbound::MixDelivery> {
-        db::mix::transfer_mix_delivery_to_bosh(&self.pool, source, session_id, ttl_seconds).await
+        db::mix::transfer_mix_delivery_to_bosh(&self.pool, request).await
     }
+
     async fn renew_mix_delivery_lease(&self, delivery_id: Uuid, lease_token: Uuid) -> Result<bool> {
         db::renew_mix_delivery_lease(&self.pool, delivery_id, lease_token).await
     }

@@ -4,7 +4,11 @@ use super::{queue_bosh_resume_payload, BoshActor};
 use crate::xmpp::protocol::{Action, ResumeTransportParts};
 
 impl BoshActor {
-    pub(super) async fn apply_action(&mut self, action: Action) -> bool {
+    pub(super) async fn apply_action(
+        &mut self,
+        action: Action,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) -> bool {
         match action {
             Action::Send(reply) => {
                 let accepted = self.record_and_push(reply).await;
@@ -24,7 +28,7 @@ impl BoshActor {
             }
             Action::SendManyItems(items) => {
                 for item in items {
-                    if !self.record_and_push_item(item).await {
+                    if !self.record_and_push_item(item, operation).await {
                         return false;
                     }
                 }

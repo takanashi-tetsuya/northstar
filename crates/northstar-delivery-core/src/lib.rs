@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bosh_ownership;
 pub mod native_write;
 pub mod sm_ownership;
 

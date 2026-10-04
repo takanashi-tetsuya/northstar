@@ -7,6 +7,7 @@
 //! behavior from drifting away from TCP/WebSocket behavior.
 
 mod action;
+mod ownership;
 
 use crate::state::{AppState, ClientConnectionGuard};
 use crate::transport_parsing::parse_bosh_frame;
@@ -204,6 +205,8 @@ struct BoshActor {
     client_acknowledgements: bool,
     delivery_session_id: uuid::Uuid,
     delivery_fence_ttl_seconds: u64,
+    /// One current-or-last operation; retained old readers remain independent.
+    ownership_operation: Option<northstar_delivery_core::bosh_ownership::Operation>,
     /// Set when the next non-empty HTTP response contains the terminal
     /// authentication/resume control. Publication happens only after that
     /// response has been handed to the HTTP transport task.
@@ -359,6 +362,7 @@ impl BoshManager {
                 .max(wait_seconds)
                 .saturating_add(30)
                 .min(86_400),
+            ownership_operation: None,
             auth_publication_pending: false,
             actor_shutdown,
             _connection_guard: connection_guard,
@@ -477,6 +481,24 @@ impl BoshActor {
         }
     }
 
+    fn begin_ownership_operation(
+        &mut self,
+        kind: northstar_delivery_core::bosh_ownership::OperationKind,
+    ) -> northstar_delivery_core::bosh_ownership::Operation {
+        // Vec::new allocates no transfer metadata here; per-item records are
+        // created only inside the existing timed child. Cleanup keeps this
+        // last observation and never rewrites it as a release receipt.
+        let operation = northstar_delivery_core::bosh_ownership::Operation::new(
+            northstar_delivery_core::bosh_ownership::Scope {
+                session_id: self.delivery_session_id,
+                ttl_seconds: self.delivery_fence_ttl_seconds,
+                kind,
+            },
+        );
+        self.ownership_operation = Some(operation.clone());
+        operation
+    }
+
     async fn run_loop(&mut self) {
         let signals = self.protocol.termination_signals();
         let mut maintenance = tokio::time::interval(Duration::from_secs(1));
@@ -523,10 +545,11 @@ impl BoshActor {
                 command = self.commands.recv() => {
                     match command {
                         Some(BoshCommand::Request { request, response }) => {
-                            keep_running = match tokio::time::timeout(
+                            let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::Request);
+                            keep_running = match ownership::OperationRunner::new(operation.clone(), tokio::time::timeout(
                                 BOSH_BACKEND_OPERATION_TIMEOUT,
-                                self.accept_request(*request, response),
-                            )
+                                self.accept_request(*request, response, &operation),
+                            ))
                             .await
                             {
                                 Ok(keep_running) => keep_running,
@@ -550,11 +573,12 @@ impl BoshActor {
                 stanza = self.outbound.recv(), if self.has_output_capacity() => {
                     match stanza {
                         Some(stanza) => {
+                            let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::Outbound);
                             if !matches!(
-                                tokio::time::timeout(
+                                ownership::OperationRunner::new(operation.clone(), tokio::time::timeout(
                                     BOSH_BACKEND_OPERATION_TIMEOUT,
-                                    self.queue_outbound(stanza),
-                                )
+                                    self.queue_outbound(stanza, &operation),
+                                ))
                                 .await,
                                 Ok(true)
                             ) {
@@ -563,11 +587,13 @@ impl BoshActor {
                                 keep_running = false;
                             } else if self.held.is_some()
                                 && !matches!(
-                                    tokio::time::timeout(
-                                        BOSH_BACKEND_OPERATION_TIMEOUT,
-                                        self.finish_held(None),
-                                    )
-                                    .await,
+                                    {
+                                        let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::HeldResponse);
+                                        ownership::OperationRunner::new(operation, tokio::time::timeout(
+                                            BOSH_BACKEND_OPERATION_TIMEOUT,
+                                            self.finish_held(None),
+                                        )).await
+                                    },
                                     Ok(true)
                                 )
                             {
@@ -584,11 +610,12 @@ impl BoshActor {
                     }
                 }
                 _ = tokio::time::sleep_until(hold_deadline.into()), if self.held.is_some() => {
+                    let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::HeldResponse);
                     if !matches!(
-                        tokio::time::timeout(
+                        ownership::OperationRunner::new(operation, tokio::time::timeout(
                             BOSH_BACKEND_OPERATION_TIMEOUT,
                             self.finish_held(None),
-                        )
+                        ))
                         .await,
                         Ok(true)
                     ) {
@@ -658,6 +685,7 @@ impl BoshActor {
         &mut self,
         request: BoshRequest,
         response: oneshot::Sender<BoshHttpResponse>,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
         if !valid_client_response_ack(
             self.client_acknowledgements,
@@ -778,7 +806,7 @@ impl BoshActor {
                     self.next_rid += 1;
                 }
                 std::mem::swap(&mut oldest.responders, &mut terminating.responders);
-                let _ = self.process_pending(terminating).await;
+                let _ = self.process_pending(terminating, operation).await;
                 if !self.finish_pending(oldest, None, false).await {
                     self.protocol.forbid_sm_resume();
                 }
@@ -810,7 +838,7 @@ impl BoshActor {
             if !final_rid {
                 self.next_rid += 1;
             }
-            if !self.process_pending(pending).await {
+            if !self.process_pending(pending, operation).await {
                 self.terminate_waiters("other-request");
                 return false;
             }
@@ -818,7 +846,11 @@ impl BoshActor {
         true
     }
 
-    async fn process_pending(&mut self, pending: PendingRequest) -> bool {
+    async fn process_pending(
+        &mut self,
+        pending: PendingRequest,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) -> bool {
         let request = &pending.request;
         self.active_inactivity = self.inactivity;
         if !advance_bosh_key_sequence(
@@ -898,7 +930,7 @@ impl BoshActor {
             for payload in &request.payloads {
                 match self.protocol.process_frame(payload).await {
                     Ok(action) => {
-                        if !self.apply_action(action).await {
+                        if !self.apply_action(action, operation).await {
                             failure = Some("remote-stream-error");
                             break;
                         }
@@ -924,7 +956,7 @@ impl BoshActor {
             let Ok(stanza) = self.outbound.try_recv() else {
                 break;
             };
-            if !self.queue_outbound(stanza).await {
+            if !self.queue_outbound(stanza, operation).await {
                 let _ = self
                     .finish_pending(pending, Some("policy-violation"), false)
                     .await;
@@ -1006,7 +1038,11 @@ impl BoshActor {
         Ok(())
     }
 
-    async fn record_and_push_item(&mut self, mut item: crate::outbound::OutboundItem) -> bool {
+    async fn record_and_push_item(
+        &mut self,
+        mut item: crate::outbound::OutboundItem,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) -> bool {
         let managed_by_sm = match self.protocol.record_outbound_item(&item).await {
             Ok(managed) => managed,
             Err(error) if superseded_bosh_message_id(&error).is_some() => {
@@ -1024,50 +1060,38 @@ impl BoshActor {
             item.durable_source = None;
             item.mix_handoff = None;
         } else if let Some(source) = item.mix_delivery() {
-            // BOSH has no per-stanza socket acknowledgement. Transfer the
-            // exact MIX lease to a short-lived, typed BOSH fence *before*
-            // this actor can retain the stanza in its response FIFO. The
-            // source worker is then free to stop; final deletion happens only
-            // after the client acknowledges the response RID.
-            if !self.can_push_output_item(&item) {
-                return false;
-            }
-            let transferred = match self
-                .mix_service
-                .transfer_mix_delivery_to_bosh(
-                    source,
-                    self.delivery_session_id,
-                    self.delivery_fence_ttl_seconds,
-                )
-                .await
-            {
-                Ok(transferred) => transferred,
+            let mut output = ownership::Output {
+                items: &mut self.output,
+                bytes: &mut self.output_bytes,
+                max_stanzas: self.max_output_stanzas,
+                max_bytes: self.max_output_bytes,
+            };
+            let port = ownership::ServiceTransfer {
+                service: &self.mix_service,
+            };
+            return match ownership::transfer_and_push(&mut output, item, operation, &port).await {
+                Ok(accepted) => accepted,
                 Err(error) => {
-                    tracing::error!(
-                        ?error,
-                        delivery_id = %source.delivery_id,
-                        session_id = %self.delivery_session_id,
-                        "failed to persist MIX BOSH transport ownership"
-                    );
-                    return false;
+                    tracing::error!(?error, delivery_id = %source.delivery_id, session_id = %self.delivery_session_id, "failed to persist MIX BOSH transport ownership");
+                    false
                 }
             };
-            item.durable_source = Some(crate::outbound::TransportOwnershipSource::Mix(transferred));
-            item.complete_mix_handoff(crate::outbound::MixTransportCompletion::BoshPersisted {
-                session_id: self.delivery_session_id,
-            });
         }
         self.push_output_item(item)
     }
 
-    async fn queue_outbound(&mut self, item: crate::outbound::OutboundItem) -> bool {
+    async fn queue_outbound(
+        &mut self,
+        item: crate::outbound::OutboundItem,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) -> bool {
         // BOSH cannot prove an individual stanza reached the peer without
         // response/SM acknowledgement, so a durable row remains available for
         // safe replay even after the item leaves CSI's defer buffer.
         let Some(item) = self.protocol.csi_filter_outbound(item) else {
             return true;
         };
-        self.record_and_push_item(item).await
+        self.record_and_push_item(item, operation).await
     }
 
     fn push_output(&mut self, stanza: String) -> bool {
@@ -1075,17 +1099,13 @@ impl BoshActor {
     }
 
     fn push_output_item(&mut self, item: crate::outbound::OutboundItem) -> bool {
-        if !self.can_push_output_item(&item) {
-            return false;
+        ownership::Output {
+            items: &mut self.output,
+            bytes: &mut self.output_bytes,
+            max_stanzas: self.max_output_stanzas,
+            max_bytes: self.max_output_bytes,
         }
-        self.output_bytes = self.output_bytes.saturating_add(item.stanza.len());
-        self.output.push_back(item);
-        true
-    }
-
-    fn can_push_output_item(&self, item: &crate::outbound::OutboundItem) -> bool {
-        let next_bytes = self.output_bytes.saturating_add(item.stanza.len());
-        self.output.len() < self.max_output_stanzas && next_bytes <= self.max_output_bytes
+        .push(item)
     }
 
     fn has_output_capacity(&self) -> bool {

@@ -1439,10 +1439,12 @@ pub async fn fence_mix_socket_write(
 /// retry, dead-letter, or acknowledge a source already owned by BOSH.
 pub async fn transfer_mix_delivery_to_bosh(
     pool: &PgPool,
-    source: crate::outbound::MixDelivery,
-    session_id: Uuid,
-    ttl_seconds: u64,
+    request: &northstar_delivery_core::bosh_ownership::TransferRequest,
 ) -> Result<crate::outbound::MixDelivery> {
+    request.validate_for_io()?;
+    let source = request.source();
+    let session_id = request.session_id();
+    let ttl_seconds = request.ttl_seconds();
     let ttl_seconds =
         i64::try_from(ttl_seconds.clamp(1, 300)).context("MIX BOSH hand-off TTL is too large")?;
     let mut transaction = pool.begin().await?;
@@ -1539,7 +1541,14 @@ pub async fn transfer_mix_delivery_to_bosh(
         inserted == 1,
         "MIX BOSH ownership transfer did not create its fence"
     );
-    transaction.commit().await?;
+    // A lost response after entering COMMIT leaves the whole transfer
+    // unresolved. The exact positive receipt precedes this returned source.
+    northstar_delivery_core::bosh_ownership::transfer_commit_observed(
+        transaction.commit(),
+        request,
+        transferred,
+    )
+    .await?;
     Ok(transferred)
 }
 

@@ -1,75 +1,74 @@
 //! Structural bridge to the unchanged synthetic v1 contract. No prediction is
 //! executed here: compatibility observations come from shared Rust execution.
-use super::input::{digest, Envelope, InputError, Row, Stage1, MAX_TIME};
-use serde::Deserialize;
+use super::input::{digest, object_input, Envelope, InputError, Row, Stage1, MAX_TIME};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Scenario {
-    schema: String,
-    model: String,
-    scenario_id: String,
-    purpose: String,
-    policy: Policy,
-    clock: Clock,
-    actors: Vec<String>,
-    initial_rows: Vec<Row>,
-    commands: Vec<Command>,
-    budgets: Budgets,
-    termination: Termination,
-    #[serde(deserialize_with = "super::input::required_option")]
-    seed: Option<u64>,
+object_input! {
+    struct Scenario {
+        schema: String,
+        model: String,
+        scenario_id: String,
+        purpose: String,
+        policy: Policy,
+        clock: Clock,
+        actors: Vec<String>,
+        initial_rows: Vec<Row>,
+        commands: Vec<Command>,
+        budgets: Budgets,
+        termination: Termination,
+        #[serde(deserialize_with = "super::input::required_option")]
+        seed: Option<u64>,
+    }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Policy {
-    actor_capacity: u64,
-    accepted_ttl_us: u64,
-    pending_ttl_us: u64,
-    lease_us: u64,
+object_input! {
+    struct Policy {
+        actor_capacity: u64,
+        accepted_ttl_us: u64,
+        pending_ttl_us: u64,
+        lease_us: u64,
+    }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Clock {
-    domain: String,
-    unit: String,
-    start_us: i64,
+object_input! {
+    struct Clock {
+        domain: String,
+        unit: String,
+        start_us: i64,
+    }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Command {
-    operation_id: String,
-    effect_id: String,
-    #[serde(deserialize_with = "super::input::required_option")]
-    causal_id: Option<String>,
-    attempt: u32,
-    time_us: i64,
-    action: String,
-    kind: String,
-    actor: String,
-    key: String,
-    payload_tag: String,
-    lease: String,
-    cut: String,
+object_input! {
+    struct Command {
+        operation_id: String,
+        effect_id: String,
+        #[serde(deserialize_with = "super::input::required_option")]
+        causal_id: Option<String>,
+        attempt: u32,
+        time_us: i64,
+        action: String,
+        kind: String,
+        actor: String,
+        key: String,
+        payload_tag: String,
+        lease: String,
+        cut: String,
+    }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Budgets {
-    domain_us: u64,
-    wall_ms: u64,
-    steps: u64,
-    events: u64,
-    evidence_bytes: u64,
-    memory_bytes: u64,
-    files: u64,
+object_input! {
+    struct Budgets {
+        domain_us: u64,
+        wall_ms: u64,
+        steps: u64,
+        events: u64,
+        evidence_bytes: u64,
+        memory_bytes: u64,
+        files: u64,
+    }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Termination {
-    after_commands: String,
-    terminal_required: bool,
+object_input! {
+    struct Termination {
+        after_commands: String,
+        terminal_required: bool,
+    }
 }
 fn require(v: bool) -> Result<(), InputError> {
     if v {

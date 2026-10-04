@@ -351,6 +351,360 @@ mod tests {
         );
     }
     #[test]
+    fn parser_rejects_complete_positional_root() {
+        let mut value = input();
+        assert!(parse(&serde_json::to_vec(&value).unwrap()).is_ok());
+        make_positional_record(
+            &mut value,
+            &[
+                "schema",
+                "model",
+                "adapter",
+                "binding_version",
+                "scenario_id",
+                "scope",
+                "initial",
+                "bindings",
+                "commands",
+                "budgets",
+                "stage1",
+            ],
+        );
+        assert!(matches!(
+            parse(&serde_json::to_vec(&value).unwrap()),
+            Err(InputError::Fields)
+        ));
+    }
+
+    fn make_positional_record(value: &mut Value, fields: &[&str]) {
+        let object = value.as_object_mut().unwrap();
+        assert_eq!(object.len(), fields.len());
+        let positional = fields
+            .iter()
+            .map(|field| object.remove(*field).unwrap())
+            .collect();
+        *value = Value::Array(positional);
+    }
+
+    fn parser_input_with_optional_records() -> Value {
+        let mut value = input();
+        value["initial"]["rows"] = json!([{
+            "actor":"actor-a","key":"key-a","payload_tag":"payload-a","state":"pending",
+            "expires_at_us":20,"lease":"lease-a","lease_until_us":10
+        }]);
+        let proof = json!({
+            "challenge_id":"abcdef00-0000-0000-0000-000000000001","nonce":"synthetic-nonce"
+        });
+        value["initial"]["proofs"] = json!([proof["challenge_id"]]);
+        value["commands"][0]["guard"]["proof"] = proof.clone();
+        value["commands"][0]["schedule"]["completions"][0]["guard"]["proof"] = proof;
+        value
+    }
+
+    fn parser_stage1_input() -> Value {
+        let mut value = input();
+        let command = &mut value["commands"][0];
+        command["generation"] = 1.into();
+        command["times"] = json!({
+            "admission_us":1,"actor_policy_us":1,"finalize_us":1,"reconcile_us":1
+        });
+        command["guard"]["actor_sequence_delta"] = 0.into();
+        command["schedule"]["cleanup"] = "exact_key_only".into();
+        refresh_completion(command);
+        let scenario = json!({
+            "schema":"northstar-admission-scenario-v1","model":"admission-fixture-v1",
+            "scenario_id":"rust-controlled-unit","purpose":"normal",
+            "policy":{"actor_capacity":4096,"accepted_ttl_us":21600000000_u64,
+                "pending_ttl_us":1800000000,"lease_us":60000000},
+            "clock":{"domain":"sql_model","unit":"microsecond","start_us":0},
+            "actors":["actor-a"],"initial_rows":[],
+            "commands":[{"operation_id":"operation-1","effect_id":"effect-1","causal_id":null,
+                "attempt":1,"time_us":1,"action":"reserve","kind":"direct","actor":"actor-a",
+                "key":"key-a","payload_tag":"payload-a","lease":"lease-a","cut":"none"}],
+            "budgets":{"domain_us":10,"wall_ms":1,"steps":1,"events":1,
+                "evidence_bytes":2048,"memory_bytes":4096,"files":0},
+            "termination":{"after_commands":"complete","terminal_required":true},"seed":null
+        });
+        value["stage1"] = json!({"sha256":input::digest(&scenario),"scenario":scenario});
+        value
+    }
+
+    #[test]
+    fn parser_rejects_positional_nested_records() {
+        let guard_fields: &[&str] = &[
+            "account_bare",
+            "normalized_target",
+            "origin_id",
+            "normalized_payload",
+            "pow_intent_payload",
+            "subject",
+            "actors",
+            "proof",
+            "allowed",
+            "actor_sequence_delta",
+        ];
+        let records: &[(&str, &[&str])] = &[
+            ("/initial", &["rows", "actor_sequences", "proofs"]),
+            (
+                "/initial/rows/0",
+                &[
+                    "actor",
+                    "key",
+                    "payload_tag",
+                    "state",
+                    "expires_at_us",
+                    "lease",
+                    "lease_until_us",
+                ],
+            ),
+            ("/bindings", &["actors", "keys", "payloads", "leases"]),
+            ("/bindings/actors/0", &["label", "uuid"]),
+            ("/bindings/keys/0", &["label", "key_id", "hex"]),
+            ("/bindings/payloads/0", &["label", "hex"]),
+            ("/bindings/leases/0", &["label", "uuid"]),
+            (
+                "/commands/0",
+                &[
+                    "operation_id",
+                    "operation_uuid",
+                    "effect_number",
+                    "effect_id",
+                    "causal_id",
+                    "attempt",
+                    "generation",
+                    "action",
+                    "kind",
+                    "actor",
+                    "key",
+                    "payload_tag",
+                    "lease",
+                    "candidates",
+                    "times",
+                    "guard",
+                    "schedule",
+                    "reconcile_of",
+                ],
+            ),
+            (
+                "/commands/0/times",
+                &[
+                    "admission_us",
+                    "actor_policy_us",
+                    "finalize_us",
+                    "reconcile_us",
+                ],
+            ),
+            ("/commands/0/guard", guard_fields),
+            ("/commands/0/guard/proof", &["challenge_id", "nonce"]),
+            (
+                "/commands/0/schedule",
+                &[
+                    "cut",
+                    "world_commit",
+                    "cleanup",
+                    "locked_keys",
+                    "completions",
+                ],
+            ),
+            (
+                "/commands/0/schedule/completions/0",
+                &[
+                    "operation_uuid",
+                    "effect_number",
+                    "generation",
+                    "attempt",
+                    "action",
+                    "actor",
+                    "key",
+                    "payload_tag",
+                    "lease",
+                    "guard",
+                    "reconcile_of",
+                ],
+            ),
+            ("/commands/0/schedule/completions/0/guard", guard_fields),
+            (
+                "/commands/0/schedule/completions/0/guard/proof",
+                &["challenge_id", "nonce"],
+            ),
+            ("/budgets", &["steps", "events", "evidence_bytes"]),
+            ("/stage1", &["scenario", "sha256"]),
+        ];
+        for (path, fields) in records {
+            let mut value = if *path == "/stage1" {
+                parser_stage1_input()
+            } else {
+                parser_input_with_optional_records()
+            };
+            assert!(
+                parse(&serde_json::to_vec(&value).unwrap()).is_ok(),
+                "{path}"
+            );
+            make_positional_record(value.pointer_mut(path).unwrap(), fields);
+            assert!(
+                matches!(
+                    parse(&serde_json::to_vec(&value).unwrap()),
+                    Err(InputError::Fields)
+                ),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn parser_rejects_positional_stage1_bridge_records_after_digest_check() {
+        let records: &[(&str, &[&str])] = &[
+            (
+                "",
+                &[
+                    "schema",
+                    "model",
+                    "scenario_id",
+                    "purpose",
+                    "policy",
+                    "clock",
+                    "actors",
+                    "initial_rows",
+                    "commands",
+                    "budgets",
+                    "termination",
+                    "seed",
+                ],
+            ),
+            (
+                "/policy",
+                &[
+                    "actor_capacity",
+                    "accepted_ttl_us",
+                    "pending_ttl_us",
+                    "lease_us",
+                ],
+            ),
+            ("/clock", &["domain", "unit", "start_us"]),
+            (
+                "/commands/0",
+                &[
+                    "operation_id",
+                    "effect_id",
+                    "causal_id",
+                    "attempt",
+                    "time_us",
+                    "action",
+                    "kind",
+                    "actor",
+                    "key",
+                    "payload_tag",
+                    "lease",
+                    "cut",
+                ],
+            ),
+            (
+                "/budgets",
+                &[
+                    "domain_us",
+                    "wall_ms",
+                    "steps",
+                    "events",
+                    "evidence_bytes",
+                    "memory_bytes",
+                    "files",
+                ],
+            ),
+            ("/termination", &["after_commands", "terminal_required"]),
+        ];
+        for (path, fields) in records {
+            let mut value = parser_stage1_input();
+            assert!(parse(&serde_json::to_vec(&value).unwrap()).is_ok());
+            make_positional_record(
+                value["stage1"]["scenario"].pointer_mut(path).unwrap(),
+                fields,
+            );
+            value["stage1"]["sha256"] = input::digest(&value["stage1"]["scenario"]).into();
+            assert!(
+                matches!(
+                    parse(&serde_json::to_vec(&value).unwrap()),
+                    Err(InputError::Stage1)
+                ),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn parser_rejects_array_hidden_uuid_aliases() {
+        let canonical = "abcdef00-0000-0000-0000-000000000001";
+        let aliases = [
+            "ABCDEF00-0000-0000-0000-000000000001",
+            "abcdef00000000000000000000000001",
+            "{abcdef00-0000-0000-0000-000000000001}",
+            "urn:uuid:abcdef00-0000-0000-0000-000000000001",
+        ];
+        for path in ["/bindings/actors/0", "/bindings/leases/0"] {
+            let mut control = input();
+            control.pointer_mut(path).unwrap()["uuid"] = canonical.into();
+            assert!(parse(&serde_json::to_vec(&control).unwrap()).is_ok());
+            for alias in aliases {
+                assert_eq!(
+                    uuid::Uuid::parse_str(alias).unwrap(),
+                    uuid::Uuid::parse_str(canonical).unwrap()
+                );
+                let mut value = control.clone();
+                let binding = value.pointer_mut(path).unwrap();
+                binding["uuid"] = alias.into();
+                make_positional_record(binding, &["label", "uuid"]);
+                assert!(
+                    matches!(
+                        parse(&serde_json::to_vec(&value).unwrap()),
+                        Err(InputError::Fields)
+                    ),
+                    "{path}: {alias}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parser_preserves_object_roundtrip_and_canonical_material() {
+        let mut nulls = input();
+        nulls["commands"][0]["guard"]["origin_id"] = Value::Null;
+        nulls["commands"][0]["schedule"]["completions"][0]["guard"]["origin_id"] = Value::Null;
+        for value in [
+            input(),
+            nulls,
+            parser_input_with_optional_records(),
+            parser_stage1_input(),
+        ] {
+            let (envelope, hash) = parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(envelope).unwrap(), value);
+            assert_eq!(hash, input::digest(&value));
+        }
+        for path in [
+            "/bindings/actors/0/uuid",
+            "/bindings/leases/0/uuid",
+            "/commands/0/operation_uuid",
+            "/commands/0/guard/proof/challenge_id",
+            "/commands/0/schedule/completions/0/operation_uuid",
+            "/commands/0/schedule/completions/0/guard/proof/challenge_id",
+            "/initial/proofs/0",
+        ] {
+            let mut value = parser_input_with_optional_records();
+            *value.pointer_mut(path).unwrap() = "abcdef00-0000-0000-0000-000000000001".into();
+            assert!(
+                parse(&serde_json::to_vec(&value).unwrap()).is_ok(),
+                "{path}"
+            );
+            *value.pointer_mut(path).unwrap() = "ABCDEF00-0000-0000-0000-000000000001".into();
+            assert!(
+                matches!(
+                    parse(&serde_json::to_vec(&value).unwrap()),
+                    Err(InputError::Binding)
+                ),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
     fn parser_rejects_unknown_fields_and_duplicate_nested_maps() {
         let mut v = input();
         v["commands"][0]["guard"]["unexpected"] = "rejected".into();
@@ -358,10 +712,24 @@ mod tests {
             parse(&serde_json::to_vec(&v).unwrap()),
             Err(InputError::Fields)
         ));
-        let text = serde_json::to_string(&input())
-            .unwrap()
-            .replace("\"actor-a\":0", "\"actor-a\":0,\"actor-a\":1");
-        assert!(matches!(parse(text.as_bytes()), Err(InputError::Json)));
+        for (value, field) in [
+            (input(), "\"scenario_id\":\"rust-controlled-unit\""),
+            (input(), "\"allowed\":true"),
+            (input(), "\"actor-a\":0"),
+            (parser_stage1_input(), "\"actor_capacity\":4096"),
+        ] {
+            let text = serde_json::to_string(&value).unwrap();
+            assert!(text.contains(field));
+            let text = text.replacen(field, &format!("{field},{field}"), 1);
+            assert!(matches!(parse(text.as_bytes()), Err(InputError::Json)));
+        }
+        let mut bridge = parser_stage1_input();
+        bridge["stage1"]["scenario"]["policy"]["unexpected"] = true.into();
+        bridge["stage1"]["sha256"] = input::digest(&bridge["stage1"]["scenario"]).into();
+        assert!(matches!(
+            parse(&serde_json::to_vec(&bridge).unwrap()),
+            Err(InputError::Stage1)
+        ));
     }
     #[test]
     fn parser_requires_explicit_null_fields_in_every_saved_request() {
@@ -371,6 +739,24 @@ mod tests {
             vec!["commands", "0", "guard", "proof"],
             vec!["commands", "0", "guard", "origin_id"],
             vec!["commands", "0", "reconcile_of"],
+            vec![
+                "commands",
+                "0",
+                "schedule",
+                "completions",
+                "0",
+                "guard",
+                "proof",
+            ],
+            vec![
+                "commands",
+                "0",
+                "schedule",
+                "completions",
+                "0",
+                "guard",
+                "origin_id",
+            ],
             vec![
                 "commands",
                 "0",
@@ -396,6 +782,21 @@ mod tests {
             assert!(matches!(
                 parse(&serde_json::to_vec(&v).unwrap()),
                 Err(InputError::Fields)
+            ));
+        }
+        for path in ["/seed", "/commands/0/causal_id"] {
+            let mut value = parser_stage1_input();
+            let (parent, field) = path.rsplit_once('/').unwrap();
+            value["stage1"]["scenario"]
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            value["stage1"]["sha256"] = input::digest(&value["stage1"]["scenario"]).into();
+            assert!(matches!(
+                parse(&serde_json::to_vec(&value).unwrap()),
+                Err(InputError::Stage1)
             ));
         }
     }

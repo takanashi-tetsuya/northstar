@@ -32,6 +32,7 @@ Reconcile保留實際返回的effect與as-of，但尚無production runtime consu
 - 3→2縮減保留同一cap反例與因果，精確一列移除的正對照為4096
 - 24個actual v2 reader情境通過：前後完整正例，中間22個篡改依指定phase／reason拒絕；原證據及來源未改
 - 113項pure/mock與51項具名Rust CI提供各自有限證據；數量不可相加，251項ignored不算DB驗證
+- [Object-only parser修正](../evidence/experimental-rebuild/stage2-map-only-parser-results.json)另通過7項精確回歸；固定82案未涵蓋positional records／array-hidden UUID，不是一般strict-input證明
 
 [接受範圍](../evidence/experimental-rebuild/stage2-acceptance.json)、
 [record/replay索引](../evidence/experimental-rebuild/stage2-record-replay-results.json)、

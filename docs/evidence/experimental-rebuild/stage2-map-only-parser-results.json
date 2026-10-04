@@ -1,0 +1,156 @@
+{
+  "schema": "northstar-stage2-map-only-parser-result-v1",
+  "status": "LimitedParserScopePassed",
+  "base_commit": "fb1250eca2feaede98b7ef1958da19fc444cd479",
+  "scope": "Concrete controlled-admission and Stage1 bridge JSON record shape validation; parser-only regressions.",
+  "sources": {
+    "crates/northstar-test-harness/src/controlled_admission/input.rs": {
+      "sha256": "cf835868bc479529f3f5745acc126cf6ae9ecac2e2fb2b122b1ad1b9da8960f7",
+      "bytes": 26703
+    },
+    "crates/northstar-test-harness/src/controlled_admission/mod.rs": {
+      "sha256": "ee742272f545a8db950d5a98f58e39c92ab7700315518e7b0b73c87e9bf95691",
+      "bytes": 46255
+    },
+    "crates/northstar-test-harness/src/controlled_admission/stage1.rs": {
+      "sha256": "39188203ebcb50126acf82220bab8e9fb231acc775fe0cf6f77420ec76deb0c4",
+      "bytes": 8464
+    }
+  },
+  "input_scope": {
+    "files": 26,
+    "bytes": 469331,
+    "manifest_sha256": "8a871f95fbc4b94aca7c4c552786e4ec27a1b7922c217d930984f16481cf2e2c",
+    "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+    "recipe": "Cargo.toml, Cargo.lock, rust-toolchain.toml and each Cargo.toml plus every src/**/*.rs file of northstar-test-harness and its sole local dependency northstar-abuse-policy at the base commit, replacing the three listed sources."
+  },
+  "test_binary": {
+    "path": "target/debug/deps/northstar_test_harness-bdd8428f564042b3",
+    "bytes": 7719408,
+    "sha256": "d16d0f3bf8e589b75a714a4202ff7a5e2445a161586a1bbeb17b6352e0cbd95c"
+  },
+  "checks": {
+    "format_check": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.032516255",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2021",
+        "--config",
+        "skip_children=true",
+        "--check",
+        "crates/northstar-test-harness/src/controlled_admission/input.rs",
+        "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+        "crates/northstar-test-harness/src/controlled_admission/stage1.rs"
+      ]
+    },
+    "compile": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "2.267691954",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 308,
+      "log_sha256": "2ae6a66831a182b1455aabf52a639c41882bdc4bb6e004259788e53498381141",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--offline",
+        "-p",
+        "northstar-test-harness",
+        "--all-targets"
+      ]
+    },
+    "clippy": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "3.204175101",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 308,
+      "log_sha256": "969cbfce5b1df1229c8f92d0f35706ede2d54b9e2a0bde522dc627f9b2db9472",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "northstar-test-harness",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    "inventory_harness": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "2.657699498",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 3904,
+      "log_sha256": "002a4ccaa0e1bc6237838ebfaa8696d156bd698721561a1d4a389f925a13c6f5",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "northstar-test-harness",
+        "--lib",
+        "--",
+        "--list"
+      ]
+    }
+  },
+  "parser_tests": {
+    "inventory_count": 38,
+    "selected": 7,
+    "ran": 7,
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "names": [
+      "controlled_admission::tests::parser_rejects_complete_positional_root",
+      "controlled_admission::tests::parser_rejects_positional_nested_records",
+      "controlled_admission::tests::parser_rejects_positional_stage1_bridge_records_after_digest_check",
+      "controlled_admission::tests::parser_rejects_array_hidden_uuid_aliases",
+      "controlled_admission::tests::parser_preserves_object_roundtrip_and_canonical_material",
+      "controlled_admission::tests::parser_rejects_unknown_fields_and_duplicate_nested_maps",
+      "controlled_admission::tests::parser_requires_explicit_null_fields_in_every_saved_request"
+    ],
+    "log_sha256_by_name": {
+      "controlled_admission::tests::parser_rejects_complete_positional_root": "eacc67c09f139f822a6fd951edf8141daaa5590fc5cb32d9ff27635bf169e2ba",
+      "controlled_admission::tests::parser_rejects_positional_nested_records": "45bacb9a738e6f686429ce26adc7fde0c895822d6f0ebded72b5a635a44763ff",
+      "controlled_admission::tests::parser_rejects_positional_stage1_bridge_records_after_digest_check": "33afca031f1b3c57957820b93367a74c7bb47b31fdf87d0f1fc1268d30066749",
+      "controlled_admission::tests::parser_rejects_array_hidden_uuid_aliases": "120cb444cfaca13a5700978807af4555ff8b31f227159a89a2c7689677c54730",
+      "controlled_admission::tests::parser_preserves_object_roundtrip_and_canonical_material": "cade2312fa868bf2d8786c17dd1276c5f1f46c6f5add8f4e1e2db40a8d9d7a5d",
+      "controlled_admission::tests::parser_rejects_unknown_fields_and_duplicate_nested_maps": "3771e0fbe3dc7f31fc40cd5847c49cd7332fa8ae8808eb7a2efb509260577b4a",
+      "controlled_admission::tests::parser_requires_explicit_null_fields_in_every_saved_request": "6d83c287974324fdb5ae63a5c3ff8c430702043252508b95f1b4aae90c795860"
+    },
+    "all_exit_zero": true,
+    "all_sources_unchanged": true,
+    "per_command_timeout_seconds": 600,
+    "kill_after_seconds": 5,
+    "per_log_limit_bytes": 4194304
+  },
+  "correction": "All 15 named input records and six Stage1 bridge records require JSON objects. The existing duplicate-key, unknown-field, explicit required-null, canonical UUID/material, bridge digest and domain validation remain in force. Positional arrays can no longer hide a noncanonical UUID alias from the raw object-key check.",
+  "compatibility": "Object-form controls and serialization roundtrip are checked. Stage1 array negatives recompute their valid outer digest, so rejection reaches the record-shape boundary.",
+  "limitations": [
+    "The previously accepted fixed82 record/replay evidence remains bound to its original exact sources, inputs and binary. It did not cover these positional-record and array-hidden UUID forms; it is not a general strict-input proof.",
+    "No82-case record/replay, oracle execution, SQL, network, service or process-fault workload was run in this parser batch.",
+    "Concurrent Stage3 WIP corrections are outside the targeted harness dependency sources and this checkpoint. Full Stage3 and later adapter qualification remain open.",
+    "The exact base CI failed on separate Stage3 test-target field access and source-gate issues; these seven parser results do not assert that whole-workspace CI passed."
+  ]
+}

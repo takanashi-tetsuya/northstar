@@ -12,158 +12,214 @@ pub const MODEL: &str = "admission-controlled-v1";
 pub const MAX_INPUT: usize = 32 * 1024 * 1024;
 pub const MAX_TIME: i64 = 9_000_000_000_000_000;
 
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Envelope {
-    pub schema: String,
-    pub model: String,
-    pub adapter: String,
-    pub binding_version: String,
-    pub scenario_id: String,
-    pub scope: String,
-    pub initial: Initial,
-    pub bindings: Bindings,
-    pub commands: Vec<Command>,
-    pub budgets: Budgets,
-    #[serde(deserialize_with = "required_option")]
-    pub stage1: Option<Stage1>,
+// Derived named structs also accept positional sequences. Keep each concrete
+// input record map-only while the private derive retains exact fields and
+// required_option handling. Serialization still uses the public named record.
+macro_rules! object_input {
+    (
+        $(#[$meta:meta])*
+        $visibility:vis struct $name:ident {
+            $($(#[$field_meta:meta])* $field_visibility:vis $field:ident: $kind:ty),* $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        $visibility struct $name {
+            $($field_visibility $field: $kind),*
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields {
+                    $($(#[$field_meta])* $field: $kind),*
+                }
+                struct ObjectVisitor;
+                impl<'de> serde::de::Visitor<'de> for ObjectVisitor {
+                    type Value = $name;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str(concat!("a named ", stringify!($name), " object"))
+                    }
+                    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                        let fields = <Fields as serde::Deserialize>::deserialize(
+                            serde::de::value::MapAccessDeserializer::new(map),
+                        )?;
+                        Ok($name { $($field: fields.$field),* })
+                    }
+                }
+                deserializer.deserialize_map(ObjectVisitor)
+            }
+        }
+    };
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Initial {
-    pub rows: Vec<Row>,
-    pub actor_sequences: BTreeMap<String, u64>,
-    pub proofs: Vec<Uuid>,
+pub(super) use object_input;
+
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Envelope {
+        pub schema: String,
+        pub model: String,
+        pub adapter: String,
+        pub binding_version: String,
+        pub scenario_id: String,
+        pub scope: String,
+        pub initial: Initial,
+        pub bindings: Bindings,
+        pub commands: Vec<Command>,
+        pub budgets: Budgets,
+        #[serde(deserialize_with = "required_option")]
+        pub stage1: Option<Stage1>,
+    }
 }
-#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Row {
-    pub actor: String,
-    pub key: String,
-    pub payload_tag: String,
-    pub state: String,
-    pub expires_at_us: i64,
-    pub lease: String,
-    pub lease_until_us: i64,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Initial {
+        pub rows: Vec<Row>,
+        pub actor_sequences: BTreeMap<String, u64>,
+        pub proofs: Vec<Uuid>,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Bindings {
-    pub actors: Vec<UuidBinding>,
-    pub keys: Vec<KeyBinding>,
-    pub payloads: Vec<HexBinding>,
-    pub leases: Vec<UuidBinding>,
+object_input! {
+    #[derive(Clone, PartialEq, Eq, Serialize)]
+    pub struct Row {
+        pub actor: String,
+        pub key: String,
+        pub payload_tag: String,
+        pub state: String,
+        pub expires_at_us: i64,
+        pub lease: String,
+        pub lease_until_us: i64,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct UuidBinding {
-    pub label: String,
-    pub uuid: Uuid,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Bindings {
+        pub actors: Vec<UuidBinding>,
+        pub keys: Vec<KeyBinding>,
+        pub payloads: Vec<HexBinding>,
+        pub leases: Vec<UuidBinding>,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct KeyBinding {
-    pub label: String,
-    pub key_id: String,
-    pub hex: String,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct UuidBinding {
+        pub label: String,
+        pub uuid: Uuid,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct HexBinding {
-    pub label: String,
-    pub hex: String,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct KeyBinding {
+        pub label: String,
+        pub key_id: String,
+        pub hex: String,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Command {
-    pub operation_id: String,
-    pub operation_uuid: Uuid,
-    pub effect_number: u64,
-    pub effect_id: String,
-    #[serde(deserialize_with = "required_option")]
-    pub causal_id: Option<String>,
-    pub attempt: u32,
-    pub generation: u64,
-    pub action: String,
-    pub kind: String,
-    pub actor: String,
-    pub key: String,
-    pub payload_tag: String,
-    pub lease: String,
-    pub candidates: Vec<String>,
-    pub times: Times,
-    pub guard: Guard,
-    pub schedule: Schedule,
-    #[serde(deserialize_with = "required_option")]
-    pub reconcile_of: Option<String>,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct HexBinding {
+        pub label: String,
+        pub hex: String,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Times {
-    pub admission_us: i64,
-    pub actor_policy_us: i64,
-    pub finalize_us: i64,
-    pub reconcile_us: i64,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Command {
+        pub operation_id: String,
+        pub operation_uuid: Uuid,
+        pub effect_number: u64,
+        pub effect_id: String,
+        #[serde(deserialize_with = "required_option")]
+        pub causal_id: Option<String>,
+        pub attempt: u32,
+        pub generation: u64,
+        pub action: String,
+        pub kind: String,
+        pub actor: String,
+        pub key: String,
+        pub payload_tag: String,
+        pub lease: String,
+        pub candidates: Vec<String>,
+        pub times: Times,
+        pub guard: Guard,
+        pub schedule: Schedule,
+        #[serde(deserialize_with = "required_option")]
+        pub reconcile_of: Option<String>,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Guard {
-    pub account_bare: String,
-    pub normalized_target: String,
-    #[serde(deserialize_with = "required_option")]
-    pub origin_id: Option<String>,
-    pub normalized_payload: String,
-    pub pow_intent_payload: String,
-    pub subject: String,
-    pub actors: Vec<String>,
-    #[serde(deserialize_with = "required_option")]
-    pub proof: Option<Proof>,
-    pub allowed: bool,
-    pub actor_sequence_delta: u64,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Times {
+        pub admission_us: i64,
+        pub actor_policy_us: i64,
+        pub finalize_us: i64,
+        pub reconcile_us: i64,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Proof {
-    pub challenge_id: Uuid,
-    pub nonce: String,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Guard {
+        pub account_bare: String,
+        pub normalized_target: String,
+        #[serde(deserialize_with = "required_option")]
+        pub origin_id: Option<String>,
+        pub normalized_payload: String,
+        pub pow_intent_payload: String,
+        pub subject: String,
+        pub actors: Vec<String>,
+        #[serde(deserialize_with = "required_option")]
+        pub proof: Option<Proof>,
+        pub allowed: bool,
+        pub actor_sequence_delta: u64,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Schedule {
-    pub cut: String,
-    pub world_commit: bool,
-    pub cleanup: String,
-    pub locked_keys: Vec<String>,
-    pub completions: Vec<CompletionInput>,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Proof {
+        pub challenge_id: Uuid,
+        pub nonce: String,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompletionInput {
-    pub operation_uuid: Uuid,
-    pub effect_number: u64,
-    pub generation: u64,
-    pub attempt: u32,
-    pub action: String,
-    pub actor: String,
-    pub key: String,
-    pub payload_tag: String,
-    pub lease: String,
-    pub guard: Guard,
-    #[serde(deserialize_with = "required_option")]
-    pub reconcile_of: Option<String>,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Schedule {
+        pub cut: String,
+        pub world_commit: bool,
+        pub cleanup: String,
+        pub locked_keys: Vec<String>,
+        pub completions: Vec<CompletionInput>,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Budgets {
-    pub steps: usize,
-    pub events: usize,
-    pub evidence_bytes: usize,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct CompletionInput {
+        pub operation_uuid: Uuid,
+        pub effect_number: u64,
+        pub generation: u64,
+        pub attempt: u32,
+        pub action: String,
+        pub actor: String,
+        pub key: String,
+        pub payload_tag: String,
+        pub lease: String,
+        pub guard: Guard,
+        #[serde(deserialize_with = "required_option")]
+        pub reconcile_of: Option<String>,
+    }
 }
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Stage1 {
-    pub scenario: Value,
-    pub sha256: String,
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Budgets {
+        pub steps: usize,
+        pub events: usize,
+        pub evidence_bytes: usize,
+    }
+}
+object_input! {
+    #[derive(Clone, Serialize)]
+    pub struct Stage1 {
+        pub scenario: Value,
+        pub sha256: String,
+    }
 }
 
 /// Finite error categories, never raw deserialization/authority input text.

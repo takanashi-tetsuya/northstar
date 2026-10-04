@@ -106,18 +106,39 @@ export function verifyAdmissionBoundaries(sources) {
   }
   const complete = compact(body(sources.execution, 'pub\\s+fn\\s+complete\\b'));
   const advance = complete.indexOf('self.state=ExecutionState::Finished(outcome)');
-  for (const guard of ['expected.correlation!=completion.effect.correlation',
-    'expected.command.kind()!=completion.effect.command.kind()',
-    'expected.command!=completion.effect.command', 'validate_knowledge(expected,&completion.knowledge)?',
+  for (const guard of ['validate_effect(expected,&completion.effect)?',
+    'self.observed.as_ref()!=Some(&completion.knowledge)', 'validate_knowledge(expected,&completion.knowledge)?',
     'validate_result(expected,&completion.result,&completion.knowledge)?']) {
     const index = complete.indexOf(guard);
     requireAdmission(index >= 0 && advance > index,
       `completion must validate ${guard} before consuming the outstanding effect`);
   }
+  const effect = compact(body(sources.execution, 'fn\\s+validate_effect\\b'));
+  for (const guard of ['expected.correlation!=actual.correlation',
+    'expected.command.kind()!=actual.command.kind()', 'expected.command!=actual.command']) {
+    requireAdmission(effect.includes(guard), `effect validation must retain ${guard}`);
+  }
+  const observe = compact(body(sources.execution, 'pub\\s+fn\\s+observe_witness\\b'));
+  ordered(observe, ['validate_effect(expected,witness.effect())?',
+    'validate_knowledge(expected,witness.knowledge())?',
+    '!knowledge_advances(prior,witness.knowledge())',
+    'self.observed=Some(witness.knowledge().clone())'], 'independent witness observation');
+  const knowledge = compact(body(sources.execution, 'fn\\s+knowledge_advances\\b'));
+  requireAdmission(knowledge.includes('prior==next') && knowledge.includes('prepared.matches_receipt(receipt)'),
+    'observed knowledge must be idempotent and retain the same prepared attempt');
+  const receipt = compact(body(sources.execution, 'pub\\s+fn\\s+record_receipt\\b'));
+  requireAdmission(receipt.includes('prepared.matches_receipt(&receipt)'),
+    'positive receipt must match the retained prospective fact');
+  requireAdmission(complete.includes('Knowledge::CommitCallEntered(prepared)=>{ExecutionOutcome::Unknown{prepared,cause}}'),
+    'Unknown must retain the unconfirmed prospective transaction fact');
   for (const name of ['begin_message_admission', 'accept_message_admission', 'reconcile_message_admission']) {
     const driver = compact(body(sources.service, `pub\\(crate\\)\\s+async\\s+fn\\s+${name}\\b`));
     requireAdmission(driver.includes('coordinator.complete(Completion{') && driver.includes('matchoutcome{'),
       `${name} must consume the shared coordinator result`);
+    ordered(driver, ['letobserved=witness.snapshot();', 'coordinator.observe_witness(&observed)?;',
+      'coordinator.complete(Completion{'], `${name} retained witness`);
+    requireAdmission(count(driver, 'witness.snapshot()') === 1 && driver.includes('observed.knowledge().clone()'),
+      `${name} completion must use the single independently observed snapshot`);
   }
   const begin = compact(body(sources.repository, 'pub\\(crate\\)\\s+async\\s+fn\\s+begin_message_admission\\b'));
   const beginDecision = begin.indexOf('decision::decide_begin(');
@@ -157,7 +178,7 @@ export function verifyAdmissionBoundaries(sources) {
   }
   requireAdmission(finalize.includes('TransactionScope::AdmissionFinalize'), 'finalization lost its transaction scope');
   const commit = compact(body(sources.witness, 'pub\\(crate\\)\\s+async\\s+fn\\s+commit_observed\\b'));
-  requireAdmission(commit === 'letreceipt=witness.prepare(scope,fact)?;tx.commit().await?;witness.received(receipt);Ok(())',
+  requireAdmission(commit === 'letprepared=witness.prepare(scope,fact)?;tx.commit().await?;witness.received(prepared);Ok(())',
     'COMMIT must record caller entry before its sole await and positive receipt synchronously afterward');
   const verify = compact(body(sources.verification, 'pub\\(crate\\)\\s+async\\s+fn\\s+verify\\b'));
   requireAdmission(verify.includes('ifletSome(witness)=witness{')

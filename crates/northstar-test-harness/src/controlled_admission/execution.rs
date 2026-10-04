@@ -625,7 +625,11 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         let mut committed = false;
         if let Some(scope) = transaction.scope {
             witness
-                .enter_commit(scope)
+                .enter_commit(core::PreparedCommit {
+                    correlation: emitted.correlation,
+                    scope,
+                    fact: transaction.fact.clone().expect("scope has fact"),
+                })
                 .map_err(|_| InputError::Schedule)?;
             if c.schedule.world_commit {
                 world = transaction.staged.clone();
@@ -653,6 +657,9 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         };
         let mut rejections = Vec::new();
         let mut accepted = false;
+        coordinator
+            .observe_witness(&witness)
+            .map_err(|_| InputError::Schedule)?;
         for (completion_index, saved) in c.schedule.completions.iter().enumerate() {
             let old = coordinator.clone();
             let known = witness.clone();

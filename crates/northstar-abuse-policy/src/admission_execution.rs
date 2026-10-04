@@ -117,6 +117,21 @@ pub enum CommitFact {
     },
     GuardOnly(GuardDecision),
 }
+/// Exact prospective transaction fact retained before the COMMIT await.
+/// This is unconfirmed knowledge, never a receipt or an admission capability.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedCommit {
+    pub correlation: Correlation,
+    pub scope: TransactionScope,
+    pub fact: CommitFact,
+}
+impl PreparedCommit {
+    fn matches_receipt(&self, receipt: &Receipt) -> bool {
+        self.correlation == receipt.correlation
+            && self.scope == receipt.scope
+            && self.fact == receipt.fact
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Receipt {
     pub correlation: Correlation,
@@ -127,7 +142,7 @@ pub struct Receipt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Knowledge {
     NoCommitRequested,
-    CommitCallEntered(TransactionScope),
+    CommitCallEntered(PreparedCommit),
     ReceiptKnown(Receipt),
 }
 
@@ -150,22 +165,23 @@ impl CommitWitness {
     pub fn effect(&self) -> &Effect {
         &self.effect
     }
-    pub fn enter_commit(&mut self, scope: TransactionScope) -> Result<(), CompletionRejected> {
-        if self.knowledge != Knowledge::NoCommitRequested
-            || !scope_matches(self.effect.command.kind(), scope)
-        {
+    pub fn enter_commit(&mut self, prepared: PreparedCommit) -> Result<(), CompletionRejected> {
+        if prepared.correlation != self.effect.correlation {
+            return Err(CompletionRejected::Correlation);
+        }
+        if self.knowledge != Knowledge::NoCommitRequested {
             return Err(CompletionRejected::Knowledge);
         }
-        self.knowledge = Knowledge::CommitCallEntered(scope);
+        let knowledge = Knowledge::CommitCallEntered(prepared);
+        validate_knowledge(&self.effect, &knowledge)?;
+        self.knowledge = knowledge;
         Ok(())
     }
     pub fn record_receipt(&mut self, receipt: Receipt) -> Result<(), CompletionRejected> {
         if receipt.correlation != self.effect.correlation {
             return Err(CompletionRejected::Correlation);
         }
-        if self.knowledge != Knowledge::CommitCallEntered(receipt.scope)
-            || !fact_matches_scope(&receipt.fact, receipt.scope)
-            || !fact_matches_command(&receipt.fact, &self.effect.command)
+        if !matches!(&self.knowledge, Knowledge::CommitCallEntered(prepared) if prepared.matches_receipt(&receipt))
         {
             return Err(CompletionRejected::Knowledge);
         }
@@ -212,7 +228,7 @@ pub enum ExecutionOutcome {
     },
     PreCommitFailure(FailureKind),
     Unknown {
-        scope: TransactionScope,
+        prepared: PreparedCommit,
         cause: FailureKind,
     },
     /// The repository received a receipt even if its continuation was cancelled.
@@ -229,6 +245,7 @@ pub enum ExecutionState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Coordinator {
     state: ExecutionState,
+    observed: Option<Knowledge>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -252,6 +269,7 @@ impl Coordinator {
                 correlation,
                 command,
             }),
+            observed: None,
         }
     }
     pub fn state(&self) -> &ExecutionState {
@@ -263,6 +281,25 @@ impl Coordinator {
             _ => None,
         }
     }
+    /// Supply a snapshot obtained directly from the repository's retained witness,
+    /// independently of a completion. A completion cannot supply this observation.
+    /// Same-attempt observations only advance knowledge; rejected updates are inert.
+    pub fn observe_witness(&mut self, witness: &CommitWitness) -> Result<(), CompletionRejected> {
+        let ExecutionState::Waiting(expected) = &self.state else {
+            return Err(CompletionRejected::AlreadyCompleted);
+        };
+        validate_effect(expected, witness.effect())?;
+        validate_knowledge(expected, witness.knowledge())?;
+        if self
+            .observed
+            .as_ref()
+            .is_some_and(|prior| !knowledge_advances(prior, witness.knowledge()))
+        {
+            return Err(CompletionRejected::Knowledge);
+        }
+        self.observed = Some(witness.knowledge().clone());
+        Ok(())
+    }
     pub fn complete(
         &mut self,
         completion: Completion,
@@ -270,15 +307,7 @@ impl Coordinator {
         let ExecutionState::Waiting(expected) = &self.state else {
             return Err(CompletionRejected::AlreadyCompleted);
         };
-        if expected.correlation != completion.effect.correlation {
-            return Err(CompletionRejected::Correlation);
-        }
-        if expected.command.kind() != completion.effect.command.kind() {
-            return Err(CompletionRejected::Kind);
-        }
-        if expected.command != completion.effect.command {
-            return Err(CompletionRejected::Request);
-        }
+        validate_effect(expected, &completion.effect)?;
         let result_kind = match &completion.result {
             EffectResult::Begin(_) => Some(EffectKind::Begin),
             EffectResult::Finalize(_) => Some(EffectKind::Finalize),
@@ -288,11 +317,16 @@ impl Coordinator {
         if result_kind.is_some_and(|kind| kind != expected.command.kind()) {
             return Err(CompletionRejected::Kind);
         }
+        if self.observed.as_ref() != Some(&completion.knowledge) {
+            return Err(CompletionRejected::Knowledge);
+        }
         validate_knowledge(expected, &completion.knowledge)?;
         let outcome = if let EffectResult::Failed(cause) = completion.result {
             match completion.knowledge {
                 Knowledge::NoCommitRequested => ExecutionOutcome::PreCommitFailure(cause),
-                Knowledge::CommitCallEntered(scope) => ExecutionOutcome::Unknown { scope, cause },
+                Knowledge::CommitCallEntered(prepared) => {
+                    ExecutionOutcome::Unknown { prepared, cause }
+                }
                 Knowledge::ReceiptKnown(receipt) => {
                     ExecutionOutcome::ReceiptPreserved { receipt, cause }
                 }
@@ -310,6 +344,29 @@ impl Coordinator {
             _ => unreachable!(),
         }
     }
+}
+
+fn validate_effect(expected: &Effect, actual: &Effect) -> Result<(), CompletionRejected> {
+    if expected.correlation != actual.correlation {
+        return Err(CompletionRejected::Correlation);
+    }
+    if expected.command.kind() != actual.command.kind() {
+        return Err(CompletionRejected::Kind);
+    }
+    if expected.command != actual.command {
+        return Err(CompletionRejected::Request);
+    }
+    Ok(())
+}
+fn knowledge_advances(prior: &Knowledge, next: &Knowledge) -> bool {
+    prior == next
+        || match (prior, next) {
+            (Knowledge::NoCommitRequested, _) => true,
+            (Knowledge::CommitCallEntered(prepared), Knowledge::ReceiptKnown(receipt)) => {
+                prepared.matches_receipt(receipt)
+            }
+            _ => false,
+        }
 }
 
 fn scope_matches(kind: EffectKind, scope: TransactionScope) -> bool {
@@ -364,7 +421,12 @@ fn fact_matches_command(fact: &CommitFact, command: &Command) -> bool {
 fn validate_knowledge(effect: &Effect, knowledge: &Knowledge) -> Result<(), CompletionRejected> {
     let valid = match knowledge {
         Knowledge::NoCommitRequested => true,
-        Knowledge::CommitCallEntered(scope) => scope_matches(effect.command.kind(), *scope),
+        Knowledge::CommitCallEntered(prepared) => {
+            prepared.correlation == effect.correlation
+                && scope_matches(effect.command.kind(), prepared.scope)
+                && fact_matches_scope(&prepared.fact, prepared.scope)
+                && fact_matches_command(&prepared.fact, &effect.command)
+        }
         Knowledge::ReceiptKnown(receipt) => {
             receipt.correlation == effect.correlation
                 && scope_matches(effect.command.kind(), receipt.scope)
@@ -447,7 +509,7 @@ fn validate_result(
 mod tests {
     use super::*;
     fn begin() -> Coordinator {
-        Coordinator::new(
+        let mut coordinator = Coordinator::new(
             Correlation {
                 operation: Uuid::from_u128(1),
                 effect: 2,
@@ -468,7 +530,31 @@ mod tests {
                     nonce: "nonce-private".into(),
                 }),
             }),
-        )
+        );
+        let witness = CommitWitness::new(coordinator.pending().unwrap().clone());
+        coordinator.observe_witness(&witness).unwrap();
+        coordinator
+    }
+    fn fence() -> AdmissionFence {
+        AdmissionFence {
+            admission_key: vec![1; 32],
+            payload_mac: vec![2; 32],
+            lease_token: Uuid::from_u128(3),
+        }
+    }
+    fn prepared(effect: &Effect, scope: TransactionScope, fact: CommitFact) -> PreparedCommit {
+        PreparedCommit {
+            correlation: effect.correlation,
+            scope,
+            fact,
+        }
+    }
+    fn receipt(prepared: &PreparedCommit) -> Receipt {
+        Receipt {
+            correlation: prepared.correlation,
+            scope: prepared.scope,
+            fact: prepared.fact.clone(),
+        }
     }
     fn allowed(c: &Coordinator) -> Completion {
         Completion {
@@ -540,17 +626,26 @@ mod tests {
         ] {
             let mut c = begin();
             let effect = c.pending().unwrap().clone();
+            let fact = if scope == TransactionScope::GuardOnlyVerification {
+                CommitFact::GuardOnly(GuardDecision::Allowed)
+            } else {
+                CommitFact::Reserved(fence())
+            };
+            let prepared = prepared(&effect, scope, fact);
+            let mut witness = CommitWitness::new(effect.clone());
+            witness.enter_commit(prepared.clone()).unwrap();
+            c.observe_witness(&witness).unwrap();
             let outcome = c
                 .complete(Completion {
                     effect,
                     result: EffectResult::Failed(FailureKind::Cancelled),
-                    knowledge: Knowledge::CommitCallEntered(scope),
+                    knowledge: witness.knowledge().clone(),
                 })
                 .unwrap();
             assert_eq!(
                 outcome,
                 &ExecutionOutcome::Unknown {
-                    scope,
+                    prepared,
                     cause: FailureKind::Cancelled
                 }
             );
@@ -573,13 +668,15 @@ mod tests {
         let effect = c.pending().unwrap().clone();
         let mut witness = CommitWitness::new(effect.clone());
         let scope = TransactionScope::GuardOnlyVerification;
-        witness.enter_commit(scope).unwrap();
-        let receipt = Receipt {
-            correlation: effect.correlation,
+        let prepared = prepared(
+            &effect,
             scope,
-            fact: CommitFact::GuardOnly(GuardDecision::Allowed),
-        };
+            CommitFact::GuardOnly(GuardDecision::Allowed),
+        );
+        witness.enter_commit(prepared.clone()).unwrap();
+        let receipt = receipt(&prepared);
         witness.record_receipt(receipt.clone()).unwrap();
+        c.observe_witness(&witness).unwrap();
         let mut stale = Completion {
             effect: effect.clone(),
             result: EffectResult::Failed(FailureKind::Cancelled),
@@ -604,8 +701,293 @@ mod tests {
             }
         );
         let before = witness.clone();
-        assert!(witness.enter_commit(scope).is_err());
+        assert!(witness.enter_commit(prepared).is_err());
         assert_eq!(witness, before);
+    }
+    #[test]
+    fn swapped_reservation_result_and_receipt_cannot_replace_observed_fence() {
+        for field in 0..3 {
+            let mut c = begin();
+            let effect = c.pending().unwrap().clone();
+            let prepared = prepared(
+                &effect,
+                TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+                CommitFact::Reserved(fence()),
+            );
+            let mut witness = CommitWitness::new(effect.clone());
+            witness.enter_commit(prepared.clone()).unwrap();
+            witness.record_receipt(receipt(&prepared)).unwrap();
+            c.observe_witness(&witness).unwrap();
+            let before = c.clone();
+            let mut swapped_fence = fence();
+            match field {
+                0 => swapped_fence.admission_key[0] ^= 1,
+                1 => swapped_fence.payload_mac[0] ^= 1,
+                2 => swapped_fence.lease_token = Uuid::from_u128(9),
+                _ => unreachable!(),
+            }
+            let mut swapped_receipt = receipt(&prepared);
+            swapped_receipt.fact = CommitFact::Reserved(swapped_fence.clone());
+            assert_eq!(
+                c.complete(Completion {
+                    effect: effect.clone(),
+                    result: EffectResult::Begin(BeginResult::Reserved(swapped_fence)),
+                    knowledge: Knowledge::ReceiptKnown(swapped_receipt),
+                }),
+                Err(CompletionRejected::Knowledge)
+            );
+            assert_eq!(c, before);
+            c.complete(Completion {
+                effect,
+                result: EffectResult::Begin(BeginResult::Reserved(fence())),
+                knowledge: witness.knowledge().clone(),
+            })
+            .unwrap();
+        }
+    }
+    #[test]
+    fn completion_neither_supplies_a_witness_nor_upgrades_observed_preparation() {
+        let observed = begin();
+        let effect = observed.pending().unwrap().clone();
+        let mut c = Coordinator::new(effect.correlation, effect.command.clone());
+        let before = c.clone();
+        let completion = allowed(&c);
+        assert_eq!(c.complete(completion), Err(CompletionRejected::Knowledge));
+        assert_eq!(c, before);
+
+        let prepared = prepared(
+            &effect,
+            TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+            CommitFact::Reserved(fence()),
+        );
+        let mut witness = CommitWitness::new(effect.clone());
+        witness.enter_commit(prepared.clone()).unwrap();
+        c.observe_witness(&witness).unwrap();
+        let entered = witness.knowledge().clone();
+        let before = c.clone();
+        let completion = Completion {
+            effect: effect.clone(),
+            result: EffectResult::Begin(BeginResult::Reserved(fence())),
+            knowledge: Knowledge::ReceiptKnown(receipt(&prepared)),
+        };
+        assert_eq!(
+            c.complete(completion.clone()),
+            Err(CompletionRejected::Knowledge)
+        );
+        assert_eq!(c, before);
+        witness.record_receipt(receipt(&prepared)).unwrap();
+        c.observe_witness(&witness).unwrap();
+        let before = c.clone();
+        assert_eq!(
+            c.complete(Completion {
+                effect,
+                result: EffectResult::Failed(FailureKind::Cancelled),
+                knowledge: entered,
+            }),
+            Err(CompletionRejected::Knowledge)
+        );
+        assert_eq!(c, before);
+        c.complete(completion).unwrap();
+    }
+    #[test]
+    fn observation_checks_full_effect_before_changing_retained_knowledge() {
+        for field in 0..15 {
+            let mut c = begin();
+            let before = c.clone();
+            let mut effect = c.pending().unwrap().clone();
+            match field {
+                0 => effect.correlation.operation = Uuid::nil(),
+                1 => effect.correlation.effect += 1,
+                2 => effect.correlation.generation += 1,
+                3 => effect.correlation.attempt += 1,
+                4 => effect.command = Command::Finalize(fence()),
+                _ => {
+                    let Command::Begin(request) = &mut effect.command else {
+                        unreachable!()
+                    };
+                    match field {
+                        5 => request.actor_id = Uuid::nil(),
+                        6 => request.account_bare.push('x'),
+                        7 => request.normalized_target.push('x'),
+                        8 => request.origin_id = None,
+                        9 => request.normalized_payload.push('x'),
+                        10 => request.pow_intent_payload.push('x'),
+                        11 => request.subject.push('x'),
+                        12 => request.actors.push("different".into()),
+                        13 => request.proof.as_mut().unwrap().challenge_id = Uuid::nil(),
+                        14 => request.proof.as_mut().unwrap().nonce.push('x'),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            let expected_error = match field {
+                0..=3 => CompletionRejected::Correlation,
+                4 => CompletionRejected::Kind,
+                _ => CompletionRejected::Request,
+            };
+            assert_eq!(
+                c.observe_witness(&CommitWitness::new(effect)),
+                Err(expected_error)
+            );
+            assert_eq!(c, before);
+            let valid = allowed(&c);
+            c.complete(valid).unwrap();
+        }
+    }
+    #[test]
+    fn observation_is_monotone_and_identical_repeats_are_idempotent() {
+        let mut c = begin();
+        let effect = c.pending().unwrap().clone();
+        let empty = CommitWitness::new(effect.clone());
+        let before = c.clone();
+        c.observe_witness(&empty).unwrap();
+        assert_eq!(c, before);
+        let prepared = prepared(
+            &effect,
+            TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+            CommitFact::Reserved(fence()),
+        );
+        let mut witness = empty.clone();
+        witness.enter_commit(prepared.clone()).unwrap();
+        c.observe_witness(&witness).unwrap();
+        let before = c.clone();
+        c.observe_witness(&witness).unwrap();
+        assert_eq!(c, before);
+        assert_eq!(
+            c.observe_witness(&empty),
+            Err(CompletionRejected::Knowledge)
+        );
+        assert_eq!(c, before);
+
+        for field in 0..5 {
+            let mut changed = prepared.clone();
+            match field {
+                0 => changed.scope = TransactionScope::RatedBegin(BeginCommitPurpose::Reclaim),
+                1 => {
+                    changed.scope = TransactionScope::GuardOnlyVerification;
+                    changed.fact = CommitFact::GuardOnly(GuardDecision::Allowed);
+                }
+                _ => {
+                    let CommitFact::Reserved(fence) = &mut changed.fact else {
+                        unreachable!()
+                    };
+                    match field {
+                        2 => fence.admission_key[0] ^= 1,
+                        3 => fence.payload_mac[0] ^= 1,
+                        4 => fence.lease_token = Uuid::from_u128(9),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            let mut replacement = empty.clone();
+            replacement.enter_commit(changed.clone()).unwrap();
+            assert_eq!(
+                c.observe_witness(&replacement),
+                Err(CompletionRejected::Knowledge)
+            );
+            assert_eq!(c, before);
+            replacement.record_receipt(receipt(&changed)).unwrap();
+            assert_eq!(
+                c.observe_witness(&replacement),
+                Err(CompletionRejected::Knowledge)
+            );
+            assert_eq!(c, before);
+        }
+        let entered = witness.clone();
+        witness.record_receipt(receipt(&prepared)).unwrap();
+        c.observe_witness(&witness).unwrap();
+        let before = c.clone();
+        c.observe_witness(&witness).unwrap();
+        assert_eq!(c, before);
+        for downgrade in [&empty, &entered] {
+            assert_eq!(
+                c.observe_witness(downgrade),
+                Err(CompletionRejected::Knowledge)
+            );
+            assert_eq!(c, before);
+        }
+        c.complete(Completion {
+            effect,
+            result: EffectResult::Failed(FailureKind::Cancelled),
+            knowledge: witness.knowledge().clone(),
+        })
+        .unwrap();
+    }
+    #[test]
+    fn witness_rejects_a_receipt_that_changes_the_prepared_fact() {
+        let c = begin();
+        let effect = c.pending().unwrap().clone();
+        let prepared = prepared(
+            &effect,
+            TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+            CommitFact::Reserved(fence()),
+        );
+        let mut witness = CommitWitness::new(effect);
+        witness.enter_commit(prepared.clone()).unwrap();
+        let before = witness.clone();
+        for field in 0..6 {
+            let mut changed = receipt(&prepared);
+            match field {
+                0 => changed.correlation.attempt += 1,
+                1 => changed.scope = TransactionScope::RatedBegin(BeginCommitPurpose::Reclaim),
+                2 => changed.fact = CommitFact::Denied,
+                _ => {
+                    let CommitFact::Reserved(fence) = &mut changed.fact else {
+                        unreachable!()
+                    };
+                    match field {
+                        3 => fence.admission_key[0] ^= 1,
+                        4 => fence.payload_mac[0] ^= 1,
+                        5 => fence.lease_token = Uuid::from_u128(9),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            assert!(witness.record_receipt(changed).is_err());
+            assert_eq!(witness, before);
+        }
+        witness.record_receipt(receipt(&prepared)).unwrap();
+    }
+    #[test]
+    fn already_accepted_observation_binds_request_fence_without_stored_token_equality() {
+        use crate::admission_transaction::{decide_finalize, AdmissionRow, RowState};
+        let request_fence = fence();
+        let now = chrono::DateTime::from_timestamp(1, 0).unwrap();
+        let accepted = AdmissionRow {
+            admission_key: request_fence.admission_key.clone(),
+            key_id: "key".into(),
+            actor_id: Uuid::from_u128(100),
+            payload_mac: request_fence.payload_mac.clone(),
+            state: RowState::Accepted,
+            lease_token: Uuid::from_u128(999),
+            lease_expires_at: now,
+            expires_at: now,
+        };
+        let result = decide_finalize(Some(&accepted), &request_fence);
+        assert_eq!(result, FinalizeDecision::AlreadyAccepted);
+        let mut c = Coordinator::new(
+            begin().pending().unwrap().correlation,
+            Command::Finalize(request_fence.clone()),
+        );
+        let effect = c.pending().unwrap().clone();
+        let prepared = prepared(
+            &effect,
+            TransactionScope::AdmissionFinalize,
+            CommitFact::Finalized {
+                fence: request_fence,
+                result: FinalizeSuccess::AlreadyAccepted,
+            },
+        );
+        let mut witness = CommitWitness::new(effect.clone());
+        witness.enter_commit(prepared.clone()).unwrap();
+        witness.record_receipt(receipt(&prepared)).unwrap();
+        c.observe_witness(&witness).unwrap();
+        c.complete(Completion {
+            effect,
+            result: EffectResult::Finalize(result),
+            knowledge: witness.knowledge().clone(),
+        })
+        .unwrap();
     }
     #[test]
     fn fake_success_without_receipt_is_rejected_and_memory_denial_needs_none() {

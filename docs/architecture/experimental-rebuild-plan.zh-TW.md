@@ -192,3 +192,26 @@ Stage 2 另保存明確未驗收的 source WIP checkpoint：`stage2-wip-20261003
 它保留五項已知 review blocker，供工作區遺失時恢復與定位；不代表 Stage 2 tests 或退出通過。
 修正 prospective authority、completion expected fence、actual coordinator projection、多個未决
 operation 的 caller uncertainty，以及 shrink exact-target reader 後，仍須重新凍結來源與驗證。
+
+## 2026-10-04 窄修正進度，Stage 2 仍未驗收
+
+`d65a7b06` 修正 controlled input parser 的 misplaced duplicate block；`7ab258b9` 將只供測試
+使用的舊 admission wrapper/imports 限定為 `cfg(test)`。後者已通過普通 normal/test target clippy，
+未在本地執行測試。`d65a7b06` 的 CI 為 29 success／2 failure／2 skip，failure 是上述 clippy
+及匯總；該次 DR 成功不證明更早 missing-TSV 的根因。歷史 failure 紀錄保持原樣。
+
+目前另外實作兩項已知 source 修正：`PreparedCommit` 在 COMMIT await 前保留 exact prospective
+correlation／scope／fact，Unknown 也保留它；它仍是未確認事實，不是成功 receipt 或 admission
+capability。Coordinator 先獨立觀察正式 repository witness 的單一 snapshot，核對完整 immutable
+Effect 與同 attempt 單調性，再要求 completion knowledge 與該觀察完全一致。Repository／guard
+仍是準備 fence 的權威，pure coordinator 不自行推导 Begin 的密碼學 fence。
+
+這一增量未改 SQL、鎖、capacity／TTL、policy 或 entropy。AlreadyAccepted 的既有 token 例外
+仍保留。已新增 regression source 並完成普通 Rust normal/test target 編譯、格式與 JS 語法檢查；
+本地未執行新增測試、source-gate tests、舊 standalone probe、saved corpus、SQL 或 fault。
+精確來源與檢查界線見 [窄修正紀錄](../evidence/experimental-rebuild/stage2-prepared-witness-correction.json)。
+
+尚待修正的三項 Stage 2 blocker 是 actual coordinator outcome projection、多個 Unknown 的 caller
+knowledge、shrink reader 的 exact target preservation；actor-policy clock 與 reconcile SQL as-of
+仍有資格缺口。Stage 3 的 outer cancellation owner、durable commit／route／write／ACK，以及
+Stage 5 真 SQL/wire 都尚未完成。這些 source 修正或普通 CI green 都不構成 Stage 2 退出通過。

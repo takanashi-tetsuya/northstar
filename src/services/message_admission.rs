@@ -136,7 +136,9 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         let (mut coordinator, witness) = operation(begin_command(request)?);
         let effect = coordinator.pending().expect("new begin").clone();
         let result = self.repository.begin(request, &witness).await;
-        let knowledge = witness.knowledge();
+        let observed = witness.snapshot();
+        coordinator.observe_witness(&observed)?;
+        let knowledge = observed.knowledge().clone();
         let completion_result = match &result {
             Ok(value) => EffectResult::Begin(begin_result(value, &knowledge)),
             Err(error) => EffectResult::Failed(failure(error)),
@@ -166,6 +168,8 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
             operation(Command::Finalize(acceptance_fence(&acceptance)));
         let effect = coordinator.pending().expect("new finalize").clone();
         let result = self.repository.accept(&acceptance, &witness).await;
+        let observed = witness.snapshot();
+        coordinator.observe_witness(&observed)?;
         let completion_result = match &result {
             Ok(decision) => EffectResult::Finalize(*decision),
             Err(error) => EffectResult::Failed(failure(error)),
@@ -174,7 +178,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
             .complete(Completion {
                 effect,
                 result: completion_result,
-                knowledge: witness.knowledge(),
+                knowledge: observed.knowledge().clone(),
             })?
             .clone();
         match outcome {
@@ -196,12 +200,14 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         unresolved: Correlation,
         fence: AdmissionFence,
     ) -> Result<ReconcileObservation> {
-        let (mut coordinator, _) = operation(Command::Reconcile {
+        let (mut coordinator, witness) = operation(Command::Reconcile {
             unresolved,
             fence: fence.clone(),
         });
         let effect = coordinator.pending().expect("new reconcile").clone();
         let result = self.repository.reconcile(&fence).await;
+        let observed = witness.snapshot();
+        coordinator.observe_witness(&observed)?;
         let completion_result = match &result {
             Ok(observation) => EffectResult::Reconcile(*observation),
             Err(error) => EffectResult::Failed(failure(error)),
@@ -210,7 +216,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
             .complete(Completion {
                 effect,
                 result: completion_result,
-                knowledge: Knowledge::NoCommitRequested,
+                knowledge: observed.knowledge().clone(),
             })?
             .clone();
         match outcome {
@@ -278,11 +284,11 @@ mod tests {
                     requirement: requirement(),
                 }),
                 Mode::GuardReceipt => {
-                    let receipt = witness.prepare(
+                    let prepared = witness.prepare(
                         TransactionScope::GuardOnlyVerification,
                         CommitFact::GuardOnly(GuardDecision::Allowed),
                     )?;
-                    witness.received(receipt);
+                    witness.received(prepared);
                     Ok(MessageAdmissionStart::Proceed {
                         lease: None,
                         requirement: requirement(),
@@ -291,11 +297,11 @@ mod tests {
                 Mode::ReservedReceipt | Mode::MissingReceipt => {
                     let lease = lease();
                     if matches!(self.0, Mode::ReservedReceipt) {
-                        let receipt = witness.prepare(
+                        let prepared = witness.prepare(
                             TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
                             CommitFact::Reserved(acceptance_fence(&lease.acceptance())),
                         )?;
-                        witness.received(receipt);
+                        witness.received(prepared);
                     }
                     Ok(MessageAdmissionStart::Proceed {
                         lease: Some(lease),
@@ -318,14 +324,14 @@ mod tests {
             acceptance: &MessageAdmissionAcceptance<'_>,
             witness: &AdmissionWitness,
         ) -> Result<FinalizeDecision> {
-            let receipt = witness.prepare(
+            let prepared = witness.prepare(
                 TransactionScope::AdmissionFinalize,
                 CommitFact::Finalized {
                     fence: acceptance_fence(acceptance),
                     result: FinalizeSuccess::AlreadyAccepted,
                 },
             )?;
-            witness.received(receipt);
+            witness.received(prepared);
             Ok(FinalizeDecision::AlreadyAccepted)
         }
         async fn reconcile(&self, _: &AdmissionFence) -> Result<ReconcileObservation> {
@@ -383,6 +389,12 @@ mod tests {
             .unwrap_err();
         assert!(unknown.to_string().contains("Unknown"));
         assert!(!format!("{unknown:?}").contains("forbidden-private"));
+        let error = unknown.downcast_ref::<AdmissionExecutionError>().unwrap();
+        assert!(matches!(
+            &error.outcome,
+            ExecutionOutcome::Unknown { prepared, .. }
+                if prepared.fact == CommitFact::Reserved(acceptance_fence(&lease().acceptance()))
+        ));
         assert!(MessageAdmissionService::new(Repository(Mode::Memory))
             .accept_message_admission(&lease())
             .await

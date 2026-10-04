@@ -1,0 +1,158 @@
+{
+  "schema": "northstar-prepared-witness-source-correction-v1",
+  "status": "ImplementedAndCompiledNotStage2Accepted",
+  "base_commit": "7ab258b961bed3596516275adcafbc46c0dec8a6",
+  "base_tree": "a1c2dd2d0a82ebedcacce79c9efa403dfce0ceb8",
+  "source_delta": [
+    {
+      "path": "crates/northstar-abuse-policy/src/admission_execution.rs",
+      "before_sha256": "e37c6fa05914ab3bae4484ffcbd1a5ccfda304c663acf59e5996515f0376b622",
+      "after_sha256": "1cdbd1f3451cf83fa2df689837193cdff6a20788de85c89fcae374aa9a905c2c",
+      "bytes": 37173
+    },
+    {
+      "path": "src/services/message_admission.rs",
+      "before_sha256": "f6a5ebb218e72f42d51e3f37b4ac81217a934f91392a68dfffa4e918a822a534",
+      "after_sha256": "b97669face201933d72c4622c5140e2f0c0a5ae462c796c7d70a6f765b55df64",
+      "bytes": 15349
+    },
+    {
+      "path": "src/services/message_admission/witness.rs",
+      "before_sha256": "37b9750eb7b302f0506c66b61b9c8639c172c92dac3c5f37465872627983ae8f",
+      "after_sha256": "924963bf7d060fa30a70008db60603385b1efd42dc3fb7eb245d5ef6e261c0ea",
+      "bytes": 6168
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "before_sha256": "5b8f81b5a0d4eea3c2e9858e2b95e737a07b602a07f944aab83c41f280073325",
+      "after_sha256": "91efecddd85ce16db7dbbf4d1fdd6ed9ebea4cefd32eb71c325aafee3982c666",
+      "bytes": 33173
+    },
+    {
+      "path": "scripts/check-admission-execution.mjs",
+      "before_sha256": "4c70f5eae73aac13e7d9fa46262a3bacddbfd25d31aeab59726b5e70ab913499",
+      "after_sha256": "85466880de8268e62da0deaeaeed4b130d60daa37a0222cea8619eb11d944755",
+      "bytes": 12122
+    },
+    {
+      "path": "scripts/test-admission-execution.mjs",
+      "before_sha256": "cae8ad2f665ae704cd882fb5e618b04dc1016bec40157ba85401cd69575a1a27",
+      "after_sha256": "1d9fefc08d020ff3d712c6866db47fe85105298e4e95e37f72e553a7443e0e78",
+      "bytes": 5004
+    }
+  ],
+  "targeted_corrections": [
+    {
+      "id": "unknown-prospective-authority",
+      "implementation": "CommitCallEntered and Unknown retain typed PreparedCommit with exact correlation, transaction scope and prospective fact/fence. It is explicitly unconfirmed, never a reservation capability or successful receipt."
+    },
+    {
+      "id": "begin-expected-authority",
+      "implementation": "Coordinator first observes a separate retained repository witness snapshot after validating the complete immutable Effect. Observations are monotone within the same prepared attempt; completion knowledge must equal that independently observed snapshot before result validation and state transition."
+    }
+  ],
+  "authority_boundary": "The existing repository/guard prepares authority-bearing values. This mechanism binds completion to that trusted preparation; it does not derive or authenticate a Begin fence cryptographically inside the pure coordinator. Production Begin/Finalize/Reconcile take one actual witness snapshot and reuse it for observation and completion.",
+  "unchanged_semantics": [
+    "No SQL, schema, migration, actor lock, capacity/TTL, cryptographic entropy or admission-policy changes.",
+    "AlreadyAccepted exact key/payload finalization still precedes stored-token comparison; completion correlation retains the requested fence.",
+    "GuardOnly memory and persistent scope remain distinct. COMMIT call entry does not assert that PostgreSQL received COMMIT.",
+    "The controlled adapter changes only preparation and observation API glue. It still has the three separately documented evidence/knowledge gaps."
+  ],
+  "regression_source": [
+    "Jointly swapped reservation result and receipt key/MAC/token; valid key/MAC lengths retained",
+    "Unrelated effect/request witness observations, unobserved or stale completion knowledge",
+    "Idempotent repeat, downgrade and changed prepared scope/fact/fence with pending/observed state preservation",
+    "Prospective reservation fence retained across dropped continuation; known receipt preservation",
+    "AlreadyAccepted request-fence correlation without changing SQL stored-token semantics"
+  ],
+  "verification": {
+    "base_commit": "7ab258b961bed3596516275adcafbc46c0dec8a6",
+    "end_head": "7ab258b961bed3596516275adcafbc46c0dec8a6",
+    "source_patch_sha256": "c1b98653d54e2d817453a0ecbe6239b86ba2f230fbcee58b4ddf3d20c1b0b363",
+    "tracked_source_file_count": 1658,
+    "source_unchanged": true,
+    "changed_during_command": [],
+    "before_map_sha256": "7cbce10ae7651044170c6955d3f66a85815899527845c86ae3bb003f45dffaac",
+    "after_map_sha256": "7cbce10ae7651044170c6955d3f66a85815899527845c86ae3bb003f45dffaac",
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "crates/northstar-abuse-policy/src/admission_execution.rs",
+          "src/services/message_admission.rs",
+          "src/services/message_admission/witness.rs",
+          "crates/northstar-test-harness/src/controlled_admission/execution.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.056,
+        "log": "command-1.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "node",
+          "--check",
+          "scripts/check-admission-execution.mjs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.054,
+        "log": "command-2.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "node",
+          "--check",
+          "scripts/test-admission-execution.mjs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.048,
+        "log": "command-3.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-abuse-policy",
+          "-p",
+          "northstar-test-harness",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 126.551,
+        "log": "command-4.log",
+        "log_sha256": "587a62d29ab93e6fd83ec4399876472a61f5b1f406f384cc93e46bfe9b49661a"
+      }
+    ],
+    "scope": "Ordinary formatting, JavaScript syntax and default-feature normal/test target compilation only. No project tests, prior standalone probe, saved replay, service, SQL or fault execution."
+  },
+  "verification_limits": [
+    "Rust normal and test targets were compiled using default features; test binaries were not executed locally.",
+    "JavaScript gate and mutation-test files received syntax checks only; no gate/test execution was performed in this correction.",
+    "No old standalone probe, saved corpus, replay/shrink, SQL adapter, service, fault injection or soak was executed.",
+    "The independent review is source correctness and recorded compile evidence only; new CI results belong to their exact eventual commit."
+  ],
+  "remaining_stage2_blockers": [
+    "actual-coordinator-projection",
+    "multi-unresolved-knowledge",
+    "shrink-exact-target"
+  ],
+  "additional_open_limits": [
+    "actor_policy_us accompanies scripted guard outcomes and does not establish actor-policy time control",
+    "Reconcile observation still lacks SQL observed_at",
+    "Stage3 must retain production outer cancellation/Unknown ownership and durable-message/routing/write/ACK responsibility",
+    "Stage5 real SQL, commit-outcome and wire conformance remains open"
+  ],
+  "review": "Final independent read-only review passed on2026-10-04: exact six-file source delta,1658-file stable compile maps, actual command logs, ledger scope and copied CI terminal were verified. This is source mechanisms plus ordinary compile evidence only; regression execution and Stage2 acceptance remain pending."
+}

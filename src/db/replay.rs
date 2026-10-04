@@ -1240,13 +1240,31 @@ pub async fn acknowledge_durable_delivery(
 }
 
 /// Atomically acknowledge a complete transport boundary. Every claimed/live
-/// ownership fence is validated before any row is deleted, so failure on a
-/// later stanza cannot partially consume the prefix while the caller retains
-/// its old XEP-0198 `h` and in-memory queue.
+/// ownership fence is validated before any row is deleted; the batch commits
+/// atomically. A lost COMMIT response leaves the entire outcome unknown, and
+/// a returned error alone does not prove that the prefix was retained.
 pub async fn acknowledge_durable_deliveries(
     pool: &PgPool,
     deliveries: &[crate::outbound::DurableDelivery],
 ) -> Result<()> {
+    acknowledge_durable_deliveries_observed(pool, deliveries, None).await
+}
+
+pub(crate) async fn acknowledge_durable_deliveries_observed(
+    pool: &PgPool,
+    deliveries: &[crate::outbound::DurableDelivery],
+    observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+) -> Result<()> {
+    use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
+    if let Some(observation) = observation {
+        anyhow::ensure!(
+            deliveries.len() == 1,
+            "native ACK observation requires its one exact source"
+        );
+        observation.validate_source(crate::outbound::TransportOwnershipSource::C2s(
+            deliveries[0],
+        ))?;
+    }
     if deliveries.is_empty() {
         return Ok(());
     }
@@ -1305,6 +1323,13 @@ pub async fn acknowledge_durable_deliveries(
             }
         }
     }
+    let observed_disposition = observation.map(|_| {
+        if present[0] {
+            AckDisposition::Deleted
+        } else {
+            AckDisposition::AbsentUnclaimed
+        }
+    });
     for (delivery, present) in deliveries.iter().zip(present) {
         if !present {
             continue;
@@ -1324,7 +1349,11 @@ pub async fn acknowledge_durable_deliveries(
             "durable delivery disappeared during acknowledgement"
         );
     }
-    transaction.commit().await?;
+    if let Some((observation, disposition)) = observation.zip(observed_disposition) {
+        commit_observed(transaction.commit(), observation, disposition).await?;
+    } else {
+        transaction.commit().await?;
+    }
     tracing::debug!(
         deliveries = deliveries.len(),
         "atomically acknowledged durable C2S delivery batch"

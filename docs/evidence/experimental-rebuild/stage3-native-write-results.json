@@ -1,0 +1,376 @@
+{
+  "schema": "northstar-stage3-native-write-results-v1",
+  "status": "PassedLimitedNativeWriteAndAckKnowledgeSlice",
+  "scope": [
+    "Receiving TCP/WS callbacks create an invocation-local owner before polling their prepare/write/settle child. The same borrowed OutboundItem, stanza and receipt channels survive through that child; retirement follows child destruction, including caught panic.",
+    "The production lease supplies its bound stanza to the real writer helper. It records actual full-write/failure separately from the permission decision, then issues a private consuming written continuation. Dropping that continuation never acknowledges.",
+    "Existing TCP write_all/flush and WS cancellation priority/timeout behavior are retained. Full local write is recorded before transport notifications and ACK await; it is not peer receipt.",
+    "Native ACK requests bind the exact returned fence and operation. Actual C2S/MIX SQL commit sites retain unconfirmed COMMIT-entry and synchronous positive receipt before returning. Checked C2S deletion, allowed absent-unclaimed and MIX committed no-match are different facts.",
+    "C2S initial message-ID claims rotate, non-initial claims stay exact and returned claims are Some. MIX token inequality is not invented. Existing SM ownership suppresses native fence/ACK; no new read, retry, reconciliation consumer or deadline is added."
+  ],
+  "tested_source": {
+    "base_commit": "2ab71b8541493566468a773fb0237acad043cc7e",
+    "base_tree": "c38d748f9c05f7ce87ffec47101ebcd57735e6c1",
+    "changed_files": {
+      "crates/northstar-delivery-core/src/lib.rs": {
+        "sha256": "9beb002c54eb0f772e53050f2b8af7ec94217f2ab6153072fe81290d6f433feb",
+        "bytes": 7939
+      },
+      "crates/northstar-delivery-core/src/native_write.rs": {
+        "sha256": "39eff0c991662b65590c98daf8cbf4236b74193955af24552c622b8fc0a70fa5",
+        "bytes": 25744
+      },
+      "src/db/mix.rs": {
+        "sha256": "61814830986dfe3c1b7d3137257399b7fe107ab9e09aed985a5a9514ed89d46c",
+        "bytes": 298025
+      },
+      "src/db/mix_repository.rs": {
+        "sha256": "414c0c126d6bb7221531c39232d3854a6fd398d549b39870ebc5b502919be3eb",
+        "bytes": 68165
+      },
+      "src/db/replay.rs": {
+        "sha256": "54079eb5f397dc6d620162d63059a46fb5afaec914ca772360fb76416c11365a",
+        "bytes": 85253
+      },
+      "src/db/replay_repository.rs": {
+        "sha256": "c39b713ad2aa060f16bc57559f72d85c1253774f911e616a8674946a3a3e6acf",
+        "bytes": 9642
+      },
+      "src/services/mix.rs": {
+        "sha256": "62e043e0b6e9a90acdf25b79f90e4a99496fe1f1f7782ae8bb6841eda574e136",
+        "bytes": 121755
+      },
+      "src/services/replay.rs": {
+        "sha256": "5668ba8acd282a4bb8757fba15f75240a11b26e398809e13c82fe40d7d88e38a",
+        "bytes": 17247
+      },
+      "src/xmpp/direct_delivery.rs": {
+        "sha256": "a5f43f54332aa76f8baa0fbfcb6d0f9528b82495d4cf945f90a62e4b53433385",
+        "bytes": 39473
+      },
+      "src/xmpp/mod.rs": {
+        "sha256": "fde7b0537c09abf0818c1f17f29d2693bdfbc425fe8a8d02052858d547d3ba98",
+        "bytes": 61307
+      },
+      "src/xmpp/protocol.rs": {
+        "sha256": "4840b91ea7c1cc25baa17bfc2a4ac5fdc72432191ca8f8d58632fce50f9afde0",
+        "bytes": 111481
+      },
+      "scripts/check-architecture-boundaries.mjs": {
+        "sha256": "1d772a1b85118ac3d5f6f952adc7f354acf3408a004ba5931d9d3d4f3df47853",
+        "bytes": 211082
+      },
+      "scripts/check-execution-boundaries.mjs": {
+        "sha256": "d31afa204bcea73a27a7e179c9413606aa3b784db400096a28f54d050989e158",
+        "bytes": 27165
+      },
+      "scripts/test-execution-boundaries.mjs": {
+        "sha256": "91d61a770e6e1ca6675f6545320f94f7f6747ab7e164e8c1565c9449c966fa5c",
+        "bytes": 24358
+      },
+      "src/xmpp/websocket_action.rs": {
+        "sha256": "9b1560ced8908c8cc36b695bf8553d5c225707d7d012dbb59a13ebe60bc181a0",
+        "bytes": 6791
+      }
+    },
+    "manifest_sha256": "9a2c725b4243c9466dd5dc3b864ab5370e0dac24cfd6bcdd59e26ad315d26a80",
+    "manifest_encoding": "UTF-8 JSON of changed_files, sorted keys, compact comma/colon separators, no trailing newline.",
+    "patch_sha256": "863acfb38727353cdc43eeebf73c69ba89d6a9d83163a55f3bc9cb35a0d7bf2b",
+    "source_unchanged_through_all_checks": true
+  },
+  "check_envelope": {
+    "per_command_timeout_seconds": 600,
+    "kill_after_seconds": 5,
+    "maximum_log_bytes": 4194304,
+    "serial": true,
+    "all_exit_codes": 0,
+    "all_collector_exit_codes": 0,
+    "all_source_maps_unchanged": true
+  },
+  "checks": {
+    "execution_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.363931271",
+      "log_bytes": 40,
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+    },
+    "clippy": {
+      "exit_code": 0,
+      "elapsed_seconds": "175.817616756",
+      "log_bytes": 413,
+      "log_sha256": "36e6c8df8f155aef812f9b575f4747e7bd476e1f5f60a53e48da4ee570d68220"
+    },
+    "architecture_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "1.504170428",
+      "log_bytes": 183,
+      "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36"
+    },
+    "inventory_core": {
+      "exit_code": 0,
+      "elapsed_seconds": "3.728835404",
+      "log_bytes": 1685,
+      "log_sha256": "68981aa30c4e80927a879c019db9d55350437d7c5c99944226d50b51f793d262"
+    },
+    "compile": {
+      "exit_code": 0,
+      "elapsed_seconds": "148.909422527",
+      "log_bytes": 413,
+      "log_sha256": "7745d6ebafa7ab2dd6f57a170fe4f3a43c0db73b71fd40d87f96eb96e8f59016"
+    },
+    "format_check": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.193952007",
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gates": {
+      "exit_code": 0,
+      "elapsed_seconds": "3.703032879",
+      "log_bytes": 9906,
+      "log_sha256": "9726d467414f7349a0a6bffd2f5bd1f4259073507ad5a77fa4715e1cd5207557"
+    },
+    "inventory_server": {
+      "exit_code": 0,
+      "elapsed_seconds": "158.567049574",
+      "log_bytes": 164822,
+      "log_sha256": "3a26ec035707391739d1087bf6489d11d376e9454fe7fc11f3b1e1b666411d7f"
+    },
+    "graphs": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.431514546",
+      "log_bytes": 229,
+      "log_sha256": "0adf0ef15604f387997d9a98d2f2446fec3acaddbb06b6f879160fdfec2f872f"
+    },
+    "admission_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.147830080",
+      "log_bytes": 207,
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+    }
+  },
+  "rust_selection": {
+    "selected": 20,
+    "ran": 20,
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "inventory_counts": {
+      "core": 11,
+      "server": 1789
+    },
+    "execution_order": "delivery-core names below, then server names below; each invoked alone with --exact --test-threads=1.",
+    "delivery_core": [
+      "native_write::tests::exact_fence_rules_reject_changed_identity_and_preserve_sql_token_semantics",
+      "native_write::tests::writer_truth_and_gate_stay_separate_and_failed_write_never_issues_continuation",
+      "native_write::tests::dropped_written_and_sm_owned_continuations_never_request_native_ack",
+      "native_write::tests::real_commit_wrapper_records_entry_drop_receipt_and_later_error_independently",
+      "native_write::tests::invalid_source_or_disposition_never_polls_commit_and_is_inert",
+      "native_write::tests::same_source_operations_and_retired_owner_cannot_replace_each_others_receipts",
+      "native_write::tests::compatibility_absent_unclaimed_and_mix_no_match_are_not_deleted_receipts"
+    ],
+    "server": [
+      "xmpp::direct_delivery::tests::c2s_fence_precedes_write_and_only_rotated_lease_is_acknowledged",
+      "xmpp::direct_delivery::tests::mix_handoff_follows_fence_and_ack_follows_write",
+      "xmpp::direct_delivery::tests::fence_failure_and_write_cancellation_never_acknowledge",
+      "xmpp::direct_delivery::tests::superseded_claim_survives_context_and_never_confirms_transport",
+      "xmpp::direct_delivery::tests::acknowledgement_failure_leaves_durable_lease_for_recovery",
+      "xmpp::direct_delivery::tests::sm_owner_never_uses_direct_fence_or_ack",
+      "xmpp::direct_delivery::tests::actual_tcp_writer_requires_complete_write_and_flush_before_ack",
+      "xmpp::direct_delivery::tests::actual_tcp_timeout_keeps_its_existing_deadline_and_never_settles",
+      "xmpp::direct_delivery::tests::full_write_is_retained_before_real_ack_suspension_and_synthetic_receipt_cuts",
+      "xmpp::direct_delivery::tests::wrong_or_unreturned_fence_never_polls_writer_and_retained_claim_is_accepted",
+      "xmpp::direct_delivery::tests::committed_mix_no_match_is_not_a_deleted_row_or_failed_local_write",
+      "xmpp::direct_delivery::tests::actual_websocket_live_future_preserves_cancellation_bias_failure_and_timeout",
+      "xmpp::direct_delivery::tests::native_owner_destroys_unpolled_cancelled_and_panicking_children_before_summary"
+    ],
+    "selection_sha256": "0794a601cc3fa4c473bdf1070681f8b2c72e555f6d6bd465043cf2b8d3edab95",
+    "core_command": "cargo test --locked --offline -p northstar-delivery-core --lib FULL_TEST_NAME -- --exact --test-threads=1",
+    "server_command": "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server FULL_TEST_NAME -- --exact --test-threads=1"
+  },
+  "exact_test_logs": [
+    {
+      "index": 0,
+      "elapsed_seconds": "0.151348143",
+      "log_bytes": 377,
+      "log_sha256": "c0719766e724eb4ad71c41c1ff7130bf4f011afa9eae0a6e4bf3e589e29557a2"
+    },
+    {
+      "index": 1,
+      "elapsed_seconds": "0.122906512",
+      "log_bytes": 381,
+      "log_sha256": "ab894e2b900d9a02d60284e811272d6ddcf3ce3698ac8fcf9be6d5bae9400afa"
+    },
+    {
+      "index": 2,
+      "elapsed_seconds": "0.125214527",
+      "log_bytes": 370,
+      "log_sha256": "f4e27d7ad28b1af1d333a937aa1590f4a6e2f6a3712efd652366d3fbb9b1a2b1"
+    },
+    {
+      "index": 3,
+      "elapsed_seconds": "0.134264311",
+      "log_bytes": 379,
+      "log_sha256": "457bbd88dea8705ef2e5c4ea609176712d10e0e5b98c8a7ed4a93ad137b44fa3"
+    },
+    {
+      "index": 4,
+      "elapsed_seconds": "0.148268578",
+      "log_bytes": 364,
+      "log_sha256": "be3bd0b3bcfbe6c9d8ccbf69c7ce45925b7b27080fc4b1cddfdf8b1ba7eb6794"
+    },
+    {
+      "index": 5,
+      "elapsed_seconds": "0.147529632",
+      "log_bytes": 379,
+      "log_sha256": "f9bd9ad38d5c8ce06c438207875709e5d7901010bf81fbbb185f32f3326f84a8"
+    },
+    {
+      "index": 6,
+      "elapsed_seconds": "0.144947965",
+      "log_bytes": 375,
+      "log_sha256": "1e104dc25e425b1932ecfceca1050d1f1850233a6a055a286aaf546ea7ac361c"
+    },
+    {
+      "index": 7,
+      "elapsed_seconds": "0.284158524",
+      "log_bytes": 371,
+      "log_sha256": "edcaf0e6bb1254556bb0bba10d44a3dc7a9a02a13f868c21dd836656fa0c5678"
+    },
+    {
+      "index": 8,
+      "elapsed_seconds": "0.309684532",
+      "log_bytes": 355,
+      "log_sha256": "979e87b0cbfeb16fece0d484740e8ff3cdcbd496276146f7b40ca63138edb6da"
+    },
+    {
+      "index": 9,
+      "elapsed_seconds": "0.276096691",
+      "log_bytes": 362,
+      "log_sha256": "cd57e978ac071df32a7d6789e7e91e3831267a06d0f509913e9aa28083e93c10"
+    },
+    {
+      "index": 10,
+      "elapsed_seconds": "0.325485034",
+      "log_bytes": 370,
+      "log_sha256": "0ef721749482e0798720ea5d9e39c6089f46d90b78bf00b3645302564c39aa9a"
+    },
+    {
+      "index": 11,
+      "elapsed_seconds": "0.305317167",
+      "log_bytes": 365,
+      "log_sha256": "8b5a315cf0dba64f15d10e7414530078bdf624041c363ed6640d08c6a2250421"
+    },
+    {
+      "index": 12,
+      "elapsed_seconds": "0.286510970",
+      "log_bytes": 347,
+      "log_sha256": "e82348c187a9075293a226d4204b6f91a277c090a815fefdf1000e19533b9abc"
+    },
+    {
+      "index": 13,
+      "elapsed_seconds": "0.255426984",
+      "log_bytes": 370,
+      "log_sha256": "ea707c3e992d65dea67f4106e7a84da370094acfdf09ffff95d6efe910617103"
+    },
+    {
+      "index": 14,
+      "elapsed_seconds": "0.287562226",
+      "log_bytes": 372,
+      "log_sha256": "6a662afe25489eed067edf091efb5b2dae64d9341a8a7016cb811d2779318009"
+    },
+    {
+      "index": 15,
+      "elapsed_seconds": "0.310611558",
+      "log_bytes": 384,
+      "log_sha256": "829262f317c189c5158a94bcaf3e268e66273e68134c6fe5d53aed7947f27cc6"
+    },
+    {
+      "index": 16,
+      "elapsed_seconds": "0.309050306",
+      "log_bytes": 383,
+      "log_sha256": "594f6153a984137b8f1cbb74c44dc2397da233352d68868e9a30612a98a17294"
+    },
+    {
+      "index": 17,
+      "elapsed_seconds": "0.277903988",
+      "log_bytes": 373,
+      "log_sha256": "81bc34fd0ebb245de8a0710744fa23c2cf5afe1cb6769840fc900e52d239ff8c"
+    },
+    {
+      "index": 18,
+      "elapsed_seconds": "0.264370310",
+      "log_bytes": 384,
+      "log_sha256": "d5807317e78417d05b00079dda3dd6a797a0115b81ae33fd2eab048795c41753"
+    },
+    {
+      "index": 19,
+      "elapsed_seconds": "0.281825904",
+      "log_bytes": 386,
+      "log_sha256": "e6bf6f3c0d15146278ff7186657c4b7f209cdfccb628d6eb8349cdbc22382042"
+    }
+  ],
+  "node_results": {
+    "passed": 152,
+    "failed": 0,
+    "skipped": 0,
+    "new_negative_source_mutations": 35,
+    "new_positive_source_checks": 2,
+    "limit": "Source-drift tests are separate from the 20 Rust behavior tests."
+  },
+  "test_binaries": {
+    "core": {
+      "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+      "bytes": 2994464,
+      "sha256": "bdb2a90a3c050462446f9314b8c5a92f64e2383b61a6783f0acb8317c0a67c1d"
+    },
+    "server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 195286520,
+      "sha256": "dc63e9b4ec870ece5f6d9fb026099f8548acdfd2327b5309ab39d006ad96fc6f"
+    }
+  },
+  "binary_identity_limit": "Hashes were measured after these checks. Later Git metadata or source builds may replace the local executable paths; the hashes identify these runs, not all future builds.",
+  "graphs": {
+    "generated": 10,
+    "changed": 0,
+    "all_before_after_bytes_equal": true
+  },
+  "preserved_failures": [
+    {
+      "phase": "initial Node gate",
+      "exit_code": 1,
+      "tests": 152,
+      "passed": 139,
+      "failed": 13,
+      "log_sha256": "e1bab1bc073690beafba4c705e331a6a79ad66c3db3e24046546ac7468150dab",
+      "cause": "The new positive source check omitted rustfmt trailing comma in WrittenDirectLease. Twelve later negatives then encountered that earlier mismatch. One expected comma was corrected; no Rust behavior or assertion was weakened."
+    },
+    {
+      "phase": "initial Rust check",
+      "exit_code": 101,
+      "log_sha256": "2e4525f362aa310dd126b41e5fdd55e6e2439a493b6ae107f0a73da908f0aac4",
+      "cause": "E0308: SendManyItems still passed item by value. Passing &item preserves its outer owner through the borrowed native callback; the other production call site already did so. Clippy and Rust units had not run in that failed attempt."
+    }
+  ],
+  "fixture_refinement": "The existing fake C2S rotation case now uses the actual initial message-ID claim. A separate control preserves a non-initial claim. This corrects fixture fidelity without changing SQL token policy.",
+  "preceding_slice": "stage3-handoff-results.json",
+  "prior_ci": {
+    "commit": "2ab71b8541493566468a773fb0237acad043cc7e",
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37203778768",
+    "success": 32,
+    "skip": 1,
+    "failure": 0,
+    "scope": "Prior saved commit only. Its later success does not explain the earlier DR connection-fence failure."
+  },
+  "limits": [
+    "Limited native source/pure-test qualification, not full Stage3 acceptance. SM h/FIFO and BOSH RID/ownership composition, saved-case replay, independent oracle/mutation and shrinking remain open.",
+    "TCP tests use the actual send helper with in-memory AsyncWrite; WS tests use the actual selection helper with a fake future. No network socket, SQL connection, child process or service is started by the selected test bodies.",
+    "ACK COMMIT tests use the production-shared helper with synthetic futures. Post-receipt pending/error cuts are explicitly synthetic; they do not invent a production await at that point.",
+    "Absent-unclaimed classification uses a test-local compatibility request. Normal post-fence native C2S carries Some(claim); this fixture proves no broader native reachability or SQL behavior.",
+    "Fence call/returned facts are observed, but this slice does not expose the fence transaction COMMIT phase. Failed or cancelled fencing remains persistence-unconfirmed, never proof of rollback.",
+    "ack_returned records whether the ACK call returned Ok; deletion/no-match authority comes only from the separate committed disposition. Recoverable storage is not a promise of scheduled retry.",
+    "The independent actual-result and ACK guards still block a decision-only Failed-to-Written mutant. No effective end-to-end settlement counterexample is claimed from that mutant.",
+    "Paused Tokio time covers in-process timeout cases, not SQL wall-clock fidelity. Real SQL/wire/fault and aggregate resource qualification remain Stages5/6; the cancelled 72-hour soak is not resumed."
+  ]
+}

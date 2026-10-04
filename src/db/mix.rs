@@ -1072,11 +1072,42 @@ pub async fn acknowledge_mix_delivery(
     delivery_id: Uuid,
     lease_token: Uuid,
 ) -> Result<bool> {
+    acknowledge_mix_delivery_observed(pool, delivery_id, lease_token, None).await
+}
+
+pub(crate) async fn acknowledge_mix_delivery_observed(
+    pool: &PgPool,
+    delivery_id: Uuid,
+    lease_token: Uuid,
+    observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+) -> Result<bool> {
+    use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
+    if let Some(observation) = observation {
+        observation.validate_source(crate::outbound::TransportOwnershipSource::Mix(
+            crate::outbound::MixDelivery {
+                delivery_id,
+                lease_token,
+            },
+        ))?;
+    }
     let mut transaction = pool.begin().await?;
     let removed = remove_mix_delivery_tx(&mut transaction, delivery_id, lease_token)
         .await?
         .is_some();
-    transaction.commit().await?;
+    if let Some(observation) = observation {
+        commit_observed(
+            transaction.commit(),
+            observation,
+            if removed {
+                AckDisposition::Deleted
+            } else {
+                AckDisposition::NoMatchingMix
+            },
+        )
+        .await?;
+    } else {
+        transaction.commit().await?;
+    }
     if !removed {
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     }

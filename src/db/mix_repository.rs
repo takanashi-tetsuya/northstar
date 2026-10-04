@@ -1194,11 +1194,24 @@ impl MixRepository for PostgresMixRepository {
     async fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64> {
         db::prune_expired_federated_mix_iq_results(&self.pool, limit).await
     }
-    async fn acknowledge_mix_delivery(&self, delivery_id: Uuid, lease_token: Uuid) -> Result<bool> {
-        let acknowledged =
-            db::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await?;
-
-        Ok(acknowledged)
+    async fn acknowledge_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+    ) -> Result<bool> {
+        match observation {
+            Some(observation) => {
+                db::mix::acknowledge_mix_delivery_observed(
+                    &self.pool,
+                    delivery_id,
+                    lease_token,
+                    Some(observation),
+                )
+                .await
+            }
+            None => db::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await,
+        }
     }
     async fn fence_mix_socket_write(
         &self,

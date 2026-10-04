@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod native_write;
+
 use std::{future::Future, pin::Pin};
 use uuid::Uuid;
 

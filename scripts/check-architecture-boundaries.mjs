@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
+import { verifyNativeAckService } from './check-execution-boundaries.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1142,7 +1143,7 @@ const mixOutboxDbMethods = new Map([
   ['maintain_mix_delivery_retention', 'maintain_mix_delivery_retention'],
   ['prune_expired_business_intents', 'prune_expired_business_intents'],
   ['prune_expired_federated_iq_results', 'prune_expired_federated_iq_results'],
-  ['acknowledge_mix_delivery', 'acknowledge_mix_delivery'],
+  ['acknowledge_mix_delivery_inner', 'acknowledge_mix_delivery'],
   ['fence_mix_socket_write', 'fence_mix_socket_write'],
   ['transfer_mix_delivery_to_cluster', 'transfer_mix_delivery_to_cluster'],
   ['release_mix_cluster_delivery', 'release_mix_cluster_delivery'],
@@ -1181,6 +1182,7 @@ if (permitManifestNegativeFixture.missing.join(',') !== 'required_turn') {
 }
 
 const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'src/services/mix.rs');
+verifyNativeAckService(mixServiceSource);
 const mixOutboxDbPermitOwners = new Map();
 const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
 for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)) !== null; ) {

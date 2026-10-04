@@ -1198,6 +1198,7 @@ pub(crate) trait MixRepository: Send + Sync {
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn fence_mix_socket_write(
         &self,
@@ -2188,10 +2189,31 @@ impl<R: MixRepository> MixService<R> {
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
+        self.acknowledge_mix_delivery_inner(delivery_id, lease_token, None)
+            .await
+    }
+
+    pub(crate) async fn acknowledge_mix_socket_write(
+        &self,
+        request: &northstar_delivery_core::native_write::AckRequest,
+    ) -> Result<bool> {
+        let crate::outbound::TransportOwnershipSource::Mix(source) = request.source() else {
+            anyhow::bail!("native MIX acknowledgement source mismatch");
+        };
+        self.acknowledge_mix_delivery_inner(source.delivery_id, source.lease_token, Some(request))
+            .await
+    }
+
+    async fn acknowledge_mix_delivery_inner(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+    ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
         let result = self
             .repository
-            .acknowledge_mix_delivery(delivery_id, lease_token)
+            .acknowledge_mix_delivery(delivery_id, lease_token, observation)
             .await?;
         if result {
             self.publish_delivery_local_commit();

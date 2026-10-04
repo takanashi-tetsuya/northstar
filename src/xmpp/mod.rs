@@ -708,12 +708,22 @@ async fn websocket_send_live(
     message: Message,
     cancellation: &WebSocketSendCancellation<'_>,
 ) -> bool {
+    bounded_websocket_live_write(socket.send(message), cancellation).await
+}
+
+async fn bounded_websocket_live_write<F, E>(
+    write: F,
+    cancellation: &WebSocketSendCancellation<'_>,
+) -> bool
+where
+    F: Future<Output = std::result::Result<(), E>>,
+{
     tokio::select! {
         biased;
         _ = cancellation.actor_shutdown.cancelled() => false,
         _ = cancellation.signals.revoked() => false,
         _ = cancellation.signals.backpressured() => false,
-        result = tokio::time::timeout(XMPP_WRITE_TIMEOUT, socket.send(message)) => {
+        result = tokio::time::timeout(XMPP_WRITE_TIMEOUT, write) => {
             matches!(result, Ok(Ok(())))
         }
     }
@@ -885,36 +895,40 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     item: &crate::outbound::OutboundItem,
     opening: bool,
 ) -> Result<bool> {
-    let lease = match direct_delivery::DirectWriteLease::prepare(session, item).await {
-        Ok(lease) => lease,
-        Err(error)
-            if error
-                .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
-                .is_some() =>
-        {
-            tracing::debug!(
-                ?error,
-                "superseded durable TCP item skipped before socket write"
-            );
-            return Ok(true);
-        }
-        Err(error) => {
-            tcp_internal_backend_error(
-                io,
-                session,
-                opening,
-                "prepare durable direct write",
-                &error,
-            )
-            .await;
-            return Ok(false);
-        }
-    };
-    send(io, &item.stanza).await?;
-    lease.written(session, item).await;
-    Ok(true)
+    let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
+    direct_delivery::NativeWriteRunner::new(observation.clone(), async move {
+        let lease =
+            match direct_delivery::DirectWriteLease::prepare(session, item, &observation).await {
+                Ok(lease) => lease,
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                        .is_some() =>
+                {
+                    tracing::debug!(
+                        ?error,
+                        "superseded durable TCP item skipped before socket write"
+                    );
+                    return Ok(true);
+                }
+                Err(error) => {
+                    tcp_internal_backend_error(
+                        io,
+                        session,
+                        opening,
+                        "prepare durable direct write",
+                        &error,
+                    )
+                    .await;
+                    return Ok(false);
+                }
+            };
+        let written = lease.write(|stanza| send(io, stanza)).await?;
+        written.settle(session).await;
+        Ok(true)
+    })
+    .await
 }
-
 async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
     io: &mut S,
     session: &mut ProtocolSession,
@@ -1196,7 +1210,7 @@ pub async fn websocket_connection(
                     if !websocket_record_and_send_item(
                         &mut socket,
                         &mut session,
-                        outgoing,
+                        &outgoing,
                         opening,
                         &mut terminal_sequence,
                         &send_cancellation,
@@ -1232,50 +1246,64 @@ pub async fn websocket_connection(
 async fn websocket_record_and_send_item(
     socket: &mut WebSocket,
     session: &mut ProtocolSession,
-    item: crate::outbound::OutboundItem,
+    item: &crate::outbound::OutboundItem,
     opening: bool,
     terminal: &mut WebSocketTerminalSequence,
     cancellation: &WebSocketSendCancellation<'_>,
 ) -> bool {
-    let lease = match direct_delivery::DirectWriteLease::prepare(session, &item).await {
-        Ok(lease) => lease,
-        Err(error)
-            if error
-                .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
-                .is_some() =>
+    let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
+    direct_delivery::NativeWriteRunner::new(observation.clone(), async move {
+        let lease =
+            match direct_delivery::DirectWriteLease::prepare(session, item, &observation).await {
+                Ok(lease) => lease,
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                        .is_some() =>
+                {
+                    tracing::debug!(
+                        ?error,
+                        "superseded durable WebSocket item skipped before write"
+                    );
+                    return true;
+                }
+                Err(error) => {
+                    tracing::error!(?error, "failed to prepare durable WebSocket write");
+                    session.forbid_sm_resume();
+                    let domain = session.local_domain().to_owned();
+                    websocket_fatal_error(
+                        socket,
+                        &domain,
+                        opening,
+                        crate::xmpp::xml_util::stream_error("internal-server-error"),
+                        terminal,
+                    )
+                    .await;
+                    return false;
+                }
+            };
+        let written = match lease
+            .write(|stanza| async move {
+                anyhow::ensure!(
+                    websocket_send_live(
+                        socket,
+                        Message::Text(stanza.to_owned().into()),
+                        cancellation
+                    )
+                    .await,
+                    "native WebSocket write did not complete"
+                );
+                Ok(())
+            })
+            .await
         {
-            tracing::debug!(
-                ?error,
-                "superseded durable WebSocket item skipped before write"
-            );
-            return true;
-        }
-        Err(error) => {
-            tracing::error!(?error, "failed to prepare durable WebSocket write");
-            session.forbid_sm_resume();
-            let domain = session.local_domain().to_owned();
-            websocket_fatal_error(
-                socket,
-                &domain,
-                opening,
-                crate::xmpp::xml_util::stream_error("internal-server-error"),
-                terminal,
-            )
-            .await;
-            return false;
-        }
-    };
-    if !websocket_send_live(
-        socket,
-        Message::Text(item.stanza.clone().into()),
-        cancellation,
-    )
+            Ok(written) => written,
+            Err(_) => return false,
+        };
+        written.settle(session).await;
+        true
+    })
     .await
-    {
-        return false;
-    }
-    lease.written(session, &item).await;
-    true
 }
 
 #[cfg(test)]

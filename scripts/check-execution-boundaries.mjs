@@ -14,6 +14,11 @@ const files = {
   muc: 'src/xmpp/protocol/muc.rs',
   mucFanout: 'src/services/muc/fanout.rs',
   mix: 'src/xmpp/protocol/mix.rs',
+  mixService: 'src/services/mix.rs',
+  nativeWrite: 'src/xmpp/direct_delivery.rs',
+  nativeCore: 'crates/northstar-delivery-core/src/native_write.rs',
+  replayDb: 'src/db/replay.rs',
+  mixDb: 'src/db/mix.rs',
 };
 
 function requireBoundary(condition, message) {
@@ -97,6 +102,76 @@ function ordered(source, steps, message) {
 export function readExecutionSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
     fs.readFileSync(path.join(root, file), 'utf8')]));
+}
+
+// Drift detection for the existing native/compatibility MIX service boundary.
+// This checks source wiring, not transaction success or exact-token SQL behavior.
+export function verifyNativeAckService(source) {
+  const normalize = value => compact(value).replace(/,\)/g, ')');
+  const legacy = normalize(body(source, 'pub\\s*\\(crate\\)\\s+async\\s+fn\\s+acknowledge_mix_delivery\\b'));
+  requireBoundary(legacy === 'self.acknowledge_mix_delivery_inner(delivery_id,lease_token,None).await',
+    'legacy MIX acknowledgement must forward the exact delivery/token without an observation');
+  const observed = normalize(body(source, 'pub\\s*\\(crate\\)\\s+async\\s+fn\\s+acknowledge_mix_socket_write\\b'));
+  requireBoundary(observed === 'letcrate::outbound::TransportOwnershipSource::Mix(source)=request.source()else{anyhow::bail!();};self.acknowledge_mix_delivery_inner(source.delivery_id,source.lease_token,Some(request)).await',
+    'native MIX acknowledgement must extract its exact source and forward the same request');
+  const shared = normalize(body(source, 'async\\s+fn\\s+acknowledge_mix_delivery_inner\\b'));
+  requireBoundary(shared === 'let_admission=self.outbox_db_admission_guard().await;letresult=self.repository.acknowledge_mix_delivery(delivery_id,lease_token,observation).await?;ifresult{self.publish_delivery_local_commit();}Ok(result)',
+    'shared MIX acknowledgement must own one permit, exact repository turn and true-only wake');
+}
+
+export function verifyNativeWriteBoundaries({ transport, nativeWrite, nativeCore, replayDb, mixDb }) {
+  const normalize = value => compact(value).replace(/,\)/g, ')');
+  for (const name of ['tcp_record_and_send_item', 'websocket_record_and_send_item']) {
+    const callback = normalize(body(transport, `async\\s+fn\\s+${name}\\b`));
+    requireBoundary(callback.startsWith('letobservation=northstar_delivery_core::native_write::Observation::new(item.durable_source);direct_delivery::NativeWriteRunner::new(observation.clone(),asyncmove{') && callback.endsWith('}).await'),
+      `${name} must create its receiving owner before polling the borrowed item child`);
+    ordered(callback, ['DirectWriteLease::prepare(session,item,&observation).await', 'lease.write(', 'written.settle(session).await'],
+      `${name} must prepare, fully write and then settle the same item`);
+    requireBoundary(count(callback, 'lease.write(') === 1 && count(callback, 'written.settle(session).await') === 1,
+      `${name} must consume its write and settlement continuations once`);
+  }
+  const tcpItem = normalize(body(transport, 'async\\s+fn\\s+tcp_record_and_send_item\\b'));
+  requireBoundary(tcpItem.includes('letwritten=lease.write(|stanza|send(io,stanza)).await?;written.settle(session).await;'),
+    'native TCP must supply the bound stanza to the real send future and propagate write failure');
+  const wsItem = normalize(body(transport, 'async\\s+fn\\s+websocket_record_and_send_item\\b'));
+  requireBoundary(wsItem.includes('lease.write(|stanza|asyncmove{anyhow::ensure!(websocket_send_live(socket,Message::Text(stanza.to_owned().into()),cancellation).await);Ok(())}).await{Ok(written)=>written,Err(_)=>returnfalse,};written.settle(session).await;'),
+    'native WebSocket must require its actual bound-stanza write before settlement');
+  const wsSend = normalize(body(transport, 'async\\s+fn\\s+websocket_send_live\\b'));
+  requireBoundary(wsSend === 'bounded_websocket_live_write(socket.send(message),cancellation).await',
+    'WebSocket live writes must use the shared bounded selection');
+  const wsBounded = normalize(body(transport, 'async\\s+fn\\s+bounded_websocket_live_write\\b'));
+  requireBoundary(wsBounded === 'tokio::select!{biased;_=cancellation.actor_shutdown.cancelled()=>false,_=cancellation.signals.revoked()=>false,_=cancellation.signals.backpressured()=>false,result=tokio::time::timeout(XMPP_WRITE_TIMEOUT,write)=>{matches!(result,Ok(Ok(())))}}',
+    'WebSocket live selection must preserve cancellation priority and the existing timeout');
+  const write = normalize(body(nativeWrite, 'pub\\s*\\(super\\)\\s+async\\s+fn\\s+write\\b'));
+  ordered(write, ['self.observation.begin_write()?;', 'letactual=writer(&self.item.stanza).await;', 'lettruth=ifactual.is_ok(){WriterResult::FullWrite}else{WriterResult::Failed};', 'letwritten=self.observation.writer_completed(truth)?;', 'actual?;', 'Ok(WrittenDirectLease{item:self.item,written,managed_by_sm:self.managed_by_sm,})'],
+    'native lease must retain actual writer truth before issuing the consuming written continuation');
+  const settle = normalize(body(nativeWrite, 'async\\s+fn\\s+settle_with\\b'));
+  ordered(settle, ['self.item.confirm_transport_write();', 'if!self.managed_by_sm{self.item.confirm_transport_ownership();}', 'self.written.begin_ack()', 'request.source()'],
+    'native settlement must preserve full-write notification and require the consuming ACK request');
+  for (const kind of ['c2s', 'mix']) {
+    requireBoundary(settle.includes(`letresult=port.acknowledge_${kind}(&request).await;request.returned(result.is_ok());`),
+      `native ${kind} settlement must pass the exact request and retain the actual call result`);
+  }
+  const runnerDrop = normalize(body(nativeWrite, 'impl<F>\\s+Drop\\s+for\\s+NativeWriteRunner<F>'));
+  requireBoundary(runnerDrop === 'fndrop(&mutself){drop(self.child.take());ifself.poll_in_progress{self.observation.finish(Terminal::Panicked);}}',
+    'native owner must destroy its child before retirement and retain a caught panic');
+  const runner = body(nativeWrite, 'impl<F:\\s*Future>\\s+Future\\s+for\\s+NativeWriteRunner<F>');
+  const poll = normalize(body(runner, 'fn\\s+poll\\b'));
+  ordered(poll, ['this.poll_in_progress=true;', '.poll(cx)', 'drop(this.child.take());this.poll_in_progress=false;this.observation.finish(Terminal::Returned);'],
+    'native poll must mark a panic boundary and destroy its ready child before retirement');
+  requireBoundary(poll.includes('Poll::Pending=>{this.poll_in_progress=false;returnPoll::Pending;}') && count(poll, 'this.poll_in_progress=false;') === 2 && count(poll, '.finish(') === 1,
+    'native pending and ready polls must preserve their distinct retirement facts');
+  const commit = normalize(body(nativeCore, 'pub\\s+async\\s+fn\\s+commit_observed\\b'));
+  requireBoundary(commit === 'letpermit=request.enter_commit(disposition).map_err(CommitError::Binding)?;commit.await.map_err(CommitError::Repository)?;permit.received();Ok(())',
+    'native ACK must bind preparation before COMMIT and retain its receipt before returning');
+  const c2s = normalize(body(replayDb, 'async\\s+fn\\s+acknowledge_durable_deliveries_observed\\b'));
+  requireBoundary(c2s.includes('ifpresent[0]{AckDisposition::Deleted}else{AckDisposition::AbsentUnclaimed}') && c2s.includes('anyhow::ensure!(removed==1);'),
+    'C2S ACK receipt must distinguish checked deletion from accepted absent-unclaimed');
+  requireBoundary(count(c2s, 'commit_observed(') === 1 && c2s.includes('commit_observed(transaction.commit(),observation,disposition).await?;'),
+    'actual C2S ACK transaction must use the native COMMIT observer');
+  const mix = normalize(body(mixDb, 'async\\s+fn\\s+acknowledge_mix_delivery_observed\\b'));
+  requireBoundary(count(mix, 'commit_observed(') === 1 && mix.includes('commit_observed(transaction.commit(),observation,ifremoved{AckDisposition::Deleted}else{AckDisposition::NoMatchingMix}).await?;'),
+    'actual MIX ACK transaction must retain the deleted versus no-match COMMIT receipt');
 }
 
 export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction }) {
@@ -278,5 +353,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const sources = readExecutionSources();
   verifyExecutionBoundaries(sources);
   verifyRoomExecutionBoundaries(sources);
+  verifyNativeAckService(sources.mixService);
+  verifyNativeWriteBoundaries(sources);
   console.log('Execution publication boundaries passed');
 }

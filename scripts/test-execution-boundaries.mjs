@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -211,3 +211,66 @@ test('MUC room guard cannot be released before accepted fanout', () => {
 rejectsRoom('MIX acknowledgement cannot substitute a different exact fence', 'mix',
   '.acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),',
   '.acknowledge_mix_delivery(delivery.delivery_id, delivery.delivery_id),', /MIX claimed delivery/);
+
+test('native and compatibility MIX ACK share the reviewed database owner', () => verifyNativeAckService(baseline.mixService));
+function rejectsNativeAck(name, declaration, before, after, expected) {
+  test(name, () => {
+    assert.equal(baseline.mixService.split(declaration).length - 1, 1);
+    const start = baseline.mixService.indexOf(declaration);
+    const end = baseline.mixService.indexOf('\n    }', start);
+    assert.ok(end > start, 'reviewed service method boundary must exist');
+    const method = baseline.mixService.slice(start, end + 6);
+    assert.equal(method.split(before).length - 1, 1, 'mutation must match once within its service method');
+    const source = baseline.mixService.slice(0, start) + method.replace(before, after) + baseline.mixService.slice(end + 6);
+    assert.notEqual(source, baseline.mixService, 'mutation must change source');
+    assert.throws(() => verifyNativeAckService(source), expected);
+  });
+}
+const legacyAck = 'pub(crate) async fn acknowledge_mix_delivery(';
+const nativeAck = 'pub(crate) async fn acknowledge_mix_socket_write(';
+const sharedAck = 'async fn acknowledge_mix_delivery_inner(';
+rejectsNativeAck('legacy MIX ACK cannot replace the exact delivery', legacyAck, 'delivery_id,', 'other_delivery,', /legacy MIX acknowledgement/);
+rejectsNativeAck('legacy MIX ACK cannot replace the exact token', legacyAck, 'lease_token,', 'other_token,', /legacy MIX acknowledgement/);
+rejectsNativeAck('legacy MIX ACK cannot invent an observation', legacyAck, 'None', 'Some(request)', /legacy MIX acknowledgement/);
+rejectsNativeAck('native MIX ACK cannot reinterpret a C2S source', nativeAck, 'TransportOwnershipSource::Mix(source)', 'TransportOwnershipSource::C2s(source)', /native MIX acknowledgement/);
+rejectsNativeAck('native MIX ACK cannot extract a different request', nativeAck, 'request.source()', 'other_request.source()', /native MIX acknowledgement/);
+rejectsNativeAck('native MIX ACK cannot replace the exact token', nativeAck, 'source.lease_token', 'source.delivery_id', /native MIX acknowledgement/);
+rejectsNativeAck('native MIX ACK cannot discard its observation', nativeAck, 'Some(request)', 'None', /native MIX acknowledgement/);
+rejectsNativeAck('native MIX ACK cannot replace its observation', nativeAck, 'Some(request)', 'Some(other_request)', /native MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot bypass database admission', sharedAck, 'self.outbox_db_admission_guard().await', 'unbounded_permit()', /shared MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot omit the repository observation', sharedAck, 'lease_token, observation', 'lease_token, None', /shared MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot erase the repository failure', sharedAck, '.await?', '.await.unwrap_or(true)', /shared MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot wake after no-match', sharedAck, 'if result', 'if true', /shared MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot invert the wake condition', sharedAck, 'if result', 'if !result', /shared MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot wake twice', sharedAck, 'self.publish_delivery_local_commit();', 'self.publish_delivery_local_commit(); self.publish_delivery_local_commit();', /shared MIX acknowledgement/);
+rejectsNativeAck('shared MIX ACK cannot fabricate success', sharedAck, 'Ok(result)', 'Ok(true)', /shared MIX acknowledgement/);
+
+test('native receive, write and settlement owners satisfy their source gate', () => verifyNativeWriteBoundaries(baseline));
+function rejectsNativeWrite(name, file, pattern, replacement, expected) {
+  test(name, () => {
+    assert.equal([...baseline[file].matchAll(pattern)].length, 1, 'native mutation must match exactly once');
+    const source = baseline[file].replace(pattern, replacement);
+    assert.notEqual(source, baseline[file], 'native mutation must change source');
+    assert.throws(() => verifyNativeWriteBoundaries({ ...baseline, [file]: source }), expected);
+  });
+}
+rejectsNativeWrite('TCP lease cannot substitute another stanza', 'transport', /\|stanza\| send\(io, stanza\)/g, '|stanza| send(io, other_stanza)', /native TCP/);
+rejectsNativeWrite('WS lease cannot substitute another stanza', 'transport', /Message::Text\(stanza\.to_owned\(\)\.into\(\)\)/g, 'Message::Text(other_stanza.to_owned().into())', /native WebSocket/);
+rejectsNativeWrite('WS send cannot bypass the bounded helper', 'transport', /bounded_websocket_live_write\(socket\.send\(message\), cancellation\)/g, 'unbounded_write(socket.send(message), cancellation)', /WebSocket live writes/);
+rejectsNativeWrite('WS write cannot lose actor-shutdown priority', 'transport', /_ = cancellation\.actor_shutdown\.cancelled\(\) => false,/g, '', /WebSocket live selection/);
+rejectsNativeWrite('WS write cannot replace the existing timeout', 'transport', /tokio::time::timeout\(XMPP_WRITE_TIMEOUT, write\)/g, 'tokio::time::timeout(OTHER_TIMEOUT, write)', /WebSocket live selection/);
+rejectsNativeWrite('lease writer must receive its original item body', 'nativeWrite', /writer\(&self\.item\.stanza\)/g, 'writer(other_stanza)', /actual writer truth/);
+rejectsNativeWrite('lease cannot relabel a failed write as full', 'nativeWrite', /let truth = if actual\.is_ok\(\)/g, 'let truth = if true', /actual writer truth/);
+rejectsNativeWrite('lease must propagate actual writer failure', 'nativeWrite', /\n\s*actual\?;/g, '\n        let _ = actual;', /actual writer truth/);
+rejectsNativeWrite('written item must retain its full-write notification', 'nativeWrite', /self\.item\.confirm_transport_write\(\);/g, '', /native settlement/);
+rejectsNativeWrite('written item must use the consuming ACK request', 'nativeWrite', /self\.written\.begin_ack\(\)/g, 'unreviewed_ack()', /native settlement/);
+rejectsNativeWrite('C2S settlement cannot substitute its request', 'nativeWrite', /port\.acknowledge_c2s\(&request\)/g, 'port.acknowledge_c2s(&other_request)', /native c2s settlement/);
+rejectsNativeWrite('MIX settlement cannot substitute its request', 'nativeWrite', /port\.acknowledge_mix\(&request\)/g, 'port.acknowledge_mix(&other_request)', /native mix settlement/);
+rejectsNativeWrite('native Drop must destroy its child first', 'nativeWrite', /drop\(self\.child\.take\(\)\);/g, '', /destroy its child/);
+rejectsNativeWrite('native poll must retain the panic marker', 'nativeWrite', /this\.poll_in_progress = true;/g, 'this.poll_in_progress = false;', /mark a panic boundary/);
+rejectsNativeWrite('native ready poll must destroy its child first', 'nativeWrite', /drop\(this\.child\.take\(\)\);/g, '', /mark a panic boundary/);
+rejectsNativeWrite('ACK commit helper cannot skip its actual commit', 'nativeCore', /commit\.await\.map_err\(CommitError::Repository\)\?;/g, 'drop(commit);', /bind preparation before COMMIT/);
+rejectsNativeWrite('C2S transaction cannot bypass the observer', 'replayDb', /\bcommit_observed\(/g, 'unobserved_commit(', /actual C2S ACK transaction/);
+rejectsNativeWrite('C2S absent row cannot be called a deletion', 'replayDb', /AckDisposition::AbsentUnclaimed/g, 'AckDisposition::Deleted', /checked deletion/);
+rejectsNativeWrite('MIX transaction cannot bypass the observer', 'mixDb', /\bcommit_observed\(/g, 'unobserved_commit(', /actual MIX ACK transaction/);
+rejectsNativeWrite('MIX no-match cannot be called a deletion', 'mixDb', /AckDisposition::NoMatchingMix/g, 'AckDisposition::Deleted', /actual MIX ACK transaction/);

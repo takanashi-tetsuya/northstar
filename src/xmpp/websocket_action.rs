@@ -64,7 +64,7 @@ pub(super) async fn apply(
                 if !websocket_record_and_send_item(
                     socket,
                     session,
-                    item,
+                    &item,
                     opening,
                     terminal_sequence,
                     send_cancellation,

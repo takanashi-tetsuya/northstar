@@ -213,6 +213,7 @@ pub(crate) trait ReplayRepository: ReplayLeaseRepository {
     fn acknowledge_socket_write(
         &self,
         delivery: crate::outbound::DurableDelivery,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn renew_bosh_fences(
         &self,
@@ -384,7 +385,24 @@ impl<R: ReplayRepository> ReplayService<R> {
         &self,
         delivery: crate::outbound::DurableDelivery,
     ) -> Result<()> {
-        self.repository.acknowledge_socket_write(delivery).await
+        self.repository
+            .acknowledge_socket_write(delivery, None)
+            .await
+    }
+
+    pub(crate) async fn acknowledge_socket_write_observed(
+        &self,
+        delivery: crate::outbound::DurableDelivery,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+    ) -> Result<()> {
+        match observation {
+            Some(observation) => {
+                self.repository
+                    .acknowledge_socket_write(delivery, Some(observation))
+                    .await
+            }
+            None => self.acknowledge_socket_write(delivery).await,
+        }
     }
 
     pub(crate) async fn renew_bosh_fences(

@@ -574,6 +574,17 @@ impl SmRuntimePolicy {
 }
 
 impl SessionTerminationSignals {
+    #[cfg(test)]
+    pub(super) fn from_test_tokens(
+        policy_revoke: tokio_util::sync::CancellationToken,
+        backpressure: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            policy_revoke,
+            backpressure,
+        }
+    }
+
     pub(crate) async fn revoked(&self) {
         self.policy_revoke.cancelled().await;
     }
@@ -756,21 +767,24 @@ impl ProtocolSession {
 
     pub(super) async fn acknowledge_c2s_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
+        request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<()> {
+        let crate::outbound::TransportOwnershipSource::C2s(delivery) = request.source() else {
+            anyhow::bail!("native C2S acknowledgement source mismatch");
+        };
         self.state
             .replay_service()
-            .acknowledge_socket_write(delivery)
+            .acknowledge_socket_write_observed(delivery, Some(request))
             .await
     }
 
     pub(super) async fn acknowledge_mix_socket_write(
         &self,
-        delivery: crate::outbound::MixDelivery,
+        request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<bool> {
         self.state
             .mix_service()
-            .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token)
+            .acknowledge_mix_socket_write(request)
             .await
     }
 

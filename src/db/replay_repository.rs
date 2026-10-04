@@ -196,8 +196,19 @@ impl ReplayRepository for PostgresReplayRepository {
     async fn acknowledge_socket_write(
         &self,
         delivery: crate::outbound::DurableDelivery,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> Result<()> {
-        db::replay::acknowledge_durable_delivery(&self.pool, delivery).await
+        match observation {
+            Some(observation) => {
+                db::replay::acknowledge_durable_deliveries_observed(
+                    &self.pool,
+                    std::slice::from_ref(&delivery),
+                    Some(observation),
+                )
+                .await
+            }
+            None => db::replay::acknowledge_durable_delivery(&self.pool, delivery).await,
+        }
     }
 
     async fn renew_bosh_fences(

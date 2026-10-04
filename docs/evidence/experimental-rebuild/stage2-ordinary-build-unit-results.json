@@ -1,0 +1,191 @@
+{
+  "base_commit": "10cecb74df4b62a49d7527bdd71876673bdfd010",
+  "build": {
+    "binary": {
+      "bytes": 4172408,
+      "executed": false,
+      "relative_path": "target/debug/northstar-admission-replay",
+      "sha256": "4fbeb389e32790823cb53446b9e16cd428ee6763136e374fd00878c9c44210df"
+    },
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--offline",
+      "-p",
+      "northstar-test-harness",
+      "--bin",
+      "northstar-admission-replay"
+    ],
+    "environment": {
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_ENCODED_RUSTFLAGS": "",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "RUSTFLAGS": ""
+    },
+    "exit_status": 0,
+    "kill_after_seconds": 5,
+    "log_bytes": 308,
+    "log_sha256": "bfe8d163771bca10c89a0a1ec99395041199888759f26a8e5aff8430c971973a",
+    "manifest_encoding": "SHA256 of sorted compact JSON mapping each selected path to {bytes,sha256}.",
+    "reported_cargo_elapsed_seconds": 2.91,
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "source_manifest_sha256": "a29784095cbe7e43e9c6a79adeb7a23e38903575936ded8ced0325f3bb7f0179",
+    "source_scope_count": 28,
+    "source_scope_git_pathspecs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      ".cargo",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "crates/northstar-abuse-policy",
+      "crates/northstar-test-harness"
+    ],
+    "source_unchanged": true,
+    "timeout_seconds": 600
+  },
+  "intermediate_test_source": "Runs2/3 are base10cecb74 plus only the execution-helper hunk from the final diff; run4 additionally includes the world_counts/4098-retained fixture hunk.",
+  "limitations": [
+    "The two120s runs are incomplete and have no terminal boundary result; they do not prove zero blocked attempts.",
+    "The first completed300s run failed and remains a failure. The final unchanged-budget run passed all113 tests in215.889s with zero recorded blocked attempts.",
+    "This is a bounded unit-workload budget calibration, not a product deadline change or OS/resource qualification.",
+    "Rust record/replay, its82-case plans, real SQL/wire/fault execution and Stage2 acceptance remain pending.",
+    "Logs and scoped before/after records were reviewed locally; this compact public record avoids repeated full-repository maps and bulk archives."
+  ],
+  "log_capture": {
+    "method": "GNU head retains4MiB plus one sentinel; original timeout/pipeline status is recorded separately.",
+    "no_overflow": true,
+    "retained_bytes_maximum": 4194305,
+    "valid_log_limit": 4194304
+  },
+  "prior_ci": {
+    "applies_to_new_test_hunks": false,
+    "commit": "10cecb74df4b62a49d7527bdd71876673bdfd010",
+    "failure": 0,
+    "historical_caddy_root_cause": "Unknown",
+    "skipped": 1,
+    "success": 32,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37180473889"
+  },
+  "schema": "northstar-ordinary-build-unit-results-v1",
+  "source_changes": [
+    "Test-only helper extraction omits the unused evaluation/input copy from mocked reexecution; each reader still recomputes its full independent oracle.",
+    "Malformed4098/4097 remains an explicit schema-rejection case; representable4098/4098 now exercises semantic divergence and exact-target rejection."
+  ],
+  "stage2_accepted": false,
+  "status": "BuildAndPureMockSuitePassed",
+  "test_source": {
+    "path": "scripts/test-controlled-admission.py",
+    "sha256": "b6d27d486c539402ce85c0b922df1fcba803245855d5620993a0cc0b64670aa6"
+  },
+  "tripwire": {
+    "effectful_paths": "Static mocks cover process/socket/signal/prctl/limits; the tripwire additionally blocks audited entries and guards os._exit.",
+    "first_run_difference": "First driver had no unittest -v argument; runs2–4 used these exact bytes.",
+    "purpose": "One-off reviewed pure-test boundary tripwire; not a syscall sandbox. This exact historical driver contains the execution workspace root.",
+    "retained_data": "Bounded event-name/count summary only; no arbitrary event arguments.",
+    "sha256": "abaf9b39cf141761d82ea791a675443d71eb05399c275b29055321f9edd9115f",
+    "source_path": "docs/evidence/experimental-rebuild/stage2-mock-unit-tripwire.py"
+  },
+  "unit_runs": [
+    {
+      "boundary_result": null,
+      "driver_sha256": "08d55b53c1bacd979a6251a0bd98b309806075a82d70ed1361f3f3c1331d9bce",
+      "exit_status": 124,
+      "log_bytes": 787,
+      "log_overflow": false,
+      "log_sha256": "a6fa6c429cf5e621d92bcb8cf31caa669f4534dc6771fe13a62dec533ccf2623",
+      "run": 1,
+      "source_manifest_sha256": "1da2b435f13be1c3b31a67e5e499c426acf23b562c9715ffbdf1787d2ea42e5c",
+      "source_scope_files": 15,
+      "source_test_sha256": "0d3413ea0ca2eeaaaa9f4766c70df4a37a9ffa22f5ad1d80a61902f0fc2480c1",
+      "source_unchanged": true,
+      "status": "IncompleteBudgetExceeded",
+      "timeout_seconds": 120
+    },
+    {
+      "boundary_result": null,
+      "driver_sha256": "abaf9b39cf141761d82ea791a675443d71eb05399c275b29055321f9edd9115f",
+      "exit_status": 124,
+      "last_reported_test": "ShrinkReaderTests.test_legal_deletion_can_change_index_and_actor_diagnostics_but_preserve_target",
+      "log_bytes": 13257,
+      "log_overflow": false,
+      "log_sha256": "0b346ac9cce7e2535edb345a07a8752c17df1ef97b5ccff00f943c24915bcc50",
+      "run": 2,
+      "source_manifest_sha256": "8f250383763e7aac1a664885db2c75c756056c815022e5bf28cf159bf040e17b",
+      "source_scope_files": 15,
+      "source_test_sha256": "ab3635cc160780aaae9fa2139f23524cfc9ccd620d9c9ac78e8bac6a00988519",
+      "source_unchanged": true,
+      "status": "IncompleteBudgetExceeded",
+      "timeout_seconds": 120
+    },
+    {
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 1
+      },
+      "driver_sha256": "abaf9b39cf141761d82ea791a675443d71eb05399c275b29055321f9edd9115f",
+      "elapsed_user_system_seconds": "214.939 214.625 0.300",
+      "error": "The test mutated active to4098 while retained stayed4097; unchanged world_counts shape validation raised InvalidScenario before the intended semantic-divergence assertion.",
+      "errors": 1,
+      "exit_status": 1,
+      "log_bytes": 21656,
+      "log_overflow": false,
+      "log_sha256": "40b5265e8682b7eb0ea588ee5e35b2e32436f6928318dfb63ffb562cd557a719",
+      "run": 3,
+      "source_manifest_sha256": "8f250383763e7aac1a664885db2c75c756056c815022e5bf28cf159bf040e17b",
+      "source_scope_files": 15,
+      "source_test_sha256": "ab3635cc160780aaae9fa2139f23524cfc9ccd620d9c9ac78e8bac6a00988519",
+      "source_unchanged": true,
+      "status": "Failed",
+      "test_count": 113,
+      "timeout_seconds": 300
+    },
+    {
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      },
+      "driver_sha256": "abaf9b39cf141761d82ea791a675443d71eb05399c275b29055321f9edd9115f",
+      "elapsed_user_system_seconds": "215.889 215.585 0.288",
+      "errors": 0,
+      "exit_status": 0,
+      "log_bytes": 20320,
+      "log_overflow": false,
+      "log_sha256": "4781d156ae6a595744675789b89af069f81df3801c598330c21799fda7725a27",
+      "run": 4,
+      "source_manifest_sha256": "30e729d330f46db7ae7a154ae3501b36fe5b9e915e11f8eb538f6f1bcef88b69",
+      "source_scope_files": 15,
+      "source_test_sha256": "b6d27d486c539402ce85c0b922df1fcba803245855d5620993a0cc0b64670aa6",
+      "source_unchanged": true,
+      "status": "Passed",
+      "test_count": 113,
+      "timeout_seconds": 300
+    }
+  ],
+  "unit_source_manifest_encoding": "Same compact sorted {path:{bytes,sha256}} JSON encoding as build; all paths other than the test script match base10cecb74.",
+  "unit_source_paths": [
+    ".github/workflows/ci.yml",
+    "catalog/runtime-experiments.json",
+    "catalog/runtime-experiments.schema.json",
+    "crates/northstar-abuse-policy/src/model.rs",
+    "scripts/capture-controlled-admission.py",
+    "scripts/check-runtime-experiments.mjs",
+    "scripts/lib/controlled_admission.py",
+    "scripts/lib/controlled_admission_supervision.py",
+    "scripts/lib/experiment_contract.py",
+    "scripts/mixed-traffic-soak.py",
+    "scripts/run-controlled-admission.py",
+    "scripts/test-controlled-admission.py",
+    "scripts/test-experiment-contract.py",
+    "scripts/test-runtime-experiments.mjs",
+    "src/db/message_admission_repository.rs"
+  ]
+}

@@ -740,22 +740,26 @@ class ShrinkReaderTests(unittest.TestCase):
                        'attempts': attempts, 'positive_control': attempts[2], 'reduced': attempts[3],
                        'scope': controlled.SHRINK_SCOPE}
 
-    def record(self, value, name):
+    def execution(self, value, name):
         output = controlled.expected_output(value)
-        execution = {'command': ['/mock/controlled-admission', '/mock/' + name + '.input.json'],
-                     'returncode': 0, 'wall_ms': 0,
-                     'input_file_sha256': hashlib.sha256((controlled.canonical(value) + '\n').encode()).hexdigest(),
-                     'stdout_sha256': hashlib.sha256((controlled.canonical(output) + '\n').encode()).hexdigest(),
-                     'output': output, 'provenance': copy.deepcopy(self.provenance)}
+        return {'command': ['/mock/controlled-admission', '/mock/' + name + '.input.json'],
+                'returncode': 0, 'wall_ms': 0,
+                'input_file_sha256': hashlib.sha256((controlled.canonical(value) + '\n').encode()).hexdigest(),
+                'stdout_sha256': hashlib.sha256((controlled.canonical(output) + '\n').encode()).hexdigest(),
+                'output': output, 'provenance': copy.deepcopy(self.provenance)}
+
+    def record(self, value, name):
+        execution = self.execution(value, name)
         return {'input': copy.deepcopy(value), 'execution': execution,
-                'evaluation': controlled.evaluate(value, output, expected_failure=controlled.expected_counterexample(value))}
+                'evaluation': controlled.evaluate(value, execution['output'],
+                                                  expected_failure=controlled.expected_counterexample(value))}
 
     def replay_mocked(self, shrink):
         observed = []
         def reexecute(path, _binary, **_kwargs):
             value = controlled.read_json(path)
             observed.append(value)
-            return self.record(value, 'mock-reexecution')['execution']
+            return self.execution(value, 'mock-reexecution')
         with patch.object(controlled, 'run_saved_input', side_effect=reexecute):
             count = controlled.replay_shrink(shrink, '/mock/controlled-admission', expected_provenance=self.provenance)
         return count, observed
@@ -823,7 +827,13 @@ class ShrinkReaderTests(unittest.TestCase):
             self.assertIsNone(controlled.shrink_target(value, output, evaluation))
         changed = copy.deepcopy(output)
         changed['projection'][1]['world']['active'] = 4098
-        evaluation = controlled.evaluate(value, changed, expected_failure=controlled.expected_counterexample(value))
+        expected_failure = controlled.expected_counterexample(value)
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'world_counts'):
+            controlled.evaluate(value, changed, expected_failure=expected_failure)
+        # A representable but wrong count must reach semantic divergence rather
+        # than being rejected by the active <= retained shape constraint.
+        changed['projection'][1]['world']['retained'] = 4098
+        evaluation = controlled.evaluate(value, changed, expected_failure=expected_failure)
         self.assertEqual(evaluation['invariant']['class'], 'ReplayDivergence')
         self.assertIsNone(controlled.shrink_target(value, changed, evaluation))
         evaluation = copy.deepcopy(saved['evaluation'])

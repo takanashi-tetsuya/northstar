@@ -1,12 +1,12 @@
 # Controlled admission：來源修正後的獨立驗證交接
 
-這是待執行清單，不是執行結果。Stage 2 仍未驗收；Stage 3–6 也未因此完成。
-新增的窄型 supervisor 是來源實作與 mocked regression source；不代表已執行 regression bodies、
-Rust record/replay、shrinker、SQL、服務或 process/fault experiments。來源 review、AST／compile-only
-以及普通編譯不能代替上述專項驗證。後續必須固定 exact source identity 並取得獨立 review。
+這份清單區分已完成的普通驗證與仍待執行的專項。Stage 2 仍未驗收；Stage 3–6 也未因此完成。
+固定Rust CLI已普通build，113項pure／mocked regression已在300s預算內完整通過，
+tripwire記錄zero blocked attempts；來源與歷次失敗見[普通驗證結果](../evidence/experimental-rebuild/stage2-ordinary-build-unit-results.json)。
+這些結果不包含Rust record/replay、shrinker、SQL、服務或process/fault experiments。
+後續專項仍必須固定exact source identity並取得獨立review。
 目前來源已修正先前五個 blocker：prospective fence、獨立 witness binding、actual coordinator
-projection、shrink exact target/history、多 Unknown caller knowledge。已完成的本地檢查僅為
-格式／語法／普通 normal/test target 編譯與只讀 source/evidence review。
+projection、shrink exact target/history、多 Unknown caller knowledge。此前的格式／語法／普通normal/test target編譯與source review之外，本輪增加上述完整pure/mock驗證。
 後續 observed_at source 修正保留實際 SQL 分類時間及完整 reconciliation effect，controlled output
 改為 v4；這項來源／編譯成果仍未經真 SQL 或 saved replay 驗證。
 
@@ -15,13 +15,13 @@ projection、shrink exact target/history、多 Unknown caller knowledge。已完
 - `247522e9`、`cca8f120`、`280da7d8`、`87ec1c2` 的既有 CI 各自完整成功，32 jobs 成功、1個 schedule-only skip
 - CI 的 Rust test job 是 workspace/all-targets/all-features；其結果只屬各自 exact commit
 - `.github/workflows/ci.yml` 目前沒有執行 `scripts/test-controlled-admission.py`，不可把普通 CI 當作 dedicated Python reader/oracle 通過
-- 本輪尚未執行目前 v4 Rust CLI 的 saved corpus、真實 replay、縮減或相容 projection 重播；上述 CI 不包含 v4 增量
-- 編譯檢查不執行 regression bodies；mocked reader tests 即使將來通過，也不能代替真 Rust replay
+- 本輪尚未執行目前 v4 Rust CLI 的 saved corpus、真實 replay、縮減或相容 projection 重播；普通 CI 的 Rust 測試不等於這些專項
+- 最新`10cecb74`普通CI完整成功32／1；本地113項pure/mock已通過，仍不能代替真Rust replay或SQL conformance
 
 ## 下一步驗證與必要退出
 
 1. 先固定新 commit/tree、dirty patch、實際 source scope、Cargo.lock、toolchain、features及新建 binary SHA256；外層保留 build/check 前後相同來源 map
-2. 執行 dedicated Python oracle/reader regressions，保留每個失敗及真實分類。確認 incomplete／Cancelled／InvalidScenario／ReplayDivergence 不互相代替
+2. 已執行完整113項pure/mock oracle／reader regression；兩次120s未完成及一項fixture error保留，修正後300s通過。後續來源改動需重驗受影響項，且不得把此結果當實際Rust replay
 3. 用新建的 trusted Rust CLI 錄下完整 concrete inputs、effect order及真實 outcomes；prediction不能標作observed。比較既有同案例前後行為，刻意修正另列
 4. 從保存檔真正重播每個case和固定 rejection fixture。移除或修改input、output、schema、correlation、target、provenance都須拒絕；不能接受自洽但錯誤的期待值
 5. 執行固定3→2 counterexample縮減。原始／候選／positive control／reduced順序與因果關係要成立；保持同一cap failure target，positive control為精確既定的一列移除並得4096
@@ -244,7 +244,7 @@ timeout 的固定 timer semantics，並不是 hostile-process／whole-system cle
 目前 Debian patched binary 的 runtime verification。adapter 自身的 actual terminal outcome 必須由可信
 invoker 觀察；post-work保存失敗即使留下完整檔案也不能採為 caller authority。
 
-目前僅新增 caller source／mocked regression source，未執行其 regression、timeout 包裹的 workload、
+Caller的pure/mock regression已完成；尚未執行真實timeout包裹的controlled workload、
 record／replay 或任何82-run artifacts。真正的 reviewed Python hash、contract、capture 與執行安全判定
 仍待完成；不能把保存的 JSON 當自我授權的 enforcement 證據。
 

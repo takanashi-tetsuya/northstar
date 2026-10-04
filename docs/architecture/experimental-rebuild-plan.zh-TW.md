@@ -360,3 +360,21 @@ code-object checks為exit0；詳見[短來源檢查紀錄](../evidence/experimen
 本輪僅另讀本機timeout version／help及官方來源；沒有執行timeout workload、新mock測試、
 82-case runner或服務。下一步仍須普通build取得真正Rust executable身分，再按精確有限
 執行方案驗證。Caller源碼補齊不等於監督或Stage2已驗收。
+
+
+## 普通build及完整pure/mock驗證結果
+
+`10cecb74`保存total-only caller並通過普通CI32 success／1 skip。固定Rust CLI以
+offline／locked、單一build job成功產出；binary SHA256為
+`4fbeb389e32790823cb53446b9e16cd428ee6763136e374fd00878c9c44210df`，尚未執行。
+
+Pure/mock首輪120s不完整；刪除mock callback丟棄的重複evaluation後，第二輪仍120s不完整。
+經明確校準為同一完整113項／300s，第三輪完成但有一個test fixture error：4098 active
+配4097 retained先被正確的shape gate拒絕。保留這項拒絕斷言，另以4098／4098驗證原先
+預期的ReplayDivergence與target rejection；沒有放寬oracle或刪除case。
+
+最終113項全部通過，215.889s、exit0、zero recorded blocked attempts，15檔來源前後
+hash相同，log未超界。兩個120s不完整run沒有terminal tripwire結果，不能稱zero attempts。
+[短結果與歷史run](../evidence/experimental-rebuild/stage2-ordinary-build-unit-results.json)保留各自
+source／log hash、結果和一次性tripwire來源；它不是syscall sandbox。這只是普通build與
+pure/mock gate，Rust82-case record／replay及Stage2子退出仍待新的有限執行判定。

@@ -1227,6 +1227,106 @@ def prune_bindings(value):
     return result
 
 
+SHRINK_SCOPE = ('Bounded deletion of independent commands; every candidate and positive control reruns shared Rust. '
+                'No global minimality claim.')
+SHRINK_EVALUATION_FIELDS = ('verdict qualified replay_matched complete evidence_overflow first_mismatch '
+                            'compatibility_mismatch invariant')
+
+
+def shrink_deletion(value, operation_id):
+    """The sole reduction operator: delete one non-target command, then prune.
+
+    Retained commands, initial rows/proofs, clocks, budgets and used material
+    are immutable. Parsing the candidate checks remaining causal references.
+    """
+    require(operation_id not in ('op-1', 'op-2') and
+            any(c['operation_id'] == operation_id for c in value['commands']), 'shrink_deletion_target')
+    candidate = copy.deepcopy(value)
+    candidate['commands'] = [c for c in candidate['commands'] if c['operation_id'] != operation_id]
+    candidate = prune_bindings(candidate)
+    verify_late_premise(candidate)
+    return candidate
+
+
+def shrink_positive_control(value):
+    """Exact control operator: remove the first target-actor accepted row."""
+    begin, _ = verify_late_premise(value)
+    positive = copy.deepcopy(value)
+    accepted = next(r for r in positive['initial']['rows']
+                    if r['actor'] == begin['actor'] and r['state'] == 'accepted')
+    positive['initial']['rows'].remove(accepted)
+    return prune_bindings(positive)
+
+
+def _shrink_target_event(event):
+    """Keep the violating fact and coordinator semantics, not diagnostics.
+
+    A deleted independent command can move an event's index, change actor or
+    proof diagnostics, or change retained/caller aggregate counts. The complete
+    event still has to match its own independent oracle on every reexecution.
+    Stable operation identity supplies the location across ordered deletions.
+    """
+    result = {key: copy.deepcopy(item) for key, item in event.items() if key not in ('index', 'world', 'caller')}
+    result['world'] = {key: copy.deepcopy(item) for key, item in event['world'].items()
+                       if key not in ('retained', 'actor_sequence', 'proof_present')}
+    result['caller'] = {key: copy.deepcopy(item) for key, item in event['caller'].items()
+                        if key not in ('active_min', 'active_max', 'retained_min', 'retained_max')}
+    return result
+
+
+def shrink_target(value, output, evaluation):
+    """Independent fixed late-finalize target; a self-consistent Pass is not it.
+
+    Callers compare the entire actual output/evaluation with the independent
+    oracle first. This signature compares only contract facts across reductions;
+    it is not a replacement for those per-input exact comparisons.
+    """
+    begin, finalize = verify_late_premise(value)
+    if not (evaluation['verdict'] == 'InvariantViolation' and evaluation['replay_matched'] is True and
+            evaluation['complete'] is True and evaluation['qualified'] is False and
+            evaluation['evidence_overflow'] is False):
+        return None
+    invariant = evaluation['invariant']
+    identity = {'id': 'actor-active-cap-4096', 'class': 'Safety',
+                'location': finalize['operation_id'], 'cut': finalize['schedule']['cut']}
+    if not (type(invariant) is dict and all(invariant.get(key) == item for key, item in identity.items()) and
+            invariant == derive_invariant(value, output['projection'])):
+        return None
+    events = {event['operation_id']: event for event in output['projection']}
+    reserve, accepted = events.get(begin['operation_id']), events.get(finalize['operation_id'])
+    if reserve is None or accepted is None:
+        return None
+    for event, result, active, completion in ((reserve, 'Proceed', CAPACITY, 'Begin.Reserved'),
+                                              (accepted, 'Accepted', CAPACITY + 1, 'Finalize.AcceptPending')):
+        coordinator = event['coordinator']
+        if not (event['world']['result'] == event['domain'] == result and event['world']['active'] == active and
+                event['world']['committed'] is True and event['execution'] == 'Completed' and
+                event['cancellation'] is False and coordinator['state'] == 'Finished' and
+                coordinator['outcome'] == 'Completed' and coordinator['result'] is not None and
+                coordinator['result']['kind'] == completion and event['witness']['kind'] == 'ReceiptKnown'):
+            return None
+    if not (reserve['caller']['reservation_receipt'] is True and
+            accepted['caller']['finalization_receipt'] is True and
+            accepted['world']['row_state'] == 'accepted' and invariant['output'] == accepted):
+        return None
+    pending = next(r for r in value['initial']['rows'] if r['key'] == finalize['key'])
+    return {'invariant': identity, 'actor': begin['actor'], 'pending': copy.deepcopy(pending),
+            'reserve': _shrink_target_event(reserve), 'finalize': _shrink_target_event(accepted)}
+
+
+def _shrink_positive_pass(output, evaluation):
+    if not (evaluation['verdict'] == 'Pass' and evaluation['qualified'] is True and
+            evaluation['replay_matched'] is True and evaluation['complete'] is True and
+            evaluation['evidence_overflow'] is False and evaluation['invariant'] is None):
+        return False
+    events = {event['operation_id']: event for event in output['projection']}
+    begin, finalize = events.get('op-1'), events.get('op-2')
+    return (begin is not None and finalize is not None and
+            begin['world']['result'] == 'Proceed' and begin['world']['active'] == CAPACITY - 1 and
+            finalize['world']['result'] == 'Accepted' and finalize['world']['active'] == CAPACITY and
+            finalize['caller']['finalization_receipt'] is True)
+
+
 def shrink_counterexample(value, binary, *, expected_provenance, directory, root=ROOT):
     """Reexecute every tested reduction; no modeled candidate is observed evidence."""
     verify_late_premise(value)
@@ -1238,45 +1338,34 @@ def shrink_counterexample(value, binary, *, expected_provenance, directory, root
         path.write_text(canonical(candidate) + '\n')
         execution = run_saved_input(path, binary, expected_provenance=expected_provenance, root=root)
         require(execution['returncode'] == 0, 'shrink_runner_rejected')
+        require(execution['output'] == expected_output(candidate), 'shrink_oracle_mismatch')
         result = evaluate(candidate, execution['output'], expected_failure=expected_counterexample(candidate))
         saved = {'input': candidate, 'execution': execution, 'evaluation': result}
         (directory / (name + '.execution.json')).write_text(canonical(saved) + '\n')
         attempts.append(saved)
         return saved
     original = execute_candidate(value, 'original')
-    require(original['evaluation']['replay_matched'] and original['evaluation']['verdict'] == 'InvariantViolation', 'shrink_original_mismatch')
+    target = shrink_target(value, original['execution']['output'], original['evaluation'])
+    require(target is not None, 'shrink_original_mismatch')
     reduced = copy.deepcopy(value)
     for command in list(reduced['commands']):
         if command['operation_id'] in ('op-1', 'op-2'):
             continue
-        candidate = copy.deepcopy(reduced)
-        candidate['commands'] = [c for c in candidate['commands'] if c['operation_id'] != command['operation_id']]
-        candidate = prune_bindings(candidate)
         try:
-            verify_late_premise(candidate)
+            candidate = shrink_deletion(reduced, command['operation_id'])
         except InvalidScenario:
             continue
         execution = execute_candidate(candidate, f'candidate-{len(attempts)}')
-        invariant = execution['evaluation']['invariant']
-        # The invariant's complete event and all semantic fields stay exact.
-        original_invariant = original['evaluation']['invariant']
-        same = invariant is not None and all(invariant[key] == original_invariant[key] for key in ('id', 'class', 'cut', 'location'))
-        if same:
-            same = invariant['output'] == original_invariant['output']
-        if execution['evaluation']['replay_matched'] and same:
+        if shrink_target(candidate, execution['execution']['output'], execution['evaluation']) == target:
             reduced = candidate
-    # Positive control removes one accepted row, preserving cleanup and both commands.
-    positive = copy.deepcopy(reduced)
-    accepted = next(r for r in positive['initial']['rows'] if r['actor'] == 'actor-a' and r['state'] == 'accepted')
-    positive['initial']['rows'].remove(accepted)
-    positive = prune_bindings(positive)
+    positive = shrink_positive_control(reduced)
     control = execute_candidate(positive, 'positive-control')
-    require(control['evaluation']['verdict'] == 'Pass' and control['evaluation']['replay_matched'], 'shrink_positive_control')
+    require(_shrink_positive_pass(control['execution']['output'], control['evaluation']), 'shrink_positive_control')
     final = execute_candidate(reduced, 'reduced')
-    require(final['evaluation']['replay_matched'], 'shrink_final_mismatch')
+    require(shrink_target(reduced, final['execution']['output'], final['evaluation']) == target, 'shrink_final_mismatch')
     result = {'schema': 'northstar-controlled-shrink-v1', 'original': original, 'attempts': attempts,
               'reduced': final, 'positive_control': control,
-              'scope': 'Bounded deletion of independent commands; every candidate and positive control reruns shared Rust. No global minimality claim.'}
+              'scope': SHRINK_SCOPE}
     (directory / 'shrink.json').write_text(canonical(result) + '\n')
     return result
 
@@ -1327,6 +1416,91 @@ def record_corpus(directory, binary, *, expected_provenance, root=ROOT):
             'scope': 'Actual controlled Rust only; no real adapter qualification'}
 
 
+def _validate_shrink_attempt(saved, expected_provenance):
+    fields(saved, 'input execution evaluation', 'shrink_attempt')
+    value, execution, evaluation = saved['input'], saved['execution'], saved['evaluation']
+    parse_scenario(value)
+    fields(execution, 'command returncode wall_ms input_file_sha256 stdout_sha256 output provenance', 'shrink_execution')
+    require(type(execution['command']) is list and len(execution['command']) == 2 and
+            all(type(part) is str and part for part in execution['command']), 'shrink_execution_command')
+    require(type(execution['returncode']) is int and execution['returncode'] == 0 and
+            execution['provenance'] == expected_provenance, 'shrink_execution_identity')
+    integer(execution['wall_ms'], 'shrink_wall_ms')
+    for name in ('input_file_sha256', 'stdout_sha256'):
+        require(type(execution[name]) is str and re.fullmatch('[a-f0-9]{64}', execution[name]), 'shrink_execution_hash')
+    require(execution['input_file_sha256'] == hashlib.sha256((canonical(value) + '\n').encode()).hexdigest(),
+            'shrink_input_hash')
+    validate_output(value, execution['output'])
+    fields(evaluation, SHRINK_EVALUATION_FIELDS, 'shrink_evaluation')
+    require(evaluation['verdict'] in stage1.VERDICTS, 'shrink_verdict')
+    for name in ('qualified', 'replay_matched', 'complete', 'evidence_overflow'):
+        boolean(evaluation[name], 'shrink_' + name)
+
+
+def replay_shrink(shrink, binary, *, expected_provenance, root=ROOT):
+    """Reexecute the source-declared deletion history and its exact failure.
+
+    The corpus is anchored to late_candidate(), currently three commands reduced
+    to two. This checks that bounded history, not arbitrary subset minimization.
+    Every selected role is a validated, actually rerun member in its declared
+    position; saved expectations never choose the failure or the next candidate.
+    """
+    bounded(shrink)
+    validate_provenance(expected_provenance)
+    fields(shrink, 'schema original attempts reduced positive_control scope', 'shrink')
+    require(shrink['schema'] == 'northstar-controlled-shrink-v1' and shrink['scope'] == SHRINK_SCOPE, 'shrink_contract')
+    attempts = array(shrink['attempts'], 'shrink_attempts', MAX_STEPS + 3)
+    require(len(attempts) >= 3, 'shrink_missing_attempts')
+    for role, index in (('original', 0), ('positive_control', -2), ('reduced', -1)):
+        fields(shrink[role], 'input execution evaluation', 'shrink_' + role)
+        require(shrink[role] == attempts[index], 'shrink_role_member:' + role)
+    require(shrink['original']['input'] == late_candidate(), 'shrink_original')
+    for saved in attempts:
+        _validate_shrink_attempt(saved, expected_provenance)
+
+    def reexecute(saved):
+        value, prior = saved['input'], saved['execution']
+        with tempfile.TemporaryDirectory(prefix='northstar-replay-shrink-') as scratch:
+            path = Path(scratch) / 'input.json'
+            path.write_text(canonical(value) + '\n')
+            executed = run_saved_input(path, binary, expected_provenance=expected_provenance, root=root)
+        require(executed['returncode'] == 0 and executed['provenance'] == expected_provenance and
+                executed['input_file_sha256'] == prior['input_file_sha256'] and
+                executed['stdout_sha256'] == prior['stdout_sha256'], 'shrink_reexecution_identity')
+        require(executed['output'] == prior['output'] == expected_output(value), 'shrink_reexecution_mismatch')
+        evaluation = evaluate(value, executed['output'], expected_failure=expected_counterexample(value))
+        require(evaluation == saved['evaluation'], 'shrink_evaluation_changed')
+        return executed['output'], evaluation
+
+    original = shrink['original']['input']
+    output, evaluation = reexecute(attempts[0])
+    target = shrink_target(original, output, evaluation)
+    require(target is not None, 'shrink_original_target')
+    selected, cursor = original, 1
+    for command in original['commands']:
+        if command['operation_id'] in ('op-1', 'op-2'):
+            continue
+        try:
+            candidate = shrink_deletion(selected, command['operation_id'])
+        except InvalidScenario:
+            continue
+        require(cursor < len(attempts) - 2 and attempts[cursor]['input'] == candidate, 'shrink_candidate_history')
+        output, evaluation = reexecute(attempts[cursor])
+        if shrink_target(candidate, output, evaluation) == target:
+            selected = candidate
+        cursor += 1
+    require(cursor == len(attempts) - 2, 'shrink_extra_attempts')
+    require(shrink['reduced']['input'] == selected and len(selected['commands']) < len(original['commands']),
+            'shrink_selected_reduction')
+    positive = shrink_positive_control(selected)
+    require(shrink['positive_control']['input'] == positive, 'shrink_positive_relation')
+    output, evaluation = reexecute(attempts[-2])
+    require(_shrink_positive_pass(output, evaluation), 'shrink_positive_control')
+    output, evaluation = reexecute(attempts[-1])
+    require(shrink_target(selected, output, evaluation) == target, 'shrink_reduced_target')
+    return len(attempts)
+
+
 def replay_corpus(directory, binary, *, expected_provenance, root=ROOT):
     """Reexecute saved concrete input files; saved outputs never replace execution."""
     directory = Path(directory)
@@ -1366,22 +1540,7 @@ def replay_corpus(directory, binary, *, expected_provenance, root=ROOT):
                 executed['output'] == prior['output'] == saved['expected_rejection'] == expected, 'rejection_reexecution_mismatch')
     require(manifest['shrink_file'] == 'shrink/shrink.json', 'shrink_path')
     shrink = read_json(directory / manifest['shrink_file'])
-    fields(shrink, 'schema original attempts reduced positive_control scope', 'shrink')
-    require(shrink['schema'] == 'northstar-controlled-shrink-v1' and shrink['original']['input'] == late_candidate(), 'shrink_original')
-    verify_late_premise(shrink['reduced']['input'])
-    require(len(shrink['reduced']['input']['commands']) < len(shrink['original']['input']['commands']), 'shrink_not_reduced')
-    for index, saved in enumerate(shrink['attempts']):
-        fields(saved, 'input execution evaluation', 'shrink_execution')
-        value = saved['input']
-        with tempfile.TemporaryDirectory(prefix='northstar-replay-shrink-') as scratch:
-            path = Path(scratch) / 'input.json'
-            path.write_text(canonical(value) + '\n')
-            executed = run_saved_input(path, binary, expected_provenance=expected_provenance, root=root)
-        failure = expected_counterexample(value)
-        require(executed['returncode'] == 0 and executed['output'] == saved['execution']['output'] == expected_output(value), 'shrink_reexecution_mismatch')
-        require(evaluate(value, executed['output'], expected_failure=failure) == saved['evaluation'], 'shrink_evaluation_changed')
-    require(shrink['reduced'] in shrink['attempts'] and shrink['positive_control'] in shrink['attempts'] and
-            shrink['positive_control']['evaluation']['verdict'] == 'Pass', 'shrink_control')
+    shrink_executions = replay_shrink(shrink, binary, expected_provenance=expected_provenance, root=root)
     check_current_provenance(binary, expected_provenance, root)
     return {'replay_matched': True, 'cases': len(cases), 'rejections': len(rejections),
-            'shrink_executions': len(shrink['attempts']), 'scope': 'Actual controlled Rust reexecution only'}
+            'shrink_executions': shrink_executions, 'scope': 'Actual controlled Rust reexecution only'}

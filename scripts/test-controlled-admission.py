@@ -263,6 +263,232 @@ class IndependentOracleTests(unittest.TestCase):
         self.assertNotIn(value['commands'][0]['guard']['normalized_payload'], output)
 
 
+class ShrinkReaderTests(unittest.TestCase):
+    """Reader contract regressions with explicitly mocked executions, not Rust evidence."""
+
+    def setUp(self):
+        files = {'source.rs': '1' * 64}
+        self.provenance = {'schema': 'northstar-admission-controlled-provenance-v1', 'model': controlled.MODEL,
+                           'adapter': controlled.ADAPTER, 'binding_version': controlled.BINDING_VERSION,
+                           'source_sha256': controlled.digest(files), 'source_files': files,
+                           'binary_sha256': '2' * 64, 'cargo_lock_sha256': '3' * 64,
+                           'toolchain': 'rustc 1.97.1 (mock reader identity only)'}
+        original = controlled.late_candidate()
+        reduced = controlled.late_candidate(noise=False)
+        positive = copy.deepcopy(reduced)
+        positive['initial']['rows'].pop(0)
+        positive = controlled.prune_bindings(positive)
+        attempts = [self.record(original, 'original'), self.record(reduced, 'candidate-1'),
+                    self.record(positive, 'positive-control'), self.record(reduced, 'reduced')]
+        self.shrink = {'schema': 'northstar-controlled-shrink-v1', 'original': attempts[0],
+                       'attempts': attempts, 'positive_control': attempts[2], 'reduced': attempts[3],
+                       'scope': controlled.SHRINK_SCOPE}
+
+    def record(self, value, name):
+        output = controlled.expected_output(value)
+        execution = {'command': ['/mock/controlled-admission', '/mock/' + name + '.input.json'],
+                     'returncode': 0, 'wall_ms': 0,
+                     'input_file_sha256': hashlib.sha256((controlled.canonical(value) + '\n').encode()).hexdigest(),
+                     'stdout_sha256': hashlib.sha256((controlled.canonical(output) + '\n').encode()).hexdigest(),
+                     'output': output, 'provenance': copy.deepcopy(self.provenance)}
+        return {'input': copy.deepcopy(value), 'execution': execution,
+                'evaluation': controlled.evaluate(value, output, expected_failure=controlled.expected_counterexample(value))}
+
+    def replay_mocked(self, shrink):
+        observed = []
+        def reexecute(path, _binary, **_kwargs):
+            value = controlled.read_json(path)
+            observed.append(value)
+            return self.record(value, 'mock-reexecution')['execution']
+        with patch.object(controlled, 'run_saved_input', side_effect=reexecute):
+            count = controlled.replay_shrink(shrink, '/mock/controlled-admission', expected_provenance=self.provenance)
+        return count, observed
+
+    def replace_reduction(self, value):
+        self.shrink['attempts'][1] = self.record(value, 'candidate-1')
+        self.shrink['reduced'] = self.record(value, 'reduced')
+        self.shrink['attempts'][-1] = self.shrink['reduced']
+
+    def test_canonical_history_reexecutes_original_candidate_control_and_selected_reduction(self):
+        count, observed = self.replay_mocked(self.shrink)
+        self.assertEqual(count, 4)
+        self.assertEqual(observed, [attempt['input'] for attempt in self.shrink['attempts']])
+        self.assertEqual(len(observed[0]['commands']), 3)
+        self.assertEqual(len(observed[-1]['commands']), 2)
+        self.assertEqual(self.shrink['reduced']['evaluation']['invariant']['location'], 'op-2')
+        self.assertEqual(self.shrink['positive_control']['evaluation']['verdict'], 'Pass')
+
+    def test_selfconsistent_reduced_guard_denial_pass_does_not_preserve_target(self):
+        correct_candidates = copy.deepcopy(self.shrink)
+        reduced = copy.deepcopy(self.shrink['reduced']['input'])
+        begin = reduced['commands'][0]
+        begin['guard']['allowed'] = False
+        begin['schedule']['completions'] = [controlled.completion_for(begin)]
+        controlled.verify_late_premise(reduced)
+        self.replace_reduction(reduced)
+        saved = self.shrink['reduced']
+        self.assertEqual(saved['evaluation']['verdict'], 'Pass')
+        self.assertTrue(saved['evaluation']['replay_matched'])
+        self.assertEqual(saved['execution']['output']['projection'][1]['world']['active'], 4096)
+        self.assertIsNone(controlled.shrink_target(reduced, saved['execution']['output'], saved['evaluation']))
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_candidate_history'):
+            self.replay_mocked(self.shrink)
+        correct_candidates['reduced'] = saved
+        correct_candidates['attempts'][-1] = saved
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_selected_reduction'):
+            self.replay_mocked(correct_candidates)
+
+    def test_causal_cut_clock_and_used_material_mutations_are_not_deletions(self):
+        original = copy.deepcopy(self.shrink)
+        def change_cut(value):
+            value['commands'][1]['schedule'].update(cut='commit_unknown', world_commit=True)
+        def change_causal(value):
+            value['commands'][1]['causal_id'] = None
+        def change_time(value):
+            value['commands'][1]['times']['finalize_us'] = 2
+        def change_material(value):
+            value['bindings']['payloads'][0]['hex'] = 'a' * 64
+        for mutate in (change_cut, change_causal, change_time, change_material):
+            with self.subTest(mutation=mutate.__name__):
+                self.shrink = copy.deepcopy(original)
+                reduced = copy.deepcopy(self.shrink['reduced']['input'])
+                mutate(reduced)
+                self.replace_reduction(reduced)
+                with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_candidate_history'):
+                    self.replay_mocked(self.shrink)
+
+    def test_target_rejects_other_invariant_class_location_cut_and_violating_fact(self):
+        saved = self.shrink['reduced']
+        value, output = saved['input'], saved['execution']['output']
+        for field, replacement in (('id', 'other-invariant'), ('class', 'ReplayDivergence'),
+                                    ('location', 'op-1'), ('cut', 'commit_unknown')):
+            evaluation = copy.deepcopy(saved['evaluation'])
+            evaluation['invariant'][field] = replacement
+            self.assertIsNone(controlled.shrink_target(value, output, evaluation))
+        changed = copy.deepcopy(output)
+        changed['projection'][1]['world']['active'] = 4098
+        evaluation = controlled.evaluate(value, changed, expected_failure=controlled.expected_counterexample(value))
+        self.assertEqual(evaluation['invariant']['class'], 'ReplayDivergence')
+        self.assertIsNone(controlled.shrink_target(value, changed, evaluation))
+        evaluation = copy.deepcopy(saved['evaluation'])
+        evaluation['invariant']['output']['world']['active'] = 4096
+        self.assertIsNone(controlled.shrink_target(value, output, evaluation))
+
+    def test_missing_malformed_or_orphaned_role_members_are_rejected_before_reexecution(self):
+        variants = []
+        for role, index in (('original', 0), ('reduced', -1), ('positive_control', -2)):
+            missing = copy.deepcopy(self.shrink)
+            missing.pop(role)
+            variants.append(missing)
+            malformed = copy.deepcopy(self.shrink)
+            malformed[role] = None
+            variants.append(malformed)
+            orphan = copy.deepcopy(self.shrink)
+            orphan[role] = copy.deepcopy(orphan[role])
+            orphan[role]['execution']['command'][1] = '/orphan.input.json'
+            variants.append(orphan)
+            removed = copy.deepcopy(self.shrink)
+            removed['attempts'].pop(index)
+            variants.append(removed)
+        for bad_attempts in (None, {}, [], [None] * 4):
+            malformed = copy.deepcopy(self.shrink)
+            malformed['attempts'] = bad_attempts
+            variants.append(malformed)
+        for malformed in variants:
+            with patch.object(controlled, 'run_saved_input', side_effect=AssertionError('malformed member must not run')):
+                with self.assertRaises(controlled.InvalidScenario):
+                    controlled.replay_shrink(malformed, '/mock/controlled-admission', expected_provenance=self.provenance)
+
+    def test_missing_extra_or_reordered_candidate_attempts_are_not_a_reducer_history(self):
+        variants = []
+        missing = copy.deepcopy(self.shrink)
+        missing['attempts'].pop(1)
+        variants.append(missing)
+        extra = copy.deepcopy(self.shrink)
+        extra['attempts'].insert(1, copy.deepcopy(extra['attempts'][1]))
+        variants.append(extra)
+        swapped = copy.deepcopy(self.shrink)
+        swapped['attempts'][0], swapped['attempts'][-1] = swapped['attempts'][-1], swapped['attempts'][0]
+        variants.append(swapped)
+        for malformed in variants:
+            with self.assertRaises(controlled.InvalidScenario):
+                self.replay_mocked(malformed)
+
+    def test_saved_execution_shape_provenance_status_and_input_hash_are_required(self):
+        def missing_field(record):
+            record['execution'].pop('provenance')
+        def wrong_provenance(record):
+            record['execution']['provenance']['binary_sha256'] = '4' * 64
+        def rejected_status(record):
+            record['execution']['returncode'] = 2
+        def boolean_status(record):
+            record['execution']['returncode'] = False
+        def wrong_input_hash(record):
+            record['execution']['input_file_sha256'] = '4' * 64
+        def malformed_hash(record):
+            record['execution']['stdout_sha256'] = 'not-a-hash'
+        def malformed_evaluation(record):
+            record['evaluation'] = {'verdict': 'InvariantViolation'}
+        for mutate in (missing_field, wrong_provenance, rejected_status, boolean_status,
+                       wrong_input_hash, malformed_hash, malformed_evaluation):
+            malformed = copy.deepcopy(self.shrink)
+            mutate(malformed['original'])
+            with self.subTest(mutation=mutate.__name__), \
+                    patch.object(controlled, 'run_saved_input', side_effect=AssertionError('invalid execution must not run')):
+                with self.assertRaises(controlled.InvalidScenario):
+                    controlled.replay_shrink(malformed, '/mock/controlled-admission', expected_provenance=self.provenance)
+
+    def test_actual_reexecution_hash_and_evaluation_must_match_saved_records(self):
+        malformed = copy.deepcopy(self.shrink)
+        malformed['original']['execution']['stdout_sha256'] = '4' * 64
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_reexecution_identity'):
+            self.replay_mocked(malformed)
+        malformed = copy.deepcopy(self.shrink)
+        malformed['reduced']['evaluation']['invariant']['class'] = 'Responsibility'
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_evaluation_changed'):
+            self.replay_mocked(malformed)
+
+    def test_positive_control_must_be_exact_first_row_removal_from_selected_reduction(self):
+        positive = copy.deepcopy(self.shrink['reduced']['input'])
+        positive['initial']['rows'].pop(1)
+        positive = controlled.prune_bindings(positive)
+        control = self.record(positive, 'positive-control')
+        self.assertEqual(control['evaluation']['verdict'], 'Pass')
+        self.assertEqual(control['execution']['output']['projection'][1]['world']['active'], 4096)
+        self.shrink['positive_control'] = control
+        self.shrink['attempts'][-2] = control
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_positive_relation'):
+            self.replay_mocked(self.shrink)
+        self.shrink['positive_control'] = self.record(
+            controlled.scenario('unrelated-pass', [controlled.controlled_command(1)]), 'positive-control')
+        self.shrink['attempts'][-2] = self.shrink['positive_control']
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_positive_relation'):
+            self.replay_mocked(self.shrink)
+
+    def test_legal_deletion_can_change_index_and_actor_diagnostics_but_preserve_target(self):
+        # This exercises the shared relation helper, not an expanded corpus:
+        # replay_shrink still requires the exact source late_candidate original.
+        original = controlled.late_candidate()
+        noise = original['commands'].pop()
+        noise.update(action='guard_persistent', actor='actor-a')
+        noise['guard']['actor_sequence_delta'] = 1
+        noise['schedule']['completions'] = [controlled.completion_for(noise)]
+        original['commands'].insert(0, noise)
+        reduced = controlled.shrink_deletion(original, noise['operation_id'])
+        before, after = self.record(original, 'before'), self.record(reduced, 'after')
+        before_fact = before['evaluation']['invariant']['output']
+        after_fact = after['evaluation']['invariant']['output']
+        self.assertEqual((before_fact['index'], after_fact['index']), (2, 1))
+        self.assertEqual((before_fact['world']['actor_sequence'], after_fact['world']['actor_sequence']), (1, 0))
+        target = controlled.shrink_target(original, before['execution']['output'], before['evaluation'])
+        self.assertIsNotNone(target)
+        self.assertEqual(target, controlled.shrink_target(reduced, after['execution']['output'], after['evaluation']))
+        self.shrink['original'] = before
+        self.shrink['attempts'][0] = before
+        with self.assertRaisesRegex(controlled.InvalidScenario, 'shrink_original'):
+            self.replay_mocked(self.shrink)
+
+
 class DriverTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

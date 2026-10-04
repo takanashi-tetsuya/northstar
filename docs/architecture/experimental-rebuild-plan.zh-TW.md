@@ -241,3 +241,23 @@ authority observation 的小型 failure／位置在證據裁切前保留，不�
 `247522e9` 的既有 CI `37165020720` 已完成，32 success／1 schedule-only skip／0 failure，
 包含 graph、Rust、DR 與 protocol gates。它只涵蓋前一個 commit，不包含上述尚待保存的
 projection v2，也不能倒推歷史 DR missing-TSV 根因或替代 Stage2 corpus 資格。
+
+## Shrink reader 的固定 target／history 窄修正
+
+`cca8f120` 已持久保存 projection v2。這次僅修正 Python reader／producer 的既有縮減契約，
+固定 original 為 op-1 reserve、op-2 finalize 加 trailing op-7，範圍是 3→2 的 ordered command
+deletion 與既有 unused-binding pruning，沒有新增通用最小化操作。
+
+Reader 依重新計算的結果重建原始／候選／positive control／final reduced 順序與成員關係，
+每案完整實際輸出仍須等於該案獨立 oracle。跨 candidate 比較契約導出的同一 target：
+Proceed／4096 → exact pending finalize Accepted／4097、同 invariant／semantic operation／cut
+與 authority facts；合法刪除造成的位置或無關 actor／proof 診斷变化不強制 byte equality。
+Positive control 必須是從選定 reduced input 移除既定第一列 actor-a accepted row 的精確轉換。
+因此自洽的 reduced Pass、不同 failure 或無關 control 不得取代指定反例。
+
+新增十個 mocked reader-contract regression methods，這次只做 AST 語法檢查與只讀 review，
+沒有 import／執行 project module、tests、shrinker、runner、corpus 或 replay。精確來源、契約與
+限制見 [shrink 窄修正紀錄](../evidence/experimental-rebuild/stage2-shrink-target-correction.json)。
+多 Unknown 的 caller knowledge 仍待修正；clock／as-of 與 Stage3／5 責任也仍開放。
+先前 `coordinators_finished` 僅指核心是否都有 Finished outcome；Finished 本身仍可能是 Unknown，
+不能據此宣稱 commit 確定或 domain responsibility 已 settlement。Stage2 仍未通過整體退出。

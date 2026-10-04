@@ -10,6 +10,7 @@ pub use input::{parse, Envelope, InputError};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use northstar_abuse_policy::{admission_execution as core, admission_transaction as tx};
     use serde_json::{json, Value};
     fn input() -> Value {
         let guard = json!({"account_bare":"a@example.test","normalized_target":"b@example.test","origin_id":"origin-1",
@@ -52,6 +53,11 @@ mod tests {
             {"index":2,"reason":"AlreadyCompleted","pending_preserved":true,"receipt_preserved":true}])
         );
         assert_eq!(p["completion"]["pending"], false);
+        assert_eq!(p["coordinator"]["state"], "Finished");
+        assert_eq!(p["coordinator"]["outcome"], "Completed");
+        assert_eq!(p["coordinator"]["result"]["kind"], "Begin.Reserved");
+        assert_eq!(p["coordinator"]["knowledge"], p["witness"]);
+        assert_eq!(out["coordinators_finished"], true);
         assert_eq!(p["world"]["active"], 1);
     }
     #[test]
@@ -60,6 +66,13 @@ mod tests {
         v["commands"][0]["schedule"]["cut"] = "commit_unknown".into();
         let returned = run(&v);
         assert_eq!(returned["projection"][0]["completion"]["accepted"], true);
+        assert_eq!(
+            returned["projection"][0]["coordinator"]["outcome"],
+            "Unknown"
+        );
+        assert_eq!(returned["projection"][0]["coordinator"]["cause"], "Backend");
+        assert_eq!(returned["projection"][0]["cancellation"], false);
+        assert_eq!(returned["coordinators_finished"], true);
         v["commands"][0]["schedule"]["cut"] = "commit_cancel".into();
         v["commands"][0]["schedule"]["completions"] = json!([]);
         let cancelled = run(&v);
@@ -70,7 +83,17 @@ mod tests {
         assert_eq!(p["caller"]["active_min"], 0);
         assert_eq!(p["caller"]["active_max"], 1);
         assert_eq!(p["caller"]["reservation_receipt"], false);
+        assert_eq!(p["domain"], "AwaitingCompletion");
+        assert_eq!(
+            p["coordinator"],
+            json!({"state":"Waiting","outcome":null,"result":null,"cause":null,"knowledge":null})
+        );
+        assert_eq!(p["witness"]["kind"], "CommitCallEntered");
+        assert_eq!(p["witness"]["fact"]["kind"], "Reserved");
+        assert_eq!(p["cancellation"], true);
         assert_eq!(cancelled["execution"], "Cancelled");
+        assert_eq!(cancelled["terminal"], true);
+        assert_eq!(cancelled["coordinators_finished"], false);
     }
     #[test]
     fn receipt_before_cancellation_is_preserved_without_caller_completion() {
@@ -83,6 +106,11 @@ mod tests {
         assert_eq!(p["caller"]["reservation_receipt"], true);
         assert_eq!(p["completion"]["accepted"], false);
         assert_eq!(p["completion"]["pending"], true);
+        assert_eq!(p["domain"], "AwaitingCompletion");
+        assert_eq!(p["coordinator"]["outcome"], Value::Null);
+        assert_eq!(p["witness"]["fact"]["fence"]["lease"], "lease-a");
+        assert_eq!(out["execution"], "Cancelled");
+        assert_eq!(out["coordinators_finished"], false);
     }
     #[test]
     fn no_valid_saved_completion_never_qualifies_terminal() {
@@ -92,6 +120,154 @@ mod tests {
         assert_eq!(out["execution"], "Inconclusive");
         assert_eq!(out["terminal"], false);
         assert_eq!(out["projection"][0]["caller"]["reservation_receipt"], true);
+        assert_eq!(out["projection"][0]["coordinator"]["state"], "Waiting");
+        assert_eq!(out["projection"][0]["execution"], "Inconclusive");
+        assert_eq!(out["coordinators_finished"], false);
+    }
+    #[test]
+    fn undelivered_failure_does_not_manufacture_an_outcome_from_the_cut() {
+        for cut in ["commit_unknown", "precommit_error"] {
+            let mut v = input();
+            v["commands"][0]["schedule"]["cut"] = cut.into();
+            v["commands"][0]["schedule"]["world_commit"] = (cut == "commit_unknown").into();
+            v["commands"][0]["schedule"]["completions"][0]["attempt"] = 2.into();
+            let out = run(&v);
+            let event = &out["projection"][0];
+            assert_eq!(event["domain"], "AwaitingCompletion");
+            assert_eq!(event["coordinator"]["outcome"], Value::Null);
+            assert_eq!(event["cancellation"], false);
+            assert_eq!(out["execution"], "Inconclusive");
+            assert_eq!(event["caller"]["unresolved"], cut == "commit_unknown");
+            if cut == "commit_unknown" {
+                assert_eq!(event["witness"]["fact"]["kind"], "Reserved");
+            }
+        }
+    }
+    fn retained_receipt(e: &Envelope) -> core::Receipt {
+        let c = &e.commands[0];
+        core::Receipt {
+            correlation: core::Correlation {
+                operation: c.operation_uuid,
+                effect: c.effect_number,
+                generation: c.generation,
+                attempt: c.attempt,
+            },
+            scope: core::TransactionScope::RatedBegin(core::BeginCommitPurpose::NewReservation),
+            fact: core::CommitFact::Reserved(tx::AdmissionFence {
+                admission_key: input::bytes32(&e.key(&c.key).hex).unwrap().to_vec(),
+                payload_mac: e.payload(&c.payload_tag),
+                lease_token: e.lease(&c.lease),
+            }),
+        }
+    }
+    #[test]
+    fn projection_observes_altered_core_classification_instead_of_saved_cut() {
+        let (e, _) = parse(&serde_json::to_vec(&input()).unwrap()).unwrap();
+        let receipt = retained_receipt(&e);
+        let core::CommitFact::Reserved(fence) = &receipt.fact else {
+            panic!("reservation fixture")
+        };
+        let completed = core::ExecutionState::Finished(core::ExecutionOutcome::Completed {
+            result: core::EffectResult::Begin(core::BeginResult::Reserved(fence.clone())),
+            knowledge: core::Knowledge::ReceiptKnown(receipt.clone()),
+        });
+        let preserved = core::ExecutionState::Finished(core::ExecutionOutcome::ReceiptPreserved {
+            receipt: receipt.clone(),
+            cause: core::FailureKind::Cancelled,
+        });
+        let unknown = core::ExecutionState::Finished(core::ExecutionOutcome::Unknown {
+            prepared: core::PreparedCommit {
+                correlation: receipt.correlation,
+                scope: receipt.scope,
+                fact: receipt.fact,
+            },
+            cause: core::FailureKind::Backend,
+        });
+        for (state, domain, outcome, knowledge) in [
+            (completed, "Proceed", "Completed", "ReceiptKnown"),
+            (
+                preserved,
+                "ReceiptPreserved",
+                "ReceiptPreserved",
+                "ReceiptKnown",
+            ),
+            (unknown, "Unknown", "Unknown", "CommitCallEntered"),
+        ] {
+            // All three consume the identical input whose cut is "none".
+            let observed = execution::coordinator_projection(&e, &state);
+            assert_eq!(execution::coordinator_domain(&state), domain);
+            assert_eq!(observed["outcome"], outcome);
+            assert_eq!(observed["knowledge"]["kind"], knowledge);
+            assert_eq!(observed["knowledge"]["fact"]["fence"]["key"], "key-a");
+        }
+    }
+    #[test]
+    fn actual_unbound_and_out_of_input_range_values_remain_observation_failures() {
+        let (e, _) = parse(&serde_json::to_vec(&input()).unwrap()).unwrap();
+        let mut receipt = retained_receipt(&e);
+        receipt.correlation.operation = uuid::Uuid::from_u128(9);
+        receipt.correlation.effect = 0;
+        receipt.correlation.generation = u64::MAX;
+        receipt.correlation.attempt = u32::MAX;
+        let core::CommitFact::Reserved(fence) = &mut receipt.fact else {
+            panic!("reservation fixture")
+        };
+        fence.admission_key = vec![0xff; 32];
+        let state = core::ExecutionState::Finished(core::ExecutionOutcome::ReceiptPreserved {
+            receipt,
+            cause: core::FailureKind::Backend,
+        });
+        let observed = execution::coordinator_projection(&e, &state);
+        assert_eq!(observed["knowledge"]["correlation"]["mapped"], false);
+        assert_eq!(
+            observed["knowledge"]["correlation"]["operation_id"],
+            Value::Null
+        );
+        assert_eq!(observed["knowledge"]["correlation"]["effect_number"], 0);
+        assert_eq!(observed["knowledge"]["correlation"]["generation"], u64::MAX);
+        assert_eq!(observed["knowledge"]["fact"]["fence"]["mapped"], false);
+        assert_eq!(observed["knowledge"]["fact"]["fence"]["key"], Value::Null);
+    }
+    #[test]
+    fn stage1_cancel_translation_keeps_native_waiting_observation() {
+        let mut v = input();
+        v["commands"][0]["schedule"]["cut"] = "before_effect_cancel".into();
+        v["commands"][0]["schedule"]["world_commit"] = false.into();
+        v["commands"][0]["schedule"]["completions"] = json!([]);
+        let (e, _) = parse(&serde_json::to_vec(&v).unwrap()).unwrap();
+        let out = run(&v);
+        let native = &out["projection"][0];
+        assert_eq!(native["domain"], "AwaitingCompletion");
+        assert_eq!(native["coordinator"]["state"], "Waiting");
+        let legacy = stage1::projection(&e.commands[0], native);
+        assert_eq!(legacy["domain"], "NotRequested");
+        assert_eq!(legacy["execution"], "Cancelled");
+    }
+    #[test]
+    fn rejected_reconcile_delivery_cannot_publish_repository_observation() {
+        let mut v = input();
+        v["commands"][0]["schedule"]["cut"] = "commit_unknown".into();
+        let mut reconcile = v["commands"][0].clone();
+        reconcile["operation_id"] = "operation-2".into();
+        reconcile["effect_id"] = "effect-2".into();
+        reconcile["operation_uuid"] = "10000000-0000-0000-0000-000000000002".into();
+        reconcile["effect_number"] = 2.into();
+        reconcile["action"] = "reconcile".into();
+        reconcile["reconcile_of"] = "operation-1".into();
+        reconcile["schedule"]["cut"] = "none".into();
+        for key in ["operation_uuid", "effect_number", "action", "reconcile_of"] {
+            reconcile["schedule"]["completions"][0][key] = reconcile[key].clone();
+        }
+        reconcile["schedule"]["completions"][0]["attempt"] = 2.into();
+        v["commands"].as_array_mut().unwrap().push(reconcile);
+        let out = run(&v);
+        assert_eq!(
+            out["projection"][1]["world"]["result"],
+            "ReconcileExactPending"
+        );
+        assert_eq!(out["projection"][1]["reconcile"], Value::Null);
+        assert_eq!(out["projection"][1]["coordinator"]["outcome"], Value::Null);
+        assert_eq!(out["execution"], "Inconclusive");
     }
     #[test]
     fn rejected_finalize_preserves_original_receipt_without_authorizing_changed_fence() {
@@ -181,5 +357,7 @@ mod tests {
         assert_eq!(out["execution"], "Inconclusive");
         assert_eq!(out["evidence_complete"], false);
         assert_eq!(out["projection"], json!([]));
+        assert_eq!(out["terminal"], false);
+        assert_eq!(out["coordinators_finished"], false);
     }
 }

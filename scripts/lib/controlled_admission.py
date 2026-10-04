@@ -21,7 +21,7 @@ import uuid
 from . import experiment_contract as stage1
 
 SCHEMA = 'northstar-admission-controlled-input-v1'
-OUTPUT_SCHEMA = 'northstar-admission-controlled-output-v1'
+OUTPUT_SCHEMA = 'northstar-admission-controlled-output-v2'
 REJECTION_SCHEMA = 'northstar-admission-controlled-rejection-v1'
 CORPUS_SCHEMA = 'northstar-admission-controlled-corpus-v1'
 MODEL = 'admission-controlled-v1'
@@ -484,6 +484,64 @@ def _completion_reason(command, completion, already_finished):
     return None
 
 
+def _fence_labels(command, *, row=None):
+    source = command if row is None else row
+    return {'mapped': True, **{key: source[key] for key in ('key', 'payload_tag', 'lease')}}
+
+
+def _retained_knowledge(command, result, scope, staged, selected_key):
+    """Authority contract: preparation retains its exact prospective fact;
+    only a delivered repository receipt establishes confirmed knowledge.
+    This prediction is independent of Rust's outcome classification.
+    """
+    if scope is None:
+        return {'kind': 'NoCommitRequested', 'correlation': None, 'scope': None, 'fact': None}
+    kind = 'CommitCallEntered' if command['schedule']['cut'] in ('commit_unknown', 'commit_cancel') else 'ReceiptKnown'
+    fact_kind = {'Proceed': 'Reserved', 'Accepted': 'Finalized.PendingAccepted',
+                 'AlreadyAccepted': 'Finalized.AlreadyAccepted'}.get(result, result)
+    fence = _fence_labels(command, row=staged[selected_key]) if result == 'Proceed' else \
+        _fence_labels(command) if result in ('Accepted', 'AlreadyAccepted') else None
+    return {'kind': kind, 'correlation': {'mapped': True, 'operation_id': command['operation_id'],
+                                         'effect_number': command['effect_number'], 'generation': command['generation'],
+                                         'attempt': command['attempt']},
+            'scope': scope, 'fact': {'kind': fact_kind, 'fence': fence}}
+
+
+def _declared_result(command, result, staged, selected_key, reconciliation):
+    """The completion payload follows declared adapter effects, not its cut's
+    desired domain label. A missing reply is handled separately by delivery.
+    """
+    failed = command['schedule']['cut'] in ('before_effect_cancel', 'precommit_error', 'commit_unknown', 'commit_cancel') or result == 'IntegrityFailure'
+    if failed:
+        return {'kind': 'Failed', 'fence': None, 'reconcile': None, 'cause': 'Backend'}
+    action = command['action']
+    if action == 'reconcile':
+        kind = 'Reconcile'
+    elif action == 'finalize':
+        kind = 'Finalize.' + {'Conflict': 'PayloadConflict', 'LeaseLost': 'LostFence',
+                              'Accepted': 'AcceptPending'}.get(result, result)
+    else:
+        kind = 'Begin.' + ('Reserved' if result == 'Proceed' else result)
+    return {'kind': kind, 'fence': _fence_labels(command, row=staged[selected_key]) if result == 'Proceed' else None,
+            'reconcile': None if reconciliation is None else
+            {key: reconciliation[key] for key in ('observation', 'lease', 'retention')}, 'cause': None}
+
+
+def _expected_coordinator(accepted, delivered, retained):
+    """Independently apply the contract for a validated delivered completion.
+    Cancellation is an external action and cannot supply an outcome here.
+    """
+    if not accepted:
+        return {'state': 'Waiting', 'outcome': None, 'result': None, 'cause': None, 'knowledge': None}
+    if delivered['kind'] != 'Failed':
+        return {'state': 'Finished', 'outcome': 'Completed', 'result': copy.deepcopy(delivered),
+                'cause': None, 'knowledge': copy.deepcopy(retained)}
+    outcome = {'NoCommitRequested': 'PreCommitFailure', 'CommitCallEntered': 'Unknown',
+               'ReceiptKnown': 'ReceiptPreserved'}[retained['kind']]
+    return {'state': 'Finished', 'outcome': outcome, 'result': None,
+            'cause': delivered['cause'], 'knowledge': copy.deepcopy(retained)}
+
+
 def predict(value):
     """Independent Python predicates; outputs are explicitly predictions only."""
     maps = parse_scenario(value)
@@ -591,8 +649,9 @@ def predict(value):
         committed = commit and command['schedule']['world_commit']
         if committed:
             rows, sequences, proofs = staged, stage_sequences, stage_proofs
-        knowledge = 'CommitCallEntered' if commit and cut in ('commit_unknown', 'commit_cancel') else \
-            'ReceiptKnown' if commit else 'NoCommitRequested'
+        witness = _retained_knowledge(command, result, scope, staged, selected_key)
+        knowledge = witness['kind']
+        delivered = _declared_result(command, result, staged, selected_key, reconciliation)
         accepted, rejections = False, []
         for completion_index, completion in enumerate(command['schedule']['completions']):
             reason = _completion_reason(command, completion, accepted)
@@ -602,11 +661,11 @@ def predict(value):
                 rejections.append({'index': completion_index, 'reason': reason,
                                    'pending_preserved': True, 'receipt_preserved': True})
         cancelled = cut in ('before_effect_cancel', 'commit_cancel', 'receipt_before_cancel')
-        domain = {'before_effect_cancel': 'NotRequested', 'precommit_error': 'BackendFailure',
-                  'commit_unknown': 'Unknown', 'commit_cancel': 'Unknown',
-                  'receipt_before_cancel': 'ReceiptPreserved'}.get(cut, result)
-        if not accepted and not cancelled and cut == 'none':
-            domain = 'AwaitingCompletion'
+        coordinator = _expected_coordinator(accepted, delivered, witness)
+        domain = 'AwaitingCompletion' if not accepted else result if coordinator['outcome'] == 'Completed' else \
+            'BackendFailure' if coordinator['outcome'] == 'PreCommitFailure' else coordinator['outcome']
+        if not accepted:
+            reconciliation = None
         old_counts, staged_counts = _counts(before, command['actor'], now), _counts(staged, command['actor'], now)
         active, retained = _counts(rows, command['actor'], now)
         uncertain = knowledge == 'CommitCallEntered'
@@ -634,7 +693,8 @@ def predict(value):
         event = {'index': index, 'operation_id': command['operation_id'], 'effect_id': command['effect_id'],
                  'causal_id': command['causal_id'], 'attempt': command['attempt'], 'generation': command['generation'],
                  'action': action, 'kind': command['kind'], 'times': copy.deepcopy(command['times']),
-                 'domain': domain, 'execution': 'Cancelled' if cancelled else 'Completed', 'knowledge': knowledge,
+                 'domain': domain, 'execution': 'Cancelled' if cancelled else 'Completed' if accepted else 'Inconclusive',
+                 'cancellation': cancelled, 'coordinator': coordinator, 'witness': witness, 'knowledge': knowledge,
                  'scope': scope,
                  'world': {'committed': committed, 'result': result, 'active': active, 'retained': retained,
                            'row_state': world_row['state'] if world_row else 'Absent',
@@ -652,11 +712,14 @@ def predict(value):
         if value['stage1'] is not None:
             old = value['stage1']['scenario']['commands'][index]
             old_row = before.get(command['key']) if uncertain else world_row
+            cancelled_before_effect = (event['cancellation'] and coordinator['state'] == 'Waiting' and
+                                       witness['kind'] == 'NoCommitRequested')
+            compatibility_domain = 'NotRequested' if cancelled_before_effect else domain
             compatibility.append({'schema_version': 1, 'operation_id': old['operation_id'], 'effect_id': old['effect_id'],
                                   'causal_id': old['causal_id'], 'attempt': old['attempt'], 'time_us': old['time_us'],
                                   'transition': old['action'], 'actor': old['actor'], 'key': old['key'], 'kind': old['kind'],
-                                  'execution': event['execution'], 'domain': domain,
-                                  'effect_status': 'Unknown' if uncertain else 'NotRequested' if cancelled else 'Confirmed',
+                                  'execution': event['execution'], 'domain': compatibility_domain,
+                                  'effect_status': 'Unknown' if domain == 'Unknown' else 'NotRequested' if cancelled_before_effect else 'Confirmed',
                                   **{key: event['caller'][key] for key in ('active_min', 'active_max', 'retained_min', 'retained_max')},
                                   'row_state': 'Unconfirmed' if uncertain else old_row['state'] if old_row else 'Absent',
                                   'expires_at_us': None if uncertain or old_row is None else old_row['expires_at_us'],
@@ -664,23 +727,104 @@ def predict(value):
     unfinished = any(event['completion']['pending'] and event['execution'] != 'Cancelled' for event in projection)
     execution = 'Inconclusive' if unfinished else 'Cancelled' if any(event['execution'] == 'Cancelled' for event in projection) else 'Completed'
     return {'origin': 'prediction', 'projection': projection, 'compatibility_projection': compatibility if value['stage1'] else None,
-            'execution': execution, 'terminal': not unfinished}
+            'execution': execution, 'terminal': not unfinished,
+            'coordinators_finished': all(event['coordinator']['state'] == 'Finished' for event in projection)}
 
 
 EVENT_FIELDS = ('index operation_id effect_id causal_id attempt generation action kind times domain execution knowledge '
-                'scope world caller completion reconcile')
+                'scope world caller completion reconcile cancellation coordinator witness')
 WORLD_FIELDS = 'committed result active retained row_state expires_at_us lease actor_sequence proof_present'
 CALLER_FIELDS = 'active_min active_max retained_min retained_max reservation_receipt reservation finalization_receipt unresolved'
 DOMAINS = ('Proceed', 'ReplayAccepted', 'InProgress', 'Denied', 'Conflict', 'CapacityLimited', 'Missing', 'AlreadyAccepted',
            'LeaseLost', 'Accepted', 'GuardOnlyAllowed', 'GuardOnlyDenied', 'ReconcileExactPending', 'ReconcileExactAccepted',
            'ReconcileMissing', 'ReconcileSuperseded', 'ReconcileConflicting', 'NotRequested', 'BackendFailure', 'Unknown',
-           'ReceiptPreserved', 'AwaitingCompletion', 'IntegrityFailure')
+           'ReceiptPreserved', 'AwaitingCompletion', 'IntegrityFailure', 'ActorBusy', 'CancelledFailure')
 SCOPES = (None, 'RatedBegin.NewReservation', 'RatedBegin.Reclaim', 'RatedBegin.ReplayRead',
           'RatedBegin.PendingRequirement', 'RatedBegin.GuardDenial', 'AdmissionFinalize', 'GuardOnlyVerification')
+FACT_KINDS = ('Reserved', 'ReplayAccepted', 'InProgress', 'Denied', 'Finalized.PendingAccepted',
+              'Finalized.AlreadyAccepted', 'GuardOnlyAllowed', 'GuardOnlyDenied')
+RESULT_KINDS = ('Begin.GuardOnlyAllowed', 'Begin.GuardOnlyDenied', 'Begin.Reserved', 'Begin.ReplayAccepted',
+                'Begin.InProgress', 'Begin.Denied', 'Begin.Conflict', 'Begin.CapacityLimited', 'Finalize.Missing',
+                'Finalize.PayloadConflict', 'Finalize.LostFence', 'Finalize.AlreadyAccepted', 'Finalize.AcceptPending',
+                'Reconcile', 'Failed')
+CAUSES = ('Backend', 'ActorBusy', 'Cancelled')
+
+
+def _validate_fence(value):
+    fields(value, 'mapped key payload_tag lease', 'projected_fence')
+    boolean(value['mapped'], 'fence_mapped')
+    for key in ('key', 'payload_tag', 'lease'):
+        if value[key] is not None:
+            label(value[key], 'fence_' + key)
+    require(value['mapped'] == all(value[key] is not None for key in ('key', 'payload_tag', 'lease')), 'fence_mapping')
+
+
+def _validate_knowledge(value):
+    fields(value, 'kind correlation scope fact', 'projected_knowledge')
+    require(value['kind'] in ('NoCommitRequested', 'CommitCallEntered', 'ReceiptKnown'), 'knowledge_kind')
+    if value['kind'] == 'NoCommitRequested':
+        require(all(value[key] is None for key in ('correlation', 'scope', 'fact')), 'no_commit_shape')
+        return
+    correlation = value['correlation']
+    fields(correlation, 'mapped operation_id effect_number generation attempt', 'projected_correlation')
+    boolean(correlation['mapped'], 'correlation_mapped')
+    require(correlation['mapped'] == (correlation['operation_id'] is not None), 'correlation_mapping')
+    if correlation['operation_id'] is not None:
+        label(correlation['operation_id'], 'correlation_operation')
+    # Observed typed values may diverge from valid input bounds. Preserve them
+    # for ReplayDivergence instead of misclassifying the saved input as invalid.
+    integer(correlation['effect_number'], 'correlation_effect', 0, 2**64 - 1)
+    integer(correlation['generation'], 'correlation_generation', 0, 2**64 - 1)
+    integer(correlation['attempt'], 'correlation_attempt', 0, 2**32 - 1)
+    require(value['scope'] in SCOPES[1:], 'knowledge_scope')
+    fact = value['fact']
+    fields(fact, 'kind fence', 'projected_fact')
+    require(fact['kind'] in FACT_KINDS, 'fact_kind')
+    if fact['kind'] in ('Reserved', 'Finalized.PendingAccepted', 'Finalized.AlreadyAccepted'):
+        _validate_fence(fact['fence'])
+    else:
+        require(fact['fence'] is None, 'fact_fence_shape')
+
+
+def _validate_reconcile(value):
+    fields(value, 'observation lease retention', 'result_reconcile')
+    require(value['observation'] in ('ExactPending', 'ExactAccepted', 'Missing', 'Superseded', 'Conflicting'), 'reconcile_observation')
+    for key in ('lease', 'retention'):
+        require(value[key] in (None, 'Current', 'Expired'), 'reconcile_validity')
+    require((value['lease'] is not None) == (value['observation'] == 'ExactPending') and
+            (value['retention'] is not None) == (value['observation'] in ('ExactPending', 'ExactAccepted')), 'reconcile_shape')
+
+
+def _validate_coordinator(value):
+    fields(value, 'state outcome result cause knowledge', 'projected_coordinator')
+    require(value['state'] in ('Waiting', 'Finished'), 'coordinator_state')
+    if value['state'] == 'Waiting':
+        require(all(value[key] is None for key in ('outcome', 'result', 'cause', 'knowledge')), 'waiting_shape')
+        return
+    _validate_knowledge(value['knowledge'])
+    if value['outcome'] == 'Completed':
+        require(value['cause'] is None, 'completed_cause')
+        result = value['result']
+        fields(result, 'kind fence reconcile cause', 'projected_result')
+        require(result['kind'] in RESULT_KINDS, 'result_kind')
+        if result['kind'] == 'Begin.Reserved':
+            _validate_fence(result['fence'])
+        else:
+            require(result['fence'] is None, 'result_fence_shape')
+        if result['kind'] == 'Reconcile':
+            _validate_reconcile(result['reconcile'])
+        else:
+            require(result['reconcile'] is None, 'result_reconcile_shape')
+        require(result['cause'] in CAUSES if result['kind'] == 'Failed' else result['cause'] is None, 'result_cause_shape')
+    else:
+        require(value['outcome'] in ('PreCommitFailure', 'Unknown', 'ReceiptPreserved') and
+                value['result'] is None and value['cause'] in CAUSES, 'failed_outcome_shape')
+        require(value['knowledge']['kind'] == {'PreCommitFailure': 'NoCommitRequested', 'Unknown': 'CommitCallEntered',
+                                              'ReceiptPreserved': 'ReceiptKnown'}[value['outcome']], 'outcome_knowledge_shape')
 
 
 def validate_output(value, output):
-    fields(output, 'schema adapter model scenario_id input_sha256 execution terminal evidence_complete projection compatibility_projection limitations',
+    fields(output, 'schema adapter model scenario_id input_sha256 execution terminal coordinators_finished observation_failure evidence_complete projection compatibility_projection limitations',
            'controlled output')
     require(output['schema'] == OUTPUT_SCHEMA and output['adapter'] == ADAPTER and output['model'] == MODEL,
             'output_version')
@@ -688,6 +832,14 @@ def validate_output(value, output):
     require(output['execution'] in ('Completed', 'Cancelled', 'Inconclusive', 'EnvironmentInterrupted'), 'output_execution')
     boolean(output['terminal'], 'terminal')
     boolean(output['evidence_complete'], 'evidence_complete')
+    boolean(output['coordinators_finished'], 'coordinators_finished')
+    if output['observation_failure'] is not None:
+        failure = output['observation_failure']
+        fields(failure, 'class index operation_id', 'observation_failure')
+        require(failure['class'] == 'UnmappedMaterial', 'observation_failure_class')
+        integer(failure['index'], 'observation_failure_index', 0, len(value['commands'])-1)
+        require(failure['operation_id'] == value['commands'][failure['index']]['operation_id'], 'observation_failure_identity')
+        require(not output['evidence_complete'] and not output['terminal'] and not output['coordinators_finished'], 'observation_failure_incomplete')
     for limitation in array(output['limitations'], 'limitations', 32):
         require(type(limitation) is str and 0 < len(limitation) <= 1024, 'limitation_text')
     require(output['limitations'], 'missing_limitations')
@@ -704,9 +856,12 @@ def validate_output(value, output):
         fields(event['times'], ' '.join(TIMES), 'event_times')
         for now in event['times'].values():
             integer(now, 'event_time')
-        require(event['domain'] in DOMAINS and event['execution'] in ('Completed', 'Cancelled') and
+        require(event['domain'] in DOMAINS and event['execution'] in ('Completed', 'Cancelled', 'Inconclusive') and
                 event['knowledge'] in ('NoCommitRequested', 'CommitCallEntered', 'ReceiptKnown') and
                 event['scope'] in SCOPES, 'event_semantics')
+        boolean(event['cancellation'], 'external_cancellation')
+        _validate_coordinator(event['coordinator'])
+        _validate_knowledge(event['witness'])
         world = event['world']
         fields(world, WORLD_FIELDS, 'world')
         boolean(world['committed'], 'committed')
@@ -799,13 +954,19 @@ def evaluate(value, output, *, expected_failure=None):
                 len(actual) == len(predicted['projection']) and
                 (value['stage1'] is None or len(output['compatibility_projection']) == len(predicted['compatibility_projection'])))
     expected_output_value = expected_output(value)
-    execution_matches = all(output[key] == expected_output_value[key] for key in ('execution', 'terminal', 'evidence_complete', 'limitations'))
+    execution_matches = all(output[key] == expected_output_value[key] for key in ('execution', 'terminal', 'coordinators_finished', 'observation_failure', 'evidence_complete', 'limitations'))
     if prefix_mismatch is not None or compatibility_mismatch is not None:
         mismatch = prefix_mismatch or compatibility_mismatch
         at = min(mismatch['index'], len(value['commands'])-1)
         derived = {'id': 'controlled-projection-mismatch', 'class': 'ReplayDivergence',
                    'location': value['commands'][at]['operation_id'], 'cut': value['commands'][at]['schedule']['cut'],
                    'output': mismatch['actual']}
+        verdict = 'InvariantViolation'
+    elif output['observation_failure'] is not None:
+        failure = output['observation_failure']
+        derived = {'id': 'controlled-projection-mismatch', 'class': 'ReplayDivergence',
+                   'location': failure['operation_id'], 'cut': value['commands'][failure['index']]['schedule']['cut'],
+                   'output': copy.deepcopy(failure)}
         verdict = 'InvariantViolation'
     elif derived is not None:
         verdict = 'InvariantViolation'
@@ -1016,13 +1177,15 @@ def expected_output(value):
     output = {'schema': OUTPUT_SCHEMA, 'adapter': ADAPTER, 'model': MODEL, 'scenario_id': value['scenario_id'],
               'input_sha256': digest(value), 'execution': prediction['execution'] if terminal else 'Inconclusive',
               'terminal': terminal, 'evidence_complete': complete, 'projection': projection,
+              'coordinators_finished': complete and prediction['coordinators_finished'],
+              'observation_failure': None,
               'compatibility_projection': compatibility if value['stage1'] else None, 'limitations': LIMITATIONS.copy()}
     while len(canonical(output).encode()) > value['budgets']['evidence_bytes']:
         require(output['projection'], 'root_evidence_budget')
         output['projection'].pop()
         if output['compatibility_projection'] is not None:
             output['compatibility_projection'].pop()
-        output.update(evidence_complete=False, terminal=False, execution='Inconclusive')
+        output.update(evidence_complete=False, terminal=False, coordinators_finished=False, execution='Inconclusive')
     return output
 
 

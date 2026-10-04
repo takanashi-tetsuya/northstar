@@ -1,0 +1,266 @@
+{
+  "schema": "northstar-ci-terminal-v1",
+  "observed_at": "2026-10-04T00:29:15.580Z",
+  "commit": "aeba5f1da42738dbc4b25094c450da4fdca0a8eb",
+  "tree": "d4d15f94233b20b211410f5a914a04a48d806db4",
+  "checkpoint_status": "ImplementedAndCompiledNotStage2Accepted",
+  "run_id": 37164567906,
+  "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906",
+  "status": "completed",
+  "conclusion": "cancelled",
+  "run_attempt": 1,
+  "counts": {
+    "success": 23,
+    "cancelled": 7,
+    "failure": 2,
+    "skipped": 1
+  },
+  "jobs": [
+    {
+      "id": 111324813271,
+      "name": "Rust fmt",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813271"
+    },
+    {
+      "id": 111324813328,
+      "name": "Contract compatibility",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813328"
+    },
+    {
+      "id": 111324813336,
+      "name": "Listener diagnostic preflight",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813336"
+    },
+    {
+      "id": 111324813337,
+      "name": "Rust test",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813337"
+    },
+    {
+      "id": 111324813344,
+      "name": "PostgreSQL protocol integration",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813344"
+    },
+    {
+      "id": 111324813350,
+      "name": "Rust clippy",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813350"
+    },
+    {
+      "id": 111324813358,
+      "name": "Rust compile checks",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813358"
+    },
+    {
+      "id": 111324813361,
+      "name": "RustSec dependency audit",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813361"
+    },
+    {
+      "id": 111324813376,
+      "name": "Versioned S3 storage migration",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813376"
+    },
+    {
+      "id": 111324813402,
+      "name": "MIX database, wire and federation validation",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813402"
+    },
+    {
+      "id": 111324813408,
+      "name": "Wire contracts (Buf)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813408"
+    },
+    {
+      "id": 111324813410,
+      "name": "Pinned non-root container build",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813410"
+    },
+    {
+      "id": 111324813412,
+      "name": "PostgreSQL workload role boundary",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813412"
+    },
+    {
+      "id": 111324813417,
+      "name": "Dependency licenses and sources",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813417"
+    },
+    {
+      "id": 111324813434,
+      "name": "Rust build",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813434"
+    },
+    {
+      "id": 111324813460,
+      "name": "Isolated disaster-recovery drill",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813460"
+    },
+    {
+      "id": 111324813467,
+      "name": "Two-domain S2S federation",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813467"
+    },
+    {
+      "id": 111324813475,
+      "name": "1,000-session production envelope",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813475"
+    },
+    {
+      "id": 111324813488,
+      "name": "Multi-node cluster and raw 1,000-session load",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813488"
+    },
+    {
+      "id": 111324813493,
+      "name": "Web static checks",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813493"
+    },
+    {
+      "id": 111324813501,
+      "name": "Isolated PostgreSQL and Redis invariants (abuse-delivery)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813501"
+    },
+    {
+      "id": 111324813520,
+      "name": "Listener/readiness smoke (1x1 then 1x2 · federation)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813520"
+    },
+    {
+      "id": 111324813550,
+      "name": "Isolated PostgreSQL and Redis invariants (collaboration-storage)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813550"
+    },
+    {
+      "id": 111324813561,
+      "name": "Isolated PostgreSQL and Redis invariants (pubsub-federation)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813561"
+    },
+    {
+      "id": 111324813565,
+      "name": "Isolated PostgreSQL and Redis invariants (auth-identity)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813565"
+    },
+    {
+      "id": 111324813591,
+      "name": "Listener/readiness smoke (1x1 then 1x2 · mix-federation)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813591"
+    },
+    {
+      "id": 111324813604,
+      "name": "Privilege-separated XEP-0487 HTTPS discovery",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813604"
+    },
+    {
+      "id": 111324813615,
+      "name": "Timed parser robustness suite",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111324813615"
+    },
+    {
+      "id": 111325659469,
+      "name": "Rust quality gates",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111325659469"
+    },
+    {
+      "id": 111326061919,
+      "name": "Listener/readiness stress (regular 2x50 · federation)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111326061919"
+    },
+    {
+      "id": 111326061931,
+      "name": "Listener/readiness stress (regular 2x50 · mix-federation)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111326061931"
+    },
+    {
+      "id": 111326062774,
+      "name": "Scheduled listener/readiness stress (${{ (((github.event_name == 'workflow_dispatch') && inputs.extended_stress && '100x50') || '20x50') }} · ${{ matrix.fixture }})",
+      "status": "completed",
+      "conclusion": "skipped",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111326062774"
+    },
+    {
+      "id": 111326107662,
+      "name": "CI required",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37164567906/job/111326107662"
+    }
+  ],
+  "failure_observations": [
+    {
+      "job_id": 111325659469,
+      "error": "Generated architecture dependency graph diff after successful architecture-validator generation",
+      "paths": [
+        "docs/architecture/generated/compile-time.dot",
+        "docs/architecture/generated/compile-time.json",
+        "docs/architecture/generated/compile-time.mmd",
+        "docs/architecture/generated/graphs.json"
+      ],
+      "exit_code": 1
+    }
+  ],
+  "qualification": "The reviewed graph-documentation correction 247522e was pushed while this run had six jobs in progress. Cancelled jobs are unqualified, not passes. Stage 2 remains unaccepted.",
+  "privacy": "Public job metadata and concise generated-source error only; no raw logs."
+}

@@ -81,7 +81,6 @@ struct Transaction {
     scope: Option<core::TransactionScope>,
     fact: Option<core::CommitFact>,
     domain: &'static str,
-    reconciliation: Option<Value>,
 }
 fn now(us: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_micros(us).expect("validated timestamp")
@@ -222,7 +221,6 @@ fn transaction(e: &Context<'_>, w: &World, c: &Command) -> Result<Transaction, I
         TransactionScope as S,
     };
     let mut staged = w.clone();
-    let mut reconciliation = None;
     let (result, scope, fact, domain) = match c.action.as_str() {
         "guard_memory" => {
             let decision = if c.guard.allowed {
@@ -439,30 +437,9 @@ fn transaction(e: &Context<'_>, w: &World, c: &Command) -> Result<Transaction, I
                 &fence(e, &c.key, &c.payload_tag, &c.lease),
                 now(c.times.reconcile_us),
             );
-            let (observation, lease, retention, domain) = match d {
-                tx::ReconcileObservation::ExactPending { lease, retention } => (
-                    "ExactPending",
-                    Some(validity(lease)),
-                    Some(validity(retention)),
-                    "ReconcileExactPending",
-                ),
-                tx::ReconcileObservation::ExactAccepted { retention } => (
-                    "ExactAccepted",
-                    None,
-                    Some(validity(retention)),
-                    "ReconcileExactAccepted",
-                ),
-                tx::ReconcileObservation::Missing => ("Missing", None, None, "ReconcileMissing"),
-                tx::ReconcileObservation::Superseded => {
-                    ("Superseded", None, None, "ReconcileSuperseded")
-                }
-                tx::ReconcileObservation::Conflicting => {
-                    ("Conflicting", None, None, "ReconcileConflicting")
-                }
-            };
-            reconciliation =
-                Some(json!({"observation":observation,"lease":lease,"retention":retention}));
-            (R::Reconcile(d), None, None, domain)
+            let result = R::Reconcile(d);
+            let domain = result_domain(&result);
+            (result, None, None, domain)
         }
         _ => unreachable!("validated command"),
     };
@@ -477,7 +454,6 @@ fn transaction(e: &Context<'_>, w: &World, c: &Command) -> Result<Transaction, I
         scope,
         fact,
         domain,
-        reconciliation,
     })
 }
 fn validity(v: tx::TemporalValidity) -> &'static str {
@@ -507,6 +483,233 @@ fn reason(r: core::CompletionRejected) -> &'static str {
         core::CompletionRejected::AlreadyCompleted => "AlreadyCompleted",
     }
 }
+fn failure_name(cause: core::FailureKind) -> &'static str {
+    match cause {
+        core::FailureKind::Backend => "Backend",
+        core::FailureKind::ActorBusy => "ActorBusy",
+        core::FailureKind::Cancelled => "Cancelled",
+    }
+}
+fn failure_domain(cause: core::FailureKind) -> &'static str {
+    match cause {
+        core::FailureKind::Backend => "BackendFailure",
+        core::FailureKind::ActorBusy => "ActorBusy",
+        core::FailureKind::Cancelled => "CancelledFailure",
+    }
+}
+fn result_domain(result: &core::EffectResult) -> &'static str {
+    use core::{BeginResult as B, EffectResult as R, GuardDecision as G};
+    match result {
+        R::Begin(B::GuardOnly(G::Allowed)) => "GuardOnlyAllowed",
+        R::Begin(B::GuardOnly(G::Denied)) => "GuardOnlyDenied",
+        R::Begin(B::Reserved(_)) => "Proceed",
+        R::Begin(B::ReplayAccepted) => "ReplayAccepted",
+        R::Begin(B::InProgress) => "InProgress",
+        R::Begin(B::Denied) => "Denied",
+        R::Begin(B::Conflict) => "Conflict",
+        R::Begin(B::CapacityLimited) => "CapacityLimited",
+        R::Finalize(tx::FinalizeDecision::Missing) => "Missing",
+        R::Finalize(tx::FinalizeDecision::PayloadConflict) => "Conflict",
+        R::Finalize(tx::FinalizeDecision::LostFence) => "LeaseLost",
+        R::Finalize(tx::FinalizeDecision::AlreadyAccepted) => "AlreadyAccepted",
+        R::Finalize(tx::FinalizeDecision::AcceptPending) => "Accepted",
+        R::Reconcile(tx::ReconcileObservation::ExactPending { .. }) => "ReconcileExactPending",
+        R::Reconcile(tx::ReconcileObservation::ExactAccepted { .. }) => "ReconcileExactAccepted",
+        R::Reconcile(tx::ReconcileObservation::Missing) => "ReconcileMissing",
+        R::Reconcile(tx::ReconcileObservation::Superseded) => "ReconcileSuperseded",
+        R::Reconcile(tx::ReconcileObservation::Conflicting) => "ReconcileConflicting",
+        R::Failed(cause) => failure_domain(*cause),
+    }
+}
+pub(super) fn coordinator_domain(state: &core::ExecutionState) -> &'static str {
+    match state {
+        core::ExecutionState::Waiting(_) => "AwaitingCompletion",
+        core::ExecutionState::Finished(core::ExecutionOutcome::Completed { result, .. }) => {
+            result_domain(result)
+        }
+        core::ExecutionState::Finished(core::ExecutionOutcome::PreCommitFailure(cause)) => {
+            failure_domain(*cause)
+        }
+        core::ExecutionState::Finished(core::ExecutionOutcome::Unknown { .. }) => "Unknown",
+        core::ExecutionState::Finished(core::ExecutionOutcome::ReceiptPreserved { .. }) => {
+            "ReceiptPreserved"
+        }
+    }
+}
+fn fence_projection(e: &Envelope, fence: &tx::AdmissionFence) -> Value {
+    // Never replace an unexpected core value with the current command's label.
+    // Unbound material is an observation failure, not an invalid input. The
+    // explicit discriminator is preserved as divergent/incomplete evidence.
+    let key = e
+        .bindings
+        .keys
+        .iter()
+        .find(|b| bytes32(&b.hex).is_some_and(|bytes| bytes.as_slice() == fence.admission_key));
+    let payload = e
+        .bindings
+        .payloads
+        .iter()
+        .find(|b| bytes32(&b.hex).is_some_and(|bytes| bytes.as_slice() == fence.payload_mac));
+    let lease = e
+        .bindings
+        .leases
+        .iter()
+        .find(|b| b.uuid == fence.lease_token);
+    json!({"mapped":key.is_some() && payload.is_some() && lease.is_some(),
+        "key":key.map(|b| &b.label),"payload_tag":payload.map(|b| &b.label),"lease":lease.map(|b| &b.label)})
+}
+fn correlation_projection(e: &Envelope, value: core::Correlation) -> Value {
+    let original = e
+        .commands
+        .iter()
+        .find(|c| c.operation_uuid == value.operation);
+    json!({"mapped":original.is_some(),"operation_id":original.map(|c| &c.operation_id),"effect_number":value.effect,
+        "generation":value.generation,"attempt":value.attempt})
+}
+fn fact_projection(e: &Envelope, fact: &core::CommitFact) -> Value {
+    use core::{CommitFact as F, FinalizeSuccess as S, GuardDecision as G};
+    let (kind, fence) = match fact {
+        F::Reserved(fence) => ("Reserved", Some(fence)),
+        F::ReplayAccepted => ("ReplayAccepted", None),
+        F::InProgress => ("InProgress", None),
+        F::Denied => ("Denied", None),
+        F::Finalized {
+            fence,
+            result: S::PendingAccepted,
+        } => ("Finalized.PendingAccepted", Some(fence)),
+        F::Finalized {
+            fence,
+            result: S::AlreadyAccepted,
+        } => ("Finalized.AlreadyAccepted", Some(fence)),
+        F::GuardOnly(G::Allowed) => ("GuardOnlyAllowed", None),
+        F::GuardOnly(G::Denied) => ("GuardOnlyDenied", None),
+    };
+    json!({"kind":kind,"fence":fence.map(|f| fence_projection(e, f))})
+}
+fn knowledge_projection(e: &Envelope, knowledge: &core::Knowledge) -> Value {
+    let (kind, details) = match knowledge {
+        core::Knowledge::NoCommitRequested => ("NoCommitRequested", None),
+        core::Knowledge::CommitCallEntered(p) => {
+            ("CommitCallEntered", Some((p.correlation, p.scope, &p.fact)))
+        }
+        core::Knowledge::ReceiptKnown(r) => {
+            ("ReceiptKnown", Some((r.correlation, r.scope, &r.fact)))
+        }
+    };
+    let (correlation, scope, fact) = if let Some((correlation, scope, fact)) = details {
+        (
+            correlation_projection(e, correlation),
+            json!(scope_name(scope)),
+            fact_projection(e, fact),
+        )
+    } else {
+        (Value::Null, Value::Null, Value::Null)
+    };
+    json!({"kind":kind,"correlation":correlation,"scope":scope,"fact":fact})
+}
+fn reconcile_projection(observation: tx::ReconcileObservation) -> Value {
+    let (observation, lease, retention) = match observation {
+        tx::ReconcileObservation::ExactPending { lease, retention } => (
+            "ExactPending",
+            Some(validity(lease)),
+            Some(validity(retention)),
+        ),
+        tx::ReconcileObservation::ExactAccepted { retention } => {
+            ("ExactAccepted", None, Some(validity(retention)))
+        }
+        tx::ReconcileObservation::Missing => ("Missing", None, None),
+        tx::ReconcileObservation::Superseded => ("Superseded", None, None),
+        tx::ReconcileObservation::Conflicting => ("Conflicting", None, None),
+    };
+    json!({"observation":observation,"lease":lease,"retention":retention})
+}
+fn result_projection(e: &Envelope, result: &core::EffectResult) -> Value {
+    use core::{BeginResult as B, EffectResult as R, GuardDecision as G};
+    let kind = match result {
+        R::Begin(B::GuardOnly(G::Allowed)) => "Begin.GuardOnlyAllowed",
+        R::Begin(B::GuardOnly(G::Denied)) => "Begin.GuardOnlyDenied",
+        R::Begin(B::Reserved(_)) => "Begin.Reserved",
+        R::Begin(B::ReplayAccepted) => "Begin.ReplayAccepted",
+        R::Begin(B::InProgress) => "Begin.InProgress",
+        R::Begin(B::Denied) => "Begin.Denied",
+        R::Begin(B::Conflict) => "Begin.Conflict",
+        R::Begin(B::CapacityLimited) => "Begin.CapacityLimited",
+        R::Finalize(tx::FinalizeDecision::Missing) => "Finalize.Missing",
+        R::Finalize(tx::FinalizeDecision::PayloadConflict) => "Finalize.PayloadConflict",
+        R::Finalize(tx::FinalizeDecision::LostFence) => "Finalize.LostFence",
+        R::Finalize(tx::FinalizeDecision::AlreadyAccepted) => "Finalize.AlreadyAccepted",
+        R::Finalize(tx::FinalizeDecision::AcceptPending) => "Finalize.AcceptPending",
+        R::Reconcile(_) => "Reconcile",
+        R::Failed(_) => "Failed",
+    };
+    let fence = if let R::Begin(B::Reserved(fence)) = result {
+        Some(fence_projection(e, fence))
+    } else {
+        None
+    };
+    let reconcile = if let R::Reconcile(observation) = result {
+        Some(reconcile_projection(*observation))
+    } else {
+        None
+    };
+    let cause = if let R::Failed(cause) = result {
+        Some(failure_name(*cause))
+    } else {
+        None
+    };
+    json!({"kind":kind,"fence":fence,"reconcile":reconcile,"cause":cause})
+}
+pub(super) fn coordinator_projection(e: &Envelope, state: &core::ExecutionState) -> Value {
+    use core::{ExecutionOutcome as O, ExecutionState as S};
+    let (status, outcome, result, cause, knowledge) = match state {
+        S::Waiting(_) => ("Waiting", None, None, None, None),
+        S::Finished(O::Completed { result, knowledge }) => (
+            "Finished",
+            Some("Completed"),
+            Some(result_projection(e, result)),
+            None,
+            Some(knowledge_projection(e, knowledge)),
+        ),
+        S::Finished(O::PreCommitFailure(cause)) => (
+            "Finished",
+            Some("PreCommitFailure"),
+            None,
+            Some(failure_name(*cause)),
+            Some(knowledge_projection(e, &core::Knowledge::NoCommitRequested)),
+        ),
+        S::Finished(O::Unknown { prepared, cause }) => (
+            "Finished",
+            Some("Unknown"),
+            None,
+            Some(failure_name(*cause)),
+            Some(knowledge_projection(
+                e,
+                &core::Knowledge::CommitCallEntered(prepared.clone()),
+            )),
+        ),
+        S::Finished(O::ReceiptPreserved { receipt, cause }) => (
+            "Finished",
+            Some("ReceiptPreserved"),
+            None,
+            Some(failure_name(*cause)),
+            Some(knowledge_projection(
+                e,
+                &core::Knowledge::ReceiptKnown(receipt.clone()),
+            )),
+        ),
+    };
+    json!({"state":status,"outcome":outcome,"result":result,"cause":cause,"knowledge":knowledge})
+}
+fn projection_mapped(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.get("mapped") != Some(&Value::Bool(false))
+                && fields.values().all(projection_mapped)
+        }
+        Value::Array(items) => items.iter().all(projection_mapped),
+        _ => true,
+    }
+}
 fn receipt_flags(k: &core::Knowledge) -> (bool, bool) {
     if let core::Knowledge::ReceiptKnown(r) = k {
         (
@@ -533,20 +736,16 @@ fn reservation_projection(
         .bindings
         .keys
         .iter()
-        .find(|b| bytes32(&b.hex).expect("validated key").as_slice() == fence.admission_key)
-        .expect("synthetic bound key");
-    let payload = e
-        .bindings
-        .payloads
-        .iter()
-        .find(|b| bytes32(&b.hex).expect("validated payload").as_slice() == fence.payload_mac)
-        .expect("synthetic bound payload");
+        .find(|b| bytes32(&b.hex).expect("validated key").as_slice() == fence.admission_key)?;
+    let payload =
+        e.bindings.payloads.iter().find(|b| {
+            bytes32(&b.hex).expect("validated payload").as_slice() == fence.payload_mac
+        })?;
     let lease = e
         .bindings
         .leases
         .iter()
-        .find(|b| b.uuid == fence.lease_token)
-        .expect("synthetic bound lease");
+        .find(|b| b.uuid == fence.lease_token)?;
     let applicable_key = if current.action == "reserve" {
         current.candidates.contains(&key.label)
     } else {
@@ -577,6 +776,8 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
     let mut operations = BTreeMap::<String, (core::Coordinator, core::CommitWitness)>::new();
     let mut complete = true;
     let mut terminal = true;
+    let mut coordinators_finished = true;
+    let mut observation_failure = None;
     let mut cancelled = false;
     let mut total_events = 0;
     for (index, c) in e.commands.iter().enumerate() {
@@ -608,7 +809,6 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
                 } else {
                     "BackendFailure"
                 },
-                reconciliation: None,
             }
         } else {
             transaction(e, &world, c)?
@@ -674,23 +874,17 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             }
         }
         let pending = coordinator.pending().is_some();
+        coordinators_finished &= !pending;
         if pending && !cancelled_cut {
             terminal = false;
         }
         cancelled |= cancelled_cut;
-        let domain = match c.schedule.cut.as_str() {
-            "before_effect_cancel" => "NotRequested",
-            "precommit_error" => "BackendFailure",
-            "commit_unknown" | "commit_cancel" => "Unknown",
-            "receipt_before_cancel" => "ReceiptPreserved",
-            _ if pending => "AwaitingCompletion",
-            _ => transaction.domain,
-        };
-        let knowledge = match witness.knowledge() {
-            core::Knowledge::NoCommitRequested => "NoCommitRequested",
-            core::Knowledge::CommitCallEntered(_) => "CommitCallEntered",
-            core::Knowledge::ReceiptKnown(_) => "ReceiptKnown",
-        };
+        // Complete()'s retained outcome is the authority for core observation.
+        // A controlled cancellation suppresses delivery; it does not finish it.
+        let observed = coordinator_projection(e, coordinator.state());
+        let retained = knowledge_projection(e, witness.knowledge());
+        let domain = coordinator_domain(coordinator.state());
+        let unresolved = matches!(witness.knowledge(), core::Knowledge::CommitCallEntered(_));
         let time = match c.action.as_str() {
             "finalize" => c.times.finalize_us,
             "reconcile" => c.times.reconcile_us,
@@ -699,7 +893,7 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         let world_counts = counts(&world, &c.actor, time);
         let before_counts = counts(&before, &c.actor, time);
         let possible_counts = counts(&transaction.staged, &c.actor, time);
-        let (minimum, maximum) = if unknown {
+        let (minimum, maximum) = if unresolved {
             (
                 (
                     before_counts.0.min(possible_counts.0),
@@ -736,7 +930,13 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             causal = original.causal_id.as_deref();
         }
         let reservation_receipt = reservation.is_some();
-        let mut reconciliation = transaction.reconciliation.clone();
+        let mut reconciliation = match coordinator.state() {
+            core::ExecutionState::Finished(core::ExecutionOutcome::Completed {
+                result: core::EffectResult::Reconcile(observation),
+                ..
+            }) => Some(reconcile_projection(*observation)),
+            _ => None,
+        };
         if let Some(observation) = reconciliation.as_mut() {
             let unresolved_after = c.reconcile_of.as_ref().and_then(|id| operations.get(id));
             let preserved = unresolved_before.as_ref() == unresolved_after
@@ -756,15 +956,23 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         let r = world.rows.get(&c.key);
         let event = json!({
             "index":index,"operation_id":c.operation_id,"effect_id":c.effect_id,"causal_id":c.causal_id,"attempt":c.attempt,"generation":c.generation,
-            "action":c.action,"kind":c.kind,"times":c.times,"domain":domain,"execution":if cancelled_cut {"Cancelled"} else {"Completed"},
-            "knowledge":knowledge,"scope":transaction.scope.map(scope_name),
+            "action":c.action,"kind":c.kind,"times":c.times,"domain":domain,
+            "execution":if cancelled_cut {"Cancelled"} else if pending {"Inconclusive"} else {"Completed"},
+            "cancellation":cancelled_cut,"coordinator":observed,"witness":retained,
+            "knowledge":retained["kind"],"scope":retained["scope"],
             "world":{"committed":committed,"result":transaction.domain,"active":world_counts.0,"retained":world_counts.1,"row_state":r.map(|r|r.state.as_str()).unwrap_or("Absent"),
                 "expires_at_us":r.map(|r|r.expires_at_us),"lease":r.map(|r|&r.lease),"actor_sequence":world.actors[&c.actor],
                 "proof_present":c.guard.proof.as_ref().map(|p|world.proofs.contains(&p.challenge_id))},
             "caller":{"active_min":minimum.0,"active_max":maximum.0,"retained_min":minimum.1,"retained_max":maximum.1,
-                "reservation_receipt":reservation_receipt,"reservation":reservation,"finalization_receipt":finalization_receipt,"unresolved":unknown},
+                "reservation_receipt":reservation_receipt,"reservation":reservation,"finalization_receipt":finalization_receipt,"unresolved":unresolved},
             "completion":{"accepted":accepted,"pending":pending,"rejections":rejections},"reconcile":reconciliation,
         });
+        // Keep the first failed observation outside the trim-able event list.
+        // A later evidence budget cannot erase an already observed divergence.
+        if !projection_mapped(&event) {
+            observation_failure = Some(json!({"class":"UnmappedMaterial","index":index,
+                "operation_id":c.operation_id}));
+        }
         total_events += 1 + c.schedule.completions.len();
         if total_events > e.budgets.events
             || serde_json::to_vec(&projection).expect("JSON").len()
@@ -779,10 +987,17 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             compatibility.push(super::stage1::projection(c, &event));
         }
         projection.push(event);
+        if observation_failure.is_some() {
+            complete = false;
+            terminal = false;
+            break;
+        }
         operations.insert(c.operation_id.clone(), (coordinator, witness));
     }
     let mut output = json!({"schema":OUTPUT_SCHEMA,"adapter":"controlled_rust","model":MODEL,"scenario_id":e.scenario_id,"input_sha256":hash,
         "execution":if !complete||!terminal {"Inconclusive"} else if cancelled {"Cancelled"} else {"Completed"},"terminal":terminal,"evidence_complete":complete,
+        "coordinators_finished":complete && coordinators_finished,
+        "observation_failure":observation_failure,
         "projection":projection,"compatibility_projection":if e.stage1.is_some() {Some(compatibility)} else {None},
         "limitations":["Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
             "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
@@ -804,6 +1019,7 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         }
         output["evidence_complete"] = false.into();
         output["terminal"] = false.into();
+        output["coordinators_finished"] = false.into();
         output["execution"] = "Inconclusive".into();
     }
     Ok(output)

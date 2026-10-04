@@ -75,7 +75,139 @@ class IndependentOracleTests(unittest.TestCase):
         self.assertEqual(event['domain'], 'AwaitingCompletion')
         self.assertTrue(event['caller']['reservation_receipt'])
         self.assertTrue(event['completion']['pending'])
+        self.assertEqual(event['coordinator'], {'state': 'Waiting', 'outcome': None, 'result': None, 'cause': None, 'knowledge': None})
+        self.assertEqual(event['witness']['fact']['kind'], 'Reserved')
+        self.assertEqual(event['execution'], 'Inconclusive')
+        self.assertFalse(output['coordinators_finished'])
         self.assertEqual(controlled.evaluate(value, output)['verdict'], 'Inconclusive')
+
+    def test_explicit_cancellation_is_distinct_from_actual_unknown_and_retained_receipt(self):
+        for cut, knowledge, receipt in [('before_effect_cancel', 'NoCommitRequested', False),
+                                        ('commit_cancel', 'CommitCallEntered', False),
+                                        ('receipt_before_cancel', 'ReceiptKnown', True)]:
+            with self.subTest(cut=cut):
+                value = controlled.scenario('cancel-separation', [controlled.controlled_command(1, cut=cut)])
+                output = controlled.expected_output(value)
+                event = output['projection'][0]
+                self.assertEqual(event['domain'], 'AwaitingCompletion')
+                self.assertTrue(event['cancellation'])
+                self.assertEqual(event['coordinator']['state'], 'Waiting')
+                self.assertIsNone(event['coordinator']['outcome'])
+                self.assertIsNone(event['coordinator']['knowledge'])
+                self.assertEqual(event['witness']['kind'], knowledge)
+                self.assertEqual(event['caller']['reservation_receipt'], receipt)
+                self.assertEqual(output['execution'], 'Cancelled')
+                self.assertTrue(output['terminal'])
+                self.assertFalse(output['coordinators_finished'])
+                self.assertEqual(controlled.evaluate(value, output)['verdict'], 'Cancelled')
+        value = controlled.scenario('returned-unknown', [controlled.controlled_command(1, cut='commit_unknown')])
+        output = controlled.expected_output(value)
+        event = output['projection'][0]
+        self.assertEqual(event['domain'], 'Unknown')
+        self.assertEqual(event['coordinator']['outcome'], 'Unknown')
+        self.assertEqual(event['coordinator']['knowledge'], event['witness'])
+        self.assertFalse(event['cancellation'])
+        self.assertTrue(output['coordinators_finished'])
+
+    def test_cut_cannot_supply_an_outcome_for_a_rejected_completion(self):
+        for cut in ('commit_unknown', 'precommit_error'):
+            command = controlled.controlled_command(1, cut=cut)
+            command['schedule']['completions'][0]['attempt'] += 1
+            value = controlled.scenario('undelivered-failure', [command])
+            output = controlled.expected_output(value)
+            event = output['projection'][0]
+            self.assertEqual(event['domain'], 'AwaitingCompletion')
+            self.assertIsNone(event['coordinator']['outcome'])
+            self.assertEqual(event['caller']['unresolved'], cut == 'commit_unknown')
+            self.assertEqual(controlled.evaluate(value, output)['verdict'], 'Inconclusive')
+
+    def test_coordinator_classification_and_result_mismatch_are_not_masked_by_schedule(self):
+        value = controlled.scenario('actual-classification', [controlled.controlled_command(1)])
+        expected = controlled.expected_output(value)
+        variants = []
+        changed = copy.deepcopy(expected)
+        event = changed['projection'][0]
+        event['coordinator'].update(outcome='ReceiptPreserved', result=None, cause='Cancelled')
+        event['domain'] = 'ReceiptPreserved'
+        variants.append(changed)
+        changed = copy.deepcopy(expected)
+        changed['projection'][0]['coordinator']['result'].update(kind='Begin.ReplayAccepted', fence=None)
+        variants.append(changed)
+        changed = copy.deepcopy(expected)
+        changed['projection'][0]['coordinator']['knowledge']['fact'] = {'kind': 'ReplayAccepted', 'fence': None}
+        variants.append(changed)
+        changed = copy.deepcopy(expected)
+        changed['projection'][0]['witness']['fact']['fence']['lease'] = 'other-bound-identity'
+        variants.append(changed)
+        changed = copy.deepcopy(expected)
+        changed['projection'][0]['cancellation'] = True
+        variants.append(changed)
+        for changed in variants:
+            result = controlled.evaluate(value, changed)
+            self.assertEqual(result['verdict'], 'InvariantViolation')
+            self.assertEqual(result['invariant']['class'], 'ReplayDivergence')
+            self.assertFalse(result['replay_matched'])
+
+    def test_actual_correlation_values_outside_input_bounds_are_replay_divergence(self):
+        value = controlled.scenario('actual-correlation', [controlled.controlled_command(1)])
+        for key, actual in [('effect_number', 0), ('effect_number', 2**64-1),
+                            ('generation', 20001), ('generation', 2**64-1), ('attempt', 0), ('attempt', 2**32-1)]:
+            changed = controlled.expected_output(value)
+            changed['projection'][0]['coordinator']['knowledge']['correlation'][key] = actual
+            result = controlled.evaluate(value, changed)
+            self.assertEqual(result['invariant']['class'], 'ReplayDivergence')
+            self.assertFalse(result['qualified'])
+
+    def test_unmapped_observation_failure_survives_empty_or_trimmed_detail(self):
+        value = controlled.scenario('unmapped', [controlled.controlled_command(1)])
+        for keep_detail in (True, False):
+            changed = controlled.expected_output(value)
+            fence = changed['projection'][0]['coordinator']['result']['fence']
+            fence.update(mapped=False, key=None)
+            if not keep_detail:
+                changed['projection'] = []
+            changed.update(execution='Inconclusive', terminal=False, coordinators_finished=False, evidence_complete=False,
+                           observation_failure={'class': 'UnmappedMaterial', 'index': 0, 'operation_id': 'op-1'})
+            result = controlled.evaluate(value, changed)
+            self.assertEqual(result['verdict'], 'InvariantViolation')
+            self.assertEqual(result['invariant']['class'], 'ReplayDivergence')
+            self.assertEqual(result['invariant']['location'], 'op-1')
+            self.assertFalse(result['replay_matched'])
+
+    def test_undelivered_reconcile_does_not_publish_its_observation(self):
+        first = controlled.controlled_command(1, cut='commit_unknown')
+        second = controlled.controlled_command(2, first['key'], action='reconcile', lease=first['lease'], reconcile_of='op-1')
+        second['schedule']['completions'][0]['attempt'] += 1
+        value = controlled.scenario('undelivered-reconcile', [first, second])
+        output = controlled.expected_output(value)
+        event = output['projection'][1]
+        self.assertEqual(event['world']['result'], 'ReconcileExactPending')
+        self.assertIsNone(event['reconcile'])
+        self.assertIsNone(event['coordinator']['result'])
+        self.assertEqual(controlled.evaluate(value, output)['verdict'], 'Inconclusive')
+
+    def test_output_v2_refuses_legacy_and_invalid_variant_shapes(self):
+        value = controlled.scenario('output-version', [controlled.controlled_command(1)])
+        changed = controlled.expected_output(value)
+        changed['schema'] = 'northstar-admission-controlled-output-v1'
+        with self.assertRaises(controlled.InvalidScenario):
+            controlled.validate_output(value, changed)
+        changed = controlled.expected_output(value)
+        changed['projection'][0]['coordinator']['state'] = 'Waiting'
+        with self.assertRaises(controlled.InvalidScenario):
+            controlled.validate_output(value, changed)
+        changed = controlled.expected_output(value)
+        changed['projection'][0]['witness']['kind'] = 'NoCommitRequested'
+        with self.assertRaises(controlled.InvalidScenario):
+            controlled.validate_output(value, changed)
+
+    def test_root_coordinator_completion_is_independently_compared(self):
+        value = controlled.scenario('root-state', [controlled.controlled_command(1, cut='commit_cancel')])
+        changed = controlled.expected_output(value)
+        changed['coordinators_finished'] = True
+        result = controlled.evaluate(value, changed)
+        self.assertFalse(result['qualified'])
+        self.assertFalse(result['replay_matched'])
 
     def test_all_saved_completion_records_are_concrete_and_rejections_preserve_pending(self):
         value = next(v for v in controlled.native_cases() if v['scenario_id'] == 'native-malformed-stale-duplicate-completions')
@@ -103,6 +235,8 @@ class IndependentOracleTests(unittest.TestCase):
         output = controlled.expected_output(value)
         self.assertEqual(len(output['projection']), 1)
         self.assertEqual(controlled.evaluate(value, output)['verdict'], 'Inconclusive')
+        self.assertFalse(output['terminal'])
+        self.assertFalse(output['coordinators_finished'])
         output['projection'][0]['world']['active'] = 0
         self.assertEqual(controlled.evaluate(value, output)['verdict'], 'InvariantViolation')
 

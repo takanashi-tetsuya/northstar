@@ -196,12 +196,23 @@ pub fn projection(c: &super::input::Command, event: &Value) -> Value {
     let caller = &event["caller"];
     let world = &event["world"];
     let unknown = event["domain"] == "Unknown";
+    // The legacy fixture describes external cancellation as NotRequested.
+    // Translate only the native observation of that action with a still-waiting
+    // coordinator and no retained commit knowledge; never invent a core outcome.
+    let cancelled_before_effect = event["cancellation"] == true
+        && event["coordinator"]["state"] == "Waiting"
+        && event["witness"]["kind"] == "NoCommitRequested";
+    let domain = if cancelled_before_effect {
+        Value::String("NotRequested".into())
+    } else {
+        event["domain"].clone()
+    };
     let action = &c.action;
     serde_json::json!({
         "schema_version":1,"operation_id":c.operation_id,"effect_id":c.effect_id,"causal_id":c.causal_id,
         "attempt":c.attempt,"time_us":c.times.admission_us,"transition":action,"actor":c.actor,"key":c.key,"kind":c.kind,
-        "execution":event["execution"],"domain":event["domain"],
-        "effect_status": if unknown {"Unknown"} else if event["domain"]=="NotRequested" {"NotRequested"} else {"Confirmed"},
+        "execution":event["execution"],"domain":domain,
+        "effect_status": if unknown {"Unknown"} else if cancelled_before_effect {"NotRequested"} else {"Confirmed"},
         "active_min":caller["active_min"],"active_max":caller["active_max"],
         "retained_min":caller["retained_min"],"retained_max":caller["retained_max"],
         "row_state":if unknown {Value::String("Unconfirmed".into())} else {world["row_state"].clone()},

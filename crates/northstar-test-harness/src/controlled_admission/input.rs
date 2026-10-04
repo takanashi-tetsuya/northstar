@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const INPUT_SCHEMA: &str = "northstar-admission-controlled-input-v1";
-pub const OUTPUT_SCHEMA: &str = "northstar-admission-controlled-output-v1";
+pub const OUTPUT_SCHEMA: &str = "northstar-admission-controlled-output-v2";
 pub const MODEL: &str = "admission-controlled-v1";
 pub const MAX_INPUT: usize = 32 * 1024 * 1024;
 pub const MAX_TIME: i64 = 9_000_000_000_000_000;

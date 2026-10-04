@@ -1,0 +1,188 @@
+{
+  "schema": "northstar-actual-projection-source-correction-v1",
+  "status": "ImplementedAndCompiledNotStage2Accepted",
+  "base_commit": "247522e9091a4f317e447d4b3115dc9d4b75a60c",
+  "base_tree": "c2cf8eefd716c28859ed6999cfe02a2909a16fbb",
+  "source_delta": [
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "before_sha256": "91efecddd85ce16db7dbbf4d1fdd6ed9ebea4cefd32eb71c325aafee3982c666",
+      "after_sha256": "4555b8db06f9e9670737c33247965cebfbdbd5eda4b358c5d0889408091476b9",
+      "bytes": 42779
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/input.rs",
+      "before_sha256": "798775545173d2c6501d02c236daa5f91a6a6e32681835a3cae0bcb36a6c714c",
+      "after_sha256": "b666a845e537d9711ee1260d2906fc47089e5b2df8c49e24505ae3e13a18a086",
+      "bytes": 24710
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+      "before_sha256": "3f6ded307a8f15ac85bb1d3acc093740f5af53e9b7241da1995fdb4cf46cec11",
+      "after_sha256": "8278ae8aa00d3f9268ff8aa443e2a8a3df26ceb85dead2c4bc780847c2eaadbb",
+      "bytes": 17800
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/stage1.rs",
+      "before_sha256": "6a3d062effe6210b3ce446b2466eca9eb44152c8150bac3232f2d593f92d410b",
+      "after_sha256": "210a68c2a1d02fc039116deec6bd0d49d4d977b360396dcdc02aed42518c230c",
+      "bytes": 8468
+    },
+    {
+      "path": "scripts/lib/controlled_admission.py",
+      "before_sha256": "321357270d38fa58d51b917f1b7f19f899a936665da83ea876052d8333d64afd",
+      "after_sha256": "e8c9f1d3f8d0cf1d8807224acbd4b858df25370b2757405cd2e33210c448c330",
+      "bytes": 87578
+    },
+    {
+      "path": "scripts/test-controlled-admission.py",
+      "before_sha256": "dfe73c4cf734ab843fecb61d8343965d5ec4a9ff5e468fef74464b434cb0c190",
+      "after_sha256": "5b3f5e74ecd1263e51378a980d9ba750ac459f486447cc0275388928e101ab33",
+      "bytes": 20624
+    },
+    {
+      "path": "catalog/runtime-experiments.schema.json",
+      "before_sha256": "b4dd09ab2ecfb2e3a19da8652684a0f16687265f50d53e155e59a304fbd500e9",
+      "after_sha256": "56d4deb4ce883e730826b1dfaf388822c0612806e8f6b3b910ce2bdcbaad9017",
+      "bytes": 76366
+    }
+  ],
+  "targeted_correction": "actual-coordinator-projection",
+  "output_contract": {
+    "schema": "northstar-admission-controlled-output-v2",
+    "input_and_model": "Unchanged input-v1, model admission-controlled-v1 and existing case identities",
+    "observed_coordinator": "Actual Waiting/Finished state and actual Finished outcome/result/cause/knowledge; no result is invented for Waiting.",
+    "retained_witness": "Projected independently from the actual witness; exact bound synthetic scope/fact/correlation with no raw authority material.",
+    "external_cancellation": "An executed controlled cancellation is a separate event. It may end an experiment as Cancelled while the core is still Waiting. Missing completion without cancellation is Inconclusive.",
+    "terminal_meaning": "Experiment termination, not discharged responsibility; coordinators_finished separately reports whether complete evidence shows every coordinator Finished. Incomplete/unmapped/truncated observations cannot produce terminal qualification.",
+    "reconcile": "Only the actual Finished Reconcile result is delivered as a reconcile observation.",
+    "unmapped_material": "Explicit mapped=false plus a bounded root UnmappedMaterial failure/location retained before budget checks and outside event trimming. It remains observation divergence, not InvalidScenario or silently absent authority.",
+    "numeric_domains": "Output correlation preserves actual Rust u64/u32 values; narrower input bounds are unchanged.",
+    "legacy_bridge": "Stage1 Cancelled/NotRequested translation is restricted to observed cancellation + Waiting + NoCommitRequested. Compatibility is source-reviewed here; saved replay/byte equivalence was not executed.",
+    "reader": "Strict output-v2 shapes and exact independently predicted nested observations; output-v1 is rejected. The oracle does not call Rust to obtain its expected outcome."
+  },
+  "review_findings_addressed": [
+    {
+      "finding": "Input correlation limits misclassified representable actual output divergence as InvalidScenario.",
+      "correction": "Separate full typed output bounds from input validation; regression source added.",
+      "executed_probe": false
+    },
+    {
+      "finding": "Event or whole-output trimming could discard an already observed unmapped failure.",
+      "correction": "Reserve and retain a bounded first observation failure before trimming; source regressions cover detail-free divergence.",
+      "executed_probe": false
+    }
+  ],
+  "regression_source": [
+    "Actual outcome/result/knowledge classification mismatches",
+    "Cancelled experiment with Waiting core and retained responsibility",
+    "Undelivered reconcile is not caller observation",
+    "Output-v1 and malformed exact variant shapes rejected",
+    "Rust source tests exercise unbound projection helpers; Python source tests manually alter bounded output/root failure to check exact typed divergence and retained failure handling."
+  ],
+  "verification": {
+    "base_commit": "247522e9091a4f317e447d4b3115dc9d4b75a60c",
+    "end_head": "247522e9091a4f317e447d4b3115dc9d4b75a60c",
+    "source_patch_sha256": "2e4020089badb0bc3026e3bc894887880e0aa1a0c3f6a51936ea2fabe3f00684",
+    "tracked_source_file_count": 1662,
+    "source_unchanged": true,
+    "changed_during_command": [],
+    "before_map_sha256": "17124bd3db226d8cc1f5cb607fc208f6000251ea46f6b076973098fe3fb26b01",
+    "after_map_sha256": "17124bd3db226d8cc1f5cb607fc208f6000251ea46f6b076973098fe3fb26b01",
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+          "crates/northstar-test-harness/src/controlled_admission/input.rs",
+          "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+          "crates/northstar-test-harness/src/controlled_admission/stage1.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.069,
+        "log": "command-1.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "-B",
+          "-c",
+          "import ast,pathlib,sys; [ast.parse(pathlib.Path(p).read_text(),filename=p) for p in sys.argv[1:]]",
+          "scripts/lib/controlled_admission.py",
+          "scripts/test-controlled-admission.py"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.041,
+        "log": "command-2.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "-B",
+          "-c",
+          "import json,pathlib,sys\ndef pairs(values):\n d={}\n for k,v in values:\n  if k in d: raise ValueError(\"duplicate JSON key: \"+k)\n  d[k]=v\n return d\njson.loads(pathlib.Path(sys.argv[1]).read_text(),object_pairs_hook=pairs)",
+          "catalog/runtime-experiments.schema.json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.021,
+        "log": "command-3.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-abuse-policy",
+          "-p",
+          "northstar-test-harness",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.866,
+        "log": "command-4.log",
+        "log_sha256": "96925e0be7a7141d3b6872872dd0d05209b09c3ba99715d5d91aa72bf015c481"
+      }
+    ],
+    "scope": "Ordinary formatting, Python AST/strict JSON syntax and default-feature normal/test target compilation only. No project test, oracle, runner, saved corpus/replay, SQL, service or fault execution."
+  },
+  "remaining_stage2_blockers": [
+    "multi-unresolved-knowledge",
+    "shrink-exact-target"
+  ],
+  "additional_open_limits": [
+    "Existing caller count intervals still have the separately documented multi-Unknown flaw; this checkpoint does not qualify aggregate caller knowledge.",
+    "actor_policy_us accompanies scripted guard outcomes; actor-policy clock behavior remains unqualified.",
+    "Reconcile observation still lacks SQL observed_at.",
+    "Production outer cancellation/Unknown ownership, durable-message/router/write/ACK integration and real SQL/wire conformance remain later-stage obligations."
+  ],
+  "unexecuted": [
+    "Local regression test binaries and Python oracle tests",
+    "Controlled runner, saved corpus, replay and shrinking",
+    "Any old standalone probe, SQL adapter, service, fault injection or soak"
+  ],
+  "review": "Final independent read-only eleven-file source/evidence review passed on2026-10-04. Exact seven-file patch,1662-file stable maps, four successful command logs, ledger limits and both CI records verified. Helper/manual-output regression limits remain explicit. Source-and-compile checkpoint only; Stage2 remains unaccepted.",
+  "regression_limits": [
+    "The Rust unbound test covers the projection helper, not an executed end-to-end injected core mismatch.",
+    "The Python retained-root-failure check uses manually altered output, not an observed Rust runner failure.",
+    "No local regression source or saved compatibility/replay case was executed in this checkpoint."
+  ],
+  "preceding_ci": {
+    "commit": "247522e9091a4f317e447d4b3115dc9d4b75a60c",
+    "run_id": 37165020720,
+    "record": "docs/evidence/experimental-rebuild/generated-graph-ci-terminal.json",
+    "conclusion": "success",
+    "scope": "32 successful jobs and one schedule-only skip on the parent commit; does not include this uncommitted projection correction."
+  }
+}

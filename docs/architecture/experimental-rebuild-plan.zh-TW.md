@@ -215,3 +215,29 @@ Effect 與同 attempt 單調性，再要求 completion knowledge 與該觀察完
 knowledge、shrink reader 的 exact target preservation；actor-policy clock 與 reconcile SQL as-of
 仍有資格缺口。Stage 3 的 outer cancellation owner、durable commit／route／write／ACK，以及
 Stage 5 真 SQL/wire 都尚未完成。這些 source 修正或普通 CI green 都不構成 Stage 2 退出通過。
+
+## Actual coordinator projection v2 窄修正
+
+`aeba5f1d` 已保存 PreparedCommit／independent witness 修正，`247522e9` 另外同步缺少的四條
+harness dependency graph 邊；兩者均以精確 remote delta 核驗。後續 actual projection source
+改為 output v2，從真正 `ExecutionState`／`ExecutionOutcome` 與獨立 retained witness 取得
+觀察，schedule 僅控制外部事件。Waiting 不再被 schedule 假裝為已完成的 Unknown 或 ReceiptPreserved。
+
+明確取消仍是 experiment Cancelled；core 可以保持 Waiting，`coordinators_finished` 另揭露
+責任是否已結束。沒有取消而缺 completion 則是 Inconclusive；reconcile 只有真正交付給 core 的
+結果才被投射為 caller observation。Stage1 相容翻譯只使用原生 cancellation／Waiting／
+NoCommitRequested 觀察，這次尚未執行 saved replay 來證明 byte equivalence。
+
+Oracle 與 strict schema 同步拒絕 v1；實際 correlation 保留完整 Rust 型別範圍，首次 unmapped
+authority observation 的小型 failure／位置在證據裁切前保留，不被誤稱為 invalid input 或空值。
+這些 source 修正、regression source 及格式／語法／普通 normal/test target 編譯記錄，見
+[projection 窄修正紀錄](../evidence/experimental-rebuild/stage2-actual-projection-correction.json)。
+本地沒有執行 oracle tests、runner、corpus、replay、SQL、服務或 fault。
+
+剩餘 Stage2 blocker 為多 Unknown 的 caller knowledge 與 shrink exact-target；目前 count bounds
+不可當作多未決操作的已驗證知識。Actor-policy clock、SQL observed_at 及 Stage3／5 責任仍開放。
+這項 source/compile checkpoint 仍不是 Stage2 退出或整體實用性驗收。
+
+`247522e9` 的既有 CI `37165020720` 已完成，32 success／1 schedule-only skip／0 failure，
+包含 graph、Rust、DR 與 protocol gates。它只涵蓋前一個 commit，不包含上述尚待保存的
+projection v2，也不能倒推歷史 DR missing-TSV 根因或替代 Stage2 corpus 資格。

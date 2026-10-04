@@ -1634,7 +1634,10 @@
         "world",
         "caller",
         "completion",
-        "reconcile"
+        "reconcile",
+        "cancellation",
+        "coordinator",
+        "witness"
       ],
       "properties": {
         "index": {
@@ -1714,13 +1717,16 @@
             "Unknown",
             "ReceiptPreserved",
             "AwaitingCompletion",
-            "IntegrityFailure"
+            "IntegrityFailure",
+            "ActorBusy",
+            "CancelledFailure"
           ]
         },
         "execution": {
           "enum": [
             "Completed",
-            "Cancelled"
+            "Cancelled",
+            "Inconclusive"
           ]
         },
         "knowledge": {
@@ -2031,6 +2037,15 @@
               }
             }
           ]
+        },
+        "cancellation": {
+          "type": "boolean"
+        },
+        "coordinator": {
+          "$ref": "#/$defs/controlledCoordinator"
+        },
+        "witness": {
+          "$ref": "#/$defs/controlledProjectedKnowledge"
         }
       }
     },
@@ -2048,11 +2063,13 @@
         "evidence_complete",
         "projection",
         "compatibility_projection",
-        "limitations"
+        "limitations",
+        "coordinators_finished",
+        "observation_failure"
       ],
       "properties": {
         "schema": {
-          "const": "northstar-admission-controlled-output-v1"
+          "const": "northstar-admission-controlled-output-v2"
         },
         "adapter": {
           "const": "controlled_rust"
@@ -2109,8 +2126,891 @@
             "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
             "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
           ]
+        },
+        "coordinators_finished": {
+          "type": "boolean"
+        },
+        "observation_failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "class",
+                "index",
+                "operation_id"
+              ],
+              "properties": {
+                "class": {
+                  "const": "UnmappedMaterial"
+                },
+                "index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "operation_id": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+                }
+              }
+            }
+          ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_complete": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "const": false
+              },
+              "coordinators_finished": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "projection": {
+                "maxItems": 0
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "const": false
+              },
+              "coordinators_finished": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observation_failure": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "const": false
+              },
+              "coordinators_finished": {
+                "const": false
+              },
+              "evidence_complete": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlledProjectedFence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mapped",
+        "key",
+        "payload_tag",
+        "lease"
+      ],
+      "properties": {
+        "mapped": {
+          "type": "boolean"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        },
+        "payload_tag": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        },
+        "lease": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mapped": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+              },
+              "payload_tag": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+              },
+              "lease": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+              }
+            }
+          },
+          "else": {
+            "anyOf": [
+              {
+                "properties": {
+                  "key": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "payload_tag": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "lease": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "controlledProjectedCorrelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mapped",
+        "operation_id",
+        "effect_number",
+        "generation",
+        "attempt"
+      ],
+      "properties": {
+        "mapped": {
+          "type": "boolean"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+            }
+          ]
+        },
+        "effect_number": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mapped": {
+                "enum": [
+                  true
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "operation_id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "operation_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlledProjectedFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "fence"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "Reserved",
+            "ReplayAccepted",
+            "InProgress",
+            "Denied",
+            "Finalized.PendingAccepted",
+            "Finalized.AlreadyAccepted",
+            "GuardOnlyAllowed",
+            "GuardOnlyDenied"
+          ]
+        },
+        "fence": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedFence"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Reserved",
+                  "Finalized.PendingAccepted",
+                  "Finalized.AlreadyAccepted"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fence": {
+                "$ref": "#/$defs/controlledProjectedFence"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "fence": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlledProjectedKnowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "correlation",
+        "scope",
+        "fact"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "NoCommitRequested",
+            "CommitCallEntered",
+            "ReceiptKnown"
+          ]
+        },
+        "correlation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedCorrelation"
+            }
+          ]
+        },
+        "scope": {
+          "enum": [
+            null,
+            "RatedBegin.NewReservation",
+            "RatedBegin.Reclaim",
+            "RatedBegin.ReplayRead",
+            "RatedBegin.PendingRequirement",
+            "RatedBegin.GuardDenial",
+            "AdmissionFinalize",
+            "GuardOnlyVerification"
+          ]
+        },
+        "fact": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedFact"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "NoCommitRequested"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "correlation": {
+                "type": "null"
+              },
+              "scope": {
+                "type": "null"
+              },
+              "fact": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "correlation": {
+                "$ref": "#/$defs/controlledProjectedCorrelation"
+              },
+              "scope": {
+                "enum": [
+                  "RatedBegin.NewReservation",
+                  "RatedBegin.Reclaim",
+                  "RatedBegin.ReplayRead",
+                  "RatedBegin.PendingRequirement",
+                  "RatedBegin.GuardDenial",
+                  "AdmissionFinalize",
+                  "GuardOnlyVerification"
+                ]
+              },
+              "fact": {
+                "$ref": "#/$defs/controlledProjectedFact"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlledProjectedReconcile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation",
+        "lease",
+        "retention"
+      ],
+      "properties": {
+        "observation": {
+          "enum": [
+            "ExactPending",
+            "ExactAccepted",
+            "Missing",
+            "Superseded",
+            "Conflicting"
+          ]
+        },
+        "lease": {
+          "enum": [
+            null,
+            "Current",
+            "Expired"
+          ]
+        },
+        "retention": {
+          "enum": [
+            null,
+            "Current",
+            "Expired"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "observation": {
+                "enum": [
+                  "ExactPending"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lease": {
+                "enum": [
+                  "Current",
+                  "Expired"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "lease": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observation": {
+                "enum": [
+                  "ExactPending",
+                  "ExactAccepted"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retention": {
+                "enum": [
+                  "Current",
+                  "Expired"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "retention": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlledProjectedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "fence",
+        "reconcile",
+        "cause"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "Begin.GuardOnlyAllowed",
+            "Begin.GuardOnlyDenied",
+            "Begin.Reserved",
+            "Begin.ReplayAccepted",
+            "Begin.InProgress",
+            "Begin.Denied",
+            "Begin.Conflict",
+            "Begin.CapacityLimited",
+            "Finalize.Missing",
+            "Finalize.PayloadConflict",
+            "Finalize.LostFence",
+            "Finalize.AlreadyAccepted",
+            "Finalize.AcceptPending",
+            "Reconcile",
+            "Failed"
+          ]
+        },
+        "fence": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedFence"
+            }
+          ]
+        },
+        "reconcile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedReconcile"
+            }
+          ]
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "Backend",
+                "ActorBusy",
+                "Cancelled"
+              ]
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Begin.Reserved"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fence": {
+                "$ref": "#/$defs/controlledProjectedFence"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "fence": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Reconcile"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reconcile": {
+                "$ref": "#/$defs/controlledProjectedReconcile"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "reconcile": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Failed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cause": {
+                "enum": [
+                  "Backend",
+                  "ActorBusy",
+                  "Cancelled"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "cause": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controlledCoordinator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "outcome",
+        "result",
+        "cause",
+        "knowledge"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "Waiting",
+            "Finished"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            null,
+            "Completed",
+            "PreCommitFailure",
+            "Unknown",
+            "ReceiptPreserved"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedResult"
+            }
+          ]
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "Backend",
+                "ActorBusy",
+                "Cancelled"
+              ]
+            }
+          ]
+        },
+        "knowledge": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/controlledProjectedKnowledge"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "Waiting"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "type": "null"
+              },
+              "result": {
+                "type": "null"
+              },
+              "cause": {
+                "type": "null"
+              },
+              "knowledge": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "Completed",
+                  "PreCommitFailure",
+                  "Unknown",
+                  "ReceiptPreserved"
+                ]
+              },
+              "knowledge": {
+                "$ref": "#/$defs/controlledProjectedKnowledge"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "Completed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/controlledProjectedResult"
+              },
+              "cause": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "PreCommitFailure",
+                  "Unknown",
+                  "ReceiptPreserved"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "null"
+              },
+              "cause": {
+                "enum": [
+                  "Backend",
+                  "ActorBusy",
+                  "Cancelled"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "PreCommitFailure"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "knowledge": {
+                "properties": {
+                  "kind": {
+                    "const": "NoCommitRequested"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "Unknown"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "knowledge": {
+                "properties": {
+                  "kind": {
+                    "const": "CommitCallEntered"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "ReceiptPreserved"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "knowledge": {
+                "properties": {
+                  "kind": {
+                    "const": "ReceiptKnown"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

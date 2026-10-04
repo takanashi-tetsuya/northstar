@@ -1,0 +1,274 @@
+{
+  "schema": "northstar-stage3-bosh-response-result-v1",
+  "status": "LimitedHelperScopePassed",
+  "stage3": "Open",
+  "base_commit": "39cc70873c8160453b10e0ff40fa28674ee75bd1",
+  "base_tree": "149fbf410191341a3537dabce771af0adcfcd883",
+  "scope": "Production-shared BOSH response bind/rebuild/exposure/cache/replay/fresh-ACK helpers and immutable request/receipt rules, qualified by finite pure/fake tests and source-placement review.",
+  "source_manifest": {
+    "crates/northstar-delivery-core/src/bosh_ownership.rs": {
+      "bytes": 28990,
+      "sha256": "dd3c05a161e24936886fdd35ba22fc7aeb6f979433265cabd4c4236c0199d5fc"
+    },
+    "crates/northstar-delivery-core/src/bosh_ownership/response.rs": {
+      "bytes": 55334,
+      "sha256": "ed5cb2ba7bb332bd760ee9e854221d6fff7539fb36049e1626e0323bba749f11"
+    },
+    "src/bosh.rs": {
+      "bytes": 108718,
+      "sha256": "cc99ad88c98cb5b12a91b51c1195afabf3ead5af73cffd88c79c4f8e391ab92f"
+    },
+    "src/bosh/response_owner.rs": {
+      "bytes": 61652,
+      "sha256": "c8b2e8627c654a53a9cfd8b7e5e48457c529b38ff520d6ec693fc0aa05bb3f86"
+    },
+    "src/db/replay.rs": {
+      "bytes": 87825,
+      "sha256": "602286624e999349620ae91b6a65da24bd758f118eb72f4ce56bf2e452220cdb"
+    },
+    "src/db/replay_repository.rs": {
+      "bytes": 9342,
+      "sha256": "c84ee2d149e13d43be96bb23d203ee3425a402e47aa09c3d187dcef3f28e293e"
+    },
+    "src/outbound.rs": {
+      "bytes": 28992,
+      "sha256": "77579b1a6026911d1fa280dc2ead03c8f233727353eca423a3a55af4780b4577"
+    },
+    "src/services/replay.rs": {
+      "bytes": 16925,
+      "sha256": "429a17dfcbd36e64062db713e85c2af6aeba0ac029bbc9f16dd95dd7c3e105ca"
+    },
+    "src/bosh/ownership.rs": {
+      "bytes": 34628,
+      "sha256": "b8824caac75a3842fbf5945bb5f00f041a0933aff918e1e8d8f0245b3d4e855f"
+    },
+    "scripts/check-execution-boundaries.mjs": {
+      "bytes": 55178,
+      "sha256": "a054c3300c3efa74f747819cfaaf47a66df6798ebd6b5d6ee9bdf3023208e28e"
+    },
+    "scripts/test-execution-boundaries.mjs": {
+      "bytes": 44777,
+      "sha256": "7ba39f29ddd282b5fcb0ee6b4c2f7b8e13ff0f28d78d50a2e3c2f2cebd6cf490"
+    }
+  },
+  "source_manifest_sha256": "3ab82409c6b6265d423669f8ceb39d73aa980abdb154895ee8ccfa1d7c7ed975",
+  "manifest_encoding": "UTF-8 JSON, sorted object keys, compact separators, no trailing newline",
+  "changed_source_paths": [
+    "crates/northstar-delivery-core/src/bosh_ownership.rs",
+    "crates/northstar-delivery-core/src/bosh_ownership/response.rs",
+    "scripts/check-execution-boundaries.mjs",
+    "scripts/test-execution-boundaries.mjs",
+    "src/bosh/response_owner.rs"
+  ],
+  "checks": {
+    "admission_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.155502004",
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+    },
+    "architecture_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "1.644971803",
+      "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36"
+    },
+    "clippy": {
+      "exit_code": 0,
+      "elapsed_seconds": "175.974991327",
+      "log_sha256": "36e6c8df8f155aef812f9b575f4747e7bd476e1f5f60a53e48da4ee570d68220"
+    },
+    "compile": {
+      "exit_code": 0,
+      "elapsed_seconds": "157.228098423",
+      "log_sha256": "90eb4f65696f6d4ad3353277a6d29a3dd27c2073aaf365b1c0c72a72e0fda2c9"
+    },
+    "execution_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.538581846",
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+    },
+    "format_check": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.103284666",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gates": {
+      "exit_code": 0,
+      "elapsed_seconds": "8.028988069",
+      "log_sha256": "e507c949280b2782823a32333efaf9f0b8e22a425be89ec02d7f8d2338ac58c2"
+    },
+    "graphs": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.443313642",
+      "log_sha256": "e38a265a5bd35a61e776fb027cd8494eb98955b13e9dabb9c1169c472dd8a008"
+    },
+    "inventory_core": {
+      "exit_code": 0,
+      "elapsed_seconds": "1.179371132",
+      "log_sha256": "8f1cbf33710c8cd3caea6b32e2e4cee1d3f5ff83d9fa92a7dc66d1d6d5278912"
+    },
+    "inventory_server": {
+      "exit_code": 0,
+      "elapsed_seconds": "164.898002480",
+      "log_sha256": "5ca0e0a996c9abdcd644edcb8889be6319e0a468f6667425fe924e6b59b84221"
+    }
+  },
+  "rust_tests": {
+    "selected": 49,
+    "passed": 49,
+    "failed": 0,
+    "ignored": 0,
+    "groups": {
+      "new_response_core": 11,
+      "new_response_helper": 18,
+      "existing_duplicate_rid": 1,
+      "existing_transfer_core_and_item_helpers": 19
+    },
+    "inventory_counts": {
+      "core": 37,
+      "server": 1836
+    },
+    "exact_selection": "Every name was present exactly once in the actual --list inventory before execution; each invocation used --exact --test-threads=1 and reported one named pass with zero ignored.",
+    "log_digest": "5a223fa477df08398f6ab99901021be4fcf6b6e6e3412fb47cbf78d9a72828b8",
+    "log_digest_encoding": "SHA256 of UTF-8 sorted compact JSON mapping exact_00 through exact_48 to their actual log SHA256 values.",
+    "names_by_package": {
+      "northstar-delivery-core": [
+        "bosh_ownership::response::tests::whole_ordered_cut_and_private_request_binding_reject_changes_inertly",
+        "bosh_ownership::response::tests::bind_commit_membership_is_exact_and_source_less_response_needs_no_commit",
+        "bosh_ownership::response::tests::bind_commit_poll_loss_and_receipt_have_independent_knowledge",
+        "bosh_ownership::response::tests::returned_membership_and_late_receipt_never_substitute_for_each_other",
+        "bosh_ownership::response::tests::restoration_matches_all_message_ids_in_reverse_order_and_releases_sources",
+        "bosh_ownership::response::tests::restoration_is_precommit_only_and_mismatched_removal_does_not_allow_rebuild",
+        "bosh_ownership::response::tests::renewal_preserves_expected_value_and_separates_replay_from_fresh_ack",
+        "bosh_ownership::response::tests::ack_duplicate_identities_reject_before_commit_poll_without_reordering",
+        "bosh_ownership::response::tests::ack_empty_commit_loss_and_positive_receipt_remain_distinct",
+        "bosh_ownership::response::tests::retirement_blocks_durable_starts_but_late_control_facts_cannot_change_terminal",
+        "bosh_ownership::response::tests::response_request_snapshot_and_summary_debug_redact_retained_tokens",
+        "bosh_ownership::tests::closed_request_preserves_original_scope_and_rejects_retargeting_before_commit_poll",
+        "bosh_ownership::tests::commit_drop_error_and_receipt_remain_distinct_without_rollback_inference",
+        "bosh_ownership::tests::actual_mismatched_and_bare_returns_never_authorize_local_continuation",
+        "bosh_ownership::tests::late_receipt_does_not_retroactively_accept_an_earlier_rejected_return",
+        "bosh_ownership::tests::same_source_invocations_and_old_owners_cannot_share_receipt_authority",
+        "bosh_ownership::tests::exact_local_continuation_retains_commit_and_notification_on_fifo_refusal",
+        "bosh_ownership::tests::terminal_kind_keep_running_and_lazy_metadata_are_separate_facts",
+        "bosh_ownership::tests::debug_redacts_retained_original_committed_and_mismatched_return_tokens"
+      ],
+      "rust-xmpp-server": [
+        "bosh::response_owner::tests::exact_bind_exposure_and_cache_share_bytes_membership_and_real_receipts",
+        "bosh::response_owner::tests::bind_cut_owner_retains_unknown_or_receipt_without_exposure_or_cache",
+        "bosh::response_owner::tests::bare_wrong_invocation_and_mismatched_bind_returns_cannot_expose",
+        "bosh::response_owner::tests::responder_refusal_and_abandoned_post_exposure_continuation_remain_distinct",
+        "bosh::response_owner::tests::typed_supersession_restores_peers_and_removes_every_matching_message",
+        "bosh::response_owner::tests::supersession_after_commit_knowledge_never_restores_or_rebuilds",
+        "bosh::response_owner::tests::missing_supersession_and_rebuild_exhaustion_preserve_actual_restoration",
+        "bosh::response_owner::tests::repeated_single_removals_retain_linear_measured_vector_capacity",
+        "bosh::response_owner::tests::malformed_output_restores_same_items_and_byte_limit_precedes_selection",
+        "bosh::response_owner::tests::plain_payload_and_pause_control_keep_distinct_no_bind_paths",
+        "bosh::response_owner::tests::unacknowledged_limit_preserves_release_before_terminal_without_bind",
+        "bosh::response_owner::tests::cached_replay_renews_exact_membership_and_same_bytes_without_fresh_ack",
+        "bosh::response_owner::tests::replay_policy_controls_and_renewal_failure_never_expose_cached_payload",
+        "bosh::response_owner::tests::fresh_ack_renews_then_applies_cache_and_each_actual_receipt_result",
+        "bosh::response_owner::tests::none_and_empty_source_ack_preserve_existing_persistence_paths",
+        "bosh::response_owner::tests::ack_or_renewal_unknown_mismatch_and_postreceipt_drop_preserve_cache",
+        "bosh::response_owner::tests::real_resume_governor_holds_follow_shared_response_bytes_until_last_drop",
+        "bosh::response_owner::tests::real_governor_rejection_preserves_fifo_before_response_buffer_allocation",
+        "bosh::tests::duplicate_rid_replays_only_an_identical_request",
+        "bosh::ownership::tests::actual_item_token_allocation_and_one_shot_survive_successful_transfer",
+        "bosh::ownership::tests::record_precedes_capacity_rejection_and_transfer_is_never_started",
+        "bosh::ownership::tests::record_and_transfer_errors_preserve_their_distinct_actor_classification",
+        "bosh::ownership::tests::missing_wrong_or_unrelated_receipt_returns_never_mutate_notify_or_enqueue",
+        "bosh::ownership::tests::cancelled_transfer_keeps_pending_or_committed_facts_without_handoff",
+        "bosh::ownership::tests::returned_failure_keeps_commit_knowledge_and_records_keep_running_false",
+        "bosh::ownership::tests::controlled_post_transfer_fifo_refusal_preserves_commit_and_one_shot",
+        "bosh::ownership::tests::dropped_receiver_is_only_a_notification_attempt_and_does_not_undo_fifo_acceptance",
+        "bosh::ownership::tests::private_preparation_rejects_invalid_shape_and_redacts_owned_payloads",
+        "bosh::ownership::tests::owner_drops_unpolled_cancelled_ready_and_panicking_children_before_summary",
+        "bosh::ownership::tests::expired_test_timer_destroys_pending_child_before_timeout_summary"
+      ]
+    }
+  },
+  "node_tests": {
+    "passed": 248,
+    "failed": 0,
+    "skipped": 0,
+    "scope": "Execution and admission source-drift checks; string mutations do not establish runtime SQL or transport behavior."
+  },
+  "graphs": {
+    "checked": 10,
+    "byte_identical": 10
+  },
+  "test_binaries": {
+    "core": {
+      "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+      "bytes": 4148552,
+      "sha256": "21cc959d076d54a394bd22996d7288b771f9475204e5f566029d100817cc6633"
+    },
+    "server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 197907688,
+      "sha256": "3f392db494492e1ae8e9493810126853f272859aca16e67e3ef35baa04110bd5"
+    }
+  },
+  "binary_identity_limit": "These identities were verified against the actual local test logs and available files, built on the stated Git base plus the frozen source delta. A later saved commit or rebuild can change embedded Git metadata and executable bytes.",
+  "portable_unit_recipe": {
+    "core": "cargo test --locked --offline -p northstar-delivery-core --lib FULL_TEST_NAME -- --exact --test-threads=1",
+    "server": "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server FULL_TEST_NAME -- --exact --test-threads=1",
+    "capacity_output": "Add --show-output only to repeated_single_removals_retain_linear_measured_vector_capacity."
+  },
+  "source_corrections": [
+    "Retained removal-index vectors grow from actual removals instead of reserving every selected prefix. The test reads live retained capacities under the operation lock; a cloned snapshot cannot mask spare capacity.",
+    "ACK receipt preparation rejects duplicate C2S message identities or duplicate MIX delivery identities before the COMMIT future is polled. Actual list order and cross-family equal UUIDs remain valid; no standalone512-row policy was added.",
+    "The existing publication gate now follows actual bound response exposure and responder acceptance, immediately followed by the unchanged auth branch and cache bookkeeping; request-forwarding and COMMIT hooks remain guarded."
+  ],
+  "qualified_observations": [
+    "Closed ordered bind requests reject changed cuts; actual returned membership and independent receipt authority remain distinct, including lost return and late receipt.",
+    "Typed restoration requires no COMMIT entry and retains actual selected-item removal ordinals; generic failure or post-COMMIT uncertainty does not authorize restoration/rebuild.",
+    "Actual responder sends, source-less payload and empty pause controls retain distinct facts. Response Bytes/capacity owners and receipt channels survive exposure/cache while selected OutboundItems drop after preparation.",
+    "Cached replay preserves exact membership, same response bytes and replay-count-before-renewal behavior. Fresh ACK renews first, then applies only the acknowledged cache prefix and actual receipt sends.",
+    "Real in-process governor rejection and shared response-byte ownership were exercised; retired durable starts and late control observations remain distinct."
+  ],
+  "removal_capacity_measurements": [
+    {
+      "removed": 16,
+      "retained_index_capacity": 64,
+      "element_bytes": 8,
+      "element_storage_bytes": 512
+    },
+    {
+      "removed": 64,
+      "retained_index_capacity": 256,
+      "element_bytes": 8,
+      "element_storage_bytes": 2048
+    }
+  ],
+  "capacity_scope": "Two finite16/64-removal fixtures measured retained usize element capacities, with element size8 bytes. These are not complete owner heap measurements, allocator overhead, RSS or a universal maximum-size qualification.",
+  "preserved_ci_failure": {
+    "commit": "39cc70873c8160453b10e0ff40fa28674ee75bd1",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37221824260",
+    "counts": {
+      "success": 30,
+      "failure": 2,
+      "skipped": 1,
+      "cancelled": 0
+    },
+    "substantive_failure": "The previous checker required the former inline exposure loop; the required aggregate also failed. This checkpoint passed the updated local source gate.",
+    "failed_job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37221824260/job/111493535486"
+  },
+  "limitations": [
+    "Fake persistence invokes the same COMMIT wrappers, but successful fake futures do not prove live PostgreSQL locking, expiry, atomicity or failure behavior.",
+    "A fake outer-return pause after the receipt is a controlled continuation cut, not evidence of a production post-COMMIT await.",
+    "The duplicate-message typed-supersession restoration case exercises the controlled helper contract; actual bind SQL rejects duplicate input identities before that typed path.",
+    "The zero-config rebuild-exhaustion case is a controlled helper fixture, not a valid runtime configuration or added product rejection.",
+    "Helper tests do not instantiate the full HTTP actor or qualify authentication publication. The existing exact-selected-auth-control gap remains a Stage4 obligation.",
+    "Additional ownership metadata is outside the memory governor; the measured removal vectors do not establish whole-process resource bounds.",
+    "Shared direct post-application continuation, saved-case record/replay, effective mutation and same-target reduction/control remain required for full Stage3.",
+    "The unresolved TLS response/EOF observations and SM retention policy remain Stage5 work; later green CI does not explain or close the TLS failures."
+  ],
+  "ordinary_bounds": {
+    "per_command_timeout_seconds": 600,
+    "kill_grace_seconds": 5,
+    "log_limit_bytes": 4194304,
+    "serial_commands": 59,
+    "all_collector_exits": 0,
+    "all_source_after_maps_equal": true
+  }
+}

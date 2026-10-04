@@ -1,5 +1,5 @@
-//! Invocation-local BOSH ownership facts. This slice observes pending MIX
-//! transfers; response binding, replay and ACK remain separate boundaries.
+//! Invocation-local BOSH ownership facts. Pending MIX transfers, response
+//! binding, renewal and ACK retain separate transaction knowledge.
 //! The outer owner has constant-size setup. Transfer metadata is allocated
 //! lazily inside the existing timed actor child, bounded by its FIFO/action
 //! flow. The actor's T <= 2S+1 bound is a logical record count; Vec capacity
@@ -52,7 +52,7 @@ pub enum Rejected {
 }
 impl std::fmt::Display for Rejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BOSH transfer rejected: {self:?}")
+        write!(f, "BOSH operation rejected: {self:?}")
     }
 }
 impl std::error::Error for Rejected {}
@@ -151,6 +151,18 @@ impl Snapshot {
                         matches!(attempt.knowledge, response::BindKnowledge::ReceiptKnown(_))
                     })
                     .count(),
+                restored_indices: self
+                    .responses
+                    .iter()
+                    .flat_map(|response| &response.attempts)
+                    .map(|attempt| attempt.removed_indices.len())
+                    .sum(),
+                retained_removal_capacity: self
+                    .responses
+                    .iter()
+                    .flat_map(|response| &response.attempts)
+                    .map(|attempt| attempt.removed_indices.capacity())
+                    .sum(),
                 accepted_responders: self
                     .responses
                     .iter()
@@ -272,6 +284,11 @@ impl Operation {
     }
     pub fn snapshot(&self) -> Snapshot {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    /// Inspect retained storage without cloning vectors and losing their spare
+    /// capacity. Counts describe these allocations, not allocator or RSS bytes.
+    pub fn summary(&self) -> Summary {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).summary()
     }
     fn open(state: &Snapshot) -> Result<(), Rejected> {
         if state.terminal.is_some() {

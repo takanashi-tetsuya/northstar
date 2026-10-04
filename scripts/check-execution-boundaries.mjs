@@ -27,6 +27,10 @@ const files = {
   boshOwner: 'src/bosh/ownership.rs',
   boshCore: 'crates/northstar-delivery-core/src/bosh_ownership.rs',
   mixRepository: 'src/db/mix_repository.rs',
+  boshResponse: 'src/bosh/response_owner.rs',
+  boshResponseCore: 'crates/northstar-delivery-core/src/bosh_ownership/response.rs',
+  replayService: 'src/services/replay.rs',
+  replayRepository: 'src/db/replay_repository.rs',
 };
 
 function requireBoundary(condition, message) {
@@ -94,6 +98,12 @@ function body(source, declaration) {
     else if (code[index] === '}' && --depth === 0) return code.slice(opening + 1, index);
   }
   throw new Error(`execution boundary: unterminated body: ${declaration}`);
+}
+
+function productionModule(source) {
+  const markers = [...codeOnly(source).matchAll(/\n#\[cfg\(test\)\]\s*\nmod\s+tests\b/g)];
+  requireBoundary(markers.length <= 1, 'expected at most one test-module boundary');
+  return markers.length ? source.slice(0, markers[0].index) : source;
 }
 
 function compact(source) { return source.replace(/\s+/g, ''); }
@@ -360,7 +370,111 @@ export function verifyBoshTransferBoundaries({ bosh, boshOwner, boshCore, mixSer
   'BOSH operation must retain actual timeout/return and keep_running after child destruction');
 }
 
-export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction }) {
+// Wiring checks for the response seam. The pure owner/helper tests establish
+// behavior; these lexical checks keep production on those exact shared paths.
+export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseCore, replayService, replayRepository, replayDb }) {
+  boshResponse = productionModule(boshResponse);
+  boshResponseCore = productionModule(boshResponseCore);
+  const normalize = value => compact(value).replace(/,\)/g, ')');
+  const finish = normalize(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
+  requireBoundary(finish.includes('cache:cache&&condition.is_none()&&pending.request.pause.is_none(),') &&
+    finish.includes('response_owner::prepare(&mutresponse_owner::Fields{output:&mutself.output,output_bytes:&mutself.output_bytes,replay:&mutself.replay,governor:&self.sm_memory_governor,max_response_bytes:self.max_response_bytes,max_output_stanzas:self.max_output_stanzas,content_type:&self.content_type,received_rid,},metadata,condition,operation,&response_owner::ServiceReplay{service:&self.replay_service,}).await'),
+  'BOSH response preparation must borrow the actual actor fields and retain its existing cache predicate');
+  const ingress = normalize(body(bosh, 'async\\s+fn\\s+accept_request\\b'));
+  ordered(ingress, ['if!valid_client_response_ack(', 'response_owner::replay_cached(&mutself.replay,&request,response,&mutself.last_response,operation,', 'matchclassify_rid(self.next_rid,request.rid)'],
+    'BOSH must validate client ACK before cached replay and fresh RID classification');
+  const pending = normalize(body(bosh, 'async\\s+fn\\s+process_pending\\b'));
+  ordered(pending, ['advance_bosh_key_sequence(', 'bosh_request_shape_error(', 'self.renew_and_apply_response_ack(request.ack,operation).await'],
+    'BOSH fresh requests must preserve key, shape and renewal/ACK order');
+  requireBoundary(normalize(body(bosh, 'async\\s+fn\\s+renew_and_apply_response_ack\\b')) ===
+    'response_owner::renew_and_acknowledge(&mutself.replay,ack,operation,&response_owner::ServiceReplay{service:&self.replay_service,}).await',
+  'BOSH actor ACK wrapper must delegate the actual cache and same operation to the shared helper');
+  requireBoundary(normalize(body(bosh, 'fn\\s+finish_pending_empty\\b')) ===
+    'response_owner::finish_empty_control(pending.request.rid,pending.responders,&self.content_type,&mutself.last_response,&mutself.highest_responded,operation);',
+  'BOSH actor pause wrapper must use the shared empty-control primitive without extra behavior');
+  const replayPort = body(boshResponse, 'impl<R:\\s*ReplayRepository>\\s+ReplayPort\\s+for\\s+ServiceReplay');
+  for (const [method, service] of [['bind', 'bind_bosh_response_sources'], ['renew', 'renew_bosh_fences'], ['acknowledge', 'acknowledge_bosh_responses']]) {
+    requireBoundary(normalize(body(replayPort, `async\\s+fn\\s+${method}\\b`)) === `self.service.${service}(request).await`,
+      'BOSH ReplayPort must pass each exact request into the real service');
+  }
+  const prepare = normalize(body(boshResponse, 'async\\s+fn\\s+prepare\\b'));
+  ordered(prepare, ['.begin_response(', 'loop{', 'fields.body(', 'build.attempt(sources,selected.iter().map(|item|item.durable_source))',
+    'letresult=ifrequest.sources().is_empty(){Ok(BoshResponseOwnership::default())}else{port.bind(&request).await};',
+    'letbound=request.returned(ownership)', 'letownership=bound.ownership().clone();', 'Ok(BoundResponse{metadata,response,receipts,ownership,bound,})'],
+  'BOSH must bind selected sources and consume the actual returned membership before releasing response bytes');
+  ordered(prepare, ['ifletSome(message_id)=superseded_bosh_message_id(&error){', 'ifletOk(restoration)=request.supersession(message_id){',
+    'restore_response_items_observed(', 'restoration.restored(removed_indices)', 'ifremoved&&superseded_rebuilds<fields.max_output_stanzas{'],
+  'BOSH restoration must require independent pre-COMMIT authority and retain actual removal ordinals');
+  const bindImpl = body(boshResponseCore, 'impl\\s+BindRequest\\b');
+  const supersession = normalize(body(bindImpl, 'fn\\s+supersession\\b'));
+  requireBoundary(supersession.includes('self.validate(&mutstate)?;') &&
+    supersession.includes('ifattempt.knowledge!=BindKnowledge::NoCommitRequested||attempt.returned.is_some()||attempt.restored{returnErr(Rejected::State);}'),
+  'BOSH supersession cannot restore an entered or confirmed bind');
+  const returned = normalize(body(bindImpl, 'fn\\s+returned\\b'));
+  ordered(returned, ['self.validate(&mutstate)?;', 'BindKnowledge::ReceiptKnown(receipt)=>receipt==&ownership',
+    'attempt.returned=Some(ownership.clone());', 'if!attempt.return_matches{returnErr(Rejected::Receipt);}', 'Ok(BoundResponse{request:self,ownership,})'],
+  'BOSH actual bind return must remain separate from matching receipt authority');
+  const bound = normalize(body(body(boshResponseCore, 'impl\\s+BoundResponse\\b'), 'fn\\s+begin_exposure\\b'));
+  ordered(bound, ['self.request.validate(&mutstate)?;', 'if!attempt.return_matches||attempt.restored{returnErr(Rejected::Receipt);}', 'response.exposure_entered=true;'],
+    'BOSH payload exposure must consume the checked bound continuation');
+  const localFinish = normalize(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+finish\\b'));
+  ordered(localFinish, ['self.exposure.begin_bookkeeping()?;', 'update_response_position(last_response,highest_responded,self.metadata.rid);',
+    'bookkeeping.updated();', 'ifself.metadata.cache{', 'replay.push_back(CachedResponse{', 'bookkeeping.cached();'],
+  'BOSH cache bookkeeping must consume exposure and record insertion after the actual push');
+  for (const field of ['response:self.response,', 'durable_ownership:self.ownership,', 'transport_receipts:self.receipts,']) {
+    requireBoundary(localFinish.includes(field), 'BOSH cache must retain the same bytes, membership and receipt channels');
+  }
+  const pause = normalize(body(boshResponse, 'fn\\s+finish_empty_control\\b'));
+  requireBoundary(pause.includes('operation.observe_empty_control(rid)') && pause.includes('bosh_body_element(None,false,None).finish()') &&
+    pause.includes('update_response_position(last_response,highest_responded,rid);control.updated();') &&
+    !/await|\.bind\(|\.renew\(|\.acknowledge\(|auth_publication|replay\.push_back/.test(pause),
+  'BOSH pause must remain an empty synchronous control without durable binding, auth or cache');
+  const replay = normalize(body(boshResponse, 'async\\s+fn\\s+replay_cached\\b'));
+  ordered(replay, ['super::replay_response(replay,request)', 'operation.begin_renew(Some((request.rid,ownership)))',
+    'port.renew(&renewal).await', 'renewal.returned().and_then(|renewed|renewed.begin_replay())',
+    'send_one(reply,responder,||exposure.sending(),|accepted|exposure.sent(accepted));', '*last_response=Instant::now();', 'exposure.updated();'],
+  'BOSH cached replay must select/count first and require its exact renewal before payload exposure');
+  requireBoundary(replay.includes('operation.observe_terminal_control(request.rid)') && !replay.includes('port.acknowledge('),
+    'BOSH replay termination is a terminal control and cached replay cannot apply a fresh ACK');
+  const acknowledge = normalize(body(boshResponse, 'async\\s+fn\\s+renew_and_acknowledge\\b'));
+  ordered(acknowledge, ['operation.begin_renew(None)?;', 'port.renew(&request).await?;', 'request.returned()?;', 'ifletSome(rid)=ack{',
+    'renewed.begin_ack(rid)?;', 'port.acknowledge(&request).await?;', 'letacknowledged=request.returned()?;',
+    'cached.rid<=acknowledged.rid()', 'replay.pop_front()', 'acknowledged.evicted();', 'acknowledged.sending_receipt();',
+    'letaccepted=receipt.send(()).is_ok();', 'acknowledged.receipt_sent(accepted);'],
+  'BOSH fresh ACK must renew first and preserve exact committed return, cache eviction and actual receipt sends');
+  for (const [name, sql] of [['bind_bosh_response_sources', 'bind_bosh_transport_response_observed'],
+    ['renew_bosh_fences', 'renew_bosh_transport_fences'], ['acknowledge_bosh_responses', 'acknowledge_bosh_transport_responses']]) {
+    const service = normalize(body(replayService, `pub\\(crate\\)\\s+async\\s+fn\\s+${name}\\b`));
+    requireBoundary(service === `self.repository.${name}(request).await`, 'BOSH service must forward the same closed response request');
+    const repository = normalize(body(replayRepository, `async\\s+fn\\s+${name}\\b`));
+    requireBoundary(repository.includes(`db::replay::${sql}(&self.pool,request).await`),
+      'BOSH repository must forward the same closed response request');
+  }
+  const bindSql = normalize(body(replayDb, 'async\\s+fn\\s+bind_bosh_transport_response_observed\\b'));
+  requireBoundary(bindSql === 'request.validate_for_io()?;bind_bosh_transport_response_inner(pool,request.session_id(),request.rid(),request.sources(),request.ttl_seconds(),Some(request)).await',
+    'BOSH bind SQL must use validated closed inputs and retain its request');
+  const bindInner = normalize(body(replayDb, 'async\\s+fn\\s+bind_bosh_transport_response_inner\\b'));
+  ordered(bindInner, ['letownership=crate::outbound::BoshResponseOwnership{', 'letreceipt=ownership.clone();',
+    'response::bind_commit_observed(transaction.commit(),request,receipt).await?;', 'Ok(ownership)'],
+  'BOSH bind must prepare its independent membership receipt before actual COMMIT and return');
+  const renewSql = normalize(body(replayDb, 'async\\s+fn\\s+renew_bosh_transport_fences\\b'));
+  ordered(renewSql, ['request.validate_for_io()?;', 'letsession_id=request.session_id();', 'letexpected_response=request.expected();',
+    'letttl_seconds=request.ttl_seconds();', 'pool.begin().await?', 'response::renew_commit_observed(transaction.commit(),request).await?;', 'Ok(())'],
+  'BOSH renewal SQL must preserve closed request inputs and actual COMMIT receipt');
+  const ackSql = normalize(body(replayDb, 'async\\s+fn\\s+acknowledge_bosh_transport_responses\\b'));
+  ordered(ackSql, ['request.validate_for_io()?;', 'letsession_id=request.session_id();', 'letacknowledged_rid=request.rid();',
+    'pool.begin().await?', 'deleted_sources.push(', 'letacknowledged=deleted_sources.len();',
+    'response::ack_commit_observed(transaction.commit(),request,deleted_sources).await?;', 'Ok(acknowledged)'],
+  'BOSH ACK SQL must retain actual deletion facts before COMMIT and return');
+  for (const [name, argument] of [['bind', 'receipt'], ['renew', ''], ['ack', 'deleted']]) {
+    const commit = normalize(body(boshResponseCore, `async\\s+fn\\s+${name}_commit_observed\\b`));
+    requireBoundary(commit === `letpermit=request.enter_commit(${argument}).map_err(CompletionError::Binding)?;future.await.map_err(CompletionError::Repository)?;permit.received();Ok(())`,
+      'BOSH response COMMIT wrappers must bind first, await once and record the exact receipt synchronously');
+  }
+}
+
+export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction, boshResponse }) {
+  boshResponse = productionModule(boshResponse);
   for (const name of ['drive_io', 'websocket_connection']) {
     const ingress = compact(body(transport, `async\\s+fn\\s+${name}\\b`));
     requireBoundary(ingress.includes('session.process_frame(&frame).await') && !ingress.includes('session.handle('),
@@ -469,12 +583,23 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
   requireBoundary(boshIngress.includes('matchself.protocol.process_frame(payload).await{') &&
     !boshIngress.includes('self.protocol.handle('), 'BOSH must enter the observed frame runner');
   const boshPublication = compact(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
-  const exposure = 'letmutexposed_to_transport=false;forresponderinpending.responders{exposed_to_transport|=responder.send(response.clone()).is_ok();}';
-  const continuation = 'ifself.auth_publication_pending{if!exposed_to_transport{returnfalse;}self.auth_publication_pending=false;if!self.protocol.publish_committed_authentication_and_route().await{returnfalse;}}';
-  requireBoundary(boshPublication.includes(exposure + continuation) &&
+  const exposure = 'letexposed=matchbound.expose(pending.responders){Ok(exposed)=>exposed,Err(error)=>{tracing::error!(?error,rid,);returnfalse;}};';
+  const continuation = 'ifself.auth_publication_pending{if!exposed.any_accepted(){returnfalse;}self.auth_publication_pending=false;if!self.protocol.publish_committed_authentication_and_route().await{returnfalse;}}';
+  requireBoundary(boshPublication.includes(exposure + continuation +
+    'exposed.finish(&mutself.last_response,&mutself.highest_responded,&mutself.replay,).is_ok()'),
+  'BOSH must observe publication only after response exposure and before cache bookkeeping');
+  requireBoundary(count(boshPublication, 'bound.expose(') === 1 &&
     count(boshPublication, '.publish_committed_authentication_and_route().await') === 1 &&
     !boshPublication.includes('publish_committed_authentication_and_route_inner'),
   'BOSH must observe publication only after response exposure and reject publication failure');
+  const send = compact(body(boshResponse, 'fn\\s+send_one\\b'));
+  const expose = compact(body(body(boshResponse, 'impl\\s+BoundResponse\\b'), 'fn\\s+expose\\b'));
+  requireBoundary(send === 'entering();letaccepted=responder.send(response).is_ok();returned(accepted);accepted' &&
+    expose.includes('letexposure=self.bound.begin_exposure()?;letmutaccepted=false;') &&
+    expose.includes('accepted|=send_one(self.response.clone(),responder,||exposure.sending(),|accepted|exposure.sent(accepted),);') &&
+    expose.includes('exposure,accepted,})') &&
+    compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+any_accepted\\b')) === 'self.accepted',
+  'BOSH response exposure must preserve the actual responder acceptance');
   const boshApply = body(boshAction, 'async\\s+fn\\s+apply_action\\b');
   requireBoundary(!compact(boshApply).includes('publish_committed_authentication'),
     'BOSH FIFO admission must defer authentication publication until response exposure');
@@ -543,5 +668,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   verifyNativeWriteBoundaries(sources);
   verifySmOwnershipBoundaries(sources);
   verifyBoshTransferBoundaries(sources);
+  verifyBoshResponseBoundaries(sources);
   console.log('Execution publication boundaries passed');
 }

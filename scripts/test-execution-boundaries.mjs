@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -126,14 +126,17 @@ rejects('BOSH publication cannot bypass observed owner', 'bosh',
   '.publish_committed_authentication_and_route()\n                .await',
   '.publish_committed_authentication_and_route_inner()\n                .await', /BOSH must observe publication/);
 rejects('BOSH unexposed response cannot publish authentication', 'bosh',
-  'if !exposed_to_transport {\n                return false;\n            }',
+  'if !exposed.any_accepted() {\n                return false;\n            }',
   'if false {\n                return false;\n            }', /BOSH must observe publication/);
 rejects('BOSH publication failure cannot succeed', 'bosh',
   '.publish_committed_authentication_and_route()\n                .await\n            {\n                return false;',
   '.publish_committed_authentication_and_route()\n                .await\n            {\n                return true;', /BOSH must observe publication/);
-rejects('BOSH exposure must reflect actual responder acceptance', 'bosh',
-  'exposed_to_transport |= responder.send(response.clone()).is_ok();',
-  'exposed_to_transport = true; let _ = responder.send(response.clone());', /BOSH must observe publication/);
+rejects('BOSH exposure must reflect actual responder acceptance', 'boshResponse',
+  'let accepted = responder.send(response).is_ok();',
+  'let accepted = true; let _ = responder.send(response);', /actual responder acceptance/);
+rejects('BOSH cannot insert a suspension between exposure and publication', 'bosh',
+  'if self.auth_publication_pending {',
+  'tokio::task::yield_now().await;\n        if self.auth_publication_pending {', /BOSH must observe publication/);
 rejects('BOSH activation marker cannot be hidden behind a dead condition', 'boshAction',
   'if index == 0 {\n                        self.auth_publication_pending = true;\n                    }',
   'if false {\n                        self.auth_publication_pending = true;\n                    }', /BOSH activation/);
@@ -372,3 +375,84 @@ rejectsBosh('BOSH return cannot accept an unmatched receipt', 'boshCore', /if !t
 rejectsBosh('BOSH Drop must destroy the child first', 'boshOwner', /drop\(self\.child\.take\(\)\);/g, '', /destroy its child/);
 rejectsBosh('BOSH poll must preserve caught panic knowledge', 'boshOwner', /this\.poll_in_progress = true;/g, 'this.poll_in_progress = false;', /actual timeout\/return/);
 rejectsBosh('BOSH poll must retain the actual keep-running result', 'boshOwner', /result\.as_ref\(\)\.ok\(\)\.copied\(\)/g, 'Some(true)', /keep_running/);
+
+test('BOSH response ownership uses the actual production helpers', () => verifyBoshResponseBoundaries(baseline));
+test('BOSH response comments cannot add receipt or exposure authority', () => {
+  verifyBoshResponseBoundaries({ ...baseline, boshResponseCore: `/* permit.received();\n#[cfg(test)]\nmod tests */\n${baseline.boshResponseCore}` });
+});
+function rejectsBoshResponse(name, file, pattern, replacement, expected) {
+  test(name, () => {
+    const source = baseline[file];
+    const marker = /\n#\[cfg\(test\)\]\s*\nmod tests\b/.exec(source);
+    const split = marker ? marker.index : source.length;
+    const production = source.slice(0, split);
+    assert.equal([...production.matchAll(pattern)].length, 1, 'BOSH response mutation must match exactly once in production source');
+    const changedSource = production.replace(pattern, replacement) + source.slice(split);
+    assert.notEqual(changedSource, source, 'BOSH response mutation must change source');
+    assert.throws(() => verifyBoshResponseBoundaries({ ...baseline, [file]: changedSource }), expected);
+  });
+}
+rejectsBoshResponse('response preparation cannot borrow another FIFO', 'bosh',
+  /output: &mut self\.output,/g, 'output: &mut other_output,', /actual actor fields/);
+rejectsBoshResponse('response cache predicate cannot include pause controls', 'bosh',
+  /cache: cache && condition\.is_none\(\) && pending\.request\.pause\.is_none\(\),/g,
+  'cache: cache && condition.is_none(),', /existing cache predicate/);
+rejectsBoshResponse('cached replay cannot precede ACK validation', 'bosh',
+  /if !valid_client_response_ack\(/g, 'if !unchecked_client_response_ack(', /validate client ACK/);
+rejectsBoshResponse('fresh BOSH ACK cannot bypass the shared helper', 'bosh',
+  /\.renew_and_apply_response_ack\(request\.ack, operation\)/g, '.apply_ack_without_renewal(request.ack, operation)', /key, shape/);
+rejectsBoshResponse('actor ACK wrapper cannot bypass its production helper', 'bosh',
+  /response_owner::renew_and_acknowledge\(/g, 'response_owner::unobserved_acknowledge(', /actor ACK wrapper/);
+rejectsBoshResponse('actor pause wrapper cannot bypass the empty-control primitive', 'bosh',
+  /response_owner::finish_empty_control\(/g, 'response_owner::unobserved_empty_control(', /actor pause wrapper/);
+for (const method of ['bind_bosh_response_sources', 'renew_bosh_fences', 'acknowledge_bosh_responses']) {
+  rejectsBoshResponse(`${method} port cannot replace its request`, 'boshResponse',
+    new RegExp(`(self\\.service\\.${method}\\()request(\\))`, 'g'),
+    '$1other_request$2', /ReplayPort must pass each exact request/);
+}
+rejectsBoshResponse('bind port cannot receive a replacement request', 'boshResponse',
+  /port\.bind\(&request\)/g, 'port.bind(&other_request)', /bind selected sources/);
+rejectsBoshResponse('bind return cannot replace actual membership', 'boshResponse',
+  /request\.returned\(ownership\)/g, 'request.returned(other_ownership)', /actual returned membership/);
+rejectsBoshResponse('typed bind errors cannot bypass restoration authority', 'boshResponse',
+  /request\.supersession\(message_id\)/g, 'invent_restoration(message_id)', /independent pre-COMMIT authority/);
+rejectsBoshResponse('restoration cannot use another transaction knowledge class', 'boshResponseCore',
+  /(pub fn supersession[\s\S]*?attempt\.knowledge != )BindKnowledge::NoCommitRequested/g,
+  '$1BindKnowledge::NotRequired', /cannot restore an entered or confirmed bind/);
+rejectsBoshResponse('bind return cannot fabricate receipt agreement', 'boshResponseCore',
+  /BindKnowledge::ReceiptKnown\(receipt\) => receipt == &ownership/g,
+  'BindKnowledge::ReceiptKnown(receipt) => true', /matching receipt authority/);
+rejectsBoshResponse('payload exposure cannot omit the matching receipt guard', 'boshResponseCore',
+  /if !attempt\.return_matches \|\| attempt\.restored/g, 'if false', /checked bound continuation/);
+rejectsBoshResponse('cache insertion cannot be recorded before the actual push', 'boshResponse',
+  /(if self\.metadata\.cache \{)([\s\S]*?)bookkeeping\.cached\(\);/g,
+  '$1 bookkeeping.cached(); $2', /record insertion after the actual push/);
+rejectsBoshResponse('cache cannot replace returned membership', 'boshResponse',
+  /durable_ownership: self\.ownership,/g, 'durable_ownership: other_ownership,', /same bytes, membership/);
+rejectsBoshResponse('pause cannot turn into a terminal control', 'boshResponse',
+  /operation\.observe_empty_control\(rid\)/g, 'operation.observe_terminal_control(rid)', /empty synchronous control/);
+rejectsBoshResponse('cached renewal cannot target another RID', 'boshResponse',
+  /operation\.begin_renew\(Some\(\(request\.rid, ownership\)\)\)/g,
+  'operation.begin_renew(Some((other_rid, ownership)))', /exact renewal before payload exposure/);
+rejectsBoshResponse('cached replay cannot apply a fresh ACK', 'boshResponse',
+  /exposure\.updated\(\);/g, 'exposure.updated(); port.acknowledge(&other_request).await.unwrap();', /cannot apply a fresh ACK/);
+rejectsBoshResponse('fresh ACK must retain the actual receipt-send result', 'boshResponse',
+  /acknowledged\.receipt_sent\(accepted\);/g, 'acknowledged.receipt_sent(true);', /actual receipt sends/);
+rejectsBoshResponse('fresh ACK cannot evict a different RID prefix', 'boshResponse',
+  /cached\.rid <= acknowledged\.rid\(\)/g, 'cached.rid <= other_rid', /exact committed return/);
+rejectsBoshResponse('BOSH bind service cannot retarget its closed request', 'replayService',
+  /\.bind_bosh_response_sources\(request\)/g, '.bind_bosh_response_sources(other_request)', /service must forward/);
+rejectsBoshResponse('BOSH renewal repository cannot retarget its closed request', 'replayRepository',
+  /renew_bosh_transport_fences\(&self\.pool, request\)/g,
+  'renew_bosh_transport_fences(&self.pool, other_request)', /repository must forward/);
+rejectsBoshResponse('bind SQL cannot omit its independent COMMIT receipt', 'replayDb',
+  /response::bind_commit_observed/g, 'response::unobserved_bind_commit', /independent membership receipt/);
+rejectsBoshResponse('renewal SQL cannot replace expected cache membership', 'replayDb',
+  /let expected_response = request\.expected\(\);/g, 'let expected_response = None;', /closed request inputs/);
+rejectsBoshResponse('ACK SQL cannot fabricate its deletion count', 'replayDb',
+  /let acknowledged = deleted_sources\.len\(\);/g, 'let acknowledged = 0;', /actual deletion facts/);
+for (const kind of ['bind', 'renew', 'ack']) {
+  rejectsBoshResponse(`${kind} response COMMIT cannot discard its receipt`, 'boshResponseCore',
+    new RegExp(`(pub async fn ${kind}_commit_observed[\\s\\S]*?)permit\\.received\\(\\);`, 'g'),
+    '$1', /response COMMIT wrappers/);
+}

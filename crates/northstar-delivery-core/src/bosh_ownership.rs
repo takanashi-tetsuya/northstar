@@ -6,6 +6,9 @@
 //! and allocator/RSS bytes require separate measurement. No metadata cap or
 //! new traffic rejection is introduced here. It owns no body, item, channel,
 //! capacity lease or background task.
+pub mod response;
+pub use response::BoshResponseOwnership;
+
 use crate::MixDelivery;
 use std::{
     future::Future,
@@ -96,6 +99,9 @@ impl std::fmt::Debug for TransferSnapshot {
 pub struct Snapshot {
     pub scope: Scope,
     pub transfers: Vec<TransferSnapshot>,
+    pub responses: Vec<response::ResponseSnapshot>,
+    pub renewals: Vec<response::RenewSnapshot>,
+    pub acknowledgements: Vec<response::AckSnapshot>,
     pub terminal: Option<Terminal>,
     pub keep_running: Option<bool>,
 }
@@ -109,6 +115,7 @@ impl std::fmt::Debug for Snapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Summary {
     pub kind: OperationKind,
+    pub responses: response::ResponseSummary,
     pub transfers: usize,
     pub commit_unknown: usize,
     pub receipt_known: usize,
@@ -123,6 +130,80 @@ impl Snapshot {
     pub fn summary(&self) -> Summary {
         Summary {
             kind: self.scope.kind,
+            responses: response::ResponseSummary {
+                responses: self.responses.len(),
+                bind_unknown: self
+                    .responses
+                    .iter()
+                    .flat_map(|response| &response.attempts)
+                    .filter(|attempt| {
+                        matches!(
+                            attempt.knowledge,
+                            response::BindKnowledge::CommitCallEntered(_)
+                        )
+                    })
+                    .count(),
+                bind_receipts: self
+                    .responses
+                    .iter()
+                    .flat_map(|response| &response.attempts)
+                    .filter(|attempt| {
+                        matches!(attempt.knowledge, response::BindKnowledge::ReceiptKnown(_))
+                    })
+                    .count(),
+                accepted_responders: self
+                    .responses
+                    .iter()
+                    .map(|response| response.accepted_responders)
+                    .sum(),
+                control_accepted: self
+                    .responses
+                    .iter()
+                    .map(|response| response.control_accepted)
+                    .sum(),
+                cached: self
+                    .responses
+                    .iter()
+                    .filter(|response| response.cached)
+                    .count(),
+                renew_unknown: self
+                    .renewals
+                    .iter()
+                    .filter(|renewal| renewal.knowledge == response::Knowledge::CommitCallEntered)
+                    .count(),
+                renew_receipts: self
+                    .renewals
+                    .iter()
+                    .filter(|renewal| renewal.knowledge == response::Knowledge::ReceiptKnown)
+                    .count(),
+                ack_unknown: self
+                    .acknowledgements
+                    .iter()
+                    .filter(|ack| ack.knowledge == response::Knowledge::CommitCallEntered)
+                    .count(),
+                ack_receipts: self
+                    .acknowledgements
+                    .iter()
+                    .filter(|ack| ack.knowledge == response::Knowledge::ReceiptKnown)
+                    .count(),
+                deleted: self
+                    .acknowledgements
+                    .iter()
+                    .filter(|ack| ack.knowledge == response::Knowledge::ReceiptKnown)
+                    .filter_map(|ack| ack.deleted.as_ref())
+                    .map(|deleted| deleted.len())
+                    .sum(),
+                evictions: self
+                    .acknowledgements
+                    .iter()
+                    .map(|ack| ack.cache_evictions)
+                    .sum(),
+                receipt_sends: self
+                    .acknowledgements
+                    .iter()
+                    .map(|ack| ack.receipts_sent)
+                    .sum(),
+            },
             transfers: self.transfers.len(),
             commit_unknown: self
                 .transfers
@@ -175,9 +256,19 @@ impl Operation {
         Self(Arc::new(Mutex::new(Snapshot {
             scope,
             transfers: Vec::new(),
+            responses: Vec::new(),
+            renewals: Vec::new(),
+            acknowledgements: Vec::new(),
             terminal: None,
             keep_running: None,
         })))
+    }
+    pub fn session_id(&self) -> Uuid {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .scope
+            .session_id
     }
     pub fn snapshot(&self) -> Snapshot {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()

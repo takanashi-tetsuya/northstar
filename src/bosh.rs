@@ -8,6 +8,7 @@
 
 mod action;
 mod ownership;
+mod response_owner;
 #[cfg(test)]
 pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
 
@@ -154,7 +155,7 @@ struct CachedResponse {
     rid: u64,
     fingerprint: [u8; 32],
     response: BoshHttpResponse,
-    durable_ownership: crate::outbound::BoshResponseOwnership,
+    durable_ownership: Arc<crate::outbound::BoshResponseOwnership>,
     transport_receipts: Vec<mpsc::UnboundedSender<()>>,
     owned_at: Instant,
     response_bytes: usize,
@@ -591,9 +592,9 @@ impl BoshActor {
                                 && !matches!(
                                     {
                                         let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::HeldResponse);
-                                        ownership::OperationRunner::new(operation, tokio::time::timeout(
+                                        ownership::OperationRunner::new(operation.clone(), tokio::time::timeout(
                                             BOSH_BACKEND_OPERATION_TIMEOUT,
-                                            self.finish_held(None),
+                                            self.finish_held(None, &operation),
                                         )).await
                                     },
                                     Ok(true)
@@ -614,9 +615,9 @@ impl BoshActor {
                 _ = tokio::time::sleep_until(hold_deadline.into()), if self.held.is_some() => {
                     let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::HeldResponse);
                     if !matches!(
-                        ownership::OperationRunner::new(operation, tokio::time::timeout(
+                        ownership::OperationRunner::new(operation.clone(), tokio::time::timeout(
                             BOSH_BACKEND_OPERATION_TIMEOUT,
-                            self.finish_held(None),
+                            self.finish_held(None, &operation),
                         ))
                         .await,
                         Ok(true)
@@ -699,32 +700,35 @@ impl BoshActor {
             self.terminate_waiters("other-request");
             return false;
         }
-        if let Some((reply, terminate, durable_ownership)) =
-            replay_response(&mut self.replay, &request)
+        let response = match response_owner::replay_cached(
+            &mut self.replay,
+            &request,
+            response,
+            &mut self.last_response,
+            operation,
+            &response_owner::ServiceReplay {
+                service: &self.replay_service,
+            },
+        )
+        .await
         {
-            // An exact cached fingerprint proves this request already passed
-            // the BOSH key/shape checks when it was first processed. It does
-            // not carry a new acknowledgement, but it does keep the response
-            // lease alive while replaying byte-identical cached bytes.
-            if !terminate
-                && self
-                    .renew_delivery_fences(Some((request.rid, &durable_ownership)))
-                    .await
-                    .is_err()
-            {
-                let _ = response.send(terminal_response("internal-server-error"));
+            response_owner::ReplayOutcome::Miss(response) => response,
+            response_owner::ReplayOutcome::Sent { terminate } => {
+                if terminate {
+                    self.terminate_waiters("other-request");
+                }
+                return !terminate;
+            }
+            response_owner::ReplayOutcome::Failed {
+                responder,
+                error: _error,
+            } => {
+                let _ = responder.send(terminal_response("internal-server-error"));
                 self.protocol.forbid_sm_resume();
                 self.terminate_waiters("internal-server-error");
                 return false;
             }
-            let _ = response.send(reply);
-            if terminate {
-                self.terminate_waiters("other-request");
-            } else {
-                self.last_response = Instant::now();
-            }
-            return !terminate;
-        }
+        };
         if let Some(held) = self
             .held
             .as_mut()
@@ -809,7 +813,7 @@ impl BoshActor {
                 }
                 std::mem::swap(&mut oldest.responders, &mut terminating.responders);
                 let _ = self.process_pending(terminating, operation).await;
-                if !self.finish_pending(oldest, None, false).await {
+                if !self.finish_pending(oldest, None, false, operation).await {
                     self.protocol.forbid_sm_resume();
                 }
                 self.terminate_waiters("other-request");
@@ -817,7 +821,7 @@ impl BoshActor {
             }
             if self.held.is_some()
                 && self.buffered.contains_key(&self.next_rid)
-                && !self.finish_held(None).await
+                && !self.finish_held(None, operation).await
             {
                 self.protocol.forbid_sm_resume();
                 self.terminate_waiters("internal-server-error");
@@ -832,7 +836,7 @@ impl BoshActor {
             let final_rid = self.next_rid == MAX_RID;
             if final_rid && !pending.request.terminate {
                 let _ = self
-                    .finish_pending(pending, Some("item-not-found"), false)
+                    .finish_pending(pending, Some("item-not-found"), false, operation)
                     .await;
                 self.terminate_waiters("other-request");
                 return false;
@@ -861,21 +865,26 @@ impl BoshActor {
             request.newkey.as_deref(),
         ) {
             let _ = self
-                .finish_pending(pending, Some("item-not-found"), false)
+                .finish_pending(pending, Some("item-not-found"), false, operation)
                 .await;
             return false;
         }
         if let Some(condition) = bosh_request_shape_error(request, self.protocol.is_stream_open()) {
-            let _ = self.finish_pending(pending, Some(condition), false).await;
+            let _ = self
+                .finish_pending(pending, Some(condition), false, operation)
+                .await;
             return false;
         }
         // A SID alone is insufficient when the negotiated SHA-1 key sequence
         // is active. Apply the client response acknowledgement only after the
         // request has passed both its key proof and structural checks.
-        if let Err(error) = self.renew_and_apply_response_ack(request.ack).await {
+        if let Err(error) = self
+            .renew_and_apply_response_ack(request.ack, operation)
+            .await
+        {
             tracing::error!(?error, session_id = %self.delivery_session_id, ack = ?request.ack, "failed to commit authenticated BOSH response acknowledgement");
             let _ = self
-                .finish_pending(pending, Some("internal-server-error"), false)
+                .finish_pending(pending, Some("internal-server-error"), false, operation)
                 .await;
             return false;
         }
@@ -883,13 +892,13 @@ impl BoshActor {
         if let Some(pause) = request.pause {
             if pause > self.max_pause {
                 let _ = self
-                    .finish_pending(pending, Some("policy-violation"), false)
+                    .finish_pending(pending, Some("policy-violation"), false, operation)
                     .await;
                 return false;
             }
             self.last_empty_poll = None;
             self.active_inactivity = Duration::from_secs(pause);
-            self.finish_pending_empty(pending);
+            self.finish_pending_empty(pending, operation);
             return true;
         }
 
@@ -904,7 +913,9 @@ impl BoshActor {
             let restart_to = match validated_bosh_restart_target(request.to.as_deref(), &domain) {
                 Ok(target) => target,
                 Err(condition) => {
-                    let _ = self.finish_pending(pending, Some(condition), false).await;
+                    let _ = self
+                        .finish_pending(pending, Some(condition), false, operation)
+                        .await;
                     return false;
                 }
             };
@@ -917,13 +928,13 @@ impl BoshActor {
             .is_err()
             {
                 let _ = self
-                    .finish_pending(pending, Some("improper-addressing"), false)
+                    .finish_pending(pending, Some("improper-addressing"), false, operation)
                     .await;
                 return false;
             }
             if !self.push_output(self.protocol.features()) {
                 let _ = self
-                    .finish_pending(pending, Some("policy-violation"), false)
+                    .finish_pending(pending, Some("policy-violation"), false, operation)
                     .await;
                 return false;
             }
@@ -950,7 +961,9 @@ impl BoshActor {
                 }
             }
             if let Some(condition) = failure {
-                let _ = self.finish_pending(pending, Some(condition), false).await;
+                let _ = self
+                    .finish_pending(pending, Some(condition), false, operation)
+                    .await;
                 return false;
             }
         }
@@ -960,7 +973,7 @@ impl BoshActor {
             };
             if !self.queue_outbound(stanza, operation).await {
                 let _ = self
-                    .finish_pending(pending, Some("policy-violation"), false)
+                    .finish_pending(pending, Some("policy-violation"), false, operation)
                     .await;
                 return false;
             }
@@ -968,7 +981,9 @@ impl BoshActor {
 
         if request.terminate {
             self.protocol.forbid_sm_resume();
-            let _ = self.finish_pending(pending, Some("terminate"), false).await;
+            let _ = self
+                .finish_pending(pending, Some("terminate"), false, operation)
+                .await;
             self.terminate_waiters("other-request");
             return false;
         }
@@ -976,7 +991,7 @@ impl BoshActor {
             // A non-empty response breaks the consecutive-empty-poll pair
             // defined by XEP-0124 section 12.
             self.last_empty_poll = None;
-            if !self.finish_pending(pending, None, true).await {
+            if !self.finish_pending(pending, None, true, operation).await {
                 return false;
             }
         } else if self.hold == 0 {
@@ -986,12 +1001,12 @@ impl BoshActor {
                 })
             {
                 let _ = self
-                    .finish_pending(pending, Some("policy-violation"), false)
+                    .finish_pending(pending, Some("policy-violation"), false, operation)
                     .await;
                 return false;
             }
             self.last_empty_poll = request.payloads.is_empty().then_some(request.received_at);
-            if !self.finish_pending(pending, None, true).await {
+            if !self.finish_pending(pending, None, true, operation).await {
                 return false;
             }
         } else {
@@ -1007,37 +1022,20 @@ impl BoshActor {
         self.protocol.record_outbound(&stanza).await.is_ok() && self.push_output(stanza)
     }
 
-    async fn renew_delivery_fences(
-        &self,
-        expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
+    async fn renew_and_apply_response_ack(
+        &mut self,
+        ack: Option<u64>,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> anyhow::Result<()> {
-        self.replay_service
-            .renew_bosh_fences(
-                self.delivery_session_id,
-                expected_response,
-                self.delivery_fence_ttl_seconds,
-            )
-            .await
-    }
-
-    async fn renew_and_apply_response_ack(&mut self, ack: Option<u64>) -> anyhow::Result<()> {
-        // Renew before consuming `ack`: an expired lease must never be
-        // resurrected after another transport became eligible to claim the
-        // same offline row.
-        self.renew_delivery_fences(None).await?;
-        if let Some(ack) = ack {
-            self.replay_service
-                .acknowledge_bosh_responses(self.delivery_session_id, ack)
-                .await?;
-            while self.replay.front().is_some_and(|cached| cached.rid <= ack) {
-                if let Some(cached) = self.replay.pop_front() {
-                    for receipt in cached.transport_receipts {
-                        let _ = receipt.send(());
-                    }
-                }
-            }
-        }
-        Ok(())
+        response_owner::renew_and_acknowledge(
+            &mut self.replay,
+            ack,
+            operation,
+            &response_owner::ServiceReplay {
+                service: &self.replay_service,
+            },
+        )
+        .await
     }
 
     async fn record_and_push_item(
@@ -1113,9 +1111,15 @@ impl BoshActor {
         self.output.len() < self.max_output_stanzas && self.output_bytes < self.max_output_bytes
     }
 
-    async fn finish_held(&mut self, condition: Option<&str>) -> bool {
+    async fn finish_held(
+        &mut self,
+        condition: Option<&str>,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) -> bool {
         if let Some(held) = self.held.take() {
-            return self.finish_pending(held.pending, condition, true).await;
+            return self
+                .finish_pending(held.pending, condition, true, operation)
+                .await;
         }
         true
     }
@@ -1152,117 +1156,62 @@ impl BoshActor {
         pending: PendingRequest,
         condition: Option<&str>,
         cache: bool,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
         let rid = pending.request.rid;
-        let mut superseded_rebuilds = 0;
-        let (response, transport_receipts, durable_ownership) = loop {
-            let built = if condition == Some("remote-stream-error") {
-                self.response_body(condition, true)
-            } else if condition == Some("terminate") {
-                Ok((
-                    BoshHttpResponse {
-                        body: Bytes::from(bosh_body_element(None, true, None).finish()),
-                        content_type: self.content_type.clone(),
-                    },
-                    Vec::new(),
-                    Vec::new(),
-                    VecDeque::new(),
-                ))
-            } else if let Some(condition) = condition {
-                // Invalid key/terminal responses never expose queued payloads.
-                Ok((
-                    terminal_response_with_content(condition, &self.content_type),
-                    Vec::new(),
-                    Vec::new(),
-                    VecDeque::new(),
-                ))
-            } else {
-                self.response_body(None, false)
-            };
-            let (response, sources, transport_receipts, selected_items) = match built {
-                Ok(built) => built,
-                Err(error) => {
-                    tracing::error!(?error, rid, "failed to construct bounded BOSH response");
-                    let response =
-                        terminal_response_with_content("internal-server-error", &self.content_type);
-                    for responder in pending.responders {
-                        let _ = responder.send(response.clone());
+        let metadata = response_owner::Metadata {
+            rid,
+            fingerprint: pending.request.fingerprint,
+            cache: cache && condition.is_none() && pending.request.pause.is_none(),
+        };
+        let received_rid =
+            highest_contiguous_buffered_rid(self.next_rid, self.highest_received, &self.buffered);
+        let bound = response_owner::prepare(
+            &mut response_owner::Fields {
+                output: &mut self.output,
+                output_bytes: &mut self.output_bytes,
+                replay: &mut self.replay,
+                governor: &self.sm_memory_governor,
+                max_response_bytes: self.max_response_bytes,
+                max_output_stanzas: self.max_output_stanzas,
+                content_type: &self.content_type,
+                received_rid,
+            },
+            metadata,
+            condition,
+            operation,
+            &response_owner::ServiceReplay {
+                service: &self.replay_service,
+            },
+        )
+        .await;
+        let bound = match bound {
+            Ok(bound) => bound,
+            Err(failure) => {
+                match failure.stage {
+                    response_owner::FailureStage::Construction => {
+                        tracing::error!(error = ?failure.error, rid, "failed to construct bounded BOSH response")
                     }
-                    return false;
-                }
-            };
-            let response_bytes = response.body.len();
-            if cache && condition.is_none() && pending.request.pause.is_none() {
-                while self.replay.len() >= RESPONSE_CACHE_SIZE
-                    && self.replay.front().is_some_and(|cached| {
-                        cached.durable_ownership.is_empty() && cached.transport_receipts.is_empty()
-                    })
-                {
-                    self.replay.pop_front();
-                }
-                if bosh_unacknowledged_limit_exceeded(&self.replay, response_bytes, Instant::now())
-                {
-                    let _ = self
-                        .replay_service
-                        .release_bosh_fences(self.delivery_session_id)
-                        .await;
-                    let terminal =
-                        terminal_response_with_content("policy-violation", &self.content_type);
-                    for responder in pending.responders {
-                        let _ = responder.send(terminal.clone());
+                    response_owner::FailureStage::Binding => {
+                        tracing::error!(error = ?failure.error, session_id = %self.delivery_session_id, rid, "failed to bind durable BOSH transport sources")
                     }
-                    return false;
+                    response_owner::FailureStage::Limit => {}
                 }
-            }
-            let ownership = if sources.is_empty() {
-                Ok(crate::outbound::BoshResponseOwnership::default())
-            } else {
-                self.replay_service
-                    .bind_bosh_response_sources(
-                        self.delivery_session_id,
-                        rid,
-                        &sources,
-                        self.delivery_fence_ttl_seconds,
-                    )
-                    .await
-            };
-            match ownership {
-                Ok(ownership) => break (response, transport_receipts, ownership),
-                Err(error) => {
-                    if let Some(message_id) = superseded_bosh_message_id(&error) {
-                        let removed = restore_response_items(
-                            &mut self.output,
-                            &mut self.output_bytes,
-                            selected_items,
-                            Some(message_id),
-                        );
-                        if removed && superseded_rebuilds < self.max_output_stanzas {
-                            superseded_rebuilds += 1;
-                            tracing::debug!(%message_id, rid,
-                                "superseded durable BOSH item removed before response exposure");
-                            continue;
-                        }
-                    }
-                    // A typed conflict without a matching selected source is
-                    // an invariant failure, not permission to discard peers.
-                    tracing::error!(?error, session_id = %self.delivery_session_id, rid,
-                        "failed to bind durable BOSH transport sources");
-                    let response =
-                        terminal_response_with_content("internal-server-error", &self.content_type);
-                    for responder in pending.responders {
-                        let _ = responder.send(response.clone());
-                    }
-                    return false;
-                }
+                failure.send(pending.responders, &self.content_type);
+                return false;
             }
         };
-        let response_bytes = response.body.len();
-        let mut exposed_to_transport = false;
-        for responder in pending.responders {
-            exposed_to_transport |= responder.send(response.clone()).is_ok();
-        }
+        let exposed = match bound.expose(pending.responders) {
+            Ok(exposed) => exposed,
+            Err(error) => {
+                tracing::error!(?error, rid, "BOSH bound response continuation was lost");
+                return false;
+            }
+        };
+        // Preserve the actor's existing publication placement and flag timing.
+        // This branch remains distinct from pause-only empty controls.
         if self.auth_publication_pending {
-            if !exposed_to_transport {
+            if !exposed.any_accepted() {
                 return false;
             }
             self.auth_publication_pending = false;
@@ -1274,74 +1223,28 @@ impl BoshActor {
                 return false;
             }
         }
-        self.last_response = Instant::now();
-        self.highest_responded = self.highest_responded.max(rid);
-        if cache && condition.is_none() && pending.request.pause.is_none() {
-            self.replay.push_back(CachedResponse {
-                rid: pending.request.rid,
-                fingerprint: pending.request.fingerprint,
-                response,
-                durable_ownership,
-                transport_receipts,
-                owned_at: Instant::now(),
-                response_bytes,
-                replays: 0,
-            });
-        }
-        true
+        exposed
+            .finish(
+                &mut self.last_response,
+                &mut self.highest_responded,
+                &mut self.replay,
+            )
+            .is_ok()
     }
 
-    fn finish_pending_empty(&mut self, pending: PendingRequest) {
-        let rid = pending.request.rid;
-        let response = BoshHttpResponse {
-            body: Bytes::from(bosh_body_element(None, false, None).finish()),
-            content_type: self.content_type.clone(),
-        };
-        for responder in pending.responders {
-            let _ = responder.send(response.clone());
-        }
-        self.last_response = Instant::now();
-        self.highest_responded = self.highest_responded.max(rid);
-    }
-
-    fn response_body(
+    fn finish_pending_empty(
         &mut self,
-        condition: Option<&str>,
-        terminate: bool,
-    ) -> anyhow::Result<BoshResponseBody> {
-        let (payload, sources, transport_receipts, transient_sm_capacity, selected_items) =
-            take_response_payload(
-                &mut self.output,
-                &mut self.output_bytes,
-                self.max_response_bytes,
-                &self.sm_memory_governor,
-            )?;
-        let body = bosh_body_element(
-            condition,
-            terminate,
-            highest_contiguous_buffered_rid(self.next_rid, self.highest_received, &self.buffered),
+        pending: PendingRequest,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) {
+        response_owner::finish_empty_control(
+            pending.request.rid,
+            pending.responders,
+            &self.content_type,
+            &mut self.last_response,
+            &mut self.highest_responded,
+            operation,
         );
-        let body = match body.validated_fragment(&payload) {
-            Ok(body) => body.finish(),
-            Err(error) => {
-                restore_response_items(
-                    &mut self.output,
-                    &mut self.output_bytes,
-                    selected_items,
-                    None,
-                );
-                anyhow::bail!("malformed protocol output at BOSH boundary: {error}");
-            }
-        };
-        Ok((
-            BoshHttpResponse {
-                body: bosh_response_bytes(body, transient_sm_capacity),
-                content_type: self.content_type.clone(),
-            },
-            sources,
-            transport_receipts,
-            selected_items,
-        ))
     }
 
     fn terminate_waiters(&mut self, condition: &str) {
@@ -1439,12 +1342,23 @@ fn restore_response_items(
     selected: VecDeque<crate::outbound::OutboundItem>,
     superseded: Option<uuid::Uuid>,
 ) -> bool {
+    restore_response_items_observed(output, output_bytes, selected, superseded, |_| {})
+}
+
+fn restore_response_items_observed(
+    output: &mut VecDeque<crate::outbound::OutboundItem>,
+    output_bytes: &mut usize,
+    selected: VecDeque<crate::outbound::OutboundItem>,
+    superseded: Option<uuid::Uuid>,
+    mut on_removed: impl FnMut(usize),
+) -> bool {
     let mut removed = false;
-    for item in selected.into_iter().rev() {
+    for (index, item) in selected.into_iter().enumerate().rev() {
         if superseded.is_some_and(|id| {
             item.c2s_delivery()
                 .is_some_and(|source| source.message_id == id)
         }) {
+            on_removed(index);
             removed = true;
             continue;
         }
@@ -1733,21 +1647,21 @@ fn replay_response(
 ) -> Option<(
     BoshHttpResponse,
     bool,
-    crate::outbound::BoshResponseOwnership,
+    Arc<crate::outbound::BoshResponseOwnership>,
 )> {
     let cached = replay.iter_mut().find(|cached| cached.rid == request.rid)?;
     if cached.fingerprint != request.fingerprint {
         return Some((
             terminal_response("bad-request"),
             true,
-            crate::outbound::BoshResponseOwnership::default(),
+            Arc::new(crate::outbound::BoshResponseOwnership::default()),
         ));
     }
     if cached.replays >= MAX_RESPONSE_REPLAYS {
         return Some((
             terminal_response("policy-violation"),
             true,
-            crate::outbound::BoshResponseOwnership::default(),
+            Arc::new(crate::outbound::BoshResponseOwnership::default()),
         ));
     }
     cached.replays += 1;
@@ -2435,10 +2349,10 @@ mod tests {
             rid: request.rid,
             fingerprint: request.fingerprint,
             response: response.clone(),
-            durable_ownership: crate::outbound::BoshResponseOwnership {
+            durable_ownership: Arc::new(crate::outbound::BoshResponseOwnership {
                 c2s_message_ids: vec![uuid::Uuid::from_u128(7)],
                 mix_delivery_ids: Vec::new(),
-            },
+            }),
             transport_receipts: Vec::new(),
             owned_at: Instant::now(),
             response_bytes: response.body.len(),
@@ -2469,7 +2383,7 @@ mod tests {
             rid: request.rid,
             fingerprint: request.fingerprint,
             response,
-            durable_ownership: crate::outbound::BoshResponseOwnership::default(),
+            durable_ownership: Arc::new(crate::outbound::BoshResponseOwnership::default()),
             transport_receipts: Vec::new(),
             owned_at: Instant::now(),
             response_bytes: 64,

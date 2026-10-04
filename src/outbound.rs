@@ -265,21 +265,7 @@ pub enum MixTransportCompletion {
     BoshPersisted { session_id: uuid::Uuid },
 }
 
-/// The durable sources carried by one cached BOSH response. Source tokens are
-/// deliberately absent: the BOSH coordinator verifies tokens while binding
-/// its private fence, while cache replay only needs immutable identities to
-/// prove that the same response still owns the same rows.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct BoshResponseOwnership {
-    pub c2s_message_ids: Vec<Uuid>,
-    pub mix_delivery_ids: Vec<Uuid>,
-}
-
-impl BoshResponseOwnership {
-    pub fn is_empty(&self) -> bool {
-        self.c2s_message_ids.is_empty() && self.mix_delivery_ids.is_empty()
-    }
-}
+pub use northstar_delivery_core::bosh_ownership::BoshResponseOwnership;
 
 /// Clone-safe, exactly-once completion capability for one MIX outbound item.
 /// Multiple queue stages may clone an item, but only the stage that durably

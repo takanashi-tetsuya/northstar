@@ -1,0 +1,103 @@
+{
+  "schema": "northstar-source-checkpoint-v1",
+  "status": "WorkInProgressNotAccepted",
+  "base_commit": "aaca700ed1ace3691be2a2aa5742b712ffbddbf8",
+  "base_tree": "518a8ba207db6d6016aa06b62b72847725d5298e",
+  "scope": "Connected BOSH response bind, exposure/cache, cached replay renewal and fresh acknowledgement ownership; formatted source milestone only.",
+  "source_manifest": {
+    "crates/northstar-delivery-core/src/bosh_ownership.rs": {
+      "bytes": 28204,
+      "sha256": "64f28c413ae4b9434284c821cb0c3e1adb01d8ef0762e30e7f7e03763b7aa0b1"
+    },
+    "crates/northstar-delivery-core/src/bosh_ownership/response.rs": {
+      "bytes": 34650,
+      "sha256": "303e51ea4a1d976ea2f86f60390f3bfa1a3ad848af69fd9052d11c32a11ae8ce"
+    },
+    "src/bosh.rs": {
+      "bytes": 108718,
+      "sha256": "cc99ad88c98cb5b12a91b51c1195afabf3ead5af73cffd88c79c4f8e391ab92f"
+    },
+    "src/bosh/response_owner.rs": {
+      "bytes": 18324,
+      "sha256": "d223b8e3829e9953510907baddac31c5128db7a5456cccf41ce4448166b1dc15"
+    },
+    "src/db/replay.rs": {
+      "bytes": 87825,
+      "sha256": "602286624e999349620ae91b6a65da24bd758f118eb72f4ce56bf2e452220cdb"
+    },
+    "src/db/replay_repository.rs": {
+      "bytes": 9342,
+      "sha256": "c84ee2d149e13d43be96bb23d203ee3425a402e47aa09c3d187dcef3f28e293e"
+    },
+    "src/outbound.rs": {
+      "bytes": 28992,
+      "sha256": "77579b1a6026911d1fa280dc2ead03c8f233727353eca423a3a55af4780b4577"
+    },
+    "src/services/replay.rs": {
+      "bytes": 16925,
+      "sha256": "429a17dfcbd36e64062db713e85c2af6aeba0ac029bbc9f16dd95dd7c3e105ca"
+    }
+  },
+  "source_manifest_sha256": "0ab16d1462fbadd19abc628356b9b7048a1834eaa583bcceaa875bb4b0e5a735",
+  "manifest_encoding": "UTF-8 JSON, sorted object keys, compact separators, no trailing newline",
+  "implemented_source": [
+    "Closed bind, renewal and acknowledgement requests flow through the existing service/repository/SQL calls; transaction-derived receipt facts are recorded immediately after the existing COMMIT.",
+    "Private response helpers own selected OutboundItems through binding; those items drop when preparation returns, while response Bytes, capacity owners and receipt channels survive exposure/cache. Actor authentication publication remains between exposure and cache bookkeeping.",
+    "Cached replay retains its pre-renewal counter and exact membership; fresh acknowledgement renews first, then evicts the covered cache prefix and sends existing receipt channels only after the observed return.",
+    "Known pre-COMMIT typed supersession is the only bind restoration/rebuild path; completed matching restorations compact lineage while active or committed/unknown facts remain retained.",
+    "Private immutable Arc membership shares the actual returned value with the cache continuation; it is distinct from independently prepared SQL receipt authority.",
+    "Empty pause and terminal control observations retain factual responder results without issuing durable effects or payload continuations."
+  ],
+  "verification": {
+    "format": {
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2021",
+        "--config",
+        "skip_children=true",
+        "crates/northstar-delivery-core/src/bosh_ownership.rs",
+        "crates/northstar-delivery-core/src/bosh_ownership/response.rs",
+        "src/bosh.rs",
+        "src/bosh/response_owner.rs",
+        "src/db/replay.rs",
+        "src/db/replay_repository.rs",
+        "src/outbound.rs",
+        "src/services/replay.rs"
+      ],
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "timeout_seconds": 600,
+      "kill_grace_seconds": 5,
+      "log_limit_bytes": 4194304,
+      "exit_code": 0,
+      "pipeline_codes": [
+        0,
+        0
+      ],
+      "elapsed_seconds": 0.113989,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "compile": "Not run locally for this milestone",
+    "clippy": "Not run locally for this milestone",
+    "tests": "No regression or fixture execution for this milestone",
+    "source_gates": "Adaptation and execution pending"
+  },
+  "remaining": [
+    "Independent connected-source review and any resulting corrections.",
+    "Finite pure/fake regression bodies, exact test inventory, compile/Clippy and source-wiring gates.",
+    "Production-shared direct continuation and saved-case record/replay, effective mutation and same-target reduction/control.",
+    "Full Stage3 acceptance, real SQL/HTTP/wire fidelity, SM retention policy and later resource qualification."
+  ],
+  "limits": [
+    "Helper extraction does not establish full actor/HTTP dispatch or authentication publication conformance.",
+    "Control observation hooks do not enforce a universal gate on raw control I/O; retired durable starts remain a separate contract.",
+    "Additional retained metadata is ordinary heap overhead outside the governor. Logical actor-flow bounds do not prove Vec capacity, allocator overhead or RSS limits.",
+    "The existing bind SQL fixture surface is retained only under cfg(test); no ignored DB fixture was executed.",
+    "The unresolved TLS response/EOF problem remains open and is tracked separately in tls-response-eof-unresolved.json."
+  ],
+  "known_source_corrections_pending": [
+    "Repeated supersession currently over-reserves retained removal-index vector capacity; retained capacity must follow actual removals.",
+    "ACK receipt preparation still needs duplicate C2S-message and MIX-delivery identity checks before COMMIT, preserving list order and without adding a standalone512-row policy."
+  ]
+}

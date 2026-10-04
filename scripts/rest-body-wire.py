@@ -24,7 +24,7 @@ def connect(port, method, path, body=b"{", length=128):
     return stream
 
 
-def read_closed(stream, expected, *, diagnostic_case=None):
+def read_closed(stream, expected, *, diagnostic_case=None, diagnostic_request="POST /api/v1/login"):
     with stream:
         data = bytearray()
         try:
@@ -37,7 +37,7 @@ def read_closed(stream, expected, *, diagnostic_case=None):
                     status_line = preview.split(b"\r\n", 1)[0][:80]
                     print(
                         f"synthetic slow-body admission: case={diagnostic_case} "
-                        f"request=POST /api/v1/login expected_status={expected} "
+                        f"request={diagnostic_request} expected_status={expected} "
                         f"held_incomplete_bodies=8 declared_body_bytes=128 sent_body_bytes=1 "
                         f"partial_status_line_80={status_line!r} partial_reply_prefix_512={preview!r}",
                         file=sys.stderr, flush=True,
@@ -91,8 +91,10 @@ def main():
                 diagnostic_case = "admin"
             reply = read_closed(denied, 429, diagnostic_case=diagnostic_case)
             assert b"retry-after: 1" in reply.lower(), reply
-        for stream in pending:
-            reply = read_closed(stream, 408)
+        for index, stream in enumerate(pending, start=1):
+            method, path = routes[index - 1]
+            diagnostic_case = f"{'public_tls' if args.tls else 'public'}_held_{index}_of_8"
+            reply = read_closed(stream, 408, diagnostic_case=diagnostic_case, diagnostic_request=f"{method} {path}")
             assert b'"code":"request_timeout"' in reply, reply
             assert b"connection: close" in reply.lower(), reply
         elapsed = time.monotonic() - started

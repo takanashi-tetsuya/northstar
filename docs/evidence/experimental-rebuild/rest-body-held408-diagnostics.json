@@ -1,0 +1,57 @@
+{
+  "schema": "northstar-diagnostic-source-result-v1",
+  "status": "SourceAndSyntaxVerified",
+  "base_commit": "16a7dc01082d5d6ebec6608b7a3e2ce4f12cd24c",
+  "base_tree": "232eec9872ae3797b98d2d46a848a546690a4517",
+  "scope": "Opt existing bounded receive diagnostics into the eight synthetic held-body reads expecting 408, identifying the fixed request and 1-based index. No fixture execution or root-cause resolution is claimed.",
+  "source": {
+    "path": "scripts/rest-body-wire.py",
+    "bytes": 5250,
+    "sha256": "647224b98b6a4c35a9563def171f9d8cd93d22caa345c3c8010124f296a094f9",
+    "base_sha256": "e226b1b9b462dcc9e4e23810bf08168ab9fd2abb4f5e0b770a76fb2ee9668f20"
+  },
+  "ordinary_check": {
+    "source": "scripts/rest-body-wire.py",
+    "source_bytes": 5250,
+    "source_sha256": "647224b98b6a4c35a9563def171f9d8cd93d22caa345c3c8010124f296a094f9",
+    "command": [
+      "timeout",
+      "--signal=TERM",
+      "--kill-after=5s",
+      "30s",
+      "python3",
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      "import ast,pathlib; ast.parse(pathlib.Path(\"scripts/rest-body-wire.py\").read_text()); print(\"AST syntax passed\")"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 0.03197,
+    "log_bytes": 18,
+    "log_sha256": "d33259946d91db17c2e78d4d05e336e5a89e439a4d2e1221ebe8f12a58f20484",
+    "source_unchanged": true,
+    "qualification": "AST syntax only; fixture not executed"
+  },
+  "changes": [
+    "read_closed accepts a fixed diagnostic_request label, defaulting to the existing POST login label for unchanged 429 output.",
+    "Each held 408 read supplies its fixed route, index 1 through 8, and public or public-TLS context to the existing 80-byte status and 512-byte response-prefix diagnostic."
+  ],
+  "preserved": [
+    "23-second held-socket timeout and 3-second denied-socket timeout; no deadline adjustment.",
+    "All waits, route order, EOF requirement, status/body assertions and finally cleanup.",
+    "Guarded diagnostic rendering and the original receive exception via bare re-raise."
+  ],
+  "unresolved_problem": {
+    "path": "tls-response-eof-unresolved.json",
+    "sha256": "c01e56f298dc7ef2faed1c052508c259a61319764eea13e610b5bfbabd6e8b40",
+    "status": "Open_Stage5DiagnosisRequired",
+    "current_failure_job": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37218634592/job/111484242933"
+  },
+  "limitations": [
+    "AST syntax does not execute this fixture or validate wire behavior.",
+    "Partial bytes and the failing held index from the existing 16a7dc01 run are unknown; the new labels cannot reconstruct them.",
+    "Later green CI does not explain or close any of the three recorded observations.",
+    "BOSH response ownership work and Stage3 acceptance are outside this diagnostic correction."
+  ]
+}

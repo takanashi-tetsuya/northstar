@@ -184,6 +184,8 @@ mod direct_preparation_tests {
     };
     use uuid::Uuid;
 
+    pub(super) const FRAME_MESSAGE: &str = "<message type='chat'/>";
+
     struct MemoryGuard;
     impl MessageAdmissionRepository for MemoryGuard {
         async fn begin(
@@ -972,7 +974,7 @@ impl ProtocolSession {
     {
         let execution = crate::xmpp::frame_execution::FrameExecution::new(
             super::ClientTransport::Tcp,
-            "<message type='chat'/>",
+            direct_preparation_tests::FRAME_MESSAGE,
         );
         let operation = execution.direct_operation();
         let future = child(operation.clone());

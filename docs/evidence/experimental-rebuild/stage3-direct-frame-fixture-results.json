@@ -1,0 +1,60 @@
+{
+  "schema": "northstar-stage3-direct-frame-fixture-result-v1",
+  "status": "SourceGatePassed",
+  "base_commit": "85e00d3bfa04ed13f2145a6c58b5747fad21c26d",
+  "scope": "Test-only direct-frame XML fixture placement; unchanged production outbound XML baseline and scanner.",
+  "source": {
+    "path": "src/xmpp/protocol/messaging.rs",
+    "bytes": 127450,
+    "sha256": "f45751e13165d8386c2ce7f9bbd659ad0878d6ab29a22fba99b54f6218e00a18"
+  },
+  "checker": {
+    "path": "scripts/check-outbound-xml-construction.mjs",
+    "bytes": 15751,
+    "sha256": "71ad453255b1e2fa9ddf877171e5b1814eea4d6dcfcc0a29835c47c174f8b272"
+  },
+  "isolated_projection": {
+    "recipe": "Use the exact base commit for the unchanged checker and every file in its BASELINE map; replace only the protocol messaging file with this checkpoint.",
+    "files": 41,
+    "bytes": 3510720,
+    "manifest_sha256": "35b5155cea099d88e5905dafc2ec7eae8b4e9131686ec85ce06eff2a213933e7",
+    "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+    "scanned_files": 40,
+    "files_with_zero_findings": 40
+  },
+  "checks": {
+    "format_check": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.042613977",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true
+    },
+    "outbound_xml_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "1.547726367",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "log_bytes": 2124,
+      "log_sha256": "0c34596446db65131b158cb88c9b080684aa95f61ee5e4eb0cb7b08e922af8e6",
+      "source_unchanged": true
+    }
+  },
+  "correction": "Move the exact <message type='chat'/> fixture into a pub(super) constant in the existing cfg(test) direct_preparation_tests module. The already cfg(test) retained-frame helper passes the same static bytes to FrameExecution::new. API, first-poll timing, child factory and runner ordering are unchanged.",
+  "prior_ci_failure": {
+    "commit": "85e00d3bfa04ed13f2145a6c58b5747fad21c26d",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37229547655",
+    "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37229547655/job/111516126028",
+    "observed": "The unchanged scanner counted the test-only associated function literal as one raw production site against baseline zero. It masks complete cfg(test) modules, not associated functions.",
+    "root_cause": "Test-source representation outside the scanner existing test-module exclusion."
+  },
+  "limitations": [
+    "No new Rust runtime or SQL/wire execution is claimed for this representation-only correction.",
+    "The isolated source projection excludes all concurrent saved-entry work.",
+    "Previous shared-continuation pure results remain separately source-bound; full Stage3 and saved composition remain open."
+  ]
+}

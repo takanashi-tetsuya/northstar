@@ -1,5 +1,7 @@
 use crate::db::abuse_actor_state_repository::DbActorState;
-use crate::services::message_admission::{begin_command, operation, witness::AdmissionWitness};
+use crate::services::message_admission::witness::AdmissionWitness;
+#[cfg(test)]
+use crate::services::message_admission::{begin_command, operation};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
@@ -1693,6 +1695,7 @@ impl AbuseGuard {
     /// fencing lease expires without consuming the proof or advancing the
     /// actor step twice. An accepted retry is suppressed. The same identity
     /// with different content is always a conflict.
+    #[cfg(test)]
     pub async fn begin_message_admission(
         &self,
         request: &MessageAdmissionRequest<'_>,

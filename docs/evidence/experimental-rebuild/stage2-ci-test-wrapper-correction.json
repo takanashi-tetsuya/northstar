@@ -1,0 +1,101 @@
+{
+  "schema": "northstar-ordinary-ci-correction-v1",
+  "base_commit": "d65a7b06ff0e090fd9f542274ea2ddb158dd1cc5",
+  "base_tree": "cd3bba232e69b8456b255d78512607fcf1a7827e",
+  "status": "TestOnlyWrapperLintCorrectionVerifiedStage2StillWorkInProgress",
+  "failure": {
+    "run_id": 37162689172,
+    "job_id": 111319230243,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37162689172/job/111319230243",
+    "error": "dead_code under -D warnings: AbuseGuard::begin_message_admission"
+  },
+  "source_change": {
+    "path": "src/abuse.rs",
+    "before_sha256": "70ecf387df84cc9ed4abbf5032a601ec3347379984990e4f78cd92a284b969b8",
+    "after_sha256": "18617622a634790499f12b674f5e8d99a2a017d2392cf20eb9990a301b430087",
+    "reason": "Mark the legacy test-only wrapper and its two dedicated imports cfg(test). Production continues through MessageAdmissionService and begin_message_admission_observed; AdmissionWitness remains imported unconditionally. No allow(dead_code) suppression or behavioral change."
+  },
+  "caller_review": {
+    "test_call_sites": 16,
+    "test_module": "src/abuse_tests.rs",
+    "module_guard": "src/abuse.rs #[cfg(test)]",
+    "production_entry": "MessageAdmissionService::begin_message_admission -> repository.begin -> AbuseGuard::begin_message_admission_observed",
+    "independent_source_verdict": "Precise caller/import classification and proposed cfg(test) correction passed read-only review."
+  },
+  "verification": {
+    "base_commit": "d65a7b06ff0e090fd9f542274ea2ddb158dd1cc5",
+    "modified_source": "src/abuse.rs",
+    "modified_source_sha256": "18617622a634790499f12b674f5e8d99a2a017d2392cf20eb9990a301b430087",
+    "tracked_source_file_count": 1657,
+    "source_unchanged": true,
+    "changed_during_command": [],
+    "before_map_sha256": "353914c7b32364aac9cd62f7cdd7143aff5dafccba10ecbdf527c40285ed3520",
+    "after_map_sha256": "353914c7b32364aac9cd62f7cdd7143aff5dafccba10ecbdf527c40285ed3520",
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "src/abuse.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.049,
+        "log": "rustfmt.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--offline",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 182.618,
+        "log": "server-clippy.log",
+        "log_sha256": "6547c7cf545b11c428f06b1fb23aa41e660689e2a1028c4efcf8f092a8182cf9"
+      }
+    ],
+    "scope": "Normal and test target compilation/lints only; no project test execution, services, replay or fault injection."
+  },
+  "earlier_unqualified_attempt": {
+    "status": "InterruptedNoQualification",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--offline",
+      "-p",
+      "rust-xmpp-server",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 130,
+    "reason": "Ordinary lint started before the source freeze was confirmed, while an incomplete concurrent core API edit was present. The compiler session was interrupted normally; no completed compile or lint result is claimed. That work was preserved and the exact base restored before the final isolated check.",
+    "source_before_core_sha256": "9263c8c2192d72e15f4f12370341578dac307755f5e81ec9d52cb9799aa89fe4",
+    "base_core_sha256": "e37c6fa05914ab3bae4484ffcbd1a5ccfda304c663acf59e5996515f0376b622",
+    "current_core_sha256": "e37c6fa05914ab3bae4484ffcbd1a5ccfda304c663acf59e5996515f0376b622",
+    "log_sha256": "c972f39b759de9e23354d2c169688061f6c1f1077a4bf5b3cf5d160a03d7885d",
+    "log_bytes": 5500,
+    "project_test_executed": false
+  },
+  "scope_limits": [
+    "Compile/lint result covers default-feature normal and test targets; it does not execute tests or qualify all-feature CI.",
+    "PreparedCommit work was preserved outside the repository and held/restored to the exact base for the final stable-source check. It is excluded from this correction.",
+    "Five Stage2 architecture/evidence blockers remain unresolved in this checkpoint.",
+    "DR succeeded in the later d65a7b06 CI job; the earlier missing-TSV root cause remains unknown. This change makes no DR edit.",
+    "No saved replay, old standalone probe, local service, DB, fault injection or soak was executed."
+  ]
+}

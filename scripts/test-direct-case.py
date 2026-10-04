@@ -632,11 +632,11 @@ class NativeLiteralAndLedgerTests(unittest.TestCase):
         ledger = direct_case.derive_native_ledger(self.fixtures()['C01']['value'])
         original = ledger['originals'][0]
         expected_live = (
-            '<message from="alice@example.test/device" type="chat" id="m" to="bob@example.test/phone">'
+            '<message xmlns="jabber:client" from="alice@example.test/device" type="chat" id="m" to="bob@example.test/phone">'
             '<body>x</body><origin-id xmlns="urn:xmpp:sid:0" id="o"/>'
             '<stanza-id xmlns="urn:xmpp:sid:0" id="00000000-0000-0000-0000-000000004e85" '
             'by="bob@example.test"/></message>')
-        self.assertEqual(original['projection']['live_xml'], direct_case._tree(direct_case._xml(expected_live)))
+        self.assertEqual(original['projection']['live_xml'], direct_case._tree(direct_case._xml(expected_live, projected=True)))
         stored = original['projection']['stored_xml']
         self.assertEqual(stored[3][-1][0], '{urn:xmpp:delay}delay')
         self.assertEqual(dict(stored[3][-1][1]), {'from': 'example.test', 'stamp': '1970-01-01T00:01:40Z'})
@@ -649,6 +649,36 @@ class NativeLiteralAndLedgerTests(unittest.TestCase):
         self.assertEqual(original['prepared']['identity']['actor_scope'], 'alice@example.test')
         self.assertIsNone(original['source']['claim_id'])
         self.assertEqual(ledger['native']['fenced_source']['claim_id'], direct_case._uuid(6))
+
+    def test_projected_xml_requires_actual_client_namespace(self):
+        original = self.fixtures()['C01']['value']['originals'][0]['xml']
+        self.assertEqual(direct_case._xml(original).tag, 'message')
+        qualified = '<message xmlns="jabber:client"><body>x</body><origin-id xmlns="urn:xmpp:sid:0" id="o"/></message>'
+        actual = direct_case._xml(qualified, projected=True)
+        self.assertEqual(actual.tag, '{jabber:client}message')
+        self.assertEqual(actual[0].tag, '{jabber:client}body')
+        self.assertEqual(actual[1].tag, '{urn:xmpp:sid:0}origin-id')
+        for bad in (qualified.replace(' xmlns="jabber:client"', ''), qualified.replace('jabber:client', 'urn:wrong')):
+            with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'projected_message_namespace'):
+                direct_case._xml(bad, projected=True)
+
+    def test_namespace_ledger_preserves_children_sid_hints_and_delay(self):
+        originals = direct_case.derive_native_ledger(self.fixtures()['C07']['value'])['originals']
+        self.assertEqual(originals[0]['projection']['live_xml'][0], '{jabber:client}message')
+        self.assertEqual(originals[0]['projection']['live_xml'][3][0][0], '{urn:xmpp:hints}store')
+        target = originals[1]['projection']
+        self.assertEqual(target['live_xml'][3][0][0], '{jabber:client}body')
+        self.assertEqual(target['live_xml'][3][1][0], '{urn:xmpp:sid:0}origin-id')
+        self.assertEqual(target['live_xml'][3][2][0], '{urn:xmpp:sid:0}stanza-id')
+        self.assertEqual(target['stored_xml'][3][-1][0], '{urn:xmpp:delay}delay')
+        qualified = '<message xmlns="jabber:client"><body>x</body></message>'
+        reset = '<message xmlns="jabber:client"><body xmlns="">x</body></message>'
+        self.assertNotEqual(direct_case._tree(direct_case._xml(qualified, projected=True)),
+                            direct_case._tree(direct_case._xml(reset, projected=True)))
+        outside = copy.deepcopy(self.fixtures()['C01']['value'])
+        outside['originals'][0]['xml'] = outside['originals'][0]['xml'].replace('<body>', '<body xmlns = "">')
+        with self.assertRaisesRegex(direct_case.DirectCaseIncomplete, 'namespace_reset_outside_fixed_literal_subset'):
+            direct_case.derive_native_ledger(outside)
 
     def test_ledger_separates_transactions_modes_unknowns_and_unrated_prefix(self):
         fixtures = self.fixtures()
@@ -723,10 +753,13 @@ class NativeEvidenceAndSafetyTests(unittest.TestCase):
                   'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [], 'write_receipts': [], 'polls': []}
         if flush:
             native['flush_calls'].append({'seq': seq(), 'result': 'Ok'})
-        native.update(writer_entered=True, writer_result='FullWrite', write_decision='Written', terminal='Returned')
+        native.update(writer_entered=True, writer_result='FullWrite', write_decision='Written')
+        native['prefixes'].append({'seq': seq(), 'state': {name: copy.deepcopy(native[name])
+                                                        for name in direct_case.NATIVE_STATE_FIELDS.split()}})
         if ack:
             native['ack_calls'].append({'seq': seq(), 'source': source, 'returned': True})
             native.update(ack={'kind': 'ReceiptKnown', 'fact': {'source': source, 'disposition': 'Deleted'}}, ack_returned=True)
+        native['terminal'] = 'Returned'
         native['prefixes'].append({'seq': seq(), 'state': {name: copy.deepcopy(native[name])
                                                         for name in direct_case.NATIVE_STATE_FIELDS.split()}})
         native['polls'].append({'seq': seq(), 'result': 'Ready'})
@@ -742,7 +775,7 @@ class NativeEvidenceAndSafetyTests(unittest.TestCase):
         self.assertEqual([item['id'] for item in violations], ['NativeAckWithoutSuccessfulFlush'])
         self.assertEqual(violations[0]['class'], 'Safety')
         self.assertEqual(violations[0]['target'], {'frame_id': direct_case._uuid(702),
-                         'connection_id': direct_case._uuid(3), 'owner': 'Tcp',
+                         'connection_id': direct_case._uuid(3), 'owner': 'Tcp', 'purpose': 'NativeSettlement',
                          'source': direct_case._c2s(direct_case._uuid(20702), direct_case._uuid(6))})
 
     def test_complete_write_with_prior_flush_and_short_write_without_ack_controls(self):
@@ -797,6 +830,581 @@ class NativeEvidenceAndSafetyTests(unittest.TestCase):
             direct_case.evaluate_fixture({'value': value}, {}, payload, supervision.NO_FLUSH_PROFILE)
         with self.assertRaises(direct_case.DirectCaseIncomplete):
             direct_case.require_implemented()
+
+
+class NativeFullMatcherTests(unittest.TestCase):
+    @staticmethod
+    def complete_record():
+        return {'observation': 'Complete', 'process': {'returncode': 0}}
+
+    def fixture(self, identity):
+        values = direct_case.mutation_fixtures() if identity.startswith('M') else direct_case.native_fixtures()
+        return next(item for item in values if item['id'] == identity)
+
+    def supplied_facts(self, fixture, *, omit_flush=False, sender_cut=None, original_index=0, start_seq=0):
+        """Hand-authored fixed-literal facts, independent of oracle predictions.
+
+        Identifier and controlled-response constants come from the literal input;
+        no derive/expected/evaluation helper builds these supplied observations.
+        """
+        value = fixture['value']
+        original_input = value['originals'][original_index]
+        roles, policy = value['identities'], value['policy'][original_index]
+        identity = roles['originals'][original_index]
+        frame = identity['frame_id']
+        counter = start_seq
+        def seq():
+            nonlocal counter
+            counter += 1
+            return counter
+        def correlation(effect):
+            return {'operation_id': frame, 'effect': effect, 'generation': 0, 'attempt': 1}
+        literal = original_input['xml']
+        unrated = literal == "<message to='bob@example.test'><store xmlns='urn:xmpp:hints'/></message>"
+        literals = {
+            "<message type='chat' id='m' to='bob@example.test/phone'><body>x</body><origin-id xmlns='urn:xmpp:sid:0' id='o'/></message>": ('m', 'x', 'o'),
+            "<message type='chat' id='m' to='bob@example.test'><body>x</body><origin-id xmlns='urn:xmpp:sid:0' id='o'/></message>": ('m', 'x', 'o'),
+            "<message type='chat' id='m-c03-a' to='bob@example.test'><body>x-a</body><origin-id xmlns='urn:xmpp:sid:0' id='o-c03-a'/></message>": ('m-c03-a', 'x-a', 'o-c03-a'),
+            "<message type='chat' id='m-c03-b' to='bob@example.test'><body>x-b</body><origin-id xmlns='urn:xmpp:sid:0' id='o-c03-b'/></message>": ('m-c03-b', 'x-b', 'o-c03-b'),
+        }
+        if unrated:
+            stanza_id = origin_id = None
+            attributes = ''
+            content = '<store xmlns="urn:xmpp:hints"/>'
+        else:
+            stanza_id, body, origin_id = literals[literal]
+            attributes = ' type="chat" id="' + stanza_id + '"'
+            content = '<body>' + body + '</body><origin-id xmlns="urn:xmpp:sid:0" id="' + origin_id + '"/>'
+        prefix = '<message xmlns="jabber:client"' + attributes + ' to="' + original_input['target'] + '" from="{}">'
+        routed = prefix.format('alice@example.test/device') + content + '</message>'
+        normalized = prefix.format('alice@example.test') + content + '</message>'
+        sid = '<stanza-id xmlns="urn:xmpp:sid:0" id="{}" by="{}"/>'
+        live = routed[:-10] + sid.format(identity['recipient_stable_id'], 'bob@example.test') + '</message>'
+        sender_xml = routed[:-10] + sid.format(identity['sender_stable_id'], 'alice@example.test') + '</message>'
+        stored = live[:-10] + '<delay xmlns="urn:xmpp:delay" from="example.test" stamp="1970-01-01T00:01:40Z"/></message>'
+        archives = []
+        if policy['sender_archive']:
+            archives.append({'archive_id': identity['sender_stable_id'], 'owner_id': roles['actor_id'],
+                             'peer_jid': 'bob@example.test/phone', 'stanza_id': 'm', 'encrypted': False, 'xml': sender_xml})
+        if policy['recipient_archive']:
+            archives.append({'archive_id': identity['recipient_stable_id'], 'owner_id': roles['recipient_id'],
+                             'peer_jid': 'alice@example.test/device', 'stanza_id': 'm', 'encrypted': False, 'xml': live})
+        projection = {'message_type': 'normal' if unrated else 'chat', 'origin_id': origin_id, 'rated': not unrated,
+                      'normalized_payload': None if unrated else normalized,
+                      'live_xml': live, 'stored_xml': stored, 'archives': archives}
+        prepared = {'actor_id': roles['actor_id'], 'recipient_id': roles['recipient_id'],
+                    'delivery_id': identity['recipient_stable_id'],
+                    'eligibility': 'LiveOnly' if original_input['target'].endswith('/phone') else 'Eligible', 'encrypted': False,
+                    'mam_backed': policy['recipient_archive'], 'archive_ids': [item['archive_id'] for item in archives],
+                    'identity': {'authority': 'LocalOrigin', 'actor_scope_raw': 'alice@example.test',
+                                 'actor_scope': 'alice@example.test', 'target_scope': 'bob@example.test',
+                                 'value': origin_id, 'payload': routed} if not unrated else None}
+        state = {'begin': None, 'finalize': None, 'direct': None, 'handoff': None, 'terminal': None}
+        original = {'frame_id': frame, 'projection': projection, 'prepared': prepared, 'continuation': None,
+                    'begin': None, 'finalize': None, 'direct': None, 'terminal': None, 'prefixes': [], 'polls': [],
+                    'route': {'health_reads': [], 'enqueue': [], 'dequeued': [], 'queue_remaining': [],
+                              'backpressure_disconnected': False, 'remote_calls': [], 'rearm_calls': [], 'handoff': None}}
+        def snapshot():
+            original['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(state)})
+        def sender_only(terminal, poll):
+            original['polls'].append({'seq': seq(), 'result': poll})
+            state['terminal'] = terminal
+            if state['handoff'] is not None:
+                state['handoff']['retired'] = True
+            snapshot()
+            for name in ('begin', 'finalize', 'direct', 'terminal'):
+                original[name] = copy.deepcopy(state[name])
+            original['route']['handoff'] = copy.deepcopy(state['handoff'])
+            return {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                    'input_sha256': direct_case._hash(fixture['bytes']), 'rejection': None,
+                    'execution': 'Cancelled' if terminal == 'Cancelled' else 'Complete',
+                    'originals': [original], 'recipient': {'kind': 'None'}}
+        admission = value['admission'][original_index]
+        if not unrated:
+            fence = {name: admission['fence'][name] for name in
+                     ('admission_key_hex', 'payload_mac_hex', 'lease_token')}
+            reservation = {'correlation': correlation(1), 'scope': 'RatedBeginNewReservation',
+                           'fact': {'kind': 'Reserved', 'fence': copy.deepcopy(fence)}}
+            state['begin'] = {'correlation': correlation(1), 'started': True,
+                              'knowledge': {'kind': 'CommitCallEntered', 'prepared': reservation}, 'returned': None}
+            snapshot()
+            state['begin']['knowledge'] = {'kind': 'ReceiptKnown', 'receipt': reservation}
+            snapshot()
+            state['begin']['returned'] = {'kind': 'Proceed', 'fence': copy.deepcopy(fence)}
+        repository = value['direct_repository'][original_index]
+        transaction = copy.deepcopy(repository['transaction'])
+        direct_prepared = {'correlation': correlation(3), 'transaction': transaction,
+                           'admitted_mode': repository['admitted_mode']}
+        state['direct'] = {'correlation': correlation(3), 'started': True,
+                           'knowledge': {'kind': 'CommitCallEntered', 'prepared': direct_prepared},
+                           'returned': None, 'preserved_transaction': None, 'application_error': False}
+        snapshot()
+        if sender_cut == 'direct_pending':
+            return sender_only('Cancelled', 'Pending')
+        state['direct']['knowledge'] = {'kind': 'ReceiptKnown', 'receipt': {'prepared': direct_prepared}}
+        snapshot()
+        if unrated:
+            state['direct']['returned'] = {'commit': {'kind': 'Replay'}, 'mode': 'Live', 'live_claim_id': None}
+            original['continuation'] = {'kind': 'Accepted', 'error_type': None, 'error_condition': None}
+            return sender_only('Completed', 'Ready')
+        returned_mode = repository['completion'].get('mode', 'Live')
+        state['direct']['returned'] = {'commit': {'kind': 'Stored', 'archive_written': bool(archives),
+                                                 'recipient_id': roles['recipient_id'],
+                                                 'delivery_id': identity['recipient_stable_id']},
+                                       'mode': returned_mode, 'live_claim_id': transaction['live_claim_id']}
+        if sender_cut == 'receipt_preserved':
+            state['direct'].update(returned=None, preserved_transaction=copy.deepcopy(transaction), application_error=True)
+        finalization = {'correlation': correlation(2), 'scope': 'AdmissionFinalize',
+                        'fact': {'kind': 'Finalized', 'fence': copy.deepcopy(fence), 'result': 'PendingAccepted'}}
+        state['finalize'] = {'correlation': correlation(2), 'started': True,
+                             'knowledge': {'kind': 'CommitCallEntered', 'prepared': finalization}, 'returned': None}
+        snapshot()
+        if admission['finalize_commit'] == 'Complete':
+            state['finalize']['knowledge'] = {'kind': 'ReceiptKnown', 'receipt': finalization}
+            snapshot()
+            state['finalize']['returned'] = {'kind': 'AcceptPending'}
+        else:
+            state['finalize']['returned'] = {'kind': 'Error'}
+        snapshot()
+        source = {'kind': 'C2s', 'recipient_id': roles['recipient_id'], 'message_id': identity['recipient_stable_id'],
+                  'claim_id': transaction['live_claim_id']}
+        state['handoff'] = {'correlation': correlation(4), 'source': source, 'local_call': 'NotRequested',
+                            'local_accepted': False, 'last_local_refusal': None, 'remote': 'NotRequested',
+                            'prior_remote_uncertain': False, 'rearm': 'NotRequested', 'route_end': 'Running', 'retired': False}
+        if sender_cut == 'receipt_preserved' or returned_mode == 'SpoolOnly':
+            if source['claim_id'] is not None:
+                state['handoff']['rearm'] = 'CallEntered'
+                original['route']['rearm_calls'].append({'seq': seq(), 'source': source, 'returned': True})
+                state['handoff']['rearm'] = 'CallReturned'
+            state['handoff']['route_end'] = 'Returned'
+            original['continuation'] = {'kind': 'Accepted', 'error_type': None, 'error_condition': None}
+            return sender_only('Completed', 'Ready')
+        for phase in ('PostFinalize', 'Router'):
+            original['route']['health_reads'].append({'seq': seq(), 'phase': phase, 'mode': 'Live'})
+        if sender_cut == 'rearm_pending':
+            original['route']['enqueue'].append({'seq': seq(), 'source': source, 'xml': live, 'result': 'Full'})
+            original['route']['backpressure_disconnected'] = True
+            original['route']['queue_remaining'] = [{'xml': "<message id='plain'/>", 'source': None}]
+            state['handoff'].update(local_call='Refused', last_local_refusal='Full')
+            original['route']['remote_calls'].append({'seq': seq(), 'source': source, 'returned': False})
+            state['handoff'].update(remote='NoPositiveReceipt', prior_remote_uncertain=True, rearm='CallEntered')
+            original['route']['rearm_calls'].append({'seq': seq(), 'source': source, 'returned': False})
+            state['handoff']['route_end'] = 'Dropped'
+            original['continuation'] = {'kind': 'Live', 'error_type': None, 'error_condition': None}
+            return sender_only('Cancelled', 'Pending')
+        original['route']['enqueue'].append({'seq': seq(), 'source': source, 'xml': live, 'result': 'Accepted'})
+        state['handoff'].update(local_call='Accepted', local_accepted=True)
+        original['route']['health_reads'].append({'seq': seq(), 'phase': 'Router', 'mode': 'Live'})
+        state['handoff']['route_end'] = 'Returned'
+        original['continuation'] = {'kind': 'Live', 'error_type': None, 'error_condition': None}
+        original['polls'].append({'seq': seq(), 'result': 'Ready'})
+        state['handoff']['retired'] = True
+        state['terminal'] = 'Completed'
+        snapshot()
+        for name in ('begin', 'finalize', 'direct', 'terminal'):
+            original[name] = copy.deepcopy(state[name])
+        original['route']['handoff'] = copy.deepcopy(state['handoff'])
+        original['route']['dequeued'].append({'seq': seq(), 'source': source, 'xml': live})
+        native_input = value['recipient_owner']['native']
+        fenced = copy.deepcopy(native_input['fence']['returned_source'])
+        native_state = {'original': source, 'preparation': 'Prepared', 'managed_by_sm': False, 'fence_entered': True,
+                        'returned_fence': fenced, 'writer_entered': False, 'writer_result': None, 'write_decision': None,
+                        'ack': {'kind': 'NotRequested'}, 'ack_returned': None, 'terminal': None}
+        native = {'frame_id': frame, 'connection_id': native_input['connection_id'], 'prefixes': [], 'polls': [],
+                  'write_calls': [], 'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [], 'write_receipts': []}
+        def native_snapshot():
+            native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(native_state)})
+        native_snapshot()
+        native_state['writer_entered'] = True
+        remaining = live.encode('utf-8')
+        short = native_input['write']['fail_after_accepted_bytes']
+        accepted = 0
+        while remaining:
+            count = min(native_input['write']['chunk_limit'], len(remaining))
+            if short is not None:
+                count = min(count, max(0, short - accepted))
+            native['write_calls'].append({'seq': seq(), 'offered_len': len(remaining),
+                                          'offered_sha256': direct_case._hash(remaining),
+                                          'accepted_bytes_hex': remaining[:count].hex(), 'result': 'Accepted' if count else 'Error'})
+            if not count:
+                break
+            remaining = remaining[count:]
+            accepted += count
+        if short is None and not omit_flush:
+            native['flush_calls'].append({'seq': seq(), 'result': native_input['write']['flush']})
+        successful = short is None and (omit_flush or native_input['write']['flush'] == 'Ok')
+        native_state.update(writer_result='FullWrite' if successful else 'Failed',
+                            write_decision='Written' if successful else 'Withhold')
+        native_snapshot()
+        pending = successful and native_input['ack']['commit'] == 'Pending'
+        if successful:
+            native['ack_calls'].append({'seq': seq(), 'source': fenced, 'returned': None})
+            fact = {'source': fenced, 'disposition': 'Deleted'}
+            native_state['ack'] = {'kind': 'CommitCallEntered', 'fact': fact}
+            native_snapshot()
+            if not pending:
+                native_state['ack'] = {'kind': 'ReceiptKnown', 'fact': fact}
+                native_snapshot()
+                native['ack_calls'][0]['returned'] = True
+                native_state['ack_returned'] = True
+        native['polls'].append({'seq': seq(), 'result': 'Pending' if pending else 'Ready'})
+        native_state['terminal'] = 'Cancelled' if pending else 'Returned'
+        native_snapshot()
+        native.update(copy.deepcopy(native_state))
+        return {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY, 'input_sha256': direct_case._hash(fixture['bytes']),
+                'rejection': None, 'execution': 'Cancelled' if pending else 'Complete',
+                'originals': [original], 'recipient': {'kind': 'Native', 'native': native}}
+
+    def supplied_sequence(self, fixture, *, omit_flush=False):
+        def last_seq(value):
+            if type(value) is dict:
+                return max([value.get('seq', 0)] + [last_seq(item) for item in value.values()])
+            if type(value) is list:
+                return max([0] + [last_seq(item) for item in value])
+            return 0
+        combined, counter = None, 0
+        for index in range(len(fixture['value']['originals'])):
+            part = self.supplied_facts(fixture, original_index=index, start_seq=counter, omit_flush=omit_flush)
+            counter = last_seq(part)
+            if combined is None:
+                combined = part
+            else:
+                combined['originals'].extend(part['originals'])
+                combined['recipient'] = part['recipient']
+                combined['execution'] = part['execution']
+        return combined
+
+    def test_spool_only_pair_keeps_admitted_and_returned_modes_and_exact_rearm(self):
+        fixture = self.fixture('C03')
+        payload = self.supplied_sequence(fixture)
+        _semantic, evaluation, matched, stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual(evaluation['verdict'], 'Pass')
+        self.assertEqual([item['direct']['knowledge']['receipt']['prepared']['admitted_mode']
+                          for item in payload['originals']], ['SpoolOnly', 'Live'])
+        self.assertEqual([item['direct']['returned']['mode'] for item in payload['originals']], ['SpoolOnly', 'SpoolOnly'])
+        self.assertEqual([len(item['route']['rearm_calls']) for item in payload['originals']], [0, 1])
+        bad = copy.deepcopy(payload)
+        bad['originals'][1]['direct']['returned']['mode'] = 'Live'
+        self.assertFalse(direct_case._inspect_native_fixture(fixture, self.complete_record(), bad)[2])
+
+    def test_full_queue_remote_uncertainty_and_pending_rearm_remain_cancelled(self):
+        fixture = self.fixture('C06')
+        payload = self.supplied_facts(fixture, sender_cut='rearm_pending')
+        _semantic, evaluation, matched, stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual((evaluation['verdict'], evaluation['qualified']), ('Cancelled', False))
+        original = payload['originals'][0]
+        self.assertTrue(original['route']['handoff']['prior_remote_uncertain'])
+        self.assertEqual(original['route']['handoff']['rearm'], 'CallEntered')
+        self.assertEqual(original['route']['queue_remaining'], [{'xml': "<message id='plain'/>", 'source': None}])
+        bad = copy.deepcopy(payload)
+        bad['originals'][0]['route']['handoff']['prior_remote_uncertain'] = False
+        self.assertFalse(direct_case._inspect_native_fixture(fixture, self.complete_record(), bad)[2])
+
+    def test_unrated_prefix_and_mutation_pair_keep_exact_t_settlement_target(self):
+        fixture = self.fixture('C07')
+        payload = self.supplied_sequence(fixture)
+        _semantic, evaluation, matched, stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual(evaluation['verdict'], 'Pass')
+        first = payload['originals'][0]
+        self.assertIsNone(first['begin'])
+        self.assertIsNone(first['finalize'])
+        self.assertIsNone(first['route']['handoff'])
+        self.assertEqual(first['direct']['returned']['commit'], {'kind': 'Replay'})
+        targets = []
+        for identity in ('M1', 'M2', 'M4'):
+            fixture = self.fixture(identity)
+            payload = self.supplied_sequence(fixture, omit_flush=True)
+            _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertTrue(matched)
+            self.assertEqual(evaluation['verdict'], 'InvariantViolation')
+            self.assertEqual(len(payload['recipient']['native']['ack_calls']), 1)
+            targets.append(evaluation['invariant'])
+        self.assertEqual(targets, [targets[0]] * 3)
+
+    def test_complete_supplied_c01_matches_without_using_prediction_to_build_it(self):
+        fixture = self.fixture('C01')
+        with patch.object(direct_case, 'derive_native_ledger', side_effect=AssertionError('prediction is not observation')), \
+                patch.object(direct_case, '_expected_native_state', side_effect=AssertionError('prediction is not observation')):
+            payload = self.supplied_facts(fixture)
+        _semantic, evaluation, matched, stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual((evaluation['verdict'], evaluation['qualified'], evaluation['invariant']), ('Pass', True, None))
+
+    def test_no_flush_is_safety_before_fixture_matching_and_permission_never_changes_verdict(self):
+        fixture = self.fixture('M2')
+        payload = self.supplied_facts(fixture, omit_flush=True)
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertEqual(evaluation['invariant'], fixture['expected_failure'])
+        self.assertEqual(evaluation['verdict'], 'InvariantViolation')
+        self.assertFalse(evaluation['qualified'])
+        baseline_permission = copy.deepcopy(fixture)
+        baseline_permission.update(expected_failure=None, expected_verdict='Pass')
+        _semantic, baseline, matched, _stop = direct_case._inspect_native_fixture(baseline_permission, self.complete_record(), payload)
+        self.assertFalse(matched)
+        self.assertEqual(baseline['invariant'], evaluation['invariant'])
+        self.assertEqual(baseline['verdict'], 'InvariantViolation')
+
+    def test_short_write_control_is_pass_and_never_pollutes_expected_failure(self):
+        fixture = self.fixture('M3')
+        payload = self.supplied_facts(fixture, omit_flush=True)
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertEqual(evaluation['verdict'], 'Pass')
+        self.assertEqual(evaluation['violations'], [])
+        self.assertEqual(payload['recipient']['native']['flush_calls'], [])
+        self.assertEqual(payload['recipient']['native']['ack_calls'], [])
+
+    def test_planned_two_unknowns_remain_cancelled_and_external_interruption_never_matches(self):
+        fixture = self.fixture('C02')
+        payload = self.supplied_facts(fixture)
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertEqual(evaluation['verdict'], 'Cancelled')
+        self.assertFalse(evaluation['qualified'])
+        self.assertEqual(payload['originals'][0]['finalize']['knowledge']['kind'], 'CommitCallEntered')
+        self.assertEqual(payload['recipient']['native']['ack']['kind'], 'CommitCallEntered')
+        result = direct_case._inspect_native_fixture(fixture, {'observation': 'EnvironmentInterrupted'}, payload)
+        self.assertEqual(result, (None, None, False, 'EnvironmentInterrupted'))
+        payload['recipient']['native']['polls'][0]['result'] = 'Ready'
+        self.assertFalse(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+
+    def test_duplicate_ack_is_decodable_and_never_deduplicated_into_expected_target(self):
+        fixture = self.fixture('M2')
+        payload = self.supplied_facts(fixture, omit_flush=True)
+        native = payload['recipient']['native']
+        first = native['ack_calls'][0]['seq']
+        def shift(value):
+            if type(value) is dict:
+                if 'seq' in value and value['seq'] > first:
+                    value['seq'] += 1
+                for item in value.values():
+                    shift(item)
+            elif type(value) is list:
+                for item in value:
+                    shift(item)
+        shift(payload)
+        duplicate = copy.deepcopy(native['ack_calls'][0])
+        duplicate['seq'] = first + 1
+        native['ack_calls'].append(duplicate)
+        direct_case.validate_native_evidence(payload)
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(matched)
+        self.assertEqual([item['id'] for item in evaluation['violations']],
+                         ['NativeAckWithoutSuccessfulFlush', 'NativeAckWithoutSuccessfulFlush'])
+
+    def test_handoff_requires_prior_matching_receipt_and_retained_correlation(self):
+        fixture = self.fixture('C01')
+        payload = self.supplied_facts(fixture)
+        original = payload['originals'][0]
+        before = original['route']['enqueue'][0]['seq']
+        for prefix in original['prefixes']:
+            observed = prefix['state']['direct']
+            if prefix['seq'] < before and observed is not None and observed['knowledge']['kind'] == 'ReceiptKnown':
+                prepared = observed['knowledge']['receipt']['prepared']
+                observed['knowledge'] = {'kind': 'CommitCallEntered', 'prepared': prepared}
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(matched)
+        self.assertEqual(evaluation['invariant']['id'], 'HandoffWithoutStoredReceipt')
+        payload = self.supplied_facts(fixture)
+        payload['originals'][0]['begin']['correlation']['effect'] = 2
+        self.assertFalse(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+
+    def test_bad_projected_xml_keeps_failed_observation_and_existing_safety(self):
+        fixture = self.fixture('M2')
+        payload = self.supplied_facts(fixture, omit_flush=True)
+        payload['originals'][0]['projection']['live_xml'] = '<message><body>x</body></message>'
+        semantic, evaluation, matched, stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertEqual(semantic, payload)
+        self.assertFalse(matched)
+        self.assertEqual(stop, 'FixtureMismatch')
+        self.assertEqual(evaluation['invariant']['id'], 'NativeAckWithoutSuccessfulFlush')
+        self.assertTrue(any(item.startswith('projected_xml:') for item in evaluation['mismatches']))
+
+    def test_wrong_input_hash_cannot_supply_semantic_authority(self):
+        fixture = self.fixture('M2')
+        payload = self.supplied_facts(fixture, omit_flush=True)
+        payload['input_sha256'] = '0' * 64
+        semantic, evaluation, matched, stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertEqual(semantic, payload)
+        self.assertFalse(matched)
+        self.assertEqual(stop, 'InputBindingMismatch')
+        self.assertIsNone(evaluation['invariant'])
+        self.assertEqual(evaluation['verdict'], 'Inconclusive')
+        invalid_status = {'observation': 'Complete', 'process': {'returncode': False}}
+        self.assertEqual(direct_case._inspect_native_fixture(fixture, invalid_status, payload),
+                         (None, None, False, 'ProcessFailure'))
+
+    def test_fixed_rejections_require_exact_reason_input_binding_and_empty_execution(self):
+        for identity in ('R01', 'R02', 'R03'):
+            fixture = self.fixture(identity)
+            payload = {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                       'input_sha256': direct_case._hash(fixture['bytes']),
+                       'rejection': {'class': 'InvalidScenario', 'reason': fixture['reason']},
+                       'execution': None, 'originals': [], 'recipient': None}
+            _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertTrue(matched)
+            self.assertEqual(evaluation['verdict'], 'InvalidScenario')
+            self.assertFalse(evaluation['qualified'])
+            payload['input_sha256'] = '0' * 64
+            self.assertFalse(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+
+    def test_sender_commit_drop_is_cancelled_without_receipt_finalization_or_handoff(self):
+        fixture = self.fixture('C05')
+        payload = self.supplied_facts(fixture, sender_cut='direct_pending')
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertEqual(evaluation['verdict'], 'Cancelled')
+        self.assertFalse(evaluation['qualified'])
+        self.assertIsNone(payload['originals'][0]['finalize'])
+        self.assertIsNone(payload['originals'][0]['route']['handoff'])
+        payload['originals'][0]['prefixes'].pop()
+        self.assertFalse(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+
+    def test_receipt_preserved_error_has_no_returned_mode_and_only_recovery(self):
+        fixture = self.fixture('C04')
+        payload = self.supplied_facts(fixture, sender_cut='receipt_preserved')
+        _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertTrue(matched)
+        self.assertEqual(evaluation['verdict'], 'Pass')
+        original = payload['originals'][0]
+        self.assertIsNone(original['direct']['returned'])
+        self.assertEqual(original['route']['health_reads'], [])
+        self.assertEqual(original['route']['handoff']['rearm'], 'CallReturned')
+        self.assertEqual(original['route']['dequeued'], [])
+
+    def test_late_fence_or_full_write_knowledge_cannot_retroactively_authorize_ack(self):
+        fixture = self.fixture('C01')
+        for late in ('fence', 'writer'):
+            payload = self.supplied_facts(fixture)
+            native = payload['recipient']['native']
+            boundary = native['write_calls'][0]['seq'] if late == 'fence' else native['ack_calls'][0]['seq']
+            for prefix in native['prefixes']:
+                if prefix['seq'] < boundary:
+                    if late == 'fence':
+                        prefix['state'].update(fence_entered=False, returned_fence=None)
+                    else:
+                        prefix['state'].update(writer_result=None, write_decision=None)
+            direct_case.validate_native_evidence(payload)
+            _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertFalse(matched)
+            wanted = 'NativeAckWithoutMatchingFence' if late == 'fence' else 'NativeAckWithoutFullWrite'
+            self.assertIn(wanted, [item['id'] for item in evaluation['violations']])
+            self.assertEqual(evaluation['invariant']['class'], 'Safety')
+
+    def test_returns_and_preserved_transactions_require_contemporaneous_receipts(self):
+        for identity, cut in (('C01', None), ('C04', 'receipt_preserved')):
+            fixture = self.fixture(identity)
+            payload = self.supplied_facts(fixture, sender_cut=cut)
+            original = payload['originals'][0]
+            prefix = next(item for item in original['prefixes'] if item['state']['direct'] is not None and
+                          item['state']['direct']['knowledge']['kind'] == 'CommitCallEntered')
+            if identity == 'C01':
+                prefix['state']['direct']['returned'] = copy.deepcopy(original['direct']['returned'])
+            else:
+                prefix['state']['direct'].update(preserved_transaction=copy.deepcopy(original['direct']['preserved_transaction']),
+                                                 application_error=True)
+            _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertFalse(matched)
+            self.assertIn('direct_return_knowledge' if identity == 'C01' else 'direct_preserved_receipt_knowledge',
+                          evaluation['mismatches'])
+
+    def test_native_retained_knowledge_cannot_disappear_and_reappear(self):
+        fixture = self.fixture('C01')
+        for field in ('returned_fence', 'writer_result', 'write_decision', 'managed_by_sm'):
+            payload = self.supplied_facts(fixture)
+            prefixes = payload['recipient']['native']['prefixes']
+            target = next(item for item in prefixes if item['state']['ack']['kind'] == 'CommitCallEntered')
+            target['state'][field] = None
+            _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertFalse(matched)
+            self.assertIn('native_retained_' + field, evaluation['mismatches'])
+
+    def test_handoff_sticky_facts_and_terminal_cannot_be_erased(self):
+        expected = {'correlation': {'operation_id': direct_case._uuid(601), 'effect': 4, 'generation': 0, 'attempt': 1},
+                    'source': direct_case._c2s(direct_case._uuid(20601), direct_case._uuid(20601)),
+                    'local_call': 'Refused', 'local_accepted': False, 'last_local_refusal': 'Full',
+                    'remote': 'NoPositiveReceipt', 'prior_remote_uncertain': True, 'rearm': 'CallEntered',
+                    'route_end': 'Dropped', 'retired': True}
+        for field, erased in (('prior_remote_uncertain', False), ('last_local_refusal', None), ('retired', False)):
+            hidden = copy.deepcopy(expected)
+            hidden[field] = erased
+            prefixes = [{'seq': index + 1, 'state': {'handoff': value}} for index, value in
+                        enumerate((expected, hidden, expected))]
+            findings = []
+            direct_case._retained_handoff_prefixes(prefixes, expected, findings)
+            self.assertTrue(findings)
+
+    def test_native_returns_and_writer_results_require_prior_actual_facts(self):
+        fixture = self.fixture('C01')
+        payload = self.supplied_facts(fixture)
+        native = payload['recipient']['native']
+        entered = next(item for item in native['prefixes'] if item['state']['ack']['kind'] == 'CommitCallEntered')
+        entered['state']['ack_returned'] = True
+        result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(result[2])
+        self.assertIn('native_ack_return_knowledge', result[1]['mismatches'])
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['native']['prefixes'][0]['state'].update(
+            writer_entered=True, writer_result='FullWrite', write_decision='Written')
+        result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(result[2])
+        self.assertIn('native_writer_result_after_calls', result[1]['mismatches'])
+        payload = self.supplied_facts(fixture)
+        native = payload['recipient']['native']
+        native['ack'] = {'kind': 'NoCommitRequested'}
+        native['ack_returned'] = False
+        native['ack_calls'][0]['returned'] = False
+        direct_case.validate_native_evidence(payload)
+
+    def test_owner_final_observation_cadence_and_native_call_before_poll_are_required(self):
+        fixture = self.fixture('C01')
+        for owner in ('sender', 'native'):
+            payload = self.supplied_facts(fixture)
+            prefixes = payload['originals'][0]['prefixes'] if owner == 'sender' else payload['recipient']['native']['prefixes']
+            for prefix in prefixes:
+                prefix['state']['terminal'] = 'Completed' if owner == 'sender' else 'Returned'
+            result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertFalse(result[2])
+            self.assertIn(owner + '_terminal_after_poll', result[1]['mismatches'])
+        payload = self.supplied_facts(fixture)
+        native = payload['recipient']['native']
+        native['ack_calls'][0]['seq'], native['polls'][0]['seq'] = native['polls'][0]['seq'], native['ack_calls'][0]['seq']
+        direct_case.validate_native_evidence(payload)
+        result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(result[2])
+        self.assertIn('native_calls_before_poll', result[1]['mismatches'])
+
+    def test_handoff_result_and_retirement_prefixes_cannot_precede_actual_calls(self):
+        for identity, cut, wanted in (('C01', None, 'handoff_acceptance_after_call'),
+                                      ('C06', 'rearm_pending', 'handoff_uncertainty_after_call')):
+            fixture = self.fixture(identity)
+            payload = self.supplied_facts(fixture, sender_cut=cut)
+            original = payload['originals'][0]
+            original['prefixes'][0]['state']['handoff'] = copy.deepcopy(original['route']['handoff'])
+            result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+            self.assertFalse(result[2])
+            self.assertIn(wanted, result[1]['mismatches'])
+            self.assertIn('handoff_retired_after_poll', result[1]['mismatches'])
+
+    def test_receipt_preserved_rearm_waits_for_actual_finalization_return(self):
+        fixture = self.fixture('C04')
+        payload = self.supplied_facts(fixture, sender_cut='receipt_preserved')
+        original = payload['originals'][0]
+        rearm_seq = original['route']['rearm_calls'][0]['seq']
+        for prefix in original['prefixes']:
+            if prefix['seq'] < rearm_seq and prefix['state']['finalize'] is not None:
+                prefix['state']['finalize']['returned'] = None
+        result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(result[2])
+        self.assertIn('finalization_return_before_rearm', result[1]['mismatches'])
 
 
 if __name__ == '__main__':

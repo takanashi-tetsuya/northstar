@@ -1,0 +1,71 @@
+{
+  "schema": "northstar.stage3.sm-owner-wip.v1",
+  "status": "WorkInProgressNotAccepted",
+  "base_commit": "c9a113b868b0d9cd8fb75abb7753ae1347978bba",
+  "scope": "First wired source draft of existing SM record, checkpoint and client acknowledgement ownership",
+  "implemented_source": [
+    "ProtocolSession delegates to a private helper over the actual SmSubstate and ordered FIFO",
+    "Borrowed prepared snapshot and acknowledgement views bind the service/repository projection",
+    "Per-turn metadata retains source cut, COMMIT and explicit rollback phases, returned ownership rotations, local application and notification facts",
+    "Existing resume checkpoint retains an unobserved compatibility path"
+  ],
+  "checks": {
+    "git_diff_check": {
+      "exit_code": 0
+    },
+    "format": "NotRun",
+    "compile": "NotRun",
+    "lint": "NotRun",
+    "tests": "NotRun"
+  },
+  "pending": [
+    "Independent semantic source review and any required corrections",
+    "Finite pure/fake regression source and exact test selection",
+    "Source-boundary drift checks and ordinary format, compile, lint and unit validation",
+    "BOSH ownership, composed saved-case evidence and full Stage3 acceptance"
+  ],
+  "limits": [
+    "This checkpoint preserves incomplete source and makes no runtime or compatibility acceptance claim",
+    "The draft adds bounded metadata and temporary comparison vectors beyond existing SM governor accounting; it does not establish a hard memory ceiling",
+    "No live SQL, product sockets, wire, fault or recovery workload was executed for this draft",
+    "The separately approved SM live-lease retention policy change is not part of this extraction"
+  ],
+  "source_files": {
+    "crates/northstar-delivery-core/src/lib.rs": {
+      "bytes": 7961,
+      "sha256": "71a94b11a8e6c34f1a1a2e9364f2a761525730a64a1bf8ba7981d66615514c33"
+    },
+    "crates/northstar-delivery-core/src/sm_ownership.rs": {
+      "bytes": 14997,
+      "sha256": "4fc1eafad6a51abbf1d3aa9fe092197d4eb2ca403f78b112d74f4f5eb511480b"
+    },
+    "src/db/sm.rs": {
+      "bytes": 69519,
+      "sha256": "ba3881f60fb73d7fc7604a8ee290b4fb479d2e6b567dbf8acb521c60db22880f"
+    },
+    "src/db/sm_repository.rs": {
+      "bytes": 19717,
+      "sha256": "982d60cba4f6d8c1e541f73f52ba60be4aad305fded0add80eccb82a9d36b3ee"
+    },
+    "src/services/sm.rs": {
+      "bytes": 69038,
+      "sha256": "b0e89455bc2de9e2a8cbc87249a82bd5cf37bff3465c08ff0c4a6b22bfd26b77"
+    },
+    "src/services/sm/ownership.rs": {
+      "bytes": 6213,
+      "sha256": "f654ac5030ab64cce6d02f1db3f24eaff7476137c756daa9eabbe4e205faaa15"
+    },
+    "src/xmpp/protocol.rs": {
+      "bytes": 105531,
+      "sha256": "a80f943964d9c7e7f2dfae38215aaef2130d51418245593d76bc8a5e24727689"
+    },
+    "src/xmpp/protocol/sm.rs": {
+      "bytes": 76240,
+      "sha256": "327c8e76693b626dae61565b30ebd7a64249a54f19a494586c333fe5cb36b58e"
+    },
+    "src/xmpp/protocol/sm_owner.rs": {
+      "bytes": 17656,
+      "sha256": "2f59e86322d06d088a9a406da02807202b11cd9ae1d55c361d497f62531571df"
+    }
+  }
+}

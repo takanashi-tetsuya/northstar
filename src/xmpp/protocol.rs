@@ -24,6 +24,7 @@ pub(crate) mod retractions;
 pub(crate) mod roster;
 pub(crate) mod sasl2;
 pub(crate) mod sm;
+mod sm_owner;
 pub(crate) mod upload;
 pub(crate) mod vcard;
 
@@ -527,6 +528,8 @@ struct SmSubstate {
     unacked: VecDeque<crate::outbound::SmUnackedStanza>,
     /// Process-local bytes retained for a resumable XEP-0198 epoch.
     capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
+    /// One replaceable observation; retained old handles keep their own facts.
+    current_operation: Option<northstar_delivery_core::sm_ownership::Observation>,
 }
 
 /// Presence epochs stay with the protocol session across transport changes.
@@ -1102,31 +1105,13 @@ impl ProtocolSession {
         &mut self,
         item: &crate::outbound::OutboundItem,
     ) -> Result<bool> {
-        anyhow::ensure!(
-            item.validate_durable_source_shape(),
-            "outbound item has an invalid durable source/hand-off shape"
-        );
-        let managed_by_sm = durable_delivery_managed_by_sm(
-            self.sm.enabled && self.sm.db_id.is_some(),
-            &item.stanza,
-            item.durable_source.is_some(),
-        );
-        self.record_outbound_with_source(&item.stanza, item.durable_source)
-            .await?;
-        if managed_by_sm {
-            if item.mix_delivery().is_some() {
-                let session_id = self
-                    .sm
-                    .db_id
-                    .context("XEP-0198 MIX ownership was not persisted")?;
-                item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SmPersisted {
-                    session_id,
-                });
-            } else {
-                item.confirm_transport_ownership();
-            }
-        }
-        Ok(managed_by_sm)
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
+        sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.record_item(item, &observation).await;
+            if result.is_err() { observation.returned_error(); }
+            result
+        }).await
     }
 
     async fn record_outbound_with_source(
@@ -1134,78 +1119,51 @@ impl ProtocolSession {
         stanza: &str,
         durable_source: Option<crate::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
-        self.state.outbound_stanza_telemetry().recorded();
-        if self.sm.enabled && is_counted_stanza(stanza) {
-            let next_bytes = self
-                .sm
-                .unacked
-                .iter()
-                .map(|entry| entry.stanza.len())
-                .sum::<usize>()
-                .saturating_add(stanza.len());
-            if self.sm.unacked.len() >= self.sm_runtime_policy.buffer.max_unacked_stanzas
-                || next_bytes > self.sm_runtime_policy.buffer.max_unacked_bytes
-            {
-                self.sm.resume_allowed = false;
-                anyhow::bail!("XEP-0198 unacknowledged queue capacity reached");
-            }
-            let projected = self
-                .sm_resident_bytes()
-                .and_then(|bytes| {
-                    bytes
-                        .checked_add(std::mem::size_of::<crate::outbound::SmUnackedStanza>())
-                        .and_then(|bytes| bytes.checked_add(stanza.len()))
-                })
-                .context("XEP-0198 projected resident-size overflow")?;
-            if projected > self.sm_runtime_policy.buffer.max_snapshot_bytes
-                || self
-                    .sm
-                    .capacity
-                    .as_ref()
-                    .is_none_or(|lease| lease.try_grow_to(projected).is_err())
-            {
-                self.sm.resume_allowed = false;
-                anyhow::bail!("XEP-0198 process memory capacity reached");
-            }
-            self.sm.outbound_h = self.sm.outbound_h.wrapping_add(1);
-            self.sm
-                .unacked
-                .push_back(crate::outbound::SmUnackedStanza::with_source(
-                    stanza.to_owned(),
-                    durable_source,
-                ));
-            if let Err(error) = self.checkpoint_sm().await {
-                if error
-                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
-                    .is_some()
-                {
-                    // The database checkpoint rolled back its entire source
-                    // transfer. Do not let a stale queued item advance h or
-                    // remain in the process replay queue before it is sent.
-                    self.sm.unacked.pop_back();
-                    self.sm.outbound_h = self.sm.outbound_h.wrapping_sub(1);
-                    if let (Some(bytes), Some(capacity)) =
-                        (self.sm_resident_bytes(), self.sm.capacity.as_ref())
-                    {
-                        capacity
-                            .shrink_to(bytes)
-                            .context("restore SM capacity after superseded delivery")?;
-                    }
-                }
-                return Err(error);
-            }
-        } else if durable_source.is_some() {
-            // With SM disabled, counted RFC 6120 stanzas are legitimately
-            // completed at the transport write boundary. Non-counted control
-            // elements always use that path as well. Only an active SM session
-            // can take ownership of a counted stanza's durable fence.
-            debug_assert!(!self.sm.enabled || !is_counted_stanza(stanza));
-        }
-        Ok(())
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
+        sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.record_source(stanza, durable_source, &observation).await;
+            if result.is_err() { observation.returned_error(); }
+            result
+        }).await
     }
 
     pub fn record_replayed(&self) {
         self.state.outbound_stanza_telemetry().recorded();
+    }
+
+    fn sm_snapshot_view(&self) -> sm_owner::SmSnapshotView<'_> {
+        sm_owner::SmSnapshotView {
+            available: &self.available, carbons: &self.carbons, priority: &self.priority,
+            blocklist_requested: &self.blocklist_requested, roster_requested: &self.roster_requested,
+            privacy_active: &self.privacy_active, privacy_requested: &self.privacy_requested,
+            peer_ip: &self.peer_ip, user_agent_id: &self.user_agent_id,
+            joined_rooms: &self.joined_rooms, directed_presence: &self.directed_presence,
+            last_presence: &self.last_presence,
+        }
+    }
+
+    fn sm_transport_turn(&mut self) -> sm_owner::SmTransportTurn<'_, sm_owner::RealSmPort<'_>> {
+        // Constructing the borrowed view performs no atomic reads or cloning.
+        // Snapshot/accounting sampling remains at its original call sites.
+        sm_owner::SmTransportTurn {
+            sm: &mut self.sm,
+            view: sm_owner::SmSnapshotView {
+            available: &self.available, carbons: &self.carbons, priority: &self.priority,
+            blocklist_requested: &self.blocklist_requested, roster_requested: &self.roster_requested,
+            privacy_active: &self.privacy_active, privacy_requested: &self.privacy_requested,
+            peer_ip: &self.peer_ip, user_agent_id: &self.user_agent_id,
+            joined_rooms: &self.joined_rooms, directed_presence: &self.directed_presence,
+            last_presence: &self.last_presence,
+        },
+            policy: &self.sm_runtime_policy,
+            connection_id: self.connection_id,
+            port: sm_owner::RealSmPort {
+                service: self.state.sm_service(),
+                governor: self.state.sm_memory_governor(),
+                telemetry: self.state.outbound_stanza_telemetry(),
+            },
+        }
     }
 
     pub(crate) fn sm_snapshot(&self) -> crate::services::sm::SmSessionSnapshot {
@@ -1216,46 +1174,7 @@ impl ProtocolSession {
         &self,
         unacked: Vec<crate::outbound::SmUnackedStanza>,
     ) -> crate::services::sm::SmSessionSnapshot {
-        crate::services::sm::SmSessionSnapshot {
-            inbound_h: self.sm.inbound_h,
-            outbound_h: self.sm.outbound_h,
-            acked_h: self.sm.acked_h,
-            available: self
-                .available
-                .as_ref()
-                .is_some_and(|available| available.load(Ordering::Relaxed)),
-            carbons: self.carbons.load(Ordering::Acquire),
-            priority: self.priority.load(Ordering::Relaxed),
-            blocklist_requested: self.blocklist_requested.load(Ordering::Relaxed),
-            roster_requested: self.roster_requested.load(Ordering::Relaxed),
-            active_privacy_list: self
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone(),
-            privacy_requested: self.privacy_requested.load(Ordering::Relaxed),
-            peer_ip: self.peer_ip,
-            user_agent_id: self.user_agent_id,
-            joined_rooms: self
-                .joined_rooms
-                .iter()
-                .map(|membership| crate::services::sm::SmMucMembership {
-                    room_jid: membership.key().clone(),
-                    nick: membership.nick.clone(),
-                })
-                .collect(),
-            directed_presence: self
-                .directed_presence
-                .iter()
-                .map(|jid| jid.key().clone())
-                .collect(),
-            last_presence: self
-                .last_presence
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone(),
-            unacked,
-        }
+        self.sm_snapshot_view().snapshot(&self.sm, unacked)
     }
 
     /// Transfer the large replay FIFO into cleanup ownership. Finalization
@@ -1270,100 +1189,17 @@ impl ProtocolSession {
     /// This mirrors `SmSessionSnapshot::resident_bytes` and is used to reserve
     /// both retained growth and short-lived snapshot clones before allocation.
     pub(crate) fn sm_resident_bytes(&self) -> Option<usize> {
-        let mut bytes = std::mem::size_of::<crate::services::sm::SmSessionSnapshot>();
-        let mut add = |value: usize| {
-            bytes = bytes.checked_add(value)?;
-            Some(())
-        };
-        if let Some(value) = self
-            .privacy_active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-        {
-            add(value.len())?;
-        }
-        if let Some(value) = self
-            .last_presence
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-        {
-            add(value.len())?;
-        }
-        add(self
-            .joined_rooms
-            .len()
-            .checked_mul(std::mem::size_of::<crate::services::sm::SmMucMembership>())?)?;
-        for membership in self.joined_rooms.iter() {
-            add(membership.key().len())?;
-            add(membership.nick.len())?;
-        }
-        add(self
-            .directed_presence
-            .len()
-            .checked_mul(std::mem::size_of::<String>())?)?;
-        for jid in self.directed_presence.iter() {
-            add(jid.key().len())?;
-        }
-        add(self
-            .sm
-            .unacked
-            .len()
-            .checked_mul(std::mem::size_of::<crate::outbound::SmUnackedStanza>())?)?;
-        for stanza in &self.sm.unacked {
-            add(stanza.stanza.len())?;
-        }
-        Some(bytes)
+        self.sm_snapshot_view().resident_bytes(&self.sm)
     }
 
     pub(crate) async fn checkpoint_sm(&mut self) -> Result<()> {
-        let Some(id) = self.sm.db_id else {
-            return Ok(());
-        };
-        let live_bytes = self
-            .sm_resident_bytes()
-            .context("XEP-0198 live resident-size overflow")?;
-        let _snapshot_clone_capacity = self
-            .state
-            .sm_memory_governor()
-            .try_reserve_live(live_bytes)
-            .context("XEP-0198 transient snapshot capacity reached")?;
-        let snapshot = self.sm_snapshot();
-        let snapshot_bytes = snapshot
-            .resident_bytes()
-            .context("XEP-0198 snapshot resident-size overflow")?;
-        if snapshot_bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes
-            || self
-                .sm
-                .capacity
-                .as_ref()
-                .is_none_or(|lease| lease.try_grow_to(snapshot_bytes).is_err())
-        {
-            self.sm.resume_allowed = false;
-            anyhow::bail!("XEP-0198 process memory capacity reached");
-        }
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.state.sm_service().checkpoint_session(
-                id,
-                self.connection_id,
-                &snapshot,
-                self.sm.resume_timeout_seconds,
-                self.sm_runtime_policy.session.live_lease_seconds,
-                self.sm_runtime_policy.buffer.max_unacked_stanzas,
-                self.sm_runtime_policy.buffer.max_unacked_bytes,
-            ),
-        )
-        .await
-        .context("XEP-0198 checkpoint database operation timed out")??;
-        anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
-        // A checkpoint can rotate a MIX lease while atomically transferring
-        // the stanza into the SM queue.  Keep the process-resident replay
-        // queue on that exact new lease: a later acknowledgement must never
-        // consume the old worker lease.
-        self.apply_sm_ownership_resolution(&outcome.ownership);
-        Ok(())
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Checkpoint);
+        sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.checkpoint_in_turn(&observation).await;
+            if result.is_err() { observation.returned_error(); }
+            result
+        }).await
     }
 
     pub(crate) fn apply_sm_ownership_resolution(

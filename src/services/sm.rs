@@ -1,5 +1,7 @@
 //! Application boundary for durable resource binding and XEP-0198 ownership.
 
+pub(crate) mod ownership;
+
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
 use std::{
@@ -637,6 +639,7 @@ pub(crate) trait SmRepository: Send + Sync {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
     fn remove_live_muc_memberships(
         &self,
@@ -655,10 +658,12 @@ pub(crate) trait SmRepository: Send + Sync {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
     fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
+        observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn reserve_binding(
         &self,
@@ -762,6 +767,7 @@ impl<R: SmRepository> SmService<R> {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         self.repository
             .checkpoint_session(
@@ -772,6 +778,7 @@ impl<R: SmRepository> SmService<R> {
                 live_lease_seconds,
                 max_stanzas,
                 max_bytes,
+                observation,
             )
             .await
     }
@@ -796,6 +803,7 @@ impl<R: SmRepository> SmService<R> {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         self.repository
             .checkpoint_and_acknowledge(
@@ -807,14 +815,16 @@ impl<R: SmRepository> SmService<R> {
                 live_lease_seconds,
                 max_stanzas,
                 max_bytes,
+                observation,
             )
             .await
     }
     pub(crate) async fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
+        observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
-        self.repository.acknowledge_delivery_batch(sources).await
+        self.repository.acknowledge_delivery_batch(sources, observation).await
     }
     pub(crate) async fn reserve_binding(
         &self,
@@ -1146,6 +1156,7 @@ mod tests {
             _live_lease_seconds: u64,
             _max_stanzas: usize,
             _max_bytes: usize,
+            _observation: Option<&super::ownership::PreparedCheckpoint<'_>>,
         ) -> Result<super::SmCheckpointOutcome> {
             panic!("unexpected persistence operation")
         }
@@ -1168,12 +1179,14 @@ mod tests {
             _live_lease_seconds: u64,
             _max_stanzas: usize,
             _max_bytes: usize,
+            _observation: Option<&super::ownership::PreparedCheckpoint<'_>>,
         ) -> Result<super::SmCheckpointOutcome> {
             panic!("unexpected persistence operation")
         }
         async fn acknowledge_delivery_batch(
             &self,
             _sources: &[crate::outbound::TransportOwnershipSource],
+            _observation: Option<&super::ownership::PreparedBatch<'_>>,
         ) -> Result<()> {
             panic!("unexpected persistence operation")
         }

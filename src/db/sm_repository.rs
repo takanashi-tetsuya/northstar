@@ -94,17 +94,23 @@ impl SmRepository for PostgresSmRepository {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
-        Ok(db::checkpoint_sm_session_with_ownership_resolution(
+        if let Some(prepared) = observation {
+            prepared.validate_projection(session_id, connection_id, database_projection(&snapshot), &[], ownership::CheckpointPolicy { ttl_seconds, live_lease_seconds, max_stanzas, max_bytes })?;
+        }
+        Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
             &self.pool,
             session_id,
             connection_id,
             &snapshot,
+            &[],
             ttl_seconds,
             live_lease_seconds,
             max_stanzas,
             max_bytes,
+            observation.map(|prepared| prepared.request()),
         )
         .await?
         .into())
@@ -128,10 +134,14 @@ impl SmRepository for PostgresSmRepository {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
+        if let Some(prepared) = observation {
+            prepared.validate_projection(session_id, connection_id, database_projection(&snapshot), acknowledged, ownership::CheckpointPolicy { ttl_seconds, live_lease_seconds, max_stanzas, max_bytes })?;
+        }
         Ok(
-            db::checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
+            db::sm::checkpoint_sm_session_and_acknowledge_observed(
                 &self.pool,
                 session_id,
                 connection_id,
@@ -141,6 +151,7 @@ impl SmRepository for PostgresSmRepository {
                 live_lease_seconds,
                 max_stanzas,
                 max_bytes,
+                observation.map(|prepared| prepared.request()),
             )
             .await?
             .into(),
@@ -149,8 +160,10 @@ impl SmRepository for PostgresSmRepository {
     async fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
+        observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
-        db::acknowledge_transport_sources(&self.pool, sources).await
+        if let Some(prepared) = observation { prepared.validate_sources(sources)?; }
+        db::sm::acknowledge_transport_sources_observed(&self.pool, sources, observation.map(|prepared| prepared.request())).await
     }
     async fn reserve_binding(
         &self,
@@ -523,4 +536,12 @@ impl From<db::SmResumePending> for SmResumePending {
             retry_at: value.retry_at,
         }
     }
+}
+
+fn database_projection(snapshot: &db::SmSessionSnapshot) -> ownership::SnapshotProjection<'_> {
+    let db::SmSessionSnapshot { inbound_h, outbound_h, acked_h, available, carbons, priority, blocklist_requested, roster_requested,
+        active_privacy_list, privacy_requested, peer_ip, user_agent_id, joined_rooms, directed_presence, last_presence, unacked } = snapshot;
+    ownership::SnapshotProjection { inbound_h: *inbound_h, outbound_h: *outbound_h, acked_h: *acked_h, available: *available, carbons: *carbons, priority: *priority,
+        blocklist_requested: *blocklist_requested, roster_requested: *roster_requested, active_privacy_list, privacy_requested: *privacy_requested,
+        peer_ip: *peer_ip, user_agent_id: *user_agent_id, joined_rooms, directed_presence, last_presence, unacked }
 }

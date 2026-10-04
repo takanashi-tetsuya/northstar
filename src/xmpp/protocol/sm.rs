@@ -1203,6 +1203,7 @@ impl ProtocolSession {
                 self.sm_runtime_policy.session.live_lease_seconds,
                 self.sm_runtime_policy.buffer.max_unacked_stanzas,
                 self.sm_runtime_policy.buffer.max_unacked_bytes,
+                None,
             )
             .await;
         match checkpointed {
@@ -1355,76 +1356,13 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn acknowledge(&mut self, h: u32) -> Result<bool> {
-        let Some(delta) = acknowledgement_delta(self.sm.acked_h, h, self.sm.unacked.len()) else {
-            return Ok(false);
-        };
-        let acknowledged = self
-            .sm
-            .unacked
-            .iter()
-            .take(delta)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut remaining = self
-            .sm
-            .unacked
-            .iter()
-            .skip(delta)
-            .cloned()
-            .collect::<VecDeque<_>>();
-        if let Some(id) = self.sm.db_id {
-            let clone_bytes = self
-                .sm_resident_bytes()
-                .ok_or_else(|| anyhow::anyhow!("XEP-0198 live resident-size overflow"))?;
-            let _snapshot_clone_capacity = self
-                .state
-                .sm_memory_governor()
-                .try_reserve_live(clone_bytes)?;
-            let mut snapshot = self.sm_snapshot();
-            snapshot.acked_h = h;
-            snapshot.unacked = remaining.iter().cloned().collect();
-            let outcome = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                self.state.sm_service().checkpoint_and_acknowledge(
-                    id,
-                    self.connection_id,
-                    &snapshot,
-                    &acknowledged,
-                    self.sm.resume_timeout_seconds,
-                    self.sm_runtime_policy.session.live_lease_seconds,
-                    self.sm_runtime_policy.buffer.max_unacked_stanzas,
-                    self.sm_runtime_policy.buffer.max_unacked_bytes,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("XEP-0198 acknowledgement database operation timed out")
-            })??;
-            anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
-            Self::apply_sm_ownership_resolution_to_unacked(&mut remaining, &outcome.ownership);
-        } else {
-            let sources = acknowledged
-                .iter()
-                .filter_map(|entry| entry.source)
-                .collect::<Vec<_>>();
-            tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                self.state.sm_service().acknowledge_delivery_batch(&sources),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("delivery acknowledgement database operation timed out")
-            })??;
-        }
-        self.sm.unacked = remaining;
-        self.sm.acked_h = h;
-        let live_bytes = self
-            .sm_resident_bytes()
-            .ok_or_else(|| anyhow::anyhow!("XEP-0198 live resident-size overflow"))?;
-        if let Some(capacity) = &self.sm.capacity {
-            capacity.shrink_to(live_bytes)?;
-        }
-        Ok(true)
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Acknowledge { h });
+        super::sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.acknowledge(h, &observation).await;
+            if result.is_err() { observation.returned_error(); }
+            result
+        }).await
     }
 
     pub(crate) fn reset_sm(&mut self) {

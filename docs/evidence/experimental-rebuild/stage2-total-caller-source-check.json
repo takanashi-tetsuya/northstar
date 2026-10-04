@@ -1,0 +1,118 @@
+{
+  "check_base_commit": "0963edae88b1b3d41abbf50b882e7c5cc0532129",
+  "mechanism": {
+    "caller_packet_reservation_bytes": 65536,
+    "documentation": "docs/architecture/controlled-admission-validation-handoff.zh-TW.md",
+    "fixed_timeout_argv": [
+      "/usr/bin/timeout",
+      "--signal=TERM",
+      "--kill-after=5s",
+      "612s"
+    ],
+    "maximum_named_processes": 5,
+    "observed_total_limit_ms": 617000,
+    "receipt_and_stderr_capture_bytes_each": 4096,
+    "separate_external_startup_guarantee": false,
+    "timeout_reported_version": "GNU coreutils9.7 Debian9.7-3",
+    "timeout_sha256": "6ca1891dfc0b05d7680770c2884c0391b92467c7bb6500a5c84677e6481739f1"
+  },
+  "prior_source_checkpoint_ci": {
+    "actual_failure": "Pinned non-root container Caddy synthetic SSL receive timeout; CI required is the aggregate failure.",
+    "applies_to_current_caller_delta": false,
+    "commit": "0963edae88b1b3d41abbf50b882e7c5cc0532129",
+    "diagnostic_source_commit": "997b473b989222d8a08d79d3fb1edc8f3e3690d6",
+    "failure": 2,
+    "root_cause": "Unknown",
+    "skipped": 1,
+    "success": 30,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37179140576"
+  },
+  "read_only_tool_checks": {
+    "arguments_executed": [
+      [
+        "timeout",
+        "--version"
+      ],
+      [
+        "timeout",
+        "--help"
+      ]
+    ],
+    "primary_sources": [
+      "https://www.gnu.org/software/coreutils/manual/html_node/timeout-invocation.html",
+      "https://raw.githubusercontent.com/coreutils/coreutils/v9.7/src/timeout.c"
+    ],
+    "source_binary_limit": "Upstream source and reported package version do not prove exact Debian patched-build identity or runtime behavior.",
+    "workload_executed": false
+  },
+  "remaining_limits": [
+    "Preflight, Popen/exec bootstrap and final filesystem persistence have no universal hard wall guarantee.",
+    "Named owner/worker/Rust CPU and AS limits are not aggregate bounds for all five processes or RSS.",
+    "Timeout137, signal delivery, unknown wrapper status or missing EOF do not prove owner/descendant termination.",
+    "Caller persistence must finish successfully and its real terminal status must be observed before using saved evidence.",
+    "All new mocked regression bodies, actual timeout workload, Rust82-case record/replay, shrink and SQL/wire qualification remain unexecuted locally.",
+    "Resource proposals remain uncalibrated and Stage2 remains unaccepted."
+  ],
+  "review": {
+    "scope": "Five frozen source paths and mocked regression bodies; no runtime qualification",
+    "status": "SourceSemanticReviewPassed"
+  },
+  "schema": "northstar-source-checkpoint-v1",
+  "source_corrections": [
+    "Versioned total-only contract removes the separate caller-startup claim; internal startup limit remains role-local.",
+    "Fixed adapter captures bounded independent pipes, real wrapper wait and monotonic duration; partial/noncanonical receipt retains null owner authority.",
+    "Worker usable evidence ceiling deducts64KiB for create-only caller sibling files; trailing-slash/root/parent-path cases are explicitly handled."
+  ],
+  "source_files": {
+    "docs/architecture/controlled-admission-validation-handoff.zh-TW.md": {
+      "bytes": 21103,
+      "sha256": "55f5c2de4776c6dd05f697d32b1738024df987ac554273378fda4534a5730927"
+    },
+    "scripts/capture-controlled-admission.py": {
+      "bytes": 13307,
+      "sha256": "4806de9755e4c81b730c3f3c5b18bc95bf02c2d8f2a39dcf34ea4acb4d1db576"
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "bytes": 82161,
+      "sha256": "46bfe93d846ca6fb44996de40eeb472c8ff3e1707e357848ff7ae39f65ec70b4"
+    },
+    "scripts/run-controlled-admission.py": {
+      "bytes": 1515,
+      "sha256": "f2737cfbd2e87047a1c8c69e2ef356117cb668ac60ff3573aebc53e44ab0b825"
+    },
+    "scripts/test-controlled-admission.py": {
+      "bytes": 121204,
+      "sha256": "0d3413ea0ca2eeaaaa9f4766c70df4a37a9ffa22f5ad1d80a61902f0fc2480c1"
+    }
+  },
+  "source_unchanged_during_check": true,
+  "stage2_accepted": false,
+  "status": "ImplementedSyntaxCheckedNotExecuted",
+  "verification": {
+    "dedicated_tests_or_runner_executed": false,
+    "exit_codes": {
+      "scripts/capture-controlled-admission.py": 0,
+      "scripts/lib/controlled_admission_supervision.py": 0,
+      "scripts/run-controlled-admission.py": 0,
+      "scripts/test-controlled-admission.py": 0
+    },
+    "operation": "AST parse and code-object compile only; no project imports, exec/eval, tests or workload",
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "reproduce_argv": [
+      "python3",
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      "import ast,pathlib,sys; [compile(ast.parse(pathlib.Path(p).read_bytes(),filename=p),p,\"exec\",dont_inherit=True) for p in sys.argv[1:]]",
+      "scripts/capture-controlled-admission.py",
+      "scripts/lib/controlled_admission_supervision.py",
+      "scripts/run-controlled-admission.py",
+      "scripts/test-controlled-admission.py"
+    ],
+    "reused_unchanged_paths": [
+      "scripts/capture-controlled-admission.py",
+      "scripts/run-controlled-admission.py"
+    ]
+  }
+}

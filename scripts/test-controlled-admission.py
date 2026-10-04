@@ -3,6 +3,7 @@
 import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -14,6 +15,11 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 from lib import controlled_admission as controlled
 from lib import controlled_admission_supervision as supervision
+
+_caller_spec = importlib.util.spec_from_file_location('controlled_admission_caller',
+                                                    Path(__file__).with_name('capture-controlled-admission.py'))
+caller = importlib.util.module_from_spec(_caller_spec)
+_caller_spec.loader.exec_module(caller)
 
 
 class IndependentOracleTests(unittest.TestCase):
@@ -985,6 +991,8 @@ class SupervisionSchemaTests(unittest.TestCase):
                            'toolchain': 'rustc 1.97.1 (mock identity)'},
             'helper_source_files': helpers, 'budgets': supervision.PROPOSED_BUDGETS.copy(),
             'plan_counts': supervision.PLAN_COUNTS.copy(),
+            'caller': {'schema': supervision.CALLER_SCHEMA, 'python': '/mock/python',
+                       'python_sha256': '5' * 64, 'timeout_sha256': supervision.TIMEOUT_SHA256},
         }
 
     @staticmethod
@@ -1456,10 +1464,11 @@ class CallerReceiptTests(unittest.TestCase):
                 'stdout_complete': True, 'receipt': copy.deepcopy(self.receipt)}
 
     def authority(self):
-        return {'schema': 'northstar-controlled-external-caller-v1', 'invocation_id': 'mock-executor-run',
-                'mechanism_sha256': '4' * 64, 'owner_exit_status': self.receipt['owner_exit_status'],
+        return {'schema': supervision.CALLER_EVIDENCE_SCHEMA, 'invocation_id': 'mock-executor-run',
+                'mechanism_sha256': supervision.caller_mechanism_hash(self.contract),
+                'owner_exit_status': self.receipt['owner_exit_status'], 'timeout_exit_status': self.receipt['owner_exit_status'],
                 'receipt_sha256': supervision.fingerprint(supervision.encoded(self.receipt)),
-                'startup_limit_ms': 10000, 'total_limit_ms': 617000, 'observed_total_ms': 1234, 'stdout_complete': True}
+                'total_limit_ms': 617000, 'observed_total_ms': 1234, 'stdout_complete': True, 'stderr_complete': True}
 
     def test_caller_receipt_requires_separate_trusted_mechanism_and_actual_exit(self):
         self.assertEqual(supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority()),
@@ -1516,6 +1525,189 @@ class CallerReceiptTests(unittest.TestCase):
             self.receipt = dict(original, **changes)
             with self.subTest(changes=changes), self.assertRaises(supervision.SupervisionError):
                 supervision.validate_owner_capture(self.capture(), self.contract, caller_evidence=self.authority())
+
+
+class TotalCallerTests(unittest.TestCase):
+    """Every process, pipe, clock and persistence seam below is mocked."""
+    def setUp(self):
+        self.fixture = CallerReceiptTests()
+        self.fixture.setUp()
+        self.contract = self.fixture.contract
+
+    def observation(self, **changes):
+        raw = supervision.encoded(self.fixture.receipt)
+        value = {'streams': {'stdout': {'data': raw, 'observed_bytes': len(raw), 'complete': True},
+                             'stderr': {'data': b'', 'observed_bytes': 0, 'complete': True}},
+                 'timeout_exit_status': 0, 'elapsed_ns': 1000000, 'stop': None}
+        value.update(changes)
+        return value
+
+    def packet(self, observation=None, stable=True):
+        return caller.make_packet(self.contract, 'mock-invocation', observation or self.observation(), stable)
+
+    def test_total_only_schema_rejects_prior_startup_authority_and_unknown_wrapper_status(self):
+        for change in ({'schema': 'northstar-controlled-external-caller-v1'}, {'startup_limit_ms': 10000},
+                       {'timeout_exit_status': 124}, {'timeout_exit_status': 137}, {'timeout_exit_status': None},
+                       {'stderr_complete': False}, {'observed_total_ms': 617001}, {'mechanism_sha256': '0' * 64}):
+            authority = dict(self.fixture.authority(), **change)
+            with self.subTest(change=change), self.assertRaises(supervision.SupervisionError):
+                supervision.validate_owner_capture(self.fixture.capture(), self.contract, caller_evidence=authority)
+        old = copy.deepcopy(self.contract)
+        old['schema'] = 'northstar-controlled-execution-contract-v1'
+        old['budgets']['caller_startup_ms'] = old['budgets'].pop('caller_total_ms')
+        with self.assertRaises(supervision.SupervisionError):
+            supervision.validate_contract(old)
+
+    def test_caller_sibling_normalizes_trailing_slash_and_rejects_root_or_same_replay_destination(self):
+        for spelling in ('/mock/run', '/mock/run/', '/mock//run/./'):
+            self.assertEqual(supervision.caller_directory(spelling), Path('/mock/run.caller'))
+            contract = dict(self.contract, evidence_dir=spelling)
+            supervision.validate_contract(contract)
+        for spelling in ('/', '/./', '//', '/..', '/mock/..', '/mock/../'):
+            with self.assertRaises(supervision.SupervisionError):
+                supervision.caller_directory(spelling)
+            with self.assertRaises(supervision.SupervisionError):
+                supervision.validate_contract(dict(self.contract, evidence_dir=spelling))
+        for replay in ('/', '/mock/new-evidence/', '/mock//new-evidence/./'):
+            with self.assertRaisesRegex(supervision.SupervisionError, 'replay_destination'):
+                supervision.validate_contract(dict(self.contract, mode='replay', replay_dir=replay))
+
+    def test_exact_canonical_receipt_and_normal_status_bind_real_authority(self):
+        capture, authority, result = self.packet()
+        self.assertTrue(result['qualification']['FixtureMatched'])
+        self.assertEqual(authority['receipt_sha256'], supervision.fingerprint(self.observation()['streams']['stdout']['data']))
+        self.assertEqual((capture['owner_exit_status'], authority['timeout_exit_status']), (0, 0))
+        for status in (124, 125, 126, 127, 137, -9, None):
+            capture, authority, result = self.packet(self.observation(timeout_exit_status=status))
+            self.assertIsNone(capture['owner_exit_status'])
+            self.assertIsNone(capture['receipt'])
+            self.assertIsNone(authority['receipt_sha256'])
+            self.assertFalse(result['qualification']['supervision_complete'])
+            self.assertEqual(result['timeout_exit_status'], status)
+
+    def test_noncanonical_partial_wrong_contract_and_changed_material_never_qualify(self):
+        for raw, complete in ((supervision.encoded(self.fixture.receipt) + b' ', True), (b'{', True), (b'{', False)):
+            observation = self.observation()
+            observation['streams']['stdout'].update(data=raw, observed_bytes=len(raw), complete=complete)
+            capture, authority, result = self.packet(observation)
+            self.assertIsNone(capture['receipt'])
+            self.assertIsNone(authority['receipt_sha256'])
+            self.assertEqual(result['streams']['stdout']['reference']['sha256'], supervision.fingerprint(raw))
+        self.assertFalse(self.packet(stable=False)[2]['qualification']['FixtureMatched'])
+        self.fixture.receipt['contract_sha256'] = '0' * 64
+        self.assertIsNone(self.packet()[0]['receipt'])
+
+    def test_total_nanosecond_boundary_cannot_floor_an_overrun_into_success(self):
+        maximum = 617000 * 1000000
+        self.assertTrue(self.packet(self.observation(elapsed_ns=maximum))[2]['qualification']['FixtureMatched'])
+        capture, authority, result = self.packet(self.observation(elapsed_ns=maximum + 1))
+        self.assertEqual(authority['observed_total_ms'], 617001)
+        self.assertFalse(result['qualification']['supervision_complete'])
+        self.assertIsNone(capture['receipt'])
+
+    def fake_process(self, statuses):
+        process = unittest.mock.Mock()
+        for name, descriptor in (('stdout', 10), ('stderr', 11)):
+            endpoint = getattr(process, name)
+            endpoint.fileno.return_value = descriptor
+            endpoint.closed = False
+            endpoint.close.side_effect = lambda endpoint=endpoint: setattr(endpoint, 'closed', True)
+        process.poll.side_effect = statuses
+        process.wait.side_effect = AssertionError('no blocking wait')
+        process.kill.side_effect = AssertionError('no new process-control machinery')
+        process.terminate.side_effect = AssertionError('no new process-control machinery')
+        return process
+
+    def test_fixed_launch_clean_descriptors_and_default_sigchld_precede_wait(self):
+        process = self.fake_process([0, 0, 0])
+        order = []
+        with patch.object(caller.signal, 'signal', side_effect=lambda *_: order.append('sigchld')), \
+                patch.object(caller.subprocess, 'Popen', side_effect=lambda *_args, **_kwargs: order.append('launch') or process) as launch, \
+                patch.object(caller.os, 'set_blocking'), patch.object(caller.os, 'read', return_value=b''), \
+                patch.object(caller.select, 'select', return_value=([10, 11], [], [])), \
+                patch.object(caller.time, 'monotonic_ns', side_effect=[0, 1, 2, 3]):
+            observation = caller.collect(self.contract)
+        self.assertEqual(order, ['sigchld', 'launch'])
+        arguments = launch.call_args.args[0]
+        self.assertEqual(arguments[:8], ['/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '612s',
+                                        '/mock/python', '-I', '-S', '-B'])
+        self.assertNotIn('--foreground', arguments)
+        self.assertNotIn('--preserve-status', arguments)
+        self.assertEqual(arguments[8], '/mock/root/scripts/run-controlled-admission.py')
+        self.assertTrue(launch.call_args.kwargs['close_fds'])
+        self.assertFalse(launch.call_args.kwargs['shell'])
+        self.assertEqual(launch.call_args.kwargs['env'], {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+        self.assertTrue(all(value['complete'] for value in observation['streams'].values()))
+        process.wait.assert_not_called()
+
+    def test_cap_plus_sentinel_closes_only_overflowed_stream_and_still_observes_wrapper(self):
+        process = self.fake_process([None, None, 0, 0])
+        def read(descriptor, maximum):
+            self.assertEqual(maximum, 4097)
+            if descriptor == 10:
+                return b'x' * 4097
+            self.assertTrue(process.stdout.closed)
+            self.assertFalse(process.stderr.closed)
+            return b''
+        with patch.object(caller.signal, 'signal'), patch.object(caller.subprocess, 'Popen', return_value=process), \
+                patch.object(caller.os, 'set_blocking'), patch.object(caller.os, 'read', side_effect=read), \
+                patch.object(caller.select, 'select', side_effect=[([10], [], []), ([11], [], [])]) as selected, \
+                patch.object(caller.time, 'monotonic_ns', side_effect=[0, 1, 2, 3, 4]):
+            observation = caller.collect(self.contract)
+        self.assertEqual(selected.call_args_list[1].args[0], [11])
+        self.assertEqual(len(observation['streams']['stdout']['data']), 4096)
+        self.assertEqual(observation['streams']['stdout']['observed_bytes'], 4097)
+        self.assertFalse(observation['streams']['stdout']['complete'])
+        self.assertTrue(observation['streams']['stderr']['complete'])
+        self.assertEqual(observation['timeout_exit_status'], 0)
+        self.assertIsNone(self.packet(observation)[0]['receipt'])
+
+    def test_missing_eof_and_unknown_wrapper_end_at_cutoff_without_cleanup_claim(self):
+        for terminal in (None, 0, 137):
+            process = self.fake_process([terminal, terminal])
+            with patch.object(caller.signal, 'signal'), patch.object(caller.subprocess, 'Popen', return_value=process), \
+                    patch.object(caller.os, 'set_blocking'), patch.object(caller.select, 'select') as selected, \
+                    patch.object(caller.time, 'monotonic_ns', side_effect=[0, 617000000000, 617000000001]):
+                observation = caller.collect(self.contract)
+            selected.assert_not_called()
+            process.wait.assert_not_called()
+            process.kill.assert_not_called()
+            self.assertTrue(process.stdout.closed and process.stderr.closed)
+            capture, _authority, result = self.packet(observation)
+            self.assertIsNone(capture['owner_exit_status'])
+            self.assertFalse(result['qualification']['supervision_complete'])
+            self.assertEqual(result['timeout_reaped'], terminal is not None)
+
+    def test_worker_ceiling_reserves_caller_packet_for_every_write_path(self):
+        for terminal in (False, True):
+            store = object.__new__(supervision.EvidenceStore)
+            store.budgets = self.contract['budgets']
+            store.used = store.budgets['evidence_bytes'] - store.budgets['caller_artifact_bytes'] - 1
+            store.reservation = 2
+            store._admit(1, terminal)
+            with self.assertRaisesRegex(supervision.SupervisionError, 'worker_evidence_ceiling'):
+                store._admit(1, terminal)
+
+    def test_post_work_packet_is_bounded_sibling_and_failed_fsync_never_returns_success(self):
+        observation = self.observation()
+        capture, authority, result = self.packet(observation)
+        stream = unittest.mock.MagicMock()
+        stream.__enter__.return_value = stream
+        written = []
+        stream.write.side_effect = lambda data: written.append(data) or len(data)
+        with patch.object(Path, 'mkdir') as mkdir, patch.object(Path, 'open', return_value=stream) as opened, \
+                patch.object(caller.os, 'open', return_value=30), patch.object(caller.os, 'close'), patch.object(caller.os, 'fsync'):
+            caller.save_packet(self.contract, observation, capture, authority, result)
+        mkdir.assert_called_once_with(mode=0o700, parents=False, exist_ok=False)
+        self.assertEqual(supervision.caller_directory(self.contract['evidence_dir']), Path('/mock/new-evidence.caller'))
+        self.assertEqual(opened.call_count, 5)
+        self.assertLessEqual(sum(map(len, written)), 65536)
+        self.assertEqual(supervision.strict_json(written[-1], 8192), authority)
+        with patch.object(caller, 'verify_material', return_value={}), patch.object(caller, 'collect', return_value=observation), \
+                patch.object(Path, 'exists', return_value=False), patch.object(Path, 'is_symlink', return_value=False), \
+                patch.object(caller, 'save_packet', side_effect=OSError('mock fsync failure')):
+            with self.assertRaises(OSError):
+                caller.run(self.contract, 'mock-invocation')
 
 
 class OwnerSetupTests(unittest.TestCase):

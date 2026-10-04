@@ -340,3 +340,23 @@ fixture mismatch；最多83個不可變 prefix 世代保留先前已確認 bytes
 外部 caller 的實際 deadline／receipt／exit capture 仍未交付，不能用 JSON 宣稱代替監督。
 [交接文件](controlled-admission-validation-handoff.zh-TW.md) 列有精確介面和未校準 budgets；
 下一次執行方案仍需收斂這項前置條件。Stage2 仍未驗收，Stage3–6 及已取消 soak 的界線不變。
+
+
+## Total-only caller 的窄型來源補齊
+
+`0963eda` 已持久保存 supervisor 整合。新增固定 caller 使用既有 GNU timeout612s／
+kill-after5s，捕獲有界 receipt／stderr、實際 wrapper wait 與 monotonic elapsed，
+以觀察區間≤617s及完整證據作 qualification 條件。獨立 external startup enforcement
+宣稱已移除，沒有另造 Ready／ACK 層。內部 startup limit 仍屬原命名 role。
+
+最多5個 processes 包含 caller及timeout；原 CPU／AS 數值只適用指定 owner／worker／Rust，
+不是 RSS 或全體上限。Preflight、Popen／exec bootstrap及最後fsync不具 universal hard
+deadline。Timeout137、缺EOF或未知status保留未qualified診斷，不能推定所有子進程已退出。
+
+Caller的64KiB packet由worker usable evidence ceiling扣除，使用獨立create-only sibling
+目錄。Source review修正了trailing-slash路徑可能落入worker目錄的問題，root／parent／
+同一normalized replay destination亦被拒絕。五檔source review通過，四個Python檔的AST／
+code-object checks為exit0；詳見[短來源檢查紀錄](../evidence/experimental-rebuild/stage2-total-caller-source-check.json)。
+本輪僅另讀本機timeout version／help及官方來源；沒有執行timeout workload、新mock測試、
+82-case runner或服務。下一步仍須普通build取得真正Rust executable身分，再按精確有限
+執行方案驗證。Caller源碼補齊不等於監督或Stage2已驗收。

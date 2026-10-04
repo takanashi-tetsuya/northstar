@@ -3,7 +3,8 @@
 
 Invoke with an isolated, no-site, no-bytecode Python interpreter (-I -S -B).
 The caller supplies an external trusted contract, captures bounded stdout and
-the actual exit status, and separately bounds interpreter/owner startup. This
+the actual exit status, and checks the total invocation interval. Internal
+startup_ms is not an independent interpreter-startup bound. This
 entry point never builds a binary, starts a service, or selects arbitrary work.
 """
 import argparse

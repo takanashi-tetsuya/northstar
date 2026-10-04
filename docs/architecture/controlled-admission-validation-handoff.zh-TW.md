@@ -41,7 +41,9 @@ Caller-model 的64 successor／1,000,000 row-copy／64MiB serialized-state 上�
 
 ## 新窄型 supervisor 的來源契約
 
-拓樸只有一個專用 owner、一個可終止的 Python worker，以及至多一個固定可信 Rust child。
+supervisor 拓樸是一個專用 owner、一個可終止的 Python worker，以及至多一個固定可信 Rust child。
+加上固定 capture adapter 與 GNU timeout，整體最多五個 processes；下列 CPU／AS budgets 只適用
+於明列的 owner／worker／Rust roles，不能宣稱 adapter／timeout 也受到相同限制。
 owner 在 worker fork 前啟用 Linux subreaper；監控期間僅做有限 nonblocking control、monotonic
 deadline、已持有 pidfd 的 signals／reap。所有檔案、hash、oracle、fsync、atomic prefix 都由 worker
 負責，不能放回 owner 的 watchdog critical path。沒有 generic executor／journal／DSL 或 CI workflow
@@ -58,8 +60,8 @@ toolchain 及全部有限 budgets。來源 scope 包含 supervisor、entry point
 和 build inputs；不能採信待驗證 corpus 自己給的 provenance。worker 在 project imports 前先核對
 helpers。owner 最後只在有限窗口送出小 receipt；外部 caller 必須實際捕獲完整 receipt 與 owner exit
 status，並綁定自己原先信任的 contract。缺 receipt、部分 receipt、exit 不符或 cleanup 未確認不能
-取得完整 supervision。caller 還必須自行約束 interpreter／owner 初始化前的 startup window。
-caller 的證據須指出實際已 review 的 invocation mechanism identity、startup／total limits、實際
+取得完整 supervision。新版 caller 僅檢查 total launch／capture interval，不另外宣稱 interpreter
+startup enforcement。caller 的證據須指出實際已 review 的 invocation mechanism identity、total limit、實際
 terminal exit 和所捕獲 receipt 的確切 bytes hash；單一 JSON boolean 不算 enforcement 證據。
 replay 的可信 prior contract／capture／caller evidence 必須由外部契約提供，不能從 corpus 自行採信。
 
@@ -76,14 +78,17 @@ nonblocking 支援；完成等待及 cleanup 共用一個 absolute deadline，�
 目前數值都是待校準的有限提案：每個互斥 record 或 replay mode 固定44 normal＋34 parser negatives＋
 4 shrink starts＝82，各自 cap128；不能混成164，也不能漏掉 shrink tail。whole-work600s；每 case30s
 從準備前開始，涵蓋 capture、oracle、保存到 CaseReady，並受 whole-work 截斷。startup10s、cleanup5s、
-receipt2s 與 caller startup10s 分別列入契約。stdout8MiB、stderr4096 bytes；多出一 byte 就截斷並停止。
+receipt2s 分別列入內部契約；startup10s 從 owner 已初始化後計時，不涵蓋 interpreter bootstrap。
+caller total 提案為617000ms。Rust stdout8MiB、stderr4096 bytes；多出一 byte 就截斷並停止。
 
 owner／worker 各60 CPU seconds；Rust setup 後 soft9／hard10。Rust bootstrap 初始繼承 worker60，
 所以 initialized-owner 的保守 nominal CPU allowance 是60＋60＋128×60＝7800 seconds。
 1400 只是 setup 後的60＋60＋128×10，不能當端到端 hard ceiling；owner 初始化和 kernel 計帳 granularity
 仍須另外說明。每 process1GiB 是 RLIMIT_AS，並不是 RSS 或瞬間 aggregate hard cap。
 512MiB persisted evidence 提案包含 immutable observations、evaluation、全部 prefix generations、安裝 temp 峰值與1MiB
-terminal reserve；這些值尚未經 safe qualification／實測校準。
+terminal reserve；其中64KiB保留給 caller 的獨立 packet。worker 每一個 write path，包含 terminal
+與 prefix temporary 峰值，都受 `evidence_bytes - caller_artifact_bytes` ceiling 約束；terminal 的單次
+上限也扣除64KiB。這些值尚未經 safe qualification／實測校準。
 另有限制 source material64MiB、binary128MiB、contract128KiB、control／receipt4096 bytes、prefix64KiB，
 用來約束 metadata／hash 輸入；這些也僅為未校準的有限來源提案。
 
@@ -115,29 +120,38 @@ file／hash；worker 在下一個 CaseReady 被接收前死亡，也不會改掉
 
 `scripts/test-controlled-admission.py` 現在只保留 pure／mocked regression 入口。專項入口是
 `scripts/run-controlled-admission.py`，要求 isolated no-site no-bytecode Python、外部 compact contract JSON、
-獨立 run_id／mode／contract SHA256，以及外部 caller 的有限 startup／receipt capture。輸出目錄必須新建；
+獨立 run_id／mode／contract SHA256，以及固定 caller 的 total／receipt capture。輸出目錄必須新建；
 replay 不覆寫 record artifacts。
 
 ## 供後續安全判定的精確介面（尚未執行）
 
-實際 entry point 的 argv 如下；尖括號是尚待可信 build／caller 提供的資料，不是已存在的 artifact。
+實際 capture adapter 的 argv 如下；尖括號是尚待可信 build／caller 提供的資料，不是已存在的 artifact。
 應以 argument array 傳遞 compact JSON，避免把路徑或 JSON 插值成 shell code。這份介面說明沒有授權
-執行，也不宣稱已有可用的 caller enforcement。
+執行，也不宣稱已驗證 caller enforcement。
 
 ```text
-<reviewed-python-executable> -I -S -B <absolute-root>/scripts/run-controlled-admission.py
+<reviewed-python-executable> -I -S -B <absolute-root>/scripts/capture-controlled-admission.py
   --contract-json <externally-trusted-compact-ExecutionContract-JSON>
   --contract-sha256 <SHA256-of-canonical-ExecutionContract-JSON-without-newline>
   --run-id <same-run_id-as-contract>
   --mode record
+  --invocation-id <unique-trusted-invocation-id>
 ```
 
 Replay 使用完全相同的參數名，最後改為 `--mode replay`，並傳入下列 replay 資料差異；不能把兩個
-mode 合併為一次 invocation。每次各有完整82 Rust starts，cap128。
+mode 合併為一次 invocation。每次各有完整82 Rust starts，cap128。adapter 只組成下列固定 argv，
+沒有任意 command 選項，不使用 `--foreground` 或 `--preserve-status`：
+
+```text
+/usr/bin/timeout --signal=TERM --kill-after=5s 612s <reviewed-python-executable>
+  -I -S -B <absolute-root>/scripts/run-controlled-admission.py
+  --contract-json <same-canonical-contract> --contract-sha256 <same-contract-hash>
+  --run-id <same-run-id> --mode <record-or-replay>
+```
 
 ExecutionContract 必須是 exact-field JSON object：
 
-- `schema`: `northstar-controlled-execution-contract-v1`
+- `schema`: `northstar-controlled-execution-contract-v2`
 - `run_id`: 本次唯一識別；`mode`: `record` 或 `replay`
 - `root`: 實際執行 helper 所在 checkout 的 absolute root
 - `binary`: 外部已 build、hash、review 的固定 Rust ELF executable absolute path
@@ -150,11 +164,15 @@ ExecutionContract 必須是 exact-field JSON object：
   `admission-controlled-v1`，adapter 是 `controlled_rust`，binding 是 `synthetic-material-v1`，toolchain
   是實際 `rustc 1.97.1 ...` identity。所有 SHA256 為真實64位 lowercase hex，source manifest hash 是
   canonical `source_files` object 的 SHA256。不可填 fabricated hashes
-- `helper_source_files`: 以下六個相對路徑到 SHA256 的 exact map；也必須逐一出現在 provenance 的
+- `caller`: exact fields `schema python python_sha256 timeout_sha256`；schema 是
+  `northstar-controlled-timeout-caller-v1`，python 是實際 reviewed interpreter 的 canonical absolute path
+  及 SHA256。timeout 固定為 `/usr/bin/timeout`，本輪只讀 inspection 記錄 GNU coreutils9.7／Debian9.7-3，
+  SHA256 `6ca1891dfc0b05d7680770c2884c0391b92467c7bb6500a5c84677e6481739f1`；不同 identity 必須另行 review
+- `helper_source_files`: 以下七個相對路徑到 SHA256 的 exact map；也必須逐一出現在 provenance 的
   reviewed `source_files` scope：`scripts/lib/controlled_admission_supervision.py`、
   `scripts/lib/controlled_admission.py`、`scripts/lib/experiment_contract.py`、
   `scripts/run-controlled-admission.py`、`scripts/test-controlled-admission.py`、
-  `scripts/test-experiment-contract.py`
+  `scripts/test-experiment-contract.py`、`scripts/capture-controlled-admission.py`
 - `plan_counts`: `{"normal":44,"rejection":34,"shrink":4,"total":82}`
 - `budgets`: 必須精確為下面的有限提案，不能自行加入 RSS 宣稱、提高 cap 或省略欄位
 
@@ -166,7 +184,8 @@ ExecutionContract 必須是 exact-field JSON object：
   "startup_ms": 10000,
   "cleanup_ms": 5000,
   "receipt_ms": 2000,
-  "caller_startup_ms": 10000,
+  "caller_total_ms": 617000,
+  "caller_artifact_bytes": 65536,
   "owner_cpu_s": 60,
   "worker_cpu_s": 60,
   "rust_cpu_soft_s": 9,
@@ -189,21 +208,45 @@ hash 不含換行。owner receipt 實際 bytes 則使用相同 canonical JSON �
 redirect 到普通檔案會在任何 fork 前拒絕。
 
 caller capture 的 exact fields 是 `schema owner_exit_status stdout_complete receipt`，schema 為
-`northstar-controlled-caller-capture-v1`。供 strict validator 使用的外部 caller evidence exact fields 是
-`schema invocation_id mechanism_sha256 owner_exit_status receipt_sha256 startup_limit_ms total_limit_ms
-observed_total_ms stdout_complete`，schema 為 `northstar-controlled-external-caller-v1`。startup limit
-最多10000ms，total limit最多617000ms（caller startup＋600s owner work＋單一5s cleanup＋2s receipt）；
-實際 observed total 必須在該上限內。識別與 hash 只有在它們來自實際已 review、被信任的 invoking
+`northstar-controlled-caller-capture-v2`。供 strict validator 使用的外部 caller evidence exact fields 是
+`schema invocation_id mechanism_sha256 owner_exit_status timeout_exit_status receipt_sha256 total_limit_ms
+observed_total_ms stdout_complete stderr_complete`，schema 為 `northstar-controlled-external-caller-v2`。
+total limit 精確617000ms；實際 monotonic nanosecond interval 必須在該上限內，milliseconds 向上取整，
+不能用向下取整把超界包成成功。mechanism hash 綁定 caller contract、source manifest、固定 timeout
+path／arguments、owner entrypoint 與 Python flags。識別與 hash 只有在它們來自實際已 review、被信任的 invoking
 executor 時才有意義，不能從 corpus 任意字串推得信任。
 
 record directory 的 `contract.json`、`prefix-000.json`～`prefix-082.json`、immutable per-case raw／observation／evaluation／result
-與 `corpus.json` 由 worker 保存；`caller-capture.json` 必須由外部 caller 根據真實 capture 另外保存，
-worker 不會替自己的 owner 作證。replay 會比對此檔與外部 `replay_authority.capture`，並核對 prior
+與 `corpus.json` 由 worker 保存；adapter 在 post-work 建立獨立 private sibling `<evidence_dir>.caller`，
+保存 `owner.stdout.bin`、`timeout.stderr.bin`、`caller-capture.json`、`caller-result.json`、最後
+`caller-evidence.json`。每個 raw 最多4096 bytes、每個 JSON 最多8192 bytes，全部最多64KiB，
+使用 create-only writes、file fsync 與 directory fsync，沒有額外 temporary copy；不重複保存128KiB
+contract／argv。directory 分離使未知 worker 狀態不會導致兩個 writers 爭用其 evidence directory。
+worker 不會替自己的 owner 作證。replay 會比對 sibling capture 與外部 `replay_authority.capture`，並核對 prior
 FixtureMatched、完整82-case tail、prefix／terminal 一致性和全部 source-fixed semantic facts。
 
-目前尚未交付或驗證具體 external caller mechanism、該 mechanism 的 source hash、真正的 capture，
-或任何82-run artifacts。因此上述 argv 仍有明確前置缺口：先選定並 review 能提供這些實際限制與
-observations 的 caller，再由另一次安全判定決定是否可執行。缺口不能用一個 enforcement boolean 補上。
+adapter 先核對外部 contract、helper／Python／timeout hashes，單次啟動 timeout，使用 clean FDs、
+stdin DEVNULL、固定 PATH／LC_ALL，獨立 nonblocking stdout／stderr。每個 pipe 只讀4096 bytes 加一個
+sentinel；超界只關閉該 stream，保存 prefix hash／observed lower bound，繼續有限監控另一 stream 與
+wrapper。到617s cutoff 即關閉 read ends，不以無限 wait 等 EOF，也不新增 kill／reaper 機制。
+只有正常 forwarded0／2、兩個 complete bounded EOF、完整 exact canonical receipt、正確 run／contract
+及已確認 owner cleanup 才可能 qualify；124／125／126／127／137、signal、未知 terminal、missing EOF
+與 persistence failure 都 unqualified。partial／noncanonical capture 的 owner status／receipt authority
+保持 null，raw prefix hash 另存，不能冒稱 receipt hash。未知／未 reap wrapper 必須保留為未知，不能
+授權新 launch 或宣稱 cleanup。單次 adapter 沒有 retry path。
+
+[GNU timeout9.7 source](https://github.com/coreutils/coreutils/blob/v9.7/src/timeout.c#L487-L581)
+顯示 timer 在 fork 後才設定；kill-after5s 從首次TERM算起，137不能區分 timeout 或 command 被殺，
+更不能證明所有 descendants 已 reap。preflight、Popen／exec bootstrap stall、post-work hash／fsync
+不受 universal hard wall guarantee；617s 是實際 observed interval 的 qualification check，加上成熟
+timeout 的固定 timer semantics，並不是 hostile-process／whole-system cleanup 證明。
+執行前後 frozen-workspace 與 trusted executable 假設仍然適用，source／version inspection 不等於
+目前 Debian patched binary 的 runtime verification。adapter 自身的 actual terminal outcome 必須由可信
+invoker 觀察；post-work保存失敗即使留下完整檔案也不能採為 caller authority。
+
+目前僅新增 caller source／mocked regression source，未執行其 regression、timeout 包裹的 workload、
+record／replay 或任何82-run artifacts。真正的 reviewed Python hash、contract、capture 與執行安全判定
+仍待完成；不能把保存的 JSON 當自我授權的 enforcement 證據。
 
 此controlled composition不證明真PostgreSQL transaction、real-clock、cryptographic verification、
 wire、process loss或production readiness；252個historical ignored tests也不是新DB驗證。

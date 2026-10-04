@@ -25,14 +25,19 @@ import sys
 import time
 
 
-CONTRACT_SCHEMA = 'northstar-controlled-execution-contract-v1'
+CONTRACT_SCHEMA = 'northstar-controlled-execution-contract-v2'
 CASE_SCHEMA = 'northstar-controlled-case-v2'
 RESULT_SCHEMA = 'northstar-controlled-case-result-v2'
 CORPUS_SCHEMA = 'northstar-admission-controlled-corpus-v2'
 SHRINK_SCHEMA = 'northstar-controlled-shrink-v2'
 PREFIX_SCHEMA = 'northstar-controlled-prefix-v2'
 RECEIPT_SCHEMA = 'northstar-controlled-owner-receipt-v1'
-CAPTURE_SCHEMA = 'northstar-controlled-caller-capture-v1'
+CAPTURE_SCHEMA = 'northstar-controlled-caller-capture-v2'
+CALLER_SCHEMA = 'northstar-controlled-timeout-caller-v1'
+CALLER_EVIDENCE_SCHEMA = 'northstar-controlled-external-caller-v2'
+TIMEOUT_PATH = '/usr/bin/timeout'
+TIMEOUT_SHA256 = '6ca1891dfc0b05d7680770c2884c0391b92467c7bb6500a5c84677e6481739f1'
+TIMEOUT_ARGUMENTS = ('--signal=TERM', '--kill-after=5s', '612s')
 MAX_CONTROL = 4096
 MAX_CONTRACT = 128 * 1024
 MAX_PREFIX = 64 * 1024
@@ -42,6 +47,7 @@ HELPER_FILES = frozenset({
     'scripts/lib/controlled_admission_supervision.py',
     'scripts/lib/controlled_admission.py', 'scripts/lib/experiment_contract.py',
     'scripts/run-controlled-admission.py', 'scripts/test-controlled-admission.py',
+    'scripts/capture-controlled-admission.py',
     'scripts/test-experiment-contract.py',
 })
 PLAN_COUNTS = {'normal': 44, 'rejection': 34, 'shrink': 4, 'total': 82}
@@ -52,7 +58,8 @@ INTERRUPTION_KINDS = tuple(kind for kind in STOP_KINDS if kind != 'FixtureMismat
 PROPOSED_BUDGETS = {
     'launches': 128, 'whole_work_ms': 600000, 'case_ms': 30000,
     'startup_ms': 10000, 'cleanup_ms': 5000, 'receipt_ms': 2000,
-    'caller_startup_ms': 10000, 'owner_cpu_s': 60, 'worker_cpu_s': 60,
+    'caller_total_ms': 617000, 'caller_artifact_bytes': 64 * 1024,
+    'owner_cpu_s': 60, 'worker_cpu_s': 60,
     'rust_cpu_soft_s': 9, 'rust_cpu_hard_s': 10,
     'address_space_bytes': 1024 ** 3, 'input_bytes': 32 * 1024 ** 2,
     'stdout_bytes': 8 * 1024 ** 2, 'stderr_bytes': 4096,
@@ -118,7 +125,7 @@ def valid_hash(value):
 
 def validate_contract(value):
     """Validate an externally trusted contract; saved evidence is not authority."""
-    exact(value, 'schema run_id mode root binary evidence_dir replay_dir replay_authority provenance helper_source_files budgets plan_counts',
+    exact(value, 'schema run_id mode root binary evidence_dir replay_dir replay_authority provenance helper_source_files budgets plan_counts caller',
           'execution_contract_fields')
     need(value['schema'] == CONTRACT_SCHEMA, 'execution_contract_version')
     need(type(value['run_id']) is str and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}', value['run_id']), 'run_id')
@@ -126,10 +133,12 @@ def validate_contract(value):
     for name in ('root', 'binary', 'evidence_dir'):
         need(type(value[name]) is str and Path(value[name]).is_absolute() and
              '..' not in Path(value[name]).parts, 'absolute_' + name)
+    need(bool(Path(value['evidence_dir']).name), 'evidence_destination_root')
     need((value['mode'] == 'record' and value['replay_dir'] is None) or
          (value['mode'] == 'replay' and type(value['replay_dir']) is str and
           Path(value['replay_dir']).is_absolute() and '..' not in Path(value['replay_dir']).parts and
-          value['replay_dir'] != value['evidence_dir']), 'replay_destination')
+          bool(Path(value['replay_dir']).name) and
+          Path(value['replay_dir']) != Path(value['evidence_dir'])), 'replay_destination')
     if value['mode'] == 'record':
         need(value['replay_authority'] is None, 'unexpected_replay_authority')
     else:
@@ -141,7 +150,7 @@ def validate_contract(value):
     need(type(value['plan_counts']) is dict and value['plan_counts'] == PLAN_COUNTS and
          all(type(item) is int for item in value['plan_counts'].values()), 'fixed_plan_counts')
     exact(value['budgets'], ' '.join(PROPOSED_BUDGETS), 'budget_fields')
-    # Version 1 deliberately supports this single reviewed finite proposal only.
+    # Version 2 deliberately supports this single reviewed finite proposal only.
     for name, proposed in PROPOSED_BUDGETS.items():
         need(type(value['budgets'][name]) is int and value['budgets'][name] == proposed, 'budget:' + name)
     helpers = value['helper_source_files']
@@ -164,8 +173,31 @@ def validate_contract(value):
     for name, value_hash in helpers.items():
         valid_hash(value_hash)
         need(provenance['source_files'].get(name) == value_hash, 'helper_provenance_binding')
+    caller = value['caller']
+    exact(caller, 'schema python python_sha256 timeout_sha256', 'caller_contract_fields')
+    need(caller['schema'] == CALLER_SCHEMA and type(caller['python']) is str and
+         Path(caller['python']).is_absolute() and '..' not in Path(caller['python']).parts,
+         'fixed_caller_contract')
+    valid_hash(caller['python_sha256'])
+    need(caller['timeout_sha256'] == TIMEOUT_SHA256, 'reviewed_timeout_identity')
     need(len(encoded(value)) <= MAX_CONTRACT, 'contract_byte_budget')
     return copy.deepcopy(value)
+
+
+def caller_mechanism_hash(contract):
+    """Identity of this fixed caller composition, never an executable command DSL."""
+    return object_hash({'caller': contract['caller'], 'source_sha256': contract['provenance']['source_sha256'],
+                        'timeout': TIMEOUT_PATH, 'timeout_arguments': TIMEOUT_ARGUMENTS,
+                        'owner': str(Path(contract['root']) / 'scripts/run-controlled-admission.py'),
+                        'python_arguments': ['-I', '-S', '-B']})
+
+
+def caller_directory(evidence_directory):
+    """Caller is a separate writer, including when worker liveness is unknown."""
+    directory = Path(evidence_directory)
+    need(directory.is_absolute() and '..' not in directory.parts, 'caller_destination_ambiguous')
+    need(bool(directory.name), 'caller_destination_root')
+    return directory.with_name(directory.name + '.caller')
 
 
 def validate_reference(value):
@@ -297,20 +329,22 @@ def validate_owner_capture(capture, expected_contract, *, caller_evidence=None):
                 receipt['prefix'] is not None and receipt['terminal'] is not None and receipt['stop'] is None and
                 receipt['stop_kind'] is None)
     need(receipt['status'] != 'FixtureMatched' or complete, 'false_supervision_completion')
-    exact(caller_evidence, 'schema invocation_id mechanism_sha256 owner_exit_status receipt_sha256 '
-          'startup_limit_ms total_limit_ms observed_total_ms stdout_complete', 'external_caller_evidence_required')
-    need(caller_evidence['schema'] == 'northstar-controlled-external-caller-v1' and
+    exact(caller_evidence, 'schema invocation_id mechanism_sha256 owner_exit_status timeout_exit_status receipt_sha256 '
+          'total_limit_ms observed_total_ms stdout_complete stderr_complete', 'external_caller_evidence_required')
+    need(caller_evidence['schema'] == CALLER_EVIDENCE_SCHEMA and
          type(caller_evidence['invocation_id']) is str and
          re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}', caller_evidence['invocation_id']), 'caller_invocation_identity')
     valid_hash(caller_evidence['mechanism_sha256'])
     valid_hash(caller_evidence['receipt_sha256'])
-    need(type(caller_evidence['owner_exit_status']) is int and
+    need(caller_evidence['mechanism_sha256'] == caller_mechanism_hash(contract), 'external_caller_mechanism_binding')
+    need(type(caller_evidence['timeout_exit_status']) is int and caller_evidence['timeout_exit_status'] in (0, 2) and
+         type(caller_evidence['owner_exit_status']) is int and
+         caller_evidence['owner_exit_status'] == caller_evidence['timeout_exit_status'] and
          caller_evidence['owner_exit_status'] == capture['owner_exit_status'] and
          caller_evidence['receipt_sha256'] == fingerprint(encoded(receipt)) and
-         caller_evidence['stdout_complete'] is True, 'external_caller_terminal_binding')
-    number(caller_evidence['startup_limit_ms'], 1, contract['budgets']['caller_startup_ms'])
-    total = sum(contract['budgets'][name] for name in ('caller_startup_ms', 'whole_work_ms', 'cleanup_ms', 'receipt_ms'))
-    number(caller_evidence['total_limit_ms'], 1, total)
+         caller_evidence['stdout_complete'] is True and caller_evidence['stderr_complete'] is True,
+         'external_caller_terminal_binding')
+    number(caller_evidence['total_limit_ms'], contract['budgets']['caller_total_ms'], contract['budgets']['caller_total_ms'])
     number(caller_evidence['observed_total_ms'], 0, caller_evidence['total_limit_ms'])
     return {'FixtureMatched': complete, 'supervision_complete': supervised}
 
@@ -353,9 +387,13 @@ class EvidenceStore:
 
     def _admit(self, size, terminal=False):
         number(size)
+        # The separate caller packet is part of the same evidence budget. Every
+        # worker write, including failed attempts and prefix temp peaks, leaves it.
+        need(self.used + size <= self.budgets['evidence_bytes'] - self.budgets['caller_artifact_bytes'],
+             'worker_evidence_ceiling')
         if terminal:
-            need(size <= self.budgets['terminal_reserve_bytes'] and
-                 self.used + size <= self.budgets['evidence_bytes'], 'terminal_reserve_exhausted')
+            need(size <= self.budgets['terminal_reserve_bytes'] - self.budgets['caller_artifact_bytes'],
+                 'terminal_reserve_exhausted')
         else:
             need(size <= self.reservation, 'case_reservation_exhausted')
             self.reservation -= size
@@ -512,7 +550,7 @@ def replay_source(directory, current_contract):
     need(contract['mode'] == 'record' and contract['provenance'] == current_contract['provenance'] and
          contract['helper_source_files'] == current_contract['helper_source_files'] and
          contract['budgets'] == current_contract['budgets'], 'replay_source_contract')
-    capture = strict_json(read_bounded(Path(directory) / 'caller-capture.json', MAX_CONTROL * 2), MAX_CONTROL * 2)
+    capture = strict_json(read_bounded(caller_directory(directory) / 'caller-capture.json', MAX_CONTROL * 2), MAX_CONTROL * 2)
     need(capture == authority['capture'] and validate_owner_capture(capture, contract,
          caller_evidence=authority['caller_evidence'])['FixtureMatched'], 'prior_owner_capture_incomplete')
     manifest_ref = capture['receipt']['terminal']
@@ -1033,7 +1071,8 @@ def owner_main(contract_bytes, *, run_id, mode, contract_sha256):
              type(run_id) is str and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}', run_id) and
              mode in ('record', 'replay'), 'owner_bootstrap_identity')
         valid_hash(contract_sha256)
-        # -I -S -B is checked by the entry point; caller bounds time before this.
+        # -I -S -B is checked by the entry point. The caller checks total elapsed
+        # time; this internal startup timer does not cover interpreter bootstrap.
         _limits(PROPOSED_BUDGETS['owner_cpu_s'], PROPOSED_BUDGETS['owner_cpu_s'])
         _prepare_receipt()  # Unsupported receipt setup must fail before any fork.
         _prctl(36, 1)  # PR_SET_CHILD_SUBREAPER, before the sole worker fork.

@@ -14,11 +14,12 @@ use super::{
 };
 use crate::abuse::MessageDedupeIdentity;
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
-use crate::outbound::DurableDelivery;
+use crate::outbound::{DurableDelivery, OutboundItem, RouteEnqueue};
 use anyhow::Result;
 use northstar_message_application::direct_commit::{
     CommitError as DirectCommitError, DirectCommitRepository,
 };
+use northstar_message_application::direct_handoff::HandoffHandle;
 use northstar_message_application::{
     CommitError, MessageApplication, PersonalMessageCommitRepository,
 };
@@ -69,7 +70,9 @@ pub(crate) fn committed_live_delivery_has_fence(
     message_id: Uuid,
     claim_id: Option<Uuid>,
 ) -> bool {
-    !clustered || claim_id == Some(message_id)
+    northstar_message_application::direct_handoff::live_reservation_valid(
+        clustered, message_id, claim_id,
+    )
 }
 
 /// The first accepted online resource, if any. Cluster v1 receipts may be
@@ -88,9 +91,8 @@ pub(crate) trait OnlineRoutePort: Sync {
     fn try_local(
         &self,
         session: &Self::Session,
-        stanza: String,
-        delivery: Option<DurableDelivery>,
-    ) -> bool;
+        enqueue: RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError>;
     fn record_local_accept(&self, durable: bool);
     fn route_available_remote(
         &self,
@@ -134,7 +136,6 @@ pub(crate) struct FullJidFallback<'a> {
     pub(crate) bare_target: &'a str,
     pub(crate) sender: &'a str,
     pub(crate) recipient_id: Uuid,
-    pub(crate) stanza: &'a str,
     pub(crate) delivery: Option<DurableDelivery>,
 }
 
@@ -145,11 +146,105 @@ enum FullJidFallbackPlan<S> {
     Targets(Vec<(String, S)>),
 }
 
+/// One durable item survives every refused primary/fallback local attempt.
+/// Volatile fanout deliberately creates distinct items. The queue never owns
+/// this operation handle; accepted items can outlive the sending frame.
+struct RoutePayload<'a> {
+    stanza: &'a str,
+    delivery: Option<DurableDelivery>,
+    item: Option<OutboundItem>,
+    witness: Option<HandoffHandle>,
+    binding_rejected: bool,
+}
+impl<'a> RoutePayload<'a> {
+    fn new(stanza: &'a str, delivery: Option<DurableDelivery>) -> Self {
+        Self {
+            stanza,
+            delivery,
+            item: None,
+            witness: None,
+            binding_rejected: false,
+        }
+    }
+    fn prepared(stanza: &'a str, item: OutboundItem, witness: HandoffHandle) -> Self {
+        Self {
+            stanza,
+            delivery: item.c2s_delivery(),
+            item: Some(item),
+            witness: Some(witness),
+            binding_rejected: false,
+        }
+    }
+    fn enqueue<P: OnlineRoutePort>(&mut self, port: &P, session: &P::Session) -> bool {
+        if self.binding_rejected {
+            return false;
+        }
+        let item = self.item.take().unwrap_or_else(|| match self.delivery {
+            Some(delivery) => OutboundItem::durable(self.stanza.to_owned(), delivery),
+            None => OutboundItem::plain(self.stanza.to_owned()),
+        });
+        if item.stanza != self.stanza
+            || item.c2s_delivery() != self.delivery
+            || !item.validate_durable_source_shape()
+        {
+            self.item = Some(item);
+            self.binding_rejected = true;
+            return false;
+        }
+        let permit = match (&self.witness, self.delivery) {
+            (Some(witness), Some(source)) => match witness.local_permit(source) {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    self.item = Some(item);
+                    return false;
+                }
+            },
+            _ => None,
+        };
+        let enqueue = match RouteEnqueue::bind(item, permit, self.stanza) {
+            Ok(enqueue) => enqueue,
+            Err(rejected) => {
+                self.item = Some(rejected.0);
+                self.binding_rejected = true;
+                return false;
+            }
+        };
+        match port.try_local(session, enqueue) {
+            Ok(()) => true,
+            Err(crate::outbound::RouteSendError::Binding(rejected)) => {
+                self.item = Some(rejected.0);
+                self.binding_rejected = true;
+                false
+            }
+            Err(
+                crate::outbound::RouteSendError::Full(item)
+                | crate::outbound::RouteSendError::Closed(item),
+            ) => {
+                self.item = Some(item);
+                false
+            }
+        }
+    }
+    fn returned(&self) {
+        if let Some(witness) = &self.witness {
+            witness.returned();
+        }
+    }
+}
+impl Drop for RoutePayload<'_> {
+    fn drop(&mut self) {
+        if let Some(witness) = &self.witness {
+            witness.dropped();
+        }
+    }
+}
+
 pub(crate) struct OnlineMessageRouter;
 
 impl OnlineMessageRouter {
     /// Route an accepted stanza without touching its transaction owner. A
     /// durable delivery has one transport owner; headline fanout is volatile.
+    #[cfg(test)]
     pub(crate) async fn dispatch<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
@@ -158,25 +253,37 @@ impl OnlineMessageRouter {
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
-        let local = Self::dispatch_local(port, stanza, delivery, deliver_all, approved_targets);
-        Self::dispatch_remote(port, jid, stanza, delivery, deliver_all, local).await
+        let mut payload = RoutePayload::new(stanza, delivery);
+        Self::dispatch_owned(port, jid, &mut payload, deliver_all, approved_targets).await
     }
 
-    fn dispatch_local<P: OnlineRoutePort>(
+    async fn dispatch_owned<P: OnlineRoutePort>(
         port: &P,
-        stanza: &str,
-        delivery: Option<DurableDelivery>,
+        jid: &str,
+        payload: &mut RoutePayload<'_>,
+        deliver_all: bool,
+        approved_targets: &[(String, P::Session)],
+    ) -> OnlineRouteResult {
+        let local = Self::dispatch_local_owned(port, payload, deliver_all, approved_targets);
+        Self::dispatch_remote_owned(port, jid, payload, deliver_all, local).await
+    }
+
+    fn dispatch_local_owned<P: OnlineRoutePort>(
+        port: &P,
+        payload: &mut RoutePayload<'_>,
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
         debug_assert!(
-            !(delivery.is_some() && deliver_all),
+            !(payload.delivery.is_some() && deliver_all),
             "one durable C2S fence cannot be fanned out to multiple resources"
         );
         let mut result = OnlineRouteResult::default();
         for (key, session) in approved_targets {
-            if port.try_local(session, stanza.to_owned(), delivery) {
-                port.record_local_accept(delivery.is_some());
+            if payload.enqueue(port, session) {
+                // The real sender consumed its prevalidated positive permit
+                // synchronously before this telemetry or any later await.
+                port.record_local_accept(payload.delivery.is_some());
                 if result.accepted_full_jid.is_none() {
                     result.accepted_full_jid = Some(key.clone());
                 }
@@ -189,37 +296,58 @@ impl OnlineMessageRouter {
         result
     }
 
-    async fn dispatch_remote<P: OnlineRoutePort>(
+    async fn dispatch_remote_owned<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
-        stanza: &str,
-        delivery: Option<DurableDelivery>,
+        payload: &mut RoutePayload<'_>,
         deliver_all: bool,
         mut result: OnlineRouteResult,
     ) -> OnlineRouteResult {
-        if deliver_all {
-            result.delivered |= port.route_available_remote(jid, stanza, delivery).await;
-        } else if !result.delivered {
-            result = port.route_remote_primary(jid, stanza, delivery).await;
+        if payload.binding_rejected || (!deliver_all && result.delivered) {
+            return result;
+        }
+        let permit = match (&payload.witness, payload.delivery) {
+            (Some(witness), Some(source)) => match witness.remote_permit(source) {
+                Ok(permit) => Some(permit),
+                Err(_) => return result,
+            },
+            _ => None,
+        };
+        let positive = if deliver_all {
+            let accepted = port
+                .route_available_remote(jid, payload.stanza, payload.delivery)
+                .await;
+            result.delivered |= accepted;
+            accepted
+        } else {
+            result = port
+                .route_remote_primary(jid, payload.stanza, payload.delivery)
+                .await;
+            result.delivered
+        };
+        if let Some(permit) = permit {
+            permit.returned(positive);
+        }
+        if positive {
+            payload.item.take();
         }
         result
     }
 
-    /// RFC 6121 full-JID mismatch handling after the exact route declined.
+    /// RFC 6121 full-JID mismatch handling using the same refused item.
     /// Privacy for every candidate is checked before any fallback enqueue.
-    pub(crate) async fn full_jid_fallback<P: FullJidFallbackPort>(
+    async fn full_jid_fallback_owned<P: FullJidFallbackPort>(
         port: &P,
         request: FullJidFallback<'_>,
+        payload: &mut RoutePayload<'_>,
     ) -> Result<FullJidFallbackResult> {
         let bare_target = request.bare_target;
-        let stanza = request.stanza;
-        let delivery = request.delivery;
         let allowed = match Self::prepare_full_jid_fallback(port, request).await? {
             FullJidFallbackPlan::Finished(result) => return Ok(result),
             FullJidFallbackPlan::Targets(allowed) => allowed,
         };
-        let local = Self::dispatch_local(port, stanza, delivery, false, &allowed);
-        let result = Self::dispatch_remote(port, bare_target, stanza, delivery, false, local).await;
+        let local = Self::dispatch_local_owned(port, payload, false, &allowed);
+        let result = Self::dispatch_remote_owned(port, bare_target, payload, false, local).await;
         Ok(if result.delivered {
             FullJidFallbackResult::Delivered(result.accepted_full_jid)
         } else {
@@ -240,7 +368,6 @@ impl OnlineMessageRouter {
             bare_target,
             sender,
             recipient_id,
-            stanza: _,
             delivery,
         } = request;
 
@@ -478,7 +605,7 @@ impl<R: MessageRepository> MessageService<R> {
 
     pub(crate) async fn admit_prepared_personal_message_with_mode(
         &self,
-        prepared: &direct_workflow::PreparedLocalDirect<'_>,
+        prepared: &direct_workflow::PreparedLocalDirect<'_, '_>,
     ) -> Result<DirectPersonalMessageAdmission> {
         self.personal
             .commit_direct(prepared.command(), prepared.eligibility(), Some(prepared))

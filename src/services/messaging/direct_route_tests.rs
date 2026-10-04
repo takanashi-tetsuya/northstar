@@ -93,12 +93,15 @@ impl OnlineRoutePort for Port {
     fn try_local(
         &self,
         target: &Target,
-        stanza: String,
-        delivery: Option<DurableDelivery>,
-    ) -> bool {
+        enqueue: crate::outbound::RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError> {
         self.record("enqueue");
-        self.record_route(RouteDestination::Local(target.jid), &stanza, delivery);
-        target.accepts
+        self.record_route(
+            RouteDestination::Local(target.jid),
+            &enqueue.item().stanza,
+            enqueue.item().c2s_delivery(),
+        );
+        enqueue.complete_for_fake(target.accepts)
     }
 
     fn record_local_accept(&self, durable: bool) {

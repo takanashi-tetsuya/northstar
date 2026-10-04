@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 northstar-abuse-policy = { path = "../northstar-abuse-policy" }
+northstar-delivery-core = { path = "../northstar-delivery-core" }
 northstar-message-core = { path = "../northstar-message-core" }
 uuid = "1.12"
 

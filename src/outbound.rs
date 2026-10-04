@@ -61,6 +61,81 @@ pub struct OutboundItem {
         Option<std::sync::Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
 }
 
+/// The pre-enqueue gate owns the actual item and its one-use receipt permit.
+/// Neither can be replaced after binding. Rejection is not queue backpressure.
+pub(crate) struct RouteEnqueue {
+    item: OutboundItem,
+    permit: Option<northstar_message_application::direct_handoff::LocalEnqueuePermit>,
+}
+pub(crate) struct RouteBindingRejected(pub(crate) OutboundItem);
+impl std::fmt::Debug for RouteBindingRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RouteBindingRejected { item: [redacted] }")
+    }
+}
+impl std::fmt::Debug for RouteEnqueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RouteEnqueue { item: [redacted], permit: [redacted] }")
+    }
+}
+pub(crate) enum RouteSendError {
+    Binding(RouteBindingRejected),
+    Full(OutboundItem),
+    Closed(OutboundItem),
+}
+impl std::fmt::Debug for RouteSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Binding(_) => "RouteSendError::Binding { item: [redacted] }",
+            Self::Full(_) => "RouteSendError::Full { item: [redacted] }",
+            Self::Closed(_) => "RouteSendError::Closed { item: [redacted] }",
+        })
+    }
+}
+impl RouteEnqueue {
+    pub(crate) fn bind(
+        item: OutboundItem,
+        permit: Option<northstar_message_application::direct_handoff::LocalEnqueuePermit>,
+        expected_stanza: &str,
+    ) -> Result<Self, RouteBindingRejected> {
+        if item.stanza != expected_stanza
+            || permit.as_ref().is_some_and(|permit| {
+                item.c2s_delivery() != Some(permit.source())
+                    || !item.validate_durable_source_shape()
+            })
+        {
+            return Err(RouteBindingRejected(item));
+        }
+        Ok(Self { item, permit })
+    }
+    fn unobserved(item: OutboundItem) -> Self {
+        Self { item, permit: None }
+    }
+    #[cfg(test)]
+    pub(crate) fn item(&self) -> &OutboundItem {
+        &self.item
+    }
+    #[cfg(test)]
+    pub(crate) fn complete_for_fake(self, accepted: bool) -> Result<(), RouteSendError> {
+        use northstar_message_application::direct_handoff::Refusal;
+        let permit = match self.permit.map(|permit| permit.enter()).transpose() {
+            Ok(permit) => permit,
+            Err(_) => return Err(RouteSendError::Binding(RouteBindingRejected(self.item))),
+        };
+        if accepted {
+            if let Some(permit) = permit {
+                permit.accepted();
+            }
+            Ok(())
+        } else {
+            if let Some(permit) = permit {
+                permit.refused(Refusal::Closed);
+            }
+            Err(RouteSendError::Closed(self.item))
+        }
+    }
+}
+
 impl OutboundItem {
     pub fn plain(stanza: String) -> Self {
         Self {
@@ -305,14 +380,47 @@ impl OutboundSender {
         stanza: String,
         delivery: DurableDelivery,
     ) -> Result<(), mpsc::error::TrySendError<String>> {
-        match self.try_send_item(OutboundItem::durable(stanza, delivery)) {
-            Ok(()) => Ok(()),
+        self.try_send_route_item(RouteEnqueue::unobserved(OutboundItem::durable(
+            stanza, delivery,
+        )))
+        .map_err(|error| match error {
+            RouteSendError::Full(item) => mpsc::error::TrySendError::Full(item.stanza),
+            RouteSendError::Closed(item) => mpsc::error::TrySendError::Closed(item.stanza),
+            RouteSendError::Binding(_) => unreachable!("unobserved enqueue has no binding permit"),
+        })
+    }
+
+    /// Preserve the exact refused item, including its source and completion
+    /// channels. A positive receipt is retained at the actual queue boundary.
+    pub(crate) fn try_send_route_item(&self, enqueue: RouteEnqueue) -> Result<(), RouteSendError> {
+        use northstar_message_application::direct_handoff::Refusal;
+        let RouteEnqueue { item, permit } = enqueue;
+        let durable = item.c2s_delivery().is_some();
+        let permit = match permit.map(|permit| permit.enter()).transpose() {
+            Ok(permit) => permit,
+            Err(_) => return Err(RouteSendError::Binding(RouteBindingRejected(item))),
+        };
+        match self.try_send_item(item) {
+            Ok(()) => {
+                if let Some(permit) = permit {
+                    permit.accepted();
+                }
+                Ok(())
+            }
             Err(mpsc::error::TrySendError::Full(item)) => {
-                self.backpressure_disconnect.cancel();
-                Err(mpsc::error::TrySendError::Full(item.stanza))
+                if durable {
+                    self.backpressure_disconnect.cancel();
+                }
+                if let Some(permit) = permit {
+                    permit.refused(Refusal::Full);
+                }
+                Err(RouteSendError::Full(item))
             }
             Err(mpsc::error::TrySendError::Closed(item)) => {
-                Err(mpsc::error::TrySendError::Closed(item.stanza))
+                if let Some(permit) = permit {
+                    permit.refused(Refusal::Closed);
+                }
+                Err(RouteSendError::Closed(item))
             }
         }
     }

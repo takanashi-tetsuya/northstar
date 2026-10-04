@@ -2686,6 +2686,10 @@
     ],
     [
       "northstar-message-application",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-message-application",
       "northstar-message-core"
     ],
     [

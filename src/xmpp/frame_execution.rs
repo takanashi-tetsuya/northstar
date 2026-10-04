@@ -477,13 +477,15 @@ impl Observation {
                 || snapshot.direct.is_some()
             {
                 // Never print the snapshot, command, payload, fence, or lease.
-                // These are admission facts only; direct storage is not inferred.
+                // Reservation, direct SQL, and queue facts remain independent;
+                // none implies a transport write or settlement.
                 tracing::debug!(target: "rust_xmpp_server::xmpp::direct_lifecycle",
                     operation_id = %snapshot.operation,
                     classification = ?snapshot.classification(),
                     reservation = ?snapshot.reservation,
                     finalization = ?snapshot.finalization,
                     direct = ?snapshot.direct,
+                    handoff = ?snapshot.handoff,
                     terminal = ?snapshot.terminal,
                     "frame admission ownership retired"
                 );

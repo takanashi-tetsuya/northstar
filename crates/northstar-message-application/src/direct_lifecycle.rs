@@ -4,7 +4,7 @@
 //! does not infer a durable message commit, route, or scheduled recovery from
 //! either admission transaction. No I/O, clock, entropy, or async Drop lives here.
 
-use crate::direct_commit;
+use crate::{direct_commit, direct_handoff};
 use northstar_abuse_policy::{
     admission_execution::{
         BeginRequest, BeginResult, Command, CommitFact, CommitWitness, Completion,
@@ -164,6 +164,7 @@ pub struct OperationSummary {
     pub reservation: Option<AdmissionSummary>,
     pub finalization: Option<AdmissionSummary>,
     pub direct: Option<DirectSummary>,
+    pub handoff: Option<HandoffSummary>,
     pub terminal: Option<TerminalReason>,
 }
 
@@ -181,6 +182,26 @@ pub enum DirectOutcomeClass {
     Stored,
     Replay,
     AccountUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HandoffSummary {
+    pub local: direct_handoff::LocalKnowledge,
+    pub local_accepted: bool,
+    pub remote: direct_handoff::RemoteKnowledge,
+    pub prior_remote_uncertain: bool,
+    pub rearm: direct_handoff::RearmKnowledge,
+    pub route_end: direct_handoff::RouteEnd,
+}
+fn handoff_summary(snapshot: direct_handoff::Snapshot) -> HandoffSummary {
+    HandoffSummary {
+        local: snapshot.local_call,
+        local_accepted: snapshot.local_accepted,
+        remote: snapshot.remote,
+        prior_remote_uncertain: snapshot.prior_remote_uncertain,
+        rearm: snapshot.rearm,
+        route_end: snapshot.route_end,
+    }
 }
 
 fn direct_summary(state: &direct_commit::Snapshot) -> DirectSummary {
@@ -259,6 +280,7 @@ pub struct OperationSnapshot {
     pub reservation: Option<AdmissionSnapshot>,
     pub finalization: Option<AdmissionSnapshot>,
     pub direct: Option<direct_commit::Snapshot>,
+    pub handoff: Option<direct_handoff::Snapshot>,
     pub terminal: Option<TerminalReason>,
 }
 
@@ -272,6 +294,7 @@ impl OperationSnapshot {
             reservation: self.reservation.as_ref().map(summarize),
             finalization: self.finalization.as_ref().map(summarize),
             direct: self.direct.as_ref().map(direct_summary),
+            handoff: self.handoff.map(handoff_summary),
             terminal: self.terminal,
         }
         .classification()
@@ -321,6 +344,7 @@ pub struct DirectLifecycle {
     reservation: Option<AdmissionExecution>,
     finalization: Option<AdmissionExecution>,
     direct: Option<direct_commit::Execution>,
+    handoff: Option<direct_handoff::Control>,
     terminal: Option<TerminalReason>,
 }
 
@@ -333,6 +357,7 @@ impl DirectLifecycle {
             reservation: None,
             finalization: None,
             direct: None,
+            handoff: None,
             terminal: None,
         }
     }
@@ -534,6 +559,7 @@ impl DirectLifecycle {
             reservation: self.reservation.as_ref().map(AdmissionExecution::snapshot),
             finalization: self.finalization.as_ref().map(AdmissionExecution::snapshot),
             direct: self.direct.as_ref().map(direct_commit::Execution::snapshot),
+            handoff: self.handoff.as_ref().map(direct_handoff::Control::snapshot),
             terminal: self.terminal,
         }
     }
@@ -541,6 +567,9 @@ impl DirectLifecycle {
     pub fn retire(&mut self, reason: TerminalReason) -> OperationSummary {
         if self.terminal.is_none() {
             self.terminal = Some(reason);
+        }
+        if let Some(handoff) = &self.handoff {
+            handoff.retire();
         }
         let summarize = |value: &AdmissionExecution| {
             AdmissionSummary::from_execution(
@@ -557,6 +586,10 @@ impl DirectLifecycle {
                 .direct
                 .as_ref()
                 .map(|execution| direct_summary(execution.state())),
+            handoff: self
+                .handoff
+                .as_ref()
+                .map(|handoff| handoff_summary(handoff.snapshot())),
             terminal: self.terminal,
         }
     }
@@ -638,6 +671,91 @@ impl DirectLifecycle {
         result: Option<DirectPersonalMessageAdmission>,
     ) -> Result<direct_commit::ExecutionOutcome, direct_commit::Rejected> {
         self.direct_execution()?.complete(effect, result)
+    }
+
+    pub fn begin_handoff(&mut self) -> Result<direct_handoff::Next, direct_handoff::Rejected> {
+        use direct_handoff::Rejected as Error;
+        use northstar_message_core::DirectPostCommitMode;
+        if self.terminal.is_some() {
+            return Err(Error::Retired);
+        }
+        if self.handoff.is_some() {
+            return Err(Error::State);
+        }
+        let finalized = match self.admission_grant() {
+            Some(AdmissionGrant::Reserved(_)) => {
+                self.finalization.as_ref().is_some_and(|finalization| {
+                    matches!(
+                        finalization.coordinator.state(),
+                        ExecutionState::Finished(_)
+                    )
+                })
+            }
+            Some(AdmissionGrant::GuardOnly(_)) => true,
+            None => self.reservation.is_none(),
+        };
+        if !finalized {
+            return Err(Error::State);
+        }
+        let state = self.direct.as_ref().ok_or(Error::Knowledge)?.state();
+        let direct_commit::Knowledge::ReceiptKnown(receipt) = &state.knowledge else {
+            return Err(Error::Knowledge);
+        };
+        let direct_commit::TransactionOutcome::Stored {
+            recipient_id,
+            delivery_id,
+            live_claim_id,
+            ..
+        } = receipt.prepared.outcome
+        else {
+            return Err(Error::Knowledge);
+        };
+        let needs_health = match &state.outcome {
+            Some(direct_commit::ExecutionOutcome::Completed(result)) => match result.mode {
+                DirectPostCommitMode::Live => true,
+                DirectPostCommitMode::SpoolOnly => false,
+                DirectPostCommitMode::Rejected => return Err(Error::Knowledge),
+            },
+            Some(direct_commit::ExecutionOutcome::ReceiptPreserved(_)) => false,
+            _ => return Err(Error::Knowledge),
+        };
+        let source = northstar_delivery_core::DurableDelivery {
+            recipient_id,
+            message_id: delivery_id,
+            claim_id: live_claim_id,
+        };
+        let (control, next) =
+            direct_handoff::Control::new(self.correlation(4), source, needs_health);
+        self.handoff = Some(control);
+        Ok(next)
+    }
+    fn handoff_control(
+        &mut self,
+    ) -> Result<&mut direct_handoff::Control, direct_handoff::Rejected> {
+        if self.terminal.is_some() {
+            return Err(direct_handoff::Rejected::Retired);
+        }
+        self.handoff.as_mut().ok_or(direct_handoff::Rejected::State)
+    }
+    pub fn observe_handoff_health(
+        &mut self,
+        permit: direct_handoff::HealthPermit,
+        mode: northstar_message_core::DirectPostCommitMode,
+    ) -> Result<direct_handoff::Next, direct_handoff::Rejected> {
+        self.handoff_control()?.observed_health(permit, mode)
+    }
+    pub fn consume_route(
+        &mut self,
+        grant: direct_handoff::RouteGrant,
+        source: northstar_delivery_core::DurableDelivery,
+    ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
+        self.handoff_control()?.consume_route(grant, source)
+    }
+    pub fn consume_recovery(
+        &mut self,
+        grant: direct_handoff::RecoveryGrant,
+    ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
+        self.handoff_control()?.consume_recovery(grant)
     }
 }
 
@@ -1160,5 +1278,187 @@ mod tests {
         assert_eq!(unrated.begin(request()), Err(Rejected::AlreadyStarted));
         assert_eq!(unrated.snapshot(), before);
         assert!(before.reservation.is_none());
+    }
+
+    fn retained_direct(
+        lifecycle: &mut DirectLifecycle,
+        rated: bool,
+        kind: u8,
+        returned_mode: Option<northstar_message_core::DirectPostCommitMode>,
+    ) {
+        use northstar_message_core::{
+            DirectPostCommitMode, DirectSpoolEligibility, MessageCommit, MessagePostCommit,
+        };
+        let original = request();
+        let admission = if rated {
+            PreparationAdmission::Rated(OriginalAdmission {
+                actor_id: original.actor_id,
+                account_bare: &original.account_bare,
+                normalized_target: &original.normalized_target,
+                origin_id: original.origin_id.as_deref(),
+                normalized_payload: &original.normalized_payload,
+            })
+        } else {
+            PreparationAdmission::NoAdmissionRequired
+        };
+        let effect = lifecycle
+            .prepare_direct(
+                admission,
+                direct_commit::DirectCommandFacts {
+                    actor_id: original.actor_id,
+                    recipient_id: Uuid::from_u128(30),
+                    delivery_id: Uuid::from_u128(31),
+                    archive_ids: vec![],
+                    eligibility: DirectSpoolEligibility::Eligible,
+                },
+            )
+            .unwrap();
+        lifecycle.start_direct(&effect).unwrap();
+        let fact = match kind {
+            0 => direct_commit::TransactionOutcome::Stored {
+                recipient_id: Uuid::from_u128(30),
+                delivery_id: Uuid::from_u128(31),
+                archive_ids: vec![],
+                live_claim_id: Some(Uuid::from_u128(31)),
+            },
+            1 => direct_commit::TransactionOutcome::Replay {
+                archive_ids: vec![],
+            },
+            _ => direct_commit::TransactionOutcome::AccountUnavailable,
+        };
+        let prepared = direct_commit::PreparedCommit {
+            correlation: effect.correlation(),
+            outcome: fact,
+            admitted_mode: DirectPostCommitMode::Live,
+        };
+        lifecycle
+            .enter_direct_commit(&effect, prepared.clone())
+            .unwrap();
+        lifecycle.receive_direct_commit(&effect, prepared).unwrap();
+        lifecycle
+            .complete_direct(
+                &effect,
+                returned_mode.map(|mode| DirectPersonalMessageAdmission {
+                    commit: match kind {
+                        0 => MessageCommit::Stored {
+                            archive_written: false,
+                            post_commit: MessagePostCommit::RouteLocalDelivery {
+                                recipient_id: Uuid::from_u128(30),
+                                delivery_id: Uuid::from_u128(31),
+                            },
+                        },
+                        1 => MessageCommit::Replay,
+                        _ => MessageCommit::AccountUnavailable,
+                    },
+                    mode,
+                    live_claim_id: (kind == 0).then_some(Uuid::from_u128(31)),
+                }),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn handoff_requires_actual_finalization_completion_but_unknown_attempt_is_sufficient() {
+        use northstar_message_core::DirectPostCommitMode;
+        let (mut lifecycle, grant) = reserved(301);
+        retained_direct(&mut lifecycle, true, 0, Some(DirectPostCommitMode::Live));
+        let direct_before = lifecycle.snapshot().direct;
+        let before = lifecycle.snapshot();
+        assert!(lifecycle.begin_handoff().is_err());
+        assert_eq!(lifecycle.snapshot(), before);
+        let finalize = lifecycle.finalize(&grant).unwrap();
+        let before = lifecycle.snapshot();
+        assert!(lifecycle.begin_handoff().is_err());
+        assert_eq!(lifecycle.snapshot(), before);
+        lifecycle
+            .start_effect(&finalize, &Command::Finalize(fence()))
+            .unwrap();
+        lifecycle
+            .enter_commit(
+                &finalize,
+                PreparedCommit {
+                    correlation: finalize.effect().correlation,
+                    scope: TransactionScope::AdmissionFinalize,
+                    fact: CommitFact::Finalized {
+                        fence: fence(),
+                        result: FinalizeSuccess::PendingAccepted,
+                    },
+                },
+            )
+            .unwrap();
+        lifecycle
+            .complete(&finalize, EffectResult::Failed(FailureKind::Cancelled))
+            .unwrap();
+        let direct_handoff::Next::CheckHealth(health) = lifecycle.begin_handoff().unwrap() else {
+            panic!("known live mode requires existing health read")
+        };
+        let direct_handoff::Next::Route(grant) = lifecycle
+            .observe_handoff_health(health, DirectPostCommitMode::Live)
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let source = grant.source();
+        lifecycle.consume_route(grant, source).unwrap();
+        assert_eq!(lifecycle.snapshot().direct, direct_before);
+        assert!(matches!(
+            lifecycle.snapshot().finalization.unwrap().state,
+            ExecutionState::Finished(ExecutionOutcome::Unknown { .. })
+        ));
+    }
+
+    #[test]
+    fn handoff_never_promotes_replay_unavailable_or_an_old_retired_owner() {
+        use northstar_message_core::DirectPostCommitMode;
+        for kind in [1, 2] {
+            let mut lifecycle = DirectLifecycle::new(Uuid::from_u128(310 + u128::from(kind)), 0, 1);
+            retained_direct(
+                &mut lifecycle,
+                false,
+                kind,
+                Some(DirectPostCommitMode::Live),
+            );
+            let before = lifecycle.snapshot();
+            assert!(lifecycle.begin_handoff().is_err());
+            assert_eq!(lifecycle.snapshot(), before);
+        }
+        let mut lifecycle = DirectLifecycle::new(Uuid::from_u128(320), 0, 1);
+        retained_direct(&mut lifecycle, false, 0, Some(DirectPostCommitMode::Live));
+        let direct_handoff::Next::CheckHealth(health) = lifecycle.begin_handoff().unwrap() else {
+            unreachable!()
+        };
+        let direct_handoff::Next::Route(grant) = lifecycle
+            .observe_handoff_health(health, DirectPostCommitMode::Live)
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let source = grant.source();
+        let before = lifecycle.snapshot();
+        assert!(lifecycle.begin_handoff().is_err());
+        assert_eq!(lifecycle.snapshot(), before);
+        lifecycle.retire(TerminalReason::Cancelled);
+        let retired = lifecycle.snapshot();
+        assert!(lifecycle.consume_route(grant, source).is_err());
+        assert_eq!(lifecycle.snapshot(), retired);
+    }
+
+    #[test]
+    fn spool_and_preserved_stored_receipts_issue_only_single_use_recovery() {
+        use northstar_message_core::DirectPostCommitMode;
+        for returned in [None, Some(DirectPostCommitMode::SpoolOnly)] {
+            let mut lifecycle = DirectLifecycle::new(Uuid::from_u128(330), 0, 1);
+            retained_direct(&mut lifecycle, false, 0, returned);
+            let direct_handoff::Next::Recover(grant) = lifecycle.begin_handoff().unwrap() else {
+                panic!("no live authority")
+            };
+            let handle = lifecycle.consume_recovery(grant).unwrap();
+            let before = lifecycle.snapshot();
+            assert!(lifecycle.begin_handoff().is_err());
+            assert!(handle.local_permit(handle.snapshot().source).is_err());
+            assert_eq!(lifecycle.snapshot(), before);
+            assert!(lifecycle.snapshot().reservation.is_none());
+            assert!(lifecycle.snapshot().finalization.is_none());
+        }
     }
 }

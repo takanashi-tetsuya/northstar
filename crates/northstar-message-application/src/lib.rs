@@ -5,6 +5,7 @@
 //! sockets, XML, global server state or post-commit providers.
 
 pub mod direct_commit;
+pub mod direct_handoff;
 pub mod direct_lifecycle;
 
 use northstar_message_core::{

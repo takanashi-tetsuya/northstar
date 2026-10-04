@@ -8,7 +8,9 @@ use northstar_message_application::direct_lifecycle::OperationSnapshot;
 use northstar_message_application::direct_lifecycle::{
     AdmissionEffectHandle, AdmissionGrant, DirectLifecycle, OperationSummary, TerminalReason,
 };
-use northstar_message_application::{direct_commit, direct_lifecycle::PreparationAdmission};
+use northstar_message_application::{
+    direct_commit, direct_handoff, direct_lifecycle::PreparationAdmission,
+};
 use northstar_message_core::DirectPersonalMessageAdmission;
 use sqlx::{Postgres, Transaction};
 use std::sync::{Arc, Mutex};
@@ -79,6 +81,42 @@ impl DirectOperationHandle {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retire(reason)
+    }
+
+    pub(crate) fn begin_handoff(&self) -> Result<direct_handoff::Next, direct_handoff::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .begin_handoff()
+    }
+    pub(crate) fn observe_handoff_health(
+        &self,
+        permit: direct_handoff::HealthPermit,
+        mode: northstar_message_core::DirectPostCommitMode,
+    ) -> Result<direct_handoff::Next, direct_handoff::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe_handoff_health(permit, mode)
+    }
+    pub(crate) fn consume_route(
+        &self,
+        grant: direct_handoff::RouteGrant,
+        source: crate::outbound::DurableDelivery,
+    ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .consume_route(grant, source)
+    }
+    pub(crate) fn consume_recovery(
+        &self,
+        grant: direct_handoff::RecoveryGrant,
+    ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .consume_recovery(grant)
     }
 
     pub(crate) fn prepare_direct(

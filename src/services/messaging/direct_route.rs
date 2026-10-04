@@ -6,7 +6,7 @@
 
 use super::{
     committed_live_delivery_has_fence, FullJidFallback, FullJidFallbackPlan, FullJidFallbackPort,
-    FullJidFallbackResult, OnlineMessageRouter, OnlineRouteResult,
+    FullJidFallbackResult, OnlineMessageRouter, OnlineRouteResult, RoutePayload,
 };
 use crate::{cluster::DirectPostCommitMode, outbound::DurableDelivery};
 use northstar_message_core::{bare_message_route, BareMessageRoute};
@@ -43,7 +43,7 @@ pub(crate) enum DirectRouteTarget<'a> {
 }
 
 impl<'a> DirectRouteTarget<'a> {
-    fn jid(self) -> &'a str {
+    pub(super) fn jid(self) -> &'a str {
         match self {
             Self::Bare(jid) | Self::Full { jid, .. } => jid,
         }
@@ -65,6 +65,7 @@ pub(crate) struct DirectRouteRequest<'a, S> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirectRouteStage {
     LiveReservation,
+    HandoffBinding,
     PrimaryRoute,
     PrimaryRemote,
     FullJidFallback,
@@ -76,6 +77,7 @@ pub(crate) enum DirectRouteStage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirectRouteRecoveryReason {
     MissingLiveReservation,
+    InvalidHandoff,
     HealthChanged,
     FallbackFailed,
     FallbackRejected,
@@ -131,12 +133,29 @@ impl std::error::Error for DirectRouteError {
 
 /// Consuming this capability makes repeated recovery branches idempotent in
 /// one route attempt. It never represents a transport acknowledgement.
-struct UnroutedClaim(Option<DurableDelivery>);
+struct UnroutedClaim {
+    source: Option<DurableDelivery>,
+    witness: Option<northstar_message_application::direct_handoff::HandoffHandle>,
+}
 
 impl UnroutedClaim {
     async fn rearm<P: DirectMessageRoutePort>(&mut self, port: &P) {
-        if let Some(delivery) = self.0.take().filter(|delivery| delivery.claim_id.is_some()) {
+        if let Some(delivery) = self
+            .source
+            .take()
+            .filter(|delivery| delivery.claim_id.is_some())
+        {
+            let permit = match &self.witness {
+                Some(witness) => match witness.rearm_permit(delivery) {
+                    Ok(Some(permit)) => Some(permit),
+                    Ok(None) | Err(_) => return,
+                },
+                None => None,
+            };
             port.rearm_direct_route(delivery).await;
+            if let Some(permit) = permit {
+                permit.returned();
+            }
         }
     }
 }
@@ -148,8 +167,57 @@ impl DirectMessageRouter {
         port: &P,
         request: DirectRouteRequest<'_, P::Session>,
     ) -> Result<DirectRouteOutcome, DirectRouteError> {
+        let mut payload = RoutePayload::new(request.stanza, request.delivery.durable());
+        let result = Self::route_owned(port, request, &mut payload).await;
+        payload.returned();
+        result
+    }
+
+    pub(crate) async fn route_prepared<P: DirectMessageRoutePort>(
+        port: &P,
+        request: DirectRouteRequest<'_, P::Session>,
+        prepared: super::direct_workflow::PreparedDirectHandoff<'_>,
+    ) -> Result<DirectRouteOutcome, DirectRouteError> {
+        let (item, witness) = match prepared.bind_route(&request) {
+            Ok(bound) => bound,
+            Err(_) => {
+                port.post_accept_failed();
+                return Ok(DirectRouteOutcome::AcceptedForRecovery {
+                    stage: DirectRouteStage::HandoffBinding,
+                    reason: DirectRouteRecoveryReason::InvalidHandoff,
+                });
+            }
+        };
+        let mut payload = RoutePayload::prepared(request.stanza, item, witness);
+        let result = Self::route_owned(port, request, &mut payload).await;
+        payload.returned();
+        result
+    }
+
+    pub(crate) async fn recover_prepared<P: DirectMessageRoutePort>(
+        port: &P,
+        prepared: super::direct_workflow::PreparedDirectRecovery,
+    ) {
+        let mut payload = RoutePayload::new("", Some(prepared.source));
+        payload.witness = Some(prepared.witness);
+        let mut claim = UnroutedClaim {
+            source: Some(prepared.source),
+            witness: payload.witness.clone(),
+        };
+        claim.rearm(port).await;
+        payload.returned();
+    }
+
+    async fn route_owned<P: DirectMessageRoutePort>(
+        port: &P,
+        request: DirectRouteRequest<'_, P::Session>,
+        payload: &mut RoutePayload<'_>,
+    ) -> Result<DirectRouteOutcome, DirectRouteError> {
         let delivery = request.delivery.durable();
-        let mut claim = UnroutedClaim(delivery);
+        let mut claim = UnroutedClaim {
+            source: delivery,
+            witness: payload.witness.clone(),
+        };
         if let Some(outcome) = Self::reservation_gate(port, delivery) {
             return Ok(outcome);
         }
@@ -164,11 +232,10 @@ impl DirectMessageRouter {
         {
             return Ok(outcome);
         }
-        let mut routed = OnlineMessageRouter::dispatch(
+        let mut routed = OnlineMessageRouter::dispatch_owned(
             port,
             request.target.jid(),
-            request.stanza,
-            delivery,
+            payload,
             matches!(request.target, DirectRouteTarget::Bare(_))
                 && bare_message_route(request.message_type) == BareMessageRoute::All,
             request.approved_targets,
@@ -187,7 +254,7 @@ impl DirectMessageRouter {
                 {
                     return Ok(outcome);
                 }
-                let fallback = OnlineMessageRouter::full_jid_fallback(
+                let fallback = OnlineMessageRouter::full_jid_fallback_owned(
                     port,
                     FullJidFallback {
                         message_type: request.message_type,
@@ -195,9 +262,9 @@ impl DirectMessageRouter {
                         bare_target: bare,
                         sender: request.sender,
                         recipient_id: request.recipient_id,
-                        stanza: request.stanza,
                         delivery,
                     },
+                    payload,
                 )
                 .await;
                 if let Some(outcome) =
@@ -239,8 +306,12 @@ impl DirectMessageRouter {
         request: DirectRouteRequest<'_, P::Session>,
         history_committed: bool,
     ) -> Result<DirectRouteOutcome, DirectRouteError> {
+        let mut payload = RoutePayload::new(request.stanza, request.delivery.durable());
         let delivery = request.delivery.durable();
-        let mut claim = UnroutedClaim(delivery);
+        let mut claim = UnroutedClaim {
+            source: delivery,
+            witness: None,
+        };
         if let Some(outcome) = Self::reservation_gate(port, delivery) {
             return Ok(outcome);
         }
@@ -260,10 +331,9 @@ impl DirectMessageRouter {
         }
         let deliver_all = matches!(request.target, DirectRouteTarget::Bare(_))
             && bare_message_route(request.message_type) == BareMessageRoute::All;
-        let local = OnlineMessageRouter::dispatch_local(
+        let local = OnlineMessageRouter::dispatch_local_owned(
             port,
-            request.stanza,
-            delivery,
+            &mut payload,
             deliver_all,
             request.approved_targets,
         );
@@ -280,11 +350,10 @@ impl DirectMessageRouter {
         {
             return Ok(outcome);
         }
-        let mut routed = OnlineMessageRouter::dispatch_remote(
+        let mut routed = OnlineMessageRouter::dispatch_remote_owned(
             port,
             request.target.jid(),
-            request.stanza,
-            delivery,
+            &mut payload,
             deliver_all,
             local,
         )
@@ -310,7 +379,6 @@ impl DirectMessageRouter {
                         bare_target: bare,
                         sender: request.sender,
                         recipient_id: request.recipient_id,
-                        stanza: request.stanza,
                         delivery,
                     },
                 )
@@ -330,10 +398,9 @@ impl DirectMessageRouter {
                         {
                             return Ok(outcome);
                         }
-                        let local = OnlineMessageRouter::dispatch_local(
+                        let local = OnlineMessageRouter::dispatch_local_owned(
                             port,
-                            request.stanza,
-                            delivery,
+                            &mut payload,
                             false,
                             &allowed,
                         );
@@ -351,11 +418,10 @@ impl DirectMessageRouter {
                             {
                                 return Ok(outcome);
                             }
-                            OnlineMessageRouter::dispatch_remote(
+                            OnlineMessageRouter::dispatch_remote_owned(
                                 port,
                                 bare,
-                                request.stanza,
-                                delivery,
+                                &mut payload,
                                 false,
                                 local,
                             )
@@ -485,25 +551,36 @@ impl DirectMessageRouter {
         queue_accepted: bool,
         history_committed: bool,
     ) -> Option<DirectRouteOutcome> {
-        if !request.enforce_direct_health || port.direct_route_mode() == DirectPostCommitMode::Live
-        {
+        use northstar_message_application::direct_handoff::{health_decision, HealthDecision};
+        // Keep the original disabled-health short circuit and each caller's
+        // checkpoint; the shared decision owns no clock or health read.
+        if !request.enforce_direct_health {
             return None;
         }
-        Some(
-            if request.delivery.durable().is_some() || history_committed {
+        match health_decision(
+            true,
+            port.direct_route_mode(),
+            request.delivery.durable().is_some(),
+            history_committed,
+            queue_accepted,
+        ) {
+            HealthDecision::Continue => None,
+            HealthDecision::Recover => {
                 if !queue_accepted {
                     claim.rearm(port).await;
                 }
-                DirectRouteOutcome::AcceptedForRecovery {
+                Some(DirectRouteOutcome::AcceptedForRecovery {
                     stage,
                     reason: DirectRouteRecoveryReason::HealthChanged,
-                }
-            } else if queue_accepted {
-                DirectRouteOutcome::AcceptedBeforeDegradation
-            } else {
-                DirectRouteOutcome::Rejected(DirectRouteRejection::Unavailable)
-            },
-        )
+                })
+            }
+            HealthDecision::AcceptedBeforeDegradation => {
+                Some(DirectRouteOutcome::AcceptedBeforeDegradation)
+            }
+            HealthDecision::Reject => Some(DirectRouteOutcome::Rejected(
+                DirectRouteRejection::Unavailable,
+            )),
+        }
     }
 }
 

@@ -18,10 +18,9 @@ impl OnlineRoutePort for S2sDirectRoutePort<'_> {
     fn try_local(
         &self,
         session: &Self::Session,
-        stanza: String,
-        delivery: Option<DurableDelivery>,
-    ) -> bool {
-        OnlineRoutePort::try_local(self.0, session, stanza, delivery)
+        enqueue: crate::outbound::RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError> {
+        OnlineRoutePort::try_local(self.0, session, enqueue)
     }
 
     fn record_local_accept(&self, durable: bool) {

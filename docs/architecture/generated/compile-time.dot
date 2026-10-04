@@ -1012,6 +1012,7 @@ digraph compile_time {
   "northstar-federation-core" -> "sha2";
   "northstar-federation-core" -> "uuid";
   "northstar-message-application" -> "northstar-abuse-policy";
+  "northstar-message-application" -> "northstar-delivery-core";
   "northstar-message-application" -> "northstar-message-core";
   "northstar-message-application" -> "tokio";
   "northstar-message-application" -> "uuid";

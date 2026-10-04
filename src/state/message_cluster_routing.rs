@@ -20,14 +20,9 @@ impl OnlineRoutePort for AppState {
     fn try_local(
         &self,
         session: &Self::Session,
-        stanza: String,
-        delivery: Option<DurableDelivery>,
-    ) -> bool {
-        if let Some(delivery) = delivery {
-            session.sender.try_send_durable(stanza, delivery).is_ok()
-        } else {
-            session.sender.try_send(stanza).is_ok()
-        }
+        enqueue: crate::outbound::RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError> {
+        session.sender.try_send_route_item(enqueue)
     }
 
     fn record_local_accept(&self, durable: bool) {

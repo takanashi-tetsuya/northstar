@@ -1668,7 +1668,9 @@
       "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
       "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
       "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
-      "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
+      "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
+      "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
+      "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted"
     ]
   }
 }

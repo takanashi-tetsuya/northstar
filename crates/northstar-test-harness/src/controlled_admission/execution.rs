@@ -69,11 +69,291 @@ impl std::ops::Deref for Context<'_> {
         self.input
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct World {
     rows: BTreeMap<String, Row>,
     actors: BTreeMap<String, u64>,
     proofs: BTreeSet<Uuid>,
+}
+// These are caller-model accounting limits, not process/RSS limits. The view
+// limit applies to attempted successors BEFORE filtering or deduplication; the
+// separate row/byte reservation covers simultaneous source, successor and
+// transaction scratch content. The actual injected World has separate input
+// bounds and is never a source for the caller's possible states.
+const MAX_KNOWLEDGE_VIEWS: usize = 64;
+const MAX_KNOWLEDGE_ROWS: usize = 1_000_000;
+const MAX_KNOWLEDGE_BYTES: usize = 64 * 1024 * 1024;
+const LIMITATIONS: [&str; 8] = [
+    "Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
+    "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
+    "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
+    "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
+    "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
+    "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
+    "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
+    "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted",
+];
+// Static root-only upper bound, including simultaneous summaries. This literal
+// includes the longest fixed enum strings, all false booleans, full-width
+// bounded integers, a 64-byte hash, and the larger null compatibility value.
+// Only the two validated <=128 ASCII labels and limitations contents are blank.
+// No modeled execution or JSON sizing probe is needed to establish this bound.
+const ROOT_FIXED_JSON: &str = concat!(
+    "{\"schema\":\"northstar-admission-controlled-output-v3\",\"adapter\":\"controlled_rust\",",
+    "\"model\":\"admission-controlled-v1\",\"scenario_id\":\"\",",
+    "\"input_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",",
+    "\"execution\":\"EnvironmentInterrupted\",\"terminal\":false,\"evidence_complete\":false,",
+    "\"coordinators_finished\":false,",
+    "\"observation_failure\":{\"class\":\"UnmappedMaterial\",\"index\":255,\"operation_id\":\"\"},",
+    "\"safety_failure\":{\"index\":255,\"active\":40256},",
+    "\"knowledge_stop\":{\"index\":255,\"phase\":\"BeforeInitialState\",\"reason\":\"KnowledgeModelIncomplete\"},",
+    "\"projection\":[],\"compatibility_projection\":null,\"limitations\":[]}"
+);
+const ROOT_MAX_BYTES: usize = ROOT_FIXED_JSON.len()
+    + 2 * 128
+    + LIMITATIONS[0].len()
+    + LIMITATIONS[1].len()
+    + LIMITATIONS[2].len()
+    + LIMITATIONS[3].len()
+    + LIMITATIONS[4].len()
+    + LIMITATIONS[5].len()
+    + LIMITATIONS[6].len()
+    + LIMITATIONS[7].len()
+    + 8 * 2
+    + 7;
+const _: () = assert!(ROOT_MAX_BYTES <= 2048);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KnowledgeStop {
+    ViewBudget,
+    RowBudget,
+    ByteBudget,
+    KnowledgeModelIncomplete,
+    InconsistentObservation,
+}
+impl KnowledgeStop {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ViewBudget => "ViewBudget",
+            Self::RowBudget => "RowBudget",
+            Self::ByteBudget => "ByteBudget",
+            Self::KnowledgeModelIncomplete => "KnowledgeModelIncomplete",
+            Self::InconsistentObservation => "InconsistentObservation",
+        }
+    }
+}
+
+// Allocation-free upper bounds on serialized synthetic state. Labels are
+// validated ASCII without escaping; constants include object/map punctuation,
+// field names and the full decimal widths of both signed times and sequences.
+fn row_bytes(actor: &str, key: &str, payload: &str, state: &str, lease: &str) -> usize {
+    192 + 2 * key.len() + actor.len() + payload.len() + state.len() + lease.len()
+}
+fn state_bytes<'a>(
+    mut rows: impl Iterator<Item = &'a Row>,
+    actors: &BTreeMap<String, u64>,
+    proofs: usize,
+) -> Option<usize> {
+    let base = proofs.checked_mul(64)?.checked_add(256)?;
+    let total = actors
+        .keys()
+        .try_fold(base, |sum, actor| sum.checked_add(64 + actor.len()))?;
+    rows.try_fold(total, |sum, r| {
+        sum.checked_add(row_bytes(
+            &r.actor,
+            &r.key,
+            &r.payload_tag,
+            &r.state,
+            &r.lease,
+        ))
+    })
+}
+fn world_bytes(w: &World) -> Option<usize> {
+    state_bytes(w.rows.values(), &w.actors, w.proofs.len())
+}
+fn initial_knowledge(e: &Envelope) -> Result<Vec<World>, KnowledgeStop> {
+    if e.initial.rows.len() > MAX_KNOWLEDGE_ROWS {
+        return Err(KnowledgeStop::RowBudget);
+    }
+    let bytes = state_bytes(
+        e.initial.rows.iter(),
+        &e.initial.actor_sequences,
+        e.initial.proofs.len(),
+    )
+    .ok_or(KnowledgeStop::ByteBudget)?;
+    if bytes > MAX_KNOWLEDGE_BYTES {
+        return Err(KnowledgeStop::ByteBudget);
+    }
+    // Only known initial material is copied, after reservation.
+    Ok(vec![World {
+        rows: e
+            .initial
+            .rows
+            .iter()
+            .cloned()
+            .map(|r| (r.key.clone(), r))
+            .collect(),
+        actors: e.initial.actor_sequences.clone(),
+        proofs: e.initial.proofs.iter().copied().collect(),
+    }])
+}
+fn reserve_knowledge(views: &[World], c: &Command, factor: usize) -> Result<(), KnowledgeStop> {
+    let successors = views
+        .len()
+        .checked_mul(factor)
+        .ok_or(KnowledgeStop::ViewBudget)?;
+    if successors > MAX_KNOWLEDGE_VIEWS {
+        return Err(KnowledgeStop::ViewBudget);
+    }
+    let mut old_rows = 0usize;
+    let mut next_rows = 0usize;
+    let mut largest_rows = 0usize;
+    let mut old_bytes = 0usize;
+    let mut next_bytes = 0usize;
+    let mut largest_bytes = 0usize;
+    let added_row = usize::from(c.action == "reserve");
+    // Also covers a reclaim's longer lease and finalize's state/expiry update.
+    let added_bytes = row_bytes(&c.actor, &c.key, &c.payload_tag, "accepted", &c.lease);
+    for view in views {
+        old_rows = old_rows
+            .checked_add(view.rows.len())
+            .ok_or(KnowledgeStop::RowBudget)?;
+        let rows = view
+            .rows
+            .len()
+            .checked_add(added_row)
+            .ok_or(KnowledgeStop::RowBudget)?;
+        next_rows = next_rows
+            .checked_add(rows)
+            .ok_or(KnowledgeStop::RowBudget)?;
+        largest_rows = largest_rows.max(rows);
+        let bytes = world_bytes(view).ok_or(KnowledgeStop::ByteBudget)?;
+        old_bytes = old_bytes
+            .checked_add(bytes)
+            .ok_or(KnowledgeStop::ByteBudget)?;
+        let bytes = bytes
+            .checked_add(added_bytes)
+            .ok_or(KnowledgeStop::ByteBudget)?;
+        next_bytes = next_bytes
+            .checked_add(bytes)
+            .ok_or(KnowledgeStop::ByteBudget)?;
+        largest_bytes = largest_bytes.max(bytes);
+    }
+    // At most two full-state scratch copies coexist on rollback. On commit,
+    // the second envelope covers bounded cleanup's key/hex tuples instead.
+    // Up to eight AdmissionCandidate plus eight selected AdmissionRow DTOs
+    // coexist. Charge sixteen rows and 1024 content bytes each separately;
+    // validated key IDs, fixed byte arrays and timestamps fit that envelope.
+    let rows = next_rows
+        .checked_mul(factor)
+        .and_then(|n| n.checked_add(old_rows))
+        .and_then(|n| {
+            largest_rows
+                .checked_mul(2)
+                .and_then(|scratch| n.checked_add(scratch))
+        })
+        .and_then(|n| n.checked_add(16))
+        .ok_or(KnowledgeStop::RowBudget)?;
+    if rows > MAX_KNOWLEDGE_ROWS {
+        return Err(KnowledgeStop::RowBudget);
+    }
+    let bytes = next_bytes
+        .checked_mul(factor)
+        .and_then(|n| n.checked_add(old_bytes))
+        .and_then(|n| {
+            largest_bytes
+                .checked_mul(2)
+                .and_then(|scratch| n.checked_add(scratch))
+        })
+        .and_then(|n| n.checked_add(16 * 1024))
+        .ok_or(KnowledgeStop::ByteBudget)?;
+    if bytes > MAX_KNOWLEDGE_BYTES {
+        return Err(KnowledgeStop::ByteBudget);
+    }
+    Ok(())
+}
+
+fn advance_knowledge(
+    e: &Context<'_>,
+    views: &mut Vec<World>,
+    c: &Command,
+    witness: &core::CommitWitness,
+    state: &core::ExecutionState,
+) -> Result<(), KnowledgeStop> {
+    if views.is_empty() {
+        return Err(KnowledgeStop::InconsistentObservation);
+    }
+    let delivered =
+        match state {
+            core::ExecutionState::Finished(core::ExecutionOutcome::Completed {
+                result, ..
+            }) if !matches!(result, core::EffectResult::Failed(_)) => Some(result),
+            _ => None,
+        };
+    let retained = witness.knowledge();
+    if matches!(retained, core::Knowledge::NoCommitRequested)
+        && (delivered.is_none() || c.action == "guard_memory")
+    {
+        // No successful storage observation: do not even evaluate a speculative
+        // transaction. Cancellation/precommit failure cannot select a view.
+        return Ok(());
+    }
+    let factor = if matches!(retained, core::Knowledge::CommitCallEntered(_)) {
+        2
+    } else {
+        1
+    };
+    reserve_knowledge(views, c, factor)?;
+    let mut next = Vec::new();
+    for view in views.iter() {
+        // A scripted Allowed cannot justify deleting a missing-proof view. The
+        // controlled guard lacks a contract for that alternative: stop the
+        // entire analysis, retaining all prior views and observed actual facts.
+        let candidate =
+            transaction(e, view, c).map_err(|_| KnowledgeStop::KnowledgeModelIncomplete)?;
+        let matches_witness = match retained {
+            core::Knowledge::NoCommitRequested => candidate.scope.is_none(),
+            core::Knowledge::CommitCallEntered(p) => {
+                p.correlation == correlation(c)
+                    && candidate.scope == Some(p.scope)
+                    && candidate.fact.as_ref() == Some(&p.fact)
+            }
+            core::Knowledge::ReceiptKnown(r) => {
+                r.correlation == correlation(c)
+                    && candidate.scope == Some(r.scope)
+                    && candidate.fact.as_ref() == Some(&r.fact)
+            }
+        };
+        if !matches_witness || delivered.is_some_and(|result| result != &candidate.result) {
+            continue;
+        }
+        if !matches!(retained, core::Knowledge::ReceiptKnown(_))
+            && !next.iter().any(|known| known == view)
+        {
+            next.push(view.clone());
+        }
+        if !matches!(retained, core::Knowledge::NoCommitRequested)
+            && !next.iter().any(|known| known == &candidate.staged)
+        {
+            next.push(candidate.staged);
+        }
+    }
+    if next.is_empty() {
+        return Err(KnowledgeStop::InconsistentObservation);
+    }
+    *views = next;
+    Ok(())
+}
+
+fn knowledge_counts(views: &[World], actor: &str, time: i64) -> ((usize, usize), (usize, usize)) {
+    let mut minimum = (usize::MAX, usize::MAX);
+    let mut maximum = (0, 0);
+    for view in views {
+        let count = counts(view, actor, time);
+        minimum = (minimum.0.min(count.0), minimum.1.min(count.1));
+        maximum = (maximum.0.max(count.0), maximum.1.max(count.1));
+    }
+    (minimum, maximum)
 }
 struct Transaction {
     staged: World,
@@ -758,6 +1038,11 @@ fn reservation_projection(
 }
 pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
     input.validate()?;
+    // Public execute callers must satisfy the same bounded hash shape as parse.
+    // Reject before any actual work so root-summary reservation remains valid.
+    if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(InputError::Schema);
+    }
     let context = Context::new(input);
     let e = &context;
     let mut world = World {
@@ -778,13 +1063,27 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
     let mut terminal = true;
     let mut coordinators_finished = true;
     let mut observation_failure = None;
+    let mut safety_failure = None;
+    let mut knowledge_stop = None;
+    let mut views = match initial_knowledge(input) {
+        Ok(views) => views,
+        Err(reason) => {
+            knowledge_stop = Some(json!({"index":0,
+                "phase":"BeforeInitialState","reason":reason.name()}));
+            complete = false;
+            terminal = false;
+            Vec::new()
+        }
+    };
     let mut cancelled = false;
     let mut total_events = 0;
     for (index, c) in e.commands.iter().enumerate() {
+        if knowledge_stop.is_some() {
+            break;
+        }
         let emitted = effect(e, c);
         let mut coordinator = core::Coordinator::new(emitted.correlation, emitted.command.clone());
         let mut witness = core::CommitWitness::new(emitted.clone());
-        let before = world.clone();
         let unresolved_before = c
             .reconcile_of
             .as_ref()
@@ -884,6 +1183,9 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         let observed = coordinator_projection(e, coordinator.state());
         let retained = knowledge_projection(e, witness.knowledge());
         let domain = coordinator_domain(coordinator.state());
+        // This flag belongs to this operation only. Prior Unknown identities
+        // stay in their original coordinators/witnesses even when current
+        // storage alternatives converge or reconciliation narrows their rows.
         let unresolved = matches!(witness.knowledge(), core::Knowledge::CommitCallEntered(_));
         let time = match c.action.as_str() {
             "finalize" => c.times.finalize_us,
@@ -891,22 +1193,23 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             _ => c.times.admission_us,
         };
         let world_counts = counts(&world, &c.actor, time);
-        let before_counts = counts(&before, &c.actor, time);
-        let possible_counts = counts(&transaction.staged, &c.actor, time);
-        let (minimum, maximum) = if unresolved {
-            (
-                (
-                    before_counts.0.min(possible_counts.0),
-                    before_counts.1.min(possible_counts.1),
-                ),
-                (
-                    before_counts.0.max(possible_counts.0),
-                    before_counts.1.max(possible_counts.1),
-                ),
-            )
-        } else {
-            (world_counts, world_counts)
-        };
+        // Record actual failed facts before caller-model expansion or evidence
+        // trimming. A partial state analysis cannot erase an observed failure.
+        if safety_failure.is_none() && world_counts.0 > 4096 {
+            safety_failure = Some(json!({"index":index,"active":world_counts.0}));
+        }
+        let knowledge_complete =
+            match advance_knowledge(e, &mut views, c, &witness, coordinator.state()) {
+                Ok(()) => true,
+                Err(reason) => {
+                    knowledge_stop = Some(json!({"index":index,
+                    "phase":"AfterCommand","reason":reason.name()}));
+                    complete = false;
+                    terminal = false;
+                    false
+                }
+            };
+        let bounds = knowledge_complete.then(|| knowledge_counts(&views, &c.actor, time));
         let (_, finalization_receipt) = receipt_flags(witness.knowledge());
         let mut reservation = reservation_projection(e, c, c, witness.knowledge());
         let wanted_key = bytes32(&e.key(&c.key).hex).expect("validated key");
@@ -963,13 +1266,15 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             "world":{"committed":committed,"result":transaction.domain,"active":world_counts.0,"retained":world_counts.1,"row_state":r.map(|r|r.state.as_str()).unwrap_or("Absent"),
                 "expires_at_us":r.map(|r|r.expires_at_us),"lease":r.map(|r|&r.lease),"actor_sequence":world.actors[&c.actor],
                 "proof_present":c.guard.proof.as_ref().map(|p|world.proofs.contains(&p.challenge_id))},
-            "caller":{"active_min":minimum.0,"active_max":maximum.0,"retained_min":minimum.1,"retained_max":maximum.1,
+            "caller":{"active_min":bounds.map(|b|b.0.0),"active_max":bounds.map(|b|b.1.0),
+                "retained_min":bounds.map(|b|b.0.1),"retained_max":bounds.map(|b|b.1.1),
+                "knowledge_complete":knowledge_complete,"possible_states":knowledge_complete.then_some(views.len()),
                 "reservation_receipt":reservation_receipt,"reservation":reservation,"finalization_receipt":finalization_receipt,"unresolved":unresolved},
             "completion":{"accepted":accepted,"pending":pending,"rejections":rejections},"reconcile":reconciliation,
         });
         // Keep the first failed observation outside the trim-able event list.
         // A later evidence budget cannot erase an already observed divergence.
-        if !projection_mapped(&event) {
+        if observation_failure.is_none() && !projection_mapped(&event) {
             observation_failure = Some(json!({"class":"UnmappedMaterial","index":index,
                 "operation_id":c.operation_id}));
         }
@@ -983,11 +1288,11 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             terminal = false;
             break;
         }
-        if e.stage1.is_some() {
+        if e.stage1.is_some() && knowledge_complete {
             compatibility.push(super::stage1::projection(c, &event));
         }
         projection.push(event);
-        if observation_failure.is_some() {
+        if observation_failure.is_some() || knowledge_stop.is_some() {
             complete = false;
             terminal = false;
             break;
@@ -998,29 +1303,80 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
         "execution":if !complete||!terminal {"Inconclusive"} else if cancelled {"Cancelled"} else {"Completed"},"terminal":terminal,"evidence_complete":complete,
         "coordinators_finished":complete && coordinators_finished,
         "observation_failure":observation_failure,
+        "safety_failure":safety_failure,"knowledge_stop":knowledge_stop,
         "projection":projection,"compatibility_projection":if e.stage1.is_some() {Some(compatibility)} else {None},
-        "limitations":["Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
-            "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
-            "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
-            "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
-            "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
-            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"]});
+        "limitations":LIMITATIONS});
     // Account for the full root and optional compatibility projection as well,
     // never just the rich events. A bounded prefix cannot qualify completion.
     while serde_json::to_vec(&output).expect("JSON").len() > e.budgets.evidence_bytes {
-        let events = output["projection"]
-            .as_array_mut()
-            .expect("projection array");
-        if events.pop().is_none() {
-            return Err(InputError::Budget);
-        }
-        if let Some(events) = output["compatibility_projection"].as_array_mut() {
-            events.pop();
-        }
         output["evidence_complete"] = false.into();
         output["terminal"] = false.into();
         output["coordinators_finished"] = false.into();
         output["execution"] = "Inconclusive".into();
+        let events = output["projection"]
+            .as_array_mut()
+            .expect("projection array");
+        if events.pop().is_none() {
+            // Unreachable for validated bounded root fields by ROOT_MAX_BYTES.
+            // Preserve already observed facts rather than reclassify them as a
+            // rejected input if a future root extension violates that contract.
+            break;
+        }
+        let retained_events = output["projection"]
+            .as_array()
+            .expect("projection array")
+            .len();
+        if let Some(events) = output["compatibility_projection"].as_array_mut() {
+            // A native stopping event has no valid legacy numeric bounds, so
+            // it never added a compatibility event in the first place.
+            while events.len() > retained_events {
+                events.pop();
+            }
+        }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod knowledge_budget_tests {
+    use super::*;
+
+    #[test]
+    fn maximal_root_with_all_summaries_fits_minimum_evidence_without_detail() {
+        let mut root: Value = serde_json::from_str(ROOT_FIXED_JSON).unwrap();
+        root["scenario_id"] = "s".repeat(128).into();
+        root["observation_failure"]["operation_id"] = "o".repeat(128).into();
+        root["limitations"] = json!(LIMITATIONS);
+        assert_eq!(serde_json::to_vec(&root).unwrap().len(), ROOT_MAX_BYTES);
+        assert_eq!(root["observation_failure"]["class"], "UnmappedMaterial");
+        assert_eq!(root["safety_failure"]["active"], 40256);
+        assert_eq!(root["knowledge_stop"]["reason"], "KnowledgeModelIncomplete");
+    }
+
+    #[test]
+    fn inconsistent_observation_preserves_previous_views_instead_of_inventing_a_world() {
+        let value = super::super::tests::input();
+        let (input, _) = super::super::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let context = Context::new(&input);
+        let command = &input.commands[0];
+        let emitted = effect(&context, command);
+        let coordinator = core::Coordinator::new(emitted.correlation, emitted.command.clone());
+        let mut witness = core::CommitWitness::new(emitted.clone());
+        // A valid typed Begin witness, but inconsistent with the known empty
+        // initial row set. Its prepared fact cannot be replaced with Reserved.
+        witness
+            .enter_commit(core::PreparedCommit {
+                correlation: emitted.correlation,
+                scope: core::TransactionScope::RatedBegin(core::BeginCommitPurpose::ReplayRead),
+                fact: core::CommitFact::ReplayAccepted,
+            })
+            .unwrap();
+        let mut views = initial_knowledge(&input).unwrap();
+        let before = views.clone();
+        assert_eq!(
+            advance_knowledge(&context, &mut views, command, &witness, coordinator.state()),
+            Err(KnowledgeStop::InconsistentObservation)
+        );
+        assert!(views == before);
+    }
 }

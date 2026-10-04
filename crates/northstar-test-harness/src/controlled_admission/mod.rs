@@ -12,7 +12,7 @@ mod tests {
     use super::*;
     use northstar_abuse_policy::{admission_execution as core, admission_transaction as tx};
     use serde_json::{json, Value};
-    fn input() -> Value {
+    pub(super) fn input() -> Value {
         let guard = json!({"account_bare":"a@example.test","normalized_target":"b@example.test","origin_id":"origin-1",
             "normalized_payload":"synthetic-payload","pow_intent_payload":"synthetic-intent","subject":"synthetic-subject",
             "actors":["user:actor-a"],"proof":null,"allowed":true,"actor_sequence_delta":1});
@@ -359,5 +359,264 @@ mod tests {
         assert_eq!(out["projection"], json!([]));
         assert_eq!(out["terminal"], false);
         assert_eq!(out["coordinators_finished"], false);
+    }
+
+    fn refresh_completion(c: &mut Value) {
+        let fields = [
+            "operation_uuid",
+            "effect_number",
+            "generation",
+            "attempt",
+            "action",
+            "actor",
+            "key",
+            "payload_tag",
+            "lease",
+            "guard",
+            "reconcile_of",
+        ];
+        let completion = fields
+            .into_iter()
+            .map(|key| (key.to_string(), c[key].clone()))
+            .collect();
+        c["schedule"]["completions"] = Value::Array(vec![Value::Object(completion)]);
+    }
+    fn independent_commands(count: usize, unknown: bool) -> Value {
+        let mut v = input();
+        let template = v["commands"][0].clone();
+        let mut commands = Vec::new();
+        let mut keys = Vec::new();
+        for index in 1..=count {
+            let key = format!("key-{index}");
+            keys.push(json!({"label":key,"key_id":"synthetic-key","hex":format!("{index:02x}").repeat(32)}));
+            let mut c = template.clone();
+            c["key"] = key.clone().into();
+            c["candidates"] = json!([key]);
+            c["operation_id"] = format!("operation-{index}").into();
+            c["effect_id"] = format!("effect-{index}").into();
+            c["operation_uuid"] = format!("10000000-0000-0000-0000-{index:012}").into();
+            c["effect_number"] = index.into();
+            c["schedule"]["cut"] = if unknown { "commit_unknown" } else { "none" }.into();
+            refresh_completion(&mut c);
+            commands.push(c);
+        }
+        v["bindings"]["keys"] = keys.into();
+        v["commands"] = commands.into();
+        v
+    }
+    #[test]
+    fn confirmed_later_reservation_preserves_both_earlier_unknown_worlds() {
+        for committed in [false, true] {
+            let mut v = independent_commands(2, false);
+            v["commands"][0]["schedule"]["cut"] = "commit_unknown".into();
+            v["commands"][0]["schedule"]["world_commit"] = committed.into();
+            let out = run(&v);
+            let caller = &out["projection"][1]["caller"];
+            assert_eq!(caller["active_min"], 1);
+            assert_eq!(caller["active_max"], 2);
+            assert_eq!(caller["possible_states"], 2);
+            assert_eq!(caller["knowledge_complete"], true);
+            assert_eq!(out["projection"][0]["coordinator"]["outcome"], "Unknown");
+            assert_eq!(out["projection"][1]["coordinator"]["outcome"], "Completed");
+            assert_eq!(
+                out["projection"][1]["world"]["active"],
+                if committed { 2 } else { 1 }
+            );
+        }
+    }
+    #[test]
+    fn independent_unknowns_keep_four_correlated_states_for_every_injected_world() {
+        for mask in 0..4 {
+            let mut v = independent_commands(2, true);
+            for index in 0..2 {
+                v["commands"][index]["schedule"]["world_commit"] =
+                    (mask & (1 << index) != 0).into();
+            }
+            let out = run(&v);
+            let caller = &out["projection"][1]["caller"];
+            assert_eq!(caller["active_min"], 0);
+            assert_eq!(caller["active_max"], 2);
+            assert_eq!(caller["possible_states"], 4);
+        }
+    }
+    #[test]
+    fn no_commit_failure_or_cancellation_cannot_select_a_prior_view() {
+        for cut in ["precommit_error", "before_effect_cancel"] {
+            let mut v = independent_commands(2, true);
+            v["commands"][1]["schedule"]["cut"] = cut.into();
+            v["commands"][1]["schedule"]["world_commit"] = false.into();
+            if cut == "before_effect_cancel" {
+                v["commands"][1]["schedule"]["completions"] = json!([]);
+            }
+            let out = run(&v);
+            let caller = &out["projection"][1]["caller"];
+            assert_eq!(caller["active_min"], 0);
+            assert_eq!(caller["active_max"], 1);
+            assert_eq!(caller["possible_states"], 2);
+        }
+    }
+    #[test]
+    fn ttl_narrows_active_occupancy_without_erasing_retention_or_unknown_history() {
+        let mut v = independent_commands(2, true);
+        let c = &mut v["commands"][1];
+        c["action"] = "guard_memory".into();
+        c["schedule"]["cut"] = "none".into();
+        c["times"] = json!({"admission_us":1_800_000_001i64,"actor_policy_us":1_800_000_001i64,
+            "finalize_us":1_800_000_001i64,"reconcile_us":1_800_000_001i64});
+        refresh_completion(c);
+        let out = run(&v);
+        let caller = &out["projection"][1]["caller"];
+        assert_eq!(caller["active_min"], 0);
+        assert_eq!(caller["active_max"], 0);
+        assert_eq!(caller["retained_min"], 0);
+        assert_eq!(caller["retained_max"], 1);
+        assert_eq!(caller["possible_states"], 2);
+        assert_eq!(out["projection"][0]["witness"]["kind"], "CommitCallEntered");
+    }
+    #[test]
+    fn only_delivered_reconciliation_filters_current_views_and_never_rewrites_history() {
+        for committed in [false, true] {
+            for delivered in [false, true] {
+                let mut v = independent_commands(2, true);
+                v["commands"][0]["schedule"]["world_commit"] = committed.into();
+                let c = &mut v["commands"][1];
+                c["action"] = "reconcile".into();
+                c["key"] = "key-1".into();
+                c["candidates"] = json!(["key-1"]);
+                c["reconcile_of"] = "operation-1".into();
+                c["schedule"]["cut"] = "none".into();
+                refresh_completion(c);
+                if !delivered {
+                    c["schedule"]["completions"][0]["attempt"] = 2.into();
+                }
+                let out = run(&v);
+                let event = &out["projection"][1];
+                assert_eq!(
+                    event["caller"]["possible_states"],
+                    if delivered { 1 } else { 2 }
+                );
+                assert_eq!(
+                    event["caller"]["active_min"],
+                    usize::from(delivered && committed)
+                );
+                assert_eq!(
+                    event["caller"]["active_max"],
+                    usize::from(!delivered || committed)
+                );
+                assert_eq!(out["projection"][0]["coordinator"]["outcome"], "Unknown");
+                if delivered {
+                    assert_eq!(event["reconcile"]["unresolved_operation_preserved"], true);
+                } else {
+                    assert_eq!(event["reconcile"], Value::Null);
+                }
+            }
+        }
+    }
+    #[test]
+    fn missing_proof_in_a_possible_view_is_model_incomplete_not_pruned_by_allowed() {
+        let mut v = independent_commands(2, true);
+        let proof = json!({"challenge_id":"00000000-0000-0000-0000-000000000123","nonce":"synthetic-proof"});
+        v["initial"]["proofs"] = json!([proof["challenge_id"]]);
+        for c in v["commands"].as_array_mut().unwrap() {
+            c["guard"]["proof"] = proof.clone();
+            refresh_completion(c);
+        }
+        v["commands"][0]["schedule"]["world_commit"] = false.into();
+        v["commands"][1]["schedule"]["cut"] = "none".into();
+        let out = run(&v);
+        let event = &out["projection"][1];
+        assert_eq!(out["knowledge_stop"]["reason"], "KnowledgeModelIncomplete");
+        assert_eq!(event["coordinator"]["outcome"], "Completed");
+        assert_eq!(event["witness"]["kind"], "ReceiptKnown");
+        assert_eq!(event["caller"]["reservation_receipt"], true);
+        assert_eq!(event["caller"]["knowledge_complete"], false);
+        assert_eq!(event["caller"]["possible_states"], Value::Null);
+        assert_eq!(event["caller"]["active_min"], Value::Null);
+        assert_eq!(event["caller"]["active_max"], Value::Null);
+        assert_eq!(out["execution"], "Inconclusive");
+    }
+    #[test]
+    fn equal_occupancy_does_not_merge_different_proofs_sequences_or_fences() {
+        let mut v = independent_commands(2, true);
+        v["initial"]["proofs"] = json!(["00000000-0000-0000-0000-000000000123"]);
+        let first = &mut v["commands"][0];
+        first["action"] = "guard_persistent".into();
+        first["guard"]["proof"] = json!({"challenge_id":"00000000-0000-0000-0000-000000000123","nonce":"synthetic-proof"});
+        refresh_completion(first);
+        let second = &mut v["commands"][1];
+        second["action"] = "guard_memory".into();
+        second["schedule"]["cut"] = "none".into();
+        refresh_completion(second);
+        let out = run(&v);
+        assert_eq!(out["projection"][1]["caller"]["active_min"], 0);
+        assert_eq!(out["projection"][1]["caller"]["active_max"], 0);
+        assert_eq!(out["projection"][1]["caller"]["possible_states"], 2);
+
+        let mut v = independent_commands(2, true);
+        v["bindings"]["leases"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"label":"old-lease",
+            "uuid":"30000000-0000-0000-0000-000000000002"}));
+        v["initial"]["rows"] = json!([{"actor":"actor-a","key":"key-1","payload_tag":"payload-a",
+            "state":"pending","expires_at_us":1_800_000_000,"lease":"old-lease","lease_until_us":0}]);
+        v["commands"][0]["guard"]["actor_sequence_delta"] = 0.into();
+        refresh_completion(&mut v["commands"][0]);
+        let second = &mut v["commands"][1];
+        second["action"] = "guard_memory".into();
+        second["schedule"]["cut"] = "none".into();
+        refresh_completion(second);
+        let out = run(&v);
+        assert_eq!(out["projection"][1]["caller"]["active_min"], 1);
+        assert_eq!(out["projection"][1]["caller"]["active_max"], 1);
+        assert_eq!(out["projection"][1]["caller"]["possible_states"], 2);
+    }
+    #[test]
+    fn attempted_fanout_stops_without_dropping_alternatives_or_actual_outcome() {
+        let v = independent_commands(8, true);
+        let out = run(&v);
+        assert_eq!(out["projection"].as_array().unwrap().len(), 7);
+        assert_eq!(out["projection"][5]["caller"]["possible_states"], 64);
+        assert_eq!(out["projection"][6]["coordinator"]["outcome"], "Unknown");
+        assert_eq!(out["projection"][6]["caller"]["knowledge_complete"], false);
+        assert_eq!(out["projection"][6]["caller"]["retained_max"], Value::Null);
+        assert_eq!(
+            out["knowledge_stop"],
+            json!({"index":6,
+            "phase":"AfterCommand","reason":"ViewBudget"})
+        );
+        assert_eq!(out["execution"], "Inconclusive");
+        assert_eq!(out["terminal"], false);
+        assert_eq!(out["evidence_complete"], false);
+    }
+    #[test]
+    fn actual_capacity_failure_is_retained_even_when_its_detail_exceeds_event_budget() {
+        let mut v = input();
+        let c = &mut v["commands"][0];
+        c["action"] = "finalize".into();
+        refresh_completion(c);
+        let mut rows = vec![
+            json!({"actor":"actor-a","key":"key-a","payload_tag":"payload-a",
+            "state":"pending","expires_at_us":0,"lease":"lease-a","lease_until_us":60_000_000}),
+        ];
+        for index in 0..4096 {
+            let key = format!("occupied-{index}");
+            v["bindings"]["keys"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"label":key,
+                "key_id":"synthetic-key","hex":format!("{:064x}",index+1000)}));
+            rows.push(
+                json!({"actor":"actor-a","key":key,"payload_tag":"payload-a","state":"accepted",
+                "expires_at_us":21_600_000_000i64,"lease":"lease-a","lease_until_us":0}),
+            );
+        }
+        v["initial"]["rows"] = rows.into();
+        v["budgets"]["events"] = 1.into();
+        let out = run(&v);
+        assert_eq!(out["projection"], json!([]));
+        assert_eq!(out["safety_failure"], json!({"index":0,"active":4097}));
+        assert_eq!(out["execution"], "Inconclusive");
+        assert_eq!(out["evidence_complete"], false);
     }
 }

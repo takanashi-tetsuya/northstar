@@ -21,7 +21,7 @@ import uuid
 from . import experiment_contract as stage1
 
 SCHEMA = 'northstar-admission-controlled-input-v1'
-OUTPUT_SCHEMA = 'northstar-admission-controlled-output-v2'
+OUTPUT_SCHEMA = 'northstar-admission-controlled-output-v3'
 REJECTION_SCHEMA = 'northstar-admission-controlled-rejection-v1'
 CORPUS_SCHEMA = 'northstar-admission-controlled-corpus-v1'
 MODEL = 'admission-controlled-v1'
@@ -32,6 +32,9 @@ MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_ROWS = 40000
 MAX_STEPS = 256
 MAX_EVENTS = 4096
+MAX_KNOWLEDGE_VIEWS = 64
+MAX_KNOWLEDGE_ROWS = 1_000_000
+MAX_KNOWLEDGE_BYTES = 64 * 1024 * 1024
 MAX_TIME = stage1.MAX_TIME
 CAPACITY = 4096
 SHARD_CAPACITY = 32768
@@ -542,13 +545,205 @@ def _expected_coordinator(accepted, delivered, retained):
             'cause': delivered['cause'], 'knowledge': copy.deepcopy(retained)}
 
 
-def predict(value):
+def _knowledge_row_bytes(row, state=None):
+    """Conservative serialized-content envelope, not Python allocation/RSS."""
+    return (192 + 2 * len(row['key']) + len(row['actor']) + len(row['payload_tag']) +
+            len(row['state'] if state is None else state) + len(row['lease']))
+
+
+def _knowledge_world_bytes(rows, sequences, proofs):
+    return (256 + sum(_knowledge_row_bytes(row) for row in rows) +
+            sum(64 + len(actor) for actor in sequences) + 64 * len(proofs))
+
+
+def _knowledge_reserve(views, command, factor):
+    """Reserve every attempted successor before cloning, predicates or filtering.
+
+    The old views, all successors, two transaction/cleanup scratch envelopes,
+    and sixteen candidate/selected-row slots must fit simultaneously.
+    Deduplication cannot make an over-budget transition admissible.
+    """
+    if len(views) * factor > MAX_KNOWLEDGE_VIEWS:
+        return 'ViewBudget'
+    prospective = _knowledge_row_bytes(command, state='accepted')
+    old_rows = old_bytes = next_rows = next_bytes = largest_rows = largest_bytes = 0
+    for view in views:
+        rows = len(view['rows'])
+        size = _knowledge_world_bytes(view['rows'].values(), view['sequences'], view['proofs'])
+        row_upper = rows + int(command['action'] == 'reserve')
+        byte_upper = size + prospective
+        old_rows += rows
+        old_bytes += size
+        next_rows += row_upper
+        next_bytes += byte_upper
+        largest_rows = max(largest_rows, row_upper)
+        largest_bytes = max(largest_bytes, byte_upper)
+    if old_rows + factor * next_rows + 2 * largest_rows + 16 > MAX_KNOWLEDGE_ROWS:
+        return 'RowBudget'
+    if old_bytes + factor * next_bytes + 2 * largest_bytes + 16 * 1024 > MAX_KNOWLEDGE_BYTES:
+        return 'ByteBudget'
+    return None
+
+
+def _knowledge_transaction(view, command, maps, now):
+    """Compute one hypothetical transaction solely from this complete view.
+
+    These Python storage predicates have no injected-world input. None means
+    the scripted Allowed guard cannot be modeled for this possible proof set;
+    it is never interpreted as a denial, rollback, or permission to prune.
+    """
+    staged = copy.deepcopy(view)
+    rows, sequences, proofs = staged['rows'], staged['sequences'], staged['proofs']
+    action, guard = command['action'], command['guard']
+    key, actor = command['key'], command['actor']
+    proof = guard['proof']['challenge_id'] if guard['proof'] else None
+    selected_key, scope, reconciliation = key, None, None
+    row = rows.get(key)
+    if action == 'guard_persistent':
+        if guard['allowed'] and proof is not None and proof not in proofs:
+            return None
+        result = 'GuardOnlyAllowed' if guard['allowed'] else 'GuardOnlyDenied'
+        scope = 'GuardOnlyVerification'
+        sequences[actor] += guard['actor_sequence_delta']
+        proofs.discard(proof)
+    elif action == 'reserve':
+        for candidate in command['candidates']:
+            if candidate in rows and rows[candidate]['expires_at_us'] <= now:
+                del rows[candidate]
+        candidates = [rows[candidate] for candidate in command['candidates'] if candidate in rows]
+        if len(candidates) > 1:
+            result = 'IntegrityFailure'
+        elif candidates:
+            row = candidates[0]
+            selected_key = row['key']
+            if row['actor'] != actor or row['payload_tag'] != command['payload_tag']:
+                result = 'Conflict'
+            elif row['state'] == 'accepted':
+                result, scope = 'ReplayAccepted', 'RatedBegin.ReplayRead'
+            elif row['lease_until_us'] > now:
+                result, scope = 'InProgress', 'RatedBegin.PendingRequirement'
+                sequences[actor] += guard['actor_sequence_delta']
+            else:
+                result, scope = 'Proceed', 'RatedBegin.Reclaim'
+                row['lease'] = command['lease']
+                row['lease_until_us'] = now + 60 * SECOND
+                sequences[actor] += guard['actor_sequence_delta']
+        else:
+            if guard['allowed'] and proof is not None and proof not in proofs:
+                return None
+            sequences[actor] += guard['actor_sequence_delta']
+            proofs.discard(proof)
+            if not guard['allowed']:
+                result, scope = 'Denied', 'RatedBegin.GuardDenial'
+            else:
+                if command['schedule']['cleanup'] == 'bounded_skip_locked':
+                    removable = sorted((item for item in rows.values()
+                                        if item['expires_at_us'] <= now and
+                                        shard(maps, item['key']) == shard(maps, key) and
+                                        item['key'] not in command['schedule']['locked_keys']),
+                                       key=lambda item: (item['expires_at_us'], maps['keys'][item['key']]['hex']))[:128]
+                    for expired in removable:
+                        del rows[expired['key']]
+                actor_full = sum(item['actor'] == actor and item['expires_at_us'] > now
+                                 for item in rows.values()) >= CAPACITY
+                shard_full = sum(shard(maps, candidate) == shard(maps, key) for candidate in rows) >= SHARD_CAPACITY
+                if actor_full or shard_full:
+                    result = 'CapacityLimited'
+                else:
+                    result, scope = 'Proceed', 'RatedBegin.NewReservation'
+                    rows[key] = {'actor': actor, 'key': key, 'payload_tag': command['payload_tag'],
+                                 'state': 'pending', 'expires_at_us': now + 1800 * SECOND,
+                                 'lease': command['lease'], 'lease_until_us': now + 60 * SECOND}
+    elif action == 'finalize':
+        if row is None:
+            result = 'Missing'
+        elif row['payload_tag'] != command['payload_tag']:
+            result = 'Conflict'
+        elif row['state'] == 'accepted':
+            result, scope = 'AlreadyAccepted', 'AdmissionFinalize'
+        elif row['lease'] != command['lease']:
+            result = 'LeaseLost'
+        else:
+            result, scope = 'Accepted', 'AdmissionFinalize'
+            row['state'], row['expires_at_us'] = 'accepted', now + 21600 * SECOND
+    else:
+        if row is None:
+            observation = 'Missing'
+        elif row['payload_tag'] != command['payload_tag']:
+            observation = 'Conflicting'
+        elif row['state'] == 'accepted':
+            observation = 'ExactAccepted'
+        elif row['lease'] != command['lease']:
+            observation = 'Superseded'
+        else:
+            observation = 'ExactPending'
+        result = 'Reconcile' + observation
+        reconciliation = {'observation': observation,
+                          'lease': ('Current' if row['lease_until_us'] > now else 'Expired') if observation == 'ExactPending' else None,
+                          'retention': ('Current' if row['expires_at_us'] > now else 'Expired') if observation in ('ExactPending', 'ExactAccepted') else None}
+    # Noncommitting transactions roll back candidate cleanup and guard writes.
+    if scope is None:
+        staged = view
+    return staged, result, scope, selected_key, reconciliation
+
+
+def _knowledge_advance(views, command, maps, now, witness, coordinator):
+    """Only independently expected, actually available authority may filter.
+
+    Earlier Unknown records stay historical. The views carry their unresolved
+    storage alternatives forward until a retained fact or delivered storage
+    result distinguishes them. In particular, a failed or undelivered read
+    provides no negative evidence about any earlier transaction.
+    """
+    if not views:
+        return views, 'InconsistentObservation'
+    delivered = coordinator['result'] if coordinator['outcome'] == 'Completed' else None
+    if command['action'] == 'guard_memory' or (witness['kind'] == 'NoCommitRequested' and delivered is None):
+        return views, None
+    factor = 2 if witness['kind'] == 'CommitCallEntered' else 1
+    reason = _knowledge_reserve(views, command, factor)
+    if reason is not None:
+        return views, reason
+    successors = []
+    for view in views:
+        # Check every old view, including ones whose prospective observation
+        # will differ. A later unsupported guard discards this entire attempt.
+        transition = _knowledge_transaction(view, command, maps, now)
+        if transition is None:
+            return views, 'KnowledgeModelIncomplete'
+        staged, result, scope, selected_key, reconciliation = transition
+        hypothetical = _retained_knowledge(command, result, scope, staged['rows'], selected_key)
+        if hypothetical['scope'] != witness['scope'] or hypothetical['fact'] != witness['fact']:
+            continue
+        if delivered is not None and _declared_result(command, result, staged['rows'], selected_key, reconciliation) != delivered:
+            continue
+        candidates = (view, staged) if factor == 2 else (staged,)
+        for candidate in candidates:
+            # Equality includes every row field, actor sequence and proof.
+            if candidate not in successors:
+                successors.append(candidate)
+    return (successors, None) if successors else (views, 'InconsistentObservation')
+
+
+def predict(value, *, _stop_at_evidence=False):
     """Independent Python predicates; outputs are explicitly predictions only."""
     maps = parse_scenario(value)
+    initial = value['initial']
+    initial_reason = ('RowBudget' if len(initial['rows']) > MAX_KNOWLEDGE_ROWS else
+                      'ByteBudget' if _knowledge_world_bytes(initial['rows'], initial['actor_sequences'], initial['proofs']) > MAX_KNOWLEDGE_BYTES else None)
+    if initial_reason is not None:
+        return {'origin': 'prediction', 'projection': [], 'compatibility_projection': [] if value['stage1'] else None,
+                'execution': 'Inconclusive', 'terminal': False, 'coordinators_finished': False,
+                'safety_failure': None,
+                'knowledge_stop': {'index': 0, 'phase': 'BeforeInitialState', 'reason': initial_reason}}
+    views = [{'rows': {row['key']: copy.deepcopy(row) for row in initial['rows']},
+              'sequences': copy.deepcopy(initial['actor_sequences']), 'proofs': set(initial['proofs'])}]
     rows = {row['key']: copy.deepcopy(row) for row in value['initial']['rows']}
     sequences = copy.deepcopy(value['initial']['actor_sequences'])
     proofs = set(value['initial']['proofs'])
     projection, compatibility, prior = [], [], {}
+    knowledge_stop, safety_failure = None, None
+    processed_events = 0
     for index, command in enumerate(value['commands']):
         action, cut = command['action'], command['schedule']['cut']
         now = command['times'][{'finalize': 'finalize_us', 'reconcile': 'reconcile_us'}.get(action, 'admission_us')]
@@ -666,11 +861,16 @@ def predict(value):
             'BackendFailure' if coordinator['outcome'] == 'PreCommitFailure' else coordinator['outcome']
         if not accepted:
             reconciliation = None
-        old_counts, staged_counts = _counts(before, command['actor'], now), _counts(staged, command['actor'], now)
         active, retained = _counts(rows, command['actor'], now)
         uncertain = knowledge == 'CommitCallEntered'
-        ranges = [(min(a, b), max(a, b)) if uncertain else (observed, observed)
-                  for a, b, observed in zip(old_counts, staged_counts, (active, retained))]
+        views, stopped = _knowledge_advance(views, command, maps, now, witness, coordinator)
+        if stopped is None:
+            counts = [_counts(view['rows'], command['actor'], now) for view in views]
+            ranges = [(min(count[column] for count in counts), max(count[column] for count in counts))
+                      for column in (0, 1)]
+        else:
+            ranges = [(None, None), (None, None)]
+            knowledge_stop = {'index': index, 'phase': 'AfterCommand', 'reason': stopped}
         reservation = None
         if knowledge == 'ReceiptKnown' and result == 'Proceed':
             owned = staged[selected_key]
@@ -703,13 +903,20 @@ def predict(value):
                            'actor_sequence': sequences[command['actor']], 'proof_present': proof in proofs if proof else None},
                  'caller': {'active_min': ranges[0][0], 'active_max': ranges[0][1],
                             'retained_min': ranges[1][0], 'retained_max': ranges[1][1],
+                            'knowledge_complete': stopped is None, 'possible_states': len(views) if stopped is None else None,
                             'reservation_receipt': reservation_receipt, 'reservation': reservation, 'finalization_receipt': finalization_receipt,
                             'unresolved': uncertain},
                  'completion': {'accepted': accepted, 'pending': not accepted, 'rejections': rejections},
                  'reconcile': reconciliation}
+        processed_events += 1 + len(command['schedule']['completions'])
+        evidence_stop = _stop_at_evidence and (
+            processed_events > value['budgets']['events'] or
+            len(canonical(projection).encode()) + len(canonical(event).encode()) > max(0, value['budgets']['evidence_bytes']-2048))
         projection.append(event)
+        if safety_failure is None and active > CAPACITY:
+            safety_failure = {'index': index, 'active': active}
         prior[command['operation_id']] = event
-        if value['stage1'] is not None:
+        if value['stage1'] is not None and stopped is None:
             old = value['stage1']['scenario']['commands'][index]
             old_row = before.get(command['key']) if uncertain else world_row
             cancelled_before_effect = (event['cancellation'] and coordinator['state'] == 'Waiting' and
@@ -724,17 +931,21 @@ def predict(value):
                                   'row_state': 'Unconfirmed' if uncertain else old_row['state'] if old_row else 'Absent',
                                   'expires_at_us': None if uncertain or old_row is None else old_row['expires_at_us'],
                                   'lease': None if uncertain or old_row is None else old_row['lease']})
-    unfinished = any(event['completion']['pending'] and event['execution'] != 'Cancelled' for event in projection)
+        if stopped is not None or evidence_stop:
+            break
+    unfinished = knowledge_stop is not None or any(event['completion']['pending'] and event['execution'] != 'Cancelled' for event in projection)
     execution = 'Inconclusive' if unfinished else 'Cancelled' if any(event['execution'] == 'Cancelled' for event in projection) else 'Completed'
     return {'origin': 'prediction', 'projection': projection, 'compatibility_projection': compatibility if value['stage1'] else None,
             'execution': execution, 'terminal': not unfinished,
-            'coordinators_finished': all(event['coordinator']['state'] == 'Finished' for event in projection)}
+            'coordinators_finished': knowledge_stop is None and all(event['coordinator']['state'] == 'Finished' for event in projection),
+            'knowledge_stop': knowledge_stop, 'safety_failure': safety_failure}
 
 
 EVENT_FIELDS = ('index operation_id effect_id causal_id attempt generation action kind times domain execution knowledge '
                 'scope world caller completion reconcile cancellation coordinator witness')
 WORLD_FIELDS = 'committed result active retained row_state expires_at_us lease actor_sequence proof_present'
-CALLER_FIELDS = 'active_min active_max retained_min retained_max reservation_receipt reservation finalization_receipt unresolved'
+CALLER_FIELDS = ('active_min active_max retained_min retained_max knowledge_complete possible_states '
+                 'reservation_receipt reservation finalization_receipt unresolved')
 DOMAINS = ('Proceed', 'ReplayAccepted', 'InProgress', 'Denied', 'Conflict', 'CapacityLimited', 'Missing', 'AlreadyAccepted',
            'LeaseLost', 'Accepted', 'GuardOnlyAllowed', 'GuardOnlyDenied', 'ReconcileExactPending', 'ReconcileExactAccepted',
            'ReconcileMissing', 'ReconcileSuperseded', 'ReconcileConflicting', 'NotRequested', 'BackendFailure', 'Unknown',
@@ -824,7 +1035,7 @@ def _validate_coordinator(value):
 
 
 def validate_output(value, output):
-    fields(output, 'schema adapter model scenario_id input_sha256 execution terminal coordinators_finished observation_failure evidence_complete projection compatibility_projection limitations',
+    fields(output, 'schema adapter model scenario_id input_sha256 execution terminal coordinators_finished observation_failure knowledge_stop safety_failure evidence_complete projection compatibility_projection limitations',
            'controlled output')
     require(output['schema'] == OUTPUT_SCHEMA and output['adapter'] == ADAPTER and output['model'] == MODEL,
             'output_version')
@@ -833,6 +1044,23 @@ def validate_output(value, output):
     boolean(output['terminal'], 'terminal')
     boolean(output['evidence_complete'], 'evidence_complete')
     boolean(output['coordinators_finished'], 'coordinators_finished')
+    if output['knowledge_stop'] is not None:
+        stop = output['knowledge_stop']
+        fields(stop, 'index phase reason', 'knowledge_stop')
+        integer(stop['index'], 'knowledge_stop_index', 0, len(value['commands'])-1)
+        require(stop['phase'] in ('BeforeInitialState', 'AfterCommand'), 'knowledge_stop_phase')
+        require(stop['reason'] in ('ViewBudget', 'RowBudget', 'ByteBudget', 'KnowledgeModelIncomplete', 'InconsistentObservation'),
+                'knowledge_stop_reason')
+        require(stop['phase'] != 'BeforeInitialState' or (stop['index'] == 0 and not output['projection']), 'initial_knowledge_stop')
+        require(not output['evidence_complete'] and not output['terminal'] and not output['coordinators_finished'] and
+                output['execution'] == 'Inconclusive', 'knowledge_stop_incomplete')
+    if output['safety_failure'] is not None:
+        failure = output['safety_failure']
+        fields(failure, 'index active', 'safety_failure')
+        integer(failure['index'], 'safety_failure_index', 0, len(value['commands'])-1)
+        # Typed but wrong summaries must reach the independent comparison and
+        # become ReplayDivergence, never acquire authority through this parser.
+        integer(failure['active'], 'safety_failure_active', 0, MAX_ROWS + MAX_STEPS)
     if output['observation_failure'] is not None:
         failure = output['observation_failure']
         fields(failure, 'class index operation_id', 'observation_failure')
@@ -878,10 +1106,19 @@ def validate_output(value, output):
             boolean(world['proof_present'], 'proof_present')
         caller = event['caller']
         fields(caller, CALLER_FIELDS, 'caller')
-        for key in ('active_min', 'active_max', 'retained_min', 'retained_max'):
-            integer(caller[key], key, 0, MAX_ROWS + MAX_STEPS)
-        require(caller['active_min'] <= caller['active_max'] <= caller['retained_max'] and
-                caller['retained_min'] <= caller['retained_max'], 'caller_counts')
+        boolean(caller['knowledge_complete'], 'knowledge_complete')
+        if caller['knowledge_complete']:
+            integer(caller['possible_states'], 'possible_states', 1, MAX_KNOWLEDGE_VIEWS)
+            for key in ('active_min', 'active_max', 'retained_min', 'retained_max'):
+                integer(caller[key], key, 0, MAX_ROWS + MAX_STEPS)
+            require(caller['active_min'] <= caller['active_max'] <= caller['retained_max'] and
+                    caller['retained_min'] <= caller['retained_max'], 'caller_counts')
+        else:
+            require(all(caller[key] is None for key in ('active_min', 'active_max', 'retained_min', 'retained_max', 'possible_states')),
+                    'incomplete_caller_bounds')
+            stop = output['knowledge_stop']
+            require(stop is not None and stop['phase'] == 'AfterCommand' and
+                    stop['index'] == event['index'], 'incomplete_caller_stop')
         for key in ('reservation_receipt', 'finalization_receipt', 'unresolved'):
             boolean(caller[key], key)
         if caller['reservation'] is not None:
@@ -925,14 +1162,14 @@ def derive_invariant(value, projection):
 
 
 def expected_counterexample(value):
-    predicted = predict(value)
+    predicted = predict(value, _stop_at_evidence=True)
     invariant = derive_invariant(value, predicted['projection'])
     return None if invariant is None else {'invariant': invariant, 'projection': predicted['projection'],
                                           'compatibility_projection': predicted['compatibility_projection']}
 
 
 def evaluate(value, output, *, expected_failure=None):
-    predicted = predict(value)
+    predicted = predict(value, _stop_at_evidence=True)
     validate_output(value, output)
     expected = expected_counterexample(value)
     if expected_failure is not None:
@@ -954,7 +1191,16 @@ def evaluate(value, output, *, expected_failure=None):
                 len(actual) == len(predicted['projection']) and
                 (value['stage1'] is None or len(output['compatibility_projection']) == len(predicted['compatibility_projection'])))
     expected_output_value = expected_output(value)
-    execution_matches = all(output[key] == expected_output_value[key] for key in ('execution', 'terminal', 'coordinators_finished', 'observation_failure', 'evidence_complete', 'limitations'))
+    summary_mismatch = None
+    for key in ('safety_failure', 'knowledge_stop'):
+        if output[key] != expected_output_value[key]:
+            summary = output[key] or expected_output_value[key]
+            summary_mismatch = {'index': summary['index'], 'field': key,
+                                'expected': expected_output_value[key], 'actual': output[key]}
+            break
+    execution_matches = all(output[key] == expected_output_value[key] for key in
+                            ('execution', 'terminal', 'coordinators_finished', 'observation_failure',
+                             'knowledge_stop', 'safety_failure', 'evidence_complete', 'limitations'))
     if prefix_mismatch is not None or compatibility_mismatch is not None:
         mismatch = prefix_mismatch or compatibility_mismatch
         at = min(mismatch['index'], len(value['commands'])-1)
@@ -968,7 +1214,19 @@ def evaluate(value, output, *, expected_failure=None):
                    'location': failure['operation_id'], 'cut': value['commands'][failure['index']]['schedule']['cut'],
                    'output': copy.deepcopy(failure)}
         verdict = 'InvariantViolation'
+    elif summary_mismatch is not None:
+        at = summary_mismatch['index']
+        derived = {'id': 'controlled-projection-mismatch', 'class': 'ReplayDivergence',
+                   'location': value['commands'][at]['operation_id'], 'cut': value['commands'][at]['schedule']['cut'],
+                   'output': copy.deepcopy(summary_mismatch)}
+        verdict = 'InvariantViolation'
     elif derived is not None:
+        verdict = 'InvariantViolation'
+    elif output['safety_failure'] is not None:
+        failure = output['safety_failure']
+        derived = {'id': 'actor-active-cap-4096', 'class': 'Safety',
+                   'location': value['commands'][failure['index']]['operation_id'], 'cut': value['commands'][failure['index']]['schedule']['cut'],
+                   'output': copy.deepcopy(failure)}
         verdict = 'InvariantViolation'
     elif output['execution'] in ('Cancelled', 'EnvironmentInterrupted'):
         verdict = output['execution']
@@ -979,7 +1237,7 @@ def evaluate(value, output, *, expected_failure=None):
     replay_matched = (complete and execution_matches and first_mismatch is None and compatibility_mismatch is None and
                       derived == (expected_failure['invariant'] if expected_failure is not None else None))
     return {'verdict': verdict, 'qualified': verdict == 'Pass', 'replay_matched': replay_matched,
-            'complete': complete, 'evidence_overflow': overflow, 'first_mismatch': first_mismatch,
+            'complete': complete, 'evidence_overflow': overflow, 'first_mismatch': summary_mismatch or first_mismatch,
             'compatibility_mismatch': compatibility_mismatch, 'invariant': derived}
 
 
@@ -1158,32 +1416,48 @@ LIMITATIONS = [
     'Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys',
     'Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug',
     'Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3',
+    'Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits',
+    'Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted',
 ]
 
 
 def expected_output(value):
     """Independent exact expected bytes/shape, never passed to the Rust runner."""
-    prediction = predict(value)
+    prediction = predict(value, _stop_at_evidence=True)
     projection, compatibility, events, complete = [], [], 0, True
+    knowledge_stop = prediction['knowledge_stop'] if not prediction['projection'] else None
+    safety_failure = None
     for index, event in enumerate(prediction['projection']):
+        # The current command really ran even if its detail exhausts evidence.
+        # Never copy summaries from predictions after this processed prefix.
+        if safety_failure is None and event['world']['active'] > CAPACITY:
+            safety_failure = {'index': event['index'], 'active': event['world']['active']}
+        if not event['caller']['knowledge_complete']:
+            knowledge_stop = prediction['knowledge_stop']
         events += 1 + len(value['commands'][index]['schedule']['completions'])
         if events > value['budgets']['events'] or len(canonical(projection).encode()) + len(canonical(event).encode()) > max(0, value['budgets']['evidence_bytes']-2048):
             complete = False
             break
         projection.append(event)
-        if value['stage1']:
+        if value['stage1'] and event['caller']['knowledge_complete']:
             compatibility.append(prediction['compatibility_projection'][index])
+    complete = complete and knowledge_stop is None
     terminal = complete and prediction['terminal']
     output = {'schema': OUTPUT_SCHEMA, 'adapter': ADAPTER, 'model': MODEL, 'scenario_id': value['scenario_id'],
               'input_sha256': digest(value), 'execution': prediction['execution'] if terminal else 'Inconclusive',
               'terminal': terminal, 'evidence_complete': complete, 'projection': projection,
               'coordinators_finished': complete and prediction['coordinators_finished'],
-              'observation_failure': None,
+              'observation_failure': None, 'knowledge_stop': knowledge_stop, 'safety_failure': safety_failure,
               'compatibility_projection': compatibility if value['stage1'] else None, 'limitations': LIMITATIONS.copy()}
     while len(canonical(output).encode()) > value['budgets']['evidence_bytes']:
-        require(output['projection'], 'root_evidence_budget')
+        if not output['projection']:
+            # The fixed root is statically bounded below the 2048-byte minimum.
+            # If future fields break that promise, preserve failure evidence;
+            # evaluate will report overflow rather than invent InvalidScenario.
+            output.update(evidence_complete=False, terminal=False, coordinators_finished=False, execution='Inconclusive')
+            break
         output['projection'].pop()
-        if output['compatibility_projection'] is not None:
+        if output['compatibility_projection'] is not None and len(output['compatibility_projection']) > len(output['projection']):
             output['compatibility_projection'].pop()
         output.update(evidence_complete=False, terminal=False, coordinators_finished=False, execution='Inconclusive')
     return output
@@ -1270,7 +1544,7 @@ def _shrink_target_event(event):
     result['world'] = {key: copy.deepcopy(item) for key, item in event['world'].items()
                        if key not in ('retained', 'actor_sequence', 'proof_present')}
     result['caller'] = {key: copy.deepcopy(item) for key, item in event['caller'].items()
-                        if key not in ('active_min', 'active_max', 'retained_min', 'retained_max')}
+                        if key not in ('active_min', 'active_max', 'retained_min', 'retained_max', 'possible_states')}
     return result
 
 
@@ -1303,7 +1577,8 @@ def shrink_target(value, output, evaluation):
                 event['world']['committed'] is True and event['execution'] == 'Completed' and
                 event['cancellation'] is False and coordinator['state'] == 'Finished' and
                 coordinator['outcome'] == 'Completed' and coordinator['result'] is not None and
-                coordinator['result']['kind'] == completion and event['witness']['kind'] == 'ReceiptKnown'):
+                coordinator['result']['kind'] == completion and event['witness']['kind'] == 'ReceiptKnown' and
+                event['caller']['knowledge_complete'] is True):
             return None
     if not (reserve['caller']['reservation_receipt'] is True and
             accepted['caller']['finalization_receipt'] is True and

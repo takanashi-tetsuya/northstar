@@ -366,7 +366,9 @@
             "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
             "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
             "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
-            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
+            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
+            "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
+            "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted"
           ]
         }
       }
@@ -1861,26 +1863,40 @@
             "reservation_receipt",
             "reservation",
             "finalization_receipt",
-            "unresolved"
+            "unresolved",
+            "knowledge_complete",
+            "possible_states"
           ],
           "properties": {
             "active_min": {
-              "type": "integer",
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 0,
               "maximum": 40256
             },
             "active_max": {
-              "type": "integer",
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 0,
               "maximum": 40256
             },
             "retained_min": {
-              "type": "integer",
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 0,
               "maximum": 40256
             },
             "retained_max": {
-              "type": "integer",
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 0,
               "maximum": 40256
             },
@@ -1935,9 +1951,72 @@
               "type": "boolean"
             },
             "unresolved": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "This operation retains CommitCallEntered; false does not resolve any earlier Unknown operation."
+            },
+            "knowledge_complete": {
+              "type": "boolean",
+              "description": "Whether all bounded possible storage states were retained for this observation; incomplete current bounds are null."
+            },
+            "possible_states": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 64,
+              "description": "Number of distinct surviving full storage states; the adapter reserves at most 64 attempted successors before filtering or deduplication."
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "knowledge_complete": {
+                    "const": false
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "active_min": {
+                    "type": "null"
+                  },
+                  "active_max": {
+                    "type": "null"
+                  },
+                  "retained_min": {
+                    "type": "null"
+                  },
+                  "retained_max": {
+                    "type": "null"
+                  },
+                  "possible_states": {
+                    "type": "null"
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "active_min": {
+                    "type": "integer"
+                  },
+                  "active_max": {
+                    "type": "integer"
+                  },
+                  "retained_min": {
+                    "type": "integer"
+                  },
+                  "retained_max": {
+                    "type": "integer"
+                  },
+                  "possible_states": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          ]
         },
         "completion": {
           "type": "object",
@@ -2065,11 +2144,13 @@
         "compatibility_projection",
         "limitations",
         "coordinators_finished",
-        "observation_failure"
+        "observation_failure",
+        "knowledge_stop",
+        "safety_failure"
       ],
       "properties": {
         "schema": {
-          "const": "northstar-admission-controlled-output-v2"
+          "const": "northstar-admission-controlled-output-v3"
         },
         "adapter": {
           "const": "controlled_rust"
@@ -2124,7 +2205,9 @@
             "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
             "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
             "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
-            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3"
+            "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
+            "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
+            "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted"
           ]
         },
         "coordinators_finished": {
@@ -2159,6 +2242,73 @@
               }
             }
           ]
+        },
+        "knowledge_stop": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "index",
+                "phase",
+                "reason"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "phase": {
+                  "enum": [
+                    "BeforeInitialState",
+                    "AfterCommand"
+                  ]
+                },
+                "reason": {
+                  "enum": [
+                    "ViewBudget",
+                    "RowBudget",
+                    "ByteBudget",
+                    "KnowledgeModelIncomplete",
+                    "InconsistentObservation"
+                  ]
+                }
+              }
+            }
+          ],
+          "description": "First caller-model stop, located by command index in the exact input bound by input_sha256; BeforeInitialState means no command ran."
+        },
+        "safety_failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "index",
+                "active"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "active": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 40256
+                }
+              }
+            }
+          ],
+          "description": "First retained actual capacity observation, located by command index; typed facts must be checked independently before assigning Safety."
         }
       },
       "allOf": [
@@ -2217,6 +2367,31 @@
                 "const": false
               },
               "evidence_complete": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "knowledge_stop": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "execution": {
+                "const": "Inconclusive"
+              },
+              "terminal": {
+                "const": false
+              },
+              "evidence_complete": {
+                "const": false
+              },
+              "coordinators_finished": {
                 "const": false
               }
             }

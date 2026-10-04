@@ -1,6 +1,6 @@
 # Northstar 實驗架構重建台帳
 
-更新日期：2026-10-03。這是由持久 Git 基線重新實作的台帳；不是遺失工作樹的還原證明。
+更新日期：2026-10-04。這是由持久 Git 基線重新實作的台帳；不是遺失工作樹的還原證明。
 
 ## 來源與證據界線
 
@@ -261,3 +261,24 @@ Positive control 必須是從選定 reduced input 移除既定第一列 actor-a 
 多 Unknown 的 caller knowledge 仍待修正；clock／as-of 與 Stage3／5 責任也仍開放。
 先前 `coordinators_finished` 僅指核心是否都有 Finished outcome；Finished 本身仍可能是 Unknown，
 不能據此宣稱 commit 確定或 domain responsibility 已 settlement。Stage2 仍未通過整體退出。
+
+## Multi-Unknown 有限狀態知識窄修正
+
+`280da7d8` 已保存 shrink target/history 修正，普通 CI 完整成功；專項 Python／replay資格仍未執行。
+新的 output v3 使用有限完整storage alternatives，僅由實際retained witness及已交付result篩選。
+Unknown保留commit／no-commit；no-commit failure／cancel、guard-memory及未交付reconcile不會
+憑空排除storage view。Proof view無法建模則KnowledgeModelIncomplete，空集合則
+InconsistentObservation，均保留實際outcome／receipt及先前failure。
+
+64是filter/dedup之前的attempted-successor上限；aggregate row-copy與modeled serialized bytes
+另外預留source、successors、兩個transaction scratch及16個DTO，複製前用checked arithmetic檢查。
+這不是RSS上限。Stop event的count bounds／possible_states為null，後續command不再執行；
+knowledge analysis不改寫先前facts，但輸出仍可能受evidence budget裁切；full event／receipt
+細節只在空間足夠時保留，bounded prefixes與persistent first-failure／stop summaries明示缺失。
+`caller.unresolved`仍是operation-scoped，不代表全部Unknown已解決。
+
+Compact summaries與Rust編譯期root大小上界，保護原本2048-byte最小budget中的首次failure。
+Stage1遇不完整stop只保留既有compatibility prefix，不編造數值。精確來源、ordinary檢查及限制見
+[multi-Unknown紀錄](../evidence/experimental-rebuild/stage2-multi-unknown-correction.json)。
+五個原始blocker的來源修正現已齊備，但沒有據此把Stage2標成通過。專項執行、真adapter與後續
+責任仍待完成；下一個驗證交接見[獨立驗證清單](controlled-admission-validation-handoff.zh-TW.md)。

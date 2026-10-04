@@ -1,0 +1,43 @@
+{
+  "schema": "northstar-rest-body-diagnostics-v1",
+  "status": "SourceAndSyntaxOnly",
+  "base_commit": "ce2da7456cf793b0c43ac36cdcd014d5ab1c2560",
+  "source": {
+    "path": "scripts/rest-body-wire.py",
+    "bytes": 4971,
+    "sha256": "e226b1b9b462dcc9e4e23810bf08168ab9fd2abb4f5e0b770a76fb2ee9668f20"
+  },
+  "syntax": {
+    "method": "Python ast.parse of file bytes; no import or execution of the fixture",
+    "python_version": "3.12.14",
+    "elapsed_ns": 934597,
+    "source_unchanged": true,
+    "passed": true,
+    "standalone_command_exit_code": 0,
+    "standalone_command_output_bytes": 0
+  },
+  "change": "Only the synthetic reads expecting 429 opt in (public, public TLS and admin). Diagnostics identify POST /api/v1/login and eight incomplete bodies, with an 80-byte status-line prefix and 512-byte raw response prefix via repr. Diagnostic errors are suppressed, then the original OSError is re-raised.",
+  "unchanged": [
+    "3-second socket timeout and existing other deadlines",
+    "EOF requirement, expected 429, request-id and retry-after assertions, and successful returned bytes",
+    "Eight incomplete bodies, request order, socket cleanup in finally, and all other reads"
+  ],
+  "prior_failure": {
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37207813100",
+    "job": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37207813100/job/111452589481",
+    "observed": "TLS recv timed out awaiting EOF for the synthetic public request expecting 429; denied-response bytes were not captured.",
+    "root_cause": "Unknown",
+    "cleanup": "Existing integration output reports listeners=0; no new cleanup operation or independent session audit was performed.",
+    "ci_terminal": {
+      "success": 30,
+      "failure": 2,
+      "skipped": 1,
+      "cancelled": 0,
+      "failure_scope": "Protocol integration plus required aggregate."
+    }
+  },
+  "limits": [
+    "Diagnostic source only; no root-cause fix or claim of flakiness.",
+    "No network fixture, service, fault or manual CI rerun was executed for this change."
+  ]
+}

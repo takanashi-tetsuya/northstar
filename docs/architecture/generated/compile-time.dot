@@ -1057,12 +1057,16 @@ digraph compile_time {
   "northstar-session-core" -> "serde";
   "northstar-session-core" -> "uuid";
   "northstar-test-harness" -> "anyhow";
+  "northstar-test-harness" -> "chrono";
   "northstar-test-harness" -> "libc";
+  "northstar-test-harness" -> "northstar-abuse-policy";
   "northstar-test-harness" -> "serde";
   "northstar-test-harness" -> "serde_json";
+  "northstar-test-harness" -> "sha2";
   "northstar-test-harness" -> "socket2";
   "northstar-test-harness" -> "tokio";
   "northstar-test-harness" -> "tracing";
+  "northstar-test-harness" -> "uuid";
   "northstar-upload-application" -> "northstar-upload-core";
   "northstar-upload-application" -> "northstar-xmpp-types";
   "northstar-upload-application" -> "uuid";

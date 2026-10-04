@@ -40,7 +40,7 @@ const mutations = [
   ['async frame observation starts too late', 'frame', source => source.replace('pub(super) fn run<T>', 'pub(super) async fn run<T>')],
   ['child not destroyed before terminal', 'frame', source => source.replace('drop(self.child.take());', '')],
   ['protocol retained begin removed', 'messaging', source => source.replace('.begin_message_admission_retained(&request, &retained)', '.legacy_begin(&request, &retained)')],
-  ['protocol retained finalization removed', 'messaging', source => source.replace('.accept_message_admission_retained(&lease, &retained)', '.legacy_finalize(&lease, &retained)')],
+  ['shared retained finalization removed', 'service', source => source.replace('.accept_message_admission_retained(&lease, &retained)', '.legacy_finalize(&lease, &retained)')],
   ['duplicated begin decision', 'repository', source => source.replace('decision::decide_begin(', 'legacy_decide_begin(')],
   ['missing locked row fetch', 'repository', source => source.replace('.fetch_all(&mut *tx)', '.fetch_optional(&mut *tx)')],
   ['duplicated actor cap', 'repository', source => source.replace('decision::decide_actor_capacity(', 'legacy_decide_actor_capacity(')],
@@ -66,3 +66,60 @@ for (const [name, field, mutate] of mutations) {
     assert.throws(() => verifyAdmissionBoundaries({ ...sources, [field]: changed }), /admission boundary:/);
   });
 }
+
+function rejectsDirect(name, field, pattern, replacement) {
+  test(`rejects ${name}`, () => {
+    const source = sources[field];
+    // messaging.rs has an existing test module before its production impl.
+    // Its selected forwarding expressions must therefore be unique across
+    // the whole file; truncating at that module would miss the real caller.
+    const marker = field === 'messaging' ? null
+      : /\n#\[cfg\(test\)\]\s*\n(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\b/.exec(source);
+    const split = marker ? marker.index : source.length;
+    const production = source.slice(0, split);
+    assert.equal([...production.matchAll(pattern)].length, 1, 'direct continuation mutation must match exactly once in production source');
+    const changed = production.replace(pattern, replacement) + source.slice(split);
+    assert.notEqual(changed, source, 'direct continuation mutation must change source');
+    assert.throws(() => verifyAdmissionBoundaries({ ...sources, [field]: changed }), /admission boundary:/);
+  });
+}
+rejectsDirect('publicly replaceable applied result', 'directWorkflow',
+  /actual: anyhow::Result<DirectPersonalMessageAdmission>,/g,
+  'pub(crate) actual: anyhow::Result<DirectPersonalMessageAdmission>,');
+rejectsDirect('clonable applied result and continuation', 'directWorkflow',
+  /pub\(crate\) struct AppliedLocalDirect/g,
+  '#[derive(Clone)]\npub(crate) struct AppliedLocalDirect');
+rejectsDirect('second unbound applied-pair constructor', 'directWorkflow',
+  /pub\(crate\) struct AppliedLocalDirect/g,
+  "pub(crate) fn raw_applied<'a>(actual: anyhow::Result<DirectPersonalMessageAdmission>, continuation: LocalDirectContinuation<'a>) -> AppliedLocalDirect<'a> { AppliedLocalDirect { actual, continuation } }\npub(crate) struct AppliedLocalDirect");
+rejectsDirect('applied-pair decomposition API', 'directWorkflow',
+  /pub\(crate\) struct AppliedLocalDirect/g,
+  "impl<'a> AppliedLocalDirect<'a> { pub(crate) fn into_parts(self) -> (anyhow::Result<DirectPersonalMessageAdmission>, LocalDirectContinuation<'a>) { (self.actual, self.continuation) } }\npub(crate) struct AppliedLocalDirect");
+rejectsDirect('application bridge missing its actual observer', 'directWorkflow',
+  /\.commit_direct\(\s*prepared\.command\(\),\s*prepared\.eligibility\(\),\s*Some\(&prepared\),?\s*\)/g,
+  '.commit_direct(prepared.command(), prepared.eligibility(), None)');
+rejectsDirect('application bridge discards receipt-aware error mapping', 'directWorkflow',
+  /\.map_err\(super::direct_commit_error\)/g, '.map_err(legacy_direct_error)');
+rejectsDirect('message service passes another preparation', 'messageService',
+  /commit_prepared_application\(\s*&self\.personal,\s*prepared,?\s*\)/g,
+  'commit_prepared_application(&self.personal, other_prepared)');
+rejectsDirect('protocol finalizer loses the originating owner', 'messaging',
+  /\|\| self\.message_operation\(\),/g, '|| None,');
+rejectsDirect('shared finalizer consumes lease before retaining its handle', 'service',
+  /(let retained = operation\(\)\.map\(\|operation\| operation\.finalize\(retained_lease\)\);)\s*(let lease = lease\.take\(\)\.expect\("lease checked above"\);)/g,
+  '$2 $1');
+rejectsDirect('protocol swaps the sealed application value', 'messaging',
+  /(match continue_prepared_local_direct\(\s*)applied,/g, '$1other_applied,');
+rejectsDirect('retained route bypasses the shared live continuation', 'messaging',
+  /live\.route_with\(&\*self\.state, &targets\)/g, 'legacy_route(&*self.state, &targets)');
+rejectsDirect('eager health read in shared continuation', 'directWorkflow',
+  /(let AppliedLocalDirect\s*\{\s*actual,\s*continuation,?\s*\}\s*=\s*applied;)/g,
+  '$1 let _ = route.direct_route_mode();');
+rejectsDirect('stored continuation skips shared finalization', 'directWorkflow',
+  /finalize_message_admission_with\(\s*admission,\s*lease,\s*if mode/g,
+  'skip_finalization(admission, lease, if mode');
+rejectsDirect('late route substitutes a different committed source', 'directWorkflow',
+  /delivery: super::DirectRouteDelivery::Committed\(self\.source\(\)\),/g,
+  'delivery: super::DirectRouteDelivery::Committed(other_source),');
+rejectsDirect('late route disables its existing health gate', 'directWorkflow',
+  /enforce_direct_health: true,/g, 'enforce_direct_health: false,');

@@ -1,5 +1,7 @@
 use super::{Action, ProtocolSession};
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
+#[cfg(test)]
+use crate::services::messaging::direct_workflow::PreparedHandoffNext;
 use crate::services::messaging::{
     admit_offline_then_push, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
     DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
@@ -14,8 +16,8 @@ use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
 use crate::services::{
     message_admission::witness::DirectOperationHandle,
     messaging::direct_workflow::{
-        preserved_transaction, LiveDirectBinding, LocalPreparation, PreparedHandoffNext,
-        PreparedLocalDirect,
+        continue_prepared_local_direct, preserved_transaction, ContinuedLocalDirect,
+        LiveDirectBinding, LocalPreparation, PreparedLocalDirect,
     },
 };
 use crate::xmpp::frame_execution::Stage;
@@ -955,6 +957,28 @@ where
 }
 
 impl ProtocolSession {
+    /// Ordinary controlled tests use the actual frame owner without constructing
+    /// a session. The returned runner owns observation before child polling.
+    #[cfg(test)]
+    pub(crate) fn retained_direct_frame_for_test<C, F, T>(
+        child: C,
+    ) -> (
+        DirectOperationHandle,
+        impl Future<Output = std::result::Result<T, crate::xmpp::frame_execution::FrameFailure>>,
+    )
+    where
+        C: FnOnce(DirectOperationHandle) -> F,
+        F: Future<Output = Result<T>>,
+    {
+        let execution = crate::xmpp::frame_execution::FrameExecution::new(
+            super::ClientTransport::Tcp,
+            "<message type='chat'/>",
+        );
+        let operation = execution.direct_operation();
+        let future = child(operation.clone());
+        (operation, execution.run(future))
+    }
+
     pub(crate) async fn message(
         &self,
         root: Node<'_, '_>,
@@ -1682,7 +1706,7 @@ impl ProtocolSession {
             || (!spool_only_now && self.state.personal_message_remote_resource_exists(to).await);
         let mut history_committed = false;
         let mut durable_c2s_delivery = None;
-        let mut prepared_handoff = None;
+        let mut prepared_live = None;
         let mut live_claim_id = None;
         let direct_delivery_candidate = direct_invite_room.is_none()
             && matches!(message_type, "normal" | "chat")
@@ -1750,166 +1774,147 @@ impl ProtocolSession {
                 direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
             self.enter_frame_stage(Stage::MessageAdmission);
             let service = self.state.message_service();
-            let mut continuation = None;
-            let admitted = if let Some(operation) = self.message_operation() {
-                match delayed_projection.bind(operation, admission, eligibility) {
-                    Ok(prepared) => {
-                        let result = service
-                            .admit_prepared_personal_message_with_mode(&prepared)
-                            .await;
-                        continuation = Some(prepared.into_continuation());
-                        result
+            if let Some(operation) = self.message_operation() {
+                let prepared = match delayed_projection.bind(operation, admission, eligibility) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission did not return a confirmed result");
+                        return Ok(message_error(root, "wait", "resource-constraint"));
                     }
-                    Err(error) => Err(error),
+                };
+                let applied = service
+                    .admit_prepared_personal_message_with_mode(prepared)
+                    .await;
+                match continue_prepared_local_direct(
+                    applied,
+                    &mut message_admission_lease,
+                    self.state.message_admission_service(),
+                    &*self.state,
+                    || self.enter_frame_stage(Stage::MessageFollowup),
+                )
+                .await
+                {
+                    ContinuedLocalDirect::Accepted => return Ok(Action::None),
+                    ContinuedLocalDirect::Reject(error) => {
+                        let (kind, condition) = error.stanza_error();
+                        return Ok(message_error(root, kind, condition));
+                    }
+                    ContinuedLocalDirect::Live(live) => {
+                        history_committed = live.archive_written();
+                        let source = live.source();
+                        durable_c2s_delivery = Some(source.message_id);
+                        live_claim_id = source.claim_id;
+                        prepared_live = Some(live);
+                    }
                 }
             } else {
-                service
+                // Compatibility callers without a frame owner retain their
+                // original application and post-commit behavior.
+                let admitted = service
                     .admit_personal_message_with_mode(&admission, eligibility)
-                    .await
-            };
-            match admitted.map(|result| (result.commit, result.mode, result.live_claim_id)) {
-                Ok((
-                    DurableAdmissionOutcome::Stored {
-                        archive_written,
-                        post_commit,
-                    },
-                    post_commit_mode,
-                    admitted_claim_id,
-                )) => {
-                    history_committed = archive_written;
-                    let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit
-                    else {
-                        return Ok(message_error(root, "wait", "internal-server-error"));
-                    };
-                    durable_c2s_delivery = Some(delivery_id);
-                    live_claim_id = admitted_claim_id;
-                    tracing::debug!(
-                        recipient_id = %recipient.id,
-                        message_id = %recipient_stable_id,
-                        target = %to,
-                        "committed durable C2S delivery before route attempt"
-                    );
-                    self.finalize_message_admission(
-                        &mut message_admission_lease,
-                        if post_commit_mode == DirectPostCommitMode::Live {
-                            "local-durable-c2s"
-                        } else {
-                            "local-durable-c2s-spooled"
-                        },
-                    )
                     .await;
-                    // A committed spool row is accepted for recovery. It has
-                    // no live owner while Redis is degraded, so do not attempt
-                    // local delivery, Redis routing, Push, Carbons or a later
-                    // transient/offline fallback. The second mode read also
-                    // catches degradation during PoW finalization.
-                    if let Some(continuation) = continuation.take() {
-                        match continuation
-                            .after_finalize(|| self.state.message_service().direct_mode())
-                        {
-                            Ok(PreparedHandoffNext::Route(handoff)) => {
-                                prepared_handoff = Some(handoff)
-                            }
-                            Ok(PreparedHandoffNext::Recover(recovery)) => {
-                                DirectMessageRouter::recover_prepared(&*self.state, recovery).await;
-                                return Ok(Action::None);
-                            }
-                            Err(error) => {
-                                self.state.personal_message_telemetry().post_accept_failed();
-                                tracing::warn!(?error, "stored direct handoff could not be issued; row remains recoverable");
-                                return Ok(Action::None);
-                            }
-                        }
-                    } else if post_commit_mode != DirectPostCommitMode::Live
-                        || self.state.message_service().direct_mode() != DirectPostCommitMode::Live
-                    {
-                        self.state
-                            .message_service()
-                            .rearm_unrouted_live_direct(
-                                recipient.id,
-                                delivery_id,
-                                &mut live_claim_id,
-                            )
-                            .await;
+                match admitted.map(|result| (result.commit, result.mode, result.live_claim_id)) {
+                    Ok((
+                        DurableAdmissionOutcome::Stored {
+                            archive_written,
+                            post_commit,
+                        },
+                        post_commit_mode,
+                        admitted_claim_id,
+                    )) => {
+                        history_committed = archive_written;
+                        let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit
+                        else {
+                            return Ok(message_error(root, "wait", "internal-server-error"));
+                        };
+                        durable_c2s_delivery = Some(delivery_id);
+                        live_claim_id = admitted_claim_id;
                         tracing::debug!(
                             recipient_id = %recipient.id,
                             message_id = %recipient_stable_id,
-                            "C2S direct committed to PostgreSQL spool for recovery"
+                            target = %to,
+                            "committed durable C2S delivery before route attempt"
                         );
-                        return Ok(Action::None);
-                    }
-                }
-                Ok((DurableAdmissionOutcome::Replay, _, _)) => {
-                    self.finalize_message_admission(
-                        &mut message_admission_lease,
-                        "local-durable-c2s-replay",
-                    )
-                    .await;
-                    return Ok(Action::None);
-                }
-                Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => {
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                Err(error) => {
-                    if let Some(confirmed) = preserved_transaction(&error) {
-                        match confirmed {
-                            TransactionOutcome::Stored {
-                                recipient_id,
-                                delivery_id,
-                                live_claim_id,
-                                ..
-                            } => {
-                                self.state.personal_message_telemetry().post_accept_failed();
-                                self.finalize_message_admission(
-                                    &mut message_admission_lease,
-                                    "local-durable-c2s-continuation-unknown",
+                        self.finalize_message_admission(
+                            &mut message_admission_lease,
+                            if post_commit_mode == DirectPostCommitMode::Live {
+                                "local-durable-c2s"
+                            } else {
+                                "local-durable-c2s-spooled"
+                            },
+                        )
+                        .await;
+                        if post_commit_mode != DirectPostCommitMode::Live
+                            || self.state.message_service().direct_mode()
+                                != DirectPostCommitMode::Live
+                        {
+                            service
+                                .rearm_unrouted_live_direct(
+                                    recipient.id,
+                                    delivery_id,
+                                    &mut live_claim_id,
                                 )
                                 .await;
-                                if let Some(continuation) = continuation.take() {
-                                    match continuation.after_finalize(|| {
-                                        self.state.message_service().direct_mode()
-                                    }) {
-                                        Ok(PreparedHandoffNext::Recover(recovery)) => {
-                                            DirectMessageRouter::recover_prepared(
-                                                &*self.state,
-                                                recovery,
-                                            )
-                                            .await
-                                        }
-                                        Ok(PreparedHandoffNext::Route(_)) | Err(_) => self
-                                            .state
-                                            .personal_message_telemetry()
-                                            .post_accept_failed(),
-                                    }
-                                    return Ok(Action::None);
-                                }
-                                let mut claim = *live_claim_id;
-                                service
-                                    .rearm_unrouted_live_direct(
-                                        *recipient_id,
-                                        *delivery_id,
-                                        &mut claim,
-                                    )
-                                    .await;
-                                // Storage is positively known; returned routing
-                                // mode is not. Do not fabricate a live route.
-                                return Ok(Action::None);
-                            }
-                            TransactionOutcome::Replay { .. } => {
-                                self.finalize_message_admission(
-                                    &mut message_admission_lease,
-                                    "local-durable-c2s-replay-continuation-unknown",
-                                )
-                                .await;
-                                return Ok(Action::None);
-                            }
-                            TransactionOutcome::AccountUnavailable => {
-                                return Ok(message_error(root, "cancel", "service-unavailable"))
-                            }
+                            tracing::debug!(
+                                recipient_id = %recipient.id,
+                                message_id = %recipient_stable_id,
+                                "C2S direct committed to PostgreSQL spool for recovery"
+                            );
+                            return Ok(Action::None);
                         }
                     }
-                    tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission did not return a confirmed result");
-                    return Ok(message_error(root, "wait", "resource-constraint"));
+                    Ok((DurableAdmissionOutcome::Replay, _, _)) => {
+                        self.finalize_message_admission(
+                            &mut message_admission_lease,
+                            "local-durable-c2s-replay",
+                        )
+                        .await;
+                        return Ok(Action::None);
+                    }
+                    Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => {
+                        return Ok(message_error(root, "cancel", "service-unavailable"));
+                    }
+                    Err(error) => {
+                        if let Some(confirmed) = preserved_transaction(&error) {
+                            match confirmed {
+                                TransactionOutcome::Stored {
+                                    recipient_id,
+                                    delivery_id,
+                                    live_claim_id,
+                                    ..
+                                } => {
+                                    self.state.personal_message_telemetry().post_accept_failed();
+                                    self.finalize_message_admission(
+                                        &mut message_admission_lease,
+                                        "local-durable-c2s-continuation-unknown",
+                                    )
+                                    .await;
+                                    let mut claim = *live_claim_id;
+                                    service
+                                        .rearm_unrouted_live_direct(
+                                            *recipient_id,
+                                            *delivery_id,
+                                            &mut claim,
+                                        )
+                                        .await;
+                                    return Ok(Action::None);
+                                }
+                                TransactionOutcome::Replay { .. } => {
+                                    self.finalize_message_admission(
+                                        &mut message_admission_lease,
+                                        "local-durable-c2s-replay-continuation-unknown",
+                                    )
+                                    .await;
+                                    return Ok(Action::None);
+                                }
+                                TransactionOutcome::AccountUnavailable => {
+                                    return Ok(message_error(root, "cancel", "service-unavailable"))
+                                }
+                            }
+                        }
+                        tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission did not return a confirmed result");
+                        return Ok(message_error(root, "wait", "resource-constraint"));
+                    }
                 }
             }
         }
@@ -2175,26 +2180,26 @@ impl ProtocolSession {
             None => DirectRouteDelivery::Volatile,
         };
         self.enter_frame_stage(Stage::MessageRouting);
-        let route_request = DirectRouteRequest {
-            message_type,
-            target: if bare_target {
-                DirectRouteTarget::Bare(to)
-            } else {
-                DirectRouteTarget::Full {
-                    jid: to,
-                    bare: &recipient_by,
-                }
-            },
-            sender: from,
-            recipient_id: recipient.id,
-            stanza: recipient_delivery,
-            delivery,
-            approved_targets: &targets,
-            enforce_direct_health: local_direct,
-        };
-        let outcome = if let Some(handoff) = prepared_handoff {
-            DirectMessageRouter::route_prepared(&*self.state, route_request, handoff).await?
+        let outcome = if let Some(live) = prepared_live {
+            live.route_with(&*self.state, &targets).await?
         } else {
+            let route_request = DirectRouteRequest {
+                message_type,
+                target: if bare_target {
+                    DirectRouteTarget::Bare(to)
+                } else {
+                    DirectRouteTarget::Full {
+                        jid: to,
+                        bare: &recipient_by,
+                    }
+                },
+                sender: from,
+                recipient_id: recipient.id,
+                stanza: recipient_delivery,
+                delivery,
+                approved_targets: &targets,
+                enforce_direct_health: local_direct,
+            };
             DirectMessageRouter::route(&*self.state, route_request).await?
         };
         let (delivered, delivered_key) = match outcome {
@@ -2414,37 +2419,15 @@ impl ProtocolSession {
         lease: &mut Option<MessageAdmissionLease>,
         route: &'static str,
     ) {
-        let Some(retained_lease) = lease.as_ref() else {
-            return;
-        };
-        // Retain the exact fence outside the cancellable accept future before
-        // consuming the protocol's lease. Reservation knowledge stays separate.
-        let retained = self
-            .message_operation()
-            .map(|operation| operation.finalize(retained_lease));
-        let lease = lease.take().expect("lease checked above");
-        self.enter_frame_stage(Stage::MessageFollowup);
-        let service = self.state.message_admission_service();
-        let result = match retained {
-            Some(Ok(retained)) => {
-                service
-                    .accept_message_admission_retained(&lease, &retained)
-                    .await
-            }
-            Some(Err(error)) => Err(error),
-            None => service.accept_message_admission(&lease).await,
-        };
-        if let Err(error) = result {
-            // The route has already accepted the stanza. Returning an error
-            // would encourage a duplicate retry, so expose the remaining
-            // at-least-once recovery window only through logs and metrics.
-            self.state.personal_message_telemetry().post_accept_failed();
-            tracing::warn!(
-                ?error,
-                route,
-                "accepted message PoW admission could not be finalized"
-            );
-        }
+        crate::services::message_admission::finalize_message_admission_with(
+            self.state.message_admission_service(),
+            lease,
+            route,
+            || self.message_operation(),
+            || self.enter_frame_stage(Stage::MessageFollowup),
+            || self.state.personal_message_telemetry().post_accept_failed(),
+        )
+        .await;
     }
 
     async fn direct_invite_admission(

@@ -603,14 +603,11 @@ impl<R: MessageRepository> MessageService<R> {
             .map_err(direct_commit_error)
     }
 
-    pub(crate) async fn admit_prepared_personal_message_with_mode(
+    pub(crate) async fn admit_prepared_personal_message_with_mode<'command, 'live>(
         &self,
-        prepared: &direct_workflow::PreparedLocalDirect<'_, '_>,
-    ) -> Result<DirectPersonalMessageAdmission> {
-        self.personal
-            .commit_direct(prepared.command(), prepared.eligibility(), Some(prepared))
-            .await
-            .map_err(direct_commit_error)
+        prepared: direct_workflow::PreparedLocalDirect<'command, 'live>,
+    ) -> direct_workflow::AppliedLocalDirect<'live> {
+        direct_workflow::commit_prepared_application(&self.personal, prepared).await
     }
 
     /// Rearm recovery only when the initial live reservation still owns the

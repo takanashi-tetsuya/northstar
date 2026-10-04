@@ -296,6 +296,188 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
     }
 }
 
+/// Shared finalization body. The lazy owner lookup is intentionally skipped
+/// when no lease exists; preparing the retained handle precedes taking it.
+pub(crate) async fn finalize_message_admission_with<A, O, F, E>(
+    service: &MessageAdmissionService<A>,
+    lease: &mut Option<MessageAdmissionLease>,
+    route_label: &'static str,
+    operation: O,
+    enter_followup: F,
+    post_accept_failed: E,
+) where
+    A: MessageAdmissionRepository,
+    O: FnOnce() -> Option<witness::DirectOperationHandle>,
+    F: FnOnce(),
+    E: FnOnce(),
+{
+    let Some(retained_lease) = lease.as_ref() else {
+        return;
+    };
+    let retained = operation().map(|operation| operation.finalize(retained_lease));
+    let lease = lease.take().expect("lease checked above");
+    enter_followup();
+    let result = match retained {
+        Some(Ok(retained)) => {
+            service
+                .accept_message_admission_retained(&lease, &retained)
+                .await
+        }
+        Some(Err(error)) => Err(error),
+        None => service.accept_message_admission(&lease).await,
+    };
+    if let Err(error) = result {
+        // Acceptance cannot be turned into a retriable stanza rejection by
+        // failure to finish its independent PoW reservation transaction.
+        post_accept_failed();
+        tracing::warn!(target: "rust_xmpp_server::xmpp::protocol::messaging",
+            ?error, route = route_label,
+            "accepted message PoW admission could not be finalized");
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod continuation_fixture {
+    use super::*;
+    use crate::abuse::{MessageDedupeIdentity, WorkRequirement};
+    use northstar_abuse_policy::admission_execution::{
+        BeginCommitPurpose, CommitFact, FinalizeSuccess,
+    };
+    use std::sync::{Arc, Mutex};
+
+    pub(crate) type Events = Arc<Mutex<Vec<&'static str>>>;
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    pub(crate) enum Admission {
+        Reserved,
+        GuardOnly,
+        NotRated,
+    }
+    #[derive(Clone, Copy, Default, Eq, PartialEq)]
+    pub(crate) enum FinalizeCut {
+        #[default]
+        Success,
+        PreCommitError,
+        CommitError,
+        AfterReceiptError,
+        PendingBeforeCommit,
+        PendingCommit,
+    }
+    pub(crate) struct Repository {
+        pub(crate) admission: Admission,
+        pub(crate) cut: FinalizeCut,
+        pub(crate) events: Events,
+    }
+    pub(crate) fn lease(token: u128) -> MessageAdmissionLease {
+        MessageAdmissionLease::new(
+            vec![1; 32],
+            vec![2; 32],
+            Uuid::from_u128(token),
+            MessageDedupeIdentity {
+                identity_digest: vec![4; 32],
+                candidates: vec![],
+            },
+        )
+    }
+    pub(crate) fn request() -> MessageAdmissionRequest<'static> {
+        MessageAdmissionRequest {
+            actor_id: Uuid::from_u128(1),
+            account_bare: "alice@example.test",
+            normalized_target: "bob@example.test",
+            origin_id: Some("origin"),
+            normalized_payload: "private-admission-stanza",
+            pow_intent_payload: "private-admission-stanza",
+            subject: "message",
+            actors: &[],
+            proof: None,
+        }
+    }
+    impl MessageAdmissionRepository for Repository {
+        async fn begin(
+            &self,
+            _: &MessageAdmissionRequest<'_>,
+            witness: &AdmissionWitness,
+        ) -> Result<MessageAdmissionStart> {
+            self.events.lock().unwrap().push("begin");
+            let lease = match self.admission {
+                Admission::Reserved => {
+                    let lease = lease(3);
+                    let prepared = witness.prepare(
+                        TransactionScope::RatedBegin(BeginCommitPurpose::NewReservation),
+                        CommitFact::Reserved(acceptance_fence(&lease.acceptance())),
+                    )?;
+                    witness.received(prepared);
+                    Some(lease)
+                }
+                Admission::GuardOnly => {
+                    let prepared = witness.prepare(
+                        TransactionScope::GuardOnlyVerification,
+                        CommitFact::GuardOnly(GuardDecision::Allowed),
+                    )?;
+                    witness.received(prepared);
+                    None
+                }
+                Admission::NotRated => panic!("un-rated fixture called admission repository"),
+            };
+            Ok(MessageAdmissionStart::Proceed {
+                lease,
+                requirement: WorkRequirement {
+                    action: "message".into(),
+                    step: 0,
+                    work_factor: 1,
+                    max_work_factor: 1,
+                    hard_wait_seconds: 0,
+                    retry_after_seconds: 0,
+                    cooldown_seconds: 0,
+                    approximate_max_device_seconds: 0,
+                    notice: String::new(),
+                },
+            })
+        }
+        async fn accept(
+            &self,
+            acceptance: &MessageAdmissionAcceptance<'_>,
+            witness: &AdmissionWitness,
+        ) -> Result<FinalizeDecision> {
+            self.events.lock().unwrap().push("accept");
+            assert_eq!(
+                acceptance_fence(acceptance),
+                acceptance_fence(&lease(3).acceptance())
+            );
+            if self.cut == FinalizeCut::PendingBeforeCommit {
+                std::future::pending::<()>().await;
+            }
+            if self.cut == FinalizeCut::PreCommitError {
+                anyhow::bail!("controlled pre-COMMIT finalization error");
+            }
+            // Controlled repository facts through the real retained service.
+            // This fixture does not execute the SQL Transaction wrapper.
+            let prepared = witness.prepare(
+                TransactionScope::AdmissionFinalize,
+                CommitFact::Finalized {
+                    fence: acceptance_fence(acceptance),
+                    result: FinalizeSuccess::PendingAccepted,
+                },
+            )?;
+            self.events.lock().unwrap().push("finalize_commit");
+            if self.cut == FinalizeCut::PendingCommit {
+                std::future::pending::<()>().await;
+            }
+            if self.cut == FinalizeCut::CommitError {
+                anyhow::bail!("controlled finalization COMMIT loss");
+            }
+            witness.received(prepared);
+            self.events.lock().unwrap().push("finalize_receipt");
+            if self.cut == FinalizeCut::AfterReceiptError {
+                anyhow::bail!("controlled finalization post-receipt error");
+            }
+            Ok(FinalizeDecision::AcceptPending)
+        }
+        async fn reconcile(&self, _: &Effect) -> Result<ReconcileResult> {
+            panic!("continuation attempted reconciliation")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

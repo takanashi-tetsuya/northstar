@@ -14,6 +14,8 @@ const paths = {
   repository: 'src/db/message_admission_repository.rs',
   verification: 'src/db/abuse_verification_repository.rs',
   actor: 'src/db/abuse_actor_state_repository.rs',
+  directWorkflow: 'src/services/messaging/direct_workflow.rs',
+  messageService: 'src/services/messaging.rs',
 };
 function requireAdmission(value, message) {
   if (!value) throw new Error(`admission boundary: ${message}`);
@@ -98,6 +100,84 @@ function ordered(source, steps, label) {
 export function readAdmissionSources() {
   return Object.fromEntries(Object.entries(paths).map(([name, file]) => [name,
     fs.readFileSync(path.join(root, file), 'utf8')]));
+}
+
+// The result/continuation adapter is deliberately small enough to bind its
+// entire forwarding body. These are source-drift checks, not a reachability
+// proof or a substitute for the actual application/service tests.
+function verifyDirectContinuation(sources) {
+  const normalize = source => compact(source).replace(/,([)}])/g, '$1').replace(/,$/, '');
+  const workflowCode = codeOnly(sources.directWorkflow);
+  const testModule = /\n#\[cfg\(test\)\]\s*\nmod\s+\w+\b/.exec(workflowCode);
+  const production = testModule ? workflowCode.slice(0, testModule.index) : workflowCode;
+  const pairDeclaration = /((?:#\[[^\]]*\]\s*)*)pub\(crate\)\s+struct\s+AppliedLocalDirect\b/.exec(production);
+  requireAdmission(pairDeclaration && !/\b(?:Clone|Copy)\b/.test(pairDeclaration[1]) &&
+    !/\bimpl\b[^{};]*\bAppliedLocalDirect\b/.test(production) &&
+    [...production.matchAll(/\bAppliedLocalDirect\s*\{/g)].length === 2 &&
+    !/\.\s*(?:actual|continuation)\b/.test(production),
+  'the applied pair must retain one construction, one shared destructuring and no Clone or decomposition API');
+  const bridge = normalize(body(sources.directWorkflow, 'async\\s+fn\\s+commit_prepared_application\\b'));
+  requireAdmission(bridge === 'letactual=app.commit_direct(prepared.command(),prepared.eligibility(),Some(&prepared)).await.map_err(super::direct_commit_error);AppliedLocalDirect{actual,continuation:prepared.into_continuation()}',
+    'the owned application bridge must seal its actual mapped result with the same preparation continuation');
+  const pair = normalize(body(sources.directWorkflow, 'struct\\s+AppliedLocalDirect\\b'));
+  requireAdmission(pair === "actual:anyhow::Result<DirectPersonalMessageAdmission>,continuation:LocalDirectContinuation<'live>",
+    'the applied direct result and continuation fields must remain private');
+  const serviceBridge = normalize(body(sources.messageService, 'async\\s+fn\\s+admit_prepared_personal_message_with_mode\\b'));
+  requireAdmission(serviceBridge === 'direct_workflow::commit_prepared_application(&self.personal,prepared).await',
+    'the real message service must use the same owned application bridge');
+
+  const finalize = normalize(body(sources.service, 'async\\s+fn\\s+finalize_message_admission_with\\b'));
+  requireAdmission(finalize.startsWith('letSome(retained_lease)=lease.as_ref()else{return;};letretained=operation().map(|operation|operation.finalize(retained_lease));letlease=lease.take().expect();enter_followup();'),
+    'shared finalization must lazily prepare the exact lease handle before take, stage and await');
+  requireAdmission(finalize.includes('Some(Ok(retained))=>{service.accept_message_admission_retained(&lease,&retained).await}') &&
+    finalize.includes('Some(Err(error))=>Err(error)') &&
+    finalize.includes('None=>service.accept_message_admission(&lease).await') &&
+    finalize.includes('ifletErr(error)=result{post_accept_failed();') &&
+    finalize.split('.await').length === 3,
+  'shared finalization must preserve retained, failed-construction and no-owner behavior without retry');
+  const finalizeWrapper = normalize(body(sources.messaging, 'async\\s+fn\\s+finalize_message_admission\\b'));
+  requireAdmission(finalizeWrapper === 'crate::services::message_admission::finalize_message_admission_with(self.state.message_admission_service(),lease,route,||self.message_operation(),||self.enter_frame_stage(Stage::MessageFollowup),||self.state.personal_message_telemetry().post_accept_failed()).await;',
+    'protocol finalization must forward its exact lease and lazy originating owner to the shared body');
+
+  const message = normalize(body(sources.messaging, 'async\\s+fn\\s+message\\b'));
+  ordered(message, ['delayed_projection.bind(operation,admission,eligibility)',
+    'letapplied=service.admit_prepared_personal_message_with_mode(prepared).await;',
+    'matchcontinue_prepared_local_direct(applied,&mutmessage_admission_lease,self.state.message_admission_service(),&*self.state,||self.enter_frame_stage(Stage::MessageFollowup)).await{'],
+  'actual protocol application-to-continuation wiring');
+  requireAdmission(message.includes('ContinuedLocalDirect::Accepted=>returnOk(Action::None)') &&
+    message.includes('ContinuedLocalDirect::Reject(error)=>{let(kind,condition)=error.stanza_error();returnOk(message_error(root,kind,condition));}') &&
+    message.includes('history_committed=live.archive_written();letsource=live.source();durable_c2s_delivery=Some(source.message_id);live_claim_id=source.claim_id;prepared_live=Some(live);'),
+  'protocol must consume the shared disposition without reconstructing result or delivery authority');
+  requireAdmission(message.includes('self.enter_frame_stage(Stage::MessageRouting);letoutcome=ifletSome(live)=prepared_live{live.route_with(&*self.state,&targets).await?}else{') &&
+    message.includes('service.admit_personal_message_with_mode(&admission,eligibility).await') &&
+    message.includes('DirectMessageRouter::route(&*self.state,route_request).await?'),
+  'retained routing must stay at MessageRouting and preserve the no-owner route path');
+
+  const continuation = normalize(body(sources.directWorkflow, 'async\\s+fn\\s+continue_prepared_local_direct\\b'));
+  requireAdmission(continuation.startsWith('letAppliedLocalDirect{actual,continuation}=applied;matchactual{') &&
+    continuation.split('finalize_message_admission_with(').length === 5 &&
+    continuation.split('||Some(continuation.owner.clone())').length === 5 &&
+    continuation.split('continuation.after_finalize(||route.direct_route_mode())').length === 3 &&
+    continuation.split('route.direct_route_mode()').length === 3 &&
+    !/route_prepared\(|route_with\(|try_local\(/.test(continuation),
+  'shared continuation must use its sealed owner, lazy post-finalization health and no early route');
+  ordered(continuation, ['MessagePostCommit::RouteLocalDelivery{delivery_id,..}=post_commit',
+    'finalize_message_admission_with(', 'continuation.after_finalize(||route.direct_route_mode())'],
+  'stored continuation finalization boundary');
+  requireAdmission(continuation.indexOf('finalize_message_admission_with(') < continuation.indexOf('continuation.after_finalize('),
+    'stored continuation cannot read health before its finalization attempt returns');
+  const liveImpl = body(sources.directWorkflow, 'impl\\s+PreparedLiveDirect\\b');
+  requireAdmission(normalize(body(liveImpl, 'fn\\s+source\\b')) === 'self.handoff.grant.source()',
+    'live continuation source must come from its retained handoff grant');
+  const route = normalize(body(liveImpl, 'async\\s+fn\\s+route_with\\b'));
+  for (const field of ['letlive=&self.handoff.live;', 'message_type:live.message_type,',
+    'target:iflive.target==live.target_bare{super::DirectRouteTarget::Bare(live.target)}else{super::DirectRouteTarget::Full{jid:live.target,bare:live.target_bare}},',
+    'sender:live.sender,', 'recipient_id:live.recipient_id,', 'stanza:live.stanza,',
+    'delivery:super::DirectRouteDelivery::Committed(self.source()),', 'approved_targets,enforce_direct_health:true']) {
+    requireAdmission(route.includes(field), 'late route must use the original private live projection and exact committed source');
+  }
+  requireAdmission(route.endsWith('super::DirectMessageRouter::route_prepared(port,request,*self.handoff).await') && route.split('.await').length === 2,
+    'late live routing must consume the real handoff once through the prepared router');
 }
 
 export function verifyAdmissionBoundaries(sources) {
@@ -191,10 +271,9 @@ export function verifyAdmissionBoundaries(sources) {
     'frame runner must destroy its child before ordinary observation field drop');
   const messaging = compact(codeOnly(sources.messaging));
   requireAdmission(messaging.includes('operation.begin(&request)')
-    && messaging.includes('begin_message_admission_retained(&request,&retained).await')
-    && messaging.includes('operation.finalize(retained_lease)')
-    && messaging.includes('accept_message_admission_retained(&lease,&retained).await'),
-    'actual protocol begin/finalize must use the retained frame operation');
+    && messaging.includes('begin_message_admission_retained(&request,&retained).await'),
+    'actual protocol begin must use the retained frame operation');
+  verifyDirectContinuation(sources);
   const begin = compact(body(sources.repository, 'pub\\(crate\\)\\s+async\\s+fn\\s+begin_message_admission\\b'));
   const beginDecision = begin.indexOf('decision::decide_begin(');
   const fetchedRows = begin.indexOf('.fetch_all(&mut*tx).await?');

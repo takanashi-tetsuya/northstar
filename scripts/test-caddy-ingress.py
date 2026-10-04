@@ -73,10 +73,28 @@ def free_port():
         return probe.getsockname()[1]
 
 
-def read_to_close(stream):
+def read_to_close(stream, *, rejection_status=None):
     chunks = []
-    while chunk := stream.recv(65536):
-        chunks.append(chunk)
+    try:
+        while chunk := stream.recv(65536):
+            chunks.append(chunk)
+    except OSError:
+        if rejection_status is not None:
+            preview = b""
+            for chunk in chunks:
+                preview += chunk[:512 - len(preview)]
+                if len(preview) == 512:
+                    break
+            try:
+                print(
+                    f"synthetic early-body-rejection: case=POST /api/reject/{rejection_status} "
+                    f"expected_status={rejection_status} declared_body_bytes=128 sent_body_bytes=1 "
+                    f"partial_reply_prefix_512={preview!r}",
+                    file=sys.stderr, flush=True,
+                )
+            except Exception:
+                pass  # A diagnostic write must not replace the receive error.
+        raise
     return b"".join(chunks)
 
 
@@ -152,7 +170,7 @@ def main():
                             break
                         with tls_socket(port, certificate) as stream:
                             stream.sendall(f"POST /api/reject/{status} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 128\r\n\r\n{{".encode())
-                            reply = read_to_close(stream)
+                            reply = read_to_close(stream, rejection_status=status)
                             assert reply.startswith(f"HTTP/1.1 {status} ".encode()), reply
                             assert f"fixture_{status}".encode() in reply, reply
                     def fragmented_request(method, route, content):

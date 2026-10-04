@@ -186,10 +186,10 @@ class IndependentOracleTests(unittest.TestCase):
         self.assertIsNone(event['coordinator']['result'])
         self.assertEqual(controlled.evaluate(value, output)['verdict'], 'Inconclusive')
 
-    def test_output_v3_refuses_legacy_and_invalid_variant_shapes(self):
+    def test_output_v4_refuses_legacy_and_invalid_variant_shapes(self):
         value = controlled.scenario('output-version', [controlled.controlled_command(1)])
         changed = controlled.expected_output(value)
-        for version in ('v1', 'v2'):
+        for version in ('v1', 'v2', 'v3'):
             changed['schema'] = 'northstar-admission-controlled-output-' + version
             with self.assertRaises(controlled.InvalidScenario):
                 controlled.validate_output(value, changed)
@@ -201,6 +201,59 @@ class IndependentOracleTests(unittest.TestCase):
         changed['projection'][0]['witness']['kind'] = 'NoCommitRequested'
         with self.assertRaises(controlled.InvalidScenario):
             controlled.validate_output(value, changed)
+
+    def test_reconcile_time_and_effect_observations_are_independently_compared(self):
+        first = controlled.controlled_command(1, cut='commit_unknown')
+        second = controlled.controlled_command(2, first['key'], action='reconcile', lease=first['lease'],
+                                               now=123456, reconcile_of='op-1')
+        value = controlled.scenario('reconcile-returned-sample', [first, second])
+        changes = [(('observed_at_us',), time) for time in
+                   (-2**63, -1, 0, 123457, controlled.MAX_TIME + 1, 2**63 - 1)]
+        for field in ('correlation', 'unresolved'):
+            changes.extend([((field, 'operation_id'), 'different-operation'),
+                            ((field, 'effect_number'), 2**64 - 1),
+                            ((field, 'generation'), 2**64 - 1),
+                            ((field, 'attempt'), 2**32 - 1)])
+        changes.extend([(('fence', key), 'different-bound-material') for key in ('key', 'payload_tag', 'lease')])
+        for location in ('event', 'result'):
+            for path, actual in changes:
+                with self.subTest(location=location, path=path, actual=actual):
+                    changed = controlled.expected_output(value)
+                    event = changed['projection'][1]
+                    target = event['reconcile'] if location == 'event' else event['coordinator']['result']['reconcile']
+                    for part in path[:-1]:
+                        target = target[part]
+                    target[path[-1]] = actual
+                    verdict = controlled.evaluate(value, changed)
+                    self.assertEqual(verdict['invariant']['class'], 'ReplayDivergence')
+                    self.assertFalse(verdict['replay_matched'])
+                    self.assertFalse(verdict['qualified'])
+
+    def test_reconcile_v4_requires_sample_provenance_and_effect_fields(self):
+        first = controlled.controlled_command(1, cut='commit_unknown')
+        second = controlled.controlled_command(2, first['key'], action='reconcile', lease=first['lease'], reconcile_of='op-1')
+        value = controlled.scenario('reconcile-required-fields', [first, second])
+        for location in ('event', 'result'):
+            for field in ('observed_at_us', 'observed_at_source', 'correlation', 'unresolved', 'fence'):
+                changed = controlled.expected_output(value)
+                event = changed['projection'][1]
+                target = event['reconcile'] if location == 'event' else event['coordinator']['result']['reconcile']
+                del target[field]
+                with self.subTest(location=location, missing=field), self.assertRaises(controlled.InvalidScenario):
+                    controlled.validate_output(value, changed)
+            for invalid in (True, 1.5, -(2**63)-1, 2**63):
+                changed = controlled.expected_output(value)
+                event = changed['projection'][1]
+                target = event['reconcile'] if location == 'event' else event['coordinator']['result']['reconcile']
+                target['observed_at_us'] = invalid
+                with self.assertRaises(controlled.InvalidScenario):
+                    controlled.validate_output(value, changed)
+            changed = controlled.expected_output(value)
+            event = changed['projection'][1]
+            target = event['reconcile'] if location == 'event' else event['coordinator']['result']['reconcile']
+            target['observed_at_source'] = 'PostgreSQL'
+            with self.assertRaises(controlled.InvalidScenario):
+                controlled.validate_output(value, changed)
 
     def test_root_coordinator_completion_is_independently_compared(self):
         value = controlled.scenario('root-state', [controlled.controlled_command(1, cut='commit_cancel')])
@@ -317,7 +370,11 @@ class BoundedKnowledgeTests(unittest.TestCase):
                 events = controlled.predict(controlled.scenario('reconcile-knowledge', [first, second]))['projection']
                 self.assert_bounds(events[1], active, retained, 1)
                 self.assertEqual(events[1]['coordinator']['result']['reconcile'],
-                                 {'observation': observation, 'lease': lease, 'retention': retention})
+                                 {'observation': observation, 'lease': lease, 'retention': retention,
+                                  'observed_at_us': now, 'observed_at_source': 'Scripted',
+                                  'correlation': {'mapped': True, 'operation_id': 'op-2', 'effect_number': 2, 'generation': 1, 'attempt': 1},
+                                  'unresolved': {'mapped': True, 'operation_id': 'op-1', 'effect_number': 1, 'generation': 1, 'attempt': 1},
+                                  'fence': {'mapped': True, 'key': 'key-1', 'payload_tag': 'payload-a', 'lease': 'lease-1'}})
                 self.assert_bounds(events[0], (0, 1), (0, 1), 2)
                 self.assertTrue(events[0]['caller']['unresolved'])
 
@@ -331,8 +388,36 @@ class BoundedKnowledgeTests(unittest.TestCase):
             events = controlled.predict(controlled.scenario('accepted-reconcile', [first, second], initial))['projection']
             self.assert_bounds(events[1], active, (1, 1), 1)
             self.assertEqual(events[1]['coordinator']['result']['reconcile'],
-                             {'observation': 'ExactAccepted', 'lease': None, 'retention': validity})
+                             {'observation': 'ExactAccepted', 'lease': None, 'retention': validity,
+                              'observed_at_us': now, 'observed_at_source': 'Scripted',
+                              'correlation': {'mapped': True, 'operation_id': 'op-2', 'effect_number': 2, 'generation': 1, 'attempt': 1},
+                              'unresolved': {'mapped': True, 'operation_id': 'op-1', 'effect_number': 1, 'generation': 1, 'attempt': 1},
+                              'fence': {'mapped': True, 'key': 'pending', 'payload_tag': 'payload-a', 'lease': 'pending-lease'}})
             self.assertTrue(events[0]['caller']['unresolved'])
+
+    def test_reconcile_filter_uses_delivered_instant_instead_of_requested_clock(self):
+        first = controlled.controlled_command(1, cut='commit_unknown')
+        second = controlled.controlled_command(2, first['key'], action='reconcile', lease=first['lease'], reconcile_of='op-1')
+        value = controlled.scenario('returned-as-of', [first, second])
+        maps = controlled.parse_scenario(value)
+        maps['operations'] = {command['operation_id']: command for command in value['commands']}
+        event = controlled.expected_output(value)['projection'][1]
+        coordinator = event['coordinator']
+        actual = coordinator['result']['reconcile']
+        actual.update(observed_at_us=1800 * controlled.SECOND, lease='Expired', retention='Expired')
+        empty = {'rows': {}, 'sequences': {'actor-a': 0}, 'proofs': set()}
+        pending = {'rows': {'key-1': controlled.row('key-1', state='pending', lease='lease-1',
+                                                   expiry=1800 * controlled.SECOND, lease_until=60 * controlled.SECOND)},
+                   'sequences': {'actor-a': 0}, 'proofs': set()}
+        views = [empty, pending]
+        unchanged, reason = controlled._knowledge_advance(views, second, maps, 0, event['witness'],
+                                                         {'outcome': None, 'result': None})
+        self.assertIs(unchanged, views)
+        self.assertIsNone(reason)
+        narrowed, reason = controlled._knowledge_advance(views, second, maps, 0, event['witness'], coordinator)
+        self.assertIsNone(reason)
+        self.assertEqual(narrowed, [pending])
+        self.assertEqual(second['times']['reconcile_us'], 0)
 
     def test_undelivered_reconcile_cannot_filter_any_alternative(self):
         for committed in (False, True):

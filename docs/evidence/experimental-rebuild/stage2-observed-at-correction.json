@@ -1,0 +1,309 @@
+{
+  "schema": "northstar-observed-at-source-correction-v1",
+  "status": "ImplementedAndCompiledNotStage2Accepted",
+  "base_commit": "87ec1c238adc87f9e8342c8f7803a67aab271744",
+  "base_tree": "2466a816fc6d51fb1b635b736972c7567862ff56",
+  "source_delta": [
+    {
+      "path": "catalog/runtime-experiments.json",
+      "before_sha256": "dfd23794a2073aff21319582aacf10c98c32bfb6faaf4f4e26dfab45cab053ed",
+      "after_sha256": "365c689e6738e2d897366226eb3e3bed955448a415622c0c0e5a492eda297f1a",
+      "bytes": 77131
+    },
+    {
+      "path": "catalog/runtime-experiments.schema.json",
+      "before_sha256": "5c868954bbe4cc257ed5f62f834854a98e23a95f11acb01ac439bf893aaa8ae6",
+      "after_sha256": "6f33ee86d715232856c7b74e97d9d92d651f5250422b3370d42682ef0026e6bb",
+      "bytes": 83416
+    },
+    {
+      "path": "crates/northstar-abuse-policy/src/admission_execution.rs",
+      "before_sha256": "1cdbd1f3451cf83fa2df689837193cdff6a20788de85c89fcae374aa9a905c2c",
+      "after_sha256": "9ef2ceefd43a5062fd3f2ba78985c2baab1a61e82e66329a553e6e1d3927daa9",
+      "bytes": 42054
+    },
+    {
+      "path": "crates/northstar-abuse-policy/src/admission_transaction.rs",
+      "before_sha256": "d630ee9c9b3a6abdf0b91323a38ecea23769f39b18b485d5ae87475fadd17c40",
+      "after_sha256": "9761825a4db3a4f24528f485b87faa92bc4fad8cbaf57e2ba7eeb72fb179d158",
+      "bytes": 16722
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "before_sha256": "3d5bb936006d9f7a1425b6ba77899df0f3932bdcd1cf24b9d7e756ad17acc11c",
+      "after_sha256": "f23f5cc04bc9130a02a11c43316cd7eb64688b5ad925d1dc99f0141a1361a4e1",
+      "bytes": 61896
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/input.rs",
+      "before_sha256": "45460cf2dce27c53299d7159a7cd469d7263bd2fe5735d38f9a6857c63972658",
+      "after_sha256": "81747a5c084642169e0ddfffc30f753b11fca29501f61c8e3915b537d0ffdeaa",
+      "bytes": 24725
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+      "before_sha256": "e69fe11b21065508ef648dbd92ff7bed834623eb4efc3cab962cb9175626d766",
+      "after_sha256": "d0deeb4c9ac5c88ee93fe368366fd23efd1fc1fa808fb9a7a89bd0cd5e79fd37",
+      "bytes": 31930
+    },
+    {
+      "path": "scripts/lib/controlled_admission.py",
+      "before_sha256": "520e1f8b5a011852f823580cbcfd70b7ff227bb8a88674046000ca84814c938a",
+      "after_sha256": "c0e5bdef90366f4210cc685752567493e150e17a94941b931e000b34be504c2f",
+      "bytes": 114037
+    },
+    {
+      "path": "scripts/test-controlled-admission.py",
+      "before_sha256": "934a0001cc6ddd36fffdc7b65f99d30fab165a8dffe5da35ee787e8855b86d24",
+      "after_sha256": "8f27d334bfeebf29ad479be421accfc37ccb24366a6cfd388fe75b60e4e2cfb5",
+      "bytes": 67346
+    },
+    {
+      "path": "src/db/message_admission_repository.rs",
+      "before_sha256": "9c4db2a3f7fda5b35764b1be0674eddf4e51e710653929ee8f8beb68aa6359f8",
+      "after_sha256": "f7561d8d8e62e50e6fce511970530a3d09b68236b210b75d94c61cf77a132dfc",
+      "bytes": 16459
+    },
+    {
+      "path": "src/services/message_admission.rs",
+      "before_sha256": "b97669face201933d72c4622c5140e2f0c0a5ae462c796c7d70a6f765b55df64",
+      "after_sha256": "372b12883af756ad1cf5490991a88ef6bec1710eb257bef8e56224cbd2c4b154",
+      "bytes": 16818
+    }
+  ],
+  "output_schema": "northstar-admission-controlled-output-v4",
+  "input_and_model": "Input-v1, admission-controlled-v1 and synthetic-material-v1 unchanged. Historical v3 evidence is retained, not reinterpreted as v4.",
+  "targeted_correction": "Retain exact reconciliation classification time with the full originating effect through repository, coordinator, service and controlled projections.",
+  "production_contract": [
+    "The existing PostgreSQL clock_timestamp() sample remains after the same advisory lock and locked-row SELECT. SQL text, query ordering, lock behavior and rollback remain unchanged.",
+    "TimedReconcileObservation retains that exact sample and the existing classification. ReconcileResult binds the full effect, including correlation/attempt, unresolved correlation and requested fence.",
+    "Coordinator validates the inner result effect against the outstanding full effect before changing state; correctly addressed outer completion cannot relabel another read result.",
+    "The service returns the validated typed result without discarding the sample or effect. It currently has no production runtime caller; this is not Stage3 recovery integration.",
+    "ExactAccepted retains accepted-before-token semantics. The returned requested fence is request correlation, not confirmation of the accepted row stored token."
+  ],
+  "controlled_contract": [
+    "V4 projects actual returned time/effect/unresolved/fence facts with clock source Scripted. Independent Python expectations are computed from the scenario, not copied from observed output.",
+    "Only delivered reconciliation supplies an observed instant for candidate validity filtering and caller bounds. Undelivered/failed reads do not narrow knowledge using their hidden time.",
+    "Output observed_at_us uses signed i64 bounds, so representable mismatches can reach ReplayDivergence rather than being confused with invalid scenario clocks.",
+    "Actor-policy clock input remains scripted/opaque; retaining reconciliation time does not establish actor-policy clock control."
+  ],
+  "regression_source": "Classification/sample retention; independent lease/retention equality boundaries; twelve inner-effect substitutions with valid outer completion; retained service result and sequential read identity; actual delivered time controlling candidate validity/counts; undelivered reads; strict v4 fields and independent timestamp/effect mutations. Bodies were compiled or syntax-parsed only, not executed locally.",
+  "verification": {
+    "base_commit": "87ec1c238adc87f9e8342c8f7803a67aab271744",
+    "end_head": "87ec1c238adc87f9e8342c8f7803a67aab271744",
+    "source_patch_sha256": "69e9ac5e5c5f98ff050be3cdaf4931d52a6f033c6580fd080937fcc78ecad69a",
+    "tracked_source_file_count": 1670,
+    "source_unchanged": true,
+    "changed_during_command": [],
+    "before_map_sha256": "c1fe4da191601cdbcd86d2328403d51add9d6f3fd1ea78c2e4db4f371462fac2",
+    "after_map_sha256": "c1fe4da191601cdbcd86d2328403d51add9d6f3fd1ea78c2e4db4f371462fac2",
+    "driver_sha256": "5bca7acfc6ce68df86b3f934052004fda8cd1e19570f9cd832da54fefb32d303",
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "crates/northstar-abuse-policy/src/admission_execution.rs",
+          "crates/northstar-abuse-policy/src/admission_transaction.rs",
+          "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+          "crates/northstar-test-harness/src/controlled_admission/input.rs",
+          "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+          "src/db/message_admission_repository.rs",
+          "src/services/message_admission.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.087,
+        "log": "command-1.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-abuse-policy",
+          "-p",
+          "northstar-test-harness",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 129.084,
+        "log": "command-2.log",
+        "log_sha256": "c38e16e1359a51c58595168c28063767eccaa81a55c4d72c59a693092097c0e9"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-abuse-policy",
+          "-p",
+          "northstar-test-harness",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 154.474,
+        "log": "command-3.log",
+        "log_sha256": "c9fad4d45e7b5d6397bd7f9453ef8b7d759cb1ce7dde7b7d844b2634cbc061fd"
+      }
+    ],
+    "reused_syntax_source_hashes": {
+      "catalog/runtime-experiments.json": "365c689e6738e2d897366226eb3e3bed955448a415622c0c0e5a492eda297f1a",
+      "catalog/runtime-experiments.schema.json": "6f33ee86d715232856c7b74e97d9d92d651f5250422b3370d42682ef0026e6bb",
+      "scripts/lib/controlled_admission.py": "c0e5bdef90366f4210cc685752567493e150e17a94941b931e000b34be504c2f",
+      "scripts/test-controlled-admission.py": "8f27d334bfeebf29ad479be421accfc37ccb24366a6cfd388fe75b60e4e2cfb5"
+    },
+    "reused_syntax_result_sha256": "c177699b4668b8121bd5ae399954450aa21daa8428bf60f81a8b1cd7176eb276",
+    "scope": "Ordinary Rust formatting and default-feature normal/test target compilation/lint only. Unchanged Python AST/strict JSON source hashes reuse the recorded successful initial syntax checks. No project Python imports, tests, oracle, runner, corpus, replay/shrinking, SQL, services or fault execution."
+  },
+  "raw_evidence_archive": {
+    "path": "docs/evidence/experimental-rebuild/stage2-observed-at-ordinary-evidence-v2.tar.gz",
+    "bytes": 349744,
+    "sha256": "adaa531adfd5cd97b5cc590584bb15c8121f572eea50e12033e2cfd119bea556",
+    "members": 18,
+    "verified_member_bytes": true
+  },
+  "review": "Final independent exact seventeen-file source/evidence review approved limited persistence on 2026-10-04. All thirteen plus eighteen archived members, manifests, raw log/driver bytes and initial/failure/final 1,670-file maps were independently reconstructed from base and archived code/documentation patches with zero mismatches. The exact boxed delta, final ordinary format/check/clippy success, retained Clippy failure, syntax reuse and prior CI evidence reconcile. This is source/compile/lint acceptance only, not dedicated regression execution, SQL/runtime/replay qualification or Stage2 acceptance.",
+  "remaining_qualification": [
+    "Dedicated Python regressions and actual v4 CLI corpus recording/replay/shrinking have not run. Ordinary compilation does not execute regression bodies.",
+    "Parent87ec CI passed32 jobs with1 schedule-only skip. This prior CI does not cover the v4 delta, does not run the dedicated Python suite, and does not qualify Stage2.",
+    "This time is classification time for an existing locked-row observation, not historical COMMIT attribution, global monotonicity, proof of rollback, new retry authority or stronger snapshot isolation.",
+    "Real PostgreSQL/MVCC/lock/COMMIT-response and real adapter timestamp conformance remain Stage5 evidence obligations.",
+    "Stage3 production outer cancellation/Unknown ownership and durable-message/route/write/ACK responsibility remain open; Stage4-6 have not been rebuilt/qualified.",
+    "Existing saved-input execution still lacks external hard wall/address-space/stream-output supervision. The proposed source-only supervisor is not yet implemented or authorized for dedicated execution."
+  ],
+  "cancelled": "The72-hour soak remains cancelled.",
+  "initial_ordinary_verification": {
+    "base_commit": "87ec1c238adc87f9e8342c8f7803a67aab271744",
+    "end_head": "87ec1c238adc87f9e8342c8f7803a67aab271744",
+    "source_patch_sha256": "0f1fcd445114e3819478d4cb63509c884bef7a5b26e560f70b4029b1ac1551a7",
+    "tracked_source_file_count": 1670,
+    "source_unchanged": true,
+    "changed_during_command": [],
+    "before_map_sha256": "362d22e352db813c520cb34facda05d98a53700f2433381a07e6aa54cccda1b5",
+    "after_map_sha256": "362d22e352db813c520cb34facda05d98a53700f2433381a07e6aa54cccda1b5",
+    "driver_sha256": "ef25e48bcb56f7749ffb6d0760636dfa20dccb03992da83d0a9aceaae4734c24",
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "crates/northstar-abuse-policy/src/admission_execution.rs",
+          "crates/northstar-abuse-policy/src/admission_transaction.rs",
+          "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+          "crates/northstar-test-harness/src/controlled_admission/input.rs",
+          "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+          "src/db/message_admission_repository.rs",
+          "src/services/message_admission.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.086,
+        "log": "command-1.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "-B",
+          "-c",
+          "import ast,pathlib,sys; [ast.parse(pathlib.Path(p).read_text(),filename=p) for p in sys.argv[1:]]",
+          "scripts/lib/controlled_admission.py",
+          "scripts/test-controlled-admission.py"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.056,
+        "log": "command-2.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "-B",
+          "-c",
+          "import json,pathlib,sys\ndef pairs(values):\n d={}\n for k,v in values:\n  if k in d: raise ValueError(\"duplicate JSON key: \"+k)\n  d[k]=v\n return d\nfor p in sys.argv[1:]: json.loads(pathlib.Path(p).read_text(),object_pairs_hook=pairs)\n",
+          "catalog/runtime-experiments.json",
+          "catalog/runtime-experiments.schema.json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.022,
+        "log": "command-3.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-abuse-policy",
+          "-p",
+          "northstar-test-harness",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 127.268,
+        "log": "command-4.log",
+        "log_sha256": "c95421fbc0eb74d05195b5509653d9cdf933be04702e079a9ba7dc7906a16160"
+      }
+    ],
+    "scope": "Ordinary Rust formatting, Python AST/strict JSON syntax and default-feature normal/test target compilation only. No project Python imports, tests, oracle, runner, corpus, replay/shrinking, SQL, services or fault execution."
+  },
+  "retained_lint_failure": {
+    "base_commit": "87ec1c238adc87f9e8342c8f7803a67aab271744",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--offline",
+      "-p",
+      "northstar-abuse-policy",
+      "-p",
+      "northstar-test-harness",
+      "-p",
+      "rust-xmpp-server",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 101,
+    "elapsed_seconds": 0.906,
+    "source_unchanged": true,
+    "tracked_source_file_count": 1670,
+    "before_map_sha256": "db965c8f3c35cbffd901dc6d8372a8445f9ee38dd5a4f3051411669124ee10eb",
+    "after_map_sha256": "db965c8f3c35cbffd901dc6d8372a8445f9ee38dd5a4f3051411669124ee10eb",
+    "log_sha256": "5fd40a5e05cf65d537dd0ac8014c97cedd9dfd41ca35ba96bb7968002b4c1e3c",
+    "scope": "Ordinary default-feature normal/test-target compilation and lint only. No tests, project Python imports, runner, replay, SQL, services or faults executed."
+  },
+  "historical_ordinary_evidence_archive": {
+    "path": "docs/evidence/experimental-rebuild/stage2-observed-at-ordinary-evidence-v1.tar.gz",
+    "bytes": 180821,
+    "sha256": "d94073edec5a27c4fa68fbd21d029898d2dfecd94b2024ce6a91fc480a1697ac",
+    "members": 13,
+    "verified_member_bytes": true
+  },
+  "layout_correction": "Measured Clippy exit101 exposed large_enum_variant in EffectResult (Reconcile at least280 bytes vs Begin64) and ExecutionOutcome (Completed408 vs Unknown121). Only ReconcileResult.effect became Box<Effect> with five constructor wrappers across four already-reviewed files. Full value equality, redacted Debug, SQL, as-of and v4 JSON are unchanged. Final affected format/compile/clippy all exit0; unchanged Python/JSON hashes reuse the initial successful syntax checks. No allow suppression added.",
+  "mutation_scope": "Normal Coordinator rejects a non-Reconcile inner Effect before projection. Manually bypassing that guard and constructing an impossible Finished ReconcileResult can yield null requested-authority fields rejected by strict shape validation; this checkpoint does not claim faithful projection of every such guard-bypassed typed state."
+}

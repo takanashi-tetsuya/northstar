@@ -14,11 +14,12 @@ use crate::{
 };
 use anyhow::Result;
 use northstar_abuse_policy::admission_execution::{
-    BeginCommitPurpose, CommitFact, FinalizeSuccess, TransactionScope,
+    BeginCommitPurpose, Command, CommitFact, Effect, FinalizeSuccess, ReconcileResult,
+    TransactionScope,
 };
 use northstar_abuse_policy::admission_transaction::{
     self as decision, AdmissionCandidate, AdmissionFence, AdmissionRow, BeginRowDecision,
-    CapacityDecision, FinalizeDecision, ReconcileObservation, RowState,
+    CapacityDecision, FinalizeDecision, RowState,
 };
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
@@ -423,7 +424,10 @@ impl MessageAdmissionRepository for PostgresMessageAdmissionRepository {
     ) -> Result<FinalizeDecision> {
         accept_observed(&self.pool, acceptance, witness).await
     }
-    async fn reconcile(&self, fence: &AdmissionFence) -> Result<ReconcileObservation> {
+    async fn reconcile(&self, effect: &Effect) -> Result<ReconcileResult> {
+        let Command::Reconcile { fence, .. } = &effect.command else {
+            anyhow::bail!("admission reconciliation requires a reconcile effect");
+        };
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(northstar_abuse_policy::message_admission_lock_id(
@@ -441,6 +445,9 @@ impl MessageAdmissionRepository for PostgresMessageAdmissionRepository {
             .await?;
         let observation = decision::reconcile(row.as_ref(), fence, now);
         tx.rollback().await?;
-        Ok(observation)
+        Ok(ReconcileResult {
+            effect: Box::new(effect.clone()),
+            observation,
+        })
     }
 }

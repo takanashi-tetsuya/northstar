@@ -1,6 +1,6 @@
 //! Production-shared admission effect correlation and caller knowledge.
 //! No clock, entropy, I/O, executor or global state is owned here.
-use crate::admission_transaction::{AdmissionFence, FinalizeDecision, ReconcileObservation};
+use crate::admission_transaction::{AdmissionFence, FinalizeDecision, TimedReconcileObservation};
 use crate::{MessageAdmissionRequest, PowProof};
 use std::fmt;
 use uuid::Uuid;
@@ -206,11 +206,19 @@ pub enum FailureKind {
     ActorBusy,
     Cancelled,
 }
+/// Current-row evidence bound to the exact read effect and unresolved request.
+/// Keeping this effect does not establish any historical commit or retry right.
+/// Its fence is the requested authority; ExactAccepted still precedes token equality.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconcileResult {
+    pub effect: Box<Effect>,
+    pub observation: TimedReconcileObservation,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EffectResult {
     Begin(BeginResult),
     Finalize(FinalizeDecision),
-    Reconcile(ReconcileObservation),
+    Reconcile(ReconcileResult),
     Failed(FailureKind),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -445,6 +453,9 @@ fn validate_result(
     result: &EffectResult,
     knowledge: &Knowledge,
 ) -> Result<(), CompletionRejected> {
+    if let EffectResult::Reconcile(observed) = result {
+        validate_effect(effect, &observed.effect)?;
+    }
     let valid = match (effect.command.kind(), result, knowledge) {
         (
             EffectKind::Begin,
@@ -1002,6 +1013,92 @@ mod tests {
         c.complete(valid).unwrap();
     }
     #[test]
+    fn reconciliation_retains_sample_and_rejects_relabelled_inner_effect_before_consumption() {
+        use crate::admission_transaction::ReconcileObservation;
+        let correlation = begin().pending().unwrap().correlation;
+        let unresolved = Correlation {
+            operation: Uuid::from_u128(7),
+            ..correlation
+        };
+        let observed_at = chrono::DateTime::from_timestamp_micros(-123_456).unwrap();
+        for field in 0..12 {
+            let mut coordinator = Coordinator::new(
+                correlation,
+                Command::Reconcile {
+                    unresolved,
+                    fence: fence(),
+                },
+            );
+            let effect = coordinator.pending().unwrap().clone();
+            let witness = CommitWitness::new(effect.clone());
+            coordinator.observe_witness(&witness).unwrap();
+            let result = ReconcileResult {
+                effect: Box::new(effect.clone()),
+                observation: TimedReconcileObservation {
+                    observed_at,
+                    observation: ReconcileObservation::Missing,
+                },
+            };
+            let mut wrong = result.clone();
+            match field {
+                0 => wrong.effect.correlation.operation = Uuid::nil(),
+                1 => wrong.effect.correlation.effect += 1,
+                2 => wrong.effect.correlation.generation += 1,
+                3 => wrong.effect.correlation.attempt += 1,
+                4..=10 => {
+                    let Command::Reconcile { unresolved, fence } = &mut wrong.effect.command else {
+                        unreachable!()
+                    };
+                    match field {
+                        4 => unresolved.operation = Uuid::nil(),
+                        5 => unresolved.effect += 1,
+                        6 => unresolved.generation += 1,
+                        7 => unresolved.attempt += 1,
+                        8 => fence.admission_key[0] ^= 1,
+                        9 => fence.payload_mac[0] ^= 1,
+                        10 => fence.lease_token = Uuid::nil(),
+                        _ => unreachable!(),
+                    }
+                }
+                11 => wrong.effect.command = Command::Finalize(fence()),
+                _ => unreachable!(),
+            }
+            let before = coordinator.clone();
+            assert_eq!(
+                coordinator.complete(Completion {
+                    effect: effect.clone(),
+                    result: EffectResult::Reconcile(wrong),
+                    knowledge: Knowledge::NoCommitRequested,
+                }),
+                Err(if field < 4 {
+                    CompletionRejected::Correlation
+                } else if field == 11 {
+                    CompletionRejected::Kind
+                } else {
+                    CompletionRejected::Request
+                })
+            );
+            assert_eq!(coordinator, before);
+            let completion = Completion {
+                effect,
+                result: EffectResult::Reconcile(result.clone()),
+                knowledge: Knowledge::NoCommitRequested,
+            };
+            assert_eq!(
+                coordinator.complete(completion.clone()).unwrap(),
+                &ExecutionOutcome::Completed {
+                    result: EffectResult::Reconcile(result),
+                    knowledge: Knowledge::NoCommitRequested,
+                }
+            );
+            assert_eq!(
+                coordinator.complete(completion),
+                Err(CompletionRejected::AlreadyCompleted)
+            );
+            assert_eq!(witness.knowledge(), &Knowledge::NoCommitRequested);
+        }
+    }
+    #[test]
     fn debug_and_rejection_errors_are_payload_free() {
         let c = begin();
         let text = format!("{c:?}");
@@ -1024,6 +1121,21 @@ mod tests {
             lease_token: Uuid::from_u128(9),
         };
         assert!(!format!("{fence:?}").contains("secret"));
+        let result = ReconcileResult {
+            effect: Box::new(Effect {
+                correlation: c.pending().unwrap().correlation,
+                command: Command::Reconcile {
+                    unresolved: c.pending().unwrap().correlation,
+                    fence,
+                },
+            }),
+            observation: TimedReconcileObservation {
+                observed_at: chrono::DateTime::from_timestamp_micros(1).unwrap(),
+                observation: crate::admission_transaction::ReconcileObservation::Missing,
+            },
+        };
+        assert!(!format!("{result:?}").contains("secret"));
+        assert!(format!("{result:?}").contains("redacted"));
         assert!(!CompletionRejected::Request.to_string().contains("private"));
     }
 }

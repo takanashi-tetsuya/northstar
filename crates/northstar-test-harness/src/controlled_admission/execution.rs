@@ -91,7 +91,7 @@ const LIMITATIONS: [&str; 8] = [
     "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
     "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
     "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
-    "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted",
+    "Actor-policy clock inputs and guard outcomes remain scripted; controlled reconciliation timestamps are scripted, not PostgreSQL clock conformance",
 ];
 // Static root-only upper bound, including simultaneous summaries. This literal
 // includes the longest fixed enum strings, all false booleans, full-width
@@ -99,7 +99,7 @@ const LIMITATIONS: [&str; 8] = [
 // Only the two validated <=128 ASCII labels and limitations contents are blank.
 // No modeled execution or JSON sizing probe is needed to establish this bound.
 const ROOT_FIXED_JSON: &str = concat!(
-    "{\"schema\":\"northstar-admission-controlled-output-v3\",\"adapter\":\"controlled_rust\",",
+    "{\"schema\":\"northstar-admission-controlled-output-v4\",\"adapter\":\"controlled_rust\",",
     "\"model\":\"admission-controlled-v1\",\"scenario_id\":\"\",",
     "\"input_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",",
     "\"execution\":\"EnvironmentInterrupted\",\"terminal\":false,\"evidence_complete\":false,",
@@ -309,8 +309,14 @@ fn advance_knowledge(
         // A scripted Allowed cannot justify deleting a missing-proof view. The
         // controlled guard lacks a contract for that alternative: stop the
         // entire analysis, retaining all prior views and observed actual facts.
-        let candidate =
-            transaction(e, view, c).map_err(|_| KnowledgeStop::KnowledgeModelIncomplete)?;
+        // A delivered read supplies its own as-of instant. Reusing the scripted
+        // command time here would reinterpret the repository's actual evidence.
+        let observed_at = match delivered {
+            Some(core::EffectResult::Reconcile(result)) => Some(result.observation.observed_at),
+            _ => None,
+        };
+        let candidate = transaction(e, view, c, observed_at)
+            .map_err(|_| KnowledgeStop::KnowledgeModelIncomplete)?;
         let matches_witness = match retained {
             core::Knowledge::NoCommitRequested => candidate.scope.is_none(),
             core::Knowledge::CommitCallEntered(p) => {
@@ -480,6 +486,15 @@ fn counts(w: &World, actor: &str, time: i64) -> (usize, usize) {
         retained.count(),
     )
 }
+fn caller_observation_time(state: &core::ExecutionState, fallback: i64) -> i64 {
+    match state {
+        core::ExecutionState::Finished(core::ExecutionOutcome::Completed {
+            result: core::EffectResult::Reconcile(result),
+            ..
+        }) => result.observation.observed_at.timestamp_micros(),
+        _ => fallback,
+    }
+}
 fn shard(e: &Context<'_>, key: &str) -> u8 {
     bytes32(&e.key(key).hex).expect("validated key")[8] % 64
 }
@@ -495,7 +510,12 @@ fn mutate_guard(w: &mut World, c: &Command, consume: bool) -> Result<(), InputEr
     *w.actors.get_mut(&c.actor).expect("validated actor") += c.guard.actor_sequence_delta;
     Ok(())
 }
-fn transaction(e: &Context<'_>, w: &World, c: &Command) -> Result<Transaction, InputError> {
+fn transaction(
+    e: &Context<'_>,
+    w: &World,
+    c: &Command,
+    reconcile_at: Option<DateTime<Utc>>,
+) -> Result<Transaction, InputError> {
     use core::{
         BeginCommitPurpose as P, BeginResult as B, CommitFact as F, EffectResult as R,
         TransactionScope as S,
@@ -715,9 +735,12 @@ fn transaction(e: &Context<'_>, w: &World, c: &Command) -> Result<Transaction, I
             let d = tx::reconcile(
                 locked.as_ref(),
                 &fence(e, &c.key, &c.payload_tag, &c.lease),
-                now(c.times.reconcile_us),
+                reconcile_at.unwrap_or_else(|| now(c.times.reconcile_us)),
             );
-            let result = R::Reconcile(d);
+            let result = R::Reconcile(core::ReconcileResult {
+                effect: Box::new(effect(e, c)),
+                observation: d,
+            });
             let domain = result_domain(&result);
             (result, None, None, domain)
         }
@@ -793,11 +816,13 @@ fn result_domain(result: &core::EffectResult) -> &'static str {
         R::Finalize(tx::FinalizeDecision::LostFence) => "LeaseLost",
         R::Finalize(tx::FinalizeDecision::AlreadyAccepted) => "AlreadyAccepted",
         R::Finalize(tx::FinalizeDecision::AcceptPending) => "Accepted",
-        R::Reconcile(tx::ReconcileObservation::ExactPending { .. }) => "ReconcileExactPending",
-        R::Reconcile(tx::ReconcileObservation::ExactAccepted { .. }) => "ReconcileExactAccepted",
-        R::Reconcile(tx::ReconcileObservation::Missing) => "ReconcileMissing",
-        R::Reconcile(tx::ReconcileObservation::Superseded) => "ReconcileSuperseded",
-        R::Reconcile(tx::ReconcileObservation::Conflicting) => "ReconcileConflicting",
+        R::Reconcile(result) => match result.observation.observation {
+            tx::ReconcileObservation::ExactPending { .. } => "ReconcileExactPending",
+            tx::ReconcileObservation::ExactAccepted { .. } => "ReconcileExactAccepted",
+            tx::ReconcileObservation::Missing => "ReconcileMissing",
+            tx::ReconcileObservation::Superseded => "ReconcileSuperseded",
+            tx::ReconcileObservation::Conflicting => "ReconcileConflicting",
+        },
         R::Failed(cause) => failure_domain(*cause),
     }
 }
@@ -887,8 +912,8 @@ fn knowledge_projection(e: &Envelope, knowledge: &core::Knowledge) -> Value {
     };
     json!({"kind":kind,"correlation":correlation,"scope":scope,"fact":fact})
 }
-fn reconcile_projection(observation: tx::ReconcileObservation) -> Value {
-    let (observation, lease, retention) = match observation {
+fn reconcile_projection(e: &Envelope, result: &core::ReconcileResult) -> Value {
+    let (observation, lease, retention) = match result.observation.observation {
         tx::ReconcileObservation::ExactPending { lease, retention } => (
             "ExactPending",
             Some(validity(lease)),
@@ -901,7 +926,18 @@ fn reconcile_projection(observation: tx::ReconcileObservation) -> Value {
         tx::ReconcileObservation::Superseded => ("Superseded", None, None),
         tx::ReconcileObservation::Conflicting => ("Conflicting", None, None),
     };
-    json!({"observation":observation,"lease":lease,"retention":retention})
+    let (unresolved, fence) = match &result.effect.command {
+        core::Command::Reconcile { unresolved, fence } => (
+            correlation_projection(e, *unresolved),
+            fence_projection(e, fence),
+        ),
+        _ => (Value::Null, Value::Null),
+    };
+    json!({"observation":observation,"lease":lease,"retention":retention,
+        "observed_at_us":result.observation.observed_at.timestamp_micros(),
+        "observed_at_source":"Scripted",
+        "correlation":correlation_projection(e, result.effect.correlation),
+        "unresolved":unresolved,"fence":fence})
 }
 fn result_projection(e: &Envelope, result: &core::EffectResult) -> Value {
     use core::{BeginResult as B, EffectResult as R, GuardDecision as G};
@@ -928,7 +964,7 @@ fn result_projection(e: &Envelope, result: &core::EffectResult) -> Value {
         None
     };
     let reconcile = if let R::Reconcile(observation) = result {
-        Some(reconcile_projection(*observation))
+        Some(reconcile_projection(e, observation))
     } else {
         None
     };
@@ -1110,7 +1146,7 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
                 },
             }
         } else {
-            transaction(e, &world, c)?
+            transaction(e, &world, c, None)?
         };
         if e.stage1.is_some()
             && unknown
@@ -1193,6 +1229,7 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             _ => c.times.admission_us,
         };
         let world_counts = counts(&world, &c.actor, time);
+        let caller_time = caller_observation_time(coordinator.state(), time);
         // Record actual failed facts before caller-model expansion or evidence
         // trimming. A partial state analysis cannot erase an observed failure.
         if safety_failure.is_none() && world_counts.0 > 4096 {
@@ -1209,7 +1246,7 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
                     false
                 }
             };
-        let bounds = knowledge_complete.then(|| knowledge_counts(&views, &c.actor, time));
+        let bounds = knowledge_complete.then(|| knowledge_counts(&views, &c.actor, caller_time));
         let (_, finalization_receipt) = receipt_flags(witness.knowledge());
         let mut reservation = reservation_projection(e, c, c, witness.knowledge());
         let wanted_key = bytes32(&e.key(&c.key).hex).expect("validated key");
@@ -1237,7 +1274,7 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
             core::ExecutionState::Finished(core::ExecutionOutcome::Completed {
                 result: core::EffectResult::Reconcile(observation),
                 ..
-            }) => Some(reconcile_projection(*observation)),
+            }) => Some(reconcile_projection(e, observation)),
             _ => None,
         };
         if let Some(observation) = reconciliation.as_mut() {
@@ -1340,6 +1377,57 @@ pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {
 #[cfg(test)]
 mod knowledge_budget_tests {
     use super::*;
+
+    #[test]
+    fn delivered_reconcile_time_drives_projection_filtering_and_caller_bounds() {
+        let value = super::super::tests::reconcile_input();
+        let (input, _) = super::super::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let context = Context::new(&input);
+        let empty = initial_knowledge(&input).unwrap().pop().unwrap();
+        let pending = transaction(&context, &empty, &input.commands[0], None)
+            .unwrap()
+            .staged;
+        let command = &input.commands[1];
+        let emitted = effect(&context, command);
+        let witness = core::CommitWitness::new(emitted.clone());
+        let mut coordinator = core::Coordinator::new(emitted.correlation, emitted.command.clone());
+        coordinator.observe_witness(&witness).unwrap();
+        let actual_at = now(1_800_000_001);
+        assert_ne!(actual_at, now(command.times.reconcile_us));
+        let actual = transaction(&context, &pending, command, Some(actual_at))
+            .unwrap()
+            .result;
+        let core::EffectResult::Reconcile(ref returned) = actual else {
+            unreachable!()
+        };
+        let projected = reconcile_projection(&input, returned);
+        assert_eq!(projected["observed_at_us"], 1_800_000_001i64);
+        assert_eq!(projected["lease"], "Expired");
+        assert_eq!(projected["retention"], "Expired");
+        let mut unmapped = returned.clone();
+        unmapped.effect.correlation.operation = Uuid::nil();
+        assert!(!projection_mapped(&reconcile_projection(&input, &unmapped)));
+        let mut views = vec![empty, pending.clone()];
+        // An undelivered observation cannot replace the caller's clock or views.
+        assert_eq!(
+            caller_observation_time(coordinator.state(), command.times.reconcile_us),
+            command.times.reconcile_us
+        );
+        advance_knowledge(&context, &mut views, command, &witness, coordinator.state()).unwrap();
+        assert_eq!(views.len(), 2);
+        coordinator
+            .complete(core::Completion {
+                effect: emitted,
+                result: actual,
+                knowledge: core::Knowledge::NoCommitRequested,
+            })
+            .unwrap();
+        advance_knowledge(&context, &mut views, command, &witness, coordinator.state()).unwrap();
+        assert!(views == vec![pending]);
+        let caller_time = caller_observation_time(coordinator.state(), command.times.reconcile_us);
+        assert_eq!(caller_time, actual_at.timestamp_micros());
+        assert_eq!(counts(&views[0], &command.actor, caller_time), (0, 1));
+    }
 
     #[test]
     fn maximal_root_with_all_summaries_fits_minimum_evidence_without_detail() {

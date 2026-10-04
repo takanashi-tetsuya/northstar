@@ -185,13 +185,21 @@ pub enum ReconcileObservation {
     Superseded,
 }
 
+/// The same instant used to classify this locked-row observation.
+/// Its clock belongs to the adapter; this value is not a commit receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimedReconcileObservation {
+    pub observed_at: DateTime<Utc>,
+    pub observation: ReconcileObservation,
+}
+
 /// Positive current-row evidence is not historical attribution or retry authority.
 pub fn reconcile(
     row: Option<&AdmissionRow>,
     fence: &AdmissionFence,
     now: DateTime<Utc>,
-) -> ReconcileObservation {
-    match decide_finalize(row, fence) {
+) -> TimedReconcileObservation {
+    let observation = match decide_finalize(row, fence) {
         FinalizeDecision::Missing => ReconcileObservation::Missing,
         FinalizeDecision::PayloadConflict => ReconcileObservation::Conflicting,
         FinalizeDecision::AlreadyAccepted => ReconcileObservation::ExactAccepted {
@@ -205,6 +213,10 @@ pub fn reconcile(
                 retention: validity(row.expires_at, now),
             }
         }
+    };
+    TimedReconcileObservation {
+        observed_at: now,
+        observation,
     }
 }
 
@@ -396,6 +408,65 @@ mod tests {
         );
     }
     #[test]
+    fn every_reconcile_classification_retains_the_exact_sample() {
+        let (_, _, row, fence) = fixture();
+        let observed_at = DateTime::from_timestamp(1_001, 123_456_000).unwrap();
+        let mut accepted = row.clone();
+        accepted.state = RowState::Accepted;
+        accepted.lease_token = Uuid::from_u128(88);
+        let mut superseded = row.clone();
+        superseded.lease_token = Uuid::from_u128(77);
+        let mut conflicting = row.clone();
+        conflicting.payload_mac[0] ^= 1;
+        for (row, expected) in [
+            (None, ReconcileObservation::Missing),
+            (
+                Some(row),
+                ReconcileObservation::ExactPending {
+                    lease: TemporalValidity::Current,
+                    retention: TemporalValidity::Current,
+                },
+            ),
+            (
+                Some(accepted),
+                ReconcileObservation::ExactAccepted {
+                    retention: TemporalValidity::Current,
+                },
+            ),
+            (Some(superseded), ReconcileObservation::Superseded),
+            (Some(conflicting), ReconcileObservation::Conflicting),
+        ] {
+            assert_eq!(
+                reconcile(row.as_ref(), &fence, observed_at),
+                TimedReconcileObservation {
+                    observed_at,
+                    observation: expected,
+                }
+            );
+        }
+    }
+    #[test]
+    fn reconcile_keeps_independent_lease_and_retention_boundaries() {
+        use TemporalValidity::{Current, Expired};
+        let (_, _, row, fence) = fixture();
+        let microsecond = chrono::Duration::microseconds(1);
+        for (observed_at, lease, retention) in [
+            (row.lease_expires_at - microsecond, Current, Current),
+            (row.lease_expires_at, Expired, Current),
+            (row.lease_expires_at + microsecond, Expired, Current),
+            (row.expires_at - microsecond, Expired, Current),
+            (row.expires_at, Expired, Expired),
+            (row.expires_at + microsecond, Expired, Expired),
+        ] {
+            let observed = reconcile(Some(&row), &fence, observed_at);
+            assert_eq!(observed.observed_at, observed_at);
+            assert_eq!(
+                observed.observation,
+                ReconcileObservation::ExactPending { lease, retention }
+            );
+        }
+    }
+    #[test]
     fn reconcile_keeps_retention_boundary_for_both_states() {
         let (_, _, mut row, fence) = fixture();
         row.lease_expires_at = row.expires_at;
@@ -420,7 +491,11 @@ mod tests {
                         retention: expected,
                     },
                 };
-                assert_eq!(observed, expected);
+                assert_eq!(observed.observation, expected);
+                assert_eq!(
+                    observed.observed_at,
+                    row.expires_at + chrono::Duration::microseconds(offset)
+                );
             }
         }
     }

@@ -8,12 +8,10 @@ use crate::abuse::{
 };
 use anyhow::Result;
 use northstar_abuse_policy::admission_execution::{
-    BeginRequest, BeginResult, Command, Completion, Coordinator, Correlation, EffectResult,
-    ExecutionOutcome, FailureKind, GuardDecision, Knowledge, TransactionScope,
+    BeginRequest, BeginResult, Command, Completion, Coordinator, Correlation, Effect, EffectResult,
+    ExecutionOutcome, FailureKind, GuardDecision, Knowledge, ReconcileResult, TransactionScope,
 };
-use northstar_abuse_policy::admission_transaction::{
-    AdmissionFence, FinalizeDecision, ReconcileObservation,
-};
+use northstar_abuse_policy::admission_transaction::{AdmissionFence, FinalizeDecision};
 use uuid::Uuid;
 use witness::AdmissionWitness;
 
@@ -30,8 +28,8 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<FinalizeDecision>> + Send;
     fn reconcile(
         &self,
-        fence: &AdmissionFence,
-    ) -> impl std::future::Future<Output = Result<ReconcileObservation>> + Send;
+        effect: &Effect,
+    ) -> impl std::future::Future<Output = Result<ReconcileResult>> + Send;
 }
 
 pub(crate) fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
@@ -199,17 +197,17 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         &self,
         unresolved: Correlation,
         fence: AdmissionFence,
-    ) -> Result<ReconcileObservation> {
+    ) -> Result<ReconcileResult> {
         let (mut coordinator, witness) = operation(Command::Reconcile {
             unresolved,
             fence: fence.clone(),
         });
         let effect = coordinator.pending().expect("new reconcile").clone();
-        let result = self.repository.reconcile(&fence).await;
+        let result = self.repository.reconcile(&effect).await;
         let observed = witness.snapshot();
         coordinator.observe_witness(&observed)?;
         let completion_result = match &result {
-            Ok(observation) => EffectResult::Reconcile(*observation),
+            Ok(observation) => EffectResult::Reconcile(observation.clone()),
             Err(error) => EffectResult::Failed(failure(error)),
         };
         let outcome = coordinator
@@ -334,8 +332,17 @@ mod tests {
             witness.received(prepared);
             Ok(FinalizeDecision::AlreadyAccepted)
         }
-        async fn reconcile(&self, _: &AdmissionFence) -> Result<ReconcileObservation> {
-            Ok(ReconcileObservation::Missing)
+        async fn reconcile(&self, effect: &Effect) -> Result<ReconcileResult> {
+            use northstar_abuse_policy::admission_transaction::{
+                ReconcileObservation, TimedReconcileObservation,
+            };
+            Ok(ReconcileResult {
+                effect: Box::new(effect.clone()),
+                observation: TimedReconcileObservation {
+                    observed_at: chrono::DateTime::from_timestamp_micros(123_456).unwrap(),
+                    observation: ReconcileObservation::Missing,
+                },
+            })
         }
     }
     fn request() -> MessageAdmissionRequest<'static> {
@@ -399,6 +406,32 @@ mod tests {
             .accept_message_admission(&lease())
             .await
             .is_ok());
+    }
+    #[tokio::test]
+    async fn reconciliation_service_returns_the_repository_sample_and_request() {
+        let unresolved = Correlation {
+            operation: Uuid::from_u128(10),
+            effect: 9,
+            generation: 8,
+            attempt: 7,
+        };
+        let fence = acceptance_fence(&lease().acceptance());
+        let result = MessageAdmissionService::new(Repository(Mode::Memory))
+            .reconcile_message_admission(unresolved, fence.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.observation.observed_at.timestamp_micros(), 123_456);
+        assert_eq!(
+            result.observation.observation,
+            northstar_abuse_policy::admission_transaction::ReconcileObservation::Missing
+        );
+        assert_eq!(
+            result.effect.command,
+            Command::Reconcile { unresolved, fence }
+        );
+        assert_eq!(result.effect.correlation.effect, 1);
+        assert_eq!(result.effect.correlation.generation, 0);
+        assert_eq!(result.effect.correlation.attempt, 1);
     }
     #[test]
     fn admission_request_limits_are_checked_before_ownership_conversion() {

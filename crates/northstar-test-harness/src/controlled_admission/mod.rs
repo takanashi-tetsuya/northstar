@@ -35,6 +35,21 @@ mod tests {
         let (e, hash) = parse(&serde_json::to_vec(v).unwrap()).unwrap();
         execute(&e, &hash).unwrap()
     }
+    pub(super) fn reconcile_input() -> Value {
+        let mut v = input();
+        v["commands"][0]["schedule"]["cut"] = "commit_unknown".into();
+        let mut reconcile = v["commands"][0].clone();
+        reconcile["operation_id"] = "operation-2".into();
+        reconcile["effect_id"] = "effect-2".into();
+        reconcile["operation_uuid"] = "10000000-0000-0000-0000-000000000002".into();
+        reconcile["effect_number"] = 2.into();
+        reconcile["action"] = "reconcile".into();
+        reconcile["reconcile_of"] = "operation-1".into();
+        reconcile["schedule"]["cut"] = "none".into();
+        refresh_completion(&mut reconcile);
+        v["commands"].as_array_mut().unwrap().push(reconcile);
+        v
+    }
     #[test]
     fn concrete_saved_completion_rejects_full_guard_mismatch_then_accepts_once() {
         let mut v = input();
@@ -245,21 +260,8 @@ mod tests {
     }
     #[test]
     fn rejected_reconcile_delivery_cannot_publish_repository_observation() {
-        let mut v = input();
-        v["commands"][0]["schedule"]["cut"] = "commit_unknown".into();
-        let mut reconcile = v["commands"][0].clone();
-        reconcile["operation_id"] = "operation-2".into();
-        reconcile["effect_id"] = "effect-2".into();
-        reconcile["operation_uuid"] = "10000000-0000-0000-0000-000000000002".into();
-        reconcile["effect_number"] = 2.into();
-        reconcile["action"] = "reconcile".into();
-        reconcile["reconcile_of"] = "operation-1".into();
-        reconcile["schedule"]["cut"] = "none".into();
-        for key in ["operation_uuid", "effect_number", "action", "reconcile_of"] {
-            reconcile["schedule"]["completions"][0][key] = reconcile[key].clone();
-        }
-        reconcile["schedule"]["completions"][0]["attempt"] = 2.into();
-        v["commands"].as_array_mut().unwrap().push(reconcile);
+        let mut v = reconcile_input();
+        v["commands"][1]["schedule"]["completions"][0]["attempt"] = 2.into();
         let out = run(&v);
         assert_eq!(
             out["projection"][1]["world"]["result"],
@@ -268,6 +270,54 @@ mod tests {
         assert_eq!(out["projection"][1]["reconcile"], Value::Null);
         assert_eq!(out["projection"][1]["coordinator"]["outcome"], Value::Null);
         assert_eq!(out["execution"], "Inconclusive");
+    }
+    #[test]
+    fn successive_reconcile_samples_keep_their_own_effect_and_unknown_target() {
+        let mut v = reconcile_input();
+        v["commands"][1]["times"]["reconcile_us"] = 10_000_001.into();
+        let mut next = v["commands"][1].clone();
+        next["operation_id"] = "operation-3".into();
+        next["effect_id"] = "effect-3".into();
+        next["operation_uuid"] = "10000000-0000-0000-0000-000000000003".into();
+        next["effect_number"] = 3.into();
+        next["generation"] = 5.into();
+        next["attempt"] = 7.into();
+        next["times"]["reconcile_us"] = 60_000_001.into();
+        refresh_completion(&mut next);
+        v["commands"].as_array_mut().unwrap().push(next);
+        let out = run(&v);
+        for (index, time, validity, generation, attempt) in [
+            (1, 10_000_001, "Current", 0, 1),
+            (2, 60_000_001, "Expired", 5, 7),
+        ] {
+            let event = &out["projection"][index];
+            let returned = &event["coordinator"]["result"]["reconcile"];
+            assert_eq!(returned["observed_at_us"], time);
+            assert_eq!(returned["observed_at_source"], "Scripted");
+            assert_eq!(returned["lease"], validity);
+            assert_eq!(
+                returned["correlation"],
+                json!({"mapped":true,
+                "operation_id":format!("operation-{}", index + 1),
+                "effect_number":index + 1,"generation":generation,"attempt":attempt})
+            );
+            assert_eq!(
+                returned["unresolved"],
+                out["projection"][0]["witness"]["correlation"]
+            );
+            assert_eq!(
+                returned["fence"],
+                json!({"mapped":true,"key":"key-a","payload_tag":"payload-a","lease":"lease-a"})
+            );
+            assert_eq!(
+                event["reconcile"]["observed_at_us"],
+                returned["observed_at_us"]
+            );
+            assert_eq!(event["reconcile"]["unresolved_operation_preserved"], true);
+            assert_eq!(event["witness"]["kind"], "NoCommitRequested");
+            assert_eq!(event["caller"]["reservation_receipt"], false);
+        }
+        assert_eq!(out["projection"][0]["coordinator"]["outcome"], "Unknown");
     }
     #[test]
     fn rejected_finalize_preserves_original_receipt_without_authorizing_changed_fence() {

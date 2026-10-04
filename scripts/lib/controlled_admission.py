@@ -21,12 +21,13 @@ import uuid
 from . import experiment_contract as stage1
 
 SCHEMA = 'northstar-admission-controlled-input-v1'
-OUTPUT_SCHEMA = 'northstar-admission-controlled-output-v3'
+OUTPUT_SCHEMA = 'northstar-admission-controlled-output-v4'
 REJECTION_SCHEMA = 'northstar-admission-controlled-rejection-v1'
 CORPUS_SCHEMA = 'northstar-admission-controlled-corpus-v1'
 MODEL = 'admission-controlled-v1'
 ADAPTER = 'controlled_rust'
 BINDING_VERSION = 'synthetic-material-v1'
+RECONCILE_FIELDS = 'observation lease retention observed_at_us observed_at_source correlation unresolved fence'
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_ROWS = 40000
@@ -492,6 +493,21 @@ def _fence_labels(command, *, row=None):
     return {'mapped': True, **{key: source[key] for key in ('key', 'payload_tag', 'lease')}}
 
 
+def _correlation_labels(command):
+    return {'mapped': True, 'operation_id': command['operation_id'],
+            'effect_number': command['effect_number'], 'generation': command['generation'],
+            'attempt': command['attempt']}
+
+
+def _reconcile_metadata(command, maps, observed_at):
+    # Independent prediction of the scripted adapter's returned effect/sample.
+    # No Rust output or caller-supplied evidence label enters this calculation.
+    return {'observed_at_us': observed_at, 'observed_at_source': 'Scripted',
+            'correlation': _correlation_labels(command),
+            'unresolved': _correlation_labels(maps['operations'][command['reconcile_of']]),
+            'fence': _fence_labels(command)}
+
+
 def _retained_knowledge(command, result, scope, staged, selected_key):
     """Authority contract: preparation retains its exact prospective fact;
     only a delivered repository receipt establishes confirmed knowledge.
@@ -527,7 +543,7 @@ def _declared_result(command, result, staged, selected_key, reconciliation):
         kind = 'Begin.' + ('Reserved' if result == 'Proceed' else result)
     return {'kind': kind, 'fence': _fence_labels(command, row=staged[selected_key]) if result == 'Proceed' else None,
             'reconcile': None if reconciliation is None else
-            {key: reconciliation[key] for key in ('observation', 'lease', 'retention')}, 'cause': None}
+            {key: reconciliation[key] for key in RECONCILE_FIELDS.split()}, 'cause': None}
 
 
 def _expected_coordinator(accepted, delivered, retained):
@@ -678,7 +694,7 @@ def _knowledge_transaction(view, command, maps, now):
         else:
             observation = 'ExactPending'
         result = 'Reconcile' + observation
-        reconciliation = {'observation': observation,
+        reconciliation = {**_reconcile_metadata(command, maps, now), 'observation': observation,
                           'lease': ('Current' if row['lease_until_us'] > now else 'Expired') if observation == 'ExactPending' else None,
                           'retention': ('Current' if row['expires_at_us'] > now else 'Expired') if observation in ('ExactPending', 'ExactAccepted') else None}
     # Noncommitting transactions roll back candidate cleanup and guard writes.
@@ -700,6 +716,8 @@ def _knowledge_advance(views, command, maps, now, witness, coordinator):
     delivered = coordinator['result'] if coordinator['outcome'] == 'Completed' else None
     if command['action'] == 'guard_memory' or (witness['kind'] == 'NoCommitRequested' and delivered is None):
         return views, None
+    if delivered is not None and delivered['kind'] == 'Reconcile':
+        now = delivered['reconcile']['observed_at_us']
     factor = 2 if witness['kind'] == 'CommitCallEntered' else 1
     reason = _knowledge_reserve(views, command, factor)
     if reason is not None:
@@ -728,6 +746,7 @@ def _knowledge_advance(views, command, maps, now, witness, coordinator):
 def predict(value, *, _stop_at_evidence=False):
     """Independent Python predicates; outputs are explicitly predictions only."""
     maps = parse_scenario(value)
+    maps['operations'] = {command['operation_id']: command for command in value['commands']}
     initial = value['initial']
     initial_reason = ('RowBudget' if len(initial['rows']) > MAX_KNOWLEDGE_ROWS else
                       'ByteBudget' if _knowledge_world_bytes(initial['rows'], initial['actor_sequences'], initial['proofs']) > MAX_KNOWLEDGE_BYTES else None)
@@ -834,7 +853,7 @@ def predict(value, *, _stop_at_evidence=False):
             else:
                 observed = 'ExactPending'
             result = 'Reconcile' + observed
-            reconciliation = {'observation': observed,
+            reconciliation = {**_reconcile_metadata(command, maps, now), 'observation': observed,
                               'lease': ('Current' if row['lease_until_us'] > now else 'Expired') if observed == 'ExactPending' else None,
                               'retention': ('Current' if row['expires_at_us'] > now else 'Expired') if observed in ('ExactPending', 'ExactAccepted') else None,
                               'unresolved_operation_preserved': True}
@@ -970,13 +989,7 @@ def _validate_fence(value):
     require(value['mapped'] == all(value[key] is not None for key in ('key', 'payload_tag', 'lease')), 'fence_mapping')
 
 
-def _validate_knowledge(value):
-    fields(value, 'kind correlation scope fact', 'projected_knowledge')
-    require(value['kind'] in ('NoCommitRequested', 'CommitCallEntered', 'ReceiptKnown'), 'knowledge_kind')
-    if value['kind'] == 'NoCommitRequested':
-        require(all(value[key] is None for key in ('correlation', 'scope', 'fact')), 'no_commit_shape')
-        return
-    correlation = value['correlation']
+def _validate_correlation(correlation):
     fields(correlation, 'mapped operation_id effect_number generation attempt', 'projected_correlation')
     boolean(correlation['mapped'], 'correlation_mapped')
     require(correlation['mapped'] == (correlation['operation_id'] is not None), 'correlation_mapping')
@@ -987,6 +1000,15 @@ def _validate_knowledge(value):
     integer(correlation['effect_number'], 'correlation_effect', 0, 2**64 - 1)
     integer(correlation['generation'], 'correlation_generation', 0, 2**64 - 1)
     integer(correlation['attempt'], 'correlation_attempt', 0, 2**32 - 1)
+
+
+def _validate_knowledge(value):
+    fields(value, 'kind correlation scope fact', 'projected_knowledge')
+    require(value['kind'] in ('NoCommitRequested', 'CommitCallEntered', 'ReceiptKnown'), 'knowledge_kind')
+    if value['kind'] == 'NoCommitRequested':
+        require(all(value[key] is None for key in ('correlation', 'scope', 'fact')), 'no_commit_shape')
+        return
+    _validate_correlation(value['correlation'])
     require(value['scope'] in SCOPES[1:], 'knowledge_scope')
     fact = value['fact']
     fields(fact, 'kind fence', 'projected_fact')
@@ -998,7 +1020,14 @@ def _validate_knowledge(value):
 
 
 def _validate_reconcile(value):
-    fields(value, 'observation lease retention', 'result_reconcile')
+    fields(value, RECONCILE_FIELDS, 'result_reconcile')
+    # Actual typed observations can differ from the valid input clock range.
+    # Preserve that evidence for exact comparison and ReplayDivergence.
+    integer(value['observed_at_us'], 'reconcile_observed_at', -(2**63), 2**63 - 1)
+    require(value['observed_at_source'] == 'Scripted', 'reconcile_clock_source')
+    _validate_correlation(value['correlation'])
+    _validate_correlation(value['unresolved'])
+    _validate_fence(value['fence'])
     require(value['observation'] in ('ExactPending', 'ExactAccepted', 'Missing', 'Superseded', 'Conflicting'), 'reconcile_observation')
     for key in ('lease', 'retention'):
         require(value[key] in (None, 'Current', 'Expired'), 'reconcile_validity')
@@ -1137,11 +1166,8 @@ def validate_output(value, output):
             boolean(rejection['pending_preserved'], 'pending_preserved')
             boolean(rejection['receipt_preserved'], 'receipt_preserved')
         if event['reconcile'] is not None:
-            fields(event['reconcile'], 'observation lease retention unresolved_operation_preserved', 'reconcile')
-            require(event['reconcile']['observation'] in ('ExactPending', 'ExactAccepted', 'Missing', 'Superseded', 'Conflicting'),
-                    'reconcile_observation')
-            for key in ('lease', 'retention'):
-                require(event['reconcile'][key] in (None, 'Current', 'Expired'), 'reconcile_validity')
+            fields(event['reconcile'], RECONCILE_FIELDS + ' unresolved_operation_preserved', 'reconcile')
+            _validate_reconcile({key: event['reconcile'][key] for key in RECONCILE_FIELDS.split()})
             boolean(event['reconcile']['unresolved_operation_preserved'], 'unresolved_operation_preserved')
     if value['stage1'] is None:
         require(output['compatibility_projection'] is None, 'unexpected_compatibility_projection')
@@ -1417,7 +1443,7 @@ LIMITATIONS = [
     'Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug',
     'Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3',
     'Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits',
-    'Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted',
+    'Actor-policy clock inputs and guard outcomes remain scripted; controlled reconciliation timestamps are scripted, not PostgreSQL clock conformance',
 ]
 
 

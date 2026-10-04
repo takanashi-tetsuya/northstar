@@ -368,7 +368,7 @@
             "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
             "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
             "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
-            "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted"
+            "Actor-policy clock inputs and guard outcomes remain scripted; controlled reconciliation timestamps are scripted, not PostgreSQL clock conformance"
           ]
         }
       }
@@ -2084,6 +2084,11 @@
                 "observation",
                 "lease",
                 "retention",
+                "observed_at_us",
+                "observed_at_source",
+                "correlation",
+                "unresolved",
+                "fence",
                 "unresolved_operation_preserved"
               ],
               "properties": {
@@ -2112,6 +2117,23 @@
                 },
                 "unresolved_operation_preserved": {
                   "type": "boolean"
+                },
+                "observed_at_us": {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                "observed_at_source": {
+                  "const": "Scripted"
+                },
+                "correlation": {
+                  "$ref": "#/$defs/controlledProjectedCorrelation"
+                },
+                "unresolved": {
+                  "$ref": "#/$defs/controlledProjectedCorrelation"
+                },
+                "fence": {
+                  "$ref": "#/$defs/controlledProjectedFence"
                 }
               }
             }
@@ -2150,7 +2172,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "northstar-admission-controlled-output-v3"
+          "const": "northstar-admission-controlled-output-v4"
         },
         "adapter": {
           "const": "controlled_rust"
@@ -2207,7 +2229,7 @@
             "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
             "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
             "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
-            "Actor-policy clock inputs and SQL reconciliation observed_at are not implemented authority clocks; guard outcomes remain scripted"
+            "Actor-policy clock inputs and guard outcomes remain scripted; controlled reconciliation timestamps are scripted, not PostgreSQL clock conformance"
           ]
         },
         "coordinators_finished": {
@@ -2734,9 +2756,31 @@
       "required": [
         "observation",
         "lease",
-        "retention"
+        "retention",
+        "observed_at_us",
+        "observed_at_source",
+        "correlation",
+        "unresolved",
+        "fence"
       ],
       "properties": {
+        "observed_at_us": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "observed_at_source": {
+          "const": "Scripted"
+        },
+        "correlation": {
+          "$ref": "#/$defs/controlledProjectedCorrelation"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/controlledProjectedCorrelation"
+        },
+        "fence": {
+          "$ref": "#/$defs/controlledProjectedFence"
+        },
         "observation": {
           "enum": [
             "ExactPending",

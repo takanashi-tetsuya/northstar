@@ -170,7 +170,9 @@ diagnostics 全部保留。Password executor 的 global gate、DNS global cache�
 
 普通 source/refactor、build/unit 與既有 CI 可執行。新增 service/fault/process-loss、adversarial wire、
 resource exhaustion 等執行先提交明確 scope 與安全判定；不得把先前不明內容限制的操作改名、搬到 CI
-或換路徑重試。72h soak 仍取消，不包含在本次授權。沒有 tag、merge、deploy 或付費資源操作。
+或換路徑重試。72h soak 仍取消，不包含在本次授權。沒有 tag、deploy 或付費資源操作。
+2026-10-04 使用者另要求將最新 dev 合入 recovery；核對時 dev `3dfc005` 已是 `87ec1c2`
+的祖先（ahead 13／behind 0），所以沒有建立 merge commit，也沒有反向修改 dev。
 
 ## 持久交接方式
 
@@ -282,3 +284,36 @@ Stage1遇不完整stop只保留既有compatibility prefix，不編造數值。�
 [multi-Unknown紀錄](../evidence/experimental-rebuild/stage2-multi-unknown-correction.json)。
 五個原始blocker的來源修正現已齊備，但沒有據此把Stage2標成通過。專項執行、真adapter與後續
 責任仍待完成；下一個驗證交接見[獨立驗證清單](controlled-admission-validation-handoff.zh-TW.md)。
+
+## Reconciliation observed_at／effect 窄修正
+
+`87ec1c2` 已保存 multi-Unknown 修正，其普通 CI `37170189099` 完整成功，32 success／
+1 schedule-only skip。這次增量保留正式 SQL 在原 advisory lock／locked-row read 後取得的
+同一個 `clock_timestamp()`，純 decision 回傳 typed sample＋classification；repository／service
+再返回完整 reconciliation effect。Coordinator 在改變 pending state 前核對該 inner effect，
+避免將別次 read 的 observation 重新貼到目前請求。原 SQL 文字、取樣順序、鎖與 rollback 不變。
+
+Controlled output 改為 v4，從實際返回結果投影 sample、effect／attempt、unresolved correlation
+及 requested fence，明列 clock source 為 Scripted。只有交付成功的 observation time 可用於
+caller alternatives 的 validity／count bounds；未交付或失敗 read 不提供新的 observed instant。
+獨立 Python oracle 仍從 scenario 推導應有值；output timestamp 接受完整 i64 型別範圍，使可表示
+但錯誤的時間進入 ReplayDivergence，而不先冒充 invalid input。
+
+已新增 effect substitution、各 classification 的 sample、lease／retention equality、service
+返回與連續 read、delivered／undelivered as-of 的 regression source。本次只做普通格式、AST／
+strict JSON 與三個 package 的 default-feature normal/test-target compile，全部 exit0，
+1,670 檔 before／after map 相同；沒有執行新增測試、專項 Python、runner、SQL 或 fault。
+原始 driver、source patch、maps 與 logs 也保存於精確 hash 的小型 evidence archive，見
+[observed_at 紀錄](../evidence/experimental-rebuild/stage2-observed-at-correction.json)。
+
+補充的普通 Clippy 首次實測發現兩個 `large_enum_variant`，其原始失敗仍保存。僅將 retained
+Effect 改為 `Box<Effect>` 及五個 constructors，不改內容 equality／redaction、SQL 或 v4 JSON。
+修正後重新做 Rust format、normal/test-target compile 與 `clippy -D warnings`，全部 exit0，
+1,670 檔來源 map 穩定；Python／JSON 四個檔案 hash 未變，沿用前一輪成功的語法證據。
+這裡的 layout 修正與普通 lint 不代表 regression bodies 已執行。
+
+此時間只表示 locked-row observation 的分類時刻，不是歷史 COMMIT 的證明、全域單調時鐘或
+更強 snapshot isolation。ExactAccepted 仍先於 token 比對，返回 requested fence 不代表
+accepted row 的舊 token 已驗證。Reconcile service 目前尚無 production runtime caller；
+Stage3 outer ownership／recovery 尚未接上。Actor-policy clock 仍是 scripted，真 SQL／replay
+與 bounded execution supervision 仍待完成，Stage2 仍未驗收。

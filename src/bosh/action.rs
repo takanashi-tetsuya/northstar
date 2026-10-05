@@ -37,11 +37,17 @@ impl BoshActor {
             }
             Action::SendManyThenActivate(replies) => {
                 for (index, reply) in replies.into_iter().enumerate() {
-                    if !self.record_and_push(reply).await {
+                    if self.protocol.record_outbound(&reply).await.is_err() {
                         return false;
                     }
-                    if index == 0 {
-                        self.auth_publication_pending = true;
+                    let item = crate::outbound::OutboundItem::plain(reply);
+                    let item = if index == 0 {
+                        item.with_bosh_auth_control()
+                    } else {
+                        item
+                    };
+                    if !self.push_output_item(item) {
+                        return false;
                     }
                 }
                 self.protocol.start_post_action_tasks();
@@ -66,9 +72,6 @@ impl BoshActor {
                 } = payload.into_transport_parts();
                 if self.protocol.record_outbound(&control).await.is_err() {
                     return false;
-                }
-                if activate_route {
-                    self.auth_publication_pending = true;
                 }
                 for nonza in &post_control {
                     if self.protocol.record_outbound(nonza).await.is_err() {

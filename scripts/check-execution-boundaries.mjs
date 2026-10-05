@@ -11,6 +11,7 @@ const files = {
   websocket: 'src/xmpp/websocket_action.rs',
   bosh: 'src/bosh.rs',
   boshAction: 'src/bosh/action.rs',
+  outbound: 'src/outbound.rs',
   muc: 'src/xmpp/protocol/muc.rs',
   mucFanout: 'src/services/muc/fanout.rs',
   mix: 'src/xmpp/protocol/mix.rs',
@@ -400,7 +401,9 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   const prepare = normalize(body(boshResponse, 'async\\s+fn\\s+prepare\\b'));
   ordered(prepare, ['.begin_response(', 'loop{', 'fields.body(', 'build.attempt(sources,selected.iter().map(|item|item.durable_source))',
     'letresult=ifrequest.sources().is_empty(){Ok(BoshResponseOwnership::default())}else{port.bind(&request).await};',
-    'letbound=request.returned(ownership)', 'letownership=bound.ownership().clone();', 'Ok(BoundResponse{metadata,response,receipts,ownership,bound,})'],
+    'letbound=request.returned(ownership)', 'letownership=bound.ownership().clone();',
+    'letauth_control_selected=selected.iter().any(OutboundItem::is_bosh_auth_control);',
+    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,})'],
   'BOSH must bind selected sources and consume the actual returned membership before releasing response bytes');
   ordered(prepare, ['ifletSome(message_id)=superseded_bosh_message_id(&error){', 'ifletOk(restoration)=request.supersession(message_id){',
     'restore_response_items_observed(', 'restoration.restored(removed_indices)', 'ifremoved&&superseded_rebuilds<fields.max_output_stanzas{'],
@@ -417,11 +420,12 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   const bound = normalize(body(body(boshResponseCore, 'impl\\s+BoundResponse\\b'), 'fn\\s+begin_exposure\\b'));
   ordered(bound, ['self.request.validate(&mutstate)?;', 'if!attempt.return_matches||attempt.restored{returnErr(Rejected::Receipt);}', 'response.exposure_entered=true;'],
     'BOSH payload exposure must consume the checked bound continuation');
-  const localFinish = normalize(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+finish\\b'));
-  ordered(localFinish, ['self.exposure.begin_bookkeeping()?;', 'update_response_position(last_response,highest_responded,self.metadata.rid);',
-    'bookkeeping.updated();', 'ifself.metadata.cache{', 'replay.push_back(CachedResponse{', 'bookkeeping.cached();'],
+  const localFinish = normalize(body(body(boshResponse, 'impl\\s+PublicationReadyResponse\\b'), 'fn\\s+finish\\b'));
+  ordered(localFinish, ['letExposedResponse{metadata,response,receipts,ownership,exposure,..}=self.exposed;',
+    'exposure.begin_bookkeeping()?;', 'update_response_position(last_response,highest_responded,metadata.rid);',
+    'bookkeeping.updated();', 'ifmetadata.cache{', 'replay.push_back(CachedResponse{', 'bookkeeping.cached();'],
   'BOSH cache bookkeeping must consume exposure and record insertion after the actual push');
-  for (const field of ['response:self.response,', 'durable_ownership:self.ownership,', 'transport_receipts:self.receipts,']) {
+  for (const field of ['response,', 'durable_ownership:ownership,', 'transport_receipts:receipts,']) {
     requireBoundary(localFinish.includes(field), 'BOSH cache must retain the same bytes, membership and receipt channels');
   }
   const pause = normalize(body(boshResponse, 'fn\\s+finish_empty_control\\b'));
@@ -473,7 +477,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   }
 }
 
-export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction, boshResponse }) {
+export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction, boshResponse, outbound }) {
   boshResponse = productionModule(boshResponse);
   for (const name of ['drive_io', 'websocket_connection']) {
     const ingress = compact(body(transport, `async\\s+fn\\s+${name}\\b`));
@@ -584,31 +588,99 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
     !boshIngress.includes('self.protocol.handle('), 'BOSH must enter the observed frame runner');
   const boshPublication = compact(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
   const exposure = 'letexposed=matchbound.expose(pending.responders){Ok(exposed)=>exposed,Err(error)=>{tracing::error!(?error,rid,);returnfalse;}};';
-  const continuation = 'ifself.auth_publication_pending{if!exposed.any_accepted(){returnfalse;}self.auth_publication_pending=false;if!self.protocol.publish_committed_authentication_and_route().await{returnfalse;}}';
+  const continuation = 'letready=matchexposed.publish_authentication(||self.protocol.publish_committed_authentication_and_route()).await{Ok(ready)=>ready,Err(_)=>returnfalse,};';
   requireBoundary(boshPublication.includes(exposure + continuation +
-    'exposed.finish(&mutself.last_response,&mutself.highest_responded,&mutself.replay,).is_ok()'),
+    'ready.finish(&mutself.last_response,&mutself.highest_responded,&mutself.replay,).is_ok()'),
   'BOSH must observe publication only after response exposure and before cache bookkeeping');
   requireBoundary(count(boshPublication, 'bound.expose(') === 1 &&
-    count(boshPublication, '.publish_committed_authentication_and_route().await') === 1 &&
-    !boshPublication.includes('publish_committed_authentication_and_route_inner'),
+    count(boshPublication, '.publish_committed_authentication_and_route()') === 1 &&
+    !boshPublication.includes('publish_committed_authentication_and_route_inner') &&
+    !compact(codeOnly(productionModule(bosh))).includes('auth_publication_pending'),
   'BOSH must observe publication only after response exposure and reject publication failure');
   const send = compact(body(boshResponse, 'fn\\s+send_one\\b'));
   const expose = compact(body(body(boshResponse, 'impl\\s+BoundResponse\\b'), 'fn\\s+expose\\b'));
   requireBoundary(send === 'entering();letaccepted=responder.send(response).is_ok();returned(accepted);accepted' &&
     expose.includes('letexposure=self.bound.begin_exposure()?;letmutaccepted=false;') &&
     expose.includes('accepted|=send_one(self.response.clone(),responder,||exposure.sending(),|accepted|exposure.sent(accepted),);') &&
-    expose.includes('exposure,accepted,})') &&
+    expose.includes('exposure,accepted,auth_control_selected:self.auth_control_selected,})') &&
     compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+any_accepted\\b')) === 'self.accepted',
   'BOSH response exposure must preserve the actual responder acceptance');
+  const gate = compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'async\\s+fn\\s+publish_authentication\\b'));
+  requireBoundary(gate === 'ifself.auth_control_selected{anyhow::ensure!(self.accepted,);anyhow::ensure!(publish().await,);}Ok(PublicationReadyResponse{exposed:self})',
+    'BOSH publication gate must consume selected exposure, require actual acceptance and successful lazy publication');
+  // Closed lexical inventory for these three concrete owners, not a Rust
+  // parser or a proof over alternate syntax, macro expansion or other files.
+  const responseCode = codeOnly(boshResponse);
+  const commonFields = 'metadata:Metadata,response:BoshHttpResponse,receipts:Vec<mpsc::UnboundedSender<()>>,ownership:Arc<BoshResponseOwnership>,';
+  const finishHead = 'pub(super)fnfinish(self,last_response:&mutInstant,highest_responded:&mutu64,replay:&mutVecDeque<CachedResponse>,)->Result<()>{';
+  const ownerShapes = [
+    ['BoundResponse', commonFields + 'bound:response::BoundResponse,auth_control_selected:bool,',
+      ['expose'], ['pub(super)fnexpose(self,responders:Vec<Responder>)->Result<ExposedResponse>{']],
+    ['ExposedResponse', commonFields + 'exposure:response::Exposure,accepted:bool,auth_control_selected:bool,',
+      ['any_accepted', 'publish_authentication', 'finish'], [
+        '#[cfg(test)]pub(super)fnany_accepted(&self)->bool{',
+        'pub(super)asyncfnpublish_authentication<F:Future<Output=bool>>(self,publish:implFnOnce()->F,)->Result<PublicationReadyResponse>{',
+        '#[cfg(test)]' + finishHead,
+      ]],
+    ['PublicationReadyResponse', 'exposed:ExposedResponse,', ['finish'], [finishHead]],
+  ];
+  for (const [name, fields, methods, heads] of ownerShapes) {
+    requireBoundary(compact(body(boshResponse, `pub\\(super\\)\\s+struct\\s+${name}\\b`)) === fields,
+      `BOSH ${name} must retain its exact private field shape`);
+    const declaration = responseCode.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)pub\\(super\\)\\s+struct\\s+${name}\\b`));
+    const manualCopy = new RegExp(`\\bimpl\\b[^{};]*\\b(?:Clone|Copy)\\s+for\\s+(?:\\w+\\s*::\\s*)*${name}\\b`);
+    requireBoundary(declaration && !/\bderive\s*\([^)]*\b(?:Clone|Copy)\b/.test(declaration[1]) && !manualCopy.test(responseCode),
+      `BOSH ${name} cannot derive or manually implement Clone or Copy`);
+    const implementation = body(boshResponse, `impl\\s+${name}\\b`);
+    const actualMethods = [...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]);
+    requireBoundary(actualMethods.join(',') === methods.join(','),
+      `BOSH ${name} must retain its closed inherent-method inventory`);
+    for (const head of heads) {
+      requireBoundary(compact(implementation).includes(head),
+        `BOSH ${name} must retain its named consuming declaration heads and test-only compatibility methods`);
+    }
+    requireBoundary(!/\bSelf\s*\{/.test(implementation),
+      `BOSH ${name} cannot add Self-brace construction inside its owner implementation`);
+    // Four name-plus-brace sites each: the declaration and inherent impl,
+    // plus Bound's Debug impl/construction, Exposed's construction/destructure,
+    // or Ready's two reviewed construction sites. Extra constructors fail.
+    requireBoundary([...responseCode.matchAll(new RegExp(`\\b${name}\\s*\\{`, 'g'))].length === 4,
+      `BOSH ${name} cannot add named construction sites outside the reviewed continuations`);
+  }
+  const plainFinish = compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+finish\\b'));
+  requireBoundary(plainFinish === 'anyhow::ensure!(!self.auth_control_selected,);PublicationReadyResponse{exposed:self}.finish(last_response,highest_responded,replay)',
+    'BOSH plain compatibility finish must reject selected auth before bookkeeping');
+  const prepare = compact(body(boshResponse, 'async\\s+fn\\s+prepare\\b'));
+  ordered(prepare, ['loop{', 'let(response,sources,receipts,selected)=built',
+    'letbound=request.returned(ownership)', 'letauth_control_selected=selected.iter().any(OutboundItem::is_bosh_auth_control);',
+    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,})'],
+    'BOSH auth membership must come from the final bound selection on every rebuild');
+  const cached = compact(body(bosh, 'struct\\s+CachedResponse\\b'));
+  const replay = compact(body(boshResponse, 'async\\s+fn\\s+replay_cached\\b'));
+  requireBoundary(!/auth_control|auth_publication|publish_authentication/.test(cached + replay),
+    'BOSH cache and replay cannot recreate auth publication membership or authority');
+  const item = compact(body(outbound, 'pub\\s+struct\\s+OutboundItem\\b'));
+  requireBoundary(item.includes('bosh_auth_control:bool,') && !/pub(?:\([^)]*\))?bosh_auth_control/.test(item) &&
+    compact(body(outbound, 'fn\\s+with_bosh_auth_control\\b')) === 'self.bosh_auth_control=true;self' &&
+    compact(body(outbound, 'fn\\s+is_bosh_auth_control\\b')) === 'self.bosh_auth_control',
+    'BOSH auth control must remain private item selection metadata with an exact marker accessor');
   const boshApply = body(boshAction, 'async\\s+fn\\s+apply_action\\b');
   requireBoundary(!compact(boshApply).includes('publish_committed_authentication'),
     'BOSH FIFO admission must defer authentication publication until response exposure');
   const boshActivate = compact(body(boshApply, 'Action::SendManyThenActivate\\([^)]*\\)\\s*=>'));
-  requireBoundary(boshActivate.includes('if!self.record_and_push(reply).await{returnfalse;}ifindex==0{self.auth_publication_pending=true;}'),
-    'BOSH activation must retain its pending-publication marker after first FIFO admission');
+  requireBoundary(boshActivate.includes('ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}letitem=crate::outbound::OutboundItem::plain(reply);letitem=ifindex==0{item.with_bosh_auth_control()}else{item};if!self.push_output_item(item){returnfalse;}'),
+    'BOSH activation must record then enqueue the exact first control with selection membership');
   const boshResume = compact(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));
-  requireBoundary(boshResume.includes('ifself.protocol.record_outbound(&control).await.is_err(){returnfalse;}ifactivate_route{self.auth_publication_pending=true;}'),
-    'BOSH resume must retain its conditional pending-publication marker');
+  requireBoundary(boshResume.includes('ifself.protocol.record_outbound(&control).await.is_err(){returnfalse;}') &&
+    boshResume.includes('ResumeTransportParts{control,post_control,replay,activate_route,transient_capacity,}') &&
+    !boshResume.includes('with_bosh_auth_control'),
+    'BOSH resume must retain activation intent for atomic queue admission');
+  const resumeQueue = compact(body(bosh, 'fn\\s+queue_bosh_resume_payload\\b'));
+  ordered(resumeQueue, ['activate_route,', '.is_none_or(|count|count>max_output_stanzas)',
+    '.is_none_or(|bytes|bytes>max_output_bytes){returnfalse;}',
+    'letcontrol=ifactivate_route{control.with_bosh_auth_control()}else{control};',
+    'output.push_back(control);', 'forstanzainpost_control.into_iter().chain(replay){', '*output_bytes+=batch_bytes;'],
+    'BOSH resume must mark only the exact control after complete batch capacity admission');
 }
 
 export function verifyRoomExecutionBoundaries({ muc, mucFanout, mix }) {

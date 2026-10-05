@@ -37,6 +37,11 @@ impl std::error::Error for DurableDeliverySuperseded {}
 #[derive(Clone, Debug)]
 pub struct OutboundItem {
     pub stanza: String,
+    /// Selection membership for the exact BOSH authentication control. Clone
+    /// copies membership only; publication requires the non-Clone response
+    /// owner and an actual accepted responder. This is never persisted in SM
+    /// or the BOSH response cache, and is not a credential/publication receipt.
+    bosh_auth_control: bool,
     /// The one authoritative durable source, if this stanza is recoverable.
     /// C2S offline messages and MIX recipient leases are deliberately a tagged
     /// union: a transport can transfer or acknowledge exactly one source.
@@ -140,6 +145,7 @@ impl OutboundItem {
     pub fn plain(stanza: String) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
@@ -151,6 +157,7 @@ impl OutboundItem {
     pub fn durable(stanza: String, delivery: DurableDelivery) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
             durable_source: Some(TransportOwnershipSource::C2s(delivery)),
             mix_handoff: None,
             transport_receipt: None,
@@ -167,6 +174,7 @@ impl OutboundItem {
         (
             Self {
                 stanza,
+                bosh_auth_control: false,
                 durable_source: Some(TransportOwnershipSource::Mix(delivery)),
                 mix_handoff: Some(handoff),
                 transport_receipt: None,
@@ -205,6 +213,7 @@ impl OutboundItem {
     pub fn with_transport_receipt(stanza: String, receipt: mpsc::UnboundedSender<()>) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: Some(receipt),
@@ -229,12 +238,22 @@ impl OutboundItem {
     ) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
             transport_write_receipt: None,
             transient_sm_capacity: Some(capacity),
         }
+    }
+
+    pub(crate) fn with_bosh_auth_control(mut self) -> Self {
+        self.bosh_auth_control = true;
+        self
+    }
+
+    pub(crate) fn is_bosh_auth_control(&self) -> bool {
+        self.bosh_auth_control
     }
 
     pub fn confirm_transport_ownership(&self) {

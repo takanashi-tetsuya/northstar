@@ -214,10 +214,6 @@ struct BoshActor {
     delivery_fence_ttl_seconds: u64,
     /// One current-or-last operation; retained old readers remain independent.
     ownership_operation: Option<northstar_delivery_core::bosh_ownership::Operation>,
-    /// Set when the next non-empty HTTP response contains the terminal
-    /// authentication/resume control. Publication happens only after that
-    /// response has been handed to the HTTP transport task.
-    auth_publication_pending: bool,
     actor_shutdown: tokio_util::sync::CancellationToken,
     _connection_guard: ClientConnectionGuard,
     _session_slot: OwnedSemaphorePermit,
@@ -370,7 +366,6 @@ impl BoshManager {
                 .saturating_add(30)
                 .min(86_400),
             ownership_operation: None,
-            auth_publication_pending: false,
             actor_shutdown,
             _connection_guard: connection_guard,
             _session_slot: session_slot,
@@ -1212,22 +1207,14 @@ impl BoshActor {
                 return false;
             }
         };
-        // Preserve the actor's existing publication placement and flag timing.
-        // This branch remains distinct from pause-only empty controls.
-        if self.auth_publication_pending {
-            if !exposed.any_accepted() {
-                return false;
-            }
-            self.auth_publication_pending = false;
-            if !self
-                .protocol
-                .publish_committed_authentication_and_route()
-                .await
-            {
-                return false;
-            }
-        }
-        exposed
+        let ready = match exposed
+            .publish_authentication(|| self.protocol.publish_committed_authentication_and_route())
+            .await
+        {
+            Ok(ready) => ready,
+            Err(_) => return false,
+        };
+        ready
             .finish(
                 &mut self.last_response,
                 &mut self.highest_responded,
@@ -1278,7 +1265,7 @@ fn queue_bosh_resume_payload(
         control,
         post_control,
         replay,
-        activate_route: _,
+        activate_route,
         transient_capacity,
     } = payload;
     let Some(batch_count) = 1usize
@@ -1308,10 +1295,13 @@ fn queue_bosh_resume_payload(
     }
 
     let hold = Arc::new(transient_capacity);
-    output.push_back(crate::outbound::OutboundItem::resume_fragment(
-        control,
-        Arc::clone(&hold),
-    ));
+    let control = crate::outbound::OutboundItem::resume_fragment(control, Arc::clone(&hold));
+    let control = if activate_route {
+        control.with_bosh_auth_control()
+    } else {
+        control
+    };
+    output.push_back(control);
     for stanza in post_control.into_iter().chain(replay) {
         output.push_back(crate::outbound::OutboundItem::resume_fragment(
             stanza,
@@ -2580,6 +2570,71 @@ mod tests {
             payload,
             format!("{}{}{}", control.stanza, replay.stanza, suffix.stanza)
         );
+    }
+
+    #[test]
+    fn resume_auth_control_marker_is_atomic_and_control_only() {
+        for activate_route in [false, true] {
+            let payload = || ResumeTransportParts {
+                control: "<resumed xmlns='urn:xmpp:sm:3'/>".to_owned(),
+                post_control: vec!["<features/>".to_owned()],
+                replay: vec!["<message id='replay'/>".to_owned()],
+                activate_route,
+                transient_capacity: Vec::new(),
+            };
+            let prefix = "<presence/>";
+            for (max_stanzas, max_bytes) in [(3, 4096), (4, prefix.len())] {
+                let mut output =
+                    VecDeque::from([crate::outbound::OutboundItem::plain(prefix.to_owned())]);
+                let mut bytes = prefix.len();
+                let pointer = output[0].stanza.as_ptr();
+                assert!(!queue_bosh_resume_payload(
+                    &mut output,
+                    &mut bytes,
+                    max_stanzas,
+                    max_bytes,
+                    payload(),
+                ));
+                assert_eq!(output.len(), 1);
+                assert_eq!(output[0].stanza.as_ptr(), pointer);
+                assert_eq!(bytes, prefix.len());
+                assert!(!output[0].is_bosh_auth_control());
+            }
+
+            let mut output =
+                VecDeque::from([crate::outbound::OutboundItem::plain(prefix.to_owned())]);
+            let mut bytes = prefix.len();
+            assert!(queue_bosh_resume_payload(
+                &mut output,
+                &mut bytes,
+                4,
+                4096,
+                payload(),
+            ));
+            assert_eq!(
+                output
+                    .iter()
+                    .map(|item| item.stanza.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    prefix,
+                    "<resumed xmlns='urn:xmpp:sm:3'/>",
+                    "<features/>",
+                    "<message id='replay'/>"
+                ]
+            );
+            assert_eq!(
+                output
+                    .iter()
+                    .map(crate::outbound::OutboundItem::is_bosh_auth_control)
+                    .collect::<Vec<_>>(),
+                [false, activate_route, false, false]
+            );
+            assert_eq!(
+                bytes,
+                output.iter().map(|item| item.stanza.len()).sum::<usize>()
+            );
+        }
     }
 
     #[test]

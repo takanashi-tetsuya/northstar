@@ -824,10 +824,8 @@ mod tests {
     #[test]
     fn private_preparation_rejects_invalid_shape_and_redacts_owned_payloads() {
         let operation = operation();
-        let invalid = OutboundItem {
-            durable_source: Some(TransportOwnershipSource::Mix(old())),
-            ..OutboundItem::plain("<message/>".to_owned())
-        };
+        let mut invalid = OutboundItem::plain("<message/>".to_owned());
+        invalid.durable_source = Some(TransportOwnershipSource::Mix(old()));
         assert!(PreparedTransferItem::new(invalid, &operation).is_err());
         assert!(operation.snapshot().transfers.is_empty());
         let (item, _) = item();

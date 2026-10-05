@@ -1,0 +1,58 @@
+{
+  "schema": "northstar-stage3-controlled-acceptance-v1",
+  "status": "Accepted_FiniteControlledStage3",
+  "runtime_source_commit": "107a79284f79a1e3348c099dd5b49b5f41f68c81",
+  "accepted_scope": "Production-used direct lifecycle, native TCP, SM and BOSH ownership through controlled persistence and transport helpers.",
+  "saved_family": {
+    "baseline_record": 16,
+    "baseline_replay": 16,
+    "no_flush_record": 4,
+    "no_flush_replay": 4,
+    "semantic_replay": "Inputs, complete validated DTOs including sequence values, and evaluations match each replay’s own record."
+  },
+  "domain_outcomes": {
+    "baseline_each": {
+      "Pass": 8,
+      "Cancelled": 5,
+      "InvalidScenario": 3
+    },
+    "no_flush_each": {
+      "InvariantViolation": 3,
+      "Pass": 1
+    },
+    "qualification": "Planned cancellations, rejected inputs and expected Safety findings retain qualified=false."
+  },
+  "reader_checks": {
+    "scenarios": 62,
+    "complete_profile_positives": 4,
+    "fixed_external_authority_negatives": 42,
+    "direct_inner_reader_negatives": 15,
+    "supplied_tuple_shrink_negatives": 1,
+    "additional_rust_starts": 0,
+    "scope": "Outer controls demonstrate the observed authenticity rejection stage. Inner controls supply deliberate test-local manifest references; they do not authenticate a tampered corpus. The tuple control exercises shrink binding without editing saved bytes.",
+    "duplicate_ack": "Separately covered by the unchanged passed supplied-DTO cardinality/shrink control and actual sole-ACK observations; no duplicate-ACK saved-byte mutation is claimed."
+  },
+  "obligation_reconciliation": "All13 controlled Stage3 obligations are independently reconciled, with compatibility and later-stage limits retained.",
+  "preserved_failures": [
+    "The initial C01 record stopped after1 of16 cases and remains Unqualified.",
+    "A separate prelaunch failure started no cases. Earlier ordinary and preparation failures remain retained."
+  ],
+  "current_ci_limit": "The documentation checkpoint d288ea44 has a reported Caddy TLS EOF timeout after receipt of the complete synthetic429 response. Root cause remains unknown; this controlled acceptance does not require or claim all-CI-green.",
+  "remaining": [
+    "Stage4 MUC/MIX, authentication publication and business-worker claim/recovery.",
+    "Stage5 real SQL, clock, crypto, wire, unresolved TLS diagnosis and SM retention/recovery.",
+    "Stage6 finite resource qualification; the72-hour soak remains cancelled."
+  ],
+  "claim_limits": [
+    "Saved native composition uses TCP with an in-memory writer. WS has scoped component/source evidence, without saved full-chain or real-wire proof.",
+    "C13 establishes a controlled authority replacement, not elapsed-lease reclaim or live SQL locking.",
+    "Historical compatibility has one materially same-input MIX case and five changed-premise C2S controls; no general pre-refactor equivalence follows.",
+    "Project-local provenance, per-role limits and owned cleanup do not establish full external supply-chain reproducibility or aggregate resource safety."
+  ],
+  "evidence": [
+    "stage3-baseline-record-replay-results.json",
+    "stage3-no-flush-record-replay-results.json",
+    "stage3-finalization-boundary-results.json"
+  ],
+  "detailed_evidence": "Exact reproducible validation material is retained privately for the user."
+}

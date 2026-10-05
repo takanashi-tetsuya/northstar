@@ -1,5 +1,6 @@
 //! Actual response selection, binding and cache continuations over the actor's
-//! existing fields. Authentication publication remains in BoshActor.
+//! existing fields. The selected auth control gates the actor's existing
+//! publication callback after accepted exposure and before cache bookkeeping.
 use super::{
     bosh_body_element, bosh_response_bytes, bosh_unacknowledged_limit_exceeded,
     restore_response_items, restore_response_items_observed, superseded_bosh_message_id,
@@ -159,6 +160,7 @@ pub(super) struct BoundResponse {
     receipts: Vec<mpsc::UnboundedSender<()>>,
     ownership: Arc<BoshResponseOwnership>,
     bound: response::BoundResponse,
+    auth_control_selected: bool,
 }
 impl std::fmt::Debug for BoundResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -172,6 +174,12 @@ pub(super) struct ExposedResponse {
     ownership: Arc<BoshResponseOwnership>,
     exposure: response::Exposure,
     accepted: bool,
+    auth_control_selected: bool,
+}
+/// A consuming local continuation, not proof of SQL credential publication.
+/// Only successful publication (or no selected auth control) creates it.
+pub(super) struct PublicationReadyResponse {
+    exposed: ExposedResponse,
 }
 impl BoundResponse {
     pub(super) fn expose(self, responders: Vec<Responder>) -> Result<ExposedResponse> {
@@ -192,30 +200,68 @@ impl BoundResponse {
             ownership: self.ownership,
             exposure,
             accepted,
+            auth_control_selected: self.auth_control_selected,
         })
     }
 }
 impl ExposedResponse {
+    #[cfg(test)]
     pub(super) fn any_accepted(&self) -> bool {
         self.accepted
     }
+    pub(super) async fn publish_authentication<F: Future<Output = bool>>(
+        self,
+        publish: impl FnOnce() -> F,
+    ) -> Result<PublicationReadyResponse> {
+        if self.auth_control_selected {
+            anyhow::ensure!(self.accepted, "BOSH authentication control was not exposed");
+            anyhow::ensure!(publish().await, "BOSH authentication publication failed");
+        }
+        Ok(PublicationReadyResponse { exposed: self })
+    }
+
+    /// Plain-response compatibility for the existing controlled delivery lane.
+    /// A selected auth control cannot bypass the production publication gate.
+    #[cfg(test)]
     pub(super) fn finish(
         self,
         last_response: &mut Instant,
         highest_responded: &mut u64,
         replay: &mut VecDeque<CachedResponse>,
     ) -> Result<()> {
-        let bookkeeping = self.exposure.begin_bookkeeping()?;
-        update_response_position(last_response, highest_responded, self.metadata.rid);
+        anyhow::ensure!(
+            !self.auth_control_selected,
+            "selected BOSH authentication control requires publication"
+        );
+        PublicationReadyResponse { exposed: self }.finish(last_response, highest_responded, replay)
+    }
+}
+impl PublicationReadyResponse {
+    pub(super) fn finish(
+        self,
+        last_response: &mut Instant,
+        highest_responded: &mut u64,
+        replay: &mut VecDeque<CachedResponse>,
+    ) -> Result<()> {
+        let ExposedResponse {
+            metadata,
+            response,
+            receipts,
+            ownership,
+            exposure,
+            ..
+        } = self.exposed;
+        let bookkeeping = exposure.begin_bookkeeping()?;
+        update_response_position(last_response, highest_responded, metadata.rid);
         bookkeeping.updated();
-        if self.metadata.cache {
-            let response_bytes = self.response.body.len();
+        if metadata.cache {
+            let response_bytes = response.body.len();
             replay.push_back(CachedResponse {
-                rid: self.metadata.rid,
-                fingerprint: self.metadata.fingerprint,
-                response: self.response,
-                durable_ownership: self.ownership,
-                transport_receipts: self.receipts,
+                rid: metadata.rid,
+                fingerprint: metadata.fingerprint,
+                response,
+                durable_ownership: ownership,
+                transport_receipts: receipts,
                 owned_at: Instant::now(),
                 response_bytes,
                 replays: 0,
@@ -343,12 +389,14 @@ pub(super) async fn prepare<P: ReplayPort>(
                     )
                 })?;
                 let ownership = bound.ownership().clone();
+                let auth_control_selected = selected.iter().any(OutboundItem::is_bosh_auth_control);
                 return Ok(BoundResponse {
                     metadata,
                     response,
                     receipts,
                     ownership,
                     bound,
+                    auth_control_selected,
                 });
             }
             Err(error) => {
@@ -889,6 +937,371 @@ mod tests {
     }
     fn body(response: &BoshHttpResponse) -> &str {
         std::str::from_utf8(&response.body).unwrap()
+    }
+
+    fn auth_control() -> OutboundItem {
+        OutboundItem::plain("<success xmlns='urn:xmpp:sasl:2'/>".to_owned())
+            .with_bosh_auth_control()
+    }
+
+    #[test]
+    fn auth_control_clone_copies_selection_membership_only() {
+        let control = auth_control();
+        let cloned = control.clone();
+        assert!(control.is_bosh_auth_control());
+        assert!(cloned.is_bosh_auth_control());
+        assert_eq!(cloned.stanza, control.stanza);
+        assert!(cloned.durable_source.is_none());
+        assert!(!OutboundItem::plain(control.stanza.clone()).is_bosh_auth_control());
+        // This asserts metadata copying only. Independently enqueuing cloned
+        // controls is not a global exactly-once publication contract.
+    }
+
+    #[tokio::test]
+    async fn auth_publication_selected_prefix_has_same_input_old_gate_witness() {
+        let operation = operation();
+        let port = FakeReplay::default();
+        let prefix = OutboundItem::plain(format!(
+            "<presence><status>{}</status></presence>",
+            "x".repeat(64)
+        ));
+        let limit = prefix.stanza.len() + 256;
+        let mut harness = Harness::new([prefix, auth_control()]);
+        harness.max_bytes = limit;
+        let bound = harness.prepare(&operation, &port, 10, None).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        let exposed = bound.expose(vec![tx]).unwrap();
+        assert!(!body(&rx.await.unwrap()).contains("success"));
+        assert!(harness.output[0].is_bosh_auth_control());
+
+        // Source-bound old-gate witness, not an old compiled implementation.
+        // Evaluate its historical predicate on the same actual FIFO selection
+        // and responder result: the queued auth action had set this bit.
+        let old_actor_pending = true;
+        assert!(old_actor_pending && exposed.any_accepted());
+        let calls = std::cell::Cell::new(0);
+        let ready = exposed
+            .publish_authentication(|| {
+                calls.set(calls.get() + 1);
+                std::future::ready(true)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.get(),
+            0,
+            "unselected gate must not construct its future"
+        );
+        let mut last = Instant::now();
+        let mut highest = 0;
+        ready
+            .finish(&mut last, &mut highest, &mut harness.replay)
+            .unwrap();
+        assert_eq!(highest, 10);
+
+        let bound = harness.prepare(&operation, &port, 11, None).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        let exposed = bound.expose(vec![tx]).unwrap();
+        assert!(body(&rx.await.unwrap()).contains("success"));
+        let ready = exposed
+            .publish_authentication(|| {
+                calls.set(calls.get() + 1);
+                std::future::ready(true)
+            })
+            .await
+            .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(highest, 10, "publication precedes response bookkeeping");
+        ready
+            .finish(&mut last, &mut highest, &mut harness.replay)
+            .unwrap();
+        assert_eq!(highest, 11);
+        assert!(harness.output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn auth_publication_requires_actual_acceptance_and_calls_once() {
+        for accepts in [
+            vec![],
+            vec![false, false],
+            vec![false, true],
+            vec![true, true],
+        ] {
+            let operation = operation();
+            let port = FakeReplay::default();
+            let mut harness = Harness::new([auth_control()]);
+            let bound = harness.prepare(&operation, &port, 10, None).await.unwrap();
+            let mut responders = Vec::new();
+            let mut receivers = Vec::new();
+            for accept in &accepts {
+                let (tx, rx) = oneshot::channel();
+                responders.push(tx);
+                if *accept {
+                    receivers.push(rx);
+                } else {
+                    drop(rx);
+                }
+            }
+            let exposed = bound.expose(responders).unwrap();
+            let calls = std::cell::Cell::new(0);
+            let result = exposed
+                .publish_authentication(|| {
+                    calls.set(calls.get() + 1);
+                    std::future::ready(true)
+                })
+                .await;
+            let accepted = accepts.iter().filter(|accept| **accept).count();
+            assert_eq!(calls.get(), usize::from(accepted != 0));
+            assert_eq!(result.is_ok(), accepted != 0);
+            assert_eq!(operation.summary().responses.accepted_responders, accepted);
+            if let Ok(ready) = result {
+                ready
+                    .finish(&mut Instant::now(), &mut 0, &mut harness.replay)
+                    .unwrap();
+            }
+            assert_eq!(harness.replay.len(), usize::from(accepted != 0));
+            drop(receivers);
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_publication_terminal_and_pause_controls_leave_marker_unselected() {
+        for condition in ["terminate", "policy-violation", "internal-server-error"] {
+            let operation = operation();
+            let port = FakeReplay::default();
+            let mut harness = Harness::new([auth_control()]);
+            let bound = harness
+                .prepare(&operation, &port, 10, Some(condition))
+                .await
+                .unwrap();
+            let (tx, rx) = oneshot::channel();
+            let exposed = bound.expose(vec![tx]).unwrap();
+            assert!(!body(&rx.await.unwrap()).contains("success"));
+            let calls = std::cell::Cell::new(0);
+            let ready = exposed
+                .publish_authentication(|| {
+                    calls.set(calls.get() + 1);
+                    std::future::ready(true)
+                })
+                .await
+                .unwrap();
+            assert_eq!(calls.get(), 0);
+            assert!(harness.output[0].is_bosh_auth_control());
+            drop(ready);
+
+            let (tx, rx) = oneshot::channel();
+            finish_empty_control(
+                11,
+                vec![tx],
+                "text/xml",
+                &mut Instant::now(),
+                &mut 0,
+                &operation,
+            );
+            assert!(!body(&rx.await.unwrap()).contains("success"));
+            assert!(harness.output[0].is_bosh_auth_control());
+            assert!(harness.replay.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_remote_stream_error_uses_actual_selected_control() {
+        for include_control in [false, true] {
+            let operation = operation();
+            let port = FakeReplay::default();
+            let prefix = OutboundItem::plain(format!(
+                "<presence><status>{}</status></presence>",
+                "x".repeat(64)
+            ));
+            let limit = prefix.stanza.len() + 256;
+            let mut harness = Harness::new([prefix, auth_control()]);
+            if !include_control {
+                harness.max_bytes = limit;
+            }
+            let bound = harness
+                .prepare(&operation, &port, 10, Some("remote-stream-error"))
+                .await
+                .unwrap();
+            let (tx, rx) = oneshot::channel();
+            let exposed = bound.expose(vec![tx]).unwrap();
+            assert_eq!(
+                body(&rx.await.unwrap()).contains("success"),
+                include_control
+            );
+            let calls = std::cell::Cell::new(0);
+            let ready = exposed
+                .publish_authentication(|| {
+                    calls.set(calls.get() + 1);
+                    std::future::ready(true)
+                })
+                .await
+                .unwrap();
+            assert_eq!(calls.get(), usize::from(include_control));
+            drop(ready);
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_control_membership_survives_construction_and_supersession_restoration() {
+        let operation = operation();
+        let port = FakeReplay::default();
+        let malformed = OutboundItem::plain("<success>".to_owned()).with_bosh_auth_control();
+        let pointer = malformed.stanza.as_ptr();
+        let mut harness = Harness::new([malformed]);
+        assert!(harness.prepare(&operation, &port, 10, None).await.is_err());
+        assert!(harness.output[0].is_bosh_auth_control());
+        assert_eq!(harness.output[0].stanza.as_ptr(), pointer);
+        assert_eq!(operation.summary().responses.accepted_responders, 0);
+
+        let operation = self::operation();
+        let port = FakeReplay::bind_cuts([Cut::Superseded]);
+        let mut harness = Harness::new([durable_item(506), auth_control()]);
+        let bound = harness.prepare(&operation, &port, 11, None).await.unwrap();
+        assert!(bound.auth_control_selected);
+        assert!(harness.output.is_empty());
+        assert_eq!(operation.snapshot().responses[0].attempts.len(), 2);
+        let (tx, rx) = oneshot::channel();
+        let exposed = bound.expose(vec![tx]).unwrap();
+        assert!(body(&rx.await.unwrap()).contains("success"));
+        let calls = std::cell::Cell::new(0);
+        let ready = exposed
+            .publish_authentication(|| {
+                calls.set(calls.get() + 1);
+                std::future::ready(true)
+            })
+            .await
+            .unwrap();
+        assert_eq!(calls.get(), 1);
+        drop(ready);
+    }
+
+    #[tokio::test]
+    async fn auth_publication_failure_and_pending_drop_preserve_exposure_without_bookkeeping() {
+        for pending in [false, true] {
+            let operation = operation();
+            let port = FakeReplay::default();
+            let mut harness = Harness::new([auth_control()]);
+            let bound = harness.prepare(&operation, &port, 10, None).await.unwrap();
+            let (tx, rx) = oneshot::channel();
+            let exposed = bound.expose(vec![tx]).unwrap();
+            assert!(body(&rx.await.unwrap()).contains("success"));
+            let calls = std::cell::Cell::new(0);
+            let mut last = Instant::now();
+            let initial_last = last;
+            let mut highest = 7;
+            let mut continuation = Box::pin(async {
+                let ready = exposed
+                    .publish_authentication(|| {
+                        calls.set(calls.get() + 1);
+                        async {
+                            if pending {
+                                std::future::pending::<()>().await;
+                            }
+                            false
+                        }
+                    })
+                    .await?;
+                ready.finish(&mut last, &mut highest, &mut harness.replay)
+            });
+            let result = poll_once(continuation.as_mut());
+            if pending {
+                assert!(result.is_pending());
+            } else {
+                assert!(matches!(result, Poll::Ready(Err(_))));
+            }
+            drop(continuation);
+            assert_eq!(calls.get(), 1);
+            assert_eq!(last, initial_last);
+            assert_eq!(highest, 7);
+            assert!(harness.replay.is_empty());
+            let snapshot = operation.snapshot();
+            assert_eq!(snapshot.responses[0].accepted_responders, 1);
+            assert!(!snapshot.responses[0].bookkeeping);
+            assert!(!snapshot.responses[0].cached);
+            // Exposure is known; this local callback result supplies no SQL
+            // publication, rollback, route-activation or recovery evidence.
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_auth_control_cannot_use_plain_finish_to_bypass_publication() {
+        let operation = operation();
+        let port = FakeReplay::default();
+        let mut harness = Harness::new([auth_control()]);
+        let bound = harness.prepare(&operation, &port, 10, None).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        let exposed = bound.expose(vec![tx]).unwrap();
+        let mut last = Instant::now();
+        let initial_last = last;
+        let mut highest = 7;
+        assert!(exposed
+            .finish(&mut last, &mut highest, &mut harness.replay)
+            .is_err());
+        assert_eq!(highest, 7);
+        assert_eq!(last, initial_last);
+        assert!(harness.replay.is_empty());
+        assert!(rx.await.is_ok());
+        assert!(!operation.snapshot().responses[0].bookkeeping);
+    }
+
+    #[tokio::test]
+    async fn auth_publication_cache_replay_and_plain_suffix_cannot_reissue_gate() {
+        let operation = operation();
+        let port = FakeReplay::default();
+        let mut harness = Harness::new([auth_control()]);
+        let bound = harness.prepare(&operation, &port, 10, None).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        let calls = std::cell::Cell::new(0);
+        let ready = bound
+            .expose(vec![tx])
+            .unwrap()
+            .publish_authentication(|| {
+                calls.set(calls.get() + 1);
+                std::future::ready(true)
+            })
+            .await
+            .unwrap();
+        let first = rx.await.unwrap();
+        let mut last = Instant::now();
+        let mut highest = 0;
+        ready
+            .finish(&mut last, &mut highest, &mut harness.replay)
+            .unwrap();
+        let (tx, rx) = oneshot::channel();
+        assert!(matches!(
+            replay_cached(
+                &mut harness.replay,
+                &request(10),
+                tx,
+                &mut last,
+                &operation,
+                &port
+            )
+            .await,
+            ReplayOutcome::Sent { terminate: false }
+        ));
+        assert_eq!(rx.await.unwrap().body.as_ptr(), first.body.as_ptr());
+        assert_eq!(calls.get(), 1);
+
+        let plain = OutboundItem::plain("<success xmlns='urn:xmpp:sasl:2'/>".to_owned());
+        harness.bytes += plain.stanza.len();
+        harness.output.push_back(plain);
+        let bound = harness.prepare(&operation, &port, 11, None).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        let ready = bound
+            .expose(vec![tx])
+            .unwrap()
+            .publish_authentication(|| {
+                calls.set(calls.get() + 1);
+                std::future::ready(true)
+            })
+            .await
+            .unwrap();
+        assert!(rx.await.is_ok());
+        assert_eq!(calls.get(), 1, "XML content is not publication authority");
+        ready
+            .finish(&mut last, &mut highest, &mut harness.replay)
+            .unwrap();
     }
 
     #[tokio::test]

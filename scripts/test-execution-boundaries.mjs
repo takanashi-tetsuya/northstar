@@ -5,6 +5,7 @@ import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBou
 const baseline = readExecutionSources();
 function changed(file, before, after) {
   assert.equal(baseline[file].split(before).length, 2, `mutation must match exactly once: ${before}`);
+  assert.notEqual(before, after, 'string mutation must not be a no-op');
   return { ...baseline, [file]: baseline[file].replace(before, after) };
 }
 function rejects(name, file, before, after, expected) {
@@ -123,26 +124,97 @@ rejects('BOSH ingress cannot bypass observed execution', 'bosh',
   'match self.protocol.process_frame(payload).await {',
   'match self.protocol.handle(payload).await {', /BOSH must enter/);
 rejects('BOSH publication cannot bypass observed owner', 'bosh',
-  '.publish_committed_authentication_and_route()\n                .await',
-  '.publish_committed_authentication_and_route_inner()\n                .await', /BOSH must observe publication/);
-rejects('BOSH unexposed response cannot publish authentication', 'bosh',
-  'if !exposed.any_accepted() {\n                return false;\n            }',
-  'if false {\n                return false;\n            }', /BOSH must observe publication/);
+  '.publish_authentication(|| self.protocol.publish_committed_authentication_and_route())',
+  '.publish_authentication(|| self.protocol.publish_committed_authentication_and_route_inner())', /BOSH must observe publication/);
+rejects('BOSH unexposed response cannot publish authentication', 'boshResponse',
+  'anyhow::ensure!(self.accepted, "BOSH authentication control was not exposed");',
+  'anyhow::ensure!(true, "BOSH authentication control was not exposed");', /BOSH publication gate/);
 rejects('BOSH publication failure cannot succeed', 'bosh',
-  '.publish_committed_authentication_and_route()\n                .await\n            {\n                return false;',
-  '.publish_committed_authentication_and_route()\n                .await\n            {\n                return true;', /BOSH must observe publication/);
+  'Ok(ready) => ready,\n            Err(_) => return false,',
+  'Ok(ready) => ready,\n            Err(_) => return true,', /BOSH must observe publication/);
 rejects('BOSH exposure must reflect actual responder acceptance', 'boshResponse',
   'let accepted = responder.send(response).is_ok();',
   'let accepted = true; let _ = responder.send(response);', /actual responder acceptance/);
 rejects('BOSH cannot insert a suspension between exposure and publication', 'bosh',
-  'if self.auth_publication_pending {',
-  'tokio::task::yield_now().await;\n        if self.auth_publication_pending {', /BOSH must observe publication/);
+  'let ready = match exposed',
+  'tokio::task::yield_now().await;\n        let ready = match exposed', /BOSH must observe publication/);
 rejects('BOSH activation marker cannot be hidden behind a dead condition', 'boshAction',
-  'if index == 0 {\n                        self.auth_publication_pending = true;\n                    }',
-  'if false {\n                        self.auth_publication_pending = true;\n                    }', /BOSH activation/);
-rejects('BOSH resume must honor the activation flag', 'boshAction',
-  'if activate_route {\n                    self.auth_publication_pending = true;\n                }',
-  'if false {\n                    self.auth_publication_pending = true;\n                }', /BOSH resume/);
+  'let item = if index == 0 {',
+  'let item = if false {', /BOSH activation/);
+rejects('BOSH resume must honor the activation flag', 'bosh',
+  'let control = if activate_route {',
+  'let control = if false {', /BOSH resume/);
+rejects('BOSH publication cannot treat every accepted response as selected', 'boshResponse',
+  'if self.auth_control_selected {',
+  'if true {', /BOSH publication gate/);
+rejects('BOSH publication callback failure cannot mint readiness', 'boshResponse',
+  'anyhow::ensure!(publish().await, "BOSH authentication publication failed");',
+  'let _ = publish().await;', /BOSH publication gate/);
+rejects('BOSH selected membership must use the final response items', 'boshResponse',
+  'let auth_control_selected = selected.iter().any(OutboundItem::is_bosh_auth_control);',
+  'let auth_control_selected = fields.output.iter().any(OutboundItem::is_bosh_auth_control);', /BOSH auth membership/);
+rejects('BOSH exposure cannot discard selected membership', 'boshResponse',
+  'auth_control_selected: self.auth_control_selected,',
+  'auth_control_selected: false,', /actual responder acceptance/);
+rejects('BOSH plain compatibility finish cannot bypass auth publication', 'boshResponse',
+  '!self.auth_control_selected,\n            "selected BOSH authentication control requires publication"',
+  'true,\n            "selected BOSH authentication control requires publication"', /plain compatibility finish/);
+rejects('BOSH item marker cannot become public mutable authority', 'outbound',
+  '    bosh_auth_control: bool,',
+  '    pub(crate) bosh_auth_control: bool,', /private item selection metadata/);
+rejects('BOSH marker accessor cannot synthesize selected membership', 'outbound',
+  '        self.bosh_auth_control\n',
+  '        true\n', /private item selection metadata/);
+rejects('BOSH cache cannot retain auth selection membership', 'bosh',
+  'struct CachedResponse {',
+  'struct CachedResponse {\n    auth_control_selected: bool,', /cache and replay/);
+for (const owner of ['BoundResponse', 'ExposedResponse', 'PublicationReadyResponse']) {
+  rejects(`BOSH ${owner} cannot derive Clone`, 'boshResponse',
+    `pub(super) struct ${owner} {`,
+    `#[derive(Clone)]\npub(super) struct ${owner} {`, /cannot derive or manually implement Clone or Copy/);
+  rejects(`BOSH ${owner} cannot manually implement Clone`, 'boshResponse',
+    `impl ${owner} {`,
+    `impl Clone for ${owner} { fn clone(&self) -> Self { panic!("unreviewed clone") } }\nimpl ${owner} {`,
+    /cannot derive or manually implement Clone or Copy/);
+}
+rejects('BOSH ready owner cannot derive Copy', 'boshResponse',
+  'pub(super) struct PublicationReadyResponse {',
+  '#[derive(Copy)]\npub(super) struct PublicationReadyResponse {', /cannot derive or manually implement Clone or Copy/);
+rejects('BOSH exposed owner cannot manually implement Copy', 'boshResponse',
+  'impl ExposedResponse {',
+  'impl Copy for ExposedResponse {}\nimpl ExposedResponse {', /cannot derive or manually implement Clone or Copy/);
+rejects('BOSH bound exposure must consume its owner', 'boshResponse',
+  'pub(super) fn expose(self, responders: Vec<Responder>)',
+  'pub(super) fn expose(&self, responders: Vec<Responder>)', /named consuming declaration heads/);
+rejects('BOSH publication cannot borrow its exposed owner', 'boshResponse',
+  'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        self,',
+  'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        &self,', /named consuming declaration heads/);
+rejects('BOSH ready bookkeeping must consume its owner', 'boshResponse',
+  'impl PublicationReadyResponse {\n    pub(super) fn finish(\n        self,',
+  'impl PublicationReadyResponse {\n    pub(super) fn finish(\n        &self,', /named consuming declaration heads/);
+rejects('BOSH bound owner cannot expose mutable selected membership', 'boshResponse',
+  '    bound: response::BoundResponse,\n    auth_control_selected: bool,',
+  '    bound: response::BoundResponse,\n    pub(super) auth_control_selected: bool,', /exact private field shape/);
+rejects('BOSH ready owner cannot expose its inner continuation', 'boshResponse',
+  'pub(super) struct PublicationReadyResponse {\n    exposed: ExposedResponse,',
+  'pub(super) struct PublicationReadyResponse {\n    pub(super) exposed: ExposedResponse,', /exact private field shape/);
+rejects('BOSH ready owner cannot add an into_exposed escape', 'boshResponse',
+  'impl PublicationReadyResponse {',
+  'impl PublicationReadyResponse {\n    pub(super) fn into_exposed(self) -> Result<ExposedResponse> { Ok(self.exposed) }',
+  /closed inherent-method inventory/);
+rejects('BOSH readiness cannot be constructed by an extra free function', 'boshResponse',
+  'impl PublicationReadyResponse {',
+  'fn extra_readiness(exposed: ExposedResponse) -> Result<PublicationReadyResponse> { Ok(PublicationReadyResponse { exposed }) }\nimpl PublicationReadyResponse {',
+  /cannot add named construction sites/);
+rejects('BOSH ready owner cannot hide a Self constructor inside finish', 'boshResponse',
+  '        let ExposedResponse {',
+  '        let _extra = |exposed| Self { exposed };\n        let ExposedResponse {', /cannot add Self-brace construction/);
+rejects('BOSH acceptance accessor must remain test-only', 'boshResponse',
+  '#[cfg(test)]\n    pub(super) fn any_accepted(&self)',
+  'pub(super) fn any_accepted(&self)', /test-only compatibility methods/);
+rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
+  '#[cfg(test)]\n    pub(super) fn finish(',
+  'pub(super) fn finish(', /test-only compatibility methods/);
 
 
 function rejectsRoom(name, file, before, after, expected) {
@@ -425,10 +497,10 @@ rejectsBoshResponse('bind return cannot fabricate receipt agreement', 'boshRespo
 rejectsBoshResponse('payload exposure cannot omit the matching receipt guard', 'boshResponseCore',
   /if !attempt\.return_matches \|\| attempt\.restored/g, 'if false', /checked bound continuation/);
 rejectsBoshResponse('cache insertion cannot be recorded before the actual push', 'boshResponse',
-  /(if self\.metadata\.cache \{)([\s\S]*?)bookkeeping\.cached\(\);/g,
+  /(if metadata\.cache \{)([\s\S]*?)bookkeeping\.cached\(\);/g,
   '$1 bookkeeping.cached(); $2', /record insertion after the actual push/);
 rejectsBoshResponse('cache cannot replace returned membership', 'boshResponse',
-  /durable_ownership: self\.ownership,/g, 'durable_ownership: other_ownership,', /same bytes, membership/);
+  /durable_ownership: ownership,/g, 'durable_ownership: other_ownership,', /same bytes, membership/);
 rejectsBoshResponse('pause cannot turn into a terminal control', 'boshResponse',
   /operation\.observe_empty_control\(rid\)/g, 'operation.observe_terminal_control(rid)', /empty synchronous control/);
 rejectsBoshResponse('cached renewal cannot target another RID', 'boshResponse',

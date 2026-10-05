@@ -1040,10 +1040,8 @@ mod tests {
     async fn nonpersisted_record_keeps_fifo_without_claiming_sm_ownership() {
         let mut fixture = Fixture::new(false, vec![]);
         let (receipt_tx, mut receipt_rx) = tokio::sync::mpsc::unbounded_channel();
-        let item = OutboundItem {
-            transport_receipt: Some(receipt_tx),
-            ..c2s_item()
-        };
+        let mut item = c2s_item();
+        item.transport_receipt = Some(receipt_tx);
         assert!(!fixture.record(&item).await.unwrap());
         assert_eq!(fixture.sm.unacked.len(), 1);
         assert_eq!(fixture.sm.outbound_h, 11);
@@ -1566,11 +1564,9 @@ mod tests {
             };
             let (ownership_tx, mut ownership_rx) = tokio::sync::mpsc::unbounded_channel();
             let (write_tx, mut write_rx) = tokio::sync::mpsc::unbounded_channel();
-            let item = OutboundItem {
-                transport_receipt: Some(ownership_tx),
-                transport_write_receipt: Some(write_tx),
-                ..item
-            };
+            let mut item = item;
+            item.transport_receipt = Some(ownership_tx);
+            item.transport_write_receipt = Some(write_tx);
             let native =
                 northstar_delivery_core::native_write::Observation::new(item.durable_source);
             let mut port = NativeSm {
@@ -1642,10 +1638,8 @@ mod tests {
                     (c2s_item(), None)
                 };
                 let (tx, mut c2s_receipt) = tokio::sync::mpsc::unbounded_channel();
-                let item = OutboundItem {
-                    transport_receipt: Some(tx),
-                    ..item
-                };
+                let mut item = item;
+                item.transport_receipt = Some(tx);
                 let pointer = item.stanza.as_ptr();
                 let size = item.stanza.len();
                 let mut record = NativeSm {

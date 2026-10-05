@@ -1,0 +1,44 @@
+{
+  "schema": "northstar-experimental-rebuild-engineering-summary-v1",
+  "status": "FiniteControlledMutationRecordReplayAccepted",
+  "baseline_source_commit": "107a79284f79a1e3348c099dd5b49b5f41f68c81",
+  "scope": "The fixed four-case no-flush mutation record and its own saved-input replay are independently accepted. The planned 16/16/4/4 saved family is complete; full Stage3 remains open.",
+  "mutation": "One TCP flush call was replaced by a successful return in an isolated test checkout. The unchanged oracle evaluates actual writer and acknowledgement observations.",
+  "outcomes": {
+    "record": {
+      "fixture_matched": 4,
+      "InvariantViolation": 3,
+      "Pass": 1
+    },
+    "replay": {
+      "fixture_matched": 4,
+      "InvariantViolation": 3,
+      "Pass": 1
+    }
+  },
+  "counterexample": {
+    "cases": [
+      "M1",
+      "M2",
+      "M4"
+    ],
+    "invariant": "NativeAckWithoutSuccessfulFlush",
+    "class": "Safety",
+    "qualified": false,
+    "observed": "Each accepted the complete controlled stanza, made no flush call and issued exactly one acknowledgement for the same NativeSettlement target."
+  },
+  "positive_control": {
+    "case": "M3",
+    "verdict": "Pass",
+    "observed": "Exactly one byte was accepted before write failure; no flush or acknowledgement occurred."
+  },
+  "reduction": "M1 uses the accepted baseline C07 input, whose flush failure withheld acknowledgement. M2 removes only the independent original and its exclusive inputs. M3 changes only the short-write control; M4 repeats M2. The retained invariant target and all four shrink roles were independently checked.",
+  "replay_comparison": "All four inputs, complete validated observation objects including deterministic sequence values, evaluations, first invariant and shrink relations match the accepted mutant record.",
+  "retained_failures": "The earlier incomplete baseline C01 attempt and zero-case prelaunch failure remain separately retained; neither is reclassified as a completed pass.",
+  "evidence_scope": "Detailed source, build, raw observations and replay materials are retained privately. These outcomes use controlled repository and I/O adapters.",
+  "limits": [
+    "Expected Safety findings remain qualified=false and are not counted as successful domain outcomes.",
+    "This finite test does not establish live SQL, real network delivery, lease expiry, retention recovery or aggregate resource qualification.",
+    "Finite saved-reader tamper qualification and the final Stage3 obligation matrix remain pending."
+  ]
+}

@@ -3616,36 +3616,166 @@ def require_implemented():
 
 
 def validate_provenance(provenance):
-    require_implemented()
+    """Pure metadata validation; current material still needs independent reads."""
+    _fields(provenance, 'schema model adapter binding_version source_sha256 source_files binary_sha256 '
+            'cargo_lock_sha256 toolchain compiler_sha256 artifact_role build_record_file_sha256')
+    _need(provenance['schema'] == 'northstar-direct-controlled-provenance-v1' and
+          provenance['model'] == 'direct-controlled-v1' and provenance['adapter'] == 'controlled_rust' and
+          provenance['binding_version'] == 'project-local-build-material-v1', 'direct_provenance_version')
+    _enum(provenance['artifact_role'], 'baseline no-flush')
+    for name in ('source_sha256', 'binary_sha256', 'cargo_lock_sha256', 'compiler_sha256', 'build_record_file_sha256'):
+        _hex(provenance[name], 32)
+    _text(provenance['toolchain'])
+    _need(provenance['toolchain'].startswith('rustc 1.97.1 '), 'direct_provenance_toolchain')
+    sources = provenance['source_files']
+    _need(type(sources) is dict and 0 < len(sources) <= 1024, 'direct_provenance_sources')
+    for name, digest in sources.items():
+        _text(name)
+        _need(name and all(part not in ('', '.', '..') for part in name.split('/')) and
+              '\\' not in name and not any(ord(char) < 32 or ord(char) == 127 for char in name),
+              'direct_provenance_source_path')
+        _hex(digest, 32)
+    _need(_hash(_encoded(sources)[:-1]) == provenance['source_sha256'] and
+          sources.get('Cargo.lock') == provenance['cargo_lock_sha256'], 'direct_provenance_source_binding')
+    return copy.deepcopy(provenance)
 
 
-def check_current_provenance(contract):
-    """Future reader checks the external build-record file hash before fields.
+def check_current_provenance(contract, *, record_bytes, verified_source_summary, current_mutation_bytes=None):
+    """Forward externally authenticated bytes and separately measured facts.
 
-    That small record binds source-manifest/compiler/lock/command identities,
-    target/features, original/runnable binary identities, exact strip tool and
-    flags, and the optional single-statement no-flush ancestry. It never issues
-    commands from the record or reads the oversized original executable during
-    a saved pass. The runnable executable retains the fixed 128 MiB bound.
+    The existing bounded reader supplies these values before opening the
+    runnable. This pure adapter never reads a path, tool, original or log and
+    never executes recorded argv. Its result is not execution qualification.
     """
-    require_implemented()
+    return direct_build_record.validate_build_record(record_bytes, contract,
+        verified_source_summary=verified_source_summary, current_mutation_bytes=current_mutation_bytes)
+
+
+def validate_runnable(record, verified_runnable):
+    """Bind the validated record to facts from the actual retained descriptor."""
+    return direct_build_record.validate_runnable(record, verified_runnable)
+
+
+def _fixture_sources(profile_id):
+    """Only the original finite family; no runtime or caller-selected cases."""
+    _need(profile_id in (FIXED16, FIXED4), 'fixed_profile')
+    if profile_id == FIXED16:
+        fixtures = native_fixtures() + owner_fixtures() + bosh_fixtures()
+        identities = tuple(f'C{index:02d}' for index in range(1, 14)) + ('R01', 'R02', 'R03')
+    else:
+        fixtures, identities = mutation_fixtures(), ('M1', 'M2', 'M3', 'M4')
+    by_id = {fixture['id']: fixture for fixture in fixtures}
+    _need(len(fixtures) == len(by_id) == len(identities) and set(by_id) == set(identities), 'fixed_fixture_inventory')
+    return [by_id[identity] for identity in identities]
+
+
+def _prepare_fixture(fixture, profile_id):
+    """Derive detached input authority before any output frame is opened."""
+    fixture = copy.deepcopy(fixture)
+    raw, identity = fixture['bytes'], fixture['id']
+    _need(type(raw) is bytes and identity in FIXED_LITERAL_IDENTITIES and
+          (len(raw), _hash(raw)) == FIXED_LITERAL_IDENTITIES[identity], 'fixed_literal_identity')
+    reason, owner, ledger = None, 'None', None
+    if fixture['kind'] == 'rejection':
+        reason = rejection_reason(raw)
+        _need(profile_id == FIXED16 and fixture['value'] is None and
+              reason == fixture['reason'] and reason in ('DuplicateKey', 'UnknownField', 'IdentityBinding'),
+              'fixed_rejection_input')
+    else:
+        value = parse_case_input(raw)
+        _need(value == fixture['value'] and fixture['reason'] is None and
+              fixture['kind'] == ('normal' if profile_id == FIXED16 else 'shrink'), 'fixed_fixture_input')
+        owner = value['recipient_owner']['kind']
+        ledger = derive_native_ledger(value) if owner in ('None', 'Native') else derive_owner_ledger(value)
+    fixture['input_obligations'] = {'profile': profile_id, 'input_sha256': _hash(raw),
+                                    'reason': reason, 'owner': owner, 'ledger': ledger}
+    return fixture
+
+
+def _fixture_plan(profile_id):
+    """Private pure preparation for finite review; public execution stays shut."""
+    return [_prepare_fixture(fixture, profile_id) for fixture in _fixture_sources(profile_id)]
+
+
+def _evaluate_fixture(fixture, record, payload, profile_id):
+    """Inspect supplied evidence against trusted input-only obligations.
+
+    Saved output/evaluation fields never supply these obligations. The reviewed
+    matchers independently rederive their input authority before inspecting the
+    DTO, compute normative Safety first, then apply fixture expectations. Their
+    semantic return is the complete validated DTO, including deterministic seq.
+    """
+    _need(type(fixture) is dict, 'prepared_fixture')
+    expected = next((item for item in _fixture_sources(profile_id) if item['id'] == fixture.get('id')), None)
+    _need(expected is not None and fixture == _prepare_fixture(expected, profile_id), 'prepared_fixture_binding')
+    owner = fixture['input_obligations']['owner']
+    inspector = {'None': _inspect_native_fixture, 'Native': _inspect_native_fixture,
+                 'Sm': _inspect_sm_fixture, 'NativeReplacement': _inspect_replacement_fixture,
+                 'Bosh': _inspect_bosh_fixture}[owner]
+    return inspector(fixture, record, payload)
+
+
+def _shrink_relations(observations):
+    """Recheck exact deletion/control inputs and their sole actual ACK target.
+
+    These tuples must already come from matched complete observations admitted
+    by the worker or prior-case reader. The local Complete/exit0 marker below
+    only requests semantic reevaluation; it cannot establish process completion
+    and never replaces validation of the actual saved process/stream record.
+    """
+    _need(type(observations) is list and len(observations) == 4, 'fixed_shrink_count')
+    plan = _fixture_plan(FIXED4)
+    original, candidate, positive, reduced = [fixture['value'] for fixture in plan]
+    c07 = next(item for item in native_fixtures() if item['id'] == 'C07')
+    _need(plan[0]['bytes'] == c07['bytes'], 'fixed_shrink_original')
+    deletion = copy.deepcopy(original)
+    _need(len(deletion['originals']) == 2, 'fixed_shrink_deletion_count')
+    deletion['identities']['originals'].pop(0)
+    for name in ('originals', 'policy', 'admission', 'direct_repository', 'route'):
+        deletion[name].pop(0)
+    control = copy.deepcopy(candidate)
+    control['recipient_owner']['native']['write']['fail_after_accepted_bytes'] = 1
+    _need(candidate == deletion and positive == control and reduced == candidate and
+          plan[1]['bytes'] == plan[3]['bytes'], 'fixed_shrink_input_relations')
+    target = _native_failure_target(plan[0]['input_obligations']['ledger'])
+    for index, (fixture, observation) in enumerate(zip(plan, observations)):
+        _need(type(observation) in (tuple, list) and len(observation) == 3, 'fixed_shrink_observation')
+        value, output, evaluation = observation
+        _need(value == fixture['value'], 'fixed_shrink_input_binding')
+        semantic, actual, matched, stop = _evaluate_fixture(
+            fixture, {'observation': 'Complete', 'process': {'returncode': 0}}, output, FIXED4)
+        _need(matched and stop is None and actual == evaluation and semantic == output, 'fixed_shrink_reevaluation')
+        native = semantic['recipient']['native']
+        if index == 2:
+            _need(actual['verdict'] == 'Pass' and actual['qualified'] is True and actual['invariant'] is None and
+                  actual['violations'] == [] and native['ack_calls'] == [], 'fixed_shrink_safe_control')
+        else:
+            _need(_native_failure_target(fixture['input_obligations']['ledger']) == target and
+                  actual['verdict'] == 'InvariantViolation' and actual['qualified'] is False and
+                  actual['invariant'] == target and actual['violations'] == [target] and
+                  len(native['ack_calls']) == 1 and native['ack_calls'][0]['source'] == target['target']['source'] and
+                  native['frame_id'] == target['target']['frame_id'] and
+                  native['connection_id'] == target['target']['connection_id'], 'fixed_shrink_failure_target')
 
 
 def fixture_plan(profile_id):
-    """Will return only the complete fixed16 or fixed4 literal input inventory."""
+    """Public execution remains gated pending complete profile qualification."""
     require_implemented()
+    return _fixture_plan(profile_id)
 
 
 def evaluate_fixture(fixture, record, payload, profile_id):
     """Will return semantic projection, evaluation, fixture match and stop.
 
     Structural DTO checks must permit a truthful unsafe ACK transcript to reach
-    the independent NativeAckWithoutSuccessfulFlush Safety predicate. Variable
-    runtime sequence/time and libtest diagnostics must not enter replay equality.
+    the independent NativeAckWithoutSuccessfulFlush Safety predicate. Deterministic
+    DTO seq remains in replay equality; unrelated process diagnostics do not.
     """
     require_implemented()
+    return _evaluate_fixture(fixture, record, payload, profile_id)
 
 
 def shrink_relations(observations):
     """Will check the one deletion, exact same-target violations and control."""
     require_implemented()
+    return _shrink_relations(observations)

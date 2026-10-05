@@ -2,7 +2,7 @@
 """Pure/mocked Stage3 plumbing regressions; no saved-case process execution.
 
 All contracts, captures and inventories below are synthetic control fixtures.
-The independent semantic oracle and actual Rust wire DTO remain incomplete.
+Private orchestration tests do not qualify or enable a saved Rust profile.
 """
 import copy
 import importlib.util
@@ -21,6 +21,11 @@ _caller_spec = importlib.util.spec_from_file_location(
     'direct_case_caller', Path(__file__).with_name('capture-controlled-admission.py'))
 caller = importlib.util.module_from_spec(_caller_spec)
 _caller_spec.loader.exec_module(caller)
+
+_record_spec = importlib.util.spec_from_file_location(
+    'direct_case_record_fixtures', Path(__file__).with_name('test-direct-build-record.py'))
+record_fixtures = importlib.util.module_from_spec(_record_spec)
+_record_spec.loader.exec_module(record_fixtures)
 
 
 def reference(name, data=b''):
@@ -537,6 +542,7 @@ class DirectInventoryTests(unittest.TestCase):
         absent_names = ('scripts/lib.py', 'scripts/lib.pyc', 'scripts/lib/__init__.py',
                         'scripts/lib/__init__.pyc', 'scripts/lib/__pycache__',
                         'scripts/lib/direct_case', 'scripts/lib/direct_case.pyc',
+                        'scripts/lib/direct_build_record', 'scripts/lib/direct_build_record.pyc',
                         'scripts/xml', 'scripts/xml.py', 'scripts/xml.pyc',
                         'scripts/_elementtree', 'scripts/_elementtree.py', 'scripts/_elementtree.pyc',
                         'scripts/pyexpat', 'scripts/pyexpat.py', 'scripts/pyexpat.pyc',
@@ -2714,6 +2720,336 @@ class BoshFullMatcherTests(unittest.TestCase):
             self.assertFalse(matched)
             self.assertEqual(stop, 'FixtureMismatch')
             self.assertFalse(evaluation['qualified'])
+
+
+class DirectMaterialAdapterTests(unittest.TestCase):
+    def test_build_record_and_runnable_adapters_forward_independent_facts(self):
+        for mutant in (False, True):
+            value, contract, summary, current = record_fixtures.fixture(derived=True, mutant=mutant)
+            raw = record_fixtures.encoded(value)
+            record = direct_case.check_current_provenance(contract, record_bytes=raw,
+                verified_source_summary=summary, current_mutation_bytes=current)
+            self.assertEqual(record, value)
+            self.assertIsNot(record, value)
+            direct_case.validate_runnable(record, dict(value['runnable']))
+            with self.assertRaisesRegex(direct_case.direct_build_record.BuildRecordError, 'verified_runnable_binding'):
+                direct_case.validate_runnable(record, dict(value['runnable'], bytes=value['runnable']['bytes'] + 1))
+
+    def test_provenance_metadata_is_closed_and_bound_without_reading_material(self):
+        for profile in (direct_case.FIXED16, direct_case.FIXED4):
+            provenance = synthetic_contract(profile)['provenance']
+            self.assertEqual(direct_case.validate_provenance(provenance), provenance)
+            variants = []
+            for key, replacement in (('schema', 'other'), ('artifact_role', 'other'),
+                                     ('source_sha256', '0' * 64), ('compiler_sha256', True)):
+                variants.append(dict(provenance, **{key: replacement}))
+            variants.append(dict(provenance, extra=True))
+            for bad in variants:
+                with self.assertRaises(direct_case.DirectCaseInvalid):
+                    direct_case.validate_provenance(bad)
+
+    def test_source_summary_counts_actual_read_bytes_and_retains_mutation_input(self):
+        contract = synthetic_contract(direct_case.FIXED4)
+        contract['root'] = str(Path(supervision.__file__).resolve().parents[2])
+        contents = {name: name.encode() for name in contract['provenance']['source_files']}
+        contents['src/xmpp/mod.rs'] = b'bounded current mutation source\n'
+        sources = {name: supervision.fingerprint(data) for name, data in contents.items()}
+        contract['provenance'].update(source_files=sources, source_sha256=supervision.object_hash(sources))
+        def read(path, maximum):
+            data = contents[str(Path(path).relative_to(contract['root']))]
+            self.assertLessEqual(len(data), maximum)
+            return data
+        with patch.object(supervision, 'check_direct_inventory') as inventory, \
+                patch.object(supervision, 'read_regular_bounded', side_effect=read):
+            verified = supervision._check_worker_sources(contract)
+        self.assertEqual(inventory.call_count, 2)
+        self.assertEqual(verified, {'summary': {'sha256': supervision.object_hash(sources),
+                                               'files': len(contents), 'bytes': sum(map(len, contents.values()))},
+                                    'mutation_bytes': contents['src/xmpp/mod.rs']})
+
+    def test_record_authentication_precedes_binary_open_and_closes_temporary_descriptor(self):
+        value, contract, summary, current = record_fixtures.fixture(derived=True)
+        events = []
+        def read(path, maximum):
+            events.append('record')
+            self.assertEqual((path, maximum), (Path(contract['build_record']), supervision.MAX_CONTRACT))
+            return record_fixtures.encoded(value)
+        def retain(_contract):
+            events.append('binary')
+            return 21
+        identity = (1, 2, stat.S_IFREG | 0o755, 1000, 1000, value['runnable']['bytes'], 10, 10)
+        with patch.object(supervision, '_path_metadata', return_value=SimpleNamespace(st_mode=stat.S_IFREG)), \
+                patch.object(supervision, 'read_regular_bounded', side_effect=read), \
+                patch.object(supervision, '_verified_binary', side_effect=retain), \
+                patch.object(supervision, '_binary_identity', return_value=identity), \
+                patch.object(supervision.os, 'close') as close:
+            supervision.check_current_material(direct_case, contract, {'summary': summary, 'mutation_bytes': current})
+        self.assertEqual(events, ['record', 'binary'])
+        close.assert_called_once_with(21)
+
+    def test_bad_external_record_hash_stops_before_any_runnable_descriptor(self):
+        value, contract, summary, current = record_fixtures.fixture()
+        with patch.object(supervision, '_path_metadata', return_value=SimpleNamespace(st_mode=stat.S_IFREG)), \
+                patch.object(supervision, 'read_regular_bounded', return_value=record_fixtures.encoded(value) + b' '), \
+                patch.object(supervision, '_verified_binary') as opened, \
+                self.assertRaisesRegex(direct_case.direct_build_record.BuildRecordError, 'build_record_file_sha256'):
+            supervision.check_current_material(direct_case, contract, {'summary': summary, 'mutation_bytes': current})
+        opened.assert_not_called()
+
+    def test_actual_descriptor_mode_and_size_are_not_copied_from_record(self):
+        value, contract, summary, current = record_fixtures.fixture(derived=True)
+        for mode, size in ((0o644, value['runnable']['bytes']), (0o755, value['runnable']['bytes'] + 1)):
+            identity = (1, 2, stat.S_IFREG | mode, 1000, 1000, size, 10, 10)
+            with patch.object(supervision, '_current_build_record', return_value=value), \
+                    patch.object(supervision, '_verified_binary', return_value=21), \
+                    patch.object(supervision, '_binary_identity', return_value=identity), \
+                    patch.object(supervision.os, 'close') as close, \
+                    self.assertRaisesRegex(direct_case.direct_build_record.BuildRecordError, 'verified_runnable_binding'):
+                supervision.check_current_material(direct_case, contract, {'summary': summary, 'mutation_bytes': current})
+            close.assert_called_once_with(21)
+
+    def test_v3_ancestor_metadata_rejection_precedes_binary_open(self):
+        with patch.object(supervision, '_path_metadata', side_effect=supervision.SupervisionError('inventory_symlink')), \
+                patch.object(supervision.os, 'open') as opened, \
+                self.assertRaisesRegex(supervision.SupervisionError, 'inventory_symlink'):
+            supervision._verified_binary(synthetic_contract())
+        opened.assert_not_called()
+
+    def test_legacy_current_material_keeps_original_signature(self):
+        controlled = SimpleNamespace(check_current_provenance=Mock())
+        contract = synthetic_contract(supervision.LEGACY_PROFILE)
+        with patch.object(supervision, '_current_build_record') as records, \
+                patch.object(supervision, '_verified_binary') as binary:
+            supervision.check_current_material(controlled, contract)
+        controlled.check_current_provenance.assert_called_once_with(
+            contract['binary'], contract['provenance'], contract['root'])
+        records.assert_not_called()
+        binary.assert_not_called()
+
+    def test_caller_forwards_current_source_facts_before_other_material_reads(self):
+        contract = synthetic_contract()
+        contract['root'] = str(Path(caller.__file__).resolve().parents[1])
+        contract['caller']['python'] = str(Path(sys.executable).resolve())
+        verified = {'summary': {'sha256': 'a' * 64, 'files': 12, 'bytes': 1234}, 'mutation_bytes': b'current'}
+        with patch.object(supervision, '_check_worker_sources', return_value=verified), \
+                patch.object(supervision, 'check_current_material', side_effect=ValueError('record stopped')) as material, \
+                patch.object(supervision.os, 'open') as opened, \
+                self.assertRaisesRegex(ValueError, 'record stopped'):
+            caller.verify_material(contract)
+        material.assert_called_once_with(direct_case, contract, verified)
+        opened.assert_not_called()
+
+    def test_caller_repeats_material_verification_after_mocked_capture(self):
+        contract, events = synthetic_contract(), []
+        def material(_contract):
+            events.append('material')
+            return {'stable': True}
+        def capture(_contract):
+            events.append('capture')
+            return {}
+        directory = SimpleNamespace(exists=lambda: False, is_symlink=lambda: False)
+        packet = ({}, {}, {'qualification': {'FixtureMatched': False}})
+        with patch.object(supervision, 'caller_directory', return_value=directory), \
+                patch.object(caller, 'verify_material', side_effect=material), \
+                patch.object(supervision, 'direct_preflight'), patch.object(caller, 'collect', side_effect=capture), \
+                patch.object(caller, 'make_packet', return_value=packet), patch.object(caller, 'save_packet'):
+            self.assertEqual(caller.run(contract, 'synthetic-invocation'), 2)
+        self.assertEqual(events, ['material', 'capture', 'material'])
+
+
+class FixedProfileOrchestrationTests(unittest.TestCase):
+    @staticmethod
+    def supplied(fixture):
+        identity = fixture['id']
+        if fixture['kind'] == 'rejection':
+            return {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                    'input_sha256': direct_case._hash(fixture['bytes']),
+                    'rejection': {'class': 'InvalidScenario', 'reason': fixture['reason']},
+                    'execution': None, 'originals': [], 'recipient': None}
+        if identity in ('C08', 'C09'):
+            return SmFullMatcherTests().supplied_facts(fixture)
+        if identity == 'C13':
+            return ReplacementFullMatcherTests().supplied_facts(fixture)
+        if identity in ('C10', 'C11', 'C12'):
+            return BoshFullMatcherTests().supplied_facts(fixture)
+        native = NativeFullMatcherTests()
+        cuts = {'C04': 'receipt_preserved', 'C05': 'direct_pending', 'C06': 'rearm_pending'}
+        if identity in cuts:
+            return native.supplied_facts(fixture, sender_cut=cuts[identity])
+        return native.supplied_sequence(fixture, omit_flush=identity.startswith('M'))
+
+    def observed(self, fixture, profile):
+        payload = self.supplied(fixture)
+        result = direct_case._evaluate_fixture(fixture, NativeFullMatcherTests.complete_record(), payload, profile)
+        self.assertTrue(result[2], (fixture['id'], result[1]))
+        self.assertIsNone(result[3])
+        return fixture['value'], result[0], result[1]
+
+    def shrink_observations(self):
+        return [self.observed(fixture, direct_case.FIXED4) for fixture in direct_case._fixture_plan(direct_case.FIXED4)]
+
+    def test_private_plans_bind_all_twenty_original_literal_identities(self):
+        baseline = direct_case._fixture_plan(direct_case.FIXED16)
+        mutant = direct_case._fixture_plan(direct_case.FIXED4)
+        self.assertEqual([item['id'] for item in baseline], [f'C{i:02d}' for i in range(1, 14)] + ['R01', 'R02', 'R03'])
+        self.assertEqual([item['id'] for item in mutant], ['M1', 'M2', 'M3', 'M4'])
+        self.assertEqual(sum(len(item['bytes']) for item in baseline + mutant), 69624)
+        self.assertEqual(max(len(item['bytes']) for item in baseline + mutant), 4517)
+        for fixture in baseline + mutant:
+            self.assertEqual((len(fixture['bytes']), direct_case._hash(fixture['bytes'])),
+                             direct_case.FIXED_LITERAL_IDENTITIES[fixture['id']])
+            self.assertEqual(fixture['input_obligations']['input_sha256'], direct_case._hash(fixture['bytes']))
+            self.assertEqual(fixture['input_obligations']['ledger'] is None, fixture['kind'] == 'rejection')
+
+    def test_private_preparation_rejects_literal_drift_and_unknown_profile(self):
+        fixtures = direct_case.native_fixtures()
+        fixtures[0]['bytes'] += b' '
+        with patch.object(direct_case, 'native_fixtures', return_value=fixtures), \
+                self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'fixed_literal_identity'):
+            direct_case._fixture_plan(direct_case.FIXED16)
+        with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'fixed_profile'):
+            direct_case._fixture_plan('partial-native')
+
+    def test_prepared_obligations_are_detached_and_cannot_come_from_output(self):
+        fixture = direct_case._fixture_plan(direct_case.FIXED16)[0]
+        original = copy.deepcopy(fixture)
+        fixture['input_obligations']['ledger']['originals'][0]['terminal'] = 'Cancelled'
+        self.assertEqual(fixture['value'], original['value'])
+        self.assertEqual(direct_case._fixture_plan(direct_case.FIXED16)[0], original)
+        with patch.object(direct_case, '_inspect_native_fixture') as inspect, \
+                self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'prepared_fixture_binding'):
+            direct_case._evaluate_fixture(fixture, {}, {'input_obligations': original['input_obligations']}, direct_case.FIXED16)
+        inspect.assert_not_called()
+
+    def test_twenty_supplied_dtos_route_through_reviewed_matchers(self):
+        verdicts = []
+        for profile in (direct_case.FIXED16, direct_case.FIXED4):
+            for fixture in direct_case._fixture_plan(profile):
+                with self.subTest(profile=profile, identity=fixture['id']):
+                    _value, semantic, evaluation = self.observed(fixture, profile)
+                    self.assertEqual(semantic, self.supplied(fixture))
+                    self.assertEqual(evaluation['verdict'], fixture['expected_verdict'])
+                    self.assertEqual(evaluation['qualified'], evaluation['verdict'] == 'Pass')
+                    if profile == direct_case.FIXED16:
+                        verdicts.append(evaluation['verdict'])
+        self.assertEqual([verdicts.count(name) for name in ('Pass', 'Cancelled', 'InvalidScenario')], [8, 5, 3])
+
+    def test_actual_no_flush_safety_precedes_baseline_fixture_mismatch(self):
+        fixture = next(item for item in direct_case._fixture_plan(direct_case.FIXED16) if item['id'] == 'C07')
+        payload = NativeFullMatcherTests().supplied_sequence(fixture, omit_flush=True)
+        semantic, evaluation, matched, stop = direct_case._evaluate_fixture(
+            fixture, NativeFullMatcherTests.complete_record(), payload, direct_case.FIXED16)
+        self.assertEqual(semantic, payload)
+        self.assertFalse(matched)
+        self.assertEqual(stop, 'FixtureMismatch')
+        self.assertEqual(evaluation['verdict'], 'InvariantViolation')
+        self.assertEqual([item['id'] for item in evaluation['violations']], ['NativeAckWithoutSuccessfulFlush'])
+        self.assertEqual(evaluation['invariant']['class'], 'Safety')
+
+    def test_replay_semantics_keep_full_dto_and_exclude_only_outer_diagnostics(self):
+        fixture = direct_case._fixture_plan(direct_case.FIXED16)[0]
+        payload = self.supplied(fixture)
+        adapter = SimpleNamespace(evaluate_fixture=direct_case._evaluate_fixture)
+        record = NativeFullMatcherTests.complete_record()
+        first = supervision.evaluate_fixture(adapter, fixture, dict(record, process={'returncode': 0, 'pid': 1, 'wall_ms': 1}),
+            DirectFrameTests.frame(direct_case._encoded(payload), before=b'elapsed 1s\n'), direct_case.FIXED16)
+        second = supervision.evaluate_fixture(adapter, fixture, dict(record, process={'returncode': 0, 'pid': 99, 'wall_ms': 20}),
+            DirectFrameTests.frame(direct_case._encoded(payload), before=b'elapsed 20s\n'), direct_case.FIXED16)
+        self.assertEqual(first, second)
+        self.assertTrue(first[2])
+        self.assertEqual(first[0], payload)
+        self.assertIsNot(first[0], payload)
+        changed = copy.deepcopy(payload)
+        original = changed['originals'][0]
+        health, poll = original['route']['health_reads'][-1], original['polls'][0]
+        health['seq'], poll['seq'] = poll['seq'], health['seq']
+        direct_case.validate_case_evidence(changed)
+        result = direct_case._evaluate_fixture(fixture, record, changed, direct_case.FIXED16)
+        self.assertEqual(result[0], changed)
+        self.assertNotEqual(result[0], first[0])
+
+    def test_input_obligations_exist_before_output_frame_decoding(self):
+        fixture = direct_case._fixture_plan(direct_case.FIXED16)[0]
+        expected = copy.deepcopy(fixture['input_obligations'])
+        def decode(_stdout):
+            self.assertEqual(fixture['input_obligations'], expected)
+            self.assertIsNotNone(expected['ledger'])
+            return self.supplied(fixture)
+        with patch.object(supervision, 'decode_direct_frame', side_effect=decode):
+            result = supervision.evaluate_fixture(SimpleNamespace(evaluate_fixture=direct_case._evaluate_fixture),
+                fixture, NativeFullMatcherTests.complete_record(), b'supplied frame', direct_case.FIXED16)
+        self.assertTrue(result[2])
+
+    def test_all_public_orchestration_gates_remain_unconditional(self):
+        for public, private, arguments in (
+                (direct_case.fixture_plan, '_fixture_plan', (direct_case.FIXED16,)),
+                (direct_case.evaluate_fixture, '_evaluate_fixture', ({}, {}, {}, direct_case.FIXED16)),
+                (direct_case.shrink_relations, '_shrink_relations', ([],))):
+            with patch.object(direct_case, private) as body, self.assertRaises(direct_case.DirectCaseIncomplete):
+                public(*arguments)
+            body.assert_not_called()
+
+    def test_fixed_shrink_rechecks_exact_target_and_safe_control(self):
+        observations = self.shrink_observations()
+        direct_case._shrink_relations(observations)
+        targets = [observations[index][2]['invariant'] for index in (0, 1, 3)]
+        self.assertEqual(targets, [targets[0]] * 3)
+        self.assertEqual(set(targets[0]['target']), {'frame_id', 'connection_id', 'owner', 'purpose', 'source'})
+        self.assertNotEqual(observations[0][1]['recipient']['native']['ack_calls'][0]['seq'],
+                            observations[1][1]['recipient']['native']['ack_calls'][0]['seq'])
+        self.assertEqual(observations[2][1]['recipient']['native']['ack_calls'], [])
+
+    def test_shrink_rejects_extra_attempts_input_edits_and_changed_control(self):
+        observations = self.shrink_observations()
+        variants = [observations[:-1], observations + [observations[-1]]]
+        for index, field, value in ((1, 'case_id', 'renumbered'), (3, 'case_id', 'changed-reduced')):
+            bad = copy.deepcopy(observations)
+            bad[index][0][field] = value
+            variants.append(bad)
+        bad = copy.deepcopy(observations)
+        bad[2][0]['recipient_owner']['native']['write']['fail_after_accepted_bytes'] = None
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case._shrink_relations(bad)
+
+    def test_shrink_does_not_trust_saved_evaluation_or_wrong_ack_target(self):
+        observations = self.shrink_observations()
+        variants = []
+        bad = copy.deepcopy(observations)
+        bad[1][2]['violations'] = []
+        variants.append(bad)
+        bad = copy.deepcopy(observations)
+        bad[1][1]['recipient']['native']['ack_calls'][0]['source']['claim_id'] = direct_case._uuid(99)
+        variants.append(bad)
+        bad = copy.deepcopy(observations)
+        bad[2][1]['input_sha256'] = '0' * 64
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'fixed_shrink_reevaluation'):
+                direct_case._shrink_relations(bad)
+
+    def test_shrink_rejects_a_second_real_ack_instead_of_collapsing_failures(self):
+        observations = self.shrink_observations()
+        payload = observations[1][1]
+        native = payload['recipient']['native']
+        first = native['ack_calls'][0]['seq']
+        def shift(value):
+            if type(value) is dict:
+                if 'seq' in value and value['seq'] > first:
+                    value['seq'] += 1
+                for item in value.values():
+                    shift(item)
+            elif type(value) is list:
+                for item in value:
+                    shift(item)
+        shift(payload)
+        duplicate = copy.deepcopy(native['ack_calls'][0])
+        duplicate['seq'] = first + 1
+        native['ack_calls'].append(duplicate)
+        direct_case.validate_case_evidence(payload)
+        with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'fixed_shrink_reevaluation'):
+            direct_case._shrink_relations(observations)
 
 
 if __name__ == '__main__':

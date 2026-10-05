@@ -43,7 +43,12 @@ def verify_material(contract):
                      str(Path(contract['root']) / 'scripts/capture-controlled-admission.py'), 'caller_source_root')
     supervision.need(str(Path(sys.executable).resolve()) == contract['caller']['python'], 'caller_python_path')
     if not supervision.contract_profile(contract)['legacy']:
-        supervision._check_worker_sources(contract)
+        verified_sources = supervision._check_worker_sources(contract)
+        # Source/import-layout checks precede this oracle/helper import. The
+        # caller repeats the same preparation-record/runnable binding after
+        # capture; its preflight gate still stops before any timeout launch.
+        from lib import direct_case
+        supervision.check_current_material(direct_case, contract, verified_sources)
     identities = {}
     materials = [(Path(supervision.TIMEOUT_PATH), contract['caller']['timeout_sha256'],
                   contract['budgets']['binary_bytes']),

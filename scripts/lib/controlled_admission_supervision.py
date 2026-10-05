@@ -1653,6 +1653,8 @@ def _binary_identity(descriptor):
 
 
 def _verified_binary(contract):
+    if not contract_profile(contract)['legacy']:
+        need(stat.S_ISREG(_path_metadata(Path(contract['binary'])).st_mode), 'binary_regular_path')
     descriptor = os.open(contract['binary'], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         identity = _binary_identity(descriptor)

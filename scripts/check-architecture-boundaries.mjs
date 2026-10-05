@@ -562,7 +562,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
       'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
     );
   }
-  const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixClaimWork = structBody(mixProtocolProduction, 'fn claim_mix_outbox_work(');
   const mixClaimArmMarkers = [
     'MixOutboxQueue::Delivery =>',
     'MixOutboxQueue::PamResult =>',
@@ -580,26 +580,28 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     'MIX outbox claim',
   );
   if (
-    !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
+    !/\.claim_mix_deliveries_observed\s*\(/.test(mixDeliveryClaimArm) ||
+    /\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
     /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
     !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
-    /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
+    /\.claim_mix_deliveries(?:_observed)?\s*\(/.test(mixPamClaimArm)
   ) {
     throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
   }
   const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
   if (
-    !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
+    !/MixOutboxWork\s*::\s*Delivery\s*\(delivery\)\s*=>\s*\{\s*let\s+run\s*=\s*delivery\.run\s*\(\s*move\s*\|attempt,\s*handle\|\s*\{\s*process_claimed_mix_delivery\s*\(\s*context\s*,\s*attempt\s*,\s*handle\s*,\s*cancel\s*\)/.test(
       mixProcessWork,
     ) ||
-    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
+    !/Box::pin\s*\(\s*async\s+move\s*\{\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,\s*run\.await\s*,?\s*\)\s*\}/.test(mixProcessWork) ||
+    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*Box::pin\s*\(\s*async\s+move\s*\{\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
       mixProcessWork,
     )
   ) {
     throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
   }
   const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
-  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'fn claim_mix_outbox_work(');
   const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
   const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
   if (
@@ -616,12 +618,12 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
       mixOutboxLaneWorker,
     ) ||
-    !/claim_mix_outbox_work\s*\(\s*&context\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
+    !/claim_mix_outbox_work\s*\(\s*context\s*,\s*stop_claiming\s*,\s*cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
       mixOutboxClaim,
     ) ||
-    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 2 ||
-    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
-    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 2 ||
+    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 1 ||
+    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 1 ||
     !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
     !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
   ) {
@@ -1130,6 +1132,7 @@ const mixOutboxDbMethods = new Map([
   ['outbox_find_enabled_user', 'find_enabled_user'],
   ['outbox_is_blocked', 'is_blocked'],
   ['outbox_archive_mix_message_once', 'archive_mix_message_once'],
+  ['outbox_archive_mix_message_once_observed', 'archive_mix_message_once_observed'],
   [
     'outbox_admit_federated_stanza',
     {
@@ -1141,6 +1144,7 @@ const mixOutboxDbMethods = new Map([
     },
   ],
   ['claim_mix_deliveries', 'claim_mix_deliveries'],
+  ['claim_mix_deliveries_observed', 'claim_mix_deliveries_observed'],
   ['maintain_mix_delivery_retention', 'maintain_mix_delivery_retention'],
   ['prune_expired_business_intents', 'prune_expired_business_intents'],
   ['prune_expired_federated_iq_results', 'prune_expired_federated_iq_results'],
@@ -1150,6 +1154,8 @@ const mixOutboxDbMethods = new Map([
   ['release_mix_cluster_delivery', 'release_mix_cluster_delivery'],
   ['transfer_mix_delivery_to_bosh', 'transfer_mix_delivery_to_bosh'],
   ['renew_mix_delivery_lease', 'renew_mix_delivery_lease'],
+  ['renew_mix_delivery_lease_observed', 'renew_mix_delivery_lease_observed'],
+  ['settle_mix_delivery_observed', 'settle_mix_delivery_observed'],
   ['dead_letter_mix_delivery', 'dead_letter_mix_delivery'],
   ['retry_mix_delivery', 'retry_mix_delivery'],
   ['defer_mix_delivery', 'defer_mix_delivery'],
@@ -1262,7 +1268,7 @@ for (const lane of ['LiveIngress', 'DurableOutbox']) {
     throw new Error(`MIX channel stanza database lanes must retain ${lane}`);
   }
 }
-const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza(');
+const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza_inner(');
 const deliveryDatabaseLaneMatches = [];
 const deliveryDatabaseLanePattern = /\bmatch\s+database_lane\s*\{/g;
 for (let match; (match = deliveryDatabaseLanePattern.exec(deliverChannelStanza)) !== null; ) {
@@ -1319,10 +1325,11 @@ const processClaimedMixDelivery = structBody(
   mixProtocolProduction,
   'async fn process_claimed_mix_delivery(',
 );
+const deliverClaimedMixStanza = structBody(mixProtocolProduction, 'async fn deliver_claimed_channel_stanza(');
 if (
-  !/deliver_channel_stanza\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(
-    processClaimedMixDelivery,
-  )
+  !/deliver_claimed_channel_stanza\s*\(\s*&context\s*,\s*&request\s*\)/.test(processClaimedMixDelivery) ||
+  !/deliver_channel_stanza_inner\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(deliverClaimedMixStanza) ||
+  !/Some\(request\)\s*,?\s*\)\s*\.await/.test(deliverClaimedMixStanza)
 ) {
   throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
 }

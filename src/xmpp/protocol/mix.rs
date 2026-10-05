@@ -10,6 +10,7 @@ mod worker;
 
 use super::{Action, ProtocolSession};
 use crate::jid::{prepare_domainpart, CanonicalJid};
+use crate::services::mix::outbox::{self, core as mix_worker};
 use crate::services::mix::{
     ArchiveBoundary, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult,
     CreateChannelOutcome, FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome,
@@ -139,6 +140,7 @@ enum MixLocalTransportFailure {
     QueueFull,
     QueueClosed,
     HandoffClosed,
+    Observation(mix_worker::Rejected),
 }
 
 impl std::fmt::Display for MixLocalTransportFailure {
@@ -147,6 +149,12 @@ impl std::fmt::Display for MixLocalTransportFailure {
             Self::QueueFull => "local session queue is full",
             Self::QueueClosed => "local session queue is closed",
             Self::HandoffClosed => "local transport closed before durable hand-off",
+            Self::Observation(error) => {
+                return write!(
+                    formatter,
+                    "MIX attempt rejected a local hand-off observation: {error}"
+                )
+            }
         };
         formatter.write_str(detail)
     }
@@ -203,24 +211,93 @@ async fn try_send_local_durable_mix(
     stanza: String,
     source: crate::outbound::MixDelivery,
 ) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    try_send_local_durable_mix_inner(sender, disconnect, stanza, source, None).await
+}
+
+async fn try_send_local_durable_mix_observed(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &tokio_util::sync::CancellationToken,
+    request: &mix_worker::LocalRequest,
+) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    try_send_local_durable_mix_inner(
+        sender,
+        disconnect,
+        request.stanza().to_owned(),
+        request.source(),
+        Some(request),
+    )
+    .await
+}
+
+async fn try_send_local_durable_mix_inner(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &tokio_util::sync::CancellationToken,
+    stanza: String,
+    source: crate::outbound::MixDelivery,
+    observation: Option<&mix_worker::LocalRequest>,
+) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    if let Some(request) = observation {
+        request
+            .start()
+            .map_err(MixLocalTransportFailure::Observation)?;
+    }
     let receiver = match sender.try_send_durable_mix(stanza, source) {
         Ok(receiver) => receiver,
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             sender.disconnect_backpressured_transport();
             disconnect.cancel();
+            if let Some(request) = observation {
+                request
+                    .returned(mix_worker::LocalResult::QueueFull)
+                    .map_err(MixLocalTransportFailure::Observation)?;
+            }
             return Err(MixLocalTransportFailure::QueueFull);
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             sender.disconnect_backpressured_transport();
             disconnect.cancel();
+            if let Some(request) = observation {
+                request
+                    .returned(mix_worker::LocalResult::QueueClosed)
+                    .map_err(MixLocalTransportFailure::Observation)?;
+            }
             return Err(MixLocalTransportFailure::QueueClosed);
         }
     };
     let mut pending = PendingMixLocalHandoff::new(sender.clone(), disconnect.clone());
-    let completion = receiver
-        .await
-        .map_err(|_| MixLocalTransportFailure::HandoffClosed)?;
+    if let Some(request) = observation {
+        request
+            .enqueued()
+            .map_err(MixLocalTransportFailure::Observation)?;
+    }
+    let completion = match receiver.await {
+        Ok(completion) => completion,
+        Err(_) => {
+            if let Some(request) = observation {
+                request
+                    .returned(mix_worker::LocalResult::HandoffClosed)
+                    .map_err(MixLocalTransportFailure::Observation)?;
+            }
+            return Err(MixLocalTransportFailure::HandoffClosed);
+        }
+    };
     pending.mark_completed();
+    if let Some(request) = observation {
+        let boundary = match completion {
+            crate::outbound::MixTransportCompletion::SocketFenced { connection_id } => {
+                mix_worker::TransferBoundary::SocketFenced(connection_id)
+            }
+            crate::outbound::MixTransportCompletion::SmPersisted { session_id } => {
+                mix_worker::TransferBoundary::SmPersisted(session_id)
+            }
+            crate::outbound::MixTransportCompletion::BoshPersisted { session_id } => {
+                mix_worker::TransferBoundary::BoshPersisted(session_id)
+            }
+        };
+        request
+            .returned(mix_worker::LocalResult::Transferred(boundary))
+            .map_err(MixLocalTransportFailure::Observation)?;
+    }
     Ok(completion)
 }
 
@@ -1895,9 +1972,9 @@ struct ChannelStanzaDelivery<'a> {
 }
 
 /// The outcome that determines who may consume a claimed MIX recipient row.
-/// A direct socket write and a federated outbox admission leave the claiming
-/// worker responsible for the final deletion. XEP-0198 or BOSH persistence
-/// transfers that responsibility to a typed durable owner.
+/// Socket fencing, XEP-0198 and BOSH persistence transfer responsibility to a
+/// typed transport owner. Federation outbox admission leaves final deletion
+/// with the claiming worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChannelStanzaDeliveryOutcome {
     CompletedByClaimingWorker,
@@ -1908,6 +1985,7 @@ enum ChannelStanzaDeliveryOutcome {
 /// Construct an acknowledgement future only while the worker still owns the
 /// source. After a socket/SM/BOSH hand-off its old token must never be used for
 /// acknowledgement, retry or dead-letter settlement.
+#[allow(dead_code)] // Compatibility selector retained for the existing typed-owner controls.
 async fn finish_mix_delivery_owner<Acknowledge, Completion>(
     outcome: ChannelStanzaDeliveryOutcome,
     acknowledge: Acknowledge,
@@ -1925,6 +2003,83 @@ where
 async fn deliver_channel_stanza(
     context: &MixOutboxContext,
     delivery: ChannelStanzaDelivery<'_>,
+) -> Result<ChannelStanzaDeliveryOutcome> {
+    deliver_channel_stanza_inner(context, delivery, None).await
+}
+
+async fn deliver_claimed_channel_stanza(
+    context: &MixOutboxContext,
+    request: &mix_worker::RouteRequest,
+) -> Result<ChannelStanzaDeliveryOutcome> {
+    request.start()?;
+    let row = request.row();
+    let recipient = MixParticipant {
+        participant_id: row.participant_id,
+        jid: row.recipient_jid.clone(),
+        nick: row.recipient_nick.clone(),
+    };
+    deliver_channel_stanza_inner(
+        context,
+        ChannelStanzaDelivery {
+            delivery_id: Some(row.source.delivery_id),
+            mix_source: Some(row.source),
+            channel_jid: &row.channel_jid,
+            recipient: &recipient,
+            stanza: request.stanza().to_owned(),
+            authoritative_stanza_id: row.authoritative_stanza_id,
+            archive: row.archive,
+            encrypted: row.encrypted,
+            durable: true,
+            database_lane: ChannelStanzaDatabaseLane::DurableOutbox,
+        },
+        Some(request),
+    )
+    .await
+}
+
+async fn send_claimed_cluster_mix(
+    context: &MixOutboxContext,
+    request: &mix_worker::ClusterRequest,
+) -> Result<crate::cluster::NodeDeliveryReceipt> {
+    request.start()?;
+    let result = context
+        .send_cluster_mix(
+            request.node(),
+            request.recipient(),
+            request.stanza(),
+            Some(request.source()),
+        )
+        .await;
+    record_claimed_cluster_result(request, &result)?;
+    result
+}
+
+fn record_claimed_cluster_result(
+    request: &mix_worker::ClusterRequest,
+    result: &Result<crate::cluster::NodeDeliveryReceipt>,
+) -> Result<()> {
+    let handoff = match result {
+        Ok(receipt) if receipt.acknowledged => receipt.mix_handoff.map(|handoff| match handoff {
+            crate::cluster::ClusterMixHandoff::SocketFenced => {
+                mix_worker::TransferBoundary::ClusterSocketFenced
+            }
+            crate::cluster::ClusterMixHandoff::SmPersisted => {
+                mix_worker::TransferBoundary::ClusterSmPersisted
+            }
+            crate::cluster::ClusterMixHandoff::BoshPersisted => {
+                mix_worker::TransferBoundary::ClusterBoshPersisted
+            }
+        }),
+        _ => None,
+    };
+    request.returned(handoff)?;
+    Ok(())
+}
+
+async fn deliver_channel_stanza_inner(
+    context: &MixOutboxContext,
+    delivery: ChannelStanzaDelivery<'_>,
+    observation: Option<&mix_worker::RouteRequest>,
 ) -> Result<ChannelStanzaDeliveryOutcome> {
     let ChannelStanzaDelivery {
         delivery_id,
@@ -2067,34 +2222,47 @@ async fn deliver_channel_stanza(
                 .context("archived MIX delivery requires an authoritative stanza id")?;
             let archive_id = Uuid::new_v4();
             let client_stanza_id = authoritative_stanza_id.to_string();
-            let admission = match database_lane {
-                ChannelStanzaDatabaseLane::LiveIngress => {
-                    context
-                        .service()
-                        .archive_mix_message_once(
-                            archive_id,
-                            user.id,
-                            channel_jid,
-                            authoritative_stanza_id,
-                            &stanza,
-                            encrypted,
-                            Some(&client_stanza_id),
-                        )
-                        .await
-                }
-                ChannelStanzaDatabaseLane::DurableOutbox => {
-                    context
-                        .service()
-                        .outbox_archive_mix_message_once(
-                            archive_id,
-                            user.id,
-                            channel_jid,
-                            authoritative_stanza_id,
-                            &stanza,
-                            encrypted,
-                            Some(&client_stanza_id),
-                        )
-                        .await
+            let admission = if let Some(owner) = observation {
+                let request =
+                    owner.archive_request(user.id, archive_id, Some(client_stanza_id.clone()))?;
+                context
+                    .service()
+                    .outbox_archive_mix_message_once_observed(&request)
+                    .await
+                    .map(|result| match result {
+                        mix_worker::ArchiveResult::Stored(id) => SourceArchiveAdmission::Stored(id),
+                        mix_worker::ArchiveResult::Replay(id) => SourceArchiveAdmission::Replay(id),
+                    })
+            } else {
+                match database_lane {
+                    ChannelStanzaDatabaseLane::LiveIngress => {
+                        context
+                            .service()
+                            .archive_mix_message_once(
+                                archive_id,
+                                user.id,
+                                channel_jid,
+                                authoritative_stanza_id,
+                                &stanza,
+                                encrypted,
+                                Some(&client_stanza_id),
+                            )
+                            .await
+                    }
+                    ChannelStanzaDatabaseLane::DurableOutbox => {
+                        context
+                            .service()
+                            .outbox_archive_mix_message_once(
+                                archive_id,
+                                user.id,
+                                channel_jid,
+                                authoritative_stanza_id,
+                                &stanza,
+                                encrypted,
+                                Some(&client_stanza_id),
+                            )
+                            .await
+                    }
                 }
             };
             match admission {
@@ -2140,14 +2308,24 @@ async fn deliver_channel_stanza(
                     had_deliverable_target = true;
                     if durable {
                         let source = durable_source.expect("durable source was validated above");
-                        match try_send_local_durable_mix(
-                            &session.sender,
-                            &session.disconnect,
-                            stanza.clone(),
-                            source,
-                        )
-                        .await
-                        {
+                        let result = if let Some(owner) = observation {
+                            let request = owner.local_request(jid.clone())?;
+                            try_send_local_durable_mix_observed(
+                                &session.sender,
+                                &session.disconnect,
+                                &request,
+                            )
+                            .await
+                        } else {
+                            try_send_local_durable_mix(
+                                &session.sender,
+                                &session.disconnect,
+                                stanza.clone(),
+                                source,
+                            )
+                            .await
+                        };
+                        match result {
                             Ok(
                                 crate::outbound::MixTransportCompletion::SocketFenced { .. }
                                 | crate::outbound::MixTransportCompletion::SmPersisted { .. }
@@ -2214,10 +2392,15 @@ async fn deliver_channel_stanza(
         };
         for node_id in nodes {
             had_route_target = true;
-            match context
-                .send_cluster_mix(&node_id, &recipient.jid, &stanza, durable_source)
-                .await
-            {
+            let result = if let Some(owner) = observation {
+                let request = owner.cluster_request(node_id.clone())?;
+                send_claimed_cluster_mix(context, &request).await
+            } else {
+                context
+                    .send_cluster_mix(&node_id, &recipient.jid, &stanza, durable_source)
+                    .await
+            };
+            match result {
                 Ok(receipt) => {
                     if receipt.acknowledged {
                         // A v13 peer returns a typed hand-off only after
@@ -2338,165 +2521,159 @@ fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
 
 async fn process_claimed_mix_delivery(
     context: Arc<MixOutboxContext>,
-    delivery: crate::services::mix::ClaimedMixDelivery,
+    attempt: mix_worker::Attempt,
+    handle: outbox::AttemptHandle,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let attempt_deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
-    let stanza = match addressed_mix_delivery(&delivery.stanza, &delivery.recipient.jid) {
+    let source = attempt.row().source;
+    let event_id = attempt.row().event_id;
+    let channel_id = attempt.row().channel_id;
+    let stanza = match addressed_mix_delivery(&attempt.row().stanza, &attempt.row().recipient_jid) {
         Ok(stanza) => stanza,
         Err(error) => {
+            let request = attempt.invalid_template(error.to_string())?;
             let moved = match bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                context.service().dead_letter_mix_delivery(
-                    delivery.delivery_id,
-                    delivery.lease_token,
-                    "invalid-template",
-                    &error.to_string(),
-                ),
+                context.service().settle_mix_delivery_observed(&request),
             )
             .await
             {
-                Ok(moved) => moved,
-                Err(wait) if mix_outbox_is_shutting_down(&wait) => return Ok(()),
+                Ok(mix_worker::SettlementResult::DeadLetter(moved)) => moved,
+                Ok(_) => anyhow::bail!("invalid-template settlement result kind mismatch"),
+                Err(wait) if mix_outbox_is_shutting_down(&wait) => {
+                    handle.finish_as(mix_worker::TerminalReason::Cancelled);
+                    return Ok(());
+                }
                 Err(wait) if mix_outbox_deadline_elapsed(&wait) => {
-                    tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX invalid-template handling exceeded its claimed delivery deadline; retaining fenced row for lease recovery");
+                    handle.finish_as(mix_worker::TerminalReason::TimedOut);
+                    tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX invalid-template handling exceeded its claimed delivery deadline; retaining fenced row for lease recovery");
                     return Ok(());
                 }
                 Err(wait) => return Err(wait),
             };
             if !moved {
-                tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while dead-lettering an invalid template");
+                tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX invalid-template dead-letter result was NotMoved");
             }
             return Ok(());
         }
     };
-
+    let request = attempt.route(stanza)?;
     let renewal_context = Arc::clone(&context);
-    let result = match run_claimed_mix_effect_with_lease(
+    let renewal_owner = handle.observation.clone();
+    let result = run_claimed_mix_effect_with_lease(
         cancel.clone(),
         attempt_deadline,
         MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
-        async {
-            Ok(deliver_channel_stanza(
-                &context,
-                ChannelStanzaDelivery {
-                    delivery_id: Some(delivery.delivery_id),
-                    mix_source: Some(crate::outbound::MixDelivery {
-                        delivery_id: delivery.delivery_id,
-                        lease_token: delivery.lease_token,
-                    }),
-                    channel_jid: &delivery.channel_jid,
-                    recipient: &delivery.recipient,
-                    stanza,
-                    authoritative_stanza_id: delivery.authoritative_stanza_id,
-                    archive: delivery.archive,
-                    encrypted: delivery.encrypted,
-                    durable: true,
-                    database_lane: ChannelStanzaDatabaseLane::DurableOutbox,
-                },
-            )
-            .await)
-        },
+        async { Ok(deliver_claimed_channel_stanza(&context, &request).await) },
         move || -> BoxFuture<'static, Result<bool>> {
             let context = Arc::clone(&renewal_context);
-            let delivery_id = delivery.delivery_id;
-            let lease_token = delivery.lease_token;
+            let owner = renewal_owner.clone();
             Box::pin(async move {
+                let renewal = owner.renewal_request()?;
                 context
                     .service()
-                    .renew_mix_delivery_lease(delivery_id, lease_token)
+                    .renew_mix_delivery_lease_observed(&renewal)
                     .await
             })
         },
     )
-    .await
-    {
+    .await;
+    // The existing helper has returned and destroyed its routing/renewal
+    // children. This token records that boundary without inventing a result
+    // for an in-flight renewal dropped because routing completed.
+    let closed = handle.observation.close_renewal_scope()?;
+    let result = match result {
         Ok(Some(result)) => result,
         Ok(None) => {
-            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while an external side effect was in flight");
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX renewal no longer matched the active exact source while an external side effect was in flight");
             return Ok(());
         }
-        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+        Err(error) if mix_outbox_is_shutting_down(&error) => {
+            handle.finish_as(mix_worker::TerminalReason::Cancelled);
+            return Ok(());
+        }
         Err(error) if mix_outbox_deadline_elapsed(&error) => {
-            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery attempt exceeded its claimed deadline; retaining fenced row for lease recovery");
+            handle.finish_as(mix_worker::TerminalReason::TimedOut);
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery attempt exceeded its claimed deadline; retaining fenced row for lease recovery");
             return Ok(());
         }
         Err(error) => return Err(error),
     };
-
-    let completion = match result {
-        Ok(outcome) => {
-            finish_mix_delivery_owner(outcome, || {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context
-                        .service()
-                        .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
-                )
-            })
-            .await
+    let (outcome, command) = match result {
+        Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport) => {
+            request
+                .returned(mix_worker::RouteResult::Transferred)?
+                .transferred(closed)?;
+            return Ok(());
         }
+        Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker) => (
+            mix_worker::RouteResult::CompletedByWorker,
+            mix_worker::SettlementCommand::Ack,
+        ),
         Err(error) => {
             if mix_outbox_is_shutting_down(&error) {
-                // A cancellation-aware database turn must not turn orderly
-                // shutdown into an unbounded wait.  The claimed row remains
-                // fenced and its lease expiry is the authoritative recovery
-                // path; a possibly accepted transport side effect is safe
-                // under stanza-id replay semantics.
+                handle.finish_as(mix_worker::TerminalReason::Cancelled);
                 return Ok(());
             } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some() {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context.service().defer_mix_delivery(
-                        delivery.delivery_id,
-                        delivery.lease_token,
-                        delivery.route_wake_generation,
-                        MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS,
-                    ),
+                (
+                    mix_worker::RouteResult::Pending,
+                    mix_worker::SettlementCommand::Defer {
+                        delay_seconds: MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS,
+                    },
                 )
-                .await
             } else if let Some(permanent) = error.downcast_ref::<PermanentMixDeliveryError>() {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context.service().dead_letter_mix_delivery(
-                        delivery.delivery_id,
-                        delivery.lease_token,
-                        permanent.reason,
-                        &permanent.detail,
-                    ),
+                (
+                    mix_worker::RouteResult::Permanent,
+                    mix_worker::SettlementCommand::DeadLetter {
+                        reason: permanent.reason.to_owned(),
+                        error: permanent.detail.clone(),
+                    },
                 )
-                .await
             } else {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context.service().retry_mix_delivery(
-                        delivery.delivery_id,
-                        delivery.lease_token,
-                        delivery.attempt_count,
-                        delivery.route_wake_generation,
-                        &error.to_string(),
-                    ),
+                (
+                    mix_worker::RouteResult::Retry,
+                    mix_worker::SettlementCommand::Retry {
+                        error: error.to_string(),
+                    },
                 )
-                .await
             }
         }
     };
-    let completed = match completion {
-        Ok(completed) => completed,
-        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+    let completion = request.returned(outcome)?;
+    let settlement = completion
+        .settlement(command, closed)?
+        .context("worker-owned route requires its exclusive settlement")?;
+    let completion = bounded_mix_outbox_turn(
+        &cancel,
+        attempt_deadline,
+        context.service().settle_mix_delivery_observed(&settlement),
+    )
+    .await;
+    let result = match completion {
+        Ok(result) => result,
+        Err(error) if mix_outbox_is_shutting_down(&error) => {
+            handle.finish_as(mix_worker::TerminalReason::Cancelled);
+            return Ok(());
+        }
         Err(error) if mix_outbox_deadline_elapsed(&error) => {
-            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery finalization exceeded its claimed deadline; retaining fenced row for lease recovery");
+            handle.finish_as(mix_worker::TerminalReason::TimedOut);
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery finalization exceeded its claimed deadline; retaining fenced row for lease recovery");
             return Ok(());
         }
         Err(error) => return Err(error),
     };
-    if !completed {
-        tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery completion lost its lease fence");
+    match result {
+        mix_worker::SettlementResult::DeadLetter(false) => {
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery dead-letter result was NotMoved");
+        }
+        mix_worker::SettlementResult::Ack(false)
+        | mix_worker::SettlementResult::Defer(false)
+        | mix_worker::SettlementResult::Retry(mix_worker::RetryResult::LeaseLost) => {
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery completion did not match its exact source fence");
+        }
+        _ => {}
     }
     Ok(())
 }

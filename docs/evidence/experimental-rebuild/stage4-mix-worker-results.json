@@ -1,0 +1,74 @@
+{
+  "schema": "northstar-stage4-mix-worker-results-v1",
+  "status": "OrdinaryPassed_Stage4Open",
+  "change": "The existing MIX Delivery worker now retains claim, personal-archive, route-transfer and settlement knowledge through private consuming owners, including cancellation and panic cuts.",
+  "behavior": [
+    "A claim distinguishes an authorized empty read from entry and success of the existing mutating claim statement. Only the exact returned immutable row storage can issue attempts; copied values or public identifiers cannot substitute another invocation.",
+    "Each attempt retains its actual delivery and lease identifiers, claimed payload and route-wake generation. Existing archive=false and optional authoritative-ID rows remain valid.",
+    "Personal-archive Stored and authenticated Replay retain their actual COMMIT receipts and returned IDs, including Replay’s original archive ID. A matching return permits routing; contradictory successful returns retain the evidence and block new permissions. Ordinary backend errors keep the existing retry policy.",
+    "Local queue acceptance remains an uncertain handoff prefix. SocketFenced, SmPersisted and BoshPersisted results consume the old worker’s settlement permission immediately. The existing pending-handoff disconnect behavior remains in force.",
+    "The cluster adapter records the actual acknowledged typed handoff before returning. A delivered boolean, unacknowledged result or error cannot grant transfer.",
+    "Renewal remains concurrent with routing only. After the existing helper has destroyed its children, a consuming scope-closed token permits settlement. Dropped pending renewal keeps its recorded facts; renewal false or failure authorizes no new settlement.",
+    "The actual route result selects one lazy ACK, defer, retry or dead-letter request. The request binds the exact source, route-wake generation and command; transfer grants no old-worker settlement.",
+    "ACK false and retry LeaseLost retain the actual no-exact-token-match COMMIT result, without inferring row absence or a new owner. Dead-letter false means NotMoved. Renewal and defer record successful autocommit statement outcomes, including false, separately from explicit COMMIT receipts.",
+    "Claim and attempt holders destroy children before owner retirement. A separate retirement guard retains cancellation, timeout and panic outcomes, including an externally caught poll panic or a child-destructor panic. Drop performs no database compensation, re-admission or retry."
+  ],
+  "compatibility": [
+    "The existing SQL text, predicates, locks, active-lease checks and exact-token settlement rules remain intact. Retry still chooses from the locked persisted attempt count and route-wake generation.",
+    "Fair shared database admission, local wake conditions, route-only renewal, Delivery/PAM lane separation, stop/drain behavior, deadlines and retry policy remain unchanged.",
+    "Legacy returned-only entry points remain available. No new dependency, migration, general executor or scenario language is introduced."
+  ],
+  "validation": {
+    "status": "Accepted within the finite ordinary source/component scope after independent review.",
+    "rust_exact_selected": 53,
+    "rust_new_selected": 26,
+    "rust_reused_selected": 27,
+    "new_control_scope": {
+      "pure_core": "16 finite transition controls for claim knowledge/private identity, optional archive shape, Stored/Replay permission, contradictory returns, typed transfer, renewal, exclusive settlement and actual-result correspondence.",
+      "runtime_and_protocol": "10 finite controls for the production holders, actual in-memory local queue/oneshot handoff, cancellation/destruction, supplied cluster receipt classification, fake statement/COMMIT cuts and the existing renewal helper."
+    },
+    "reused_control_scope": "27 unchanged controls: 25 protocol controls for legacy lazy settlement, local handoff, route classification, claim/renewal progress, cancellation/deadlines and Delivery/PAM drain/concurrency; two in-memory service controls for retained wakes and the clone-shared FIFO admission gate.",
+    "rust_exact_passed": 53,
+    "node_passed": 467,
+    "format_compile_clippy_and_source_gates": "Passed, including Clippy with warnings denied and the migration/source checker.",
+    "live_sql_wire_or_saved_workload_validation": "Outside this component batch.",
+    "commands_passed": 64,
+    "rust_exact_failed": 0,
+    "rust_exact_ignored": 0,
+    "inventories": {
+      "delivery_core": 54,
+      "server": 1901
+    }
+  },
+  "engineering_corrections": [
+    "The migration/source checker’s stale producer count is corrected from 18 to 19, counting both existing compatibility and observed foreground store entries. Their fair admission requirements remain intact.",
+    "Two existing negative probes now target the actual worker ACK request boundary and the original BOSH source-extraction function. Their exactly-one mutation assertions and production verifiers remain unchanged.",
+    "The retained service compatibility DTO has a documented, struct-local dead-code expectation only outside test builds. Its fields, derives and API remain unchanged.",
+    "Earlier stopped or incomplete validation attempts remain excluded from acceptance. A fresh cold build reached its fixed time limit; the separately reviewed continuation reused only its settled isolated cache and completed under the unchanged limits."
+  ],
+  "limits": [
+    "The controls exercise local ownership and finite supplied outcomes. They do not execute a complete protocol-to-service-to-PostgreSQL delivery.",
+    "Local handoff controls use the real in-memory queue and oneshot waiter, with supplied typed transport completions. They do not perform a socket write or SM/BOSH database transfer.",
+    "Cluster controls classify supplied receipts; they do not invoke a remote peer or prove cluster delivery.",
+    "Actual SQL statement/COMMIT placement and exact-source predicates are source/gate correspondence claims. Fake completion tests do not establish PostgreSQL transaction, lock, lease-clock or failure behavior.",
+    "The renewal control exercises the existing concurrent helper and pending-child destruction. Existing deadline/cancellation controls provide their own bounded evidence; they are not full observed end-to-end recovery tests.",
+    "This component does not complete full auth correlation, saved cross-domain composition, real-adapter qualification or Stage4. Historical accepted results retain their original scope; the earlier TLS response-EOF issue remains unresolved."
+  ],
+  "related": [
+    "stage4-mix-foreground-results.json",
+    "stage4-muc-discussion-results.json",
+    "stage4-bosh-auth-control-results.json"
+  ],
+  "detailed_evidence": "Detailed source snapshots, retained stops and execution records are held separately. This summary contains no raw execution metadata.",
+  "parent_ci": {
+    "commit": "a90d86208a10ed28cec2225c44d79185b144114d",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37334554598",
+    "status": "failure",
+    "successful": 29,
+    "failed": 3,
+    "skipped": 1,
+    "cancelled": 0,
+    "finding": "Two direct jobs reached the same stale 18-producer source assertion; their required aggregate also failed. The new observed store supplies the nineteenth guarded producer.",
+    "scope": "This is the prior foreground checkpoint. Its failure remains recorded; this local ordinary result does not predict the new checkpoint CI."
+  }
+}

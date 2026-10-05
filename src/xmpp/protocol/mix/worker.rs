@@ -114,7 +114,7 @@ pub(super) const fn mix_outbox_lane_budgets(background_budget: usize) -> (usize,
 }
 
 pub(super) enum MixOutboxWork {
-    Delivery(crate::services::mix::ClaimedMixDelivery),
+    Delivery(crate::services::mix::outbox::OwnedAttempt),
     PamResult(ClaimedPamResult),
 }
 
@@ -122,39 +122,58 @@ pub(super) enum MixOutboxWork {
 /// PAM lanes concurrently, while the service serializes their short database
 /// turns.  A slow external delivery therefore never holds the start slot of a
 /// correlated PAM reply.
-pub(super) async fn claim_mix_outbox_work(
-    context: &MixOutboxContext,
-    stop_claiming: &tokio_util::sync::CancellationToken,
-    cancel: &tokio_util::sync::CancellationToken,
+pub(super) fn claim_mix_outbox_work(
+    context: Arc<MixOutboxContext>,
+    stop_claiming: tokio_util::sync::CancellationToken,
+    cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
     budget: usize,
-) -> Result<Vec<MixOutboxWork>> {
+) -> MixOutboxClaimTask {
     let claim_limit = i64::try_from(budget)
         .expect("MIX outbox background budget is bounded by its fixed maximum");
     match queue {
         MixOutboxQueue::Delivery => {
-            let deliveries = drainable_mix_outbox_claim(
-                stop_claiming,
-                cancel,
-                context
-                    .service()
-                    .claim_mix_deliveries(claim_limit, 8 * 1024 * 1024),
-            )
-            .await?;
-            Ok(deliveries
-                .into_iter()
-                .map(MixOutboxWork::Delivery)
-                .collect())
+            let turn = crate::services::mix::outbox::ClaimTurn::new(claim_limit, 8 * 1024 * 1024)
+                .expect("fresh MIX claim owner issues one request");
+            let run = turn.run(move |request, handle| async move {
+                let result = drainable_mix_outbox_claim(
+                    &stop_claiming,
+                    &cancel,
+                    context.service().claim_mix_deliveries_observed(&request),
+                )
+                .await;
+                if let Err(error) = &result {
+                    if mix_outbox_is_shutting_down(error) {
+                        handle.finish_as(
+                            crate::services::mix::outbox::core::TerminalReason::Cancelled,
+                        );
+                    } else if mix_outbox_deadline_elapsed(error) {
+                        handle.finish_as(
+                            crate::services::mix::outbox::core::TerminalReason::TimedOut,
+                        );
+                    }
+                }
+                result
+            });
+            Box::pin(async move {
+                Ok(run
+                    .await?
+                    .into_iter()
+                    .map(MixOutboxWork::Delivery)
+                    .collect())
+            })
         }
-        MixOutboxQueue::PamResult => Ok(drainable_mix_outbox_claim(
-            stop_claiming,
-            cancel,
-            context.service().claim_pam_results(claim_limit),
-        )
-        .await?
-        .into_iter()
-        .map(MixOutboxWork::PamResult)
-        .collect()),
+        MixOutboxQueue::PamResult => Box::pin(async move {
+            Ok(drainable_mix_outbox_claim(
+                &stop_claiming,
+                &cancel,
+                context.service().claim_pam_results(claim_limit),
+            )
+            .await?
+            .into_iter()
+            .map(MixOutboxWork::PamResult)
+            .collect())
+        }),
     }
 }
 
@@ -167,18 +186,20 @@ pub(super) fn process_mix_outbox_work(
     work: MixOutboxWork,
     cancel: tokio_util::sync::CancellationToken,
 ) -> MixOutboxTask {
-    Box::pin(async move {
-        match work {
-            MixOutboxWork::Delivery(delivery) => (
-                MixOutboxQueue::Delivery,
-                process_claimed_mix_delivery(context, delivery, cancel).await,
-            ),
-            MixOutboxWork::PamResult(result) => (
+    match work {
+        MixOutboxWork::Delivery(delivery) => {
+            let run = delivery.run(move |attempt, handle| {
+                process_claimed_mix_delivery(context, attempt, handle, cancel)
+            });
+            Box::pin(async move { (MixOutboxQueue::Delivery, run.await) })
+        }
+        MixOutboxWork::PamResult(result) => Box::pin(async move {
+            (
                 MixOutboxQueue::PamResult,
                 process_claimed_pam_result(context, result, cancel).await,
-            ),
-        }
-    })
+            )
+        }),
+    }
 }
 
 /// Keep the bounded claim in the same progress set as already-claimed work.
@@ -192,9 +213,7 @@ pub(super) fn process_mix_outbox_claim(
     queue: MixOutboxQueue,
     available: usize,
 ) -> MixOutboxClaimTask {
-    Box::pin(async move {
-        claim_mix_outbox_work(&context, &stop_claiming, &cancel, queue, available).await
-    })
+    claim_mix_outbox_work(context, stop_claiming, cancel, queue, available)
 }
 
 /// Start one bounded maintenance page without parking already-claimed work.

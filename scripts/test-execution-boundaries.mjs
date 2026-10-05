@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -417,8 +417,8 @@ rejectsRoom('transferred MIX owner cannot acknowledge through old worker token',
 rejectsRoom('worker-owned MIX result cannot skip acknowledgement', 'mix',
   'ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker => acknowledge().await,',
   'ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker => Ok(true),', /MIX settlement/);
-rejectsRoom('MIX claimed delivery cannot bypass lazy settlement owner', 'mix',
-  'finish_mix_delivery_owner(outcome, || {', 'unreviewed_delivery_owner(outcome, || {', /MIX claimed delivery/);
+rejectsMixWorker('MIX claimed delivery cannot bypass lazy settlement owner', 'mix',
+  'completion.settlement(command, closed)?', 'unreviewed_settlement(command, closed)?', /MIX claimed delivery/);
 test('MUC room guard cannot be released before accepted fanout', () => {
   const start = baseline.muc.indexOf('        let attempted = if let Some(accepted) = discussion_fanout {');
   const release = '        drop(local_authority_guard);';
@@ -513,9 +513,9 @@ rejectsRoom('MUC acquired recipient order cannot be silently sorted', 'mucFanout
   'let recipients = port.recipients();', 'let mut recipients = port.recipients(); recipients.sort();', /MUC effects must preserve/);
 rejectsRoom('MUC pending endpoint cannot advance before its actual return', 'mucFanout',
   'let accepted = port.deliver(&recipient).await;', 'let accepted = true;', /MUC effects must preserve/);
-rejectsRoom('MIX acknowledgement cannot substitute a different exact fence', 'mix',
-  '.acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),',
-  '.acknowledge_mix_delivery(delivery.delivery_id, delivery.delivery_id),', /MIX claimed delivery/);
+rejectsMixWorker('MIX acknowledgement cannot substitute a different exact fence', 'mixDb',
+  'remove_mix_delivery_tx(&mut transaction, source.delivery_id, source.lease_token)',
+  'remove_mix_delivery_tx(&mut transaction, source.delivery_id, source.delivery_id)', /ACK must observe/);
 
 test('native and compatibility MIX ACK share the reviewed database owner', () => verifyNativeAckService(baseline.mixService));
 function rejectsNativeAck(name, declaration, before, after, expected) {
@@ -666,7 +666,7 @@ rejectsBosh('BOSH handoff cannot name another session', 'boshOwner', /session_id
 rejectsBosh('BOSH cannot discard the actual FIFO result', 'boshOwner', /local\.queue_returned\(accepted\);/g, 'local.queue_returned(true);', /actual FIFO result/);
 rejectsBosh('BOSH MIX service cannot replace the closed request', 'mixService', /self\.repository\.transfer_mix_delivery_to_bosh\(request\)/g, 'self.repository.transfer_mix_delivery_to_bosh(other_request)', /same closed request/);
 rejectsBosh('BOSH repository cannot discard the closed request', 'mixRepository', /db::mix::transfer_mix_delivery_to_bosh\(&self\.pool,\s*request\)/g, 'db::mix::transfer_mix_delivery_to_bosh(&self.pool, other_request)', /same closed request/);
-rejectsBosh('BOSH SQL cannot replace the bound source', 'mixDb', /let source = request\.source\(\);/g, 'let source = other_source;', /closed inputs/);
+rejectsBosh('BOSH SQL cannot replace the bound source', 'mixDb', /(pub async fn transfer_mix_delivery_to_bosh\([\s\S]*?\{\s*request\.validate_for_io\(\)\?;\s*)let source = request\.source\(\);/g, '$1let source = other_source;', /closed inputs/);
 rejectsBosh('BOSH SQL cannot replace the bound session', 'mixDb', /let session_id = request\.session_id\(\);/g, 'let session_id = other_session;', /closed inputs/);
 rejectsBosh('BOSH SQL cannot bypass the COMMIT observer', 'mixDb', /bosh_ownership::transfer_commit_observed/g, 'bosh_ownership::unobserved_commit', /actual COMMIT receipt/);
 rejectsBosh('BOSH commit helper must await its actual future', 'boshCore', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /COMMIT wrapper/);
@@ -757,4 +757,173 @@ for (const kind of ['bind', 'renew', 'ack']) {
   rejectsBoshResponse(`${kind} response COMMIT cannot discard its receipt`, 'boshResponseCore',
     new RegExp(`(pub async fn ${kind}_commit_observed[\\s\\S]*?)permit\\.received\\(\\);`, 'g'),
     '$1', /response COMMIT wrappers/);
+}
+
+function rejectsMixWorker(name, file, before, after, expected, matches = 1) {
+  test(name, () => assert.throws(() => verifyMixWorkerBoundaries(
+    changedMuc(file, before, after, matches)), expected));
+}
+
+test('MIX worker production adapters and private permissions satisfy their gate', () => verifyMixWorkerBoundaries(baseline));
+rejectsMixWorker('MIX claim cannot accept value-equal substituted row storage', 'mixWorkerCore',
+  'ClaimKnowledge::StatementReceipt(receipt) => Arc::ptr_eq(receipt, &rows)',
+  'ClaimKnowledge::StatementReceipt(receipt) => receipt == &rows', /exact returned storage/);
+rejectsMixWorker('MIX claim cannot erase a rejected actual return', 'mixWorkerCore',
+  'state.returned = Some(ClaimReturned::Rejected(rows.clone()));', 'state.returned = None;', /exact returned storage/);
+rejectsMixWorker('MIX claim cannot mint attempts for duplicate delivery rows', 'mixWorkerCore',
+  'if rows.iter().map(|row| row.source.delivery_id).collect::<std::collections::BTreeSet<_>>().len() != rows.len()',
+  'if false', /unique rows/);
+rejectsMixWorker('MIX attempt UUID equality cannot replace private invocation identity', 'mixWorkerCore',
+  'fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }',
+  'fn same(&self, other: &Self) -> bool { self.row().source == other.row().source }', /private invocation identity/);
+rejectsMixWorker('MIX archive mismatch cannot reopen retry permission', 'mixWorkerCore',
+  'if state.snapshot.archive.knowledge != ArchiveKnowledge::ReceiptKnown(result) { state.snapshot.aborted = true; return Err(Rejected::MissingReceipt); }',
+  'if state.snapshot.archive.knowledge != ArchiveKnowledge::ReceiptKnown(result) { return Err(Rejected::MissingReceipt); }', /archive mismatch/);
+rejectsMixWorker('MIX archive receipt alone cannot authorize routing before exact return', 'mixWorkerCore',
+  '(ArchiveKnowledge::ReceiptKnown(known), Some(ArchiveReturned::Outcome(returned))) if known == returned',
+  '(ArchiveKnowledge::ReceiptKnown(known), Some(ArchiveReturned::Outcome(returned))) if true', /matching receipt and returned/);
+rejectsMixWorker('MIX contradictory local return cannot authorize another resource', 'mixWorkerCore',
+  'if enqueued != requires_enqueue { state.snapshot.aborted = true; return Err(Rejected::Result); }',
+  'if enqueued != requires_enqueue { return Err(Rejected::Result); }', /contradictory local returns/);
+rejectsMixWorker('MIX renewal backend failure cannot reset into another renewal', 'mixWorkerCore',
+  'renewal.returned = Some(RenewalReturned::Error); renewal.pending = false; state.snapshot.aborted = true;',
+  'renewal.returned = Some(RenewalReturned::Error); renewal.pending = false;', /renewal error/);
+rejectsMixWorker('MIX renewal false must retain unavailable lease knowledge', 'mixWorkerCore',
+  'renewal.last_receipt = Some((self.ordinal, result)); if !result { state.snapshot.lease_lost = true; }',
+  'renewal.last_receipt = Some((self.ordinal, result));', /false lease knowledge/);
+rejectsMixWorker('MIX closed renewal scope cannot invent completion of a pending child', 'mixWorkerCore',
+  'state.snapshot.renewal_scope_closed = true; Ok(RenewalScopeClosed { observation: self.clone() })',
+  'state.snapshot.renewal.pending = false; state.snapshot.renewal_scope_closed = true; Ok(RenewalScopeClosed { observation: self.clone() })', /pending invocation knowledge/);
+rejectsMixWorker('MIX settlement cannot start before renewal children are destroyed', 'mixWorkerCore',
+  'if !state.snapshot.renewal_scope_closed { return Err(Rejected::Renewal); }',
+  'if false { return Err(Rejected::Renewal); }', /closed renewal scope/);
+rejectsMixWorker('MIX pending route cannot select ACK settlement', 'mixWorkerCore',
+  'RouteResult::Pending => SettlementKind::Defer,',
+  'RouteResult::Pending => SettlementKind::Ack,', /exclusive outcome kind/);
+rejectsMixWorker('MIX settlement cannot silently substitute its returned receipt', 'mixWorkerCore',
+  'settlement.knowledge != SettlementKnowledge::ReceiptKnown(result)',
+  'false', /actual receipt and command/);
+for (const [name, receipt] of [['archive', 'prepared'], ['settlement', 'prepared, result']]) {
+  rejectsMixWorker(`MIX ${name} COMMIT cannot erase an independently observed receipt`, 'mixWorkerCore',
+    `request.received(${receipt}).map_err(CommitError::Observation)`, 'Ok(())', /COMMIT wrappers/);
+}
+for (const name of ['Claim', 'Attempt']) {
+  rejectsMixWorker(`MIX ${name} holder cannot retire before child destruction`, 'mixWorkerOwner',
+    `impl Drop for ${name}Run { fn drop(&mut self) { drop(self.child.take());`,
+    `impl Drop for ${name}Run { fn drop(&mut self) { self.retirement.finish(core::TerminalReason::Cancelled); drop(self.child.take());`, /field guard/);
+  rejectsMixWorker(`MIX ${name} retirement must preserve caught poll panic`, 'mixWorkerOwner',
+    `impl Drop for ${name}Retirement { fn drop(&mut self) { if !self.retired { self.finish(if self.polling || std::thread::panicking()`,
+    `impl Drop for ${name}Retirement { fn drop(&mut self) { if !self.retired { self.finish(if std::thread::panicking()`, /field guard/);
+}
+rejectsMixWorker('MIX observed claim cannot be replaced by a raw DTO compatibility claim', 'mixWorker',
+  'context.service().claim_mix_deliveries_observed(&request)',
+  'context.service().claim_mix_deliveries(claim_limit, 8 * 1024 * 1024)', /bounded observed claim/);
+rejectsMixWorker('MIX work cannot bypass its owning attempt holder', 'mixWorker',
+  'let run = delivery.run(move |attempt, handle| { process_claimed_mix_delivery(context, attempt, handle, cancel) });',
+  'let run = process_claimed_mix_delivery(context, delivery, handle, cancel);', /attempt holder/);
+for (const [name, repository] of [
+  ['claim_mix_deliveries_observed', 'claim_mix_deliveries_observed'],
+  ['outbox_archive_mix_message_once_observed', 'archive_mix_message_once_observed'],
+  ['renew_mix_delivery_lease_observed', 'renew_mix_delivery_lease_observed'],
+  ['settle_mix_delivery_observed', 'settle_mix_delivery_observed'],
+]) {
+  rejectsMixWorker(`MIX ${name} must forward its own closed request`, 'mixService',
+    `self.repository.${repository}(request).await`,
+    `self.repository.${repository}(other_request).await`, /fair admission and exact request/);
+}
+rejectsMixWorker('MIX settlement cannot wake on ACK false', 'mixService',
+  'SettlementResult::Ack(true) | SettlementResult::DeadLetter(true)',
+  'SettlementResult::Ack(false) | SettlementResult::DeadLetter(true)', /wake must follow/);
+rejectsMixWorker('MIX authorized empty claim cannot manufacture a mutating statement receipt', 'mixDb',
+  'request.read_empty()?;', 'request.enter_statement()?;', /authorized read-empty/);
+rejectsMixWorker('MIX successful CTE claim cannot lose its independent row receipt', 'mixDb',
+  'request.received(entered.expect("observed claim entered its mutating statement"), rows.clone())?;',
+  'drop(entered);', /actual autocommit statement receipt/);
+rejectsMixWorker('MIX worker ACK false cannot be converted to a true receipt', 'mixDb',
+  'northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed)',
+  'northstar_delivery_core::mix_outbox::SettlementResult::Ack(true)', /ACK must observe/);
+rejectsMixWorker('MIX shared settlement cannot bypass the actual COMMIT observer', 'mixDb',
+  'northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(), request, result)',
+  'unobserved_commit(transaction.commit(), request, result)', /shared settlement helper/);
+rejectsMixWorker('MIX dead-letter NotMoved cannot report a moved receipt', 'mixDb',
+  'northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(moved)',
+  'northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(true)', /Moved and NotMoved/);
+rejectsMixWorker('MIX retry LeaseLost cannot skip its actual COMMIT', 'mixDb',
+  'commit_mix_worker_settlement(transaction, observation, northstar_delivery_core::mix_outbox::SettlementResult::Retry(MixDeliveryRetryOutcome::LeaseLost)).await?;',
+  'drop(transaction);', /actual COMMIT for LeaseLost/);
+rejectsMixWorker('MIX retry cannot replace the locked-row outcome in its receipt', 'mixDb',
+  'northstar_delivery_core::mix_outbox::SettlementResult::Retry(outcome)',
+  'northstar_delivery_core::mix_outbox::SettlementResult::Retry(MixDeliveryRetryOutcome::Retried)', /locked-row decisions/);
+rejectsMixWorker('MIX renewal false cannot be upgraded to a positive receipt', 'mixDb',
+  'request.received(entered.expect("observed renewal entered its statement"), renewed)?;',
+  'request.received(entered.expect("observed renewal entered its statement"), true)?;', /autocommit boolean receipt/);
+rejectsMixWorker('MIX defer false cannot be upgraded to a positive receipt', 'mixDb',
+  'northstar_delivery_core::mix_outbox::SettlementResult::Defer(updated)',
+  'northstar_delivery_core::mix_outbox::SettlementResult::Defer(true)', /autocommit boolean receipt/);
+rejectsMixWorker('MIX retry cannot borrow a different claimed wake generation', 'mixDb',
+  'retry_mix_delivery_inner(pool, source.delivery_id, source.lease_token, request.route_wake_generation(), error, Some(request)).await',
+  'retry_mix_delivery_inner(pool, source.delivery_id, source.lease_token, other_generation, error, Some(request)).await', /generation and command/);
+rejectsMixWorker('MIX personal archive Stored cannot bypass the actual COMMIT', 'mixArchive',
+  'commit_mix_archive(transaction, observation, SourceArchiveAdmission::Stored(personal_archive_id)).await?;',
+  'drop(transaction);', /Stored and authenticated original-ID Replay/);
+rejectsMixWorker('MIX personal archive replay receipt must keep the original row ID', 'mixArchive',
+  'commit_mix_archive(transaction, observation, SourceArchiveAdmission::Replay(existing_id)).await?;',
+  'commit_mix_archive(transaction, observation, SourceArchiveAdmission::Replay(personal_archive_id)).await?;', /original-ID Replay/);
+rejectsMixWorker('MIX route cannot force optional producer rows into always-archived messages', 'mix',
+  'authoritative_stanza_id: row.authoritative_stanza_id, archive: row.archive,',
+  'authoritative_stanza_id: row.authoritative_stanza_id, archive: true,', /optional-ID and archive shape/);
+for (const effect of ['archive', 'local', 'cluster']) {
+  const before = effect === 'archive' ? 'let admission = if let Some(owner) = observation {' :
+    `let result = if let Some(owner) = observation { let request = owner.${effect}_request(`;
+  const after = before.replace('= observation {', '= observation.filter(|_| false) {');
+  rejectsMixWorker(`MIX active worker cannot filter out its observed ${effect} branch`, 'mix', before, after, /unfiltered bound/);
+}
+rejectsMixWorker('MIX local handoff cannot discard its pending disconnect guard', 'mix',
+  'let mut pending = PendingMixLocalHandoff::new(sender.clone(), disconnect.clone());',
+  'let mut pending = UnobservedHandoff::new(sender.clone(), disconnect.clone());', /pending-disconnect guard/);
+rejectsMixWorker('MIX local enqueue cannot be recorded as typed ownership transfer', 'mix',
+  'request.enqueued().map_err(MixLocalTransportFailure::Observation)?;',
+  'request.returned(mix_worker::LocalResult::Transferred(mix_worker::TransferBoundary::ClusterSocketFenced)).map_err(MixLocalTransportFailure::Observation)?;', /pending-disconnect guard/);
+rejectsMixWorker('MIX typed local receipt cannot defer consumption across another await', 'mix',
+  'pending.mark_completed(); if let Some(request) = observation {',
+  'pending.mark_completed(); std::future::pending::<()>().await; if let Some(request) = observation {', /immediately before any later await/);
+rejectsMixWorker('MIX cluster result cannot return before transfer consumption', 'mix',
+  'record_claimed_cluster_result(request, &result)?; result',
+  'return result; record_claimed_cluster_result(request, &result)?;', /typed result before returning/);
+rejectsMixWorker('MIX delivered boolean cannot authorize cluster transfer', 'mix',
+  'Ok(receipt) if receipt.acknowledged => receipt.mix_handoff.map',
+  'Ok(receipt) if receipt.delivered => receipt.mix_handoff.map', /acknowledged typed handoff/);
+rejectsMixWorker('MIX settlement cannot close renewal scope before child destruction', 'mix',
+  'let closed = handle.observation.close_renewal_scope()?;',
+  'let closed = premature_scope;', /close renewal scope/);
+rejectsMixWorker('MIX transferred route cannot select worker ACK', 'mix',
+  'request.returned(mix_worker::RouteResult::Transferred)?.transferred(closed)?; return Ok(());',
+  'let settlement = request.returned(mix_worker::RouteResult::CompletedByWorker)?.settlement(mix_worker::SettlementCommand::Ack, closed)?; return Ok(());', /consume transfer or lazily/);
+for (const [kind, database, other] of [['Ack', 'acknowledge', 'defer'], ['Defer', 'defer', 'acknowledge'], ['Retry', 'retry', 'dead_letter'], ['DeadLetter', 'dead_letter', 'retry']]) {
+  rejectsMixWorker(`MIX ${kind} repository cannot select another settlement`, 'mixRepository',
+    `db::${database}_mix_delivery_worker_observed(&self.pool, request).await?`,
+    `db::${other}_mix_delivery_worker_observed(&self.pool, request).await?`, /typed command and exact request/);
+}
+rejectsMixWorker('MIX claim projection cannot replace its actual lease token', 'mixDb',
+  'source: crate::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: delivery.lease_token, },',
+  'source: crate::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: other_token, },', /claimed attempt projection/);
+rejectsMixWorker('MIX archive adapter cannot retarget a personal projection', 'mixArchive',
+  'pool, command.personal_archive_id, command.owner_id, &command.channel_jid,',
+  'pool, command.personal_archive_id, other_owner, &command.channel_jid,', /bound command/);
+rejectsMixWorker('MIX archive repository cannot turn Replay into Stored', 'mixRepository',
+  'db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id)',
+  'db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Stored(id)', /same request/);
+rejectsMixWorker('MIX pending route cannot change the existing defer delay policy', 'mix',
+  'mix_worker::SettlementCommand::Defer { delay_seconds: MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS }',
+  'mix_worker::SettlementCommand::Defer { delay_seconds: 1 }', /actual route result/);
+for (const [name, request, result] of [
+  ['claim_mix_deliveries_observed', 'ClaimRequest', 'Vec<outbox::OwnedAttempt>'],
+  ['outbox_archive_mix_message_once_observed', 'ArchiveRequest', 'outbox::core::ArchiveResult'],
+  ['renew_mix_delivery_lease_observed', 'RenewalRequest', 'bool'],
+  ['settle_mix_delivery_observed', 'SettlementRequest', 'outbox::core::SettlementResult'],
+]) {
+  const declaration = `pub(crate) async fn ${name}(&self, request: &outbox::core::${request}) -> Result<${result}> {`;
+  rejectsMixWorker(`MIX ${name} cannot skip the fair outbox gate`, 'mixService',
+    `${declaration} let _admission = self.outbox_db_admission_guard().await;`, declaration,
+    /fair admission and exact request/);
 }

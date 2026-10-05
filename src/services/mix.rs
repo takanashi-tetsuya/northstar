@@ -13,6 +13,7 @@ use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
 pub(crate) mod foreground;
+pub(crate) mod outbox;
 pub(crate) use northstar_room_core::mix::{
     Admission as StoreMixMessageAdmission, Outcome as StoreEventOutcome,
     Participant as MixParticipant, Replay as MixBusinessReplay,
@@ -152,6 +153,14 @@ pub(crate) struct MixPresenceProbeTarget {
     pub(crate) participant_jid: String,
 }
 
+/// Retained returned-only compatibility DTO; observed workers own core attempts.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "legacy return type; observed workers own attempts"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct ClaimedMixDelivery {
     pub(crate) delivery_id: Uuid,
@@ -1164,6 +1173,22 @@ pub(crate) trait MixRepository: Send + Sync {
         limit: i64,
         max_bytes: i64,
     ) -> impl std::future::Future<Output = Result<Vec<ClaimedMixDelivery>>> + Send;
+    fn claim_mix_deliveries_observed(
+        &self,
+        request: &outbox::core::ClaimRequest,
+    ) -> impl std::future::Future<Output = Result<outbox::core::Rows>> + Send;
+    fn archive_mix_message_once_observed(
+        &self,
+        request: &outbox::core::ArchiveRequest,
+    ) -> impl std::future::Future<Output = Result<outbox::core::ArchiveResult>> + Send;
+    fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &outbox::core::RenewalRequest,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn settle_mix_delivery_observed(
+        &self,
+        request: &outbox::core::SettlementRequest,
+    ) -> impl std::future::Future<Output = Result<outbox::core::SettlementResult>> + Send;
     fn maintain_mix_delivery_retention(
         &self,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
@@ -2191,6 +2216,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
+    #[allow(dead_code)] // Explicit returned-only compatibility entry; observed workers use bound requests.
     pub(crate) async fn claim_mix_deliveries(
         &self,
         limit: i64,
@@ -2202,6 +2228,90 @@ impl<R: MixRepository> MixService<R> {
         );
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.claim_mix_deliveries(limit, max_bytes).await
+    }
+
+    pub(crate) async fn claim_mix_deliveries_observed(
+        &self,
+        request: &outbox::core::ClaimRequest,
+    ) -> Result<Vec<outbox::OwnedAttempt>> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        match self.repository.claim_mix_deliveries_observed(request).await {
+            Ok(rows) => Ok(request
+                .returned(rows)?
+                .into_iter()
+                .map(outbox::OwnedAttempt::new)
+                .collect()),
+            Err(error) => {
+                request.failed()?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn outbox_archive_mix_message_once_observed(
+        &self,
+        request: &outbox::core::ArchiveRequest,
+    ) -> Result<outbox::core::ArchiveResult> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        match self
+            .repository
+            .archive_mix_message_once_observed(request)
+            .await
+        {
+            Ok(result) => Ok(request.returned(result)?),
+            Err(error) => {
+                request.failed()?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &outbox::core::RenewalRequest,
+    ) -> Result<bool> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        match self
+            .repository
+            .renew_mix_delivery_lease_observed(request)
+            .await
+        {
+            Ok(result) => Ok(request.returned(result)?),
+            Err(error) => {
+                request.failed()?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn settle_mix_delivery_observed(
+        &self,
+        request: &outbox::core::SettlementRequest,
+    ) -> Result<outbox::core::SettlementResult> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        let result = match self.repository.settle_mix_delivery_observed(request).await {
+            Ok(result) => request.returned(result)?,
+            Err(error) => {
+                request.failed()?;
+                return Err(error);
+            }
+        };
+        use outbox::core::{RetryResult, SettlementResult};
+        if matches!(
+            result,
+            SettlementResult::Ack(true)
+                | SettlementResult::DeadLetter(true)
+                | SettlementResult::Retry(
+                    RetryResult::RouteWokenAtAttemptLimit | RetryResult::DeadLettered
+                )
+        ) {
+            self.publish_delivery_local_commit();
+        }
+        Ok(result)
     }
 
     /// Keep MIX retention bounded without putting cleanup ahead of a live
@@ -2224,6 +2334,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
+    #[allow(dead_code)] // Compatibility ACK remains distinct from native and observed worker ownership.
     pub(crate) async fn acknowledge_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -2317,6 +2428,7 @@ impl<R: MixRepository> MixService<R> {
         self.repository.transfer_mix_delivery_to_bosh(request).await
     }
 
+    #[allow(dead_code)] // Compatibility source tuple does not construct an observed renewal request.
     pub(crate) async fn renew_mix_delivery_lease(
         &self,
         delivery_id: Uuid,
@@ -2328,6 +2440,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
+    #[allow(dead_code)] // Explicit compatibility result, including NotMoved.
     pub(crate) async fn dead_letter_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -2346,6 +2459,7 @@ impl<R: MixRepository> MixService<R> {
         Ok(result)
     }
 
+    #[allow(dead_code)] // Preserve the historical bool API separately from typed observed retry results.
     pub(crate) async fn retry_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -2376,6 +2490,7 @@ impl<R: MixRepository> MixService<R> {
         }
     }
 
+    #[allow(dead_code)] // Compatibility source tuple does not construct an observed settlement request.
     pub(crate) async fn defer_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -3125,19 +3240,7 @@ pub(crate) trait MixEventPayloadRenderer: Sync {
     ) -> Result<String>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixDeliveryRetryOutcome {
-    /// The exact lease was no longer owned when finalization began.
-    LeaseLost,
-    /// The row was retained with the normal retry backoff (or a newer wake
-    /// advanced a non-terminal retry to now).
-    Retried,
-    /// A newer route wake defeated the terminal boundary and released the
-    /// existing attempt count for one immediate fresh claim.
-    RouteWokenAtAttemptLimit,
-    /// The unchanged route epoch reached the normal terminal attempt limit.
-    DeadLettered,
-}
+pub(crate) use northstar_delivery_core::mix_outbox::RetryResult as MixDeliveryRetryOutcome;
 
 pub(crate) fn valid_stable_participant_id(value: &str) -> bool {
     !value.is_empty()

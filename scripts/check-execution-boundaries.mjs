@@ -25,6 +25,10 @@ const files = {
   mixCore: 'crates/northstar-room-application/src/mix.rs',
   mixData: 'crates/northstar-room-core/src/mix.rs',
   mixSlot: 'src/services/mix/foreground.rs',
+  mixWorkerCore: 'crates/northstar-delivery-core/src/mix_outbox.rs',
+  mixWorkerOwner: 'src/services/mix/outbox.rs',
+  mixWorker: 'src/xmpp/protocol/mix/worker.rs',
+  mixArchive: 'src/db/archive.rs',
   state: 'src/state.rs',
   nativeWrite: 'src/xmpp/direct_delivery.rs',
   nativeCore: 'crates/northstar-delivery-core/src/native_write.rs',
@@ -947,6 +951,209 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
     'MIX ordinary ingress must register before replay, skip mutable membership on replay and preserve explicit compatibility');
 }
 
+// Finite production bindings for the Delivery worker; PAM and transport
+// ownership retain their separate gates. This proves source correspondence,
+// not database execution or successful effects.
+export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWorker, mix, mixService, mixRepository, mixDb, mixArchive }) {
+  const dense = source => compact(source).replace(/,([)}])/g, '$1');
+  const method = (source, name) => dense(body(source, `fn\\s+${name}\\b`));
+  const implementation = (source, name) => body(source, `impl\\s+${name}\\b`);
+  const core = productionModule(mixWorkerCore);
+  const coreCode = dense(codeOnly(core));
+  requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(core)),
+    'MIX worker core must remain free of ambient effects');
+  for (const name of ['ClaimRequest', 'ClaimStatement', 'Attempt', 'RouteRequest', 'ArchiveRequest', 'ArchiveCommit', 'LocalRequest', 'ClusterRequest', 'RouteCompletion', 'RenewalScopeClosed', 'RenewalRequest', 'RenewalStatement', 'SettlementRequest', 'SettlementBoundary']) {
+    requireBoundary(!new RegExp(`#\\[derive\\([^\\]]*Clone[^\\]]*\\)\\]\\s*pub\\s+struct\\s+${name}\\b|impl\\s+Clone\\s+for\\s+${name}\\b`).test(codeOnly(core)),
+      'MIX worker requests and consuming permissions must remain noncloneable');
+  }
+  requireBoundary(coreCode.includes('pubstructAttempt{observation:Observation}') &&
+    coreCode.includes('pubstructRenewalScopeClosed{observation:Observation}') &&
+    method(implementation(core, 'Observation'), 'same') === 'Arc::ptr_eq(&self.0,&other.0)',
+    'MIX worker authority must use private invocation identity');
+  const claim = implementation(core, 'ClaimRequest');
+  requireBoundary(method(claim, 'received').startsWith('if!Arc::ptr_eq(&self.observation.0,&entered.observation.0){returnErr(Rejected::Invocation);}'),
+    'MIX claim receipt must belong to the issuing invocation');
+  const claimReturn = method(claim, 'returned');
+  requireBoundary(claimReturn.includes('state.returned=Some(ClaimReturned::Rejected(rows.clone()));letexact=match&state.knowledge{ClaimKnowledge::ReadEmpty=>rows.is_empty(),ClaimKnowledge::StatementReceipt(receipt)=>Arc::ptr_eq(receipt,&rows),_=>false};if!exact{returnErr(Rejected::MissingReceipt);}') &&
+    claimReturn.includes('ifrows.iter().map(|row|row.source.delivery_id).collect::<std::collections::BTreeSet<_>>().len()!=rows.len(){returnErr(Rejected::Result);}') &&
+    claimReturn.includes('state.returned=Some(ClaimReturned::Accepted(rows.len()));Ok(rows.iter().map(|row|Attempt{observation:Observation::new(self.observation.clone(),row.clone())}).collect())'),
+    'MIX claim must validate exact returned storage and unique rows before issuing attempts');
+  const available = method(core, 'available');
+  requireBoundary(available.includes('ifstate.transfer.is_some(){returnErr(Rejected::Transferred);}') &&
+    available.includes('ifstate.lease_lost{returnErr(Rejected::LeaseLost);}') &&
+    available.includes('ifstate.aborted{returnErr(Rejected::Phase);}') &&
+    available.includes('ifstate.settlement.is_some(){returnErr(Rejected::Settlement);}'),
+    'MIX worker retained transfer, lost lease, abort and settlement facts must prevent new permission');
+  const archive = implementation(core, 'ArchiveRequest');
+  requireBoundary(method(archive, 'returned').includes('state.snapshot.archive.returned=Some(ArchiveReturned::Outcome(result));ifstate.snapshot.archive.knowledge!=ArchiveKnowledge::ReceiptKnown(result){state.snapshot.aborted=true;returnErr(Rejected::MissingReceipt);}Ok(result)') &&
+    method(archive, 'failed').endsWith('state.snapshot.archive.returned=Some(ArchiveReturned::Error);Ok(())'),
+    'MIX archive mismatch must retain both facts and abort, while ordinary backend errors preserve retry');
+  requireBoundary(method(core, 'archive_allows_route').includes('(ArchiveKnowledge::ReceiptKnown(known),Some(ArchiveReturned::Outcome(returned)))ifknown==returned'),
+    'MIX archived route must require matching receipt and returned outcome');
+  for (const name of ['LocalRequest', 'ClusterRequest']) {
+    const request = implementation(core, name);
+    requireBoundary(method(request, 'start').includes('entry.started{returnErr(Rejected::Started);}entry.started=true;Ok(())') &&
+      method(request, 'returned').includes('if!entry.started{returnErr(Rejected::NotStarted);}'),
+      'MIX local and cluster effects must start once before recording returns');
+  }
+  requireBoundary(method(implementation(core, 'LocalRequest'), 'returned').includes('ifenqueued!=requires_enqueue{state.snapshot.aborted=true;returnErr(Rejected::Result);}') &&
+    method(implementation(core, 'LocalRequest'), 'returned').includes('state.snapshot.transfer=Some(TransferFact{target:self.target.clone(),boundary});') &&
+    method(implementation(core, 'ClusterRequest'), 'returned').includes('state.snapshot.transfer=Some(TransferFact{target:self.node.clone(),boundary});'),
+    'MIX typed transfer must retain the exact target and reject contradictory local returns');
+  const renewal = implementation(core, 'RenewalRequest');
+  requireBoundary(method(renewal, 'received').includes('if!self.observation.same(&prepared.observation)||self.ordinal!=prepared.ordinal{returnErr(Rejected::Invocation);}') &&
+    method(renewal, 'received').includes('renewal.last_receipt=Some((self.ordinal,result));if!result{state.snapshot.lease_lost=true;}'),
+    'MIX renewal must retain its exact ordinal receipt and false lease knowledge');
+  requireBoundary(method(renewal, 'failed').endsWith('renewal.returned=Some(RenewalReturned::Error);renewal.pending=false;state.snapshot.aborted=true;Ok(())') &&
+    method(renewal, 'returned').includes('ifrenewal.knowledge!=RenewalKnowledge::StatementReceipt(result){state.snapshot.aborted=true;returnErr(Rejected::MissingReceipt);}'),
+    'MIX renewal error or contradictory return must block further effects');
+  const scope = method(implementation(core, 'Observation'), 'close_renewal_scope');
+  requireBoundary(scope.includes('state.snapshot.renewal_scope_closed=true;Ok(RenewalScopeClosed{observation:self.clone()})') && !scope.includes('renewal.pending=') && !scope.includes('renewal.knowledge='),
+    'MIX renewal scope closure must preserve pending invocation knowledge');
+  const completion = method(implementation(core, 'RouteCompletion'), 'settlement');
+  requireBoundary(completion.startsWith('if!self.observation.same(&closed.observation){returnErr(Rejected::Invocation);}') &&
+    completion.includes('RouteResult::CompletedByWorker=>SettlementKind::Ack,RouteResult::Pending=>SettlementKind::Defer,RouteResult::Permanent=>SettlementKind::DeadLetter,RouteResult::Retry=>SettlementKind::Retry,') &&
+    completion.includes('ifcommand.kind()!=expected{returnErr(Rejected::Settlement);}issue_settlement(&self.observation,command,false).map(Some)') &&
+    method(core, 'issue_settlement').includes('if!state.snapshot.renewal_scope_closed{returnErr(Rejected::Renewal);}'),
+    'MIX settlement must consume its own closed renewal scope and exclusive outcome kind');
+  const settlement = implementation(core, 'SettlementRequest');
+  requireBoundary(method(settlement, 'source') === 'self.observation.row().source' &&
+    method(settlement, 'route_wake_generation') === 'self.observation.row().route_wake_generation' &&
+    method(settlement, 'start').includes('ifstate.snapshot.aborted||!state.snapshot.renewal_scope_closed{returnErr(Rejected::Phase);}') &&
+    method(settlement, 'start').includes('settlement.started{returnErr(Rejected::Started);}'),
+    'MIX settlement must preserve the claimed exact source and start once after scope closure');
+  requireBoundary(method(settlement, 'returned').includes('settlement.returned=Some(SettlementReturned::Outcome(result));ifresult.kind()!=self.command.kind()||settlement.knowledge!=SettlementKnowledge::ReceiptKnown(result){returnErr(Rejected::MissingReceipt);}'),
+    'MIX settlement return must match its actual receipt and command');
+  for (const [name, received] of [['archive_commit_observed', 'prepared'], ['settlement_commit_observed', 'prepared,result']]) {
+    requireBoundary(method(core, name) === `letprepared=request.enter_commit(result).map_err(CommitError::Observation)?;commit.await.map_err(CommitError::Commit)?;request.received(${received}).map_err(CommitError::Observation)`,
+      'MIX worker COMMIT wrappers must observe entry then actual success without another await');
+  }
+  for (const name of ['Claim', 'Attempt']) {
+    const fields = dense(body(mixWorkerOwner, `struct\\s+${name}Run\\b`));
+    requireBoundary(fields.startsWith('child:Option<BoxFuture<') && new RegExp(`retirement:${name}Retirement,?$`).test(fields),
+      'MIX worker holder fields must destroy the child before its retirement guard');
+    const poll = method(body(mixWorkerOwner, `impl\\s+Future\\s+for\\s+${name}Run\\b`), 'poll');
+    ordered(poll, ['this.retirement.polling=true;', '.poll(context)', 'drop(this.child.take());', 'this.retirement.finish(', 'this.retirement.polling=false;', 'Poll::Ready(result)'],
+      'MIX worker holder must retain poll panic and destroy the child before retirement');
+    requireBoundary(method(body(mixWorkerOwner, `impl\\s+Drop\\s+for\\s+${name}Run\\b`), 'drop') === 'drop(self.child.take());' &&
+      method(body(mixWorkerOwner, `impl\\s+Drop\\s+for\\s+${name}Retirement\\b`), 'drop') === 'if!self.retired{self.finish(ifself.polling||std::thread::panicking(){core::TerminalReason::Panicked}else{core::TerminalReason::Cancelled});}',
+      'MIX worker holder must retire through its field guard even when child destruction panics');
+  }
+  const claimWork = method(mixWorker, 'claim_mix_outbox_work');
+  requireBoundary(claimWork.includes('letturn=crate::services::mix::outbox::ClaimTurn::new(claim_limit,8*1024*1024).expect();letrun=turn.run(move|request,handle|asyncmove{letresult=drainable_mix_outbox_claim(&stop_claiming,&cancel,context.service().claim_mix_deliveries_observed(&request)).await;') &&
+    claimWork.includes('Box::pin(asyncmove{Ok(run.await?.into_iter().map(MixOutboxWork::Delivery).collect())})'),
+    'MIX claim holder must exist before polling the actual bounded observed claim');
+  requireBoundary(method(mixWorker, 'process_mix_outbox_work').includes('MixOutboxWork::Delivery(delivery)=>{letrun=delivery.run(move|attempt,handle|{process_claimed_mix_delivery(context,attempt,handle,cancel)});Box::pin(asyncmove{(MixOutboxQueue::Delivery,run.await)})}'),
+    'MIX attempt holder must exist before polling the actual claimed worker');
+  const serviceMethods = [
+    ['claim_mix_deliveries_observed', 'claim_mix_deliveries_observed'],
+    ['outbox_archive_mix_message_once_observed', 'archive_mix_message_once_observed'],
+    ['renew_mix_delivery_lease_observed', 'renew_mix_delivery_lease_observed'],
+    ['settle_mix_delivery_observed', 'settle_mix_delivery_observed'],
+  ];
+  for (const [name, repository] of serviceMethods) {
+    const service = dense(body(mixService, `pub\\(crate\\)\\s+async\\s+fn\\s+${name}\\b`));
+    const returned = name === 'claim_mix_deliveries_observed'
+      ? 'Ok(rows)=>Ok(request.returned(rows)?.into_iter().map(outbox::OwnedAttempt::new).collect())'
+      : name === 'settle_mix_delivery_observed' ? 'Ok(result)=>request.returned(result)?' : 'Ok(result)=>Ok(request.returned(result)?)';
+    requireBoundary(service.startsWith(`let_admission=self.outbox_db_admission_guard().await;request.start()?;${name === 'settle_mix_delivery_observed' ? 'letresult=' : ''}matchself.repository.${repository}(request).await{`) &&
+      service.includes(returned) && service.includes('request.failed()?;'),
+      'MIX observed worker service must preserve fair admission and exact request/return ownership');
+  }
+  requireBoundary(dense(body(mixService, 'pub\\(crate\\)\\s+async\\s+fn\\s+settle_mix_delivery_observed\\b')).includes('ifmatches!(result,SettlementResult::Ack(true)|SettlementResult::DeadLetter(true)|SettlementResult::Retry(RetryResult::RouteWokenAtAttemptLimit|RetryResult::DeadLettered)){self.publish_delivery_local_commit();}Ok(result)'),
+    'MIX worker settlement wake must follow the matching actual result only');
+  const repository = method(mixRepository, 'settle_mix_delivery_observed');
+  for (const [kind, database] of [['Ack', 'acknowledge'], ['Defer', 'defer'], ['Retry', 'retry'], ['DeadLetter', 'dead_letter']]) {
+    requireBoundary(repository.includes(`SettlementCommand::${kind}${kind === 'Ack' ? '' : '{..}'}=>SettlementResult::${kind}(db::${database}_mix_delivery_worker_observed(&self.pool,request).await?)`),
+      'MIX settlement repository must preserve its typed command and exact request');
+  }
+  requireBoundary(method(mixRepository, 'claim_mix_deliveries_observed') === 'db::claim_mix_deliveries_observed(&self.pool,request).await' &&
+    method(mixRepository, 'renew_mix_delivery_lease_observed') === 'db::renew_mix_delivery_lease_observed(&self.pool,request).await' &&
+    method(mixRepository, 'archive_mix_message_once_observed') === 'Ok(matchdb::archive_mix_message_once_observed(&self.pool,request).await?{db::SourceArchiveAdmission::Stored(id)=>outbox::core::ArchiveResult::Stored(id),db::SourceArchiveAdmission::Replay(id)=>outbox::core::ArchiveResult::Replay(id)})',
+    'MIX observed repository adapters must forward the same request');
+  const claimDb = method(mixDb, 'claim_mix_deliveries_inner');
+  requireBoundary(claimDb.includes('ifauthorized&&!pending{returnifletSome(request)=observation{request.read_empty()?;Ok(MixClaimReturn::Observed(Vec::new().into()))}else{Ok(MixClaimReturn::Compatibility(Vec::new()))};}letentered=observation.map(|request|request.enter_statement()).transpose()?;letrows=sqlx::query(') &&
+    claimDb.includes('.fetch_all(&mut*connection).await?;letdeliveries:Vec<_>=rows.into_iter()') &&
+    claimDb.includes('request.received(entered.expect(),rows.clone())?;Ok(MixClaimReturn::Observed(rows))'),
+    'MIX claim must distinguish authorized read-empty from the actual autocommit statement receipt');
+  requireBoundary(claimDb.includes('std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row{source:crate::outbound::MixDelivery{delivery_id:delivery.delivery_id,lease_token:delivery.lease_token},event_id:delivery.event_id,channel_id:delivery.channel_id,channel_jid:delivery.channel_jid,participant_id:delivery.recipient.participant_id,recipient_jid:delivery.recipient.jid,recipient_nick:delivery.recipient.nick,stanza:delivery.stanza,authoritative_stanza_id:delivery.authoritative_stanza_id,archive:delivery.archive,encrypted:delivery.encrypted,attempt_count:delivery.attempt_count,route_wake_generation:delivery.route_wake_generation})'),
+    'MIX claimed attempt projection must retain actual source, payload and optional archive identity');
+  requireBoundary(method(mixDb, 'claim_mix_deliveries_observed').includes('letcommand=request.command();matchclaim_mix_deliveries_inner(pool,command.limit,command.max_bytes,Some(request)).await?'),
+    'MIX claim SQL must use the bound limits and same observation');
+  const ack = method(mixDb, 'acknowledge_mix_delivery_worker_observed');
+  requireBoundary(ack.includes('letsource=request.source();letmuttransaction=pool.begin().await?;letremoved=remove_mix_delivery_tx(&muttransaction,source.delivery_id,source.lease_token).await?.is_some();northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(),request,northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed)).await.map_err(crate::services::mix::outbox::commit_error)?;') && ack.endsWith('Ok(removed)'),
+    'MIX worker ACK must observe its actual COMMIT including false');
+  const commit = method(mixDb, 'commit_mix_worker_settlement');
+  requireBoundary(commit === 'ifletSome(request)=observation{northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(),request,result).await.map_err(crate::services::mix::outbox::commit_error)}else{transaction.commit().await.map_err(Into::into)}',
+    'MIX shared settlement helper must wrap the actual COMMIT');
+  const deadLetter = method(mixDb, 'dead_letter_mix_delivery_inner');
+  requireBoundary(deadLetter.includes('letmoved=move_mix_delivery_to_dead_letter_tx(&muttransaction,delivery_id,lease_token,terminal_reason,error).await?;commit_mix_worker_settlement(transaction,observation,northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(moved)).await?;') && deadLetter.endsWith('Ok(moved)'),
+    'MIX dead-letter must COMMIT both Moved and NotMoved before returning');
+  const retry = method(mixDb, 'retry_mix_delivery_inner');
+  requireBoundary(retry.includes('letSome(row)=rowelse{commit_mix_worker_settlement(transaction,observation,northstar_delivery_core::mix_outbox::SettlementResult::Retry(MixDeliveryRetryOutcome::LeaseLost)).await?;MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1,Ordering::Relaxed);returnOk(MixDeliveryRetryOutcome::LeaseLost);};') &&
+    retry.includes('letnext_attempt=persisted_attempt_count.saturating_add(1);letoutcome=ifnext_attempt>=20{ifpersisted_route_wake_generation!=route_wake_generation{') &&
+    retry.includes('commit_mix_worker_settlement(transaction,observation,northstar_delivery_core::mix_outbox::SettlementResult::Retry(outcome)).await?;matchoutcome{') && retry.endsWith('Ok(outcome)'),
+    'MIX retry must preserve locked-row decisions and actual COMMIT for LeaseLost and other outcomes');
+  for (const [name, value, result] of [['renew_mix_delivery_lease_inner', 'renewed', 'renewed'], ['defer_mix_delivery_inner', 'updated', 'northstar_delivery_core::mix_outbox::SettlementResult::Defer(updated)']]) {
+    const statement = method(mixDb, name);
+    requireBoundary(statement.startsWith(`letentered=observation.map(|request|request.enter_statement()).transpose()?;let${value}=sqlx::query(`) &&
+      statement.includes(`.execute(pool).await?.rows_affected()==1;ifletSome(request)=observation{request.received(entered.expect(),${result})?;}`) && statement.endsWith(`Ok(${value})`),
+      'MIX renewal and defer must retain their actual autocommit boolean receipt including false');
+  }
+  for (const [name, command, call] of [
+    ['retry_mix_delivery_worker_observed', 'Retry{error}', 'retry_mix_delivery_inner(pool,source.delivery_id,source.lease_token,request.route_wake_generation(),error,Some(request)).await'],
+    ['defer_mix_delivery_worker_observed', 'Defer{delay_seconds}', 'defer_mix_delivery_inner(pool,source.delivery_id,source.lease_token,request.route_wake_generation(),*delay_seconds,Some(request)).await'],
+    ['dead_letter_mix_delivery_worker_observed', 'DeadLetter{reason,error}', 'dead_letter_mix_delivery_inner(pool,source.delivery_id,source.lease_token,reason,error,Some(request)).await'],
+  ]) {
+    requireBoundary(method(mixDb, name) === `letnorthstar_delivery_core::mix_outbox::SettlementCommand::${command}=request.command()else{anyhow::bail!();};letsource=request.source();${call}`,
+      'MIX settlement SQL siblings must derive exact source, generation and command from the request');
+  }
+  const archiveDb = method(mixArchive, 'archive_mix_message_once_inner');
+  requireBoundary(method(mixArchive, 'archive_mix_message_once_observed') === 'letcommand=request.command();archive_mix_message_once_inner(pool,command.personal_archive_id,command.owner_id,&command.channel_jid,command.authoritative_stanza_id,&command.stanza,command.encrypted,command.client_stanza_id.as_deref(),Some(request)).await',
+    'MIX personal archive SQL must derive all inputs from its bound command');
+  requireBoundary(archiveDb.includes('ifinserted{commit_mix_archive(transaction,observation,SourceArchiveAdmission::Stored(personal_archive_id)).await?;returnOk(SourceArchiveAdmission::Stored(personal_archive_id));}') &&
+    archiveDb.includes('anyhow::ensure!(exact_replay);letexisting_id:Uuid=row.get();commit_mix_archive(transaction,observation,SourceArchiveAdmission::Replay(existing_id)).await?;Ok(SourceArchiveAdmission::Replay(existing_id))'),
+    'MIX personal archive Stored and authenticated original-ID Replay must each observe the actual COMMIT');
+  requireBoundary(method(mixArchive, 'commit_mix_archive').includes('SourceArchiveAdmission::Stored(id)=>{northstar_delivery_core::mix_outbox::ArchiveResult::Stored(id)}SourceArchiveAdmission::Replay(id)=>{northstar_delivery_core::mix_outbox::ArchiveResult::Replay(id)}') &&
+    method(mixArchive, 'commit_mix_archive').includes('northstar_delivery_core::mix_outbox::archive_commit_observed(transaction.commit(),request,result).await.map_err(crate::services::mix::outbox::commit_error)'),
+    'MIX personal archive receipt must preserve its actual variant and ID');
+  const route = method(mix, 'deliver_claimed_channel_stanza');
+  requireBoundary(route.startsWith('request.start()?;letrow=request.row();') && route.includes('delivery_id:Some(row.source.delivery_id),mix_source:Some(row.source),channel_jid:&row.channel_jid,recipient:&recipient,stanza:request.stanza().to_owned(),authoritative_stanza_id:row.authoritative_stanza_id,archive:row.archive,encrypted:row.encrypted,durable:true,database_lane:ChannelStanzaDatabaseLane::DurableOutbox},Some(request)).await'),
+    'MIX route adapter must preserve the actual claimed optional-ID and archive shape');
+  const routeInner = method(mix, 'deliver_channel_stanza_inner');
+  for (const span of [
+    'letadmission=ifletSome(owner)=observation{letrequest=owner.archive_request(user.id,archive_id,Some(client_stanza_id.clone()))?;context.service().outbox_archive_mix_message_once_observed(&request).await',
+    'letresult=ifletSome(owner)=observation{letrequest=owner.local_request(jid.clone())?;try_send_local_durable_mix_observed(&session.sender,&session.disconnect,&request).await}',
+    'letresult=ifletSome(owner)=observation{letrequest=owner.cluster_request(node_id.clone())?;send_claimed_cluster_mix(context,&request).await}',
+  ]) requireBoundary(routeInner.includes(span), 'MIX observed route must retain the unfiltered bound archive/local/cluster branches');
+  requireBoundary(method(mix, 'try_send_local_durable_mix_observed') === 'try_send_local_durable_mix_inner(sender,disconnect,request.stanza().to_owned(),request.source(),Some(request)).await',
+    'MIX local effect must send the request-bound stanza and source');
+  const local = method(mix, 'try_send_local_durable_mix_inner');
+  requireBoundary(local.startsWith('ifletSome(request)=observation{request.start().map_err(MixLocalTransportFailure::Observation)?;}letreceiver=matchsender.try_send_durable_mix(stanza,source){') &&
+    local.includes('letmutpending=PendingMixLocalHandoff::new(sender.clone(),disconnect.clone());ifletSome(request)=observation{request.enqueued().map_err(MixLocalTransportFailure::Observation)?;}letcompletion=matchreceiver.await{'),
+    'MIX local effect must start before enqueue and retain the existing pending-disconnect guard');
+  requireBoundary(local.includes('pending.mark_completed();ifletSome(request)=observation{letboundary=matchcompletion{crate::outbound::MixTransportCompletion::SocketFenced{connection_id}=>{mix_worker::TransferBoundary::SocketFenced(connection_id)}crate::outbound::MixTransportCompletion::SmPersisted{session_id}=>{mix_worker::TransferBoundary::SmPersisted(session_id)}crate::outbound::MixTransportCompletion::BoshPersisted{session_id}=>{mix_worker::TransferBoundary::BoshPersisted(session_id)}};request.returned(mix_worker::LocalResult::Transferred(boundary)).map_err(MixLocalTransportFailure::Observation)?;}Ok(completion)'),
+    'MIX local typed transfer must be consumed immediately before any later await or return');
+  requireBoundary(method(mix, 'send_claimed_cluster_mix') === 'request.start()?;letresult=context.send_cluster_mix(request.node(),request.recipient(),request.stanza(),Some(request.source())).await;record_claimed_cluster_result(request,&result)?;result',
+    'MIX cluster invocation must consume its actual typed result before returning');
+  requireBoundary(method(mix, 'record_claimed_cluster_result') === 'lethandoff=matchresult{Ok(receipt)ifreceipt.acknowledged=>receipt.mix_handoff.map(|handoff|matchhandoff{crate::cluster::ClusterMixHandoff::SocketFenced=>{mix_worker::TransferBoundary::ClusterSocketFenced}crate::cluster::ClusterMixHandoff::SmPersisted=>{mix_worker::TransferBoundary::ClusterSmPersisted}crate::cluster::ClusterMixHandoff::BoshPersisted=>{mix_worker::TransferBoundary::ClusterBoshPersisted}}),_=>None};request.returned(handoff)?;Ok(())',
+    'MIX cluster transfer requires acknowledged typed handoff, never a delivered boolean');
+  const worker = method(mix, 'process_claimed_mix_delivery');
+  requireBoundary(worker.includes('Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker)=>(mix_worker::RouteResult::CompletedByWorker,mix_worker::SettlementCommand::Ack)') &&
+    worker.includes('(mix_worker::RouteResult::Pending,mix_worker::SettlementCommand::Defer{delay_seconds:MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS})') &&
+    worker.includes('(mix_worker::RouteResult::Permanent,mix_worker::SettlementCommand::DeadLetter{reason:permanent.reason.to_owned(),error:permanent.detail.clone()})') &&
+    worker.includes('(mix_worker::RouteResult::Retry,mix_worker::SettlementCommand::Retry{error:error.to_string()})'),
+    'MIX worker must preserve each actual route result and exclusive settlement command');
+  requireBoundary(worker.includes('letrequest=attempt.route(stanza)?;') && worker.includes('async{Ok(deliver_claimed_channel_stanza(&context,&request).await)}') &&
+    worker.includes('letrenewal=owner.renewal_request()?;context.service().renew_mix_delivery_lease_observed(&renewal).await') &&
+    worker.includes('}).await;letclosed=handle.observation.close_renewal_scope()?;letresult=matchresult{'),
+    'MIX worker must close renewal scope only after the existing route-only helper destroys its children');
+  requireBoundary(worker.includes('Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport)=>{request.returned(mix_worker::RouteResult::Transferred)?.transferred(closed)?;returnOk(());}') &&
+    worker.includes('letcompletion=request.returned(outcome)?;letsettlement=completion.settlement(command,closed)?.context()?;letcompletion=bounded_mix_outbox_turn(&cancel,attempt_deadline,context.service().settle_mix_delivery_observed(&settlement)).await;') &&
+    !worker.includes('.acknowledge_mix_delivery(') && !worker.includes('.retry_mix_delivery('),
+    'MIX claimed delivery must consume transfer or lazily start its one bound settlement under the existing deadline');
+}
+
 export function verifyRoomExecutionBoundaries(sources) {
   const { muc, mucFanout, mix } = sources;
   const message = compact(body(muc, 'async\\s+fn\\s+muc_message\\b'));
@@ -1014,10 +1221,7 @@ export function verifyRoomExecutionBoundaries(sources) {
   const finish = compact(body(mix, 'async\\s+fn\\s+finish_mix_delivery_owner\\b'));
   requireBoundary(finish === 'matchoutcome{ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker=>acknowledge().await,ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport=>Ok(true),}',
     'MIX settlement must acknowledge exactly the worker-owned result and never the transferred transport owner');
-  const claimed = body(mix, 'async\\s+fn\\s+process_claimed_mix_delivery\\b');
-  const completion = compact(body(claimed, 'Ok\\(outcome\\)\\s*=>'));
-  requireBoundary(completion === 'finish_mix_delivery_owner(outcome,||{bounded_mix_outbox_turn(&cancel,attempt_deadline,context.service().acknowledge_mix_delivery(delivery.delivery_id,delivery.lease_token),)}).await',
-    'MIX claimed delivery must delegate exact-token acknowledgement lazily under its existing deadline and cancellation');
+  verifyMixWorkerBoundaries(sources);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

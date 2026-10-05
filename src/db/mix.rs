@@ -968,6 +968,38 @@ pub async fn claim_mix_deliveries(
     limit: i64,
     max_bytes: i64,
 ) -> Result<Vec<ClaimedMixDelivery>> {
+    match claim_mix_deliveries_inner(pool, limit, max_bytes, None).await? {
+        MixClaimReturn::Compatibility(rows) => Ok(rows),
+        MixClaimReturn::Observed(_) => {
+            anyhow::bail!("MIX compatibility claim returned an observed batch")
+        }
+    }
+}
+
+pub async fn claim_mix_deliveries_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::ClaimRequest,
+) -> Result<northstar_delivery_core::mix_outbox::Rows> {
+    let command = request.command();
+    match claim_mix_deliveries_inner(pool, command.limit, command.max_bytes, Some(request)).await? {
+        MixClaimReturn::Observed(rows) => Ok(rows),
+        MixClaimReturn::Compatibility(_) => {
+            anyhow::bail!("MIX observed claim returned a compatibility batch")
+        }
+    }
+}
+
+enum MixClaimReturn {
+    Compatibility(Vec<ClaimedMixDelivery>),
+    Observed(northstar_delivery_core::mix_outbox::Rows),
+}
+
+async fn claim_mix_deliveries_inner(
+    pool: &PgPool,
+    limit: i64,
+    max_bytes: i64,
+    observation: Option<&northstar_delivery_core::mix_outbox::ClaimRequest>,
+) -> Result<MixClaimReturn> {
     let mut connection = pool.acquire().await?;
     // PostgreSQL locks every relation used by the full claim even when the
     // queue is empty. Its joins and indexes exceed PG17's fast-path lock
@@ -999,8 +1031,16 @@ pub async fn claim_mix_deliveries(
     .fetch_one(&mut *connection)
     .await?;
     if authorized && !pending {
-        return Ok(Vec::new());
+        return if let Some(request) = observation {
+            request.read_empty()?;
+            Ok(MixClaimReturn::Observed(Vec::new().into()))
+        } else {
+            Ok(MixClaimReturn::Compatibility(Vec::new()))
+        };
     }
+    let entered = observation
+        .map(|request| request.enter_statement())
+        .transpose()?;
     let rows = sqlx::query(
         "WITH candidates AS (
              SELECT recipient.delivery_id,
@@ -1074,7 +1114,7 @@ pub async fn claim_mix_deliveries(
     .bind(MIX_DELIVERY_LEASE_SECONDS)
     .fetch_all(&mut *connection)
     .await?;
-    Ok(rows
+    let deliveries: Vec<_> = rows
         .into_iter()
         .map(|row| ClaimedMixDelivery {
             delivery_id: row.get("delivery_id"),
@@ -1094,7 +1134,64 @@ pub async fn claim_mix_deliveries(
             lease_token: row.get("lease_token"),
             route_wake_generation: row.get("route_wake_generation"),
         })
-        .collect())
+        .collect();
+    if let Some(request) = observation {
+        let rows: northstar_delivery_core::mix_outbox::Rows = deliveries
+            .into_iter()
+            .map(|delivery| {
+                std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row {
+                    source: crate::outbound::MixDelivery {
+                        delivery_id: delivery.delivery_id,
+                        lease_token: delivery.lease_token,
+                    },
+                    event_id: delivery.event_id,
+                    channel_id: delivery.channel_id,
+                    channel_jid: delivery.channel_jid,
+                    participant_id: delivery.recipient.participant_id,
+                    recipient_jid: delivery.recipient.jid,
+                    recipient_nick: delivery.recipient.nick,
+                    stanza: delivery.stanza,
+                    authoritative_stanza_id: delivery.authoritative_stanza_id,
+                    archive: delivery.archive,
+                    encrypted: delivery.encrypted,
+                    attempt_count: delivery.attempt_count,
+                    route_wake_generation: delivery.route_wake_generation,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into();
+        request.received(
+            entered.expect("observed claim entered its mutating statement"),
+            rows.clone(),
+        )?;
+        Ok(MixClaimReturn::Observed(rows))
+    } else {
+        Ok(MixClaimReturn::Compatibility(deliveries))
+    }
+}
+
+/// Worker settlement is distinct from the native writer's ACK request. Both
+/// use the same exact-token deletion helper and preserve the false COMMIT.
+pub async fn acknowledge_mix_delivery_worker_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::SettlementRequest,
+) -> Result<bool> {
+    let source = request.source();
+    let mut transaction = pool.begin().await?;
+    let removed = remove_mix_delivery_tx(&mut transaction, source.delivery_id, source.lease_token)
+        .await?
+        .is_some();
+    northstar_delivery_core::mix_outbox::settlement_commit_observed(
+        transaction.commit(),
+        request,
+        northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed),
+    )
+    .await
+    .map_err(crate::services::mix::outbox::commit_error)?;
+    if !removed {
+        MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
+    }
+    Ok(removed)
 }
 
 pub async fn acknowledge_mix_delivery(
@@ -1587,6 +1684,27 @@ pub async fn renew_mix_delivery_lease(
     delivery_id: Uuid,
     lease_token: Uuid,
 ) -> Result<bool> {
+    renew_mix_delivery_lease_inner(pool, delivery_id, lease_token, None).await
+}
+
+pub async fn renew_mix_delivery_lease_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::RenewalRequest,
+) -> Result<bool> {
+    let source = request.source();
+    renew_mix_delivery_lease_inner(pool, source.delivery_id, source.lease_token, Some(request))
+        .await
+}
+
+async fn renew_mix_delivery_lease_inner(
+    pool: &PgPool,
+    delivery_id: Uuid,
+    lease_token: Uuid,
+    observation: Option<&northstar_delivery_core::mix_outbox::RenewalRequest>,
+) -> Result<bool> {
+    let entered = observation
+        .map(|request| request.enter_statement())
+        .transpose()?;
     let renewed = sqlx::query(
         "UPDATE mix_delivery_recipients
             SET lease_until=clock_timestamp()+make_interval(secs=>$3)
@@ -1599,6 +1717,12 @@ pub async fn renew_mix_delivery_lease(
     .await?
     .rows_affected()
         == 1;
+    if let Some(request) = observation {
+        request.received(
+            entered.expect("observed renewal entered its statement"),
+            renewed,
+        )?;
+    }
     if !renewed {
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     }
@@ -1612,6 +1736,39 @@ pub async fn dead_letter_mix_delivery(
     terminal_reason: &str,
     error: &str,
 ) -> Result<bool> {
+    dead_letter_mix_delivery_inner(pool, delivery_id, lease_token, terminal_reason, error, None)
+        .await
+}
+
+pub async fn dead_letter_mix_delivery_worker_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::SettlementRequest,
+) -> Result<bool> {
+    let northstar_delivery_core::mix_outbox::SettlementCommand::DeadLetter { reason, error } =
+        request.command()
+    else {
+        anyhow::bail!("MIX dead-letter request kind mismatch");
+    };
+    let source = request.source();
+    dead_letter_mix_delivery_inner(
+        pool,
+        source.delivery_id,
+        source.lease_token,
+        reason,
+        error,
+        Some(request),
+    )
+    .await
+}
+
+async fn dead_letter_mix_delivery_inner(
+    pool: &PgPool,
+    delivery_id: Uuid,
+    lease_token: Uuid,
+    terminal_reason: &str,
+    error: &str,
+    observation: Option<&northstar_delivery_core::mix_outbox::SettlementRequest>,
+) -> Result<bool> {
     let mut transaction = pool.begin().await?;
     let moved = move_mix_delivery_to_dead_letter_tx(
         &mut transaction,
@@ -1621,7 +1778,12 @@ pub async fn dead_letter_mix_delivery(
         error,
     )
     .await?;
-    transaction.commit().await?;
+    commit_mix_worker_settlement(
+        transaction,
+        observation,
+        northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(moved),
+    )
+    .await?;
     if !moved {
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -1636,6 +1798,45 @@ pub async fn retry_mix_delivery(
     lease_token: Uuid,
     route_wake_generation: i64,
     error: &str,
+) -> Result<MixDeliveryRetryOutcome> {
+    retry_mix_delivery_inner(
+        pool,
+        delivery_id,
+        lease_token,
+        route_wake_generation,
+        error,
+        None,
+    )
+    .await
+}
+
+pub async fn retry_mix_delivery_worker_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::SettlementRequest,
+) -> Result<MixDeliveryRetryOutcome> {
+    let northstar_delivery_core::mix_outbox::SettlementCommand::Retry { error } = request.command()
+    else {
+        anyhow::bail!("MIX retry request kind mismatch");
+    };
+    let source = request.source();
+    retry_mix_delivery_inner(
+        pool,
+        source.delivery_id,
+        source.lease_token,
+        request.route_wake_generation(),
+        error,
+        Some(request),
+    )
+    .await
+}
+
+async fn retry_mix_delivery_inner(
+    pool: &PgPool,
+    delivery_id: Uuid,
+    lease_token: Uuid,
+    route_wake_generation: i64,
+    error: &str,
+    observation: Option<&northstar_delivery_core::mix_outbox::SettlementRequest>,
 ) -> Result<MixDeliveryRetryOutcome> {
     // The worker's claimed attempt count is intentionally *not* an authority:
     // lease recovery or a route wake can race after claim.  Hold the exact
@@ -1656,7 +1857,14 @@ pub async fn retry_mix_delivery(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = row else {
-        transaction.commit().await?;
+        commit_mix_worker_settlement(
+            transaction,
+            observation,
+            northstar_delivery_core::mix_outbox::SettlementResult::Retry(
+                MixDeliveryRetryOutcome::LeaseLost,
+            ),
+        )
+        .await?;
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
         return Ok(MixDeliveryRetryOutcome::LeaseLost);
     };
@@ -1732,7 +1940,12 @@ pub async fn retry_mix_delivery(
         );
         MixDeliveryRetryOutcome::Retried
     };
-    transaction.commit().await?;
+    commit_mix_worker_settlement(
+        transaction,
+        observation,
+        northstar_delivery_core::mix_outbox::SettlementResult::Retry(outcome),
+    )
+    .await?;
     match outcome {
         MixDeliveryRetryOutcome::LeaseLost => unreachable!("handled before the transaction"),
         MixDeliveryRetryOutcome::Retried | MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit => {
@@ -1752,12 +1965,55 @@ pub async fn defer_mix_delivery(
     route_wake_generation: i64,
     delay_seconds: i64,
 ) -> Result<bool> {
+    defer_mix_delivery_inner(
+        pool,
+        delivery_id,
+        lease_token,
+        route_wake_generation,
+        delay_seconds,
+        None,
+    )
+    .await
+}
+
+pub async fn defer_mix_delivery_worker_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::SettlementRequest,
+) -> Result<bool> {
+    let northstar_delivery_core::mix_outbox::SettlementCommand::Defer { delay_seconds } =
+        request.command()
+    else {
+        anyhow::bail!("MIX defer request kind mismatch");
+    };
+    let source = request.source();
+    defer_mix_delivery_inner(
+        pool,
+        source.delivery_id,
+        source.lease_token,
+        request.route_wake_generation(),
+        *delay_seconds,
+        Some(request),
+    )
+    .await
+}
+
+async fn defer_mix_delivery_inner(
+    pool: &PgPool,
+    delivery_id: Uuid,
+    lease_token: Uuid,
+    route_wake_generation: i64,
+    delay_seconds: i64,
+    observation: Option<&northstar_delivery_core::mix_outbox::SettlementRequest>,
+) -> Result<bool> {
     // `route_wake_generation` is captured atomically with the lease. A
     // verified resource wake updates the same recipient row, so the UPDATE
     // below serializes with it: if the wake committed first we release for an
     // immediate re-claim; if it waits behind this UPDATE it advances the
     // unleased head to `clock_timestamp()` afterwards. Either order retains
     // the route wake across processes without weakening the fallback delay.
+    let entered = observation
+        .map(|request| request.enter_statement())
+        .transpose()?;
     let updated = sqlx::query(
         "UPDATE mix_delivery_recipients
             SET next_attempt_at=CASE
@@ -1775,10 +2031,34 @@ pub async fn defer_mix_delivery(
     .await?
     .rows_affected()
         == 1;
+    if let Some(request) = observation {
+        request.received(
+            entered.expect("observed defer entered its statement"),
+            northstar_delivery_core::mix_outbox::SettlementResult::Defer(updated),
+        )?;
+    }
     if !updated {
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     }
     Ok(updated)
+}
+
+async fn commit_mix_worker_settlement(
+    transaction: Transaction<'_, Postgres>,
+    observation: Option<&northstar_delivery_core::mix_outbox::SettlementRequest>,
+    result: northstar_delivery_core::mix_outbox::SettlementResult,
+) -> Result<()> {
+    if let Some(request) = observation {
+        northstar_delivery_core::mix_outbox::settlement_commit_observed(
+            transaction.commit(),
+            request,
+            result,
+        )
+        .await
+        .map_err(crate::services::mix::outbox::commit_error)
+    } else {
+        transaction.commit().await.map_err(Into::into)
+    }
 }
 
 /// Make the current ordered delivery head for one recipient eligible now.

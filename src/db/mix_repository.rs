@@ -1265,6 +1265,49 @@ impl MixRepository for PostgresMixRepository {
             })
             .collect())
     }
+    async fn claim_mix_deliveries_observed(
+        &self,
+        request: &outbox::core::ClaimRequest,
+    ) -> Result<outbox::core::Rows> {
+        db::claim_mix_deliveries_observed(&self.pool, request).await
+    }
+    async fn archive_mix_message_once_observed(
+        &self,
+        request: &outbox::core::ArchiveRequest,
+    ) -> Result<outbox::core::ArchiveResult> {
+        Ok(
+            match db::archive_mix_message_once_observed(&self.pool, request).await? {
+                db::SourceArchiveAdmission::Stored(id) => outbox::core::ArchiveResult::Stored(id),
+                db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id),
+            },
+        )
+    }
+    async fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &outbox::core::RenewalRequest,
+    ) -> Result<bool> {
+        db::renew_mix_delivery_lease_observed(&self.pool, request).await
+    }
+    async fn settle_mix_delivery_observed(
+        &self,
+        request: &outbox::core::SettlementRequest,
+    ) -> Result<outbox::core::SettlementResult> {
+        use outbox::core::{SettlementCommand, SettlementResult};
+        Ok(match request.command() {
+            SettlementCommand::Ack => SettlementResult::Ack(
+                db::acknowledge_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+            SettlementCommand::Defer { .. } => SettlementResult::Defer(
+                db::defer_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+            SettlementCommand::Retry { .. } => SettlementResult::Retry(
+                db::retry_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+            SettlementCommand::DeadLetter { .. } => SettlementResult::DeadLetter(
+                db::dead_letter_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+        })
+    }
     async fn maintain_mix_delivery_retention(&self) -> Result<()> {
         db::maintain_mix_delivery_retention(&self.pool).await
     }

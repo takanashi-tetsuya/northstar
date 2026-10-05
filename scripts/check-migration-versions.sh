@@ -800,7 +800,9 @@ if printf '%s\n' "$mix_capacity_fence_source" | grep -Fq 'pg_try_advisory_xact_l
     echo "MIX producer authority must block at transaction start, not reject ordinary contention" >&2
     exit 1
 fi
-if [ "$(grep -Fc 'let _admission = self.delivery_admission_guard().await;' src/services/mix.rs)" -ne 18 ]; then
+# Count both compatibility and observed store entries; each keeps its own gate.
+# The architecture and execution checkers also verify their individual ordering.
+if [ "$(grep -Fc 'let _admission = self.delivery_admission_guard().await;' src/services/mix.rs)" -ne 19 ]; then
     echo "every MIX delivery-producing application-service entry must share the fair pre-pool gate" >&2
     exit 1
 fi
@@ -1233,7 +1235,7 @@ do
         exit 1
     fi
 done
-mix_delivery_retry_source=$(sed -n '/^pub async fn retry_mix_delivery(/,/^pub async fn defer_mix_delivery(/p' src/db/mix.rs)
+mix_delivery_retry_source=$(sed -n '/^async fn retry_mix_delivery_inner(/,/^pub async fn defer_mix_delivery(/p' src/db/mix.rs)
 for required_retry_fragment in \
     'let mut transaction = pool.begin().await?;' \
     'SELECT attempt_count,route_wake_generation' \

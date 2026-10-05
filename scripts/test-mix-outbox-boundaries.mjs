@@ -80,19 +80,19 @@ rejects('hard cancellation must remain the first bounded-turn branch', 'async fn
 rejects('bounded turn must retain its absolute deadline', 'async fn bounded_mix_outbox_turn<',
   'tokio::time::sleep_until(deadline)', 'std::future::pending::<()>()', /absolute deadline/);
 for (const [name, before] of [
-  ['delivery', 'let deliveries = drainable_mix_outbox_claim(\n                stop_claiming,'],
-  ['PAM', 'MixOutboxQueue::PamResult => Ok(drainable_mix_outbox_claim(\n            stop_claiming,'],
+  ['delivery', 'let result = drainable_mix_outbox_claim(\n                    &stop_claiming,'],
+  ['PAM', 'MixOutboxQueue::PamResult => Box::pin(async move {\n            Ok(drainable_mix_outbox_claim(\n                &stop_claiming,'],
 ]) {
-  rejects(`${name} claim arm cannot bypass stop admission`, 'async fn claim_mix_outbox_work(',
+  rejects(`${name} claim arm cannot bypass stop admission`, 'fn claim_mix_outbox_work(',
     before, before.replace('drainable_mix_outbox_claim', 'unbounded_claim'), /independently bounded/);
 }
 test('two wrappers in delivery cannot conceal an unguarded PAM claim', () => {
-  const directPam = replaceIn(baseline, 'async fn claim_mix_outbox_work(',
-    'MixOutboxQueue::PamResult => Ok(drainable_mix_outbox_claim(\n            stop_claiming,\n            cancel,',
-    'MixOutboxQueue::PamResult => Ok(cancellable_mix_outbox_turn(\n            cancel,');
-  const nested = replaceIn(directPam, 'async fn claim_mix_outbox_work(',
-    '                context\n                    .service()\n                    .claim_mix_deliveries(claim_limit, 8 * 1024 * 1024),',
-    '                drainable_mix_outbox_claim(stop_claiming, cancel, context.service().claim_mix_deliveries(claim_limit, 8 * 1024 * 1024)),');
+  const directPam = replaceIn(baseline, 'fn claim_mix_outbox_work(',
+    'MixOutboxQueue::PamResult => Box::pin(async move {\n            Ok(drainable_mix_outbox_claim(\n                &stop_claiming,\n                &cancel,',
+    'MixOutboxQueue::PamResult => Box::pin(async move {\n            Ok(cancellable_mix_outbox_turn(\n                &cancel,');
+  const nested = replaceIn(directPam, 'fn claim_mix_outbox_work(',
+    '                    context.service().claim_mix_deliveries_observed(&request),',
+    '                    drainable_mix_outbox_claim(&stop_claiming, &cancel, context.service().claim_mix_deliveries_observed(&request)),');
   assert.throws(() => verifyMixOutboxLifecycle(nested), /independently bounded/);
 });
 rejects('parent stop must close lane admission', lane,
@@ -142,8 +142,8 @@ test('supervisor retries cannot reuse a cancelled hard token', () => {
 });
 rejects('supervisor must enforce its registered drain grace', start,
   '        MIX_OUTBOX_DRAIN_GRACE,', '        Duration::from_secs(140),', /whole-worker drain/);
-rejects('delivery cannot fall back to the PAM queue', 'async fn claim_mix_outbox_work(',
-  '.claim_mix_deliveries(claim_limit, 8 * 1024 * 1024)',
+rejects('delivery cannot fall back to the PAM queue', 'fn claim_mix_outbox_work(',
+  '.claim_mix_deliveries_observed(&request)',
   '.claim_pam_results(claim_limit)', /only their own durable work/);
 rejects('PAM must retain its separate budget', start,
   '                    pam_budget,', '                    delivery_budget,', /without delivery\/PAM fallback/);

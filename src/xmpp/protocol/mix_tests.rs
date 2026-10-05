@@ -1,6 +1,670 @@
 use super::*;
 use crate::services::mix::MamRsmPage;
 
+struct MixWorkerHolderProbe<T> {
+    output: Option<T>,
+    pending: bool,
+    panic_poll: bool,
+    panic_drop: bool,
+    dropped: Option<Box<dyn FnOnce() + Send>>,
+}
+impl<T: Unpin> std::future::Future for MixWorkerHolderProbe<T> {
+    type Output = Result<T>;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.panic_poll {
+            std::panic::panic_any("MIX worker probe poll panic");
+        }
+        if this.pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(Ok(this.output.take().unwrap()))
+        }
+    }
+}
+impl<T> Drop for MixWorkerHolderProbe<T> {
+    fn drop(&mut self) {
+        if let Some(dropped) = self.dropped.take() {
+            dropped();
+        }
+        if self.panic_drop {
+            std::panic::panic_any("MIX worker probe drop panic");
+        }
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_claim_holder_retains_panics_and_destroys_child_before_retirement() {
+    use crate::services::mix::outbox::{core, fixture};
+    use futures::FutureExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for cut in 0..5 {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let marker = dropped.clone();
+        let (owner, runner) = fixture::claim_probe(|owner| {
+            let owner = owner.clone();
+            Box::pin(MixWorkerHolderProbe {
+                output: Some(Vec::new()),
+                pending: cut != 3,
+                panic_poll: cut == 2,
+                panic_drop: cut >= 3,
+                dropped: Some(Box::new(move || {
+                    assert_eq!(owner.snapshot().terminal, None);
+                    marker.store(true, Ordering::Relaxed);
+                })),
+            })
+        });
+        let mut runner = Box::pin(runner);
+        if matches!(cut, 2 | 3) {
+            let payload = match std::panic::AssertUnwindSafe(&mut runner)
+                .catch_unwind()
+                .await
+            {
+                Err(payload) => payload,
+                Ok(_) => panic!("expected holder probe panic"),
+            };
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&if cut == 2 {
+                    "MIX worker probe poll panic"
+                } else {
+                    "MIX worker probe drop panic"
+                })
+            );
+            assert_eq!(
+                owner.snapshot().terminal,
+                None,
+                "externally caught panic does not destroy the holder"
+            );
+        } else if cut != 0 {
+            assert!(futures::poll!(&mut runner).is_pending());
+        }
+        if cut == 4 {
+            let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(runner)))
+                .unwrap_err();
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"MIX worker probe drop panic")
+            );
+        } else {
+            drop(runner);
+        }
+        assert!(dropped.load(Ordering::Relaxed));
+        assert_eq!(
+            owner.snapshot().terminal,
+            Some(if cut >= 2 {
+                core::TerminalReason::Panicked
+            } else {
+                core::TerminalReason::Cancelled
+            })
+        );
+        assert_eq!(
+            owner.snapshot().knowledge,
+            core::ClaimKnowledge::NoStatementEntered
+        );
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_attempt_holder_retains_panics_and_destroys_child_before_retirement() {
+    use crate::services::mix::outbox::{core, fixture};
+    use futures::FutureExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for cut in 0..5 {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let marker = dropped.clone();
+        let (owner, runner) = fixture::attempt_probe(|owner| {
+            let owner = owner.clone();
+            Box::pin(MixWorkerHolderProbe {
+                output: Some(()),
+                pending: cut != 3,
+                panic_poll: cut == 2,
+                panic_drop: cut >= 3,
+                dropped: Some(Box::new(move || {
+                    assert_eq!(owner.snapshot().terminal, None);
+                    marker.store(true, Ordering::Relaxed);
+                })),
+            })
+        });
+        let mut runner = Box::pin(runner);
+        if matches!(cut, 2 | 3) {
+            let payload = match std::panic::AssertUnwindSafe(&mut runner)
+                .catch_unwind()
+                .await
+            {
+                Err(payload) => payload,
+                Ok(_) => panic!("expected holder probe panic"),
+            };
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&if cut == 2 {
+                    "MIX worker probe poll panic"
+                } else {
+                    "MIX worker probe drop panic"
+                })
+            );
+            assert_eq!(owner.snapshot().terminal, None);
+        } else if cut != 0 {
+            assert!(futures::poll!(&mut runner).is_pending());
+        }
+        if cut == 4 {
+            let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(runner)))
+                .unwrap_err();
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"MIX worker probe drop panic")
+            );
+        } else {
+            drop(runner);
+        }
+        assert!(dropped.load(Ordering::Relaxed));
+        assert_eq!(
+            owner.snapshot().terminal,
+            Some(if cut >= 2 {
+                core::TerminalReason::Panicked
+            } else {
+                core::TerminalReason::Cancelled
+            })
+        );
+        assert_eq!(owner.snapshot().route, core::RoutePhase::Unprepared);
+        assert!(owner.snapshot().settlement.is_none());
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_observed_local_waiter_records_all_typed_transfers_before_return() {
+    use crate::services::mix::outbox::{core, fixture};
+    for (completion, boundary) in [
+        (
+            crate::outbound::MixTransportCompletion::SocketFenced {
+                connection_id: Uuid::from_u128(101),
+            },
+            core::TransferBoundary::SocketFenced(Uuid::from_u128(101)),
+        ),
+        (
+            crate::outbound::MixTransportCompletion::SmPersisted {
+                session_id: Uuid::from_u128(102),
+            },
+            core::TransferBoundary::SmPersisted(Uuid::from_u128(102)),
+        ),
+        (
+            crate::outbound::MixTransportCompletion::BoshPersisted {
+                session_id: Uuid::from_u128(103),
+            },
+            core::TransferBoundary::BoshPersisted(Uuid::from_u128(103)),
+        ),
+    ] {
+        let (owner, route) = fixture::route(false);
+        let request = route.local_request("bob@local.test/phone".into()).unwrap();
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        let mut waiting = Box::pin(try_send_local_durable_mix_observed(
+            &sender,
+            &disconnect,
+            &request,
+        ));
+        assert!(futures::poll!(&mut waiting).is_pending());
+        let item = consumer
+            .try_recv()
+            .expect("one exact item was actually queued");
+        assert_eq!(
+            item.mix_delivery(),
+            Some(crate::outbound::MixDelivery {
+                delivery_id: Uuid::from_u128(91),
+                lease_token: Uuid::from_u128(96)
+            })
+        );
+        assert!(owner.snapshot().transfer.is_none());
+        item.complete_mix_handoff(completion);
+        assert_eq!(waiting.await.unwrap(), completion);
+        assert_eq!(
+            owner.snapshot().transfer,
+            Some(core::TransferFact {
+                target: "bob@local.test/phone".into(),
+                boundary
+            })
+        );
+        assert!(!disconnect.is_cancelled());
+        assert!(matches!(
+            try_send_local_durable_mix_observed(&sender, &disconnect, &request).await,
+            Err(MixLocalTransportFailure::Observation(_))
+        ));
+        assert!(
+            consumer.try_recv().is_err(),
+            "a repeated request must not enqueue a second item"
+        );
+        owner.close_renewal_scope().unwrap();
+        assert!(matches!(
+            route.returned(core::RouteResult::Retry),
+            Err(core::Rejected::Transferred)
+        ));
+        assert!(owner.snapshot().settlement.is_none());
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_cancelled_local_wait_keeps_uncertainty_and_exact_disconnect() {
+    use crate::services::mix::outbox::{core, fixture};
+    let (owner, route) = fixture::route(false);
+    let request = route.local_request("bob@local.test/phone".into()).unwrap();
+    let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+    let sender = crate::outbound::OutboundSender::new(output);
+    let disconnect = tokio_util::sync::CancellationToken::new();
+    let mut waiting = Box::pin(try_send_local_durable_mix_observed(
+        &sender,
+        &disconnect,
+        &request,
+    ));
+    assert!(futures::poll!(&mut waiting).is_pending());
+    let item = consumer.try_recv().unwrap();
+    drop(waiting);
+    assert!(disconnect.is_cancelled());
+    assert!(owner.snapshot().local[0].enqueued);
+    assert_eq!(owner.snapshot().local[0].returned, None);
+    assert!(owner.snapshot().transfer.is_none());
+    drop(item);
+    owner.close_renewal_scope().unwrap();
+    assert!(matches!(
+        route.returned(core::RouteResult::Retry),
+        Err(core::Rejected::MissingReceipt)
+    ));
+    assert!(owner.snapshot().settlement.is_none());
+}
+
+#[test]
+fn mix_worker_cluster_adapter_consumes_typed_handoff_but_never_a_delivered_boolean() {
+    use crate::services::mix::outbox::{core, fixture};
+    for (boundary, expected) in [
+        (
+            crate::cluster::ClusterMixHandoff::SocketFenced,
+            core::TransferBoundary::ClusterSocketFenced,
+        ),
+        (
+            crate::cluster::ClusterMixHandoff::SmPersisted,
+            core::TransferBoundary::ClusterSmPersisted,
+        ),
+        (
+            crate::cluster::ClusterMixHandoff::BoshPersisted,
+            core::TransferBoundary::ClusterBoshPersisted,
+        ),
+    ] {
+        let (owner, route) = fixture::route(false);
+        let request = route.cluster_request("node-b".into()).unwrap();
+        request.start().unwrap();
+        let result = Ok(crate::cluster::NodeDeliveryReceipt {
+            acknowledged: true,
+            delivered: true,
+            mix_handoff: Some(boundary),
+            ..Default::default()
+        });
+        record_claimed_cluster_result(&request, &result).unwrap();
+        assert_eq!(
+            owner.snapshot().transfer,
+            Some(core::TransferFact {
+                target: "node-b".into(),
+                boundary: expected
+            })
+        );
+        owner.close_renewal_scope().unwrap();
+        assert!(matches!(
+            route.returned(core::RouteResult::Retry),
+            Err(core::Rejected::Transferred)
+        ));
+        assert!(owner.snapshot().settlement.is_none());
+    }
+    for result in [
+        Ok(crate::cluster::NodeDeliveryReceipt {
+            acknowledged: true,
+            delivered: true,
+            ..Default::default()
+        }),
+        Ok(crate::cluster::NodeDeliveryReceipt {
+            acknowledged: false,
+            delivered: true,
+            mix_handoff: Some(crate::cluster::ClusterMixHandoff::SmPersisted),
+            ..Default::default()
+        }),
+        Err(anyhow::anyhow!("cluster receipt error")),
+    ] {
+        let (owner, route) = fixture::route(false);
+        let request = route.cluster_request("node-b".into()).unwrap();
+        request.start().unwrap();
+        record_claimed_cluster_result(&request, &result).unwrap();
+        assert!(owner.snapshot().transfer.is_none());
+        assert_eq!(owner.snapshot().cluster[0].handoff, None);
+        assert!(owner.snapshot().settlement.is_none());
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_unpolled_and_stopped_claims_do_not_invent_an_empty_database_receipt() {
+    use crate::services::mix::outbox::{self, core};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for stopped in [false, true] {
+        let turn = outbox::ClaimTurn::new(1, 8 * 1024 * 1024).unwrap();
+        let owner = turn.observation();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect_calls = calls.clone();
+        let run = turn.run(move |request, _| async move {
+            let stop = tokio_util::sync::CancellationToken::new();
+            stop.cancel();
+            drainable_mix_outbox_claim(
+                &stop,
+                &tokio_util::sync::CancellationToken::new(),
+                async move {
+                    effect_calls.fetch_add(1, Ordering::Relaxed);
+                    request.start()?;
+                    Ok::<Vec<outbox::OwnedAttempt>, anyhow::Error>(vec![])
+                },
+            )
+            .await
+        });
+        if stopped {
+            assert!(run.await.unwrap().is_empty());
+        } else {
+            drop(run);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert!(!owner.snapshot().started);
+        assert_eq!(
+            owner.snapshot().knowledge,
+            core::ClaimKnowledge::NoStatementEntered
+        );
+        assert_eq!(
+            owner.snapshot().terminal,
+            Some(if stopped {
+                core::TerminalReason::Completed
+            } else {
+                core::TerminalReason::Cancelled
+            })
+        );
+    }
+    let owned = outbox::OwnedAttempt::new(outbox::fixture::attempt(false));
+    let owner = owned.observation();
+    drop(owned);
+    assert_eq!(
+        owner.snapshot().terminal,
+        Some(core::TerminalReason::Cancelled)
+    );
+    assert_eq!(owner.snapshot().route, core::RoutePhase::Unprepared);
+}
+
+#[tokio::test]
+async fn mix_worker_claim_statement_cuts_keep_receipts_without_issuing_attempts_after_error() {
+    use crate::services::mix::outbox::{self, core, fixture};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for cut in 0..4 {
+        let turn = outbox::ClaimTurn::new(1, 8 * 1024 * 1024).unwrap();
+        let owner = turn.observation();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let child_calls = calls.clone();
+        let mut run = Box::pin(turn.run(move |request, _| async move {
+            request.start()?;
+            if cut == 0 {
+                std::future::pending::<()>().await;
+            }
+            let entered = request.enter_statement()?;
+            child_calls.fetch_add(1, Ordering::Relaxed);
+            if cut == 1 {
+                std::future::pending::<()>().await;
+            }
+            request.received(entered, fixture::claimed_rows(false))?;
+            if cut == 2 {
+                std::future::pending::<()>().await;
+            }
+            request.failed()?;
+            anyhow::bail!("claim receipt-before-return error")
+        }));
+        if cut == 3 {
+            assert!(matches!(
+                futures::poll!(&mut run),
+                std::task::Poll::Ready(Err(_))
+            ));
+        } else {
+            assert!(futures::poll!(&mut run).is_pending());
+        }
+        drop(run);
+        assert_eq!(calls.load(Ordering::Relaxed), usize::from(cut != 0));
+        match owner.snapshot().knowledge {
+            core::ClaimKnowledge::NoStatementEntered => assert_eq!(cut, 0),
+            core::ClaimKnowledge::AutocommitStatementEntered => assert_eq!(cut, 1),
+            core::ClaimKnowledge::StatementReceipt(rows) => {
+                assert!(cut >= 2);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].source.delivery_id, Uuid::from_u128(91));
+                assert_eq!(rows[0].source.lease_token, Uuid::from_u128(96));
+            }
+            core::ClaimKnowledge::ReadEmpty => panic!("no empty shortcut was executed"),
+        }
+        assert_eq!(
+            owner.snapshot().returned,
+            (cut == 3).then_some(core::ClaimReturned::Error)
+        );
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_archive_commit_cuts_preserve_stored_and_replay_knowledge() {
+    use crate::services::mix::outbox::{self, core, fixture};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for result in [
+        core::ArchiveResult::Stored(Uuid::from_u128(97)),
+        core::ArchiveResult::Replay(Uuid::from_u128(98)),
+    ] {
+        for cut in 0..5 {
+            let (owner, route) = fixture::route(true);
+            let request = route
+                .archive_request(
+                    Uuid::from_u128(99),
+                    Uuid::from_u128(97),
+                    Some(Uuid::from_u128(95).to_string()),
+                )
+                .unwrap();
+            let calls = AtomicUsize::new(0);
+            let mut effect = Box::pin(async {
+                request.start()?;
+                if cut == 1 {
+                    std::future::pending::<()>().await;
+                }
+                core::archive_commit_observed(
+                    async {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        if cut == 2 {
+                            std::future::pending::<()>().await;
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    },
+                    &request,
+                    result,
+                )
+                .await
+                .map_err(outbox::commit_error)?;
+                if cut == 3 {
+                    std::future::pending::<()>().await;
+                }
+                request.failed()?;
+                Err::<(), anyhow::Error>(anyhow::anyhow!("archive receipt-before-return error"))
+            });
+            if cut == 4 {
+                assert!(matches!(
+                    futures::poll!(&mut effect),
+                    std::task::Poll::Ready(Err(_))
+                ));
+            } else if cut != 0 {
+                assert!(futures::poll!(&mut effect).is_pending());
+            }
+            drop(effect);
+            assert_eq!(calls.load(Ordering::Relaxed), usize::from(cut >= 2));
+            assert_eq!(
+                owner.snapshot().archive.knowledge,
+                match cut {
+                    0 | 1 => core::ArchiveKnowledge::NoCommitEntered,
+                    2 => core::ArchiveKnowledge::CommitCallEntered(result),
+                    _ => core::ArchiveKnowledge::ReceiptKnown(result),
+                }
+            );
+            assert_eq!(
+                owner.snapshot().archive.returned,
+                (cut == 4).then_some(core::ArchiveReturned::Error)
+            );
+            assert!(route.local_request("bob@local.test/phone".into()).is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn mix_worker_settlement_commit_cuts_keep_no_match_not_moved_and_lease_lost_receipts() {
+    use crate::services::mix::outbox::{self, core, fixture};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for result in [
+        core::SettlementResult::Ack(false),
+        core::SettlementResult::DeadLetter(false),
+        core::SettlementResult::Retry(core::RetryResult::LeaseLost),
+    ] {
+        for cut in 0..5 {
+            let (owner, request) = fixture::settlement(result.kind());
+            let calls = AtomicUsize::new(0);
+            let mut effect = Box::pin(async {
+                request.start()?;
+                if cut == 1 {
+                    std::future::pending::<()>().await;
+                }
+                core::settlement_commit_observed(
+                    async {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        if cut == 2 {
+                            std::future::pending::<()>().await;
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    },
+                    &request,
+                    result,
+                )
+                .await
+                .map_err(outbox::commit_error)?;
+                if cut == 3 {
+                    std::future::pending::<()>().await;
+                }
+                request.failed()?;
+                Err::<(), anyhow::Error>(anyhow::anyhow!("settlement receipt-before-return error"))
+            });
+            if cut == 4 {
+                assert!(matches!(
+                    futures::poll!(&mut effect),
+                    std::task::Poll::Ready(Err(_))
+                ));
+            } else if cut != 0 {
+                assert!(futures::poll!(&mut effect).is_pending());
+            }
+            drop(effect);
+            assert_eq!(calls.load(Ordering::Relaxed), usize::from(cut >= 2));
+            assert_eq!(
+                owner.snapshot().settlement.as_ref().unwrap().knowledge,
+                match cut {
+                    0 | 1 => core::SettlementKnowledge::NotEntered,
+                    2 => core::SettlementKnowledge::CommitCallEntered(result),
+                    _ => core::SettlementKnowledge::ReceiptKnown(result),
+                }
+            );
+            assert_eq!(
+                owner.snapshot().settlement.as_ref().unwrap().returned,
+                (cut == 4).then_some(core::SettlementReturned::Error)
+            );
+            assert!(matches!(
+                owner.renewal_request(),
+                Err(core::Rejected::Settlement)
+            ));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn mix_worker_existing_renewal_loop_drops_pending_child_before_scope_closure() {
+    use crate::services::mix::outbox::{core, fixture};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    struct RenewalDrop {
+        owner: core::Observation,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for RenewalDrop {
+        fn drop(&mut self) {
+            assert!(!self.owner.snapshot().renewal_scope_closed);
+            assert_eq!(self.owner.snapshot().terminal, None);
+            self.dropped.store(true, Ordering::Relaxed);
+        }
+    }
+    let (owner, route) = fixture::route(false);
+    let gate = Arc::new(tokio::sync::Semaphore::new(1));
+    let effect_gate = gate.clone();
+    let renewal_gate = gate.clone();
+    let renewal_owner = owner.clone();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let renewal_dropped = dropped.clone();
+    let renewals = Arc::new(AtomicUsize::new(0));
+    let renewal_calls = renewals.clone();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let mut run = Box::pin(run_claimed_mix_effect_with_lease(
+        tokio_util::sync::CancellationToken::new(),
+        tokio::time::Instant::now() + Duration::from_secs(1),
+        Duration::from_millis(10),
+        async move {
+            let permit = effect_gate.acquire_owned().await.unwrap();
+            release_rx.await.unwrap();
+            drop(permit);
+            Ok(())
+        },
+        move || -> BoxFuture<'static, Result<bool>> {
+            let gate = renewal_gate.clone();
+            let owner = renewal_owner.clone();
+            let dropped = renewal_dropped.clone();
+            let calls = renewal_calls.clone();
+            Box::pin(async move {
+                let request = owner.renewal_request()?;
+                let _marker = RenewalDrop {
+                    owner: owner.clone(),
+                    dropped,
+                };
+                calls.fetch_add(1, Ordering::Relaxed);
+                let _permit = gate.acquire_owned().await.unwrap();
+                request.start()?;
+                let entered = request.enter_statement()?;
+                request.received(entered, true)?;
+                Ok(request.returned(true)?)
+            })
+        },
+    ));
+    assert!(futures::poll!(&mut run).is_pending());
+    assert_eq!(gate.available_permits(), 0);
+    tokio::time::advance(Duration::from_millis(10)).await;
+    assert!(futures::poll!(&mut run).is_pending());
+    assert_eq!(renewals.load(Ordering::Relaxed), 1);
+    release_tx.send(()).unwrap();
+    assert!(matches!(
+        futures::poll!(&mut run),
+        std::task::Poll::Ready(Ok(Some(())))
+    ));
+    drop(run);
+    assert!(dropped.load(Ordering::Relaxed));
+    assert_eq!(gate.available_permits(), 1);
+    assert!(owner.snapshot().renewal.pending);
+    assert_eq!(owner.snapshot().renewal.returned, None);
+    assert_eq!(
+        owner.snapshot().renewal.knowledge,
+        core::RenewalKnowledge::NotEntered
+    );
+    let closed = owner.close_renewal_scope().unwrap();
+    assert!(route
+        .returned(core::RouteResult::CompletedByWorker)
+        .unwrap()
+        .settlement(core::SettlementCommand::Ack, closed)
+        .unwrap()
+        .is_some());
+}
+
 #[tokio::test]
 async fn mix_foreground_authenticated_replay_never_starts_membership_or_store_effects() {
     use crate::services::mix::foreground::{fixture, Observation};

@@ -2,7 +2,7 @@
 """Pure/mocked Stage3 plumbing regressions; no saved-case process execution.
 
 All contracts, captures and inventories below are synthetic control fixtures.
-Private orchestration tests do not qualify or enable a saved Rust profile.
+Public orchestration tests do not execute or qualify a saved Rust profile.
 """
 import copy
 import importlib.util
@@ -197,20 +197,35 @@ class ClosedProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(supervision.SupervisionError, 'case_inventory_binding'):
             supervision.validate_case_record(record, contract, 0, 'C01', 'normal')
 
-    def test_incomplete_oracle_stops_caller_and_worker_before_hello(self):
+    def test_bad_current_record_stops_caller_and_worker_before_collection_or_hello(self):
         contract = synthetic_contract()
-        with patch.object(supervision, '_check_worker_sources'), patch.object(supervision, '_exchange') as exchange, \
-                patch.object(supervision, 'EvidenceStore') as store, self.assertRaises(direct_case.DirectCaseIncomplete):
-            supervision.worker_main(object(), supervision.encoded(contract), contract['run_id'], 'record',
-                                    supervision.object_hash(contract), 10 ** 12, 128, supervision.DIRECT_PROFILE)
-        exchange.assert_not_called()
-        store.assert_not_called()
-        with patch.object(supervision, '_check_worker_sources'), self.assertRaises(direct_case.DirectCaseIncomplete):
-            supervision.direct_preflight(contract)
-        with patch.object(caller, 'verify_material'), patch.object(supervision, '_check_worker_sources'), \
-                patch.object(caller, 'collect') as collect, self.assertRaises(direct_case.DirectCaseIncomplete):
-            caller.run(contract, 'synthetic-invocation')
-        collect.assert_not_called()
+        verified = {'summary': {'sha256': contract['provenance']['source_sha256'],
+                                'files': len(contract['provenance']['source_files']), 'bytes': 1234},
+                    'mutation_bytes': b'synthetic current source'}
+        directory = SimpleNamespace(exists=lambda: False, is_symlink=lambda: False)
+        for entry in ('worker', 'preflight', 'caller'):
+            with self.subTest(entry=entry), \
+                    patch.object(supervision, '_check_worker_sources', return_value=verified) as sources, \
+                    patch.object(supervision, '_path_metadata', return_value=SimpleNamespace(st_mode=stat.S_IFREG)), \
+                    patch.object(supervision, 'read_regular_bounded', return_value=b'unauthenticated record') as read, \
+                    patch.object(supervision, '_verified_binary') as binary, \
+                    patch.object(supervision, '_exchange') as exchange, patch.object(supervision, 'EvidenceStore') as store, \
+                    patch.object(supervision, 'caller_directory', return_value=directory), \
+                    patch.object(caller, 'verify_material'), patch.object(caller, 'collect') as collect:
+                with self.assertRaisesRegex(direct_case.direct_build_record.BuildRecordError, 'build_record_file_sha256'):
+                    if entry == 'worker':
+                        supervision.worker_main(object(), supervision.encoded(contract), contract['run_id'], 'record',
+                            supervision.object_hash(contract), 10 ** 12, 128, supervision.DIRECT_PROFILE)
+                    elif entry == 'preflight':
+                        supervision.direct_preflight(contract)
+                    else:
+                        caller.run(contract, 'synthetic-invocation')
+                sources.assert_called_once_with(contract)
+                read.assert_called_once_with(Path(contract['build_record']), supervision.MAX_CONTRACT)
+                binary.assert_not_called()
+                exchange.assert_not_called()
+                store.assert_not_called()
+                collect.assert_not_called()
 
     def test_worker_bootstrap_profile_must_match_external_contract(self):
         contract = synthetic_contract()
@@ -721,8 +736,7 @@ class NativeLiteralAndLedgerTests(unittest.TestCase):
         changed['originals'][0]['xml'] = changed['originals'][0]['xml'].replace('>x<', '>different body<')
         self.assertNotEqual(direct_case.derive_native_ledger(changed)['originals'][0]['projection'],
                             expected['originals'][0]['projection'])
-        with self.assertRaises(direct_case.DirectCaseIncomplete):
-            direct_case.fixture_plan(supervision.DIRECT_PROFILE)
+        self.assertEqual(len(direct_case.fixture_plan(supervision.DIRECT_PROFILE)), 16)
 
 
 class NativeEvidenceAndSafetyTests(unittest.TestCase):
@@ -833,10 +847,8 @@ class NativeEvidenceAndSafetyTests(unittest.TestCase):
 
     def test_no_fixture_qualification_is_available_from_partial_predicates(self):
         value, payload = self.synthetic(flush=False)
-        with self.assertRaises(direct_case.DirectCaseIncomplete):
+        with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'prepared_fixture_binding'):
             direct_case.evaluate_fixture({'value': value}, {}, payload, supervision.NO_FLUSH_PROFILE)
-        with self.assertRaises(direct_case.DirectCaseIncomplete):
-            direct_case.require_implemented()
 
 
 class NativeFullMatcherTests(unittest.TestCase):
@@ -1457,7 +1469,7 @@ class OwnerLiteralAndLedgerTests(unittest.TestCase):
     def fixture(self, identity):
         return next(item for item in direct_case.owner_fixtures() if item['id'] == identity)
 
-    def test_exact_owner_literals_round_trip_without_enabling_native_or_public_gates(self):
+    def test_exact_owner_literals_round_trip_and_keep_the_native_subset_restriction(self):
         fixtures = direct_case.owner_fixtures()
         self.assertEqual([item['id'] for item in fixtures], ['C08', 'C09', 'C13'])
         self.assertEqual([item['expected_verdict'] for item in fixtures], ['Pass', 'Cancelled', 'Pass'])
@@ -1466,8 +1478,7 @@ class OwnerLiteralAndLedgerTests(unittest.TestCase):
             self.assertEqual(fixture['bytes'], direct_case._encoded(fixture['value']))
             with self.assertRaises(direct_case.DirectCaseIncomplete):
                 direct_case.parse_native_input(fixture['bytes'])
-        with self.assertRaises(direct_case.DirectCaseIncomplete):
-            direct_case.fixture_plan(direct_case.FIXED16)
+        self.assertEqual(len(direct_case.fixture_plan(direct_case.FIXED16)), 16)
 
     def test_sm_literals_keep_separate_raw_extras_and_exact_reply_authority(self):
         value = self.fixture('C08')['value']
@@ -1641,7 +1652,7 @@ class OwnerLiteralAndLedgerTests(unittest.TestCase):
         self.assertEqual(direct_case.validate_case_evidence(payload), payload)
         with self.assertRaises(direct_case.DirectCaseIncomplete):
             direct_case.validate_native_evidence(payload)
-        with self.assertRaises(direct_case.DirectCaseIncomplete):
+        with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'prepared_fixture_binding'):
             direct_case.evaluate_fixture(self.fixture('C09'), {}, payload, direct_case.FIXED16)
 
     def test_sm_dto_is_recursive_and_global_sequence_includes_typed_handoffs(self):
@@ -2880,13 +2891,13 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
 
     def observed(self, fixture, profile):
         payload = self.supplied(fixture)
-        result = direct_case._evaluate_fixture(fixture, NativeFullMatcherTests.complete_record(), payload, profile)
+        result = direct_case.evaluate_fixture(fixture, NativeFullMatcherTests.complete_record(), payload, profile)
         self.assertTrue(result[2], (fixture['id'], result[1]))
         self.assertIsNone(result[3])
         return fixture['value'], result[0], result[1]
 
     def shrink_observations(self):
-        return [self.observed(fixture, direct_case.FIXED4) for fixture in direct_case._fixture_plan(direct_case.FIXED4)]
+        return [self.observed(fixture, direct_case.FIXED4) for fixture in direct_case.fixture_plan(direct_case.FIXED4)]
 
     def test_private_plans_bind_all_twenty_original_literal_identities(self):
         baseline = direct_case._fixture_plan(direct_case.FIXED16)
@@ -2924,7 +2935,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
     def test_twenty_supplied_dtos_route_through_reviewed_matchers(self):
         verdicts = []
         for profile in (direct_case.FIXED16, direct_case.FIXED4):
-            for fixture in direct_case._fixture_plan(profile):
+            for fixture in direct_case.fixture_plan(profile):
                 with self.subTest(profile=profile, identity=fixture['id']):
                     _value, semantic, evaluation = self.observed(fixture, profile)
                     self.assertEqual(semantic, self.supplied(fixture))
@@ -2937,7 +2948,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
     def test_actual_no_flush_safety_precedes_baseline_fixture_mismatch(self):
         fixture = next(item for item in direct_case._fixture_plan(direct_case.FIXED16) if item['id'] == 'C07')
         payload = NativeFullMatcherTests().supplied_sequence(fixture, omit_flush=True)
-        semantic, evaluation, matched, stop = direct_case._evaluate_fixture(
+        semantic, evaluation, matched, stop = direct_case.evaluate_fixture(
             fixture, NativeFullMatcherTests.complete_record(), payload, direct_case.FIXED16)
         self.assertEqual(semantic, payload)
         self.assertFalse(matched)
@@ -2949,7 +2960,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
     def test_replay_semantics_keep_full_dto_and_exclude_only_outer_diagnostics(self):
         fixture = direct_case._fixture_plan(direct_case.FIXED16)[0]
         payload = self.supplied(fixture)
-        adapter = SimpleNamespace(evaluate_fixture=direct_case._evaluate_fixture)
+        adapter = direct_case
         record = NativeFullMatcherTests.complete_record()
         first = supervision.evaluate_fixture(adapter, fixture, dict(record, process={'returncode': 0, 'pid': 1, 'wall_ms': 1}),
             DirectFrameTests.frame(direct_case._encoded(payload), before=b'elapsed 1s\n'), direct_case.FIXED16)
@@ -2964,7 +2975,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
         health, poll = original['route']['health_reads'][-1], original['polls'][0]
         health['seq'], poll['seq'] = poll['seq'], health['seq']
         direct_case.validate_case_evidence(changed)
-        result = direct_case._evaluate_fixture(fixture, record, changed, direct_case.FIXED16)
+        result = direct_case.evaluate_fixture(fixture, record, changed, direct_case.FIXED16)
         self.assertEqual(result[0], changed)
         self.assertNotEqual(result[0], first[0])
 
@@ -2976,22 +2987,23 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
             self.assertIsNotNone(expected['ledger'])
             return self.supplied(fixture)
         with patch.object(supervision, 'decode_direct_frame', side_effect=decode):
-            result = supervision.evaluate_fixture(SimpleNamespace(evaluate_fixture=direct_case._evaluate_fixture),
+            result = supervision.evaluate_fixture(direct_case,
                 fixture, NativeFullMatcherTests.complete_record(), b'supplied frame', direct_case.FIXED16)
         self.assertTrue(result[2])
 
-    def test_all_public_orchestration_gates_remain_unconditional(self):
+    def test_public_orchestration_forwards_exact_arguments_and_results(self):
         for public, private, arguments in (
                 (direct_case.fixture_plan, '_fixture_plan', (direct_case.FIXED16,)),
                 (direct_case.evaluate_fixture, '_evaluate_fixture', ({}, {}, {}, direct_case.FIXED16)),
                 (direct_case.shrink_relations, '_shrink_relations', ([],))):
-            with patch.object(direct_case, private) as body, self.assertRaises(direct_case.DirectCaseIncomplete):
-                public(*arguments)
-            body.assert_not_called()
+            result = object()
+            with patch.object(direct_case, private, return_value=result) as body:
+                self.assertIs(public(*arguments), result)
+            body.assert_called_once_with(*arguments)
 
     def test_fixed_shrink_rechecks_exact_target_and_safe_control(self):
         observations = self.shrink_observations()
-        direct_case._shrink_relations(observations)
+        direct_case.shrink_relations(observations)
         targets = [observations[index][2]['invariant'] for index in (0, 1, 3)]
         self.assertEqual(targets, [targets[0]] * 3)
         self.assertEqual(set(targets[0]['target']), {'frame_id', 'connection_id', 'owner', 'purpose', 'source'})
@@ -3011,7 +3023,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
         variants.append(bad)
         for bad in variants:
             with self.assertRaises(direct_case.DirectCaseInvalid):
-                direct_case._shrink_relations(bad)
+                direct_case.shrink_relations(bad)
 
     def test_shrink_does_not_trust_saved_evaluation_or_wrong_ack_target(self):
         observations = self.shrink_observations()
@@ -3027,7 +3039,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
         variants.append(bad)
         for bad in variants:
             with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'fixed_shrink_reevaluation'):
-                direct_case._shrink_relations(bad)
+                direct_case.shrink_relations(bad)
 
     def test_shrink_rejects_a_second_real_ack_instead_of_collapsing_failures(self):
         observations = self.shrink_observations()
@@ -3049,7 +3061,7 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
         native['ack_calls'].append(duplicate)
         direct_case.validate_case_evidence(payload)
         with self.assertRaisesRegex(direct_case.DirectCaseInvalid, 'fixed_shrink_reevaluation'):
-            direct_case._shrink_relations(observations)
+            direct_case.shrink_relations(observations)
 
 
 if __name__ == '__main__':

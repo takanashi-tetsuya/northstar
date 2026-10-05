@@ -1,10 +1,10 @@
-"""Independent Stage3 oracle source with a closed runtime gate.
+"""Independent Stage3 oracle for the fixed baseline and no-flush profiles.
 
 Finite supplied-evidence inspection and preparation-record binding are separate
-from whole-profile source/artifact qualification. Runner entry points fail
-closed while complete profile preflight and execution remain unqualified.
+from whole-profile artifact and execution qualification. Runner entry points
+require their contract, current material, inventory and prior-evidence checks.
 
-The eventual oracle must derive expectations from the literal Case and declared
+The oracle derives expectations from the literal Case and declared
 adapter contracts before opening output. A child verdict or saved transcript is
 never an expected-output source. Planned cancellations remain unqualified;
 normative Safety precedes fixture comparison for both executable artifacts.
@@ -398,7 +398,7 @@ def owner_fixtures():
 
 
 def bosh_fixtures():
-    """The three literal BOSH histories, still behind the complete-profile gate."""
+    """The three literal BOSH histories in the complete fixed baseline plan."""
     fixtures = []
     for name, frame, sender, recipient in (('C10', 1001, 11001, 21001), ('C11', 1101, 11101, 21101), ('C12', 1201, 11201, 21201)):
         value = _base_case(name, ((frame, sender, recipient),))
@@ -1964,8 +1964,8 @@ def native_safety_findings(value, payload):
     """Normative facts only, identical for baseline and no-flush artifacts.
 
     This never looks at profile, case name, source/binary hash or child verdict.
-    It can expose a truthful unsafe transcript before fixture comparison. It is
-    not the still-incomplete full transaction/retirement fixture evaluator.
+    It exposes a truthful unsafe transcript before the full transaction and
+    retirement fixture comparison.
     """
     ledger = derive_native_ledger(value)  # Always derive authority before output validation.
     validate_native_evidence(payload)
@@ -2749,7 +2749,7 @@ def _sm_fixture_findings(value, ledger, payload):
 
 
 def _inspect_sm_fixture(fixture, record, payload):
-    """Pure SM supplied-evidence matcher; no public profile can invoke it yet."""
+    """Pure SM supplied-evidence matcher with input-derived authority."""
     if type(record) is not dict or record.get('observation') != 'Complete':
         return None, None, False, record.get('observation', 'IncompleteProcess') if type(record) is dict else 'IncompleteProcess'
     process = record.get('process')
@@ -3453,7 +3453,7 @@ def bosh_safety_findings(value, payload):
 
 
 def _inspect_bosh_fixture(fixture, record, payload):
-    """Pure supplied BOSH evidence; the public complete-profile gate is closed."""
+    """Pure supplied BOSH evidence inspection with input-derived authority."""
     if type(record) is not dict or record.get('observation') != 'Complete':
         return None, None, False, record.get('observation', 'IncompleteProcess') if type(record) is dict else 'IncompleteProcess'
     process = record.get('process')
@@ -3526,7 +3526,7 @@ def _authority_safety_findings(ledger, payload):
 
 
 def _inspect_native_fixture(fixture, record, payload):
-    """Pure supplied-evidence inspection; the public runner gate stays closed.
+    """Pure supplied-evidence inspection with input-derived authority.
 
     Expected failure permission affects only exact fixture matching. Normative
     Safety and the actual verdict are computed first, independently of the
@@ -3608,11 +3608,7 @@ def _inspect_native_fixture(fixture, record, payload):
 
 
 class DirectCaseIncomplete(ValueError):
-    """No partial Stage3 corpus or oracle may produce a fixture match."""
-
-
-def require_implemented():
-    raise DirectCaseIncomplete('stage3_literal_corpus_wire_oracle_and_build_record_incomplete')
+    """Input or evidence is outside the implemented fixed semantic subset."""
 
 
 def validate_provenance(provenance):
@@ -3693,7 +3689,7 @@ def _prepare_fixture(fixture, profile_id):
 
 
 def _fixture_plan(profile_id):
-    """Private pure preparation for finite review; public execution stays shut."""
+    """Prepare the complete fixed plan and its detached input obligations."""
     return [_prepare_fixture(fixture, profile_id) for fixture in _fixture_sources(profile_id)]
 
 
@@ -3759,23 +3755,20 @@ def _shrink_relations(observations):
 
 
 def fixture_plan(profile_id):
-    """Public execution remains gated pending complete profile qualification."""
-    require_implemented()
+    """Return only the complete fixed16 or fixed4 input-derived plan."""
     return _fixture_plan(profile_id)
 
 
 def evaluate_fixture(fixture, record, payload, profile_id):
-    """Will return semantic projection, evaluation, fixture match and stop.
+    """Return the full semantic DTO, evaluation, fixture match and stop.
 
     Structural DTO checks must permit a truthful unsafe ACK transcript to reach
     the independent NativeAckWithoutSuccessfulFlush Safety predicate. Deterministic
     DTO seq remains in replay equality; unrelated process diagnostics do not.
     """
-    require_implemented()
     return _evaluate_fixture(fixture, record, payload, profile_id)
 
 
 def shrink_relations(observations):
-    """Will check the one deletion, exact same-target violations and control."""
-    require_implemented()
+    """Check the one deletion, exact same-target violations and safe control."""
     return _shrink_relations(observations)

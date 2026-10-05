@@ -1129,7 +1129,7 @@ def check_current_material(controlled, contract, verified_sources=None):
 def direct_preflight(contract):
     """Caller preparation; worker independently repeats every check before Hello.
 
-    The incomplete oracle stops here before the caller can start GNU timeout.
+    Every check here must succeed before the caller can start GNU timeout.
     Trusted invoking preparation must precede the first supervision import.
     """
     contract = validate_contract(contract)
@@ -1137,7 +1137,6 @@ def direct_preflight(contract):
     need(not profile['legacy'], 'direct_preflight_profile')
     verified_sources = _check_worker_sources(contract)
     from . import direct_case as controlled
-    controlled.require_implemented()
     controlled.validate_provenance(contract['provenance'])
     check_current_material(controlled, contract, verified_sources)
     plan = fixture_plan(controlled, profile['id'])
@@ -1749,7 +1748,6 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
         from . import controlled_admission as controlled
     else:
         from . import direct_case as controlled
-        controlled.require_implemented()
     controlled.validate_provenance(contract['provenance'])
     check_current_material(controlled, contract, verified_sources)
     plan = fixture_plan(controlled) if profile['legacy'] else fixture_plan(controlled, profile['id'])

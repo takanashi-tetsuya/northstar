@@ -1,9 +1,8 @@
-"""Independent Stage3 oracle source, currently incomplete.
+"""Independent Stage3 oracle source with a closed runtime gate.
 
-Native/None literal construction and inspection do not enable a partial fixed16
-profile. Full transaction/transport fixture evaluation, build-record validation
-and complete profile preflight remain incomplete. Runner entry points fail
-closed until the whole selected profile is implemented.
+Finite supplied-evidence inspection and preparation-record binding are separate
+from whole-profile source/artifact qualification. Runner entry points fail
+closed while complete profile preflight and execution remain unqualified.
 
 The eventual oracle must derive expectations from the literal Case and declared
 adapter contracts before opening output. A child verdict or saved transcript is
@@ -15,6 +14,8 @@ import hashlib
 import json
 import re
 import xml.etree.ElementTree as ET
+
+from . import direct_build_record
 
 
 CASE_SCHEMA = 'northstar-direct-case-v1'
@@ -48,6 +49,31 @@ NATIVE_STATE_FIELDS = ('original preparation managed_by_sm fence_entered returne
 SM_STATE_FIELDS = ('scope binding h_decision knowledge appended restored ownership_applied acknowledged_h_applied '
                    'notification_attempted capacity_completed returned_updated returned_error record_managed_by_sm terminal')
 BOSH_STATE_FIELDS = 'scope transfers responses renewals acknowledgements terminal keep_running'
+# Exact canonical LF-terminated inputs, independently materialized from these
+# factories. These identities bind the finite literal and source-budget review;
+# they never supply expected output or select a domain verdict.
+FIXED_LITERAL_IDENTITIES = {
+    'C01': (3121, '77537f15ac8b72a45997d539e93b677ee5a86d7b10c50502c9bc5f228c5854b5'),
+    'C02': (3136, 'b8ebb9b065a916e9dfa0f5ebdfa57584ac7f4b5725e923405b4a2762db0e6399'),
+    'C03': (4321, 'd7d16760097cd0544305828b6bc0aa269b4c80dca340ba71e76e1693a1311cde'),
+    'C04': (2457, '6995d7d80f40cef8a4ead526a8721c8c1431bf956deaf6e5a73d0ea74147a69c'),
+    'C05': (2517, '0e6828f08a651e69c8aceff912c1410ea6f7e7a3dc3d16906761ea17397a725b'),
+    'C06': (2715, 'e7cdb08acecd013d69fc14220cf36b91739ef0485dc985e6c1df9ddf7b8fc0db'),
+    'C07': (4167, '4a7676550e61398fe359ed182bd49a51115a0f09de8d07e97a814e7b5b9dddc4'),
+    'C08': (4217, '333fd54d5375b67c5e9bc4b3e616554b3cb27e9462f5b3ec4ce8b8dd302435a2'),
+    'C09': (3484, '4c6aad935c01a16451bde04d24dfd6ba1a9884a2b20c1fe87d39c998fd65cf7a'),
+    'C10': (4517, '632371d91bd03476a0b4abb1f44d712b714bd8c5c395e615152448cfba8bf6e9'),
+    'C11': (4039, '22648f81ac95f63cd1f4630c9edcfda8c45cf0c2b95bd298e14f45de3511f84d'),
+    'C12': (4256, '047ccc9f0da7e2b58a92358b10882e8a2f992fe891b6b88ac9bc7d25540cc826'),
+    'C13': (3864, '34a3f5ef0b16f2d9801a57de8f013c44d09bd4dcd1c3c14aa7506378a9c87f0c'),
+    'R01': (3157, 'cd963ef3b7b2b5be97f2cdd296390d60677e1c924d5c5f2f8debdda09376c934'),
+    'R02': (3134, 'bd301d3bfae8f6f61b36bb47f8e32e8aac09d2d97cd66337780e23a356b7c5dd'),
+    'R03': (3121, '9e9f64981a5bc85460836d3dafc74e9d3a90dd22d7caeeac36bc8fbf50402dde'),
+    'M1': (4167, '4a7676550e61398fe359ed182bd49a51115a0f09de8d07e97a814e7b5b9dddc4'),
+    'M2': (3079, 'bbe46d81832ed36ac7f54a79588b4216deccb593a4e81c56f2e9bc1ea83b2163'),
+    'M3': (3076, '0e39fde1923da50d0717156a33cbaf7a71817c6dcbbebe7dbae019c6dd911b7d'),
+    'M4': (3079, 'bbe46d81832ed36ac7f54a79588b4216deccb593a4e81c56f2e9bc1ea83b2163'),
+}
 
 
 class DirectCaseInvalid(ValueError):

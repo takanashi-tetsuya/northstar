@@ -74,6 +74,7 @@ PROPOSED_BUDGETS = {
 }
 DIRECT_HELPER_FILES = HELPER_FILES | frozenset({
     'scripts/lib/direct_case.py', 'scripts/test-direct-case.py',
+    'scripts/lib/direct_build_record.py', 'scripts/test-direct-build-record.py',
 })
 DIRECT_ENTRY = 'xmpp::protocol::messaging::saved_case::replay_saved_case'
 DIRECT_ARGUMENTS = ('--exact', DIRECT_ENTRY, '--ignored', '--nocapture',
@@ -975,7 +976,8 @@ def check_direct_import_layout(root):
     This repeat protects the worker's later oracle import; -B alone cannot.
     """
     root = Path(root)
-    stems = ('controlled_admission_supervision', 'controlled_admission', 'experiment_contract', 'direct_case')
+    stems = ('controlled_admission_supervision', 'controlled_admission', 'experiment_contract',
+             'direct_case', 'direct_build_record')
     absent = ['scripts/lib.py', 'scripts/lib.pyc', 'scripts/lib/__init__.py',
               'scripts/lib/__init__.pyc', 'scripts/lib/__pycache__']
     for name in DIRECT_PARSER_IMPORTS:
@@ -1073,7 +1075,7 @@ def _check_worker_sources(contract):
     need(set(contract['helper_source_files']).issubset(source_files), 'helper_scope')
     if not profile['legacy']:
         check_direct_inventory(contract)
-    used = 0
+    used, mutation_bytes = 0, None
     # Helpers first. No controlled-admission/project module has been imported yet.
     for name in list(sorted(profile['helpers'])) + sorted(set(source_files) - profile['helpers']):
         path = Path(name)
@@ -1083,16 +1085,45 @@ def _check_worker_sources(contract):
         data = reader(Path(contract['root']) / path, contract['budgets']['source_bytes'] - used)
         used += len(data)
         need(fingerprint(data) == source_files[name], 'source_identity_changed')
+        if not profile['legacy'] and name == 'src/xmpp/mod.rs':
+            mutation_bytes = data
     need(object_hash(source_files) == contract['provenance']['source_sha256'], 'source_manifest_hash')
     if not profile['legacy']:
         check_direct_inventory(contract)
+        return {'summary': {'sha256': object_hash(source_files), 'files': len(source_files), 'bytes': used},
+                'mutation_bytes': mutation_bytes}
 
 
-def check_current_material(controlled, contract):
+def _current_build_record(controlled, contract, verified_sources):
+    """Authenticate bounded preparation bytes before opening any runnable."""
+    need(not contract_profile(contract)['legacy'], 'build_record_profile')
+    need(type(verified_sources) is dict and set(verified_sources) == {'summary', 'mutation_bytes'},
+         'verified_source_summary_required')
+    path = Path(contract['build_record'])
+    need(stat.S_ISREG(_path_metadata(path).st_mode), 'build_record_regular_file')
+    raw = read_regular_bounded(path, MAX_CONTRACT)
+    return controlled.check_current_provenance(contract, record_bytes=raw,
+        verified_source_summary=verified_sources['summary'], current_mutation_bytes=verified_sources['mutation_bytes'])
+
+
+def _check_build_runnable(controlled, contract, record, descriptor):
+    # _verified_binary has hashed this descriptor against the external contract.
+    # Its byte/mode facts come from the still-retained regular file, not record.
+    identity = _binary_identity(descriptor)
+    controlled.validate_runnable(record, {'path': contract['binary'],
+        'sha256': contract['provenance']['binary_sha256'], 'bytes': identity[5], 'mode': stat.S_IMODE(identity[2])})
+
+
+def check_current_material(controlled, contract, verified_sources=None):
     if contract_profile(contract)['legacy']:
         controlled.check_current_provenance(contract['binary'], contract['provenance'], contract['root'])
     else:
-        controlled.check_current_provenance(contract)
+        record = _current_build_record(controlled, contract, verified_sources)
+        descriptor = _verified_binary(contract)
+        try:
+            _check_build_runnable(controlled, contract, record, descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def direct_preflight(contract):
@@ -1104,11 +1135,11 @@ def direct_preflight(contract):
     contract = validate_contract(contract)
     profile = contract_profile(contract)
     need(not profile['legacy'], 'direct_preflight_profile')
-    _check_worker_sources(contract)
+    verified_sources = _check_worker_sources(contract)
     from . import direct_case as controlled
     controlled.require_implemented()
     controlled.validate_provenance(contract['provenance'])
-    check_current_material(controlled, contract)
+    check_current_material(controlled, contract, verified_sources)
     plan = fixture_plan(controlled, profile['id'])
     validate_fixture_inventory(plan, contract)
     prior = replay_source(contract['replay_dir'], contract) if contract['mode'] == 'replay' else None
@@ -1711,14 +1742,14 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
     need(contract['run_id'] == run_id and contract['mode'] == mode and object_hash(contract) == contract_sha256,
          'external_contract_identity')
     need(profile['id'] == profile_id, 'external_profile_identity')
-    _check_worker_sources(contract)
+    verified_sources = _check_worker_sources(contract)
     if profile['legacy']:
         from . import controlled_admission as controlled
     else:
         from . import direct_case as controlled
         controlled.require_implemented()
     controlled.validate_provenance(contract['provenance'])
-    check_current_material(controlled, contract)
+    check_current_material(controlled, contract, verified_sources)
     plan = fixture_plan(controlled) if profile['legacy'] else fixture_plan(controlled, profile['id'])
     if not profile['legacy']:
         validate_fixture_inventory(plan, contract)
@@ -1755,13 +1786,18 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
             failure_kind, phase = 'InvalidArtifact', 'prior_validation'
             prior_semantics = verify_prior_case(controlled, contract['replay_dir'], prior, fixture, index) if prior else None
             failure_kind, phase = 'EnvironmentInterrupted', 'provenance_validation'
-            _check_worker_sources(contract)
-            check_current_material(controlled, contract)
+            verified_sources = _check_worker_sources(contract)
+            build_record = None
+            if profile['legacy']:
+                check_current_material(controlled, contract)
+            else:
+                build_record = _current_build_record(controlled, contract, verified_sources)
             binary_fd = _verified_binary(contract)
             input_fd = None
             try:
                 binary_identity = _binary_identity(binary_fd)
                 if not profile['legacy']:
+                    _check_build_runnable(controlled, contract, build_record, binary_fd)
                     input_fd = _verified_input(contract, store.directory / input_reference['file'], input_reference)
                     input_identity = _input_identity(input_fd)
                 launched = True
@@ -1787,8 +1823,8 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
             # This immutable commit precedes all semantic checks, including a
             # source/input-change failure following an otherwise valid process.
             failure_kind, phase = 'EnvironmentInterrupted', 'post_execution_provenance'
-            _check_worker_sources(contract)
-            check_current_material(controlled, contract)
+            verified_sources = _check_worker_sources(contract)
+            check_current_material(controlled, contract, verified_sources)
             need(read_reference(store.directory, input_reference, contract['budgets']['input_bytes']) == fixture['bytes'], 'input_changed')
             failure_kind, phase = 'EnvironmentInterrupted', 'oracle'
             output, evaluation, matched, stop = evaluate_fixture(controlled, fixture, record, capture['bytes']['stdout'], profile['id'])

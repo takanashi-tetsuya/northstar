@@ -12,6 +12,13 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
+pub(crate) mod foreground;
+pub(crate) use northstar_room_core::mix::{
+    Admission as StoreMixMessageAdmission, Outcome as StoreEventOutcome,
+    Participant as MixParticipant, Replay as MixBusinessReplay,
+    ReplayIdentity as MixReplayIdentity,
+};
+
 // XEP-0369 node identifiers owned by the application boundary.  The repository
 // keeps identically-valued storage constants; protocol code may only name
 // these.
@@ -83,13 +90,6 @@ impl MixChannel {
     pub(crate) fn jid(&self) -> String {
         format!("{}@{}", self.localpart, self.service_domain)
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixParticipant {
-    pub(crate) participant_id: Uuid,
-    pub(crate) jid: String,
-    pub(crate) nick: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -352,24 +352,6 @@ pub(crate) enum JoinChannelOutcome {
     NickConflict,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StoreEventOutcome {
-    Stored(Uuid),
-    Replay(Uuid),
-    NotParticipant,
-    Conflict,
-    TooLarge,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StoreMixMessageAdmission {
-    pub(crate) outcome: StoreEventOutcome,
-    /// Audience captured while the channel lock and archive transaction were
-    /// still held. Join/leave/subscription changes use the same lock, so a
-    /// committed message has one linearizable recipient set.
-    pub(crate) recipients: Vec<MixParticipant>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MixMutationAdmission {
     pub(crate) channel: MixChannel,
@@ -439,12 +421,6 @@ pub(crate) enum RetractMixMessageOutcome {
     Forbidden,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct MixReplayIdentity {
-    pub(crate) client_id: String,
-    pub(crate) canonical_semantics: Vec<u8>,
-}
-
 pub(crate) struct StoreMixMessageRequest<'a> {
     pub(crate) channel_id: Uuid,
     pub(crate) actor: &'a str,
@@ -465,13 +441,6 @@ pub(crate) struct RetractMixMessageRequest<'a> {
     pub(crate) retraction_payload: &'a str,
     pub(crate) identity: Option<MixReplayIdentity>,
     pub(crate) visible_jid: Option<&'a str>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixBusinessReplay {
-    Miss,
-    Replay(Uuid),
-    Conflict,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -744,6 +713,8 @@ impl MixDeliveryWakeSubscription {
 #[derive(Clone)]
 pub(crate) struct MixService<R> {
     repository: R,
+    /// Receiving configuration, independent of any per-call claimed domain.
+    configured_mix_domain: String,
     message_identity: MixMessageContentKeyring,
     retraction_identity: MixRetractionContentKeyring,
     /// The bounded durable MIX outbox budget derived once from the configured
@@ -886,6 +857,16 @@ pub(crate) trait MixRepository: Send + Sync {
         request: StoreMixMessageRequest<'_>,
         authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
+    fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+    ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
+    fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+    ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,
@@ -1276,6 +1257,7 @@ impl<R: MixRepository> MixService<R> {
     ) -> Result<Self> {
         Self::new_with_outbox_database_admission(
             repository,
+            "local.test".to_owned(),
             message_identity,
             retraction_identity,
             crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
@@ -1287,14 +1269,18 @@ impl<R: MixRepository> MixService<R> {
 
     pub(crate) fn new_with_outbox_database_admission(
         repository: R,
+        configured_domain: String,
         message_identity: MixMessageContentKeyring,
         retraction_identity: MixRetractionContentKeyring,
         outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
         schema: String,
     ) -> Result<Self> {
         let outbox_background_budget = outbox_db_admission.capacity();
+        let configured_mix_domain =
+            northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?;
         Ok(Self {
             repository,
+            configured_mix_domain,
             message_identity,
             retraction_identity,
             outbox_background_budget,
@@ -1543,6 +1529,62 @@ impl<R: MixRepository> MixService<R> {
             self.publish_delivery_local_commit();
         }
         Ok(result)
+    }
+
+    pub(crate) fn prepare_mix_foreground(
+        &self,
+        ingress: foreground::Ingress,
+    ) -> std::result::Result<foreground::PreparedIngress, foreground::Rejected> {
+        if !ingress.matches_receiving_domain(&self.configured_mix_domain) {
+            return Err(foreground::Rejected::Input);
+        }
+        Ok(foreground::PreparedIngress::new(ingress))
+    }
+
+    pub(crate) async fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+    ) -> Result<Arc<StoreMixMessageAdmission>> {
+        let authenticators = request.command().identity.as_ref().map(|identity| {
+            self.message_identity
+                .authenticators(&identity.canonical_semantics)
+        });
+        let _admission = self.delivery_admission_guard().await;
+        let completion = northstar_room_application::mix::admit_observed(
+            request,
+            &self.configured_mix_domain,
+            self.repository
+                .store_mix_message_observed(request, authenticators.as_ref()),
+        )
+        .await
+        .map_err(foreground::effect_error)?;
+        let (result, wake) = completion.into_wake(request.observation())?;
+        if let Some(wake) = wake {
+            wake.invoke(|| self.publish_delivery_local_commit())?;
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+    ) -> Result<MixBusinessReplay> {
+        let identity = request
+            .ingress()
+            .identity
+            .as_ref()
+            .ok_or(foreground::Rejected::Input)?;
+        let authenticators = self
+            .message_identity
+            .authenticators(&identity.canonical_semantics);
+        northstar_room_application::mix::read_observed(
+            request,
+            &self.configured_mix_domain,
+            self.repository
+                .lookup_mix_message_replay_observed(request, &authenticators),
+        )
+        .await
+        .map_err(foreground::effect_error)
     }
 
     /// Consult the immutable replay commitment before any mutable participant

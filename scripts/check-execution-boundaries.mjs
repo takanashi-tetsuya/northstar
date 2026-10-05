@@ -22,6 +22,10 @@ const files = {
   mucRepository: 'src/db/room.rs',
   mix: 'src/xmpp/protocol/mix.rs',
   mixService: 'src/services/mix.rs',
+  mixCore: 'crates/northstar-room-application/src/mix.rs',
+  mixData: 'crates/northstar-room-core/src/mix.rs',
+  mixSlot: 'src/services/mix/foreground.rs',
+  state: 'src/state.rs',
   nativeWrite: 'src/xmpp/direct_delivery.rs',
   nativeCore: 'crates/northstar-delivery-core/src/native_write.rs',
   replayDb: 'src/db/replay.rs',
@@ -92,7 +96,7 @@ function codeOnly(source) {
   return output.join('');
 }
 
-function body(source, declaration) {
+function body(source, declaration, original = false) {
   const code = codeOnly(source);
   const pattern = new RegExp(declaration, 'g');
   const matches = [...code.matchAll(pattern)];
@@ -102,7 +106,7 @@ function body(source, declaration) {
   let depth = 1;
   for (let index = opening + 1; index < code.length; index++) {
     if (code[index] === '{') depth++;
-    else if (code[index] === '}' && --depth === 0) return code.slice(opening + 1, index);
+    else if (code[index] === '}' && --depth === 0) return (original ? source : code).slice(opening + 1, index);
   }
   throw new Error(`execution boundary: unterminated body: ${declaration}`);
 }
@@ -797,6 +801,152 @@ export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mu
     'MUC accepted fanout must consume its envelope and cannot substitute live payload');
 }
 
+export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, mixService, mixDb, mixRepository, frame, state }) {
+  const dense = source => compact(source).replace(/,([)}])/g, '$1');
+  for (const source of [mixCore, mixData]) {
+    requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(productionModule(source))),
+      'MIX foreground core must remain free of ambient effects');
+  }
+  const serviceConstructor = dense(body(mixService, 'fn\\s+new_with_outbox_database_admission\\b'));
+  const originalConstructor = body(mixService, 'fn\\s+new_with_outbox_database_admission\\b', true);
+  const constructorCode = codeOnly(originalConstructor);
+  const configuredDerivations = [...originalConstructor.matchAll(/let\s+configured_mix_domain\s*=\s*northstar_xmpp_types::prepare_domainpart\s*\(\s*&format!\s*\(\s*"mix\.\{configured_domain\}"\s*,?\s*\)\s*,?\s*\)\s*\?/g)]
+    .filter(match => constructorCode.slice(match.index, match.index + 3) === 'let');
+  requireBoundary(configuredDerivations.length === 1,
+    'MIX receiving domain must preserve the configured canonical mix subdomain derivation');
+  requireBoundary(serviceConstructor.includes('letconfigured_mix_domain=northstar_xmpp_types::prepare_domainpart(&format!())?;') &&
+    serviceConstructor.includes('repository,configured_mix_domain,message_identity,'),
+    'MIX receiving domain must come from the configured service constructor');
+  requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(db::mix_repository::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
+    'MIX AppState construction must supply actual runtime configuration');
+  const preparation = dense(body(mixService, 'fn\\s+prepare_mix_foreground\\b'));
+  requireBoundary(preparation === 'if!ingress.matches_receiving_domain(&self.configured_mix_domain){returnErr(foreground::Rejected::Input);}Ok(foreground::PreparedIngress::new(ingress))',
+    'MIX ingress cannot supply its own receiving authority');
+  for (const [method, runner] of [['store_mix_message_observed', 'admit_observed'], ['lookup_mix_message_replay_observed', 'read_observed']]) {
+    const service = dense(body(mixService, `pub\\(crate\\)\\s+async\\s+fn\\s+${method}\\b`));
+    requireBoundary(service.includes(`northstar_room_application::mix::${runner}(request,&self.configured_mix_domain,self.repository.${method}(`),
+      'MIX observed service must retain the receiving domain and bound repository request');
+  }
+  const storeService = dense(body(mixService, 'pub\\(crate\\)\\s+async\\s+fn\\s+store_mix_message_observed\\b'));
+  const legacyService = dense(body(mixService, 'pub\\(crate\\)\\s+async\\s+fn\\s+store_mix_message\\b'));
+  ordered(legacyService, ['self.delivery_admission_guard().await;', 'self.repository.store_mix_message(request,authenticators.as_ref()).await?'],
+    'MIX compatibility service must preserve its existing fair admission guard');
+  ordered(storeService, ['let_admission=self.delivery_admission_guard().await;',
+    'northstar_room_application::mix::admit_observed(', 'completion.into_wake(request.observation())?',
+    'wake.invoke(||self.publish_delivery_local_commit())?', 'Ok(result)'],
+    'MIX observed service must keep fair admission and consume its exact one-shot wake');
+  requireBoundary(count(storeService, 'self.publish_delivery_local_commit()') === 1,
+    'MIX observed service may invoke only one local wake');
+  const owner = body(mixCore, 'impl\\s+Observation\\b');
+  requireBoundary(dense(body(owner, 'fn\\s+same_invocation\\b')) === 'Arc::ptr_eq(&self.0,&other.0)',
+    'MIX invocation identity must be private allocation identity');
+  const store = body(mixCore, 'impl\\s+StoreRequest\\b');
+  const start = dense(body(store, 'fn\\s+start\\b'));
+  requireBoundary(start.includes('self.observation.ingress().matches_receiving_domain(configured_domain)') &&
+    start.includes('Arc::ptr_eq(command,&self.command)') && start.includes('ifstate.snapshot.repository_started{returnErr(Rejected::AlreadyStarted);}'),
+    'MIX repository start must independently validate receiving domain and immutable invocation input');
+  const commit = dense(body(mixCore, 'async\\s+fn\\s+commit_observed\\b'));
+  requireBoundary(commit === 'letprepared=request.enter_commit(fact).map_err(CommitError::Observation)?;commit.await.map_err(CommitError::Commit)?;request.received(prepared).map_err(CommitError::Observation)',
+    'MIX COMMIT must retain actual entry and receipt without an intervening await');
+  const received = dense(body(store, 'fn\\s+received\\b'));
+  ordered(received, ['if!self.observation.same_invocation(&prepared.observation){returnErr(Rejected::Invocation);}',
+    'store_pending(&state.snapshot)?;', 'Arc::ptr_eq(fact,&prepared.fact)', 'state.snapshot.knowledge=Knowledge::ReceiptKnown(prepared.fact);'],
+    'MIX receipt must belong to the exact active invocation and entered fact');
+  const returned = dense(body(store, 'fn\\s+returned\\b'));
+  ordered(returned, ['state.snapshot.returned=Some(Returned::Admission(admission.clone()));',
+    'Knowledge::ReceiptKnown(fact)iffact.matches_return(&admission)',
+    'state.snapshot.returned=Some(Returned::AcceptedStored(id));', 'state.snapshot.wake=Wake::Ready;'],
+    'MIX contradictory returns must survive while matched Stored retains one audience and grants one wake');
+  requireBoundary(returned.includes('Knowledge::NoCommitRequested=>returnErr(Rejected::MissingReceipt)') &&
+    returned.includes('Outcome::Replay(_)=>returnErr(Rejected::MissingReadEvidence)') &&
+    returned.includes('Outcome::Conflict|Outcome::TooLarge|Outcome::NotParticipant=>'),
+    'MIX read evidence, message receipts and receipt-free refusals must stay distinct');
+  const wake = dense(body(body(mixCore, 'impl\\s+WakePermit\\b'), 'fn\\s+invoke\\b'));
+  ordered(wake, ['active(&state.snapshot)?;', 'state.snapshot.wake=Wake::Invoked;', 'publish();'],
+    'MIX local wake must consume before synchronous invocation');
+  const observedSql = dense(body(mixDb, 'pub\\s+async\\s+fn\\s+store_mix_message_observed\\b'));
+  requireBoundary(observedSql === 'letcommand=request.command();store_mix_message_inner(pool,command.channel_id,&command.actor,&command.item_id.to_string(),&command.payload,identity,&command.delivery_payload,command.visible_jid.as_deref(),command.encrypted,payloads,Some(request)).await',
+    'MIX observed SQL inputs must come only from the bound request');
+  const sql = dense(body(mixDb, 'async\\s+fn\\s+store_mix_message_inner\\b'));
+  requireBoundary(count(sql, 'request.observed_existing(foreground_existing(&existing))?;}transaction.rollback().await?;') === 2,
+    'MIX raw Existing must be retained before both rollback awaits');
+  ordered(sql, ['begin_mix_delivery_admission(pool).await?', 'existing_mix_business_intent_tx(',
+    'letparticipant_row=sqlx::query(', 'admit_mix_business_intent_tx(', 'store_mix_event_tx(',
+    'Ok(Some(storage_id))=>', 'letprojection=enqueue_mix_deliveries_tx_with_facts(',
+    'northstar_room_application::mix::commit_observed(transaction.commit(),request,northstar_room_core::mix::Stored{authoritative_id,storage_id,channel_id:channel.id,channel_jid:channel.jid(),projection}',
+    'outcome:StoreEventOutcome::Stored(authoritative_id)'],
+    'MIX message admission must preserve capacity/channel/replay/membership/archive/projection/actual COMMIT order');
+  const enqueue = dense(body(mixDb, 'async\\s+fn\\s+enqueue_mix_deliveries_tx_with_facts\\b'));
+  requireBoundary(enqueue.includes('ifrecipients.is_empty(){returnOk(None);}') &&
+    enqueue.includes('delivery_id:delivery_ids[recipient.jid.as_str()]') &&
+    enqueue.includes('sequence:sequences[&recipient.jid]') && enqueue.includes('participant:recipient.clone()'),
+    'MIX projection facts must retain actual IDs/sequences and no empty durable event');
+  const repository = dense(body(mixRepository, 'async\\s+fn\\s+store_mix_message_observed\\b'));
+  ordered(repository, ['db::store_mix_message_observed(&self.pool,request,identity,&MixPayloads).await?',
+    'existing.target_id.is_none()&&authenticators.verifies(&existing.semantic_key_id,&existing.semantic_mac)',
+    'request.authenticated(&raw,classified)?;'],
+    'MIX Existing must be classified by the repository after SQL rollback');
+  const storeClassification = 'letexact=authenticators.is_some_and(|authenticators|{' +
+    'existing.target_id.is_none()&&authenticators.verifies(&existing.semantic_key_id,&existing.semantic_mac)});' +
+    'letclassified=ifexact{MixBusinessReplay::Replay(existing.authoritative_id)}else{MixBusinessReplay::Conflict};' +
+    'request.authenticated(&raw,classified)?;' +
+    'ifexact{StoreEventOutcome::Replay(existing.authoritative_id)}else{StoreEventOutcome::Conflict}';
+  requireBoundary(repository.includes(storeClassification),
+    'MIX store authentication must map exact evidence to original-ID Replay and mismatched evidence to Conflict');
+  const read = dense(body(mixRepository, 'async\\s+fn\\s+lookup_mix_message_replay_observed\\b'));
+  ordered(read, ['db::lookup_mix_business_intent(', 'request.observed_existing(raw.clone())?;',
+    'existing.target_id.is_none()&&authenticators.verifies(&existing.semantic_key_id,&existing.semantic_mac)',
+    'request.authenticated(&raw,result)?;', 'Ok(result)'],
+    'MIX preflight replay must retain raw then authenticated repository evidence');
+  const readClassification = 'letresult=ifexisting.target_id.is_none()&&' +
+    'authenticators.verifies(&existing.semantic_key_id,&existing.semantic_mac)' +
+    '{MixBusinessReplay::Replay(existing.authoritative_id)}else{MixBusinessReplay::Conflict};' +
+    'request.authenticated(&raw,result)?;Ok(result)';
+  requireBoundary(read.includes(readClassification),
+    'MIX read authentication must map exact evidence to original-ID Replay and mismatched evidence to Conflict');
+  const slot = body(mixSlot, 'impl\\s+MixForegroundSlot\\b');
+  ordered(dense(body(slot, 'fn\\s+register\\b')), ['letmutslot=self.0.lock()',
+    'ifslot.terminal.is_some(){returnErr(Rejected::Retired);}',
+    'if!observation.is_for(prepared){returnErr(Rejected::Input);}', 'slot.observation=Some(observation.clone());'],
+    'MIX registration must reject retired/conflicting owners under the slot lock');
+  const registration = dense(body(body(frame, 'impl\\s+SessionExecutions\\b'), 'fn\\s+mix_foreground\\b'));
+  requireBoundary(registration === 'letSome(execution)=&self.currentelse{returnOk(None);};ifexecution.0.outcome.load(Ordering::Relaxed)!=Outcome::Pendingasu8{returnErr(foreground::Rejected::Retired);}letprepared=prepare()?;execution.0.mix_foreground.register(&prepared).map(Some)',
+    'MIX true absence must skip preparation and retirement must never fall back to compatibility');
+  const finish = dense(body(frame, 'fn\\s+finish\\(&mut\\s+self,\\s*outcome:\\s*Outcome\\)'));
+  ordered(finish, ['ifself.phase=={letreason=matchoutcome{Outcome::Completed=>foreground::TerminalReason::Completed', 'progress.mix_foreground.retire(reason)', 'progress.outcome.store('],
+    'MIX retirement must remain in the frame terminal phase');
+  const channel = dense(body(mix, 'async\\s+fn\\s+process_channel_message\\b'));
+  const foregroundRegistration = 'letforeground=ifretraction_target.is_none(){ifletSome(frames)=observation{' +
+    'frames.mix_foreground(||{state.mix_service().prepare_mix_foreground(crate::services::mix::foreground::Ingress{' +
+    'channel_id:channel.id,channel_jid:channel.jid(),actor_bare:actor_bare.to_owned(),actor_full:actor_full.to_owned(),' +
+    'children:message_children.as_deref().unwrap_or_default().to_owned(),encrypted:message_encrypted,identity:message_replay_identity.clone()' +
+    '})})?}else{None}}else{None};';
+  const replaySelection = 'ifletSome(identity)=message_replay_identity.as_ref(){letreplay=ifletSome(owner)=&foreground{' +
+    'letrequest=owner.replay_request()?.ok_or(crate::services::mix::foreground::Rejected::Input)?;' +
+    'state.mix_service().lookup_mix_message_replay_observed(&request).await?' +
+    '}else{state.mix_service().lookup_mix_message_replay(channel.id,actor_bare,identity).await?};matchreplay{';
+  const storeSelection = 'ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}' +
+    'letadmission=ifletSome(owner)=&foreground{' +
+    'letrequest=owner.store_request(crate::services::mix::foreground::StoreCommand{' +
+    'channel_id:channel.id,actor:actor_bare.to_owned(),item_id:archive_id,payload:archive,identity:message_replay_identity,' +
+    'delivery_payload:children,visible_jid:live_jid.map(str::to_owned),encrypted:message_encrypted})?;' +
+    'state.mix_service().store_mix_message_observed(&request).await?' +
+    '}else{Arc::new(state.mix_service().store_mix_message(StoreMixMessageRequest{' +
+    'channel_id:channel.id,actor:actor_bare,item_id:&archive_id.to_string(),payload:&archive,identity:message_replay_identity,' +
+    'delivery_payload:&children,visible_jid:live_jid,encrypted:message_encrypted}).await?)};';
+  requireBoundary(count(channel, foregroundRegistration) === 1 && count(channel, 'letforeground=') === 1 &&
+    !channel.includes('letobservation=') && channel.includes(replaySelection) && channel.includes(storeSelection),
+    'MIX foreground must retain contiguous unfiltered registration, replay and store selection with explicit absence-only compatibility');
+  requireBoundary(count(channel, 'mix_participant(channel.id,actor_bare)') === 1 &&
+    channel.indexOf('mix_participant(channel.id,actor_bare)') > channel.indexOf('lookup_mix_message_replay_observed(&request).await?'),
+    'MIX mutable membership must follow immutable replay');
+  ordered(channel, ['letforeground=ifretraction_target.is_none()', 'frames.mix_foreground(||{state.mix_service().prepare_mix_foreground(',
+    'owner.replay_request()?', 'lookup_mix_message_replay_observed(&request).await?',
+    'matchreplay{', 'MixBusinessReplay::Replay(_)=>returnOk(None)', 'mix_participant(channel.id,actor_bare)',
+    'owner.store_request(', 'store_mix_message_observed(&request).await?', 'store_mix_message(StoreMixMessageRequest{'],
+    'MIX ordinary ingress must register before replay, skip mutable membership on replay and preserve explicit compatibility');
+}
+
 export function verifyRoomExecutionBoundaries(sources) {
   const { muc, mucFanout, mix } = sources;
   const message = compact(body(muc, 'async\\s+fn\\s+muc_message\\b'));
@@ -851,10 +1001,13 @@ export function verifyRoomExecutionBoundaries(sources) {
   const channelMessage = compact(body(mix, 'async\\s+fn\\s+process_channel_message\\b'));
   requireBoundary(channelMessage.startsWith('ifletSome(observation)=observation{observation.enter(Stage::MixPolicy);}'),
     'MIX shared owner must retain optional policy observation');
-  for (const call of ['retract_mix_message', 'store_mix_message']) {
+  for (const call of ['retract_mix_message']) {
     requireBoundary(channelMessage.includes(`ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}letadmission=state.mix_service().${call}(`),
       `MIX admission stage must immediately precede ${call}`);
   }
+  requireBoundary(channelMessage.includes('ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}letadmission=ifletSome(owner)=&foreground{'),
+    'MIX admission stage must immediately precede the foreground admission branch');
+  verifyMixForegroundBoundaries(sources);
   const federated = compact(body(mix, 'async\\s+fn\\s+federated_mix_message\\b'));
   requireBoundary(federated.includes('process_channel_message(&state,&actor_bare,&actor_full,&raw,None).await?'),
     'federated MIX must not fabricate a C2S frame observation');

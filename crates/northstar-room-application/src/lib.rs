@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod discussion;
+pub mod mix;
 
 use northstar_room_core::{
     MucActorAuthority, MucAffiliationBatchOutcome, MucAffiliationBatchWrite,

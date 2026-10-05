@@ -4558,6 +4558,7 @@ impl AppState {
         // a shared database's unrelated schema from creating local scan load.
         let mix_service = crate::services::mix::MixService::new_with_outbox_database_admission(
             db::mix_repository::PostgresMixRepository::new(pool.clone()),
+            config.domain.clone(),
             mix_message_content_identity,
             mix_retraction_content_identity,
             durable_outbox_database_admission.clone(),

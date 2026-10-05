@@ -585,6 +585,15 @@ async fn enqueue_mix_deliveries_tx(
     fence: &MixDeliveryAdmissionFence,
     projection: MixDeliveryProjection<'_>,
 ) -> Result<()> {
+    enqueue_mix_deliveries_tx_with_facts(transaction, fence, projection).await?;
+    Ok(())
+}
+
+async fn enqueue_mix_deliveries_tx_with_facts(
+    transaction: &mut Transaction<'_, Postgres>,
+    fence: &MixDeliveryAdmissionFence,
+    projection: MixDeliveryProjection<'_>,
+) -> Result<Option<northstar_room_core::mix::DeliveryProjection>> {
     let MixDeliveryProjection {
         channel,
         event_id,
@@ -595,7 +604,7 @@ async fn enqueue_mix_deliveries_tx(
         encrypted,
     } = projection;
     if recipients.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     anyhow::ensure!(
         archive == authoritative_stanza_id.is_some(),
@@ -712,7 +721,28 @@ async fn enqueue_mix_deliveries_tx(
     // another process cannot observe an inverted lock order. Failure rolls
     // every inserted row back with the reservation.
     reserve_mix_delivery_capacity_tx(transaction, fence, &capacity_deltas).await?;
-    Ok(())
+    let delivery_ids = projected_recipients
+        .iter()
+        .map(|(id, recipient)| (recipient.jid.as_str(), *id))
+        .collect::<BTreeMap<_, _>>();
+    let recipients = recipients
+        .iter()
+        .map(|recipient| northstar_room_core::mix::RecipientProjection {
+            participant: recipient.clone(),
+            delivery_id: delivery_ids[recipient.jid.as_str()],
+            sequence: sequences[&recipient.jid],
+        })
+        .collect();
+    Ok(Some(northstar_room_core::mix::DeliveryProjection {
+        event_id,
+        channel_id: channel.id,
+        channel_jid: channel.jid(),
+        stanza_template: stanza_template.to_owned(),
+        authoritative_stanza_id,
+        archive,
+        encrypted,
+        recipients,
+    }))
 }
 
 async fn remove_mix_delivery_tx(
@@ -2020,6 +2050,15 @@ pub struct MixIntentEvidence {
     pub semantic_key_id: String,
     pub semantic_mac: Vec<u8>,
     pub target_id: Option<Uuid>,
+}
+
+pub(super) fn foreground_existing(raw: &MixIntentEvidence) -> northstar_room_core::mix::Existing {
+    northstar_room_core::mix::Existing {
+        authoritative_id: raw.authoritative_id,
+        semantic_key_id: raw.semantic_key_id.clone(),
+        semantic_mac: raw.semantic_mac.clone(),
+        target_id: raw.target_id,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4329,6 +4368,62 @@ pub async fn store_mix_message(
     encrypted: bool,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<StoreMixMessageAdmission> {
+    store_mix_message_inner(
+        pool,
+        channel_id,
+        actor,
+        item_id,
+        payload,
+        identity,
+        delivery_payload,
+        visible_jid,
+        encrypted,
+        payloads,
+        None,
+    )
+    .await
+}
+
+pub async fn store_mix_message_observed(
+    pool: &PgPool,
+    request: &northstar_room_application::mix::StoreRequest,
+    identity: Option<MixBusinessIdentity<'_>>,
+    payloads: &dyn MixEventPayloadRenderer,
+) -> Result<StoreMixMessageAdmission> {
+    let command = request.command();
+    store_mix_message_inner(
+        pool,
+        command.channel_id,
+        &command.actor,
+        &command.item_id.to_string(),
+        &command.payload,
+        identity,
+        &command.delivery_payload,
+        command.visible_jid.as_deref(),
+        command.encrypted,
+        payloads,
+        Some(request),
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one shared existing transaction keeps the bound compatibility and observed inputs explicit"
+)]
+async fn store_mix_message_inner(
+    pool: &PgPool,
+    channel_id: Uuid,
+    actor: &str,
+    item_id: &str,
+    payload: &str,
+    identity: Option<MixBusinessIdentity<'_>>,
+    delivery_payload: &str,
+    visible_jid: Option<&str>,
+    encrypted: bool,
+    payloads: &dyn MixEventPayloadRenderer,
+    observation: Option<&northstar_room_application::mix::StoreRequest>,
+) -> Result<StoreMixMessageAdmission> {
     if payload.len() > 1_048_576 {
         return Ok(StoreMixMessageAdmission {
             outcome: StoreEventOutcome::TooLarge,
@@ -4357,6 +4452,9 @@ pub async fn store_mix_message(
         )
         .await?
         {
+            if let Some(request) = observation {
+                request.observed_existing(foreground_existing(&existing))?;
+            }
             transaction.rollback().await?;
             return Ok(StoreMixMessageAdmission {
                 outcome: StoreEventOutcome::Existing(existing),
@@ -4391,6 +4489,9 @@ pub async fn store_mix_message(
         )
         .await?
         {
+            if let Some(request) = observation {
+                request.observed_existing(foreground_existing(&existing))?;
+            }
             transaction.rollback().await?;
             return Ok(StoreMixMessageAdmission {
                 outcome: StoreEventOutcome::Existing(existing),
@@ -4408,7 +4509,7 @@ pub async fn store_mix_message(
     )
     .await;
     match stored {
-        Ok(Some(_storage_id)) => {
+        Ok(Some(storage_id)) => {
             let recipients =
                 mix_subscribers_tx(&mut transaction, channel_id, NODE_MESSAGES).await?;
             let stanza_template = recipients
@@ -4425,7 +4526,7 @@ pub async fn store_mix_message(
                 })
                 .transpose()?
                 .unwrap_or_default();
-            enqueue_mix_deliveries_tx(
+            let projection = enqueue_mix_deliveries_tx_with_facts(
                 &mut transaction,
                 &delivery_fence,
                 MixDeliveryProjection {
@@ -4439,7 +4540,30 @@ pub async fn store_mix_message(
                 },
             )
             .await?;
-            transaction.commit().await?;
+            if let Some(request) = observation {
+                northstar_room_application::mix::commit_observed(
+                    transaction.commit(),
+                    request,
+                    northstar_room_core::mix::Stored {
+                        authoritative_id,
+                        storage_id,
+                        channel_id: channel.id,
+                        channel_jid: channel.jid(),
+                        projection,
+                    },
+                )
+                .await
+                .map_err(|error| match error {
+                    northstar_room_application::mix::CommitError::Observation(error) => {
+                        anyhow::Error::from(error)
+                    }
+                    northstar_room_application::mix::CommitError::Commit(error) => {
+                        anyhow::Error::from(error)
+                    }
+                })?;
+            } else {
+                transaction.commit().await?;
+            }
             Ok(StoreMixMessageAdmission {
                 outcome: StoreEventOutcome::Stored(authoritative_id),
                 recipients,

@@ -346,6 +346,86 @@ impl MixRepository for PostgresMixRepository {
             recipients: admission.recipients,
         })
     }
+    async fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+    ) -> Result<StoreMixMessageAdmission> {
+        let identity = request.command().identity.as_ref().zip(authenticators).map(
+            |(identity, authenticators)| {
+                let primary = authenticators.primary();
+                db::MixBusinessIdentity {
+                    client_id: &identity.client_id,
+                    semantic_key_id: primary.key_id(),
+                    semantic_mac: primary.mac(),
+                }
+            },
+        );
+        let admission =
+            db::store_mix_message_observed(&self.pool, request, identity, &MixPayloads).await?;
+        let outcome = match admission.outcome {
+            db::StoreEventOutcome::Existing(existing) => {
+                let raw = db::mix::foreground_existing(&existing);
+                let exact = authenticators.is_some_and(|authenticators| {
+                    existing.target_id.is_none()
+                        && authenticators
+                            .verifies(&existing.semantic_key_id, &existing.semantic_mac)
+                });
+                let classified = if exact {
+                    MixBusinessReplay::Replay(existing.authoritative_id)
+                } else {
+                    MixBusinessReplay::Conflict
+                };
+                request.authenticated(&raw, classified)?;
+                if exact {
+                    StoreEventOutcome::Replay(existing.authoritative_id)
+                } else {
+                    StoreEventOutcome::Conflict
+                }
+            }
+            outcome => store_event_outcome(outcome),
+        };
+        Ok(StoreMixMessageAdmission {
+            outcome,
+            recipients: admission.recipients,
+        })
+    }
+
+    async fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+    ) -> Result<MixBusinessReplay> {
+        let ingress = request.ingress();
+        let identity = ingress
+            .identity
+            .as_ref()
+            .ok_or(foreground::Rejected::Input)?;
+        let existing = db::lookup_mix_business_intent(
+            &self.pool,
+            ingress.channel_id,
+            &ingress.actor_bare,
+            "message",
+            &identity.client_id,
+        )
+        .await?;
+        let Some(existing) = existing else {
+            request.observed_miss()?;
+            return Ok(MixBusinessReplay::Miss);
+        };
+        let raw = db::mix::foreground_existing(&existing);
+        request.observed_existing(raw.clone())?;
+        let result = if existing.target_id.is_none()
+            && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac)
+        {
+            MixBusinessReplay::Replay(existing.authoritative_id)
+        } else {
+            MixBusinessReplay::Conflict
+        };
+        request.authenticated(&raw, result)?;
+        Ok(result)
+    }
+
     async fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,

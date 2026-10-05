@@ -15,6 +15,7 @@
 
 use super::protocol::ClientTransport;
 use crate::services::message_admission::witness::DirectOperationHandle;
+use crate::services::mix::foreground::{self, MixForegroundSlot};
 use crate::services::muc::discussion::{self, MucDiscussionSlot};
 use northstar_message_application::direct_lifecycle::TerminalReason;
 use std::{
@@ -229,6 +230,7 @@ struct Progress {
     operation_id: Uuid,
     direct_operation: DirectOperationHandle,
     muc_discussion: MucDiscussionSlot,
+    mix_foreground: MixForegroundSlot,
     sequence: u64,
     policy: Policy,
     stage: AtomicU8,
@@ -291,6 +293,20 @@ impl SessionExecutions {
         }
         execution.0.muc_discussion.register(prepared).map(Some)
     }
+
+    pub(super) fn mix_foreground(
+        &self,
+        prepare: impl FnOnce() -> Result<foreground::PreparedIngress, foreground::Rejected>,
+    ) -> Result<Option<foreground::Observation>, foreground::Rejected> {
+        let Some(execution) = &self.current else {
+            return Ok(None);
+        };
+        if execution.0.outcome.load(Ordering::Relaxed) != Outcome::Pending as u8 {
+            return Err(foreground::Rejected::Retired);
+        }
+        let prepared = prepare()?;
+        execution.0.mix_foreground.register(&prepared).map(Some)
+    }
 }
 
 #[derive(Debug)]
@@ -309,6 +325,7 @@ impl FrameExecution {
             operation_id,
             direct_operation: DirectOperationHandle::new(operation_id),
             muc_discussion: MucDiscussionSlot::default(),
+            mix_foreground: MixForegroundSlot::default(),
             sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             policy: Policy::for_frame(transport, frame),
             stage: AtomicU8::new(Stage::Validation as u8),
@@ -538,6 +555,30 @@ impl Observation {
                 );
             }
         }
+        if self.phase == "frame" {
+            let reason = match outcome {
+                Outcome::Completed => foreground::TerminalReason::Completed,
+                Outcome::TimedOut => foreground::TerminalReason::TimedOut,
+                Outcome::Cancelled => foreground::TerminalReason::Cancelled,
+                Outcome::Panicked => foreground::TerminalReason::Panicked,
+                _ => foreground::TerminalReason::BackendFailure,
+            };
+            if let Some(summary) = progress.mix_foreground.retire(reason) {
+                tracing::debug!(target: "rust_xmpp_server::xmpp::mix_foreground",
+                    operation_id = %progress.operation_id,
+                    replay_started = summary.replay_started,
+                    replay_returned = ?summary.replay_returned,
+                    raw_existing = summary.raw_existing,
+                    identity_classified = summary.identity_classified,
+                    repository_started = summary.repository_started,
+                    knowledge = ?summary.knowledge,
+                    returned = ?summary.returned,
+                    wake = ?summary.wake,
+                    terminal = ?summary.terminal,
+                    "frame MIX foreground ownership retired"
+                );
+            }
+        }
         progress.outcome.store(outcome as u8, Ordering::Relaxed);
         let stage = Stage::from_raw(progress.stage.load(Ordering::Relaxed)).label();
         let elapsed_ms = progress.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -753,6 +794,224 @@ mod tests {
 
     fn outcome(execution: &FrameExecution) -> u8 {
         execution.0.outcome.load(Ordering::Relaxed)
+    }
+
+    struct MixChildDropMarker {
+        owner: foreground::Observation,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl Drop for MixChildDropMarker {
+        fn drop(&mut self) {
+            assert_eq!(
+                self.owner.snapshot().terminal,
+                None,
+                "MIX owner retired before child destruction"
+            );
+            self.dropped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mix_foreground_receipt_survives_actual_frame_boundaries_without_generic_finalize() {
+        use crate::services::mix::foreground::fixture::{self, Calls, Cut};
+        use northstar_room_application::mix::{KnowledgeClass, ReturnClass, Wake};
+        for cut in 0..9 {
+            let effect_cut = match cut {
+                1 => Cut::BeforeCommit,
+                2 => Cut::DuringCommit,
+                3 | 7 => Cut::AfterReceipt,
+                5 => Cut::PanicAfterReceipt,
+                8 => Cut::FailAfterReceipt,
+                _ => Cut::Return,
+            };
+            let prepared = fixture::prepared(false);
+            let mut sessions = SessionExecutions::default();
+            let execution = sessions.begin(ClientTransport::Tcp, "<message type='groupchat'/>");
+            let owner = sessions
+                .mix_foreground(|| Ok(prepared.clone()))
+                .unwrap()
+                .unwrap();
+            let request = owner.store_request(fixture::command(false)).unwrap();
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let marker = MixChildDropMarker {
+                owner: owner.clone(),
+                dropped: dropped.clone(),
+            };
+            let calls = Arc::new(Calls::default());
+            let child_calls = calls.clone();
+            let gate = Arc::new(tokio::sync::Mutex::new(()));
+            let child_gate = gate.clone();
+            let mut runner = Box::pin(execution.run(async move {
+                let _marker = marker;
+                let _admission = child_gate.lock().await;
+                let completion = fixture::admit(&request, effect_cut, true, &child_calls).await?;
+                if cut == 4 {
+                    pending::<()>().await;
+                }
+                let (_, wake) = completion.into_wake(request.observation())?;
+                if let Some(wake) = wake {
+                    wake.invoke(|| {
+                        child_calls.wake.fetch_add(1, Ordering::Relaxed);
+                    })?;
+                }
+                Ok(())
+            }));
+            match cut {
+                0 => {}
+                5 => {
+                    let payload = AssertUnwindSafe(&mut runner)
+                        .catch_unwind()
+                        .await
+                        .unwrap_err();
+                    assert_eq!(
+                        payload.downcast_ref::<&str>(),
+                        Some(&"MIX receipt-before-return panic")
+                    );
+                }
+                6 => assert!(matches!(futures::poll!(&mut runner), Poll::Ready(Ok(())))),
+                8 => assert!(matches!(
+                    futures::poll!(&mut runner),
+                    Poll::Ready(Err(FrameFailure::Backend(_)))
+                )),
+                _ => {
+                    assert!(futures::poll!(&mut runner).is_pending());
+                    assert!(gate.try_lock().is_err());
+                    if cut == 7 {
+                        tokio::time::advance(FRAME_BUDGET).await;
+                        assert!(matches!(
+                            futures::poll!(&mut runner),
+                            Poll::Ready(Err(FrameFailure::TimedOut))
+                        ));
+                    }
+                }
+            }
+            drop(runner);
+            assert!(dropped.load(Ordering::Relaxed));
+            assert!(gate.try_lock().is_ok());
+            assert_eq!(
+                calls.repository.load(Ordering::Relaxed),
+                usize::from(cut != 0)
+            );
+            assert_eq!(calls.commit.load(Ordering::Relaxed), usize::from(cut >= 2));
+            assert_eq!(calls.wake.load(Ordering::Relaxed), usize::from(cut == 6));
+            let summary = owner.snapshot().summary();
+            assert_eq!(
+                summary.knowledge,
+                match cut {
+                    0 | 1 => KnowledgeClass::NoCommitRequested,
+                    2 => KnowledgeClass::CommitCallEntered,
+                    _ => KnowledgeClass::ReceiptKnown,
+                }
+            );
+            assert_eq!(
+                summary.returned,
+                match cut {
+                    4 | 6 => ReturnClass::Stored,
+                    8 => ReturnClass::Error,
+                    _ => ReturnClass::NotReturned,
+                }
+            );
+            assert_eq!(
+                summary.wake,
+                match cut {
+                    4 => Wake::Ready,
+                    6 => Wake::Invoked,
+                    _ => Wake::Unavailable,
+                }
+            );
+            assert_eq!(
+                summary.terminal,
+                Some(match cut {
+                    5 => foreground::TerminalReason::Panicked,
+                    6 => foreground::TerminalReason::Completed,
+                    7 => foreground::TerminalReason::TimedOut,
+                    8 => foreground::TerminalReason::BackendFailure,
+                    _ => foreground::TerminalReason::Cancelled,
+                })
+            );
+            assert!(execution
+                .direct_operation()
+                .snapshot()
+                .finalization
+                .is_none());
+            assert!(matches!(
+                sessions.mix_foreground(|| Ok(prepared.clone())),
+                Err(foreground::Rejected::Retired)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn mix_foreground_slot_rejects_conflicts_and_retirement_without_legacy_fallback() {
+        use crate::services::mix::foreground::fixture;
+        let prepared = fixture::prepared(false);
+        let copied_input = fixture::prepared(false);
+        let mut sessions = SessionExecutions::default();
+        assert!(sessions
+            .mix_foreground(|| Ok(prepared.clone()))
+            .unwrap()
+            .is_none());
+        let preparation_calls = std::cell::Cell::new(0);
+        assert!(sessions
+            .mix_foreground(|| {
+                preparation_calls.set(preparation_calls.get() + 1);
+                Err(foreground::Rejected::Input)
+            })
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            preparation_calls.get(),
+            0,
+            "absent frame must not validate observed ingress"
+        );
+        let first = sessions.begin(ClientTransport::Bosh, "<message/>");
+        let owner = sessions
+            .mix_foreground(|| Ok(prepared.clone()))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            sessions.mix_foreground(|| Ok(copied_input.clone())),
+            Err(foreground::Rejected::Input)
+        ));
+        drop(first.run(async { pending::<anyhow::Result<()>>().await }));
+        let frozen = owner.snapshot();
+        assert!(matches!(
+            sessions.mix_foreground(|| Ok(prepared.clone())),
+            Err(foreground::Rejected::Retired)
+        ));
+        assert!(matches!(
+            sessions.mix_foreground(|| {
+                preparation_calls.set(preparation_calls.get() + 1);
+                Ok(prepared.clone())
+            }),
+            Err(foreground::Rejected::Retired)
+        ));
+        assert_eq!(
+            preparation_calls.get(),
+            0,
+            "retired frame must reject before preparation"
+        );
+        assert!(matches!(
+            first.0.mix_foreground.register(&prepared),
+            Err(foreground::Rejected::Retired)
+        ));
+        let next = sessions.begin(ClientTransport::Bosh, "<message/>");
+        let next_owner = sessions
+            .mix_foreground(|| Ok(copied_input.clone()))
+            .unwrap()
+            .unwrap();
+        next.run(async { Ok(()) }).await.unwrap();
+        assert_eq!(owner.snapshot(), frozen);
+        assert_eq!(
+            next_owner.snapshot().terminal,
+            Some(foreground::TerminalReason::Completed)
+        );
+        let empty = sessions.begin(ClientTransport::Bosh, "<iq/>");
+        empty.run(async { Ok(()) }).await.unwrap();
+        assert!(matches!(
+            empty.0.mix_foreground.register(&prepared),
+            Err(foreground::Rejected::Retired)
+        ));
     }
 
     struct MucChildDropMarker {

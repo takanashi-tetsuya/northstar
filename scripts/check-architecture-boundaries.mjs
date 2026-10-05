@@ -1001,7 +1001,8 @@ const mixProducerMappings = [
   ['leave_mix_channel', 'leave_mix_channel'],
   ['store_mix_presence', 'store_mix_presence_with_policy'],
   ['ensure_mix_presence', 'store_mix_presence_with_policy'],
-  ['store_mix_message', 'store_mix_message'],
+  ['store_mix_message', 'store_mix_message_inner'],
+  ['store_mix_message_observed', 'store_mix_message_inner'],
   ['publish_mix_avatar', 'publish_mix_avatar'],
   ['retract_mix_avatar', 'retract_mix_avatar'],
   ['update_mix_info', 'update_mix_info'],
@@ -1378,7 +1379,7 @@ const mixRepositoryTransactionEntries = [
   'set_mix_nick',
   'leave_mix_channel',
   'store_mix_presence_with_policy',
-  'store_mix_message',
+  'store_mix_message_inner',
   'publish_mix_avatar',
   'retract_mix_avatar',
   'update_mix_info',
@@ -1469,7 +1470,7 @@ for (const [serviceMethod, repositoryEntry] of mixProducerMappings) {
 }
 
 for (const entry of mixRepositoryTransactionEntries) {
-  const visibility = entry === 'store_mix_presence_with_policy' ? 'async fn' : 'pub async fn';
+  const visibility = ['store_mix_presence_with_policy', 'store_mix_message_inner'].includes(entry) ? 'async fn' : 'pub async fn';
   const body = structBody(mixRepositorySource, `${visibility} ${entry}(`);
   const admission = body.indexOf('begin_mix_delivery_admission(pool).await?');
   const directBegin = body.indexOf('pool.begin().await?');

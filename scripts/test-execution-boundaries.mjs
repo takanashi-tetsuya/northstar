@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -294,12 +294,119 @@ rejectsRoom('C2S MIX cannot discard originating frame observation', 'mix',
   'Some(&self.frame_executions),', 'None,', /C2S MIX must attribute/);
 rejectsRoom('MIX shared message owner cannot lose policy observation', 'mix',
   'observation.enter(Stage::MixPolicy);', '', /MIX shared owner/);
-for (const call of ['retract_mix_message', 'store_mix_message']) {
+for (const call of ['retract_mix_message']) {
   const indentation = call === 'retract_mix_message' ? '        ' : '    ';
   const before = `if let Some(observation) = observation {\n${indentation}    observation.enter(Stage::MixAdmission);\n${indentation}}\n${indentation}let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
   const after = `let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
   rejectsRoom(`MIX ${call} must retain its admission hook`, 'mix', before, after, /MIX admission stage/);
 }
+test('MIX foreground admission must retain its admission hook', () => {
+  assert.throws(() => verifyRoomExecutionBoundaries(changedMuc('mix',
+    'if let Some(observation) = observation { observation.enter(Stage::MixAdmission); } let admission = if let Some(owner) = &foreground {',
+    'let admission = if let Some(owner) = &foreground {')), /MIX admission stage/);
+});
+
+function rejectsMixForeground(name, file, before, after, expected, matches = 1) {
+  test(name, () => assert.throws(() => verifyMixForegroundBoundaries(
+    changedMuc(file, before, after, matches)), expected));
+}
+test('current production MIX foreground satisfies its retained-owner gate', () => verifyMixForegroundBoundaries(baseline));
+rejectsMixForeground('MIX configuration cannot be supplied by a caller claim', 'state',
+  'config.domain.clone(), mix_message_content_identity,', 'claimed_domain(), mix_message_content_identity,', /actual runtime configuration/);
+rejectsMixForeground('MIX receiving domain keeps the existing subdomain policy', 'mixService',
+  '&format!("mix.{configured_domain}")', '&format!("other.{configured_domain}")', /canonical mix subdomain/);
+rejectsMixForeground('MIX configured domain cannot be supplied by a comment', 'mixService',
+  'let configured_mix_domain = northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?;',
+  '/* let configured_mix_domain = northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?; */ let configured_mix_domain = claimed_domain();', /canonical mix subdomain/);
+rejectsMixForeground('MIX preparation cannot accept a self-consistent foreign domain', 'mixService',
+  'if !ingress.matches_receiving_domain(&self.configured_mix_domain)', 'if false', /own receiving authority/);
+rejectsMixForeground('MIX observed service cannot substitute claimed domain', 'mixService',
+  'request, &self.configured_mix_domain, self.repository.store_mix_message_observed(',
+  'request, claimed_domain(), self.repository.store_mix_message_observed(', /receiving domain and bound repository/);
+rejectsMixForeground('MIX observed service retains the fair pre-pool guard', 'mixService',
+  'let _admission = self.delivery_admission_guard().await; let completion = northstar_room_application::mix::admit_observed(',
+  'let completion = northstar_room_application::mix::admit_observed(', /fair admission/);
+rejectsMixForeground('MIX compatibility service retains the fair pre-pool guard', 'mixService',
+  'let _admission = self.delivery_admission_guard().await; let result = self.repository.store_mix_message(',
+  'let result = self.repository.store_mix_message(', /compatibility service/);
+rejectsMixForeground('MIX equal UUIDs cannot replace private invocation identity', 'mixCore',
+  'fn same_invocation(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }',
+  'fn same_invocation(&self, other: &Self) -> bool { true }', /private allocation identity/);
+rejectsMixForeground('MIX store input pointer cannot be substituted', 'mixCore',
+  'Arc::ptr_eq(command, &self.command)', 'true', /immutable invocation input/);
+rejectsMixForeground('MIX COMMIT receipt cannot follow an unrelated await', 'mixCore',
+  'commit.await.map_err(CommitError::Commit)?; request.received(prepared)',
+  'commit.await.map_err(CommitError::Commit)?; unrelated().await; request.received(prepared)', /without an intervening await/);
+rejectsMixForeground('MIX actual entered fact cannot be replaced by equal values', 'mixCore',
+  'Arc::ptr_eq(fact, &prepared.fact)', 'true', /exact active invocation/);
+rejectsMixForeground('MIX contradictory returns remain diagnosable', 'mixCore',
+  'state.snapshot.returned = Some(Returned::Admission(admission.clone()));',
+  'drop(admission.clone());', /contradictory returns/);
+rejectsMixForeground('MIX accepted return retains one audience', 'mixCore',
+  'state.snapshot.returned = Some(Returned::AcceptedStored(id));',
+  'state.snapshot.returned = Some(Returned::Admission(admission.clone()));', /matched Stored retains one audience/);
+rejectsMixForeground('MIX wake is consumed before invocation', 'mixCore',
+  'state.snapshot.wake = Wake::Invoked; } publish();',
+  'publish(); state.snapshot.wake = Wake::Invoked; }', /consume before synchronous invocation/);
+rejectsMixForeground('MIX observed SQL actor is obtained from its request', 'mixDb',
+  'pool, command.channel_id, &command.actor, &command.item_id.to_string(),',
+  'pool, command.channel_id, &forged_actor(), &command.item_id.to_string(),', /only from the bound request/);
+rejectsMixForeground('MIX raw Existing survives rollback suspension', 'mixDb',
+  'request.observed_existing(foreground_existing(&existing))?; } transaction.rollback().await?;',
+  '} transaction.rollback().await?;', /before both rollback awaits/, 2);
+rejectsMixForeground('MIX admission wraps its actual COMMIT', 'mixDb',
+  'transaction.commit(), request, northstar_room_core::mix::Stored {',
+  'fabricated_commit(), request, northstar_room_core::mix::Stored {', /actual COMMIT order/);
+rejectsMixForeground('MIX projection retains actual delivery IDs', 'mixDb',
+  'delivery_id: delivery_ids[recipient.jid.as_str()]', 'delivery_id: event_id', /actual IDs\/sequences/);
+rejectsMixForeground('MIX projection retains returned sequence values', 'mixDb',
+  'sequence: sequences[&recipient.jid]', 'sequence: 1', /actual IDs\/sequences/);
+rejectsMixForeground('MIX empty audience does not invent an event', 'mixDb',
+  'if recipients.is_empty() { return Ok(None); }', 'if false { return Ok(None); }', /no empty durable event/);
+rejectsMixForeground('MIX preflight replay needs repository authentication', 'mixRepository',
+  'request.authenticated(&raw, result)?;', '/* request.authenticated(&raw, result)?; */', /authenticated repository evidence/);
+rejectsMixForeground('MIX SQL Existing cannot skip classification', 'mixRepository',
+  'request.authenticated(&raw, classified)?;', '', /classified by the repository/);
+rejectsMixForeground('MIX store authentication true branch keeps original replay identity', 'mixRepository',
+  'let classified = if exact { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
+  'let classified = if exact { MixBusinessReplay::Conflict } else { MixBusinessReplay::Conflict };', /store authentication must map/);
+rejectsMixForeground('MIX store authentication false branch remains conflict', 'mixRepository',
+  'let classified = if exact { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
+  'let classified = if exact { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Replay(existing.authoritative_id) };', /store authentication must map/);
+rejectsMixForeground('MIX store returned branch cannot contradict authenticated classification', 'mixRepository',
+  'request.authenticated(&raw, classified)?; if exact { StoreEventOutcome::Replay(existing.authoritative_id) } else { StoreEventOutcome::Conflict }',
+  'request.authenticated(&raw, classified)?; if exact { StoreEventOutcome::Replay(existing.authoritative_id) } else { StoreEventOutcome::Replay(existing.authoritative_id) }', /store authentication must map/);
+rejectsMixForeground('MIX read authentication true branch keeps original replay identity', 'mixRepository',
+  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
+  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(Uuid::nil()) } else { MixBusinessReplay::Conflict };', /read authentication must map/);
+rejectsMixForeground('MIX read authentication false branch remains conflict', 'mixRepository',
+  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
+  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Replay(existing.authoritative_id) };', /read authentication must map/);
+rejectsMixForeground('MIX absent frames skip observed preparation', 'frame',
+  'let prepared = prepare()?; execution.0.mix_foreground.register(&prepared).map(Some)',
+  'execution.0.mix_foreground.register(&untrusted_prepared()).map(Some)', /true absence must skip preparation/);
+rejectsMixForeground('MIX conflicting registration cannot be downgraded', 'mixSlot',
+  'if !observation.is_for(prepared) { return Err(Rejected::Input); }',
+  'if !observation.is_for(prepared) { return Ok(observation.clone()); }', /retired\/conflicting owners/);
+rejectsMixForeground('MIX observed ingress cannot fall back after registration failure', 'mix',
+  'frames.mix_foreground(|| { state.mix_service().prepare_mix_foreground(',
+  'legacy_or_failed_registration(|| { state.mix_service().prepare_mix_foreground(', /contiguous unfiltered registration/);
+rejectsMixForeground('MIX active frame cannot be filtered into legacy compatibility', 'mix',
+  'if let Some(frames) = observation {',
+  'if let Some(frames) = observation.filter(|_| false) {', /contiguous unfiltered registration/);
+rejectsMixForeground('MIX active foreground cannot be shadowed into compatibility', 'mix',
+  'let foreground = if retraction_target.is_none() {',
+  'let observation = observation.filter(|_| false); let foreground = if retraction_target.is_none() {', /contiguous unfiltered registration/);
+rejectsMixForeground('MIX replay selection cannot filter an active owner', 'mix',
+  'let replay = if let Some(owner) = &foreground {',
+  'let replay = if let Some(owner) = foreground.as_ref().filter(|_| false) {', /contiguous unfiltered registration/);
+rejectsMixForeground('MIX store selection cannot filter an active owner', 'mix',
+  'let admission = if let Some(owner) = &foreground {',
+  'let admission = if let Some(owner) = foreground.as_ref().filter(|_| false) {', /contiguous unfiltered registration/);
+rejectsMixForeground('MIX mutable membership cannot move before replay', 'mix',
+  'let foreground = if retraction_target.is_none()',
+  'let early = state.mix_service().mix_participant(channel.id, actor_bare).await?; let foreground = if retraction_target.is_none()',
+  /mutable membership must follow/);
 rejectsRoom('federated MIX cannot invent a C2S observation', 'mix',
   'process_channel_message(&state, &actor_bare, &actor_full, &raw, None).await?',
   'process_channel_message(&state, &actor_bare, &actor_full, &raw, Some(&SessionExecutions::default())).await?',
@@ -470,7 +577,7 @@ rejectsNativeWrite('native ready poll must destroy its child first', 'nativeWrit
 rejectsNativeWrite('ACK commit helper cannot skip its actual commit', 'nativeCore', /commit\.await\.map_err\(CommitError::Repository\)\?;/g, 'drop(commit);', /bind preparation before COMMIT/);
 rejectsNativeWrite('C2S transaction cannot bypass the observer', 'replayDb', /\bcommit_observed\(/g, 'unobserved_commit(', /actual C2S ACK transaction/);
 rejectsNativeWrite('C2S absent row cannot be called a deletion', 'replayDb', /AckDisposition::AbsentUnclaimed/g, 'AckDisposition::Deleted', /checked deletion/);
-rejectsNativeWrite('MIX transaction cannot bypass the observer', 'mixDb', /\bcommit_observed\(/g, 'unobserved_commit(', /actual MIX ACK transaction/);
+rejectsNativeWrite('MIX transaction cannot bypass the observer', 'mixDb', /\bcommit_observed\(\s*transaction\.commit\(\),\s*observation,/g, 'unobserved_commit(transaction.commit(), observation,', /actual MIX ACK transaction/);
 rejectsNativeWrite('MIX no-match cannot be called a deletion', 'mixDb', /AckDisposition::NoMatchingMix/g, 'AckDisposition::Deleted', /actual MIX ACK transaction/);
 
 test('SM production ownership paths satisfy their source gate', () => verifySmOwnershipBoundaries(baseline));

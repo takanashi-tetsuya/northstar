@@ -2,6 +2,208 @@ use super::*;
 use crate::services::mix::MamRsmPage;
 
 #[tokio::test]
+async fn mix_foreground_authenticated_replay_never_starts_membership_or_store_effects() {
+    use crate::services::mix::foreground::{fixture, Observation};
+    use northstar_room_application::mix::{read_observed, Knowledge, ReadReturned, Rejected, Wake};
+    use std::sync::atomic::Ordering;
+    for replay in [
+        MixBusinessReplay::Replay(Uuid::from_u128(70)),
+        MixBusinessReplay::Conflict,
+    ] {
+        let owner = Observation::new(fixture::prepared(true));
+        let request = owner.replay_request().unwrap().unwrap();
+        let calls = fixture::Calls::default();
+        let result = read_observed(&request, "mix.local.test", async {
+            calls.repository.fetch_add(1, Ordering::Relaxed);
+            let raw = fixture::existing();
+            request.observed_existing(raw.clone())?;
+            request.authenticated(&raw, replay)?;
+            Ok::<_, anyhow::Error>(replay)
+        })
+        .await
+        .unwrap();
+        // A replay/conflict cannot mint the immutable first-execution request.
+        // The production source pin separately requires this return before
+        // its mutable participant/preference calls.
+        if let Ok(store) = owner.store_request(fixture::command(true)) {
+            calls.membership.fetch_add(1, Ordering::Relaxed);
+            fixture::admit(&store, fixture::Cut::Return, true, &calls)
+                .await
+                .unwrap();
+        }
+        assert_eq!(result, replay);
+        assert_eq!(calls.repository.load(Ordering::Relaxed), 1);
+        assert_eq!(calls.membership.load(Ordering::Relaxed), 0);
+        assert_eq!(calls.commit.load(Ordering::Relaxed), 0);
+        assert_eq!(calls.wake.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            owner.snapshot().replay.returned,
+            Some(ReadReturned::Outcome(replay))
+        );
+        assert_eq!(owner.snapshot().knowledge, Knowledge::NoCommitRequested);
+        assert_eq!(owner.snapshot().wake, Wake::Unavailable);
+        assert!(matches!(
+            owner.store_request(fixture::command(true)),
+            Err(Rejected::Read)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn mix_foreground_raw_existing_survives_cancelled_rollback_without_authenticated_replay() {
+    use crate::services::mix::foreground::{fixture, Observation};
+    use northstar_room_application::mix::{
+        admit_observed, read_observed, Knowledge, Rejected, TerminalReason,
+    };
+    let owner = Observation::new(fixture::prepared(true));
+    let read = owner.replay_request().unwrap().unwrap();
+    read_observed(&read, "mix.local.test", async {
+        read.observed_miss()?;
+        Ok::<_, anyhow::Error>(MixBusinessReplay::Miss)
+    })
+    .await
+    .unwrap();
+    let request = owner.store_request(fixture::command(true)).unwrap();
+    let raw = fixture::existing();
+    let mut effect = Box::pin(admit_observed(&request, "mix.local.test", async {
+        request.observed_existing(raw.clone())?;
+        // Independent fake rollback completion gate, never resolved here.
+        std::future::pending::<()>().await;
+        request.authenticated(&raw, MixBusinessReplay::Replay(Uuid::from_u128(70)))?;
+        Ok::<_, anyhow::Error>(crate::services::mix::StoreMixMessageAdmission {
+            outcome: StoreEventOutcome::Replay(Uuid::from_u128(70)),
+            recipients: vec![],
+        })
+    }));
+    assert!(futures::poll!(&mut effect).is_pending());
+    drop(effect);
+    assert_eq!(owner.snapshot().existing.raw.as_deref(), Some(&raw));
+    assert_eq!(owner.snapshot().existing.authenticated, None);
+    assert_eq!(owner.snapshot().returned, None);
+    assert_eq!(owner.snapshot().knowledge, Knowledge::NoCommitRequested);
+    owner.retire(TerminalReason::Cancelled);
+    let frozen = owner.snapshot();
+    assert_eq!(
+        request.authenticated(&raw, MixBusinessReplay::Replay(Uuid::from_u128(70))),
+        Err(Rejected::Retired)
+    );
+    assert_eq!(owner.snapshot(), frozen);
+}
+
+#[tokio::test]
+async fn mix_foreground_actual_projection_and_receipt_error_have_exclusive_wake_behavior() {
+    use crate::services::mix::foreground::{fixture, Observation};
+    use northstar_room_application::mix::{Knowledge, Returned, Wake};
+    use std::sync::atomic::Ordering;
+    for audience in [false, true] {
+        let owner = Observation::new(fixture::prepared(false));
+        let request = owner.store_request(fixture::command(false)).unwrap();
+        let calls = fixture::Calls::default();
+        let completion = fixture::admit(&request, fixture::Cut::Return, audience, &calls)
+            .await
+            .unwrap();
+        let (returned, wake) = completion.into_wake(&owner).unwrap();
+        assert_eq!(*returned, fixture::returned(audience));
+        if let Some(wake) = wake {
+            wake.invoke(|| {
+                calls.wake.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        }
+        assert_eq!(calls.repository.load(Ordering::Relaxed), 1);
+        assert_eq!(calls.commit.load(Ordering::Relaxed), 1);
+        assert_eq!(calls.wake.load(Ordering::Relaxed), usize::from(audience));
+        let Knowledge::ReceiptKnown(fact) = owner.snapshot().knowledge else {
+            panic!("missing fresh receipt");
+        };
+        assert_eq!(fact.authoritative_id, Uuid::from_u128(72));
+        assert_eq!(fact.storage_id, Uuid::from_u128(74));
+        if let Some(projection) = &fact.projection {
+            assert_eq!(projection.recipients[0].delivery_id, Uuid::from_u128(75));
+            assert_eq!(projection.recipients[0].sequence, 812);
+            assert_eq!(projection.recipients[0].participant.jid, "bob@local.test");
+        } else {
+            assert!(!audience);
+        }
+        assert_eq!(
+            owner.snapshot().returned,
+            Some(Returned::AcceptedStored(Uuid::from_u128(72)))
+        );
+    }
+    let owner = Observation::new(fixture::prepared(false));
+    let request = owner.store_request(fixture::command(false)).unwrap();
+    let calls = fixture::Calls::default();
+    assert!(
+        fixture::admit(&request, fixture::Cut::FailAfterReceipt, true, &calls)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        owner.snapshot().knowledge,
+        Knowledge::ReceiptKnown(_)
+    ));
+    assert_eq!(owner.snapshot().returned, Some(Returned::Error));
+    assert_eq!(owner.snapshot().wake, Wake::Unavailable);
+    assert_eq!(calls.wake.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn mix_foreground_receiving_configuration_rejects_self_consistent_claim_before_effect() {
+    use crate::services::mix::foreground::{fixture, Observation, PreparedIngress};
+    use northstar_room_application::mix::{read_observed, EffectError, Rejected};
+    use std::sync::atomic::Ordering;
+    let input = fixture::prepared(true);
+    let mut forged = input.ingress().clone();
+    forged.channel_jid = "room@mix.attacker.test".into();
+    assert!(forged.matches_receiving_domain("mix.attacker.test"));
+    let owner = Observation::new(PreparedIngress::new(forged));
+    let request = owner.replay_request().unwrap().unwrap();
+    let calls = fixture::Calls::default();
+    let result = read_observed(&request, "mix.local.test", async {
+        calls.repository.fetch_add(1, Ordering::Relaxed);
+        request.observed_miss()?;
+        Ok::<_, anyhow::Error>(MixBusinessReplay::Miss)
+    })
+    .await;
+    assert!(matches!(
+        result,
+        Err(EffectError::Observation(Rejected::Input))
+    ));
+    assert_eq!(calls.repository.load(Ordering::Relaxed), 0);
+    assert!(!owner.snapshot().replay.started);
+}
+
+#[tokio::test]
+async fn mix_foreground_constructed_unpolled_commit_does_not_enter_message_commit() {
+    use crate::services::mix::foreground::{fixture, Observation};
+    use northstar_room_application::mix::{admit_observed, commit_observed, Knowledge};
+    use std::sync::atomic::Ordering;
+    let owner = Observation::new(fixture::prepared(false));
+    let request = owner.store_request(fixture::command(false)).unwrap();
+    let calls = fixture::Calls::default();
+    let mut effect = Box::pin(admit_observed(&request, "mix.local.test", async {
+        calls.repository.fetch_add(1, Ordering::Relaxed);
+        let commit = commit_observed(
+            async {
+                calls.commit.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), anyhow::Error>(())
+            },
+            &request,
+            fixture::stored(true),
+        );
+        drop(commit);
+        std::future::pending::<()>().await;
+        Ok::<_, anyhow::Error>(fixture::returned(true))
+    }));
+    assert!(futures::poll!(&mut effect).is_pending());
+    drop(effect);
+    assert_eq!(calls.repository.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.commit.load(Ordering::Relaxed), 0);
+    assert_eq!(owner.snapshot().knowledge, Knowledge::NoCommitRequested);
+    assert_eq!(owner.snapshot().returned, None);
+}
+
+#[tokio::test]
 async fn transferred_mix_source_never_constructs_old_worker_acknowledgement() {
     let completed = finish_mix_delivery_owner(
         ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport,

@@ -5686,6 +5686,29 @@ async fn process_channel_message(
         } else {
             (None, false, None)
         };
+    // Only the ordinary frame-owned foreground path gains this owner. A
+    // genuinely absent frame retains the explicit compatibility behavior.
+    let foreground = if retraction_target.is_none() {
+        if let Some(frames) = observation {
+            frames.mix_foreground(|| {
+                state.mix_service().prepare_mix_foreground(
+                    crate::services::mix::foreground::Ingress {
+                        channel_id: channel.id,
+                        channel_jid: channel.jid(),
+                        actor_bare: actor_bare.to_owned(),
+                        actor_full: actor_full.to_owned(),
+                        children: message_children.as_deref().unwrap_or_default().to_owned(),
+                        encrypted: message_encrypted,
+                        identity: message_replay_identity.clone(),
+                    },
+                )
+            })?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     if let (Some(target_id), Some(identity)) = (retraction_target, retraction_identity.as_ref()) {
         match state
             .mix_service()
@@ -5706,11 +5729,21 @@ async fn process_channel_message(
         }
     }
     if let Some(identity) = message_replay_identity.as_ref() {
-        match state
-            .mix_service()
-            .lookup_mix_message_replay(channel.id, actor_bare, identity)
-            .await?
-        {
+        let replay = if let Some(owner) = &foreground {
+            let request = owner
+                .replay_request()?
+                .ok_or(crate::services::mix::foreground::Rejected::Input)?;
+            state
+                .mix_service()
+                .lookup_mix_message_replay_observed(&request)
+                .await?
+        } else {
+            state
+                .mix_service()
+                .lookup_mix_message_replay(channel.id, actor_bare, identity)
+                .await?
+        };
+        match replay {
             MixBusinessReplay::Replay(_) => return Ok(None),
             MixBusinessReplay::Conflict => {
                 return Ok(Some(message_error(
@@ -5845,19 +5878,38 @@ async fn process_channel_message(
     if let Some(observation) = observation {
         observation.enter(Stage::MixAdmission);
     }
-    let admission = state
-        .mix_service()
-        .store_mix_message(StoreMixMessageRequest {
+    let admission = if let Some(owner) = &foreground {
+        let request = owner.store_request(crate::services::mix::foreground::StoreCommand {
             channel_id: channel.id,
-            actor: actor_bare,
-            item_id: &archive_id.to_string(),
-            payload: &archive,
+            actor: actor_bare.to_owned(),
+            item_id: archive_id,
+            payload: archive,
             identity: message_replay_identity,
-            delivery_payload: &children,
-            visible_jid: live_jid,
+            delivery_payload: children,
+            visible_jid: live_jid.map(str::to_owned),
             encrypted: message_encrypted,
-        })
-        .await?;
+        })?;
+        state
+            .mix_service()
+            .store_mix_message_observed(&request)
+            .await?
+    } else {
+        Arc::new(
+            state
+                .mix_service()
+                .store_mix_message(StoreMixMessageRequest {
+                    channel_id: channel.id,
+                    actor: actor_bare,
+                    item_id: &archive_id.to_string(),
+                    payload: &archive,
+                    identity: message_replay_identity,
+                    delivery_payload: &children,
+                    visible_jid: live_jid,
+                    encrypted: message_encrypted,
+                })
+                .await?,
+        )
+    };
     match admission.outcome {
         StoreEventOutcome::Stored(_) => {}
         StoreEventOutcome::Replay(_) => return Ok(None),

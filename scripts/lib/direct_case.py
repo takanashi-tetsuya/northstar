@@ -1446,11 +1446,15 @@ def native_safety_findings(value, payload):
     if payload['rejection'] is not None or payload['recipient']['kind'] != 'Native':
         return []
     native = payload['recipient']['native']
-    violations = []
     original = next((item for item in payload['originals'] if item['frame_id'] == native['frame_id']), None)
     dequeued = original['route']['dequeued'] if original is not None else []
     raw = dequeued[0]['xml'].encode('utf-8') if len(dequeued) == 1 else None
-    expected = ledger['native']
+    return _native_settlement_findings(ledger['native'], native, raw)
+
+
+def _native_settlement_findings(expected, native, raw):
+    """Same fenced-writer/ACK contract for ordinary and replacement owners."""
+    violations = []
     for ack in native['ack_calls']:
         target = {'frame_id': native['frame_id'], 'connection_id': native['connection_id'],
                   'owner': 'Tcp', 'purpose': 'NativeSettlement', 'source': copy.deepcopy(ack['source'])}
@@ -1467,6 +1471,8 @@ def native_safety_findings(value, payload):
             violation('NativeAckWithoutMatchingFence')
         if expected is not None and ack['source'] != expected['fenced_source']:
             violation('NativeAckSourceIdentityMismatch')
+        if expected is not None and native['original'] != expected['original_source']:
+            violation('NativeAckOriginalSourceMismatch')
         if native['managed_by_sm'] is True or any(prefix['seq'] < ack['seq'] and
                                                 prefix['state']['managed_by_sm'] is True for prefix in native['prefixes']):
             violation('NativeAckAfterSmOwnership')
@@ -1489,11 +1495,16 @@ def native_safety_findings(value, payload):
         if not any(last_accepted_seq < item['seq'] < ack['seq'] and item['result'] == 'Ok'
                    for item in native['flush_calls']):
             violation('NativeAckWithoutSuccessfulFlush')
-        positive_before_ack = any(last_accepted_seq < prefix['seq'] < ack['seq'] and
+        positive_at_ack = any(prefix['seq'] == ack['seq'] + 1 and last_accepted_seq < ack['seq'] and
+                                  prefix['state']['preparation'] == 'Prepared' and prefix['state']['fence_entered'] and
+                                  expected is not None and prefix['state']['original'] == expected['original_source'] and
                                   prefix['state']['writer_entered'] and
                                   prefix['state']['writer_result'] == 'FullWrite' and
-                                  prefix['state']['write_decision'] == 'Written' for prefix in native['prefixes'])
-        if not positive_before_ack:
+                                  prefix['state']['write_decision'] == 'Written' and
+                                  prefix['state']['returned_fence'] == ack['source'] and
+                                  prefix['state']['ack'] == {'kind': 'NoCommitRequested'} and
+                                  prefix['state']['ack_returned'] is None for prefix in native['prefixes'])
+        if not positive_at_ack:
             violation('NativeAckWithoutFullWrite')
     return violations
 
@@ -1804,6 +1815,34 @@ def _expected_native_state(ledger, *, no_flush=False):
             'terminal': 'Cancelled' if written and commit == 'Pending' else 'Returned'}
 
 
+def _expected_native_prefixes(final):
+    """Fixed non-SM callbacks, including the post-invocation ACK boundary."""
+    recording = copy.deepcopy(final)
+    recording.update(preparation='Recording', managed_by_sm=None, fence_entered=False, returned_fence=None,
+                     writer_entered=False, writer_result=None, write_decision=None,
+                     ack={'kind': 'NotRequested'}, ack_returned=None, terminal=None)
+    fence = copy.deepcopy(recording)
+    fence.update(preparation='FenceCallEntered', managed_by_sm=False, fence_entered=True)
+    prepared = copy.deepcopy(fence)
+    prepared.update(preparation='Prepared', returned_fence=copy.deepcopy(final['returned_fence']))
+    prefixes = [recording, fence, prepared]
+    if final['ack']['kind'] != 'NotRequested':
+        authority = copy.deepcopy(prepared)
+        authority.update(writer_entered=True, writer_result='FullWrite', write_decision='Written',
+                         ack={'kind': 'NoCommitRequested'})
+        prefixes.append(authority)
+        if final['ack']['kind'] in ('CommitCallEntered', 'ReceiptKnown'):
+            entered = copy.deepcopy(authority)
+            entered['ack'] = {'kind': 'CommitCallEntered', 'fact': copy.deepcopy(final['ack']['fact'])}
+            prefixes.append(entered)
+        if final['ack']['kind'] == 'ReceiptKnown':
+            receipt = copy.deepcopy(entered)
+            receipt['ack'] = copy.deepcopy(final['ack'])
+            prefixes.append(receipt)
+    prefixes.append(copy.deepcopy(final))
+    return prefixes
+
+
 def _native_fixture_findings(ledger, payload, *, no_flush=False):
     wanted = ledger['native']
     if wanted is None:
@@ -1839,6 +1878,7 @@ def _native_fixture_findings(ledger, payload, *, no_flush=False):
     _finding(findings, 'native_ack_invocation', [(item['source'], item['returned']) for item in native['ack_calls']] == calls)
     _finding(findings, 'routed_item_has_no_receipt_channels', not native['ownership_receipts'] and not native['write_receipts'])
     polls, prefixes = native['polls'], native['prefixes']
+    _finding(findings, 'native_callback_prefixes', [prefix['state'] for prefix in prefixes] == _expected_native_prefixes(expected))
     _retained_native_prefixes(prefixes, findings)
     _finding(findings, 'native_poll', len(polls) == 1 and
              polls[0]['result'] == ('Pending' if expected['terminal'] == 'Cancelled' else 'Ready'))
@@ -1852,6 +1892,8 @@ def _native_fixture_findings(ledger, payload, *, no_flush=False):
     _finding(findings, 'native_calls_before_poll', len(polls) == 1 and
              all(item['seq'] < polls[0]['seq'] for item in calls_before_poll))
     first_write = native['write_calls'][0]['seq'] if native['write_calls'] else None
+    _finding(findings, 'native_start_after_dequeue', len(dequeued) == 1 and bool(prefixes) and
+             dequeued[0]['seq'] < prefixes[0]['seq'])
     _finding(findings, 'native_preparation_prefix', first_write is not None and len(dequeued) == 1 and
              any(dequeued[0]['seq'] < prefix['seq'] < first_write and
                  prefix['state']['preparation'] == 'Prepared' and
@@ -1892,10 +1934,11 @@ def _native_fixture_findings(ledger, payload, *, no_flush=False):
             receipt = prefix['seq']
     if written:
         ack_seq = native['ack_calls'][0]['seq'] if len(native['ack_calls']) == 1 else None
-        _finding(findings, 'native_full_write_before_ack', ack_seq is not None and
-                 any(prefix['seq'] < ack_seq and prefix['state']['writer_result'] == 'FullWrite' and
-                     prefix['state']['write_decision'] == 'Written' for prefix in prefixes))
-        _finding(findings, 'native_ack_entered_prefix', ack_seq is not None and entered is not None and ack_seq < entered)
+        _finding(findings, 'native_full_write_at_ack_boundary', ack_seq is not None and
+                 any(prefix['seq'] == ack_seq + 1 and prefix['state']['writer_result'] == 'FullWrite' and
+                     prefix['state']['write_decision'] == 'Written' and prefix['state']['ack'] == {'kind': 'NoCommitRequested'} and
+                     prefix['state']['ack_returned'] is None for prefix in prefixes))
+        _finding(findings, 'native_ack_entered_prefix', ack_seq is not None and entered is not None and ack_seq + 1 < entered)
         if wanted['ack']['commit'] == 'Complete':
             _finding(findings, 'native_ack_receipt_prefix', entered is not None and receipt is not None and entered < receipt)
         else:
@@ -2211,6 +2254,207 @@ def _inspect_sm_fixture(fixture, record, payload):
             findings.append('owner_xml:' + str(error)[:160])
         findings.extend(_original_fixture_findings(value, ledger['sender'], payload))
         _finding(findings, 'driver_execution', payload['execution'] == ledger['owner']['execution'])
+        _finding(findings, 'unexpected_safety_failure', not violations)
+    invariant = violations[0] if violations else None
+    if violations:
+        verdict = 'InvariantViolation'
+    elif payload['rejection'] is not None:
+        verdict = 'InvalidScenario'
+    elif payload['execution'] == 'Cancelled':
+        verdict = 'Cancelled'
+    elif findings:
+        verdict = 'InvariantViolation'
+        invariant = {'id': 'DirectFixtureDivergence', 'class': 'ReplayDivergence', 'location': findings[0]}
+    else:
+        verdict = 'Pass'
+    matched = not findings and verdict == fixture['expected_verdict']
+    evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': verdict, 'qualified': verdict == 'Pass',
+                  'invariant': invariant, 'violations': violations, 'mismatches': findings}
+    return copy.deepcopy(payload), evaluation, matched, None if matched else 'FixtureMismatch'
+
+
+def replacement_safety_findings(value, payload):
+    """The fixed shared-row history permits a stale attempt, never stale commit."""
+    ledger = derive_owner_ledger(value)
+    validate_case_evidence(payload)
+    if ledger['owner']['kind'] != 'NativeReplacement' or payload['rejection'] is not None or payload['recipient']['kind'] != 'NativeReplacement':
+        return []
+    expected, actual = ledger['owner'], payload['recipient']
+    original = next((item for item in payload['originals'] if item['frame_id'] == expected['old']['frame_id']), None)
+    old_dequeue = original['route']['dequeued'] if original is not None else []
+    old_raw = old_dequeue[0]['xml'].encode('utf-8') if len(old_dequeue) == 1 else None
+    new_raw = actual['replacement_dequeued']['xml'].encode('utf-8')
+    violations = []
+    identities = {}
+    for name, raw in (('old', old_raw), ('replacement', new_raw)):
+        native, wanted = actual[name], expected[name]
+        identity = {'frame_id': wanted['frame_id'], 'connection_id': wanted['connection_id'],
+                    'original_source': wanted['state']['original'], 'fenced_source': wanted['state']['returned_fence']}
+        identities[name] = identity
+        violations.extend(_native_settlement_findings(identity, native, raw))
+    def row_violation(identity, source):
+        violations.append({'id': identity, 'class': 'Safety', 'target': {
+            'frame_id': expected['old']['frame_id'], 'owner': 'ControlledNativeRow',
+            'purpose': 'ReplacementSettlement', 'source': copy.deepcopy(source)}})
+    if actual['replacement_dequeued']['source'] != identities['replacement']['original_source'] and (
+            actual['replacement']['write_calls'] or actual['replacement']['ack_calls']):
+        row_violation('NativeReplacementDequeueIdentityMismatch', actual['replacement_dequeued']['source'])
+    row = copy.deepcopy(value['recipient_owner']['initial_row'])
+    old_fence = next((prefix for prefix in actual['old']['prefixes'] if
+                     prefix['state']['preparation'] == 'Prepared' and prefix['state']['fence_entered'] and
+                     prefix['state']['returned_fence'] == identities['old']['fenced_source']), None)
+    events = [(event['seq'], event['kind'], event) for event in actual['row_events']]
+    if old_fence is not None:
+        events.append((old_fence['seq'], 'InitialNativeFence', identities['old']['fenced_source']))
+    allowed_reads = []
+    deletion_sources = []
+    for sequence, kind, event in sorted(events, key=lambda item: item[0]):
+        if kind == 'InitialNativeFence':
+            row = copy.deepcopy(event)
+        elif kind == 'Replace':
+            expected_before = identities['old']['fenced_source']
+            expected_after = identities['replacement']['fenced_source']
+            if row != expected_before or event != {
+                    'seq': sequence, 'kind': 'Replace', 'recipient_id': expected_after['recipient_id'],
+                    'message_id': expected_after['message_id'], 'before_claim_id': expected_before['claim_id'],
+                    'after_claim_id': expected_after['claim_id']}:
+                row_violation('NativeReplacementAuthorityMismatch', row)
+            row = {'kind': 'C2s', 'recipient_id': event['recipient_id'],
+                   'message_id': event['message_id'], 'claim_id': event['after_claim_id']}
+        elif kind == 'AuthorityRead':
+            same_row = row is not None and all(row[name] == event['source'][name] for name in ('recipient_id', 'message_id'))
+            current = row['claim_id'] if same_row else None
+            matches = same_row and event['source']['claim_id'] is not None and event['source']['claim_id'] == current
+            if event['current_claim_id'] != current or event['matches'] != matches:
+                row_violation('NativeClaimAuthorityReadMismatch', event['source'])
+            if matches and event['matches'] and event['current_claim_id'] == current:
+                allowed_reads.append(event)
+        else:
+            if row != event['source']:
+                row_violation('NativeRowDeleteWithoutCurrentClaim', event['source'])
+            deletion_sources.append((sequence, copy.deepcopy(event['source'])))
+            row = None
+    authorized_receipts = []
+    for name in ('old', 'replacement'):
+        native, identity = actual[name], identities[name]
+        bound_call = (native['frame_id'] == identity['frame_id'] and native['connection_id'] == identity['connection_id'] and
+                      len(native['ack_calls']) == 1 and native['ack_calls'][0]['source'] == identity['fenced_source'])
+        entered_authority = None
+        first_receipt = None
+        for prefix in native['prefixes']:
+            state, knowledge = prefix['state'], prefix['state']['ack']
+            if knowledge['kind'] in ('CommitCallEntered', 'ReceiptKnown'):
+                fact_bound = knowledge['fact'] == {'source': identity['fenced_source'], 'disposition': 'Deleted'}
+                reads = [event for event in allowed_reads if event['source'] == identity['fenced_source'] and
+                         bound_call and native['ack_calls'][0]['seq'] + 1 < event['seq'] < prefix['seq']]
+                active_reads = [read for read in reads if not any(read['seq'] < event['seq'] < prefix['seq'] and
+                                event['kind'] in ('Replace', 'Delete') for event in actual['row_events'])]
+                if knowledge['kind'] == 'CommitCallEntered' and entered_authority is None and bound_call and fact_bound and active_reads:
+                    entered_authority = prefix['seq']
+                authorized = bound_call and fact_bound and entered_authority is not None
+                if knowledge['kind'] == 'ReceiptKnown' and first_receipt is None:
+                    authorized = authorized and entered_authority < prefix['seq'] and bool(active_reads)
+                    if authorized:
+                        first_receipt = prefix['seq']
+                        authorized_receipts.append((prefix['seq'], identity['fenced_source']))
+                if not authorized:
+                    row_violation('NativeCommitWithoutCurrentClaimAuthority', knowledge['fact']['source'])
+            if state['ack_returned'] is True and knowledge['kind'] != 'ReceiptKnown':
+                row_violation('NativePositiveReturnWithoutReceipt', identity['fenced_source'])
+    for sequence, source in deletion_sources:
+        if not any(receipt_seq < sequence and receipt_source == source for receipt_seq, receipt_source in authorized_receipts):
+            row_violation('NativeRowDeleteWithoutReceipt', source)
+    if actual['row_after'] is None and row is not None:
+        row_violation('NativeRowDisappearedWithoutObservedDelete', row)
+    return violations
+
+
+def _replacement_fixture_findings(value, ledger, payload):
+    wanted = ledger['owner']
+    if payload['recipient']['kind'] != 'NativeReplacement':
+        return ['missing_replacement_owner']
+    actual, findings = payload['recipient'], []
+    original = next((item for item in payload['originals'] if item['frame_id'] == wanted['old']['frame_id']), None)
+    dequeued = original['route']['dequeued'] if original is not None else []
+    raw = dequeued[0]['xml'].encode('utf-8') if len(dequeued) == 1 else b''
+    replacement_dequeue = actual['replacement_dequeued']
+    _finding(findings, 'replacement_dequeue_source', replacement_dequeue['source'] == wanted['replacement_dequeued']['source'])
+    _finding(findings, 'replacement_dequeue_projection', _tree(_xml(replacement_dequeue['xml'], projected=True)) ==
+             wanted['replacement_dequeued']['xml'])
+    _finding(findings, 'replacement_dequeue_bytes', replacement_dequeue['xml'].encode('utf-8') == raw)
+    _finding(findings, 'replacement_row_events', [{name: item[name] for name in item if name != 'seq'}
+             for item in actual['row_events']] == wanted['row_events'])
+    _finding(findings, 'replacement_row_after', actual['row_after'] == wanted['row_after'])
+    for name in ('old', 'replacement'):
+        native, expected = actual[name], wanted[name]
+        state = expected['state']
+        _finding(findings, 'replacement_native_identity', native['frame_id'] == expected['frame_id'] and
+                 native['connection_id'] == expected['connection_id'])
+        _finding(findings, 'replacement_native_final', {field: native[field] for field in NATIVE_STATE_FIELDS.split()} == state)
+        _finding(findings, 'replacement_native_prefixes', [prefix['state'] for prefix in native['prefixes']] == _expected_native_prefixes(state))
+        _retained_native_prefixes(native['prefixes'], findings)
+        _finding(findings, 'replacement_native_polls', [poll['result'] for poll in native['polls']] == expected['polls'])
+        _finding(findings, 'replacement_native_receipt_channels', not native['ownership_receipts'] and not native['write_receipts'])
+        _finding(findings, 'replacement_native_writes', bool(raw) and [
+            {field: call[field] for field in ('offered_len', 'offered_sha256', 'accepted_bytes_hex', 'result')}
+            for call in native['write_calls']] == [{'offered_len': len(raw), 'offered_sha256': _hash(raw),
+                                                  'accepted_bytes_hex': raw.hex(), 'result': 'Accepted'}])
+        _finding(findings, 'replacement_native_flush', [call['result'] for call in native['flush_calls']] == ['Ok'])
+        _finding(findings, 'replacement_native_ack', [(call['source'], call['returned']) for call in native['ack_calls']] ==
+                 [(state['returned_fence'], state['ack_returned'])])
+        prefixes, polls = native['prefixes'], native['polls']
+        _finding(findings, 'replacement_final_after_poll', bool(prefixes) and bool(polls) and
+                 polls[-1]['seq'] < prefixes[-1]['seq'] and all(prefix['seq'] < polls[-1]['seq'] for prefix in prefixes[:-1]))
+        if len(prefixes) >= 4 and len(native['ack_calls']) == 1:
+            _finding(findings, 'replacement_adjacent_ack_boundary', prefixes[3]['seq'] == native['ack_calls'][0]['seq'] + 1)
+        if len(prefixes) >= 3 and native['write_calls'] and native['flush_calls'] and native['ack_calls']:
+            _finding(findings, 'replacement_write_flush_ack_order', prefixes[2]['seq'] < native['write_calls'][0]['seq'] <
+                     native['flush_calls'][0]['seq'] < native['ack_calls'][0]['seq'])
+    old, replacement, events = actual['old'], actual['replacement'], actual['row_events']
+    if len(events) == 4 and len(old['prefixes']) == 5 and len(replacement['prefixes']) == 7 and len(old['polls']) == 2 and len(replacement['polls']) == 1:
+        _finding(findings, 'replacement_actual_boundary_order', len(dequeued) == 1 and
+                 dequeued[0]['seq'] < old['prefixes'][0]['seq'] and
+                 old['prefixes'][3]['seq'] < old['polls'][0]['seq'] < events[0]['seq'] < replacement_dequeue['seq'] <
+                 events[1]['seq'] < old['polls'][1]['seq'] < old['prefixes'][-1]['seq'] < replacement['prefixes'][0]['seq'] and
+                 replacement['prefixes'][3]['seq'] < events[2]['seq'] < replacement['prefixes'][4]['seq'] <
+                 replacement['prefixes'][5]['seq'] < events[3]['seq'] < replacement['polls'][0]['seq'] < replacement['prefixes'][-1]['seq'])
+    else:
+        findings.append('replacement_boundary_inventory')
+    return findings
+
+
+def _inspect_replacement_fixture(fixture, record, payload):
+    """Pure C13 evidence inspection, independent of any expected-output sample."""
+    if type(record) is not dict or record.get('observation') != 'Complete':
+        return None, None, False, record.get('observation', 'IncompleteProcess') if type(record) is dict else 'IncompleteProcess'
+    process = record.get('process')
+    if type(process) is not dict or type(process.get('returncode')) is not int or process['returncode'] != 0:
+        return None, None, False, 'ProcessFailure'
+    value = parse_case_input(fixture['bytes'])
+    ledger = derive_owner_ledger(value)
+    _need(ledger['owner']['kind'] == 'NativeReplacement', 'replacement_fixture_owner')
+    try:
+        validate_case_evidence(payload)
+    except (DirectCaseInvalid, DirectCaseIncomplete, TypeError, KeyError, ValueError) as error:
+        evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': 'Inconclusive', 'qualified': False,
+                      'invariant': None, 'violations': [], 'mismatches': ['malformed_evidence:' + str(error)[:160]]}
+        return None, evaluation, False, 'MalformedOrUnexpectedOutput'
+    if payload['input_sha256'] != _hash(fixture['bytes']):
+        evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': 'Inconclusive', 'qualified': False,
+                      'invariant': None, 'violations': [], 'mismatches': ['raw_input_binding']}
+        return copy.deepcopy(payload), evaluation, False, 'InputBindingMismatch'
+    findings, violations = [], []
+    if payload['rejection'] is not None:
+        findings.append('unexpected_rejection')
+    else:
+        violations = _authority_safety_findings(ledger['sender'], payload) + replacement_safety_findings(value, payload)
+        try:
+            findings.extend(projection_findings(ledger['sender'], payload))
+            findings.extend(_replacement_fixture_findings(value, ledger, payload))
+        except (DirectCaseInvalid, ET.ParseError, ValueError) as error:
+            findings.append('owner_xml:' + str(error)[:160])
+        findings.extend(_original_fixture_findings(value, ledger['sender'], payload))
+        _finding(findings, 'driver_execution', payload['execution'] == 'Complete')
         _finding(findings, 'unexpected_safety_failure', not violations)
     invariant = violations[0] if violations else None
     if violations:

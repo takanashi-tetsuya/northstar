@@ -754,10 +754,11 @@ class NativeEvidenceAndSafetyTests(unittest.TestCase):
         if flush:
             native['flush_calls'].append({'seq': seq(), 'result': 'Ok'})
         native.update(writer_entered=True, writer_result='FullWrite', write_decision='Written')
-        native['prefixes'].append({'seq': seq(), 'state': {name: copy.deepcopy(native[name])
-                                                        for name in direct_case.NATIVE_STATE_FIELDS.split()}})
         if ack:
             native['ack_calls'].append({'seq': seq(), 'source': source, 'returned': True})
+            native['ack'] = {'kind': 'NoCommitRequested'}
+            native['prefixes'].append({'seq': seq(), 'state': {name: copy.deepcopy(native[name])
+                                                            for name in direct_case.NATIVE_STATE_FIELDS.split()}})
             native.update(ack={'kind': 'ReceiptKnown', 'fact': {'source': source, 'disposition': 'Deleted'}}, ack_returned=True)
         native['terminal'] = 'Returned'
         native['prefixes'].append({'seq': seq(), 'state': {name: copy.deepcopy(native[name])
@@ -1011,13 +1012,17 @@ class NativeFullMatcherTests(unittest.TestCase):
                     'originals': [original], 'recipient': {'kind': 'None'}}
         native_input = value['recipient_owner']['native']
         fenced = copy.deepcopy(native_input['fence']['returned_source'])
-        native_state = {'original': source, 'preparation': 'Prepared', 'managed_by_sm': False, 'fence_entered': True,
-                        'returned_fence': fenced, 'writer_entered': False, 'writer_result': None, 'write_decision': None,
+        native_state = {'original': source, 'preparation': 'Recording', 'managed_by_sm': None, 'fence_entered': False,
+                        'returned_fence': None, 'writer_entered': False, 'writer_result': None, 'write_decision': None,
                         'ack': {'kind': 'NotRequested'}, 'ack_returned': None, 'terminal': None}
         native = {'frame_id': frame, 'connection_id': native_input['connection_id'], 'prefixes': [], 'polls': [],
                   'write_calls': [], 'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [], 'write_receipts': []}
         def native_snapshot():
             native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(native_state)})
+        native_snapshot()
+        native_state.update(preparation='FenceCallEntered', managed_by_sm=False, fence_entered=True)
+        native_snapshot()
+        native_state.update(preparation='Prepared', returned_fence=fenced)
         native_snapshot()
         native_state['writer_entered'] = True
         remaining = live.encode('utf-8')
@@ -1039,10 +1044,11 @@ class NativeFullMatcherTests(unittest.TestCase):
         successful = short is None and (omit_flush or native_input['write']['flush'] == 'Ok')
         native_state.update(writer_result='FullWrite' if successful else 'Failed',
                             write_decision='Written' if successful else 'Withhold')
-        native_snapshot()
         pending = successful and native_input['ack']['commit'] == 'Pending'
         if successful:
             native['ack_calls'].append({'seq': seq(), 'source': fenced, 'returned': None})
+            native_state['ack'] = {'kind': 'NoCommitRequested'}
+            native_snapshot()
             fact = {'source': fenced, 'disposition': 'Deleted'}
             native_state['ack'] = {'kind': 'CommitCallEntered', 'fact': fact}
             native_snapshot()
@@ -1202,7 +1208,7 @@ class NativeFullMatcherTests(unittest.TestCase):
         _semantic, evaluation, matched, _stop = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
         self.assertFalse(matched)
         self.assertEqual([item['id'] for item in evaluation['violations']],
-                         ['NativeAckWithoutSuccessfulFlush', 'NativeAckWithoutSuccessfulFlush'])
+                         ['NativeAckWithoutSuccessfulFlush', 'NativeAckWithoutFullWrite', 'NativeAckWithoutSuccessfulFlush'])
 
     def test_handoff_requires_prior_matching_receipt_and_retained_correlation(self):
         fixture = self.fixture('C01')
@@ -1289,7 +1295,7 @@ class NativeFullMatcherTests(unittest.TestCase):
         for late in ('fence', 'writer'):
             payload = self.supplied_facts(fixture)
             native = payload['recipient']['native']
-            boundary = native['write_calls'][0]['seq'] if late == 'fence' else native['ack_calls'][0]['seq']
+            boundary = native['write_calls'][0]['seq'] if late == 'fence' else native['ack_calls'][0]['seq'] + 2
             for prefix in native['prefixes']:
                 if prefix['seq'] < boundary:
                     if late == 'fence':
@@ -1409,6 +1415,36 @@ class NativeFullMatcherTests(unittest.TestCase):
         result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
         self.assertFalse(result[2])
         self.assertIn('finalization_return_before_rearm', result[1]['mismatches'])
+
+    def test_native_callbacks_and_ack_boundary_match_the_actual_shared_port(self):
+        for identity, omit_flush, prefix_count in (('C01', False, 7), ('C02', False, 6),
+                                                   ('C07', False, 4), ('M2', True, 7), ('M3', True, 4)):
+            fixture = self.fixture(identity)
+            payload = self.supplied_sequence(fixture, omit_flush=omit_flush)
+            native = payload['recipient']['native']
+            self.assertEqual(len(native['prefixes']), prefix_count)
+            self.assertEqual([prefix['state']['preparation'] for prefix in native['prefixes'][:3]],
+                             ['Recording', 'FenceCallEntered', 'Prepared'])
+            if native['ack_calls']:
+                authority = native['prefixes'][3]
+                self.assertEqual(authority['seq'], native['ack_calls'][0]['seq'] + 1)
+                self.assertEqual(authority['state']['ack'], {'kind': 'NoCommitRequested'})
+                self.assertIsNone(authority['state']['ack_returned'])
+                self.assertEqual(authority['state']['writer_result'], 'FullWrite')
+            else:
+                self.assertTrue(all(prefix['state']['writer_result'] is None for prefix in native['prefixes'][:-1]))
+            self.assertTrue(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+
+    def test_native_recording_cannot_precede_the_actual_target_dequeue(self):
+        fixture = self.fixture('C01')
+        payload = self.supplied_facts(fixture)
+        dequeue = payload['originals'][0]['route']['dequeued'][0]
+        first = payload['recipient']['native']['prefixes'][0]
+        dequeue['seq'], first['seq'] = first['seq'], dequeue['seq']
+        direct_case.validate_native_evidence(payload)
+        result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(result[2])
+        self.assertIn('native_start_after_dequeue', result[1]['mismatches'])
 
 
 class OwnerLiteralAndLedgerTests(unittest.TestCase):
@@ -1987,6 +2023,213 @@ class SmFullMatcherTests(unittest.TestCase):
         result = self.inspect(fixture, payload)
         self.assertFalse(result[2])
         self.assertIn('SmAcknowledgementAppliedWithoutReceipt', [item['id'] for item in result[1]['violations']])
+
+
+class ReplacementFullMatcherTests(unittest.TestCase):
+    def fixture(self):
+        return next(item for item in direct_case.owner_fixtures() if item['id'] == 'C13')
+
+    def inspect(self, fixture, payload):
+        return direct_case._inspect_replacement_fixture(fixture, {'observation': 'Complete', 'process': {'returncode': 0}}, payload)
+
+    def supplied_facts(self, fixture):
+        """Two actual-shaped owners and one explicit controlled row replacement."""
+        payload = NativeFullMatcherTests.supplied_facts(self, fixture, sender_capture=True)
+        original = payload['originals'][0]
+        dequeue = original['route']['dequeued'][0]
+        counter = dequeue['seq']
+        def seq():
+            nonlocal counter
+            counter += 1
+            return counter
+        owner = fixture['value']['recipient_owner']
+        row_events = []
+        raw = dequeue['xml'].encode('utf-8')
+        def start_native(name, source):
+            spec = owner[name]
+            state = {'original': copy.deepcopy(source), 'preparation': 'Recording', 'managed_by_sm': None,
+                     'fence_entered': False, 'returned_fence': None, 'writer_entered': False, 'writer_result': None,
+                     'write_decision': None, 'ack': {'kind': 'NotRequested'}, 'ack_returned': None, 'terminal': None}
+            native = {'frame_id': owner['frame_id'], 'connection_id': spec['connection_id'],
+                      'write_calls': [], 'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [],
+                      'write_receipts': [], 'prefixes': [], 'polls': []}
+            def snapshot():
+                native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(state)})
+            snapshot()
+            state.update(preparation='FenceCallEntered', managed_by_sm=False, fence_entered=True)
+            snapshot()
+            state.update(preparation='Prepared', returned_fence=copy.deepcopy(spec['fence']['returned_source']))
+            snapshot()
+            state['writer_entered'] = True
+            native['write_calls'].append({'seq': seq(), 'offered_len': len(raw), 'offered_sha256': direct_case._hash(raw),
+                                          'accepted_bytes_hex': raw.hex(), 'result': 'Accepted'})
+            native['flush_calls'].append({'seq': seq(), 'result': 'Ok'})
+            state.update(writer_result='FullWrite', write_decision='Written', ack={'kind': 'NoCommitRequested'})
+            native['ack_calls'].append({'seq': seq(), 'source': copy.deepcopy(state['returned_fence']), 'returned': None})
+            snapshot()
+            return native, state, snapshot
+        old, old_state, old_snapshot = start_native('old', dequeue['source'])
+        old['polls'].append({'seq': seq(), 'result': 'Pending'})
+        current = direct_case._c2s(direct_case._uuid(21301), direct_case._uuid(10))
+        row_events.append({'seq': seq(), 'kind': 'Replace', 'recipient_id': direct_case._uuid(2),
+                           'message_id': direct_case._uuid(21301), 'before_claim_id': direct_case._uuid(6),
+                           'after_claim_id': direct_case._uuid(10)})
+        replacement_dequeued = {'seq': seq(), 'source': copy.deepcopy(current), 'xml': dequeue['xml']}
+        row_events.append({'seq': seq(), 'kind': 'AuthorityRead', 'source': copy.deepcopy(old_state['returned_fence']),
+                           'current_claim_id': direct_case._uuid(10), 'matches': False})
+        old['ack_calls'][0]['returned'] = False
+        old_state['ack_returned'] = False
+        old['polls'].append({'seq': seq(), 'result': 'Ready'})
+        old_state['terminal'] = 'Returned'
+        old_snapshot()
+        old.update(copy.deepcopy(old_state))
+        replacement, new_state, new_snapshot = start_native('replacement', current)
+        row_events.append({'seq': seq(), 'kind': 'AuthorityRead', 'source': copy.deepcopy(current),
+                           'current_claim_id': direct_case._uuid(10), 'matches': True})
+        new_state['ack'] = {'kind': 'CommitCallEntered', 'fact': {'source': copy.deepcopy(current), 'disposition': 'Deleted'}}
+        new_snapshot()
+        new_state['ack']['kind'] = 'ReceiptKnown'
+        new_snapshot()
+        row_events.append({'seq': seq(), 'kind': 'Delete', 'source': copy.deepcopy(current)})
+        replacement['ack_calls'][0]['returned'] = True
+        new_state['ack_returned'] = True
+        replacement['polls'].append({'seq': seq(), 'result': 'Ready'})
+        new_state['terminal'] = 'Returned'
+        new_snapshot()
+        replacement.update(copy.deepcopy(new_state))
+        payload['recipient'] = {'kind': 'NativeReplacement', 'old': old, 'replacement': replacement,
+                                'replacement_dequeued': replacement_dequeued, 'row_events': row_events, 'row_after': None}
+        return payload
+
+    def test_stale_attempt_and_current_claim_commit_match_independent_supplied_history(self):
+        fixture = self.fixture()
+        with patch.object(direct_case, 'derive_owner_ledger', side_effect=AssertionError('prediction is not observation')), \
+                patch.object(direct_case, '_expected_native_prefixes', side_effect=AssertionError('prediction is not observation')):
+            payload = self.supplied_facts(fixture)
+        _semantic, evaluation, matched, stop = self.inspect(fixture, payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual((evaluation['verdict'], evaluation['qualified'], evaluation['violations']), ('Pass', True, []))
+        old, replacement = payload['recipient']['old'], payload['recipient']['replacement']
+        self.assertEqual([len(old['prefixes']), len(replacement['prefixes'])], [5, 7])
+        self.assertEqual(old['ack'], {'kind': 'NoCommitRequested'})
+        self.assertIs(old['ack_returned'], False)
+        self.assertEqual(replacement['ack']['kind'], 'ReceiptKnown')
+        self.assertIs(replacement['ack_returned'], True)
+
+    def test_late_or_misplaced_positive_snapshot_cannot_authorize_the_ack(self):
+        fixture = self.fixture()
+        for change in ('late', 'before_call'):
+            payload = self.supplied_facts(fixture)
+            old = payload['recipient']['old']
+            if change == 'late':
+                old['prefixes'][3]['state'].update(writer_result=None, write_decision=None)
+            else:
+                old['prefixes'][3]['seq'], old['ack_calls'][0]['seq'] = old['ack_calls'][0]['seq'], old['prefixes'][3]['seq']
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertIn('NativeAckWithoutFullWrite', [item['id'] for item in result[1]['violations']])
+
+    def test_old_rejected_call_cannot_be_changed_into_a_commit_receipt(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        old = payload['recipient']['old']
+        for state in (old, old['prefixes'][-1]['state']):
+            state['ack'] = {'kind': 'ReceiptKnown', 'fact': {'source': copy.deepcopy(old['returned_fence']), 'disposition': 'Deleted'}}
+            state['ack_returned'] = True
+        old['ack_calls'][0]['returned'] = True
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('NativeCommitWithoutCurrentClaimAuthority', [item['id'] for item in result[1]['violations']])
+
+    def test_authority_predicate_must_compare_the_actual_current_claim(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['row_events'][1]['matches'] = True
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('NativeClaimAuthorityReadMismatch', [item['id'] for item in result[1]['violations']])
+
+    def test_committed_view_delete_needs_the_prior_same_owner_receipt(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        owner = payload['recipient']
+        receipt = owner['replacement']['prefixes'][5]
+        deletion = owner['row_events'][3]
+        receipt['seq'], deletion['seq'] = deletion['seq'], receipt['seq']
+        direct_case.validate_case_evidence(payload)
+        semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertEqual(semantic, payload)
+        self.assertFalse(matched)
+        self.assertIn('NativeRowDeleteWithoutReceipt', [item['id'] for item in evaluation['violations']])
+
+    def test_delete_of_old_claim_cannot_consume_current_replacement_authority(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['row_events'][-1]['source']['claim_id'] = direct_case._uuid(6)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('NativeRowDeleteWithoutCurrentClaim', [item['id'] for item in result[1]['violations']])
+
+    def test_replacement_dequeue_and_connection_are_actual_authority_bindings(self):
+        fixture = self.fixture()
+        for field in ('source', 'connection'):
+            payload = self.supplied_facts(fixture)
+            if field == 'source':
+                payload['recipient']['replacement_dequeued']['source'] = None
+            else:
+                payload['recipient']['replacement']['connection_id'] = direct_case._uuid(3)
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            expected = 'NativeReplacementDequeueIdentityMismatch' if field == 'source' else 'NativeAckOwnerIdentityMismatch'
+            self.assertIn(expected, [item['id'] for item in result[1]['violations']])
+
+    def test_duplicate_new_ack_cannot_share_one_invocation_receipt(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        native = payload['recipient']['replacement']
+        sequence = native['ack_calls'][0]['seq']
+        SmFullMatcherTests.shift_after(payload, sequence, 1)
+        duplicate = copy.deepcopy(native['ack_calls'][0])
+        duplicate['seq'] = sequence + 1
+        native['ack_calls'].append(duplicate)
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('NativeCommitWithoutCurrentClaimAuthority', [item['id'] for item in result[1]['violations']])
+
+    def test_replacement_owner_starts_after_old_final_snapshot(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        old_final = payload['recipient']['old']['prefixes'][-1]
+        new_first = payload['recipient']['replacement']['prefixes'][0]
+        old_final['seq'], new_first['seq'] = new_first['seq'], old_final['seq']
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('replacement_actual_boundary_order', result[1]['mismatches'])
+
+    def test_replacement_wrong_input_binding_and_external_interruption_never_qualify(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        self.assertEqual(direct_case._inspect_replacement_fixture(fixture, {'observation': 'EnvironmentInterrupted'}, payload),
+                         (None, None, False, 'EnvironmentInterrupted'))
+        payload['input_sha256'] = '0' * 64
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertEqual(result[3], 'InputBindingMismatch')
+        self.assertIsNone(result[1]['invariant'])
+
+    def test_replacement_expectation_does_not_dispatch_on_case_label(self):
+        fixture = self.fixture()
+        payload = self.supplied_facts(fixture)
+        fixture['value']['case_id'] = 'same-input-authority-with-another-label'
+        fixture['bytes'] = direct_case._encoded(fixture['value'])
+        payload['input_sha256'] = direct_case._hash(fixture['bytes'])
+        self.assertTrue(self.inspect(fixture, payload)[2])
 
 
 if __name__ == '__main__':

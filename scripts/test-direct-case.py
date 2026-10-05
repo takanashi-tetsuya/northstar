@@ -2232,5 +2232,489 @@ class ReplacementFullMatcherTests(unittest.TestCase):
         self.assertTrue(self.inspect(fixture, payload)[2])
 
 
+class BoshFullMatcherTests(unittest.TestCase):
+    def fixture(self, identity):
+        return next(item for item in direct_case.bosh_fixtures() if item['id'] == identity)
+
+    def inspect(self, fixture, payload):
+        return direct_case._inspect_bosh_fixture(fixture, {'observation': 'Complete', 'process': {'returncode': 0}}, payload)
+
+    def supplied_facts(self, fixture):
+        """Hand-authored callback histories; no oracle ledger/prefix generator."""
+        payload = NativeFullMatcherTests.supplied_facts(self, fixture, sender_capture=True)
+        dequeue = payload['originals'][0]['route']['dequeued'][0]
+        counter = dequeue['seq']
+        def seq():
+            nonlocal counter
+            counter += 1
+            return counter
+        spec = fixture['value']['recipient_owner']
+        persisted = spec['recording']['kind'] == 'PersistedSm'
+        pending = spec['bind'] is not None and spec['bind']['commit'] == 'Pending'
+        bosh = {'owners': [], 'transfer_calls': [], 'bind_calls': [], 'renew_calls': [], 'ack_calls': [],
+                'response_receivers': [], 'cache_history': [], 'fifo_after': [], 'output_bytes': 0,
+                'highest_responded': 0, 'mix_handoffs': [], 'transport_receipts': []}
+        recipient = {'kind': 'Bosh', 'bosh': bosh, 'sm_turns': [], 'sm_fifo_after': [],
+                     'sm_outbound_h': 2 if persisted else None, 'sm_acked_h': 0 if persisted else None}
+        items = [{'xml': dequeue['xml'], 'source': copy.deepcopy(dequeue['source'])}]
+        if not persisted:
+            items.append({'xml': "<message xmlns='jabber:client' id='mix'/>", 'source': direct_case._mix(8)})
+        items.append({'xml': "<message xmlns='jabber:client' id='plain'/>", 'source': None})
+        plain_index = len(items) - 1
+        def start(kind, association):
+            state = {'scope': {'session_id': direct_case._uuid(5), 'ttl_seconds': 100, 'kind': kind},
+                     'transfers': [], 'responses': [], 'renewals': [], 'acknowledgements': [],
+                     'terminal': None, 'keep_running': None}
+            owner = {'owner_index': len(bosh['owners']), 'association': copy.deepcopy(association), 'prefixes': [], 'polls': []}
+            bosh['owners'].append(owner)
+            def snapshot():
+                owner['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(state)})
+            def finish(cancelled=False):
+                owner['polls'].append({'seq': seq(), 'result': 'Pending' if cancelled else 'Ready'})
+                state.update(terminal='Cancelled' if cancelled else 'Returned', keep_running=None if cancelled else True)
+                snapshot()
+                owner.update(copy.deepcopy(state))
+            return owner, state, snapshot, finish
+        fifo = []
+        for index, item in enumerate(items):
+            owner, state, snapshot, finish = start('Outbound', {'kind': 'Outbound', 'item_index': index, 'item': item})
+            pushed = copy.deepcopy(item)
+            if persisted:
+                sm_fifo = recipient['sm_fifo_after']
+                sm = {'scope': {'purpose': {'kind': 'Record'}, 'session_id': direct_case._uuid(4),
+                                'connection_id': direct_case._uuid(3), 'inbound_h': 2, 'outbound_h': index,
+                                'acked_h': 0, 'queued': index}, 'binding': None, 'h_decision': {'kind': 'NotRequested'},
+                      'knowledge': {'kind': 'NotRequested'}, 'appended': False, 'restored': False, 'ownership_applied': False,
+                      'acknowledged_h_applied': None, 'notification_attempted': False, 'capacity_completed': None,
+                      'returned_updated': None, 'returned_error': False, 'record_managed_by_sm': None, 'terminal': None}
+                turn = {'prefixes': [{'seq': seq(), 'state': copy.deepcopy(sm)}], 'polls': []}
+                sm_fifo.append(copy.deepcopy(item))
+                sources = [copy.deepcopy(slot['source']) for slot in sm_fifo]
+                sm.update(appended=True, binding={'session_id': direct_case._uuid(4), 'connection_id': direct_case._uuid(3),
+                          'inbound_h': 2, 'outbound_h': index + 1, 'acked_h': 0, 'whole': sources,
+                          'acknowledged': [], 'remaining': copy.deepcopy(sources)},
+                          knowledge={'kind': 'CommitCallEntered', 'fact': {'kind': 'Checkpoint', 'rotations': [], 'settled': []}})
+                turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(sm)})
+                sm['knowledge']['kind'] = 'ReceiptKnown'
+                turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(sm)})
+                managed = item['source'] is not None
+                sm.update(ownership_applied=True, notification_attempted=managed, returned_updated=True,
+                          record_managed_by_sm=managed, terminal='Returned')
+                turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(sm)})
+                turn.update(copy.deepcopy(sm))
+                recipient['sm_turns'].append(turn)
+                if managed:
+                    pushed['source'] = None
+            elif item['source'] is not None and item['source']['kind'] == 'Mix':
+                transfer = {'source': direct_case._mix(8), 'knowledge': {'kind': 'NoCommitRequested'},
+                            'returned_source': None, 'return_matches_receipt': False, 'local_entered': False,
+                            'source_applied': False, 'notification_attempted': False, 'queue_accepted': None}
+                state['transfers'].append(transfer)
+                call = {'seq': seq(), 'owner_index': index, 'source': direct_case._mix(8), 'returned_source': None}
+                bosh['transfer_calls'].append(call)
+                transfer['knowledge'] = {'kind': 'CommitCallEntered', 'source': direct_case._mix(9)}
+                snapshot()
+                transfer['knowledge']['kind'] = 'ReceiptKnown'
+                snapshot()
+                transfer.update(returned_source=direct_case._mix(9), return_matches_receipt=True, local_entered=True,
+                                source_applied=True, notification_attempted=True, queue_accepted=True)
+                call['returned_source'] = direct_case._mix(9)
+                pushed['source'] = direct_case._mix(9)
+            fifo.append(pushed)
+            finish()
+            if item['source'] is not None and item['source']['kind'] == 'Mix':
+                bosh['mix_handoffs'].append({'seq': seq(), 'delivery_id': direct_case._uuid(7),
+                                             'result': {'kind': 'BoshPersisted', 'session_id': direct_case._uuid(5)}})
+            if index == plain_index:
+                bosh['transport_receipts'].append({'seq': seq(), 'item_index': index, 'result': 'Empty'})
+        def association(phase, xml):
+            return {'kind': 'Request', 'phase': phase, 'rid': 101 if phase == 'FreshAck' else 100,
+                    'ack': 100 if phase == 'FreshAck' else None, 'sid': 'case-session',
+                    'fingerprint_hex': direct_case._hash(xml.encode('utf-8'))}
+        def renew(owner, state, snapshot, expected=None):
+            renewal = {'expected': copy.deepcopy(expected), 'knowledge': 'NoCommitRequested', 'returned': False,
+                       'return_matches': False, 'ack_issued': False, 'replay_calls': 0, 'replay_accepted': 0,
+                       'replay_refused': 0, 'replay_bookkeeping': False}
+            state['renewals'].append(renewal)
+            call = {'seq': seq(), 'owner_index': owner['owner_index'], 'expected': copy.deepcopy(expected), 'returned': None}
+            bosh['renew_calls'].append(call)
+            renewal['knowledge'] = 'CommitCallEntered'
+            snapshot()
+            renewal['knowledge'] = 'ReceiptKnown'
+            snapshot()
+            renewal.update(returned=True, return_matches=True)
+            call['returned'] = True
+            return renewal
+        request = spec['request_xml']
+        owner, state, snapshot, finish = start('Request', association('Initial', request))
+        renew(owner, state, snapshot)
+        lineage = [copy.deepcopy(item['source']) for item in fifo]
+        sources = [copy.deepcopy(source) for source in lineage if source is not None]
+        membership = {'c2s_message_ids': [source['message_id'] for source in sources if source['kind'] == 'C2s'],
+                      'mix_delivery_ids': [source['delivery_id'] for source in sources if source['kind'] == 'Mix']}
+        attempt = {'selected_end': len(fifo) - 1, 'selected_len': len(fifo), 'sources': sources,
+                   'knowledge': {'kind': 'NoCommitRequested'}, 'returned': None, 'return_matches': False,
+                   'superseded_message': None, 'restored': False, 'restore_matches': False, 'removed_indices': []}
+        response = {'rid': 100, 'kind': 'Payload', 'lineage': lineage, 'removed': [False] * len(fifo), 'attempts': [attempt],
+                    'construction_restored': 0, 'exposure_entered': False, 'responder_calls': 0, 'accepted_responders': 0,
+                    'refused_responders': 0, 'control_calls': 0, 'control_accepted': 0, 'control_refused': 0,
+                    'empty_cache_evictions': 0, 'bookkeeping': False, 'cached': False}
+        state['responses'].append(response)
+        body = ("<body xmlns='http://jabber.org/protocol/httpbind' ack='100'>" + ''.join(item['xml'] for item in fifo) + '</body>').encode('utf-8')
+        fifo.clear()
+        if sources:
+            call = {'seq': seq(), 'owner_index': owner['owner_index'], 'rid': 100, 'sources': copy.deepcopy(sources), 'returned_membership': None}
+            bosh['bind_calls'].append(call)
+            attempt['knowledge'] = {'kind': 'CommitCallEntered', 'membership': copy.deepcopy(membership)}
+            snapshot()
+            if pending:
+                finish(True)
+                bosh['response_receivers'].append({'seq': seq(), 'owner_index': owner['owner_index'], 'rid': 100,
+                    'phase': 'Initial', 'receiver_index': 1, 'result': {'kind': 'Closed'}})
+                bosh['transport_receipts'].append({'seq': seq(), 'item_index': plain_index, 'result': 'Closed'})
+                payload.update(recipient=recipient, execution='Cancelled')
+                return payload
+            attempt['knowledge']['kind'] = 'ReceiptKnown'
+            snapshot()
+            call['returned_membership'] = copy.deepcopy(membership)
+        else:
+            attempt['knowledge'] = {'kind': 'NotRequired'}
+        attempt.update(returned=copy.deepcopy(membership), return_matches=True)
+        snapshot()
+        response.update(exposure_entered=True, responder_calls=2, accepted_responders=0 if persisted else 1,
+                        refused_responders=2 if persisted else 1)
+        snapshot()
+        response.update(bookkeeping=True, cached=True)
+        cache = [{'rid': 100, 'fingerprint_hex': direct_case._hash(request.encode('utf-8')), 'membership': copy.deepcopy(membership),
+                  'body_hex': body.hex(), 'response_bytes': len(body), 'replays': 0, 'transport_receipt_count': 1}]
+        bosh['cache_history'].append({'seq': seq(), 'entries': copy.deepcopy(cache)})
+        bosh['highest_responded'] = 100
+        finish()
+        if not persisted:
+            bosh['response_receivers'].append({'seq': seq(), 'owner_index': owner['owner_index'], 'rid': 100,
+                'phase': 'Initial', 'receiver_index': 1, 'result': {'kind': 'Received', 'body_hex': body.hex()}})
+        if spec['cached_replay'] is not None:
+            owner, state, snapshot, finish = start('Request', association('Replay', spec['cached_replay']['request_xml']))
+            cache[0]['replays'] = 1
+            renewal = renew(owner, state, snapshot, {'rid': 100, 'membership': copy.deepcopy(membership)})
+            renewal.update(replay_calls=1, replay_accepted=1, replay_refused=0, replay_bookkeeping=True)
+            bosh['cache_history'].append({'seq': seq(), 'entries': copy.deepcopy(cache)})
+            finish()
+            bosh['response_receivers'].append({'seq': seq(), 'owner_index': owner['owner_index'], 'rid': 100,
+                'phase': 'Replay', 'receiver_index': 0, 'result': {'kind': 'Received', 'body_hex': body.hex()}})
+        owner, state, snapshot, finish = start('Request', association('FreshAck', spec['fresh_ack']['request_xml']))
+        renewal = renew(owner, state, snapshot)
+        renewal['ack_issued'] = True
+        ack = {'rid': 100, 'knowledge': 'NoCommitRequested', 'deleted': None, 'returned': False, 'return_matches': False,
+               'cache_evictions': 0, 'receipt_calls': 0, 'receipts_sent': 0, 'receipts_refused': 0}
+        state['acknowledgements'].append(ack)
+        call = {'seq': seq(), 'owner_index': owner['owner_index'], 'rid': 100, 'returned': None}
+        bosh['ack_calls'].append(call)
+        ack.update(knowledge='CommitCallEntered', deleted=copy.deepcopy(spec['fresh_ack']['deleted']))
+        snapshot()
+        ack['knowledge'] = 'ReceiptKnown'
+        snapshot()
+        ack.update(returned=True, return_matches=True, cache_evictions=1, receipt_calls=1, receipts_sent=1, receipts_refused=0)
+        call['returned'] = True
+        cache.clear()
+        bosh['cache_history'].append({'seq': seq(), 'entries': []})
+        finish()
+        bosh['transport_receipts'].append({'seq': seq(), 'item_index': plain_index, 'result': 'Received'})
+        payload['recipient'] = recipient
+        return payload
+
+    def test_three_bosh_histories_match_without_prediction_constructing_observations(self):
+        for identity, verdict in (('C10', 'Pass'), ('C11', 'Cancelled'), ('C12', 'Pass')):
+            fixture = self.fixture(identity)
+            with patch.object(direct_case, 'derive_owner_ledger', side_effect=AssertionError('prediction is not observation')), \
+                    patch.object(direct_case, '_bosh_prefix_states', side_effect=AssertionError('prediction is not observation')):
+                payload = self.supplied_facts(fixture)
+            _semantic, evaluation, matched, stop = self.inspect(fixture, payload)
+            self.assertTrue(matched, evaluation)
+            self.assertIsNone(stop)
+            self.assertEqual((evaluation['verdict'], evaluation['qualified']), (verdict, verdict == 'Pass'))
+            self.assertEqual(evaluation['violations'], [])
+
+    def test_bosh_input_pins_actual_sid_one_original_single_mix_and_supported_cuts(self):
+        base = self.fixture('C10')['value']
+        variants = []
+        bad = copy.deepcopy(base)
+        bad['recipient_owner']['bind']['commit'] = 'Error'
+        variants.append(bad)
+        bad = copy.deepcopy(base)
+        bad['recipient_owner']['request_xml'] = bad['recipient_owner']['request_xml'].replace('case-session', 'other-session')
+        variants.append(bad)
+        bad = copy.deepcopy(base)
+        bad['recipient_owner']['extra_items'].insert(0, copy.deepcopy(bad['recipient_owner']['extra_items'][0]))
+        variants.append(bad)
+        bad = copy.deepcopy(base)
+        for name in ('originals', 'policy', 'admission', 'direct_repository', 'route'):
+            bad[name].append(copy.deepcopy(bad[name][0]))
+            bad[name][1]['frame_id'] = direct_case._uuid(999)
+        extra = copy.deepcopy(bad['identities']['originals'][0])
+        extra['frame_id'] = direct_case._uuid(999)
+        bad['identities']['originals'].append(extra)
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.derive_owner_ledger(bad)
+        native = next(item['value'] for item in direct_case.native_fixtures() if item['id'] == 'C01')
+        native['drive'] = {'kind': 'DropBoshBindCommit', 'frame_id': native['originals'][0]['frame_id']}
+        with self.assertRaises(direct_case.DirectCaseInvalid):
+            direct_case.validate_native_input(native)
+
+    def test_bosh_only_extra_namespaces_and_shared_governor_are_literal_bindings(self):
+        for identity in ('C10', 'C11', 'C12'):
+            value = self.fixture(identity)['value']
+            for item in value['recipient_owner']['extra_items']:
+                self.assertEqual(direct_case._xml(item['xml'], projected=True).tag, '{jabber:client}message')
+        c12 = self.fixture('C12')['value']
+        self.assertEqual(c12['recipient_owner']['responders'], ['Dropped', 'Dropped'])
+        self.assertEqual(c12['recipient_owner']['governor'], c12['recipient_owner']['recording']['config']['governor'])
+        c12['recipient_owner']['recording']['config']['governor']['max_bytes'] += 1
+        with self.assertRaises(direct_case.DirectCaseInvalid):
+            direct_case.validate_case_input(c12)
+        c08 = next(item for item in direct_case.owner_fixtures() if item['id'] == 'C08')
+        self.assertEqual(c08['value']['recipient_owner']['extra_items'][0]['xml'], "<message id='plain'/>")
+
+    def test_bind_unknown_keeps_prior_transfer_and_renewal_without_cache_or_receipt(self):
+        fixture = self.fixture('C11')
+        payload = self.supplied_facts(fixture)
+        bosh = payload['recipient']['bosh']
+        self.assertEqual(bosh['owners'][1]['transfers'][0]['knowledge']['kind'], 'ReceiptKnown')
+        self.assertEqual(bosh['owners'][3]['renewals'][0]['knowledge'], 'ReceiptKnown')
+        self.assertEqual(bosh['owners'][3]['responses'][0]['attempts'][0]['knowledge']['kind'], 'CommitCallEntered')
+        self.assertEqual(bosh['cache_history'], [])
+        self.assertEqual([item['result'] for item in bosh['transport_receipts']], ['Empty', 'Closed'])
+        self.assertEqual(bosh['response_receivers'][0]['result'], {'kind': 'Closed'})
+        self.assertFalse(self.inspect(fixture, payload)[1]['qualified'])
+
+    def test_c12_empty_membership_does_not_settle_or_clear_the_sm_fifo(self):
+        fixture = self.fixture('C12')
+        payload = self.supplied_facts(fixture)
+        recipient, bosh = payload['recipient'], payload['recipient']['bosh']
+        self.assertEqual(len(recipient['sm_turns']), 2)
+        self.assertEqual((recipient['sm_outbound_h'], recipient['sm_acked_h'], len(recipient['sm_fifo_after'])), (2, 0, 2))
+        self.assertEqual(bosh['bind_calls'], [])
+        self.assertEqual(bosh['owners'][2]['responses'][0]['attempts'][0]['knowledge'], {'kind': 'NotRequired'})
+        self.assertEqual(bosh['owners'][3]['acknowledgements'][0]['deleted'], [])
+        self.assertEqual(bosh['response_receivers'], [])
+        response = bosh['owners'][2]['responses'][0]
+        self.assertEqual((response['responder_calls'], response['accepted_responders'], response['refused_responders']), (2, 0, 2))
+        self.assertTrue(self.inspect(fixture, payload)[2])
+
+    def test_exposure_with_only_entered_bind_reaches_safety_before_fixture_matching(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        owner = payload['recipient']['bosh']['owners'][3]
+        for state in [owner] + [item['state'] for item in owner['prefixes'] if item['state']['responses']]:
+            state['responses'][0]['attempts'][0]['knowledge']['kind'] = 'CommitCallEntered'
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('BoshExposureWithoutExactBindAuthority', [item['id'] for item in result[1]['violations']])
+
+    def test_mix_return_cannot_apply_or_notify_without_the_matching_receipt(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        owner = payload['recipient']['bosh']['owners'][1]
+        owner['transfers'][0]['returned_source']['lease_token'] = direct_case._uuid(10)
+        owner['prefixes'][-1]['state']['transfers'][0]['returned_source']['lease_token'] = direct_case._uuid(10)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('BoshMixAppliedWithoutMatchingReceipt', [item['id'] for item in result[1]['violations']])
+
+    def test_c12_source_clearing_requires_both_actual_counted_records(self):
+        fixture = self.fixture('C12')
+        payload = self.supplied_facts(fixture)
+        turn = payload['recipient']['sm_turns'][1]
+        for state in [turn] + [item['state'] for item in turn['prefixes'] if item['state']['knowledge']['kind'] == 'ReceiptKnown']:
+            state['knowledge']['kind'] = 'CommitCallEntered'
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('BoshPushBeforeSmRecordReturn', [item['id'] for item in result[1]['violations']])
+
+    def test_replay_and_ack_issue_require_exact_renewal_receipts(self):
+        fixture = self.fixture('C10')
+        for index in (4, 5):
+            payload = self.supplied_facts(fixture)
+            owner = payload['recipient']['bosh']['owners'][index]
+            owner['renewals'][0]['knowledge'] = 'CommitCallEntered'
+            owner['prefixes'][-1]['state']['renewals'][0]['knowledge'] = 'CommitCallEntered'
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertIn('BoshContinuationWithoutRenewalReceipt', [item['id'] for item in result[1]['violations']])
+
+    def test_ack_prospective_deleted_list_cannot_authorize_eviction_or_receipt(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        owner = payload['recipient']['bosh']['owners'][5]
+        for state in [owner] + [item['state'] for item in owner['prefixes'] if item['state']['acknowledgements']]:
+            state['acknowledgements'][0]['knowledge'] = 'CommitCallEntered'
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        ids = [item['id'] for item in result[1]['violations']]
+        self.assertIn('BoshEvictionOrReceiptWithoutAckAuthority', ids)
+        self.assertIn('BoshTransportReceiptWithoutAckReceipt', ids)
+
+    def test_cached_and_received_body_bytes_cannot_change_on_replay(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['bosh']['cache_history'][1]['entries'][0]['body_hex'] = b'<body/>'.hex()
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('BoshPayloadByteIdentityMismatch', [item['id'] for item in result[1]['violations']])
+
+    def test_actual_request_phase_sid_rid_ack_and_fingerprint_bind_the_owner(self):
+        fixture = self.fixture('C10')
+        for field, value in (('sid', 'other-session'), ('rid', 100), ('ack', 99), ('fingerprint_hex', '0' * 64)):
+            payload = self.supplied_facts(fixture)
+            payload['recipient']['bosh']['owners'][5]['association'][field] = value
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertIn('BoshOwnerAssociationMismatch', [item['id'] for item in result[1]['violations']])
+
+    def test_surviving_http_receiver_cannot_move_past_the_next_request_start(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        bosh = payload['recipient']['bosh']
+        receiver = bosh['response_receivers'][0]
+        next_call = bosh['renew_calls'][1]
+        receiver['seq'], next_call['seq'] = next_call['seq'], receiver['seq']
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('bosh_receiver_before_next_owner', result[1]['mismatches'])
+
+    def test_bosh_dto_keeps_unsafe_typed_facts_but_rejects_recursive_shape_errors(self):
+        payload = self.supplied_facts(self.fixture('C12'))
+        variants = []
+        bad = copy.deepcopy(payload)
+        bad['recipient']['bosh']['owners'][2]['responses'][0]['attempts'][0]['sources'] = [None]
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['bosh']['cache_history'][0]['entries'][0]['replays'] = True
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['bosh']['owners'][0]['association']['item']['extra'] = 0
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.validate_case_evidence(bad)
+
+    def test_bosh_raw_binding_and_external_interruption_precede_all_semantic_claims(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        self.assertEqual(direct_case._inspect_bosh_fixture(fixture, {'observation': 'EnvironmentInterrupted'}, payload),
+                         (None, None, False, 'EnvironmentInterrupted'))
+        payload['input_sha256'] = '0' * 64
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertEqual(result[3], 'InputBindingMismatch')
+        self.assertIsNone(result[1]['invariant'])
+
+    def test_lost_final_call_return_does_not_erase_an_exact_retained_receipt(self):
+        fixture = self.fixture('C10')
+        for name, field in (('transfer_calls', 'returned_source'), ('bind_calls', 'returned_membership'),
+                             ('renew_calls', 'returned'), ('ack_calls', 'returned')):
+            payload = self.supplied_facts(fixture)
+            payload['recipient']['bosh'][name][0][field] = None
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertEqual(result[1]['violations'], [])
+            self.assertEqual(result[1]['invariant']['class'], 'ReplayDivergence')
+
+    def test_future_invocation_cannot_authorize_an_earlier_retained_receipt(self):
+        fixture = self.fixture('C10')
+        for name in ('transfer_calls', 'bind_calls', 'renew_calls', 'ack_calls'):
+            payload = self.supplied_facts(fixture)
+            bosh = payload['recipient']['bosh']
+            call = bosh[name][-1]
+            poll = bosh['owners'][call['owner_index']]['polls'][0]
+            call['seq'], poll['seq'] = poll['seq'], call['seq']
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertEqual(result[1]['invariant']['class'], 'Safety')
+
+    def test_actual_ack_call_still_requires_renewal_when_summary_state_is_removed(self):
+        for identity, index, invariant in (('C10', 5, 'BoshAckCallWithoutRenewalAuthority'),
+                                           ('C10', 3, 'BoshBindCallWithoutRenewalAuthority'),
+                                           ('C12', 2, 'BoshExposureWithoutRenewalAuthority')):
+            fixture = self.fixture(identity)
+            payload = self.supplied_facts(fixture)
+            owner = payload['recipient']['bosh']['owners'][index]
+            for state in [owner] + [item['state'] for item in owner['prefixes']]:
+                state['renewals'] = []
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertIn(invariant, [item['id'] for item in result[1]['violations']])
+
+    def test_actual_http_receipt_requires_initial_or_replay_owner_authority(self):
+        fixture = self.fixture('C10')
+        for index, field in ((3, 'responses'), (4, 'renewals')):
+            payload = self.supplied_facts(fixture)
+            owner = payload['recipient']['bosh']['owners'][index]
+            for state in [owner] + [item['state'] for item in owner['prefixes']]:
+                state[field] = []
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertIn('BoshHttpReceiptWithoutOwnerAuthority', [item['id'] for item in result[1]['violations']])
+
+    def test_transport_receipt_cannot_be_attributed_to_unreceipted_t(self):
+        fixture = self.fixture('C12')
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['bosh']['transport_receipts'][-1]['item_index'] = 0
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('BoshTransportReceiptIdentityMismatch', [item['id'] for item in result[1]['violations']])
+
+    def test_bind_and_exposure_cannot_hide_unknown_mix_transfer_behind_false_flags(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        owner = payload['recipient']['bosh']['owners'][1]
+        for state in [owner] + [item['state'] for item in owner['prefixes']]:
+            for transfer in state['transfers']:
+                transfer['knowledge']['kind'] = 'CommitCallEntered'
+                transfer.update(source_applied=False, notification_attempted=False, queue_accepted=None)
+        payload['recipient']['bosh']['mix_handoffs'][0]['result'] = {'kind': 'Empty'}
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('BoshBindBeforeMixTransferReceipt', [item['id'] for item in result[1]['violations']])
+
+    def test_receipt_identity_is_separate_from_the_consuming_return_mapping(self):
+        fixture = self.fixture('C10')
+        payload = self.supplied_facts(fixture)
+        owner = payload['recipient']['bosh']['owners'][4]
+        owner['renewals'][0]['return_matches'] = False
+        owner['prefixes'][-1]['state']['renewals'][0]['return_matches'] = False
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        ids = [item['id'] for item in result[1]['violations']]
+        self.assertIn('BoshContinuationWithoutRenewalReceipt', ids)
+        self.assertNotIn('BoshRenewalReceiptIdentityMismatch', ids)
+
+    def test_deep_projected_xml_stays_a_saved_failed_observation(self):
+        fixture = self.fixture('C10')
+        for target in ('projection', 'association'):
+            payload = self.supplied_facts(fixture)
+            xml = '<message xmlns="jabber:client">' + '<a>' * 550 + '</a>' * 550 + '</message>'
+            if target == 'projection':
+                payload['originals'][0]['projection']['live_xml'] = xml
+            else:
+                payload['recipient']['bosh']['owners'][0]['association']['item']['xml'] = xml
+            direct_case.validate_case_evidence(payload)
+            semantic, evaluation, matched, stop = self.inspect(fixture, payload)
+            self.assertEqual(semantic, payload)
+            self.assertFalse(matched)
+            self.assertEqual(stop, 'FixtureMismatch')
+            self.assertFalse(evaluation['qualified'])
+
+
 if __name__ == '__main__':
     unittest.main()

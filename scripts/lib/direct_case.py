@@ -33,6 +33,10 @@ BARE_XML = TARGET_XML.replace("to='bob@example.test/phone'", "to='bob@example.te
 UNRATED_XML = "<message to='bob@example.test'><store xmlns='urn:xmpp:hints'/></message>"
 PLAIN_XML = "<message id='plain'/>"
 MIX_XML = "<message id='mix'/>"
+BOSH_PLAIN_XML = "<message xmlns='jabber:client' id='plain'/>"
+BOSH_MIX_XML = "<message xmlns='jabber:client' id='mix'/>"
+BOSH_REQUEST_XML = "<body xmlns='http://jabber.org/protocol/httpbind' sid='case-session' rid='100'/>"
+BOSH_ACK_XML = "<body xmlns='http://jabber.org/protocol/httpbind' sid='case-session' rid='101' ack='100'/>"
 ORIGINAL_TRIPLES = {
     'C01': ((101, 10101, 20101),), 'C02': ((201, 10201, 20201),),
     'C03': ((301, 10301, 20301), (302, 10302, 20302)),
@@ -43,6 +47,7 @@ NATIVE_STATE_FIELDS = ('original preparation managed_by_sm fence_entered returne
                        'writer_result write_decision ack ack_returned terminal')
 SM_STATE_FIELDS = ('scope binding h_decision knowledge appended restored ownership_applied acknowledged_h_applied '
                    'notification_attempted capacity_completed returned_updated returned_error record_managed_by_sm terminal')
+BOSH_STATE_FIELDS = 'scope transfers responses renewals acknowledgements terminal keep_running'
 
 
 class DirectCaseInvalid(ValueError):
@@ -366,6 +371,85 @@ def owner_fixtures():
     return fixtures
 
 
+def bosh_fixtures():
+    """The three literal BOSH histories, still behind the complete-profile gate."""
+    fixtures = []
+    for name, frame, sender, recipient in (('C10', 1001, 11001, 21001), ('C11', 1101, 11101, 21101), ('C12', 1201, 11201, 21201)):
+        value = _base_case(name, ((frame, sender, recipient),))
+        value['identities'].update(native_claim_id=None, bosh_session_id=_uuid(5))
+        value['route'][0].update(targets=[{'jid': BOB, 'connection_id': _uuid(3)}], health_modes=['Live'] * 3)
+        membership = {'c2s_message_ids': [_uuid(recipient)], 'mix_delivery_ids': [_uuid(7)]}
+        deleted = [{'kind': 'C2s', 'recipient_id': _uuid(2), 'message_id': _uuid(recipient)},
+                   {'kind': 'Mix', 'delivery_id': _uuid(7), 'lease_token': _uuid(9)}]
+        owner = {'kind': 'Bosh', 'frame_id': _uuid(frame), 'session_id': _uuid(5), 'ttl_seconds': 100,
+                 'max_output_stanzas': 4, 'max_output_bytes': 65536, 'max_response_bytes': 65536,
+                 'content_type': 'text/xml; charset=utf-8', 'received_rid': 100,
+                 'governor': copy.deepcopy(_sm_config(initial_h=0)['governor']),
+                 'extra_items': [{'kind': 'Mix', 'xml': BOSH_MIX_XML, 'source': _mix(8)},
+                                 {'kind': 'Plain', 'xml': BOSH_PLAIN_XML, 'transport_receipt': True}],
+                 'recording': {'kind': 'Disabled'}, 'mix_transfer': {'commit': 'Complete', 'returned_source': _mix(9)},
+                 'request_xml': BOSH_REQUEST_XML, 'initial_renewal': 'Complete',
+                 'bind': {'commit': 'Pending' if name == 'C11' else 'Complete', 'returned_membership': membership},
+                 'responders': ['Dropped', 'Open'], 'cached_replay': None, 'fresh_ack': None}
+        if name == 'C12':
+            value['identities']['sm_session_id'] = _uuid(4)
+            owner.update(extra_items=[{'kind': 'Plain', 'xml': BOSH_PLAIN_XML, 'transport_receipt': True}],
+                         mix_transfer=None, bind=None, responders=['Dropped', 'Dropped'],
+                         recording={'kind': 'PersistedSm', 'connection_id': _uuid(3), 'config': _sm_config(initial_h=0),
+                                    'record_replies': [{'commit': 'Complete', 'updated': True, 'rotations': []},
+                                                       {'commit': 'Complete', 'updated': True, 'rotations': []}]})
+            deleted = []
+        else:
+            value['identities'].update(mix_delivery_id=_uuid(7), mix_old_token=_uuid(8), mix_new_token=_uuid(9))
+        if name == 'C11':
+            value['drive'] = {'kind': 'DropBoshBindCommit', 'frame_id': _uuid(frame)}
+        else:
+            owner['fresh_ack'] = {'request_xml': BOSH_ACK_XML, 'renewal': 'Complete', 'ack_commit': 'Complete', 'deleted': deleted}
+        if name == 'C10':
+            owner['cached_replay'] = {'request_xml': BOSH_REQUEST_XML, 'renewal': 'Complete', 'responder': 'Open'}
+        value['recipient_owner'] = owner
+        fixtures.append(_fixture(name, 'normal', value, 'Cancelled' if name == 'C11' else 'Pass'))
+    return fixtures
+
+
+def _membership(value):
+    _fields(value, 'c2s_message_ids mix_delivery_ids')
+    for ids in value.values():
+        _array(ids, _id, 4)
+
+
+def _deleted_source(value):
+    _need(type(value) is dict, 'deleted_source')
+    if value.get('kind') == 'C2s':
+        _fields(value, 'kind recipient_id message_id')
+        _id(value['recipient_id'])
+        _id(value['message_id'])
+    else:
+        _source(value)
+        _need(value['kind'] == 'Mix', 'deleted_mix_source')
+
+
+def _request_identity(xml, phase):
+    _text(xml)
+    _need('<!DOCTYPE' not in xml and '<!ENTITY' not in xml, 'request_document_type')
+    try:
+        root = ET.fromstring(xml)
+    except (ET.ParseError, ValueError) as error:
+        raise DirectCaseInvalid('request_xml') from error
+    _need(root.tag == '{http://jabber.org/protocol/httpbind}body' and not list(root) and
+          not set(root.attrib) - {'rid', 'ack', 'sid'} and 'rid' in root.attrib, 'fixed_request_shape')
+    def number(name):
+        value = root.get(name)
+        if value is None:
+            return None
+        _need(re.fullmatch(r'[0-9]+', value) is not None and len(value) <= 20, 'request_integer')
+        result = int(value)
+        _integer(result, 2 ** 64 - 1)
+        return result
+    return {'kind': 'Request', 'phase': phase, 'rid': number('rid'), 'ack': number('ack'), 'sid': root.get('sid'),
+            'fingerprint_hex': _hash(xml.encode('utf-8'))}
+
+
 def _governor(value):
     _fields(value, 'max_bytes max_recovery_bytes max_recovery_jobs max_snapshot_bytes')
     for item in value.values():
@@ -573,6 +657,94 @@ def validate_case_input(value):
                       for rotation in reply['rotations']), 'IdentityBinding:mix_rotation')
         else:
             _need(all(not reply['rotations'] for reply in replies), 'IdentityBinding:rotation_without_mix')
+    elif owner.get('kind') == 'Bosh':
+        _fields(owner, 'kind frame_id session_id ttl_seconds max_output_stanzas max_output_bytes max_response_bytes '
+                'content_type received_rid governor extra_items recording mix_transfer request_xml initial_renewal '
+                'bind responders cached_replay fresh_ack')
+        _need(owner['frame_id'] in frames, 'IdentityBinding:bosh_frame')
+        _need(len(value['originals']) == 1, 'fixed_bosh_original_count')
+        _id(owner['session_id'])
+        _need(owner['session_id'] == identities['bosh_session_id'], 'IdentityBinding:bosh_session')
+        for name in ('ttl_seconds', 'received_rid'):
+            _integer(owner[name], 2 ** 64 - 1)
+        for name in ('max_output_stanzas', 'max_output_bytes', 'max_response_bytes'):
+            _integer(owner[name])
+        _text(owner['content_type'], 128)
+        _governor(owner['governor'])
+        _array(owner['extra_items'], _fixture_item, 3)
+        _need(len(value['originals']) + len(owner['extra_items']) +
+              sum(route['prefill'] is not None for route in value['route']) <= 4, 'Limit:item_count')
+        xml_bytes += sum(len(item['xml'].encode('utf-8')) for item in owner['extra_items'])
+        used_roles.add('bosh_session_id')
+        recording = owner['recording']
+        _need(type(recording) is dict, 'bosh_recording')
+        if recording.get('kind') == 'Disabled':
+            _fields(recording, 'kind')
+        else:
+            _fields(recording, 'kind connection_id config record_replies')
+            _enum(recording['kind'], 'PersistedSm')
+            _id(recording['connection_id'])
+            _sm_configuration(recording['config'])
+            _need(recording['connection_id'] == identities['connection_id'] and
+                  recording['config']['session_id'] == identities['sm_session_id'], 'IdentityBinding:bosh_sm')
+            _need(recording['config']['governor'] == owner['governor'], 'shared_sm_bosh_governor')
+            _array(recording['record_replies'], _checkpoint_reply, 4)
+            _need(len(recording['record_replies']) == 1 + len(owner['extra_items']), 'aligned_bosh_record_replies')
+            used_roles.add('sm_session_id')
+        mixes = [item for item in owner['extra_items'] if item['kind'] == 'Mix']
+        _need(len(mixes) <= 1, 'fixed_bosh_mix_count')
+        if mixes:
+            used_roles.update(('mix_delivery_id', 'mix_old_token', 'mix_new_token'))
+            for name in ('mix_delivery_id', 'mix_old_token', 'mix_new_token'):
+                _id(identities[name])
+            source = {'kind': 'Mix', 'delivery_id': identities['mix_delivery_id'], 'lease_token': identities['mix_old_token']}
+            _need(all(item['source'] == source for item in mixes), 'IdentityBinding:bosh_mix_item')
+            _fields(owner['mix_transfer'], 'commit returned_source')
+            _enum(owner['mix_transfer']['commit'], 'Complete')
+            _source(owner['mix_transfer']['returned_source'])
+            _need(owner['mix_transfer']['returned_source'] == dict(source, lease_token=identities['mix_new_token']),
+                  'IdentityBinding:bosh_transfer')
+        else:
+            _need(owner['mix_transfer'] is None, 'transfer_without_mix')
+        _text(owner['request_xml'])
+        xml_bytes += len(owner['request_xml'].encode('utf-8'))
+        request = _request_identity(owner['request_xml'], 'Initial')
+        _need(request['ack'] is None and request['sid'] == 'case-session' and owner['received_rid'] == request['rid'], 'initial_bosh_request')
+        _enum(owner['initial_renewal'], 'Complete')
+        bound = identities['originals'][frames.index(owner['frame_id'])]
+        membership = {'c2s_message_ids': [bound['recipient_stable_id']] if recording['kind'] == 'Disabled' else [],
+                      'mix_delivery_ids': [identities['mix_delivery_id']] if mixes else []}
+        if owner['bind'] is not None:
+            _fields(owner['bind'], 'commit returned_membership')
+            _enum(owner['bind']['commit'], 'Complete Pending')
+            _membership(owner['bind']['returned_membership'])
+            _need(owner['bind']['returned_membership'] == membership, 'IdentityBinding:bosh_bind')
+        _array(owner['responders'], lambda item: _enum(item, 'Open Dropped'), 2)
+        _need(bool(owner['responders']), 'nonempty_bosh_responders')
+        if owner['cached_replay'] is not None:
+            replay = owner['cached_replay']
+            _fields(replay, 'request_xml renewal responder')
+            _text(replay['request_xml'])
+            xml_bytes += len(replay['request_xml'].encode('utf-8'))
+            _enum(replay['renewal'], 'Complete')
+            _enum(replay['responder'], 'Open Dropped')
+            _need(replay['request_xml'] == owner['request_xml'], 'fixed_identical_cached_request')
+        if owner['fresh_ack'] is not None:
+            fresh = owner['fresh_ack']
+            _fields(fresh, 'request_xml renewal ack_commit deleted')
+            _text(fresh['request_xml'])
+            xml_bytes += len(fresh['request_xml'].encode('utf-8'))
+            parsed = _request_identity(fresh['request_xml'], 'FreshAck')
+            _need(parsed['rid'] == request['rid'] + 1 and parsed['ack'] == request['rid'] and parsed['sid'] == request['sid'],
+                  'fixed_fresh_ack_request')
+            for name in ('renewal', 'ack_commit'):
+                _enum(fresh[name], 'Complete')
+            _array(fresh['deleted'], _deleted_source, 4)
+            allowed = ([{'kind': 'C2s', 'recipient_id': identities['recipient_id'], 'message_id': bound['recipient_stable_id']}]
+                       if membership['c2s_message_ids'] else []) + (
+                       [{'kind': 'Mix', 'delivery_id': identities['mix_delivery_id'], 'lease_token': identities['mix_new_token']}]
+                       if mixes else [])
+            _need(fresh['deleted'] == allowed, 'IdentityBinding:bosh_deleted')
     elif owner.get('kind') == 'NativeReplacement':
         _fields(owner, 'kind frame_id initial_row old replacement replacement_claim_id')
         _need(owner['frame_id'] in frames, 'IdentityBinding:replacement_frame')
@@ -605,10 +777,11 @@ def validate_case_input(value):
         _fields(drive, 'kind')
     else:
         _fields(drive, 'kind frame_id')
-        _enum(drive['kind'], 'DropDirectCommit DropRearm DropNativeAckCommit DropSmCheckpointCommit ReplaceBeforeOldAckRead')
+        _enum(drive['kind'], 'DropDirectCommit DropRearm DropNativeAckCommit DropSmCheckpointCommit DropBoshBindCommit ReplaceBeforeOldAckRead')
         _need(drive['frame_id'] in frames, 'IdentityBinding:drive_frame')
-    if drive['kind'] in ('DropSmCheckpointCommit', 'ReplaceBeforeOldAckRead'):
-        required_owner = 'Sm' if drive['kind'] == 'DropSmCheckpointCommit' else 'NativeReplacement'
+    if drive['kind'] in ('DropSmCheckpointCommit', 'DropBoshBindCommit', 'ReplaceBeforeOldAckRead'):
+        required_owner = {'DropSmCheckpointCommit': 'Sm', 'DropBoshBindCommit': 'Bosh',
+                          'ReplaceBeforeOldAckRead': 'NativeReplacement'}[drive['kind']]
         _need(owner['kind'] == required_owner and drive['frame_id'] == owner['frame_id'], 'IdentityBinding:owner_drive')
     if owner['kind'] == 'Sm':
         pending = owner['record_replies'][0]['commit'] == 'Pending'
@@ -618,6 +791,11 @@ def validate_case_input(value):
         _need(all(reply['commit'] != 'Pending' for reply in owner['record_replies'][1:]), 'unsupported_later_sm_cut')
     if owner['kind'] == 'NativeReplacement':
         _need(drive == {'kind': 'ReplaceBeforeOldAckRead', 'frame_id': owner['frame_id']}, 'fixed_replacement_drive')
+    if owner['kind'] == 'Bosh':
+        pending = owner['bind'] is not None and owner['bind']['commit'] == 'Pending'
+        _need((drive['kind'] == 'DropBoshBindCommit') == pending and drive['kind'] in ('Complete', 'DropBoshBindCommit'),
+              'fixed_bosh_drive')
+        _need(not pending or (owner['cached_replay'] is None and owner['fresh_ack'] is None), 'bosh_suffix_after_pending_cut')
     return copy.deepcopy(value)
 
 
@@ -1038,6 +1216,184 @@ def _row_events(values, counter):
         counter['seq'].append(value['seq'])
 
 
+def _mix_source(value):
+    _source(value)
+    _need(value['kind'] == 'Mix', 'mix_source')
+
+
+def _renew_expected(value):
+    _fields(value, 'rid membership')
+    _integer(value['rid'], 2 ** 64 - 1)
+    _membership(value['membership'])
+
+
+def _bosh_transfer(value):
+    _fields(value, 'source knowledge returned_source return_matches_receipt local_entered source_applied notification_attempted queue_accepted')
+    _mix_source(value['source'])
+    knowledge = value['knowledge']
+    _need(type(knowledge) is dict, 'transfer_knowledge')
+    if knowledge.get('kind') == 'NoCommitRequested':
+        _fields(knowledge, 'kind')
+    else:
+        _fields(knowledge, 'kind source')
+        _enum(knowledge['kind'], 'CommitCallEntered ReceiptKnown')
+        _mix_source(knowledge['source'])
+    _nullable(value['returned_source'], _mix_source)
+    for name in ('return_matches_receipt', 'local_entered', 'source_applied', 'notification_attempted'):
+        _boolean(value[name])
+    _nullable(value['queue_accepted'], _boolean)
+
+
+def _bosh_bind(value):
+    _fields(value, 'selected_end selected_len sources knowledge returned return_matches superseded_message restored restore_matches removed_indices')
+    _nullable(value['selected_end'], _integer)
+    _integer(value['selected_len'])
+    _nullable(value['sources'], lambda items: _array(items, _source, 4))
+    knowledge = value['knowledge']
+    _need(type(knowledge) is dict, 'bind_knowledge')
+    if knowledge.get('kind') in ('NotRequired', 'NoCommitRequested'):
+        _fields(knowledge, 'kind')
+    else:
+        _fields(knowledge, 'kind membership')
+        _enum(knowledge['kind'], 'CommitCallEntered ReceiptKnown')
+        _membership(knowledge['membership'])
+    _nullable(value['returned'], _membership)
+    _nullable(value['superseded_message'], _id)
+    for name in ('return_matches', 'restored', 'restore_matches'):
+        _boolean(value[name])
+    _array(value['removed_indices'], _integer, 4)
+
+
+def _bosh_response(value):
+    _fields(value, 'rid kind lineage removed attempts construction_restored exposure_entered responder_calls accepted_responders '
+            'refused_responders control_calls control_accepted control_refused empty_cache_evictions bookkeeping cached')
+    _integer(value['rid'], 2 ** 64 - 1)
+    _enum(value['kind'], 'Payload TerminalControl EmptyControl')
+    _array(value['lineage'], lambda item: _nullable(item, _source), 4)
+    _array(value['removed'], _boolean, 4)
+    _array(value['attempts'], _bosh_bind, 4)
+    for name in ('construction_restored', 'responder_calls', 'accepted_responders', 'refused_responders',
+                 'control_calls', 'control_accepted', 'control_refused', 'empty_cache_evictions'):
+        _integer(value[name])
+    for name in ('exposure_entered', 'bookkeeping', 'cached'):
+        _boolean(value[name])
+
+
+def _bosh_renew(value):
+    _fields(value, 'expected knowledge returned return_matches ack_issued replay_calls replay_accepted replay_refused replay_bookkeeping')
+    _nullable(value['expected'], _renew_expected)
+    _enum(value['knowledge'], 'NoCommitRequested CommitCallEntered ReceiptKnown')
+    for name in ('returned', 'return_matches', 'ack_issued', 'replay_bookkeeping'):
+        _boolean(value[name])
+    for name in ('replay_calls', 'replay_accepted', 'replay_refused'):
+        _integer(value[name])
+
+
+def _bosh_ack(value):
+    _fields(value, 'rid knowledge deleted returned return_matches cache_evictions receipt_calls receipts_sent receipts_refused')
+    _integer(value['rid'], 2 ** 64 - 1)
+    _enum(value['knowledge'], 'NoCommitRequested CommitCallEntered ReceiptKnown')
+    _nullable(value['deleted'], lambda items: _array(items, _deleted_source, 4))
+    _boolean(value['returned'])
+    _boolean(value['return_matches'])
+    for name in ('cache_evictions', 'receipt_calls', 'receipts_sent', 'receipts_refused'):
+        _integer(value[name])
+
+
+def _bosh_state(value):
+    _fields(value, BOSH_STATE_FIELDS)
+    _fields(value['scope'], 'session_id ttl_seconds kind')
+    _id(value['scope']['session_id'])
+    _integer(value['scope']['ttl_seconds'], 2 ** 64 - 1)
+    _enum(value['scope']['kind'], 'Outbound Request HeldResponse')
+    for name, check in (('transfers', _bosh_transfer), ('responses', _bosh_response), ('renewals', _bosh_renew), ('acknowledgements', _bosh_ack)):
+        _array(value[name], check, 4)
+    _nullable(value['terminal'], lambda item: _enum(item, 'Returned TimedOut Cancelled Panicked'))
+    _nullable(value['keep_running'], _boolean)
+
+
+def _bosh_owner(value, counter):
+    _fields(value, 'owner_index association ' + BOSH_STATE_FIELDS + ' prefixes polls')
+    _integer(value['owner_index'])
+    association = value['association']
+    _need(type(association) is dict, 'bosh_association')
+    if association.get('kind') == 'Outbound':
+        _fields(association, 'kind item_index item')
+        _integer(association['item_index'])
+        _slot(association['item'])
+    else:
+        _fields(association, 'kind phase rid ack sid fingerprint_hex')
+        _enum(association['kind'], 'Request')
+        _enum(association['phase'], 'Initial Replay FreshAck')
+        _integer(association['rid'], 2 ** 64 - 1)
+        _nullable(association['ack'], lambda item: _integer(item, 2 ** 64 - 1))
+        _nullable(association['sid'], _text)
+        _hex(association['fingerprint_hex'], 32)
+    _bosh_state({name: value[name] for name in BOSH_STATE_FIELDS.split()})
+    _observations(value['prefixes'], 'state', lambda item: _bosh_state(item['state']), counter)
+    _polls(value['polls'], counter)
+
+
+def _bosh_evidence(value, counter):
+    _fields(value, 'owners transfer_calls bind_calls renew_calls ack_calls response_receivers cache_history fifo_after '
+            'output_bytes highest_responded mix_handoffs transport_receipts')
+    _array(value['owners'], lambda item: _bosh_owner(item, counter), 7)
+    def transfer(item):
+        _integer(item['owner_index'])
+        _mix_source(item['source'])
+        _nullable(item['returned_source'], _mix_source)
+    _observations(value['transfer_calls'], 'owner_index source returned_source', transfer, counter, maximum=16)
+    def bind(item):
+        _integer(item['owner_index'])
+        _integer(item['rid'], 2 ** 64 - 1)
+        _array(item['sources'], _source, 4)
+        _nullable(item['returned_membership'], _membership)
+    _observations(value['bind_calls'], 'owner_index rid sources returned_membership', bind, counter, maximum=16)
+    def renew(item):
+        _integer(item['owner_index'])
+        _nullable(item['expected'], _renew_expected)
+        _nullable(item['returned'], _boolean)
+    _observations(value['renew_calls'], 'owner_index expected returned', renew, counter, maximum=16)
+    def ack(item):
+        _integer(item['owner_index'])
+        _integer(item['rid'], 2 ** 64 - 1)
+        _nullable(item['returned'], _boolean)
+    _observations(value['ack_calls'], 'owner_index rid returned', ack, counter, maximum=16)
+    def receiver(item):
+        for name in ('owner_index', 'receiver_index'):
+            _integer(item[name])
+        _integer(item['rid'], 2 ** 64 - 1)
+        _enum(item['phase'], 'Initial Replay')
+        result = item['result']
+        _need(type(result) is dict, 'bosh_receiver_result')
+        if result.get('kind') == 'Received':
+            _fields(result, 'kind body_hex')
+            _hex(result['body_hex'], maximum=131072)
+        else:
+            _fields(result, 'kind')
+            _enum(result['kind'], 'Empty Closed')
+    _observations(value['response_receivers'], 'owner_index rid phase receiver_index result', receiver, counter, maximum=4)
+    def cache(item):
+        def entry(row):
+            _fields(row, 'rid fingerprint_hex membership body_hex response_bytes replays transport_receipt_count')
+            _integer(row['rid'], 2 ** 64 - 1)
+            _hex(row['fingerprint_hex'], 32)
+            _membership(row['membership'])
+            _hex(row['body_hex'], maximum=131072)
+            for name in ('response_bytes', 'replays', 'transport_receipt_count'):
+                _integer(row[name])
+        _array(item['entries'], entry, 2)
+    _observations(value['cache_history'], 'entries', cache, counter, maximum=3)
+    _array(value['fifo_after'], _slot, 4)
+    _integer(value['output_bytes'])
+    _integer(value['highest_responded'], 2 ** 64 - 1)
+    _mix_handoffs(value['mix_handoffs'], counter)
+    def receipt(item):
+        _integer(item['item_index'])
+        _enum(item['result'], 'Received Empty Closed')
+    _observations(value['transport_receipts'], 'item_index result', receipt, counter, maximum=8)
+
+
 def validate_case_evidence(value):
     """Types/encoding/order only: an unsafe authorization history stays visible."""
     _fields(value, 'schema entry input_sha256 rejection execution originals recipient')
@@ -1081,6 +1437,13 @@ def validate_case_evidence(value):
             _observations([recipient['replacement_dequeued']], 'source xml', dequeue, counter, maximum=1)
             _row_events(recipient['row_events'], counter)
             _nullable(recipient['row_after'], lambda item: _source(item, c2s=True))
+        elif recipient.get('kind') == 'Bosh':
+            _fields(recipient, 'kind bosh sm_turns sm_fifo_after sm_outbound_h sm_acked_h')
+            _bosh_evidence(recipient['bosh'], counter)
+            _array(recipient['sm_turns'], lambda item: _sm_evidence(item, counter), 4)
+            _array(recipient['sm_fifo_after'], _slot, 4)
+            for name in ('sm_outbound_h', 'sm_acked_h'):
+                _nullable(recipient[name], _integer)
         else:
             raise DirectCaseIncomplete('stage3_transport_evidence_validator_incomplete')
     _need(counter['polls'] <= 64 and len(counter['seq']) <= 256 and
@@ -1380,6 +1743,141 @@ def _replacement_owner_ledger(value, sender):
             'row_after': None, 'execution': 'Complete'}
 
 
+def _bosh_renew_expected(expected=None, *, replay=False, ack=False):
+    return {'expected': copy.deepcopy(expected), 'knowledge': 'ReceiptKnown', 'returned': True, 'return_matches': True,
+            'ack_issued': ack, 'replay_calls': int(replay), 'replay_accepted': int(replay),
+            'replay_refused': 0, 'replay_bookkeeping': replay}
+
+
+def _bosh_owner_ledger(value, sender):
+    owner = value['recipient_owner']
+    original = next(item for item in sender['originals'] if item['frame_id'] == owner['frame_id'])
+    _need(original['route_action'] == 'Queue' and owner['initial_renewal'] == 'Complete', 'fixed_bosh_initial')
+    _need(owner['bind'] is None or owner['bind']['commit'] in ('Complete', 'Pending'), 'fixed_bosh_bind_cut')
+    _need((owner['ttl_seconds'], owner['max_output_stanzas'], owner['max_output_bytes'], owner['max_response_bytes'],
+           owner['content_type']) == (100, 4, 65536, 65536, 'text/xml; charset=utf-8'), 'fixed_bosh_limits')
+    items = [{'xml': original['projection']['live_xml'], 'source': copy.deepcopy(original['source'])}]
+    for extra in owner['extra_items']:
+        items.append({'xml': _tree(_xml(extra['xml'], projected=True)), 'source': copy.deepcopy(extra.get('source'))})
+    persisted = owner['recording']['kind'] == 'PersistedSm'
+    pending = owner['bind'] is not None and owner['bind']['commit'] == 'Pending'
+    request = _request_identity(owner['request_xml'], 'Initial')
+    _need(request['rid'] == 100, 'fixed_bosh_rid')
+    final_items = copy.deepcopy(items)
+    transfers, handoffs, turns = [], [], []
+    sm_fifo = []
+    if persisted:
+        recording, config = owner['recording'], owner['recording']['config']
+        _need(len(items) == 2 and items[0]['source']['kind'] == 'C2s' and items[1]['source'] is None and
+              config['enabled'] and config['resume_allowed'] and config['session_id'] is not None and
+              config['outbound_h'] == config['acked_h'] == 0 and owner['bind'] is None and owner['mix_transfer'] is None,
+              'fixed_bosh_sm_recording')
+        for index, (item, reply) in enumerate(zip(items, recording['record_replies'])):
+            _need(reply == {'commit': 'Complete', 'updated': True, 'rotations': []}, 'fixed_bosh_sm_reply')
+            sm_fifo.append(copy.deepcopy(item))
+            sources = [copy.deepcopy(slot['source']) for slot in sm_fifo]
+            state = {'scope': {'purpose': {'kind': 'Record'}, 'session_id': config['session_id'],
+                               'connection_id': recording['connection_id'], 'inbound_h': config['inbound_h'],
+                               'outbound_h': index, 'acked_h': 0, 'queued': index},
+                     'binding': {'session_id': config['session_id'], 'connection_id': recording['connection_id'],
+                                 'inbound_h': config['inbound_h'], 'outbound_h': index + 1, 'acked_h': 0,
+                                 'whole': sources, 'acknowledged': [], 'remaining': copy.deepcopy(sources)},
+                     'h_decision': {'kind': 'NotRequested'},
+                     'knowledge': {'kind': 'ReceiptKnown', 'fact': {'kind': 'Checkpoint', 'rotations': [], 'settled': []}},
+                     'appended': True, 'restored': False, 'ownership_applied': True, 'acknowledged_h_applied': None,
+                     'notification_attempted': item['source'] is not None, 'capacity_completed': None,
+                     'returned_updated': True, 'returned_error': False, 'record_managed_by_sm': item['source'] is not None,
+                     'terminal': 'Returned'}
+            turns.append({'item_index': index, 'state': state, 'polls': []})
+            final_items[index]['source'] = None
+    else:
+        for index, item in enumerate(items):
+            if item['source'] is not None and item['source']['kind'] == 'Mix':
+                reply = owner['mix_transfer']
+                _need(reply['commit'] == 'Complete', 'fixed_mix_transfer_complete')
+                current = copy.deepcopy(reply['returned_source'])
+                final_items[index]['source'] = current
+                transfers.append({'item_index': index, 'source': copy.deepcopy(item['source']), 'current': current})
+                handoffs.append({'delivery_id': item['source']['delivery_id'],
+                                 'result': {'kind': 'BoshPersisted', 'session_id': owner['session_id']}})
+    lineage = [copy.deepcopy(item['source']) for item in final_items]
+    sources = [source for source in lineage if source is not None]
+    membership = {'c2s_message_ids': [source['message_id'] for source in sources if source['kind'] == 'C2s'],
+                  'mix_delivery_ids': [source['delivery_id'] for source in sources if source['kind'] == 'Mix']}
+    _need(bool(sources) == (owner['bind'] is not None), 'bosh_bind_requirement')
+    owners = []
+    def state(kind):
+        return {'scope': {'session_id': owner['session_id'], 'ttl_seconds': owner['ttl_seconds'], 'kind': kind},
+                'transfers': [], 'responses': [], 'renewals': [], 'acknowledgements': [],
+                'terminal': 'Returned', 'keep_running': True}
+    for index, item in enumerate(items):
+        final = state('Outbound')
+        transfer = next((transfer for transfer in transfers if transfer['item_index'] == index), None)
+        if transfer is not None:
+            final['transfers'] = [{'source': copy.deepcopy(transfer['source']),
+                                  'knowledge': {'kind': 'ReceiptKnown', 'source': copy.deepcopy(transfer['current'])},
+                                  'returned_source': copy.deepcopy(transfer['current']), 'return_matches_receipt': True,
+                                  'local_entered': True, 'source_applied': True, 'notification_attempted': True,
+                                  'queue_accepted': True}]
+        owners.append({'owner_index': index, 'association': {'kind': 'Outbound', 'item_index': index, 'item': copy.deepcopy(item)},
+                       'state': final, 'phases': ['transfer-entered', 'transfer-receipt', 'final'] if transfer else ['final'],
+                       'polls': ['Ready']})
+    attempt = {'selected_end': len(items) - 1, 'selected_len': len(items), 'sources': sources,
+               'knowledge': {'kind': 'CommitCallEntered' if pending else 'ReceiptKnown', 'membership': copy.deepcopy(membership)}
+                            if sources else {'kind': 'NotRequired'},
+               'returned': None if pending else copy.deepcopy(membership), 'return_matches': not pending,
+               'superseded_message': None, 'restored': False, 'restore_matches': False, 'removed_indices': []}
+    response = {'rid': request['rid'], 'kind': 'Payload', 'lineage': lineage, 'removed': [False] * len(items),
+                'attempts': [attempt], 'construction_restored': 0, 'exposure_entered': not pending,
+                'responder_calls': 0 if pending else len(owner['responders']),
+                'accepted_responders': 0 if pending else owner['responders'].count('Open'),
+                'refused_responders': 0 if pending else owner['responders'].count('Dropped'),
+                'control_calls': 0, 'control_accepted': 0, 'control_refused': 0,
+                'empty_cache_evictions': 0, 'bookkeeping': not pending, 'cached': not pending}
+    initial = state('Request')
+    initial.update(responses=[response], renewals=[_bosh_renew_expected()],
+                   terminal='Cancelled' if pending else 'Returned', keep_running=None if pending else True)
+    phases = ['renew-entered', 'renew-receipt'] + (['bind-entered'] if pending else
+             (['bind-entered', 'bind-receipt'] if sources else []) + ['bound', 'exposure']) + ['final']
+    initial_index = len(owners)
+    owners.append({'owner_index': initial_index, 'association': request, 'state': initial,
+                   'phases': phases, 'polls': ['Pending' if pending else 'Ready']})
+    receivers = [{'owner_index': initial_index, 'rid': request['rid'], 'phase': 'Initial', 'receiver_index': index,
+                  'result': 'Closed' if pending else 'Received'} for index, kind in enumerate(owner['responders']) if kind == 'Open']
+    cache_replays = [] if pending else [0]
+    if owner['cached_replay'] is not None:
+        replay = owner['cached_replay']
+        _need(replay['renewal'] == 'Complete' and replay['responder'] == 'Open' and not pending, 'fixed_bosh_replay')
+        final = state('Request')
+        final['renewals'] = [_bosh_renew_expected({'rid': request['rid'], 'membership': membership}, replay=True)]
+        index = len(owners)
+        owners.append({'owner_index': index, 'association': _request_identity(replay['request_xml'], 'Replay'),
+                       'state': final, 'phases': ['renew-entered', 'renew-receipt', 'final'], 'polls': ['Ready']})
+        receivers.append({'owner_index': index, 'rid': request['rid'], 'phase': 'Replay', 'receiver_index': 0, 'result': 'Received'})
+        cache_replays.append(1)
+    if owner['fresh_ack'] is not None:
+        fresh = owner['fresh_ack']
+        _need(fresh['renewal'] == fresh['ack_commit'] == 'Complete' and not pending, 'fixed_bosh_ack')
+        final = state('Request')
+        final['renewals'] = [_bosh_renew_expected(ack=True)]
+        final['acknowledgements'] = [{'rid': request['rid'], 'knowledge': 'ReceiptKnown', 'deleted': copy.deepcopy(fresh['deleted']),
+                                      'returned': True, 'return_matches': True, 'cache_evictions': 1,
+                                      'receipt_calls': 1, 'receipts_sent': 1, 'receipts_refused': 0}]
+        owners.append({'owner_index': len(owners), 'association': _request_identity(fresh['request_xml'], 'FreshAck'),
+                       'state': final, 'phases': ['renew-entered', 'renew-receipt', 'ack-entered', 'ack-receipt', 'final'], 'polls': ['Ready']})
+        cache_replays.append(None)
+    plain_indexes = [index + 1 for index, item in enumerate(owner['extra_items']) if item['kind'] == 'Plain' and item['transport_receipt']]
+    _need(len(plain_indexes) == 1, 'fixed_bosh_plain_receipt')
+    return {'kind': 'Bosh', 'frame_id': owner['frame_id'], 'items': items, 'owners': owners, 'transfers': transfers,
+            'sources': sources, 'membership': membership, 'request': request, 'initial_index': initial_index,
+            'mix_handoffs': handoffs, 'receivers': receivers, 'cache_replays': cache_replays,
+            'transport_receipts': [{'item_index': plain_indexes[0], 'result': 'Empty'},
+                                   {'item_index': plain_indexes[0], 'result': 'Closed' if pending else 'Received'}],
+            'sm_turns': turns, 'sm_fifo_after': sm_fifo, 'sm_outbound_h': 2 if persisted else None,
+            'sm_acked_h': 0 if persisted else None, 'highest_responded': 0 if pending else request['rid'],
+            'execution': 'Cancelled' if pending else 'Complete'}
+
+
 def derive_owner_ledger(value):
     """Input-derived expected ownership, separate from actual evidence decoding.
 
@@ -1393,6 +1891,8 @@ def derive_owner_ledger(value):
         owner = _sm_owner_ledger(value, sender)
     elif kind == 'NativeReplacement':
         owner = _replacement_owner_ledger(value, sender)
+    elif kind == 'Bosh':
+        owner = _bosh_owner_ledger(value, sender)
     else:
         raise DirectCaseIncomplete('owner_ledger_transport_incomplete')
     return {'sender': sender, 'owner': owner}
@@ -2250,7 +2750,7 @@ def _inspect_sm_fixture(fixture, record, payload):
         try:
             findings.extend(projection_findings(ledger['sender'], payload))
             findings.extend(_sm_fixture_findings(value, ledger, payload))
-        except (DirectCaseInvalid, ET.ParseError, ValueError) as error:
+        except (DirectCaseInvalid, ET.ParseError, ValueError, RecursionError) as error:
             findings.append('owner_xml:' + str(error)[:160])
         findings.extend(_original_fixture_findings(value, ledger['sender'], payload))
         _finding(findings, 'driver_execution', payload['execution'] == ledger['owner']['execution'])
@@ -2451,10 +2951,513 @@ def _inspect_replacement_fixture(fixture, record, payload):
         try:
             findings.extend(projection_findings(ledger['sender'], payload))
             findings.extend(_replacement_fixture_findings(value, ledger, payload))
-        except (DirectCaseInvalid, ET.ParseError, ValueError) as error:
+        except (DirectCaseInvalid, ET.ParseError, ValueError, RecursionError) as error:
             findings.append('owner_xml:' + str(error)[:160])
         findings.extend(_original_fixture_findings(value, ledger['sender'], payload))
         _finding(findings, 'driver_execution', payload['execution'] == 'Complete')
+        _finding(findings, 'unexpected_safety_failure', not violations)
+    invariant = violations[0] if violations else None
+    if violations:
+        verdict = 'InvariantViolation'
+    elif payload['rejection'] is not None:
+        verdict = 'InvalidScenario'
+    elif payload['execution'] == 'Cancelled':
+        verdict = 'Cancelled'
+    elif findings:
+        verdict = 'InvariantViolation'
+        invariant = {'id': 'DirectFixtureDivergence', 'class': 'ReplayDivergence', 'location': findings[0]}
+    else:
+        verdict = 'Pass'
+    matched = not findings and verdict == fixture['expected_verdict']
+    evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': verdict, 'qualified': verdict == 'Pass',
+                  'invariant': invariant, 'violations': violations, 'mismatches': findings}
+    return copy.deepcopy(payload), evaluation, matched, None if matched else 'FixtureMismatch'
+
+
+def _bosh_prefix_states(wanted):
+    """Only the fixed actual callbacks; local continuations follow receipts."""
+    final = wanted['state']
+    states = []
+    for phase in wanted['phases']:
+        current = copy.deepcopy(final)
+        if phase == 'final':
+            states.append(current)
+            continue
+        current.update(terminal=None, keep_running=None)
+        if phase.startswith('transfer-'):
+            transfer = current['transfers'][0]
+            transfer['knowledge']['kind'] = 'CommitCallEntered' if phase.endswith('entered') else 'ReceiptKnown'
+            transfer.update(returned_source=None, return_matches_receipt=False, local_entered=False,
+                            source_applied=False, notification_attempted=False, queue_accepted=None)
+        elif phase.startswith('renew-'):
+            current.update(responses=[], acknowledgements=[])
+            renewal = current['renewals'][0]
+            renewal.update(knowledge='CommitCallEntered' if phase.endswith('entered') else 'ReceiptKnown',
+                           returned=False, return_matches=False, ack_issued=False, replay_calls=0,
+                           replay_accepted=0, replay_refused=0, replay_bookkeeping=False)
+        elif phase.startswith('ack-'):
+            ack = current['acknowledgements'][0]
+            ack.update(knowledge='CommitCallEntered' if phase.endswith('entered') else 'ReceiptKnown',
+                       returned=False, return_matches=False, cache_evictions=0, receipt_calls=0,
+                       receipts_sent=0, receipts_refused=0)
+        else:
+            response = current['responses'][0]
+            response.update(bookkeeping=False, cached=False)
+            if phase != 'exposure':
+                response.update(exposure_entered=False, responder_calls=0, accepted_responders=0, refused_responders=0)
+            if phase.startswith('bind-'):
+                attempt = response['attempts'][0]
+                attempt['knowledge']['kind'] = 'CommitCallEntered' if phase.endswith('entered') else 'ReceiptKnown'
+                attempt.update(returned=None, return_matches=False)
+        states.append(current)
+    return states
+
+
+def _bosh_calls(ledger):
+    calls = {'transfer_calls': [], 'bind_calls': [], 'renew_calls': [], 'ack_calls': []}
+    for owner in ledger['owners']:
+        index, state = owner['owner_index'], owner['state']
+        for transfer in state['transfers']:
+            calls['transfer_calls'].append({'owner_index': index, 'source': copy.deepcopy(transfer['source']),
+                                            'returned_source': copy.deepcopy(transfer['returned_source'])})
+        for response in state['responses']:
+            for attempt in response['attempts']:
+                if attempt['knowledge']['kind'] != 'NotRequired':
+                    calls['bind_calls'].append({'owner_index': index, 'rid': response['rid'],
+                                               'sources': copy.deepcopy(attempt['sources']),
+                                               'returned_membership': copy.deepcopy(attempt['returned'])})
+        for renewal in state['renewals']:
+            calls['renew_calls'].append({'owner_index': index, 'expected': copy.deepcopy(renewal['expected']), 'returned': True})
+        for ack in state['acknowledgements']:
+            calls['ack_calls'].append({'owner_index': index, 'rid': ack['rid'], 'returned': True})
+    return calls
+
+
+def _bosh_payload_bytes(value, ledger, payload):
+    original = next((item for item in payload['originals'] if item['frame_id'] == ledger['owner']['frame_id']), None)
+    _need(original is not None and len(original['route']['dequeued']) == 1, 'bosh_dequeue_inventory')
+    raw = original['route']['dequeued'][0]['xml']
+    _need(_tree(_xml(raw, projected=True)) == ledger['owner']['items'][0]['xml'], 'bosh_dequeue_projection')
+    fragments = [raw] + [item['xml'] for item in value['recipient_owner']['extra_items']]
+    envelope = "<body xmlns='http://jabber.org/protocol/httpbind' ack='" + str(value['recipient_owner']['received_rid']) + "'>"
+    return raw.encode('utf-8'), (envelope + ''.join(fragments) + '</body>').encode('utf-8')
+
+
+def _bosh_association_matches(actual, expected):
+    association = copy.deepcopy(actual['association'])
+    if association['kind'] == 'Outbound':
+        try:
+            association['item']['xml'] = _tree(_xml(association['item']['xml'], projected=True))
+        except (DirectCaseInvalid, RecursionError):
+            return False
+    return (actual['owner_index'] == expected['owner_index'] and actual['scope'] == expected['state']['scope'] and
+            association == expected['association'])
+
+
+def _bosh_first_observation(recipient, index):
+    bosh = recipient['bosh']
+    if index >= len(bosh['owners']):
+        return None
+    owner = bosh['owners'][index]
+    sequences = [item['seq'] for item in owner['prefixes'] + owner['polls']]
+    sequences += [item['seq'] for name in ('transfer_calls', 'bind_calls', 'renew_calls', 'ack_calls')
+                  for item in bosh[name] if item['owner_index'] == index]
+    if index < len(recipient['sm_turns']):
+        sequences += [item['seq'] for item in recipient['sm_turns'][index]['prefixes']]
+    return min(sequences) if sequences else None
+
+
+def _bosh_fixture_findings(value, ledger, payload):
+    wanted = ledger['owner']
+    if payload['recipient']['kind'] != 'Bosh':
+        return ['missing_bosh_owner']
+    recipient, findings = payload['recipient'], []
+    actual = recipient['bosh']
+    raw, body = _bosh_payload_bytes(value, ledger, payload)
+    _finding(findings, 'bosh_owner_inventory', len(actual['owners']) == len(wanted['owners']))
+    _finding(findings, 'bosh_final_fifo', actual['fifo_after'] == [] and actual['output_bytes'] == 0)
+    _finding(findings, 'bosh_highest_responded', actual['highest_responded'] == wanted['highest_responded'])
+    _finding(findings, 'bosh_sm_inventory', len(recipient['sm_turns']) == len(wanted['sm_turns']))
+    _finding(findings, 'bosh_sm_counters', (recipient['sm_outbound_h'], recipient['sm_acked_h']) ==
+             (wanted['sm_outbound_h'], wanted['sm_acked_h']))
+    sm_fifo = [{'xml': _tree(_xml(slot['xml'], projected=True)), 'source': slot['source']} for slot in recipient['sm_fifo_after']]
+    _finding(findings, 'bosh_sm_fifo', sm_fifo == wanted['sm_fifo_after'])
+    expected_raw_items = [raw] + [item['xml'].encode('utf-8') for item in value['recipient_owner']['extra_items']]
+    _finding(findings, 'bosh_sm_fifo_bytes', [slot['xml'].encode('utf-8') for slot in recipient['sm_fifo_after']] ==
+             (expected_raw_items if wanted['sm_turns'] else []))
+    for index, (turn, expected) in enumerate(zip(recipient['sm_turns'], wanted['sm_turns'])):
+        _sm_turn_findings(turn, expected, findings)
+        if index < len(actual['owners']):
+            owner = actual['owners'][index]
+            _finding(findings, 'bosh_sm_record_before_push_return', bool(turn['prefixes']) and len(owner['polls']) == 1 and
+                     turn['prefixes'][-1]['seq'] < owner['polls'][0]['seq'])
+    source_original = next(item for item in payload['originals'] if item['frame_id'] == wanted['frame_id'])
+    previous_end = source_original['route']['dequeued'][0]['seq']
+    for index, (owner, expected) in enumerate(zip(actual['owners'], wanted['owners'])):
+        _finding(findings, 'bosh_owner_association', _bosh_association_matches(owner, expected))
+        if owner['association']['kind'] == 'Outbound' and index < len(expected_raw_items):
+            _finding(findings, 'bosh_outbound_item_bytes', owner['association']['item']['xml'].encode('utf-8') == expected_raw_items[index])
+        _finding(findings, 'bosh_owner_final', {name: owner[name] for name in BOSH_STATE_FIELDS.split()} == expected['state'])
+        _finding(findings, 'bosh_owner_prefixes', [prefix['state'] for prefix in owner['prefixes']] == _bosh_prefix_states(expected))
+        _finding(findings, 'bosh_owner_polls', [poll['result'] for poll in owner['polls']] == expected['polls'])
+        prefixes, polls = owner['prefixes'], owner['polls']
+        _finding(findings, 'bosh_final_after_poll', bool(prefixes) and len(polls) == 1 and polls[0]['seq'] < prefixes[-1]['seq'] and
+                 all(prefix['seq'] < polls[0]['seq'] for prefix in prefixes[:-1]))
+        calls = [call for name in ('transfer_calls', 'bind_calls', 'renew_calls', 'ack_calls')
+                 for call in actual[name] if call['owner_index'] == index]
+        observed = [item['seq'] for item in calls + prefixes + polls]
+        if index < len(recipient['sm_turns']):
+            observed += [prefix['seq'] for prefix in recipient['sm_turns'][index]['prefixes']]
+        _finding(findings, 'bosh_owner_order', bool(observed) and all(sequence > previous_end for sequence in observed))
+        _finding(findings, 'bosh_calls_before_poll', len(polls) == 1 and all(call['seq'] < polls[0]['seq'] for call in calls))
+        phases = dict(zip(expected['phases'], prefixes)) if len(prefixes) == len(expected['phases']) else {}
+        for name, phase in (('transfer_calls', 'transfer-entered'), ('bind_calls', 'bind-entered'),
+                            ('renew_calls', 'renew-entered'), ('ack_calls', 'ack-entered')):
+            selected = [call for call in actual[name] if call['owner_index'] == index]
+            if phase in phases:
+                _finding(findings, 'bosh_call_wrapper_boundary', len(selected) == 1 and selected[0]['seq'] + 1 == phases[phase]['seq'])
+        if 'bind-entered' in phases:
+            _finding(findings, 'bosh_renew_before_bind', 'renew-receipt' in phases and
+                     phases['renew-receipt']['seq'] < phases['bind-entered']['seq'])
+        if 'ack-entered' in phases:
+            _finding(findings, 'bosh_renew_before_ack', 'renew-receipt' in phases and
+                     phases['renew-receipt']['seq'] < phases['ack-entered']['seq'])
+        previous_end = prefixes[-1]['seq'] if prefixes else previous_end
+    for name, expected in _bosh_calls(wanted).items():
+        _finding(findings, name, [{field: item[field] for field in item if field != 'seq'} for item in actual[name]] == expected)
+    receiver_expected = [dict(item, result={'kind': 'Received', 'body_hex': body.hex()} if item['result'] == 'Received' else
+                              {'kind': item['result']}) for item in wanted['receivers']]
+    _finding(findings, 'bosh_receiver_inventory', [{name: item[name] for name in item if name != 'seq'}
+             for item in actual['response_receivers']] == receiver_expected)
+    for receiver in actual['response_receivers']:
+        index = receiver['owner_index']
+        _finding(findings, 'bosh_receiver_after_retirement', index < len(actual['owners']) and
+                 bool(actual['owners'][index]['prefixes']) and actual['owners'][index]['prefixes'][-1]['seq'] < receiver['seq'])
+        if index + 1 < len(actual['owners']):
+            next_work = _bosh_first_observation(recipient, index + 1)
+            _finding(findings, 'bosh_receiver_before_next_owner', next_work is not None and receiver['seq'] < next_work)
+    expected_cache = []
+    for replays in wanted['cache_replays']:
+        entries = [] if replays is None else [{'rid': wanted['request']['rid'], 'fingerprint_hex': wanted['request']['fingerprint_hex'],
+            'membership': wanted['membership'], 'body_hex': body.hex(), 'response_bytes': len(body),
+            'replays': replays, 'transport_receipt_count': 1}]
+        expected_cache.append(entries)
+    _finding(findings, 'bosh_cache_history', [item['entries'] for item in actual['cache_history']] == expected_cache)
+    cache_owners = [owner for owner in wanted['owners'] if owner['association']['kind'] == 'Request' and owner['state']['terminal'] == 'Returned']
+    for history, expected_owner in zip(actual['cache_history'], cache_owners):
+        index = expected_owner['owner_index']
+        if index < len(actual['owners']):
+            owner = actual['owners'][index]
+            _finding(findings, 'bosh_cache_before_owner_poll', len(owner['prefixes']) >= 2 and len(owner['polls']) == 1 and
+                     owner['prefixes'][-2]['seq'] < history['seq'] < owner['polls'][0]['seq'])
+    _finding(findings, 'bosh_mix_handoffs', [{name: item[name] for name in ('delivery_id', 'result')}
+             for item in actual['mix_handoffs']] == wanted['mix_handoffs'])
+    for handoff, transfer in zip(actual['mix_handoffs'], wanted['transfers']):
+        index = transfer['item_index']
+        next_work = _bosh_first_observation(recipient, index + 1)
+        _finding(findings, 'bosh_mix_handoff_before_next_owner', index + 1 < len(actual['owners']) and
+                 bool(actual['owners'][index]['prefixes']) and next_work is not None and
+                 actual['owners'][index]['prefixes'][-1]['seq'] < handoff['seq'] < next_work)
+    _finding(findings, 'bosh_transport_receipts', [{name: item[name] for name in ('item_index', 'result')}
+             for item in actual['transport_receipts']] == wanted['transport_receipts'])
+    if len(actual['transport_receipts']) == 2:
+        first, last = actual['transport_receipts']
+        index = first['item_index']
+        initial_work = _bosh_first_observation(recipient, wanted['initial_index'])
+        _finding(findings, 'bosh_plain_receipt_initial_boundary', index < len(actual['owners']) and
+                 bool(actual['owners'][index]['prefixes']) and actual['owners'][index]['prefixes'][-1]['seq'] < first['seq'] and
+                 initial_work is not None and first['seq'] < initial_work)
+        _finding(findings, 'bosh_plain_receipt_final_boundary', bool(actual['owners']) and bool(actual['owners'][-1]['prefixes']) and
+                 actual['owners'][-1]['prefixes'][-1]['seq'] < last['seq'] and
+                 all(receiver['seq'] < last['seq'] for receiver in actual['response_receivers']))
+    return findings
+
+
+def _bosh_bound_response(response, expected, membership, *, returned=True):
+    if (response['rid'] != expected['rid'] or response['lineage'] != expected['lineage'] or
+            len(response['attempts']) != 1):
+        return False
+    attempt, wanted = response['attempts'][0], expected['attempts'][0]
+    if any(attempt[name] != wanted[name] for name in ('selected_end', 'selected_len', 'sources')):
+        return False
+    knowledge = {'kind': 'ReceiptKnown', 'membership': membership} if wanted['sources'] else {'kind': 'NotRequired'}
+    return attempt['knowledge'] == knowledge and (not returned or
+        (attempt['returned'] == membership and attempt['return_matches']))
+
+
+def bosh_safety_findings(value, payload):
+    """Recompute fixed BOSH receipt, exposure, replay and ACK prerequisites."""
+    ledger = derive_owner_ledger(value)
+    validate_case_evidence(payload)
+    if ledger['owner']['kind'] != 'Bosh' or payload['rejection'] is not None or payload['recipient']['kind'] != 'Bosh':
+        return []
+    wanted, recipient = ledger['owner'], payload['recipient']
+    actual, violations, seen = recipient['bosh'], [], set()
+    expected_calls = _bosh_calls(wanted)
+    def violation(identity, index, purpose):
+        key = (identity, index, purpose)
+        if key not in seen:
+            seen.add(key)
+            violations.append({'id': identity, 'class': 'Safety', 'target': {'frame_id': wanted['frame_id'],
+                'owner': 'Bosh', 'owner_index': index, 'purpose': purpose}})
+    def call_bound(name, index, before):
+        fields = {'transfer_calls': ('owner_index', 'source'), 'bind_calls': ('owner_index', 'rid', 'sources'),
+                  'renew_calls': ('owner_index', 'expected'), 'ack_calls': ('owner_index', 'rid')}[name]
+        calls = [call for call in actual[name] if call['owner_index'] == index]
+        expected = [call for call in expected_calls[name] if call['owner_index'] == index]
+        return (len(calls) == len(expected) == 1 and calls[0]['seq'] < before and
+                {field: calls[0][field] for field in fields} == {field: expected[0][field] for field in fields})
+    def sm_ready(index, sequence):
+        if index >= len(wanted['sm_turns']) or index >= len(recipient['sm_turns']):
+            return False
+        expected = wanted['sm_turns'][index]['state']
+        return any(prefix['seq'] < sequence and _sm_receipt_matches(prefix['state'], expected) and
+                   prefix['state']['ownership_applied'] and prefix['state']['returned_updated'] is True and
+                   prefix['state']['record_managed_by_sm'] == expected['record_managed_by_sm'] and
+                   prefix['state']['terminal'] == 'Returned' for prefix in recipient['sm_turns'][index]['prefixes'])
+    def mix_ready(transfer, sequence):
+        index = transfer['item_index']
+        if index >= len(actual['owners']) or index >= len(wanted['owners']):
+            return False
+        owner = actual['owners'][index]
+        return _bosh_association_matches(owner, wanted['owners'][index]) and any(
+            prefix['seq'] < sequence and call_bound('transfer_calls', index, prefix['seq']) and any(
+                snapshot['source'] == transfer['source'] and snapshot['knowledge'] == {'kind': 'ReceiptKnown', 'source': transfer['current']} and
+                snapshot['returned_source'] == transfer['current'] and snapshot['return_matches_receipt'] and
+                snapshot['source_applied'] and snapshot['queue_accepted'] is True for snapshot in prefix['state']['transfers'])
+            for prefix in owner['prefixes'])
+    def renewal_consumed(index, state, sequence):
+        if index >= len(actual['owners']) or index >= len(wanted['owners']):
+            return False
+        owner, expected = actual['owners'][index], wanted['owners'][index]
+        renewals = expected['state']['renewals']
+        if not _bosh_association_matches(owner, expected) or len(renewals) != 1:
+            return False
+        target = renewals[0]['expected']
+        prior = any(prefix['seq'] < sequence and call_bound('renew_calls', index, prefix['seq']) and any(
+            renewal['expected'] == target and renewal['knowledge'] == 'ReceiptKnown'
+            for renewal in prefix['state']['renewals']) for prefix in owner['prefixes'])
+        return prior and any(renewal['expected'] == target and renewal['knowledge'] == 'ReceiptKnown' and
+            renewal['returned'] and renewal['return_matches'] for renewal in state['renewals'])
+    for index, turn in enumerate(recipient['sm_turns']):
+        expected = wanted['sm_turns'][index]['state'] if index < len(wanted['sm_turns']) else None
+        entered = False
+        for state in [prefix['state'] for prefix in turn['prefixes']] + [turn]:
+            knowledge = state['knowledge']['kind']
+            entered = entered or knowledge in ('CommitCallEntered', 'ReceiptKnown')
+            authority = expected is not None and _sm_receipt_matches(state, expected)
+            if knowledge == 'ReceiptKnown' and not authority:
+                violation('BoshSmReceiptIdentityMismatch', index, 'Record')
+            if (state['ownership_applied'] or state['notification_attempted'] or state['record_managed_by_sm'] is True) and not authority:
+                violation('BoshSmOwnershipWithoutReceipt', index, 'Record')
+            if entered and state['restored']:
+                violation('BoshSmRestorationAfterCommitEntry', index, 'Record')
+            if state['acknowledged_h_applied'] is not None or state['capacity_completed'] is True:
+                violation('BoshUnexpectedSmAcknowledgement', index, 'Record')
+    for index, owner in enumerate(actual['owners']):
+        expected = wanted['owners'][index] if index < len(wanted['owners']) else None
+        association = expected is not None and _bosh_association_matches(owner, expected)
+        purpose = owner['scope']['kind']
+        states = [(prefix['seq'], prefix['state']) for prefix in owner['prefixes']]
+        states.append((owner['prefixes'][-1]['seq'] if owner['prefixes'] else 0, owner))
+        bind_entered = False
+        for sequence, state in states:
+            positive = state['keep_running'] is True or any(transfer['source_applied'] for transfer in state['transfers'])
+            if positive and not association:
+                violation('BoshOwnerAssociationMismatch', index, purpose)
+            for transfer in state['transfers']:
+                target = expected['state']['transfers'][0] if expected is not None and len(expected['state']['transfers']) == 1 else None
+                known = (association and target is not None and transfer['source'] == target['source'] and
+                         transfer['knowledge'] == target['knowledge'] and call_bound('transfer_calls', index, sequence))
+                if transfer['knowledge']['kind'] == 'ReceiptKnown' and not known:
+                    violation('BoshMixReceiptIdentityMismatch', index, 'Transfer')
+                if transfer['source_applied'] or transfer['notification_attempted'] or transfer['queue_accepted'] is True:
+                    if not (known and transfer['returned_source'] == target['returned_source'] and
+                            transfer['return_matches_receipt'] and transfer['local_entered']):
+                        violation('BoshMixAppliedWithoutMatchingReceipt', index, 'Transfer')
+            for renewal in state['renewals']:
+                target = expected['state']['renewals'][0] if expected is not None and len(expected['state']['renewals']) == 1 else None
+                known = (association and target is not None and renewal['expected'] == target['expected'] and
+                         renewal['knowledge'] == 'ReceiptKnown' and call_bound('renew_calls', index, sequence))
+                if renewal['knowledge'] == 'ReceiptKnown' and not known:
+                    violation('BoshRenewalReceiptIdentityMismatch', index, 'Renew')
+                if renewal['replay_calls'] or renewal['replay_bookkeeping'] or renewal['ack_issued']:
+                    if not (known and renewal['returned'] and renewal['return_matches']):
+                        violation('BoshContinuationWithoutRenewalReceipt', index, 'Renew')
+            for response in state['responses']:
+                target = expected['state']['responses'][0] if expected is not None and len(expected['state']['responses']) == 1 else None
+                for attempt in response['attempts']:
+                    bind_entered = bind_entered or attempt['knowledge']['kind'] in ('CommitCallEntered', 'ReceiptKnown')
+                    if bind_entered and (attempt['restored'] or attempt['removed_indices']):
+                        violation('BoshRestorationAfterBindEntry', index, 'Bind')
+                known = association and target is not None and _bosh_bound_response(response, target, wanted['membership'])
+                if target is not None and target['attempts'][0]['sources']:
+                    known = known and call_bound('bind_calls', index, sequence)
+                if response['exposure_entered'] or response['responder_calls'] or response['bookkeeping'] or response['cached']:
+                    if not known:
+                        violation('BoshExposureWithoutExactBindAuthority', index, 'Response')
+                    if not renewal_consumed(index, state, sequence):
+                        violation('BoshExposureWithoutRenewalAuthority', index, 'Response')
+                    if wanted['sm_turns'] and not all(sm_ready(item, sequence) for item in range(len(wanted['sm_turns']))):
+                        violation('BoshSourceClearedWithoutSmRecordReceipt', index, 'Response')
+                    if not all(mix_ready(transfer, sequence) for transfer in wanted['transfers']):
+                        violation('BoshExposureBeforeMixTransferReceipt', index, 'Response')
+            for ack in state['acknowledgements']:
+                target = expected['state']['acknowledgements'][0] if expected is not None and len(expected['state']['acknowledgements']) == 1 else None
+                known = (association and target is not None and ack['knowledge'] == 'ReceiptKnown' and
+                         ack['rid'] == target['rid'] and ack['deleted'] == target['deleted'] and call_bound('ack_calls', index, sequence))
+                if ack['knowledge'] == 'ReceiptKnown' and not known:
+                    violation('BoshAckReceiptIdentityMismatch', index, 'Acknowledge')
+                if ack['cache_evictions'] or ack['receipt_calls'] or ack['receipts_sent']:
+                    if not (known and ack['returned'] and ack['return_matches']):
+                        violation('BoshEvictionOrReceiptWithoutAckAuthority', index, 'Acknowledge')
+            if wanted['sm_turns'] and index < len(wanted['sm_turns']) and state['keep_running'] is True:
+                boundary = owner['polls'][0]['seq'] if len(owner['polls']) == 1 else sequence
+                if not sm_ready(index, boundary):
+                    violation('BoshPushBeforeSmRecordReturn', index, 'Outbound')
+    def ack_before(sequence, *, consumed=False):
+        for index, owner in enumerate(actual['owners']):
+            if index >= len(wanted['owners']) or not _bosh_association_matches(owner, wanted['owners'][index]):
+                continue
+            expected = wanted['owners'][index]['state']['acknowledgements']
+            if len(expected) != 1:
+                continue
+            for prefix in owner['prefixes']:
+                if prefix['seq'] >= sequence:
+                    continue
+                for ack in prefix['state']['acknowledgements']:
+                    if (ack['knowledge'] == 'ReceiptKnown' and ack['rid'] == expected[0]['rid'] and ack['deleted'] == expected[0]['deleted'] and
+                            call_bound('ack_calls', index, prefix['seq']) and (not consumed or (ack['returned'] and ack['return_matches']))):
+                        return True
+        return False
+    for receipt in actual['transport_receipts']:
+        if receipt['result'] == 'Received':
+            declared = receipt['item_index'] == wanted['transport_receipts'][0]['item_index']
+            if not declared:
+                violation('BoshTransportReceiptIdentityMismatch', receipt['item_index'], 'TransportReceipt')
+            if not ack_before(receipt['seq'], consumed=True) or not any(
+                    history['seq'] < receipt['seq'] and not history['entries'] for history in actual['cache_history']):
+                violation('BoshTransportReceiptWithoutAckReceipt', receipt['item_index'], 'TransportReceipt')
+    for handoff in actual['mix_handoffs']:
+        if handoff['result']['kind'] not in ('SmPersisted', 'BoshPersisted', 'SocketFenced'):
+            continue
+        matches = False
+        for transfer in wanted['transfers']:
+            index = transfer['item_index']
+            if index >= len(actual['owners']):
+                continue
+            owner = actual['owners'][index]
+            if handoff['delivery_id'] != transfer['source']['delivery_id'] or handoff['result'] != {
+                    'kind': 'BoshPersisted', 'session_id': value['recipient_owner']['session_id']}:
+                continue
+            matches = _bosh_association_matches(owner, wanted['owners'][index]) and any(
+                prefix['seq'] < handoff['seq'] and call_bound('transfer_calls', index, prefix['seq']) and any(snapshot['source'] == transfer['source'] and
+                snapshot['knowledge'] == {'kind': 'ReceiptKnown', 'source': transfer['current']} and snapshot['source_applied']
+                for snapshot in prefix['state']['transfers']) for prefix in owner['prefixes'])
+        if not matches:
+            violation('BoshMixHandoffWithoutReceipt', 0, 'MixHandoff')
+    try:
+        _raw, body = _bosh_payload_bytes(value, ledger, payload)
+    except (DirectCaseInvalid, RecursionError):
+        body = None
+    for history in actual['cache_history']:
+        if not history['entries']:
+            if not ack_before(history['seq']):
+                violation('BoshCacheEvictionWithoutAckReceipt', 0, 'Cache')
+            continue
+        for entry in history['entries']:
+            if (entry['rid'] != wanted['request']['rid'] or entry['fingerprint_hex'] != wanted['request']['fingerprint_hex'] or
+                    entry['membership'] != wanted['membership']):
+                violation('BoshCacheIdentityMismatch', 0, 'Cache')
+            if body is None or entry['body_hex'] != body.hex() or entry['response_bytes'] != len(body):
+                violation('BoshPayloadByteIdentityMismatch', 0, 'Cache')
+            initial_index = wanted['initial_index']
+            prepared = False
+            if initial_index < len(actual['owners']):
+                owner = actual['owners'][initial_index]
+                target = wanted['owners'][initial_index]['state']['responses'][0]
+                prepared = _bosh_association_matches(owner, wanted['owners'][initial_index]) and any(
+                    prefix['seq'] < history['seq'] and any(response['exposure_entered'] and
+                    _bosh_bound_response(response, target, wanted['membership']) for response in prefix['state']['responses'])
+                    for prefix in owner['prefixes'])
+            if not prepared:
+                violation('BoshCacheWithoutBoundExposure', 0, 'Cache')
+    for name, identity, purpose in (('ack_calls', 'BoshAckCallWithoutRenewalAuthority', 'Acknowledge'),
+                                    ('bind_calls', 'BoshBindCallWithoutRenewalAuthority', 'Bind')):
+        for call in actual[name]:
+            index = call['owner_index']
+            authorized = index < len(actual['owners']) and any(
+                prefix['seq'] == call['seq'] + 1 and renewal_consumed(index, prefix['state'], call['seq'])
+                for prefix in actual['owners'][index]['prefixes'])
+            if not authorized:
+                violation(identity, index, purpose)
+    for call in actual['bind_calls']:
+        if not all(mix_ready(transfer, call['seq']) for transfer in wanted['transfers']):
+            violation('BoshBindBeforeMixTransferReceipt', call['owner_index'], 'Bind')
+    for receiver in actual['response_receivers']:
+        if receiver['result']['kind'] != 'Received':
+            continue
+        index, authorized = receiver['owner_index'], False
+        declared = any(all(receiver[field] == expected[field] for field in ('owner_index', 'rid', 'phase', 'receiver_index'))
+                       for expected in wanted['receivers'])
+        if index < len(actual['owners']) and index < len(wanted['owners']):
+            owner, expected = actual['owners'][index], wanted['owners'][index]
+            if _bosh_association_matches(owner, expected):
+                for prefix in owner['prefixes']:
+                    if prefix['seq'] >= receiver['seq']:
+                        continue
+                    if receiver['phase'] == 'Initial' and expected['state']['responses']:
+                        target = expected['state']['responses'][0]
+                        bound = any(response['exposure_entered'] and response['accepted_responders'] > 0 and
+                            _bosh_bound_response(response, target, wanted['membership']) for response in prefix['state']['responses'])
+                        if target['attempts'][0]['sources']:
+                            bound = bound and call_bound('bind_calls', index, prefix['seq'])
+                        authorized = authorized or bound
+                    elif receiver['phase'] == 'Replay' and expected['state']['renewals']:
+                        target = expected['state']['renewals'][0]
+                        authorized = authorized or (call_bound('renew_calls', index, prefix['seq']) and any(
+                            renewal['expected'] == target['expected'] and renewal['knowledge'] == 'ReceiptKnown' and
+                            renewal['returned'] and renewal['return_matches'] and renewal['replay_calls'] > 0 and
+                            renewal['replay_accepted'] > 0 for renewal in prefix['state']['renewals']))
+        if not declared or not authorized:
+            violation('BoshHttpReceiptWithoutOwnerAuthority', index, 'ResponseReceiver')
+        if body is None or receiver['result']['body_hex'] != body.hex():
+            violation('BoshPayloadByteIdentityMismatch', index, 'ResponseReceiver')
+    return violations
+
+
+def _inspect_bosh_fixture(fixture, record, payload):
+    """Pure supplied BOSH evidence; the public complete-profile gate is closed."""
+    if type(record) is not dict or record.get('observation') != 'Complete':
+        return None, None, False, record.get('observation', 'IncompleteProcess') if type(record) is dict else 'IncompleteProcess'
+    process = record.get('process')
+    if type(process) is not dict or type(process.get('returncode')) is not int or process['returncode'] != 0:
+        return None, None, False, 'ProcessFailure'
+    value = parse_case_input(fixture['bytes'])
+    ledger = derive_owner_ledger(value)
+    _need(ledger['owner']['kind'] == 'Bosh', 'bosh_fixture_owner')
+    try:
+        validate_case_evidence(payload)
+    except (DirectCaseInvalid, DirectCaseIncomplete, TypeError, KeyError, ValueError) as error:
+        evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': 'Inconclusive', 'qualified': False,
+                      'invariant': None, 'violations': [], 'mismatches': ['malformed_evidence:' + str(error)[:160]]}
+        return None, evaluation, False, 'MalformedOrUnexpectedOutput'
+    if payload['input_sha256'] != _hash(fixture['bytes']):
+        evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': 'Inconclusive', 'qualified': False,
+                      'invariant': None, 'violations': [], 'mismatches': ['raw_input_binding']}
+        return copy.deepcopy(payload), evaluation, False, 'InputBindingMismatch'
+    findings, violations = [], []
+    if payload['rejection'] is not None:
+        findings.append('unexpected_rejection')
+    else:
+        violations = _authority_safety_findings(ledger['sender'], payload) + bosh_safety_findings(value, payload)
+        try:
+            findings.extend(projection_findings(ledger['sender'], payload))
+            findings.extend(_bosh_fixture_findings(value, ledger, payload))
+        except (DirectCaseInvalid, ET.ParseError, ValueError, RecursionError) as error:
+            findings.append('owner_xml:' + str(error)[:160])
+        findings.extend(_original_fixture_findings(value, ledger['sender'], payload))
+        _finding(findings, 'driver_execution', payload['execution'] == ledger['owner']['execution'])
         _finding(findings, 'unexpected_safety_failure', not violations)
     invariant = violations[0] if violations else None
     if violations:
@@ -2545,7 +3548,7 @@ def _inspect_native_fixture(fixture, record, payload):
             _finding(findings, 'expected_failure_authority', expected_failure == _native_failure_target(ledger))
         try:
             findings.extend(projection_findings(ledger, payload))
-        except (DirectCaseInvalid, ET.ParseError, ValueError) as error:
+        except (DirectCaseInvalid, ET.ParseError, ValueError, RecursionError) as error:
             findings.append('projected_xml:' + str(error)[:160])
         findings.extend(_original_fixture_findings(value, ledger, payload))
         findings.extend(_native_fixture_findings(ledger, payload, no_flush=no_flush))

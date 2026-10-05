@@ -1,0 +1,93 @@
+{
+  "schema": "northstar-stage3-build-record-helper-result-v1",
+  "status": "LimitedPureBuildRecordHelperScopePassed_IntegrationPending",
+  "base_commit": "0d5e7219bb472fede1b2edbc190230604587de08",
+  "base_tree": "ff2550a0511b4e18120c8e68f1141845a6437522",
+  "scope": "Isolated pure preparation-record decoder, source/ancestry binder and runnable metadata comparison. No production entry imports the helper yet; no build, strip or saved workload ran.",
+  "source_files": {
+    "scripts/lib/direct_build_record.py": {
+      "sha256": "02b7705c27ae1401ca5be22db402996e9ee2306ebdbcb1154818c7632700e34c",
+      "bytes": 19405
+    },
+    "scripts/test-direct-build-record.py": {
+      "sha256": "fad9b07df1e6f3d22d141a10bb2e3d61158cda714e766af985c378f67dcff7eb",
+      "bytes": 28640
+    }
+  },
+  "source_manifest_sha256": "962a2fc32eea4220d5a69c80de12d38c9a888571255eb66d218f5e01516c41e8",
+  "source_manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+  "source_bytes": 48045,
+  "checks": {
+    "python_ast": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.032868735",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "direct_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.175471892",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 4780,
+      "log_sha256": "c3ee1cb32209b5921eef640838d71e7de592e2da503d025eb2104e67e63e84ee"
+    }
+  },
+  "python_tests": {
+    "ran": 33,
+    "passed": 33,
+    "failed": 0,
+    "skipped": 0,
+    "unittest_seconds": "0.059",
+    "guard_sha256": "675246cdb86ca112d261fe3d43231a5c5379387bc71c498b73d679d1865832c5",
+    "boundary_result": {
+      "audit_hook_ready": true,
+      "blocked_attempts": {},
+      "schema": "northstar-unit-tripwire-v1",
+      "syscall_sandbox": false,
+      "unit_exit_status": 0
+    },
+    "scope": "Synthetic dictionaries/bytes and standard-library mocks. Tests construct metadata for original/derived artifacts without reading or executing such artifacts.",
+    "name_list_sha256": "d47b266fdc5c9f1d7909019d3d8d3808ab7e1f4011a17cf6dec994acdba2b128",
+    "name_list_encoding": "UTF-8 compact JSON array of [method, full parenthesized unittest identifier including __main__.Class.method] pairs in actual log order, no trailing newline"
+  },
+  "source_behavior": [
+    "Exact raw canonical-LF metadata bytes must match the externally supplied v3 contract hash before JSON parsing and field validation. Closed types reject duplicate/nonfinite/unknown material; the existing 128 KiB metadata bound is retained.",
+    "The complete project-local manifest remains in the trusted contract. A separately supplied verified source summary binds count and bytes without duplicating the map; compiler, lock/toolchain, explicit build controls and unique Cargo-selected original are cross-checked. Historical preparation facts are not re-executed or inferred from successful parsing.",
+    "Original and runnable content identities remain separate. An optional fresh GNU strip relation binds tool, flags and output metadata; an unchanged-content preserved original copy may have a different path/mode. Actual descriptor-derived runnable facts are compared only in the second pure phase.",
+    "No-flush ancestry reverses exactly one complete line in the bounded current source and reconstructs the baseline manifest/hash and byte delta while retaining every other helper source. Baseline references derive trust from the external record hash, not from self-consistent candidate hashes.",
+    "Explicit build environment inputs include RUSTUP_HOME and the bound compiler; inherited environment is declared unrecorded. Cargo cache policy and its actual fresh field remain distinct. No external supply-chain or reproducible-build claim is made."
+  ],
+  "limits": [
+    "The helper is not connected to caller/worker entry points. Existing bounded no-follow record reads, actual current source summary and executable descriptor verification still need integration and their ordinary checks.",
+    "All public saved-profile gates remain closed. Final literal/profile material, measured contract/frame/evidence sizes, actual artifact derivation and the separately released 16/16/4/4 passes remain pending.",
+    "The synthetic original/runnable/tool/log metadata is fixture data, not evidence that a compiler, strip command, record/replay workload, SQL connection, socket or service ran.",
+    "Concurrent BOSH matcher work is excluded from this two-file source map and checkpoint. No Rust source, legacy 113-test suite or other source qualification is renewed by these 33 helper tests.",
+    "Full Stage3 acceptance and later adapter/wire/TLS/retention/resource qualification remain open."
+  ],
+  "python_runtime": {
+    "version": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "executable_sha256": "fa67443527ed9647f760d807e2a38f26340757123e643c4639cf273ed15d5ea7",
+    "flags": [
+      "-E",
+      "-S",
+      "-B"
+    ]
+  },
+  "parent_ci": {
+    "commit": "0d5e7219bb472fede1b2edbc190230604587de08",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37250977543",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "Prior saved Native/old-current matcher checkpoint; separate from this isolated helper."
+  }
+}

@@ -10,7 +10,11 @@ mod action;
 mod ownership;
 mod response_owner;
 #[cfg(test)]
+mod saved_case;
+#[cfg(test)]
 pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
+#[cfg(test)]
+pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_case};
 
 use crate::state::{AppState, ClientConnectionGuard};
 use crate::transport_parsing::parse_bosh_frame;

@@ -458,6 +458,9 @@ impl Recorder {
             std::task::Poll::Pending => anyhow::bail!("unexpected pending saved SM ACK"),
         }
     }
+    pub(super) fn governor(&self) -> Option<Arc<SmMemoryGovernor>> {
+        self.governor.clone()
+    }
     pub(super) fn pending_marker(&self) -> Arc<AtomicBool> {
         self.pending.clone()
     }
@@ -529,6 +532,37 @@ mod tests {
             updated: true,
             rotations: vec![],
         }
+    }
+
+    #[test]
+    fn shared_governor_keeps_existing_live_charge_during_response_reservation() {
+        let recorder = Recorder::new(
+            Uuid::from_u128(3),
+            Some(&config()),
+            &[],
+            Arc::new(Mutex::new(wire::Sequence::default())),
+        )
+        .unwrap();
+        let governor = recorder.governor().unwrap();
+        assert!(Arc::ptr_eq(&governor, recorder.governor.as_ref().unwrap()));
+        let live_bytes = recorder.sm.capacity.as_ref().unwrap().reserved_bytes();
+        assert!(live_bytes > 0);
+        assert_eq!(
+            governor.metrics().reserved_bytes.load(Ordering::SeqCst),
+            live_bytes as u64
+        );
+        let response = governor.try_reserve_transient(4096).unwrap();
+        assert_eq!(
+            governor.metrics().reserved_bytes.load(Ordering::SeqCst),
+            (live_bytes + 4096) as u64
+        );
+        drop(response);
+        assert_eq!(
+            governor.metrics().reserved_bytes.load(Ordering::SeqCst),
+            live_bytes as u64
+        );
+        drop(recorder);
+        assert_eq!(governor.metrics().reserved_bytes.load(Ordering::SeqCst), 0);
     }
 
     // Isolated recorder/governor regression, not an ordinary alias for a saved

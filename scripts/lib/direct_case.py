@@ -32,6 +32,7 @@ TARGET_XML = "<message type='chat' id='m' to='bob@example.test/phone'><body>x</b
 BARE_XML = TARGET_XML.replace("to='bob@example.test/phone'", "to='bob@example.test'")
 UNRATED_XML = "<message to='bob@example.test'><store xmlns='urn:xmpp:hints'/></message>"
 PLAIN_XML = "<message id='plain'/>"
+MIX_XML = "<message id='mix'/>"
 ORIGINAL_TRIPLES = {
     'C01': ((101, 10101, 20101),), 'C02': ((201, 10201, 20201),),
     'C03': ((301, 10301, 20301), (302, 10302, 20302)),
@@ -40,6 +41,8 @@ ORIGINAL_TRIPLES = {
 }
 NATIVE_STATE_FIELDS = ('original preparation managed_by_sm fence_entered returned_fence writer_entered '
                        'writer_result write_decision ack ack_returned terminal')
+SM_STATE_FIELDS = ('scope binding h_decision knowledge appended restored ownership_applied acknowledged_h_applied '
+                   'notification_attempted capacity_completed returned_updated returned_error record_managed_by_sm terminal')
 
 
 class DirectCaseInvalid(ValueError):
@@ -119,6 +122,10 @@ def _hash(data):
 
 def _c2s(message, claim):
     return {'kind': 'C2s', 'recipient_id': _uuid(2), 'message_id': message, 'claim_id': claim}
+
+
+def _mix(token):
+    return {'kind': 'Mix', 'delivery_id': _uuid(7), 'lease_token': _uuid(token)}
 
 
 def _source(value, *, c2s=False):
@@ -309,8 +316,119 @@ def mutation_fixtures():
     return fixtures
 
 
-def validate_native_input(value):
-    """Closed Native/None Case grammar; roles are input authority, not evidence."""
+def _sm_config(*, initial_h):
+    return {'session_id': _uuid(4), 'enabled': True, 'resume_allowed': True, 'inbound_h': 2,
+            'outbound_h': initial_h, 'acked_h': initial_h, 'resume_timeout_seconds': 60,
+            'live_lease_seconds': 30, 'claim_lease_seconds': 10, 'require_same_device': True,
+            'max_per_account': 4, 'max_global': 100, 'max_unacked_stanzas': 32,
+            'max_unacked_bytes': 16384, 'max_snapshot_bytes': 32768, 'ip_binding': 'none', 'peer_ip': '127.0.0.1',
+            'governor': {'max_bytes': 65536, 'max_recovery_bytes': 32768,
+                         'max_recovery_jobs': 4, 'max_snapshot_bytes': 32768}}
+
+
+def owner_fixtures():
+    """Closed SM/replacement literals; these do not enable a runnable profile."""
+    fixtures = []
+    for identity, frame, sender, recipient in (('C08', 801, 10801, 20801), ('C09', 901, 10901, 20901)):
+        value = _base_case(identity, ((frame, sender, recipient),))
+        value['identities'].update(sm_session_id=_uuid(4), native_claim_id=None)
+        value['route'][0].update(targets=[{'jid': BOB, 'connection_id': _uuid(3)}], health_modes=['Live'] * 3)
+        pending = identity == 'C09'
+        owner = {'kind': 'Sm', 'frame_id': _uuid(frame), 'connection_id': _uuid(3),
+                 'config': _sm_config(initial_h=0 if pending else 4294967294), 'extra_items': [],
+                 'record_replies': [{'commit': 'Pending' if pending else 'Complete', 'updated': True, 'rotations': []}],
+                 'write': {'chunk_limit': 4096, 'fail_after_accepted_bytes': None, 'flush': 'Ok'}, 'ack': None}
+        if pending:
+            value['drive'] = {'kind': 'DropSmCheckpointCommit', 'frame_id': _uuid(frame)}
+        else:
+            value['identities'].update(mix_delivery_id=_uuid(7), mix_old_token=_uuid(8), mix_new_token=_uuid(9))
+            owner['extra_items'] = [{'kind': 'Plain', 'xml': PLAIN_XML, 'transport_receipt': False},
+                                    {'kind': 'Mix', 'xml': MIX_XML, 'source': _mix(8)}]
+            owner['record_replies'].extend(({'commit': 'Complete', 'updated': True, 'rotations': []},
+                                            {'commit': 'Complete', 'updated': True,
+                                             'rotations': [{'previous': _mix(8), 'current': _mix(9)}]}))
+            owner['ack'] = {'h': 0, 'reply': {'commit': 'Complete', 'updated': True, 'rotations': []}}
+        value['recipient_owner'] = owner
+        fixtures.append(_fixture(identity, 'normal', value, 'Cancelled' if pending else 'Pass'))
+    value = _base_case('C13', ((1301, 11301, 21301),))
+    value['identities'].update(replacement_connection_id=_uuid(11), replacement_claim_id=_uuid(10))
+    value['route'][0].update(targets=[{'jid': BOB, 'connection_id': _uuid(3)}], health_modes=['Live'] * 3)
+    _native_owner(value)
+    old = copy.deepcopy(value['recipient_owner']['native'])
+    replacement = copy.deepcopy(old)
+    replacement['connection_id'] = _uuid(11)
+    replacement['fence']['returned_source'] = _c2s(_uuid(21301), _uuid(10))
+    value['recipient_owner'] = {'kind': 'NativeReplacement', 'frame_id': _uuid(1301),
+                                'initial_row': _c2s(_uuid(21301), _uuid(21301)), 'old': old,
+                                'replacement': replacement, 'replacement_claim_id': _uuid(10)}
+    value['drive'] = {'kind': 'ReplaceBeforeOldAckRead', 'frame_id': _uuid(1301)}
+    fixtures.append(_fixture('C13', 'normal', value, 'Pass'))
+    return fixtures
+
+
+def _governor(value):
+    _fields(value, 'max_bytes max_recovery_bytes max_recovery_jobs max_snapshot_bytes')
+    for item in value.values():
+        _integer(item)
+
+
+def _sm_configuration(value):
+    _fields(value, 'session_id enabled resume_allowed inbound_h outbound_h acked_h resume_timeout_seconds '
+            'live_lease_seconds claim_lease_seconds require_same_device max_per_account max_global '
+            'max_unacked_stanzas max_unacked_bytes max_snapshot_bytes ip_binding peer_ip governor')
+    _nullable(value['session_id'], _id)
+    for name in ('enabled', 'resume_allowed', 'require_same_device'):
+        _boolean(value[name])
+    for name in ('inbound_h', 'outbound_h', 'acked_h', 'max_per_account', 'max_global', 'max_unacked_stanzas',
+                 'max_unacked_bytes', 'max_snapshot_bytes'):
+        _integer(value[name])
+    for name in ('resume_timeout_seconds', 'live_lease_seconds', 'claim_lease_seconds'):
+        _integer(value[name], 2 ** 64 - 1)
+    for name in ('ip_binding', 'peer_ip'):
+        _text(value[name], 64)
+    _governor(value['governor'])
+
+
+def _rotation(value):
+    _fields(value, 'previous current')
+    for source in value.values():
+        _source(source)
+        _need(source['kind'] == 'Mix', 'mix_rotation_source')
+
+
+def _checkpoint_reply(value):
+    _fields(value, 'commit updated rotations')
+    _enum(value['commit'], 'Complete Pending Error')
+    _boolean(value['updated'])
+    _array(value['rotations'], _rotation, 4)
+
+
+def _fixture_item(value):
+    _need(type(value) is dict, 'item_object')
+    if value.get('kind') == 'Plain':
+        _fields(value, 'kind xml transport_receipt')
+        _boolean(value['transport_receipt'])
+    else:
+        _fields(value, 'kind xml source')
+        _enum(value['kind'], 'Mix')
+        _source(value['source'])
+        _need(value['source']['kind'] == 'Mix', 'mix_item_source')
+    _text(value['xml'])
+
+
+def _native_spec(value):
+    _fields(value, 'connection_id fence write ack')
+    _id(value['connection_id'])
+    _fields(value['fence'], 'returned_source')
+    _source(value['fence']['returned_source'], c2s=True)
+    _write_script(value['write'])
+    _fields(value['ack'], 'commit disposition')
+    _enum(value['ack']['commit'], 'Complete Pending Error')
+    _enum(value['ack']['disposition'], 'Deleted')
+
+
+def validate_case_input(value):
+    """Closed implemented owner grammar; roles are input authority, not evidence."""
     _fields(value, 'schema case_id adapter_contract identities originals policy admission direct_repository route recipient_owner drive')
     _need(value['schema'] == CASE_SCHEMA and value['adapter_contract'] == ADAPTER, 'InvalidSchema')
     _text(value['case_id'], 64)
@@ -405,9 +523,9 @@ def validate_native_input(value):
         _array(route['health_modes'], lambda mode: _enum(mode, 'Live SpoolOnly'), 4)
         _array(route['remote_primary_returns'], _boolean, 4)
         _enum(route['rearm'], 'Return Pending')
-    _need(xml_bytes <= 16384 and len(_encoded(value)) <= 65536, 'Limit:input_bytes')
     owner = value['recipient_owner']
     _need(type(owner) is dict, 'owner_object')
+    used_roles = {'connection_id'}
     if owner.get('kind') == 'None':
         _fields(owner, 'kind')
         _need(identities['native_claim_id'] is None, 'IdentityBinding:unused_native_claim')
@@ -415,35 +533,102 @@ def validate_native_input(value):
         _fields(owner, 'kind frame_id native')
         _need(owner['frame_id'] in frames, 'IdentityBinding:native_frame')
         native = owner['native']
-        _fields(native, 'connection_id fence write ack')
-        _id(native['connection_id'])
+        _native_spec(native)
         _need(native['connection_id'] == identities['connection_id'], 'IdentityBinding:native_connection')
-        _fields(native['fence'], 'returned_source')
-        _source(native['fence']['returned_source'], c2s=True)
         bound = identities['originals'][frames.index(owner['frame_id'])]
         expected = {'kind': 'C2s', 'recipient_id': identities['recipient_id'],
                     'message_id': bound['recipient_stable_id'], 'claim_id': identities['native_claim_id']}
         _need(native['fence']['returned_source'] == expected, 'IdentityBinding:native_fence')
-        _write_script(native['write'])
-        _fields(native['ack'], 'commit disposition')
-        _enum(native['ack']['commit'], 'Complete Pending Error')
-        _enum(native['ack']['disposition'], 'Deleted')
+        used_roles.add('native_claim_id')
+    elif owner.get('kind') == 'Sm':
+        _fields(owner, 'kind frame_id connection_id config extra_items record_replies write ack')
+        _need(owner['frame_id'] in frames, 'IdentityBinding:sm_frame')
+        _id(owner['connection_id'])
+        _need(owner['connection_id'] == identities['connection_id'], 'IdentityBinding:sm_connection')
+        _sm_configuration(owner['config'])
+        _need(owner['config']['session_id'] == identities['sm_session_id'], 'IdentityBinding:sm_session')
+        _array(owner['extra_items'], _fixture_item, 3)
+        xml_bytes += sum(len(item['xml'].encode('utf-8')) for item in owner['extra_items'])
+        _need(len(value['originals']) + len(owner['extra_items']) +
+              sum(route['prefill'] is not None for route in value['route']) <= 4, 'Limit:item_count')
+        _array(owner['record_replies'], _checkpoint_reply, 4)
+        _need(len(owner['record_replies']) == 1 + len(owner['extra_items']), 'aligned_record_replies')
+        replies = list(owner['record_replies'])
+        if owner['ack'] is not None:
+            _fields(owner['ack'], 'h reply')
+            _integer(owner['ack']['h'])
+            _checkpoint_reply(owner['ack']['reply'])
+            replies.append(owner['ack']['reply'])
+        _write_script(owner['write'])
+        used_roles.add('sm_session_id')
+        mix_items = [item for item in owner['extra_items'] if item['kind'] == 'Mix']
+        if mix_items:
+            used_roles.update(('mix_delivery_id', 'mix_old_token', 'mix_new_token'))
+            for name in ('mix_delivery_id', 'mix_old_token', 'mix_new_token'):
+                _id(identities[name])
+            previous = {'kind': 'Mix', 'delivery_id': identities['mix_delivery_id'], 'lease_token': identities['mix_old_token']}
+            current = dict(previous, lease_token=identities['mix_new_token'])
+            _need(all(item['source'] == previous for item in mix_items), 'IdentityBinding:mix_item')
+            _need(all(rotation == {'previous': previous, 'current': current} for reply in replies
+                      for rotation in reply['rotations']), 'IdentityBinding:mix_rotation')
+        else:
+            _need(all(not reply['rotations'] for reply in replies), 'IdentityBinding:rotation_without_mix')
+    elif owner.get('kind') == 'NativeReplacement':
+        _fields(owner, 'kind frame_id initial_row old replacement replacement_claim_id')
+        _need(owner['frame_id'] in frames, 'IdentityBinding:replacement_frame')
+        index = frames.index(owner['frame_id'])
+        transaction = value['direct_repository'][index]['transaction']
+        _source(owner['initial_row'], c2s=True)
+        _need(transaction['kind'] == 'Stored' and owner['initial_row'] == {
+            'kind': 'C2s', 'recipient_id': transaction['recipient_id'], 'message_id': transaction['delivery_id'],
+            'claim_id': transaction['live_claim_id']}, 'IdentityBinding:initial_row')
+        for name, connection_role, claim_role in (('old', 'connection_id', 'native_claim_id'),
+                                                ('replacement', 'replacement_connection_id', 'replacement_claim_id')):
+            _native_spec(owner[name])
+            _id(identities[connection_role])
+            _id(identities[claim_role])
+            _need(owner[name]['connection_id'] == identities[connection_role] and
+                  owner[name]['fence']['returned_source'] == dict(owner['initial_row'], claim_id=identities[claim_role]),
+                  'IdentityBinding:replacement_native')
+        _id(owner['replacement_claim_id'])
+        _need(owner['replacement_claim_id'] == identities['replacement_claim_id'] and
+              identities['replacement_connection_id'] != identities['connection_id'] and
+              identities['replacement_claim_id'] != identities['native_claim_id'], 'IdentityBinding:replacement_roles')
+        used_roles.update(('native_claim_id', 'replacement_connection_id', 'replacement_claim_id'))
     else:
         raise DirectCaseIncomplete('stage3_transport_input_validator_incomplete')
-    for name in ('sm_session_id', 'bosh_session_id', 'mix_delivery_id', 'mix_old_token', 'mix_new_token',
-                 'replacement_connection_id', 'replacement_claim_id'):
+    for name in set(identities) - {'actor_id', 'recipient_id', 'originals'} - used_roles:
         _need(identities[name] is None, 'IdentityBinding:unused_owner_role')
+    _need(xml_bytes <= 16384 and len(_encoded(value)) <= 65536, 'Limit:input_bytes')
     drive = value['drive']
     if type(drive) is dict and drive.get('kind') == 'Complete':
         _fields(drive, 'kind')
     else:
         _fields(drive, 'kind frame_id')
-        _enum(drive['kind'], 'DropDirectCommit DropRearm DropNativeAckCommit')
+        _enum(drive['kind'], 'DropDirectCommit DropRearm DropNativeAckCommit DropSmCheckpointCommit ReplaceBeforeOldAckRead')
         _need(drive['frame_id'] in frames, 'IdentityBinding:drive_frame')
+    if drive['kind'] in ('DropSmCheckpointCommit', 'ReplaceBeforeOldAckRead'):
+        required_owner = 'Sm' if drive['kind'] == 'DropSmCheckpointCommit' else 'NativeReplacement'
+        _need(owner['kind'] == required_owner and drive['frame_id'] == owner['frame_id'], 'IdentityBinding:owner_drive')
+    if owner['kind'] == 'Sm':
+        pending = owner['record_replies'][0]['commit'] == 'Pending'
+        _need((drive['kind'] == 'DropSmCheckpointCommit') == pending and
+              drive['kind'] in ('Complete', 'DropSmCheckpointCommit'), 'fixed_sm_drive')
+        _need(not pending or owner['ack'] is None, 'sm_ack_after_pending_cut')
+        _need(all(reply['commit'] != 'Pending' for reply in owner['record_replies'][1:]), 'unsupported_later_sm_cut')
+    if owner['kind'] == 'NativeReplacement':
+        _need(drive == {'kind': 'ReplaceBeforeOldAckRead', 'frame_id': owner['frame_id']}, 'fixed_replacement_drive')
     return copy.deepcopy(value)
 
 
-def parse_native_input(raw):
+def validate_native_input(value):
+    value = validate_case_input(value)
+    if value['recipient_owner']['kind'] not in ('None', 'Native'):
+        raise DirectCaseIncomplete('native_only_input_validator')
+    return value
+
+
+def parse_case_input(raw):
     _need(type(raw) is bytes and len(raw) <= 65536, 'Limit:input_bytes')
     def pairs(items):
         result = {}
@@ -456,7 +641,14 @@ def parse_native_input(raw):
                            parse_constant=lambda _: (_ for _ in ()).throw(DirectCaseInvalid('nonfinite')))
     except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
         raise DirectCaseInvalid('Malformed') from error
-    return validate_native_input(value)
+    return validate_case_input(value)
+
+
+def parse_native_input(raw):
+    value = parse_case_input(raw)
+    if value['recipient_owner']['kind'] not in ('None', 'Native'):
+        raise DirectCaseIncomplete('native_only_input_validator')
+    return value
 
 
 def rejection_reason(raw):
@@ -731,7 +923,122 @@ def _native_evidence(value, counter):
     _polls(value['polls'], counter)
 
 
-def validate_native_evidence(value):
+def _sm_scope(value):
+    _fields(value, 'purpose session_id connection_id inbound_h outbound_h acked_h queued')
+    purpose = value['purpose']
+    _need(type(purpose) is dict, 'sm_purpose')
+    if purpose.get('kind') == 'Acknowledge':
+        _fields(purpose, 'kind h')
+        _integer(purpose['h'])
+    else:
+        _fields(purpose, 'kind')
+        _enum(purpose['kind'], 'Record Checkpoint')
+    _nullable(value['session_id'], _id)
+    _id(value['connection_id'])
+    for name in ('inbound_h', 'outbound_h', 'acked_h', 'queued'):
+        _integer(value[name])
+
+
+def _sm_binding(value):
+    _fields(value, 'session_id connection_id inbound_h outbound_h acked_h whole acknowledged remaining')
+    _nullable(value['session_id'], _id)
+    _id(value['connection_id'])
+    for name in ('inbound_h', 'outbound_h', 'acked_h'):
+        _integer(value[name])
+    for name in ('whole', 'acknowledged', 'remaining'):
+        _array(value[name], lambda source: _nullable(source, _source), 4)
+
+
+def _sm_fact(value):
+    _need(type(value) is dict, 'sm_fact')
+    if value.get('kind') == 'Checkpoint':
+        _fields(value, 'kind rotations settled')
+        _array(value['rotations'], _rotation, 4)
+        _array(value['settled'], _source, 4)
+    else:
+        _fields(value, 'kind deleted absent_unclaimed')
+        _enum(value['kind'], 'UnpersistedAck')
+        _array(value['deleted'], _source, 4)
+        _array(value['absent_unclaimed'], lambda source: _source(source, c2s=True), 4)
+
+
+def _sm_state(value):
+    _fields(value, SM_STATE_FIELDS)
+    _sm_scope(value['scope'])
+    _nullable(value['binding'], _sm_binding)
+    decision = value['h_decision']
+    _need(type(decision) is dict, 'sm_h_decision')
+    if decision.get('kind') == 'Prefix':
+        _fields(decision, 'kind count')
+        _integer(decision['count'])
+    else:
+        _fields(decision, 'kind')
+        _enum(decision['kind'], 'NotRequested Invalid')
+    knowledge = value['knowledge']
+    _need(type(knowledge) is dict, 'sm_knowledge')
+    if knowledge.get('kind') in ('CommitCallEntered', 'ReceiptKnown'):
+        _fields(knowledge, 'kind fact')
+        _sm_fact(knowledge['fact'])
+    else:
+        _fields(knowledge, 'kind')
+        _enum(knowledge['kind'], 'NotRequested NoCommitRequested NoPersistence RollbackCallEntered RollbackKnown')
+    for name in ('appended', 'restored', 'ownership_applied', 'notification_attempted', 'returned_error'):
+        _boolean(value[name])
+    _nullable(value['acknowledged_h_applied'], _integer)
+    for name in ('capacity_completed', 'returned_updated', 'record_managed_by_sm'):
+        _nullable(value[name], _boolean)
+    _nullable(value['terminal'], lambda item: _enum(item, 'Returned Cancelled Panicked'))
+
+
+def _sm_evidence(value, counter):
+    _fields(value, SM_STATE_FIELDS + ' prefixes polls')
+    _sm_state({name: value[name] for name in SM_STATE_FIELDS.split()})
+    _observations(value['prefixes'], 'state', lambda item: _sm_state(item['state']), counter)
+    _polls(value['polls'], counter)
+
+
+def _mix_handoffs(values, counter):
+    def handoff(item):
+        _id(item['delivery_id'])
+        result = item['result']
+        _need(type(result) is dict, 'mix_handoff_result')
+        if result.get('kind') in ('SmPersisted', 'BoshPersisted'):
+            _fields(result, 'kind session_id')
+            _id(result['session_id'])
+        elif result.get('kind') == 'SocketFenced':
+            _fields(result, 'kind connection_id')
+            _id(result['connection_id'])
+        else:
+            _fields(result, 'kind')
+            _enum(result['kind'], 'Empty Closed')
+    _observations(values, 'delivery_id result', handoff, counter, maximum=4)
+
+
+def _row_events(values, counter):
+    _need(type(values) is list and len(values) <= 16, 'row_event_count')
+    previous = 0
+    for value in values:
+        _need(type(value) is dict, 'row_event')
+        if value.get('kind') == 'Replace':
+            _fields(value, 'seq kind recipient_id message_id before_claim_id after_claim_id')
+            for name in ('recipient_id', 'message_id', 'before_claim_id', 'after_claim_id'):
+                _id(value[name])
+        elif value.get('kind') == 'AuthorityRead':
+            _fields(value, 'seq kind source current_claim_id matches')
+            _source(value['source'], c2s=True)
+            _nullable(value['current_claim_id'], _id)
+            _boolean(value['matches'])
+        else:
+            _fields(value, 'seq kind source')
+            _enum(value['kind'], 'Delete')
+            _source(value['source'], c2s=True)
+        _integer(value['seq'], 256)
+        _need(value['seq'] > previous, 'row_event_order')
+        previous = value['seq']
+        counter['seq'].append(value['seq'])
+
+
+def validate_case_evidence(value):
     """Types/encoding/order only: an unsafe authorization history stays visible."""
     _fields(value, 'schema entry input_sha256 rejection execution originals recipient')
     _need(value['schema'] == EVIDENCE_SCHEMA and value['entry'] == ENTRY, 'evidence_identity')
@@ -756,12 +1063,37 @@ def validate_native_evidence(value):
         elif recipient.get('kind') == 'Native':
             _fields(recipient, 'kind native')
             _native_evidence(recipient['native'], counter)
+        elif recipient.get('kind') == 'Sm':
+            _fields(recipient, 'kind native_writes sm_turns fifo_after outbound_h acked_h mix_handoffs')
+            _array(recipient['native_writes'], lambda item: _native_evidence(item, counter), 4)
+            _array(recipient['sm_turns'], lambda item: _sm_evidence(item, counter), 5)
+            _array(recipient['fifo_after'], _slot, 4)
+            _integer(recipient['outbound_h'])
+            _integer(recipient['acked_h'])
+            _mix_handoffs(recipient['mix_handoffs'], counter)
+        elif recipient.get('kind') == 'NativeReplacement':
+            _fields(recipient, 'kind old replacement replacement_dequeued row_events row_after')
+            _native_evidence(recipient['old'], counter)
+            _native_evidence(recipient['replacement'], counter)
+            def dequeue(item):
+                _nullable(item['source'], _source)
+                _text(item['xml'])
+            _observations([recipient['replacement_dequeued']], 'source xml', dequeue, counter, maximum=1)
+            _row_events(recipient['row_events'], counter)
+            _nullable(recipient['row_after'], lambda item: _source(item, c2s=True))
         else:
             raise DirectCaseIncomplete('stage3_transport_evidence_validator_incomplete')
     _need(counter['polls'] <= 64 and len(counter['seq']) <= 256 and
           sorted(counter['seq']) == list(range(1, len(counter['seq']) + 1)), 'global_observation_sequence')
     _need(len(_encoded(value)) <= 131072, 'evidence_frame_budget')
     return copy.deepcopy(value)
+
+
+def validate_native_evidence(value):
+    value = validate_case_evidence(value)
+    if value['recipient'] is not None and value['recipient']['kind'] not in ('None', 'Native'):
+        raise DirectCaseIncomplete('native_only_evidence_validator')
+    return value
 
 
 def _xml(value, *, projected=False):
@@ -872,7 +1204,10 @@ def derive_native_ledger(value):
     Numeric purpose tags identify distinct handles; they are not event order.
     Transcript comparison is separate from this input-only derivation.
     """
-    value = validate_native_input(value)
+    return _derive_sender_ledger(validate_native_input(value))
+
+
+def _derive_sender_ledger(value):
     roles = value['identities']
     originals = []
     for index, original in enumerate(value['originals']):
@@ -927,6 +1262,139 @@ def derive_native_ledger(value):
                   'fenced_source': copy.deepcopy(owner['native']['fence']['returned_source']),
                   'write': copy.deepcopy(owner['native']['write']), 'ack': copy.deepcopy(owner['native']['ack'])}
     return {'originals': originals, 'native': native, 'drive': copy.deepcopy(value['drive'])}
+
+
+def _sm_native_state(source, *, pending=False):
+    return {'original': copy.deepcopy(source), 'preparation': 'Recording' if pending else 'Prepared',
+            'managed_by_sm': None if pending else source is not None, 'fence_entered': False, 'returned_fence': None,
+            'writer_entered': not pending, 'writer_result': None if pending else 'FullWrite',
+            'write_decision': None if pending else 'Written', 'ack': {'kind': 'NotRequested'}, 'ack_returned': None,
+            'terminal': 'Cancelled' if pending else 'Returned'}
+
+
+def _sm_owner_ledger(value, sender):
+    owner, roles = value['recipient_owner'], value['identities']
+    config = owner['config']
+    _need(config['enabled'] and config['resume_allowed'] and config['session_id'] is not None,
+          'fixed_persisted_sm_required')
+    original = next(item for item in sender['originals'] if item['frame_id'] == owner['frame_id'])
+    _need(original['route_action'] == 'Queue', 'sm_requires_routed_item')
+    _need(owner['write'] == {'chunk_limit': 4096, 'fail_after_accepted_bytes': None, 'flush': 'Ok'},
+          'fixed_sm_complete_writer')
+    items = [{'xml': original['projection']['live_xml'], 'source': copy.deepcopy(original['source'])}]
+    for extra in owner['extra_items']:
+        # These are separately supplied raw SM extras. They do not pass through
+        # application set_from and do not acquire the routed client's namespace.
+        items.append({'xml': _tree(_xml(extra['xml'])), 'source': copy.deepcopy(extra.get('source'))})
+    outbound, acked, fifo = config['outbound_h'], config['acked_h'], []
+    turns, native, handoffs = [], [], []
+    cancelled = False
+    for index, (item, reply) in enumerate(zip(items, owner['record_replies'])):
+        _need(reply['updated'] and reply['commit'] in ('Complete', 'Pending'), 'fixed_sm_record_reply')
+        scope = {'purpose': {'kind': 'Record'}, 'session_id': config['session_id'], 'connection_id': owner['connection_id'],
+                 'inbound_h': config['inbound_h'], 'outbound_h': outbound, 'acked_h': acked, 'queued': len(fifo)}
+        outbound = (outbound + 1) % (2 ** 32)
+        fifo.append(copy.deepcopy(item))
+        whole = [copy.deepcopy(slot['source']) for slot in fifo]
+        binding = {'session_id': config['session_id'], 'connection_id': owner['connection_id'],
+                   'inbound_h': config['inbound_h'], 'outbound_h': outbound, 'acked_h': acked,
+                   'whole': whole, 'acknowledged': [], 'remaining': copy.deepcopy(whole)}
+        rotations = []
+        if item['source'] is not None and item['source']['kind'] == 'Mix':
+            rotations = [{'previous': copy.deepcopy(item['source']),
+                          'current': dict(item['source'], lease_token=roles['mix_new_token'])}]
+        _need(reply['rotations'] == rotations, 'fixed_sm_new_source_rotation')
+        known = reply['commit'] == 'Complete'
+        state = {'scope': scope, 'binding': binding, 'h_decision': {'kind': 'NotRequested'},
+                 'knowledge': {'kind': 'ReceiptKnown' if known else 'CommitCallEntered',
+                               'fact': {'kind': 'Checkpoint', 'rotations': copy.deepcopy(rotations), 'settled': []}},
+                 'appended': True, 'restored': False, 'ownership_applied': known, 'acknowledged_h_applied': None,
+                 'notification_attempted': known and item['source'] is not None, 'capacity_completed': None,
+                 'returned_updated': True if known else None, 'returned_error': False,
+                 'record_managed_by_sm': (item['source'] is not None) if known else None,
+                 'terminal': 'Returned' if known else 'Cancelled'}
+        turns.append({'item_index': index, 'state': state, 'polls': []})
+        native.append({'item_index': index, 'frame_id': owner['frame_id'], 'connection_id': owner['connection_id'],
+                       'xml': copy.deepcopy(item['xml']), 'state': _sm_native_state(item['source'], pending=not known),
+                       'polls': ['Ready' if known else 'Pending']})
+        if not known:
+            cancelled = True
+            break
+        if rotations:
+            fifo[-1]['source'] = copy.deepcopy(rotations[0]['current'])
+            handoffs.append({'delivery_id': item['source']['delivery_id'],
+                             'result': {'kind': 'SmPersisted', 'session_id': config['session_id']}})
+    if not cancelled and owner['ack'] is not None:
+        request, reply = owner['ack']['h'], owner['ack']['reply']
+        _need(reply == {'commit': 'Complete', 'updated': True, 'rotations': []}, 'fixed_sm_ack_reply')
+        count = (request - acked) % (2 ** 32)
+        _need(count <= len(fifo), 'fixed_sm_ack_prefix')
+        scope = {'purpose': {'kind': 'Acknowledge', 'h': request}, 'session_id': config['session_id'],
+                 'connection_id': owner['connection_id'], 'inbound_h': config['inbound_h'],
+                 'outbound_h': outbound, 'acked_h': acked, 'queued': len(fifo)}
+        whole = [copy.deepcopy(slot['source']) for slot in fifo]
+        acknowledged, remaining = whole[:count], whole[count:]
+        binding = {'session_id': config['session_id'], 'connection_id': owner['connection_id'],
+                   'inbound_h': config['inbound_h'], 'outbound_h': outbound, 'acked_h': request,
+                   'whole': whole, 'acknowledged': acknowledged, 'remaining': remaining}
+        state = {'scope': scope, 'binding': binding, 'h_decision': {'kind': 'Prefix', 'count': count},
+                 'knowledge': {'kind': 'ReceiptKnown', 'fact': {'kind': 'Checkpoint', 'rotations': [],
+                                'settled': [source for source in acknowledged if source is not None]}},
+                 'appended': False, 'restored': False, 'ownership_applied': True, 'acknowledged_h_applied': request,
+                 'notification_attempted': False, 'capacity_completed': True, 'returned_updated': True,
+                 'returned_error': False, 'record_managed_by_sm': None, 'terminal': 'Returned'}
+        turns.append({'item_index': None, 'state': state, 'polls': ['Ready']})
+        fifo, acked = fifo[count:], request
+    return {'kind': 'Sm', 'frame_id': owner['frame_id'], 'turns': turns, 'native_writes': native,
+            'fifo_after': fifo, 'outbound_h': outbound, 'acked_h': acked, 'mix_handoffs': handoffs,
+            'execution': 'Cancelled' if cancelled else 'Complete'}
+
+
+def _replacement_owner_ledger(value, sender):
+    owner = value['recipient_owner']
+    original = next(item for item in sender['originals'] if item['frame_id'] == owner['frame_id'])
+    _need(original['route_action'] == 'Queue' and original['source'] == owner['initial_row'], 'replacement_routed_row')
+    old_source = copy.deepcopy(owner['old']['fence']['returned_source'])
+    current = copy.deepcopy(owner['replacement']['fence']['returned_source'])
+    states = []
+    for name, source, succeeds in (('old', original['source'], False), ('replacement', current, True)):
+        spec = owner[name]
+        _need(spec['write'] == {'chunk_limit': 4096, 'fail_after_accepted_bytes': None, 'flush': 'Ok'} and
+              spec['ack'] == {'commit': 'Complete', 'disposition': 'Deleted'}, 'fixed_replacement_native_script')
+        fenced = copy.deepcopy(spec['fence']['returned_source'])
+        state = {'original': copy.deepcopy(source), 'preparation': 'Prepared', 'managed_by_sm': False,
+                 'fence_entered': True, 'returned_fence': fenced, 'writer_entered': True,
+                 'writer_result': 'FullWrite', 'write_decision': 'Written',
+                 'ack': {'kind': 'ReceiptKnown', 'fact': {'source': fenced, 'disposition': 'Deleted'}} if succeeds else
+                        {'kind': 'NoCommitRequested'}, 'ack_returned': succeeds, 'terminal': 'Returned'}
+        states.append({'frame_id': owner['frame_id'], 'connection_id': spec['connection_id'], 'state': state,
+                       'polls': ['Ready'] if succeeds else ['Pending', 'Ready']})
+    events = [{'kind': 'Replace', 'recipient_id': current['recipient_id'], 'message_id': current['message_id'],
+               'before_claim_id': old_source['claim_id'], 'after_claim_id': current['claim_id']},
+              {'kind': 'AuthorityRead', 'source': old_source, 'current_claim_id': current['claim_id'], 'matches': False},
+              {'kind': 'AuthorityRead', 'source': current, 'current_claim_id': current['claim_id'], 'matches': True},
+              {'kind': 'Delete', 'source': current}]
+    return {'kind': 'NativeReplacement', 'old': states[0], 'replacement': states[1], 'row_events': events,
+            'replacement_dequeued': {'source': current, 'xml': copy.deepcopy(original['projection']['live_xml'])},
+            'row_after': None, 'execution': 'Complete'}
+
+
+def derive_owner_ledger(value):
+    """Input-derived expected ownership, separate from actual evidence decoding.
+
+    The SM wraparound/FIFO and controlled replacement contracts are bounded to
+    the selected literals. This helper supplies no fixture verdict or permission.
+    """
+    value = validate_case_input(value)
+    sender = _derive_sender_ledger(value)
+    kind = value['recipient_owner']['kind']
+    if kind == 'Sm':
+        owner = _sm_owner_ledger(value, sender)
+    elif kind == 'NativeReplacement':
+        owner = _replacement_owner_ledger(value, sender)
+    else:
+        raise DirectCaseIncomplete('owner_ledger_transport_incomplete')
+    return {'sender': sender, 'owner': owner}
 
 
 def projection_findings(ledger, payload):

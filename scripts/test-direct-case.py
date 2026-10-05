@@ -1407,5 +1407,246 @@ class NativeFullMatcherTests(unittest.TestCase):
         self.assertIn('finalization_return_before_rearm', result[1]['mismatches'])
 
 
+class OwnerLiteralAndLedgerTests(unittest.TestCase):
+    def fixture(self, identity):
+        return next(item for item in direct_case.owner_fixtures() if item['id'] == identity)
+
+    def test_exact_owner_literals_round_trip_without_enabling_native_or_public_gates(self):
+        fixtures = direct_case.owner_fixtures()
+        self.assertEqual([item['id'] for item in fixtures], ['C08', 'C09', 'C13'])
+        self.assertEqual([item['expected_verdict'] for item in fixtures], ['Pass', 'Cancelled', 'Pass'])
+        for fixture in fixtures:
+            self.assertEqual(direct_case.parse_case_input(fixture['bytes']), fixture['value'])
+            self.assertEqual(fixture['bytes'], direct_case._encoded(fixture['value']))
+            with self.assertRaises(direct_case.DirectCaseIncomplete):
+                direct_case.parse_native_input(fixture['bytes'])
+        with self.assertRaises(direct_case.DirectCaseIncomplete):
+            direct_case.fixture_plan(direct_case.FIXED16)
+
+    def test_sm_literals_keep_separate_raw_extras_and_exact_reply_authority(self):
+        value = self.fixture('C08')['value']
+        owner = value['recipient_owner']
+        self.assertEqual(owner['extra_items'], [
+            {'kind': 'Plain', 'xml': "<message id='plain'/>", 'transport_receipt': False},
+            {'kind': 'Mix', 'xml': "<message id='mix'/>", 'source': direct_case._mix(8)}])
+        self.assertEqual([reply['rotations'] for reply in owner['record_replies']],
+                         [[], [], [{'previous': direct_case._mix(8), 'current': direct_case._mix(9)}]])
+        self.assertEqual(owner['ack'], {'h': 0, 'reply': {'commit': 'Complete', 'updated': True, 'rotations': []}})
+        ledger = direct_case.derive_owner_ledger(value)['owner']
+        self.assertEqual([item['xml'][0] for item in ledger['native_writes']],
+                         ['{jabber:client}message', 'message', 'message'])
+        self.assertEqual([item['state']['original'] for item in ledger['native_writes']],
+                         [direct_case._c2s(direct_case._uuid(20801), direct_case._uuid(20801)), None, direct_case._mix(8)])
+        self.assertEqual([item['state']['managed_by_sm'] for item in ledger['native_writes']], [True, False, True])
+
+    def test_sm_wraparound_and_plain_prefix_derive_exact_known_receipt_ledger(self):
+        ledger = direct_case.derive_owner_ledger(self.fixture('C08')['value'])['owner']
+        records, acknowledgement = ledger['turns'][:3], ledger['turns'][3]
+        self.assertEqual([item['state']['scope']['outbound_h'] for item in records], [4294967294, 4294967295, 0])
+        self.assertEqual([item['state']['scope']['queued'] for item in records], [0, 1, 2])
+        self.assertEqual([item['state']['binding']['outbound_h'] for item in records], [4294967295, 0, 1])
+        c2s = direct_case._c2s(direct_case._uuid(20801), direct_case._uuid(20801))
+        self.assertEqual(records[2]['state']['binding']['whole'], [c2s, None, direct_case._mix(8)])
+        state = acknowledgement['state']
+        self.assertEqual(state['scope']['acked_h'], 4294967294)
+        self.assertEqual(state['h_decision'], {'kind': 'Prefix', 'count': 2})
+        self.assertEqual(state['binding']['whole'], [c2s, None, direct_case._mix(9)])
+        self.assertEqual(state['binding']['acknowledged'], [c2s, None])
+        self.assertEqual(state['binding']['remaining'], [direct_case._mix(9)])
+        self.assertEqual(state['knowledge'], {'kind': 'ReceiptKnown', 'fact': {
+            'kind': 'Checkpoint', 'rotations': [], 'settled': [c2s]}})
+        self.assertEqual((ledger['outbound_h'], ledger['acked_h']), (1, 0))
+        self.assertEqual([item['source'] for item in ledger['fifo_after']], [direct_case._mix(9)])
+        self.assertEqual([item['polls'] for item in ledger['turns']], [[], [], [], ['Ready']])
+        self.assertEqual(ledger['mix_handoffs'], [{'delivery_id': direct_case._uuid(7),
+                         'result': {'kind': 'SmPersisted', 'session_id': direct_case._uuid(4)}}])
+
+    def test_pending_sm_keeps_append_and_unknown_commit_without_write_authority(self):
+        ledger = direct_case.derive_owner_ledger(self.fixture('C09')['value'])['owner']
+        state = ledger['turns'][0]['state']
+        self.assertTrue(state['appended'])
+        self.assertFalse(state['restored'])
+        self.assertFalse(state['ownership_applied'])
+        self.assertFalse(state['notification_attempted'])
+        self.assertIsNone(state['returned_updated'])
+        self.assertIsNone(state['record_managed_by_sm'])
+        self.assertEqual(state['knowledge']['kind'], 'CommitCallEntered')
+        self.assertEqual(state['terminal'], 'Cancelled')
+        native = ledger['native_writes'][0]
+        self.assertEqual(native['state']['preparation'], 'Recording')
+        self.assertIsNone(native['state']['managed_by_sm'])
+        self.assertFalse(native['state']['writer_entered'])
+        self.assertEqual(native['state']['ack'], {'kind': 'NotRequested'})
+        self.assertEqual(native['polls'], ['Pending'])
+        self.assertEqual((ledger['outbound_h'], ledger['acked_h'], len(ledger['fifo_after'])), (1, 0, 1))
+        self.assertEqual(ledger['execution'], 'Cancelled')
+
+    def test_replacement_ledger_binds_both_connections_and_committed_view_delete(self):
+        fixture = self.fixture('C13')
+        ledger = direct_case.derive_owner_ledger(fixture['value'])
+        owner = ledger['owner']
+        old, replacement = owner['old'], owner['replacement']
+        self.assertEqual([old['connection_id'], replacement['connection_id']], [direct_case._uuid(3), direct_case._uuid(11)])
+        self.assertEqual(old['state']['ack'], {'kind': 'NoCommitRequested'})
+        self.assertIs(old['state']['ack_returned'], False)
+        self.assertEqual(old['polls'], ['Pending', 'Ready'])
+        self.assertEqual(replacement['polls'], ['Ready'])
+        self.assertEqual(replacement['state']['ack']['kind'], 'ReceiptKnown')
+        self.assertEqual([item['kind'] for item in owner['row_events']], ['Replace', 'AuthorityRead', 'AuthorityRead', 'Delete'])
+        self.assertEqual([item['matches'] for item in owner['row_events'] if item['kind'] == 'AuthorityRead'], [False, True])
+        source = direct_case._c2s(direct_case._uuid(21301), direct_case._uuid(10))
+        self.assertEqual(owner['row_events'][-1], {'kind': 'Delete', 'source': source})
+        self.assertEqual(owner['replacement_dequeued']['source'], source)
+        self.assertEqual(owner['replacement_dequeued']['xml'], ledger['sender']['originals'][0]['projection']['live_xml'])
+        self.assertNotEqual(owner['replacement_dequeued']['xml'], ledger['sender']['originals'][0]['projection']['stored_xml'])
+        self.assertIsNone(owner['row_after'])
+
+    def test_owner_input_rejects_unbound_roles_closed_fields_and_noninteger_h(self):
+        value = self.fixture('C08')['value']
+        variants = []
+        for invalid_h in (True, 0.0, -1, 2 ** 32):
+            bad = copy.deepcopy(value)
+            bad['recipient_owner']['config']['outbound_h'] = invalid_h
+            variants.append(bad)
+        bad = copy.deepcopy(value)
+        bad['recipient_owner']['config']['session_id'] = direct_case._uuid(99)
+        variants.append(bad)
+        bad = copy.deepcopy(value)
+        bad['recipient_owner']['record_replies'][2]['rotations'][0]['current']['lease_token'] = direct_case._uuid(10)
+        variants.append(bad)
+        bad = copy.deepcopy(value)
+        bad['recipient_owner']['extra_items'][0]['unknown'] = None
+        variants.append(bad)
+        bad = self.fixture('C13')['value']
+        bad['recipient_owner']['replacement']['connection_id'] = direct_case._uuid(3)
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.validate_case_input(bad)
+
+    def test_owner_drives_bind_exact_owner_frame_and_the_actual_pending_checkpoint(self):
+        native = next(item['value'] for item in direct_case.native_fixtures() if item['id'] == 'C01')
+        for kind in ('DropSmCheckpointCommit', 'ReplaceBeforeOldAckRead'):
+            bad = copy.deepcopy(native)
+            bad['drive'] = {'kind': kind, 'frame_id': bad['originals'][0]['frame_id']}
+            for reader in (direct_case.validate_case_input, direct_case.validate_native_input):
+                with self.assertRaises(direct_case.DirectCaseInvalid):
+                    reader(bad)
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.parse_native_input(direct_case._encoded(bad))
+        variants = []
+        bad = self.fixture('C13')['value']
+        bad['drive'] = {'kind': 'Complete'}
+        variants.append(bad)
+        bad = self.fixture('C09')['value']
+        bad['drive'] = {'kind': 'Complete'}
+        variants.append(bad)
+        bad = self.fixture('C08')['value']
+        bad['drive'] = {'kind': 'DropSmCheckpointCommit', 'frame_id': bad['originals'][0]['frame_id']}
+        variants.append(bad)
+        bad = self.fixture('C09')['value']
+        bad['recipient_owner']['ack'] = {'h': 0, 'reply': {'commit': 'Complete', 'updated': True, 'rotations': []}}
+        variants.append(bad)
+        bad = self.fixture('C08')['value']
+        bad['recipient_owner']['record_replies'][1]['commit'] = 'Pending'
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.derive_owner_ledger(bad)
+
+    @staticmethod
+    def supplied_sm_state():
+        source = {'kind': 'C2s', 'recipient_id': direct_case._uuid(2),
+                  'message_id': direct_case._uuid(20901), 'claim_id': direct_case._uuid(20901)}
+        return {'scope': {'purpose': {'kind': 'Record'}, 'session_id': direct_case._uuid(4),
+                         'connection_id': direct_case._uuid(3), 'inbound_h': 2, 'outbound_h': 0, 'acked_h': 0, 'queued': 0},
+                'binding': {'session_id': direct_case._uuid(4), 'connection_id': direct_case._uuid(3),
+                            'inbound_h': 2, 'outbound_h': 1, 'acked_h': 0,
+                            'whole': [source], 'acknowledged': [], 'remaining': [copy.deepcopy(source)]},
+                'h_decision': {'kind': 'NotRequested'},
+                'knowledge': {'kind': 'CommitCallEntered', 'fact': {'kind': 'Checkpoint', 'rotations': [], 'settled': []}},
+                'appended': True, 'restored': False, 'ownership_applied': False, 'acknowledged_h_applied': None,
+                'notification_attempted': False, 'capacity_completed': None, 'returned_updated': None,
+                'returned_error': False, 'record_managed_by_sm': None, 'terminal': 'Cancelled'}
+
+    @staticmethod
+    def supplied_empty_original(frame):
+        return {'frame_id': direct_case._uuid(frame), 'projection': None, 'prepared': None, 'begin': None,
+                'finalize': None, 'direct': None, 'continuation': None, 'terminal': None, 'prefixes': [], 'polls': [],
+                'route': {'health_reads': [], 'enqueue': [], 'dequeued': [], 'queue_remaining': [],
+                          'backpressure_disconnected': False, 'remote_calls': [], 'rearm_calls': [], 'handoff': None}}
+
+    def supplied_sm_dto(self):
+        state = self.supplied_sm_state()
+        turn = dict(copy.deepcopy(state), prefixes=[{'seq': 1, 'state': copy.deepcopy(state)}], polls=[])
+        return {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                'input_sha256': direct_case._hash(self.fixture('C09')['bytes']), 'rejection': None, 'execution': 'Cancelled',
+                'originals': [self.supplied_empty_original(901)],
+                'recipient': {'kind': 'Sm', 'native_writes': [], 'sm_turns': [turn], 'fifo_after': [],
+                              'outbound_h': 1, 'acked_h': 0, 'mix_handoffs': []}}
+
+    def test_sm_dto_preserves_unsafe_unknown_ownership_and_foreign_sources(self):
+        payload = self.supplied_sm_dto()
+        turn = payload['recipient']['sm_turns'][0]
+        turn['ownership_applied'] = True
+        turn['notification_attempted'] = True
+        turn['record_managed_by_sm'] = True
+        turn['binding']['remaining'][0]['claim_id'] = direct_case._uuid(99)
+        self.assertEqual(direct_case.validate_case_evidence(payload), payload)
+        with self.assertRaises(direct_case.DirectCaseIncomplete):
+            direct_case.validate_native_evidence(payload)
+        with self.assertRaises(direct_case.DirectCaseIncomplete):
+            direct_case.evaluate_fixture(self.fixture('C09'), {}, payload, direct_case.FIXED16)
+
+    def test_sm_dto_is_recursive_and_global_sequence_includes_typed_handoffs(self):
+        payload = self.supplied_sm_dto()
+        payload['recipient']['mix_handoffs'] = [{'seq': 2, 'delivery_id': direct_case._uuid(7),
+                                               'result': {'kind': 'SmPersisted', 'session_id': direct_case._uuid(4)}}]
+        self.assertEqual(direct_case.validate_case_evidence(payload), payload)
+        variants = []
+        bad = copy.deepcopy(payload)
+        bad['recipient']['sm_turns'][0]['binding']['whole'][0]['extra'] = True
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['sm_turns'][0]['prefixes'][0]['state']['scope']['queued'] = True
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        del bad['recipient']['sm_turns'][0]['capacity_completed']
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['mix_handoffs'][0]['seq'] = 1
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['mix_handoffs'][0]['result']['session_id'] = 'ABCDEF00-0000-0000-0000-000000000004'
+        variants.append(bad)
+        for bad in variants:
+            with self.assertRaises(direct_case.DirectCaseInvalid):
+                direct_case.validate_case_evidence(bad)
+
+    def test_replacement_dto_keeps_precommit_false_and_unsafe_delete_read_facts(self):
+        source = direct_case._c2s(direct_case._uuid(21301), direct_case._uuid(6))
+        def native(connection, claim):
+            fenced = dict(source, claim_id=direct_case._uuid(claim))
+            return {'frame_id': direct_case._uuid(1301), 'connection_id': direct_case._uuid(connection),
+                    'original': source, 'preparation': 'Prepared', 'managed_by_sm': False, 'fence_entered': True,
+                    'returned_fence': fenced, 'writer_entered': True, 'writer_result': 'FullWrite', 'write_decision': 'Written',
+                    'ack': {'kind': 'NoCommitRequested'}, 'ack_returned': False, 'terminal': 'Returned',
+                    'write_calls': [], 'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [], 'write_receipts': [],
+                    'prefixes': [], 'polls': []}
+        payload = {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                   'input_sha256': direct_case._hash(self.fixture('C13')['bytes']), 'rejection': None, 'execution': 'Complete',
+                   'originals': [self.supplied_empty_original(1301)],
+                   'recipient': {'kind': 'NativeReplacement', 'old': native(3, 6), 'replacement': native(11, 10),
+                                 'replacement_dequeued': {'seq': 1, 'source': None, 'xml': "<message id='wrong'/>"},
+                                 'row_events': [{'seq': 2, 'kind': 'AuthorityRead', 'source': source,
+                                                 'current_claim_id': direct_case._uuid(10), 'matches': True},
+                                                {'seq': 3, 'kind': 'Delete', 'source': source}], 'row_after': source}}
+        self.assertEqual(direct_case.validate_case_evidence(payload), payload)
+        bad = copy.deepcopy(payload)
+        bad['recipient']['row_events'][0]['matches'] = 1
+        with self.assertRaises(direct_case.DirectCaseInvalid):
+            direct_case.validate_case_evidence(bad)
+
+
 if __name__ == '__main__':
     unittest.main()

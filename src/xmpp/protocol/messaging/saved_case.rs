@@ -1,6 +1,7 @@
 //! Single ignored, bounded saved-input composition entry. Repository effects
 //! and writer responses are controlled; production preparation and owners run.
-//! Native, SM and replacement paths are connected; BOSH remains unsupported.
+//! Native, SM, BOSH and replacement paths use their actual private helpers.
+//! Full fixed-profile execution and qualification remain separately gated.
 use super::*;
 use crate::direct_replay as wire;
 use crate::outbound::{
@@ -1845,6 +1846,72 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                     outbound_h: recorder.sm.outbound_h,
                     acked_h: recorder.sm.acked_h,
                     mix_handoffs,
+                };
+            }
+            wire::RecipientOwner::Bosh {
+                frame_id,
+                recording,
+                governor,
+                ..
+            } if *frame_id == case.originals[index].frame_id => {
+                let target = run
+                    .target
+                    .take()
+                    .context("declared BOSH owner has no dequeued target")?;
+                anyhow::ensure!(
+                    target.transport_receipt.is_none() && target.transport_write_receipt.is_none(),
+                    "routed item acquired synthetic receipts"
+                );
+                let (connection_id, config, replies) = match recording.as_ref() {
+                    wire::BoshRecording::Disabled {} => (
+                        case.identities
+                            .connection_id
+                            .get()
+                            .context("BOSH route connection role")?
+                            .0,
+                        None,
+                        &[][..],
+                    ),
+                    wire::BoshRecording::PersistedSm {
+                        connection_id,
+                        config,
+                        record_replies,
+                    } => (connection_id.0, Some(config), record_replies.as_slice()),
+                };
+                let mut recorder =
+                    sm::Recorder::new(connection_id, config, replies, sequence.clone())?;
+                // Preflight already checked all four declared limits. Keep the
+                // real SM charge alive while BOSH uses this very same governor.
+                let governor = match recorder.governor() {
+                    Some(governor) => governor,
+                    None => crate::services::sm_capacity::SmMemoryGovernor::new(
+                        governor.max_bytes as usize,
+                        governor.max_recovery_bytes as usize,
+                        governor.max_recovery_jobs as usize,
+                        governor.max_snapshot_bytes as usize,
+                        Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default()),
+                    )?,
+                };
+                let (evidence, dropped) = crate::bosh::run_saved_case(
+                    case,
+                    target,
+                    &mut recorder,
+                    &governor,
+                    sequence.clone(),
+                )
+                .await?;
+                recorder.capture_retired();
+                anyhow::ensure!(
+                    recorder.replies_exhausted(),
+                    "unconsumed BOSH SM record replies"
+                );
+                cancelled |= dropped;
+                recipient = wire::RecipientEvidence::Bosh {
+                    bosh: Box::new(evidence),
+                    sm_turns: recorder.evidence(),
+                    sm_fifo_after: recorder.fifo(),
+                    sm_outbound_h: config.map(|_| recorder.sm.outbound_h),
+                    sm_acked_h: config.map(|_| recorder.sm.acked_h),
                 };
             }
             wire::RecipientOwner::NativeReplacement { frame_id, .. }

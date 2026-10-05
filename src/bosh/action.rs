@@ -36,13 +36,30 @@ impl BoshActor {
                 true
             }
             Action::SendManyThenActivate(replies) => {
+                let (replies, holder) = replies.into_parts();
+                let mut holder = Some(holder);
                 for (index, reply) in replies.into_iter().enumerate() {
+                    if index == 0 {
+                        let holder = holder.as_ref().expect("first auth control");
+                        if holder
+                            .validate_connection(self.protocol.connection_id)
+                            .and_then(|_| holder.validate_control(&reply))
+                            .and_then(|_| holder.recording())
+                            .is_err()
+                        {
+                            return false;
+                        }
+                    }
                     if self.protocol.record_outbound(&reply).await.is_err() {
                         return false;
                     }
                     let item = crate::outbound::OutboundItem::plain(reply);
                     let item = if index == 0 {
-                        item.with_bosh_auth_control()
+                        match item.with_auth_publication(holder.take().expect("first auth control"))
+                        {
+                            Ok(item) => item,
+                            Err(_) => return false,
+                        }
                     } else {
                         item
                     };
@@ -68,8 +85,22 @@ impl BoshActor {
                     post_control,
                     replay,
                     activate_route,
+                    auth_publication,
                     transient_capacity,
                 } = payload.into_transport_parts();
+                if activate_route != auth_publication.is_some() {
+                    return false;
+                }
+                if let Some(holder) = &auth_publication {
+                    if holder
+                        .validate_connection(self.protocol.connection_id)
+                        .and_then(|_| holder.validate_control(&control))
+                        .and_then(|_| holder.recording())
+                        .is_err()
+                    {
+                        return false;
+                    }
+                }
                 if self.protocol.record_outbound(&control).await.is_err() {
                     return false;
                 }
@@ -89,6 +120,7 @@ impl BoshActor {
                         post_control,
                         replay,
                         activate_route,
+                        auth_publication,
                         transient_capacity,
                     },
                 ) {

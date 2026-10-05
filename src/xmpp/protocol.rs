@@ -281,7 +281,7 @@ pub enum Action {
     /// The first frame is the terminal authentication success. Publish the
     /// staged login epoch and already-committed route only after that frame
     /// reaches the transport.
-    SendManyThenActivate(Vec<String>),
+    SendManyThenActivate(super::auth_publication::AuthReplies),
     /// Send each terminal payload in order and then close the XML stream.
     /// Unlike ordinary outbound stanzas these frames are not added to an SM
     /// resume queue: the operation producing them has already revoked the
@@ -306,6 +306,7 @@ pub struct ResumePayload {
     post_control: Vec<String>,
     replay: Vec<String>,
     activate_route: bool,
+    auth_publication: Option<super::auth_publication::AuthControlHolder>,
     transient_capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
 }
 
@@ -314,6 +315,7 @@ pub(crate) struct ResumeTransportParts {
     pub(crate) post_control: Vec<String>,
     pub(crate) replay: Vec<String>,
     pub(crate) activate_route: bool,
+    pub(crate) auth_publication: Option<super::auth_publication::AuthControlHolder>,
     pub(crate) transient_capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
 }
 
@@ -356,6 +358,7 @@ impl ResumePayload {
             post_control,
             replay,
             activate_route,
+            auth_publication: None,
             transient_capacity,
         })
     }
@@ -371,6 +374,10 @@ impl ResumePayload {
         reserved_bytes: usize,
         mut capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
     ) -> Result<()> {
+        anyhow::ensure!(
+            self.auth_publication.is_none(),
+            "cannot replace a sealed authentication envelope"
+        );
         let actual = control
             .capacity()
             .checked_add(
@@ -401,6 +408,7 @@ impl ResumePayload {
             post_control: self.post_control,
             replay: self.replay,
             activate_route: self.activate_route,
+            auth_publication: self.auth_publication,
             transient_capacity: self.transient_capacity,
         }
     }
@@ -670,8 +678,7 @@ pub struct ProtocolSession {
     /// until the transport confirms the first terminal success/resumed frame;
     /// failure paths must close rather than manufacture a contradictory SASL
     /// failure or execute the commit a second time.
-    pub(crate) pending_credential_commit:
-        Option<crate::services::authentication::CredentialCommitReceipt>,
+    pub(crate) pending_credential_commit: Option<super::auth_publication::KnownCredentialOwner>,
     channel_bindings: Option<crate::auth::ChannelBindings>,
     /// Bare JIDs authenticated by the optional C2S client-certificate PKIX
     /// verifier and id-on-xmppAddr SAN parser for this exact TLS connection.
@@ -709,6 +716,124 @@ pub struct ProtocolSession {
     post_actions: PostActionHandle,
 }
 
+struct SessionAuthPublication<'a> {
+    session: &'a mut ProtocolSession,
+}
+impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
+    fn connection(&self) -> uuid::Uuid {
+        self.session.connection_id
+    }
+    async fn publish(
+        &mut self,
+        invocation: &crate::services::authentication::publication::Invocation<'_>,
+    ) -> crate::services::authentication::AuthenticationResult<Option<i64>> {
+        self.session
+            .state
+            .authentication_service()
+            .publish_credential_commit_observed(invocation)
+            .await
+    }
+    fn epoch_and_mapping(
+        &mut self,
+        route: &super::auth_publication::BoundRoute,
+        epoch: Option<i64>,
+    ) -> bool {
+        if self.session.registered_key.as_deref() != Some(route.key.as_str())
+            || self.session.authenticated.as_ref().is_none_or(|user| {
+                user.id != route.user || user.auth_generation != route.generation
+            })
+            || !Arc::ptr_eq(&self.session.route_lifecycle, &route.lifecycle)
+        {
+            return false;
+        }
+        let current = self.session.state.publish_user_agent_epoch_if_current(
+            &route.key,
+            route.connection,
+            route.user,
+            route.generation,
+            &route.lifecycle,
+            epoch,
+        );
+        if current {
+            self.session.user_agent_epoch = epoch;
+        }
+        current
+    }
+    fn activate(&mut self, route: &super::auth_publication::BoundRoute) -> bool {
+        self.session.state.activate_session_if_current(
+            &route.key,
+            route.connection,
+            route.user,
+            route.generation,
+            &route.lifecycle,
+            &route.disconnect,
+        )
+    }
+    async fn caps(&mut self, intent: Option<super::auth_publication::CapsIntent>) {
+        self.session.rebind_captured_caps_observation(intent).await;
+    }
+    fn notify_local(&mut self, intent: &super::auth_publication::NotificationIntent, epoch: i64) {
+        for (other_key, session) in self.session.state.session_entries_for(&intent.account) {
+            if other_key != intent.excluded_key
+                && session.user_id == intent.user
+                && session.user_agent_id == Some(intent.device)
+                && session.user_agent_epoch.is_some_and(|value| value < epoch)
+            {
+                session.disconnect.cancel();
+            }
+        }
+    }
+    async fn notify_remote(
+        &mut self,
+        intent: &super::auth_publication::NotificationIntent,
+        epoch: i64,
+    ) -> Result<()> {
+        self.session
+            .state
+            .notify_remote_user_agent_replacement(
+                &intent.account,
+                intent.user,
+                intent.device,
+                epoch,
+            )
+            .await
+    }
+    fn rejected(
+        &mut self,
+        result: super::frame_execution::PublicationResult,
+        error: Option<&anyhow::Error>,
+    ) {
+        use super::frame_execution::PublicationResult;
+        match result {
+            PublicationResult::BackendFailure => {
+                self.session
+                    .state
+                    .c2s_authentication_telemetry()
+                    .backend_failed();
+                tracing::error!(?error, connection_id = %self.session.connection_id, "could not publish transport-confirmed authentication epoch");
+            }
+            PublicationResult::IntegrityRejected => {
+                self.session
+                    .state
+                    .c2s_authentication_telemetry()
+                    .integrity_failed();
+                tracing::error!(connection_id = %self.session.connection_id, "authentication publication integrity failure");
+            }
+            PublicationResult::CredentialRejected => {
+                tracing::warn!(connection_id = %self.session.connection_id, "transport-confirmed authentication publication fence was lost");
+            }
+            _ => {}
+        }
+        self.session.sm.resume_allowed = false;
+    }
+    fn notification_deferred(&mut self, error: &anyhow::Error) {
+        tracing::warn!(
+            ?error,
+            "cross-node user-agent replacement was not acknowledged; maintenance will retry"
+        );
+    }
+}
+
 impl ProtocolSession {
     /// The production entry point shared by TCP, WebSocket and BOSH. Tests
     /// can still exercise `handle` directly without a transport budget.
@@ -717,13 +842,7 @@ impl ProtocolSession {
         frame: &str,
     ) -> std::result::Result<Action, super::frame_execution::FrameFailure> {
         let execution = self.frame_executions.begin(self.transport, frame);
-        let result = execution.run(self.handle(frame)).await;
-        if matches!(&result, Ok(Action::SendManyThenActivate(_)))
-            || matches!(&result, Ok(Action::Resume(payload)) if payload.activate_route)
-        {
-            self.frame_executions.defer_publication(execution);
-        }
-        result
+        execution.run(self.handle(frame)).await
     }
 
     pub(super) fn enter_frame_stage(&self, stage: super::frame_execution::Stage) {
@@ -925,142 +1044,121 @@ impl ProtocolSession {
             .start(&self.state.c2s_post_action_telemetry());
     }
 
-    pub(crate) fn activate_committed_route(&self) -> bool {
-        let (Some(key), Some(user)) = (self.registered_key.as_deref(), self.authenticated.as_ref())
-        else {
-            return false;
-        };
-        self.state.activate_session_if_current(
-            key,
+    pub(super) fn retain_credential_commit(
+        &mut self,
+        receipt: crate::services::authentication::CredentialCommitReceipt,
+    ) -> Result<()> {
+        let origin = self.frame_executions.auth_origin();
+        let owner = super::auth_publication::KnownCredentialOwner::from_returned(
+            receipt,
+            origin.clone(),
             self.connection_id,
-            user.id,
-            user.auth_generation,
-            &self.route_lifecycle,
-            &self.disconnect,
+        );
+        anyhow::ensure!(
+            self.pending_credential_commit.is_none(),
+            "unsealed credential receipt already pending"
+        );
+        if let Some(origin) = origin {
+            origin.retain_auth_receipt(owner.observation().clone())?;
+        }
+        self.pending_credential_commit = Some(owner);
+        Ok(())
+    }
+
+    fn seal_auth_control(
+        &mut self,
+        control: &str,
+        resumed: bool,
+    ) -> Result<super::auth_publication::AuthControlHolder> {
+        use super::auth_publication::{
+            BoundRoute, CapsIntent, CapturedEffects, NotificationIntent, RouteIntent,
+        };
+        let (route, caps, notification) = if let Some(key) = self.registered_key.clone() {
+            let user = self
+                .authenticated
+                .as_ref()
+                .context("bound auth control has no principal")?;
+            let route = RouteIntent::Bound(BoundRoute {
+                key: key.clone(),
+                user: user.id,
+                generation: user.auth_generation,
+                connection: self.connection_id,
+                lifecycle: self.route_lifecycle.clone(),
+                disconnect: self.disconnect.clone(),
+            });
+            let caps = if resumed {
+                self.presence
+                    .resumed_caps_presence
+                    .take()
+                    .map(|presence| CapsIntent {
+                        presence,
+                        key: key.clone(),
+                        connection: self.connection_id,
+                        gate: self.presence.mix_presence_gate.clone(),
+                        generation: self.presence.caps_observation_generation.clone(),
+                    })
+            } else {
+                None
+            };
+            let notification = self.user_agent_id.map(|device| NotificationIntent {
+                account: format!("{}@{}", user.username, self.state.local_domain()),
+                user: user.id,
+                device,
+                excluded_key: key,
+            });
+            (route, caps, notification)
+        } else {
+            (RouteIntent::Unbound, None, None)
+        };
+        let owner = self
+            .pending_credential_commit
+            .take()
+            .context("auth control has no returned credential receipt")?;
+        owner.seal(
+            control,
+            CapturedEffects {
+                route,
+                caps,
+                notification,
+            },
         )
     }
 
-    /// Transport-success continuation for SASL2, Bind2 and SM resumption.
-    /// Credential state may already be committed because an issued FAST token
-    /// is part of the success frame. Only the replacement epoch is staged; it
-    /// becomes visible through an exact operation/connection fence here.
-    pub(crate) async fn publish_committed_authentication_and_route(&mut self) -> bool {
-        if let Some(execution) = self.frame_executions.take_publication() {
-            execution
-                .observe_publication(self.publish_committed_authentication_and_route_inner())
-                .await
-        } else {
-            self.publish_committed_authentication_and_route_inner()
-                .await
-                .transport_succeeded()
-        }
+    pub(super) fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
+        let control = replies
+            .first()
+            .context("auth action has no terminal control")?;
+        let holder = self.seal_auth_control(control, false)?;
+        Ok(Action::SendManyThenActivate(
+            super::auth_publication::AuthReplies { replies, holder },
+        ))
     }
 
-    async fn publish_committed_authentication_and_route_inner(
-        &mut self,
-    ) -> super::frame_execution::PublicationResult {
-        use super::frame_execution::PublicationResult;
-
-        let published_epoch = if let Some(receipt) = self.pending_credential_commit.take() {
-            match self
-                .state
-                .authentication_service()
-                .publish_credential_commit(&receipt)
-                .await
-            {
-                crate::services::authentication::AuthenticationResult::Authenticated(epoch) => {
-                    epoch
-                }
-                crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
-                    self.state.c2s_authentication_telemetry().backend_failed();
-                    tracing::error!(
-                        ?error,
-                        connection_id = %self.connection_id,
-                        "could not publish transport-confirmed authentication epoch"
-                    );
-                    self.sm.resume_allowed = false;
-                    return PublicationResult::BackendFailure;
-                }
-                crate::services::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.state.c2s_authentication_telemetry().integrity_failed();
-                    tracing::error!(
-                        connection_id = %self.connection_id,
-                        "authentication publication integrity failure"
-                    );
-                    self.sm.resume_allowed = false;
-                    return PublicationResult::IntegrityRejected;
-                }
-                _ => {
-                    tracing::warn!(
-                        connection_id = %self.connection_id,
-                        "transport-confirmed authentication publication fence was lost"
-                    );
-                    self.sm.resume_allowed = false;
-                    return PublicationResult::CredentialRejected;
-                }
-            }
-        } else {
-            None
-        };
-        self.user_agent_epoch = published_epoch;
-
-        let Some(key) = self.registered_key.as_deref() else {
-            return PublicationResult::Completed;
-        };
-        let Some(user) = self.authenticated.clone() else {
-            return PublicationResult::RouteRejected;
-        };
-        let route_is_current = self.state.publish_user_agent_epoch_if_current(
-            key,
-            self.connection_id,
-            user.id,
-            user.auth_generation,
-            &self.route_lifecycle,
-            published_epoch,
+    pub(super) fn seal_resume_authentication(&mut self, payload: &mut ResumePayload) -> Result<()> {
+        anyhow::ensure!(
+            payload.activate_route && payload.auth_publication.is_none(),
+            "resume authentication seal is not pending"
         );
-        if !route_is_current || !self.activate_committed_route() {
-            self.sm.resume_allowed = false;
-            return PublicationResult::RouteRejected;
-        }
+        payload.auth_publication = Some(self.seal_auth_control(&payload.control, true)?);
+        Ok(())
+    }
 
-        // A capability observation belongs to a connection incarnation, not
-        // merely to a full JID. The old route's exact mapping/pending/jobs were
-        // retired by compare-and-remove. Rebuild the observation under the
-        // transferred resource gate now that the replacement is routable, so
-        // live and durable resumes do not depend on the client repeating its
-        // unchanged initial presence.
-        self.enter_frame_stage(super::frame_execution::Stage::CapsPublication);
-        self.rebind_resumed_caps_observation().await;
-
-        if let (Some(device_id), Some(epoch)) = (self.user_agent_id, published_epoch) {
-            let account = format!("{}@{}", user.username, self.state.local_domain());
-            let current = self.registered_key.as_deref();
-            for (other_key, session) in self.state.session_entries_for(&account) {
-                if Some(other_key.as_str()) != current
-                    && session.user_id == user.id
-                    && session.user_agent_id == Some(device_id)
-                    && session.user_agent_epoch.is_some_and(|value| value < epoch)
-                {
-                    session.disconnect.cancel();
-                }
-            }
-            self.enter_frame_stage(super::frame_execution::Stage::ReplacementNotification);
-            if let Err(error) = self
-                .state
-                .notify_remote_user_agent_replacement(&account, user.id, device_id, epoch)
-                .await
-            {
-                tracing::warn!(
-                    ?error,
-                    user_id = %user.id,
-                    %device_id,
-                    epoch,
-                    "cross-node user-agent replacement was not acknowledged; maintenance will retry"
-                );
-                return PublicationResult::CompletedWithDeferredNotification;
-            }
+    /// The transport supplies the exact consumed control owner; no latest
+    /// session receipt/frame slot is consulted after successful transport.
+    pub(crate) async fn publish_committed_authentication_and_route(
+        &mut self,
+        owner: super::auth_publication::OwnedPublication,
+    ) -> bool {
+        let origin = owner.origin();
+        let mut port = SessionAuthPublication { session: self };
+        let future = owner.publish(&mut port);
+        if let Some(execution) = origin {
+            execution.observe_publication(future).await
+        } else {
+            // Explicit compatibility for handle()-only callers: its missing
+            // frame origin was captured at receipt return, never guessed now.
+            future.await.transport_succeeded()
         }
-        PublicationResult::Completed
     }
 
     pub(crate) fn resource_bind_deadline(&self) -> Option<std::time::Instant> {

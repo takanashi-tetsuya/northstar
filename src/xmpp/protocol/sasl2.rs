@@ -1196,7 +1196,7 @@ impl ProtocolSession {
             {
                 Ok((token_xml, receipt)) => {
                     unbound_state_committed = true;
-                    self.pending_credential_commit = Some(receipt);
+                    self.retain_credential_commit(receipt)?;
                     token_xml
                 }
                 Err(condition) => {
@@ -1289,6 +1289,7 @@ impl ProtocolSession {
                     // resumption which skips Bind2. Reframing preserves the
                     // original replay reservation and adds the envelope lease.
                     payload.activate_route = true;
+                    self.seal_resume_authentication(&mut payload)?;
                     return Ok(Action::Resume(payload));
                 }
                 Ok((Action::Send(failed), _)) => resume_xml = failed,
@@ -1323,7 +1324,7 @@ impl ProtocolSession {
                 .await?
             {
                 Ok((token_xml, receipt)) => {
-                    self.pending_credential_commit = Some(receipt);
+                    self.retain_credential_commit(receipt)?;
                     token_xml
                 }
                 Err(condition) => {
@@ -1464,7 +1465,7 @@ impl ProtocolSession {
         // but stanza delivery stays gated until the SASL2 success outcome is
         // fully constructed and no remaining inline operation can fail it.
         if self.registered_key.is_some() || self.pending_credential_commit.is_some() {
-            Ok(Action::SendManyThenActivate(vec![success, self.features()]))
+            self.auth_replies(vec![success, self.features()])
         } else {
             Ok(Action::SendMany(vec![success, self.features()]))
         }

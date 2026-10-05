@@ -38,10 +38,11 @@ impl std::error::Error for DurableDeliverySuperseded {}
 pub struct OutboundItem {
     pub stanza: String,
     /// Selection membership for the exact BOSH authentication control. Clone
-    /// copies membership only; publication requires the non-Clone response
-    /// owner and an actual accepted responder. This is never persisted in SM
-    /// or the BOSH response cache, and is not a credential/publication receipt.
+    /// copies membership and aliases the same one-use holder below; this bit
+    /// alone grants no publication authority. Neither field is persisted in SM
+    /// or the BOSH response cache.
     bosh_auth_control: bool,
+    auth_publication: Option<crate::xmpp::auth_publication::AuthControlHolder>,
     /// The one authoritative durable source, if this stanza is recoverable.
     /// C2S offline messages and MIX recipient leases are deliberately a tagged
     /// union: a transport can transfer or acknowledge exactly one source.
@@ -146,6 +147,7 @@ impl OutboundItem {
         Self {
             stanza,
             bosh_auth_control: false,
+            auth_publication: None,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
@@ -158,6 +160,7 @@ impl OutboundItem {
         Self {
             stanza,
             bosh_auth_control: false,
+            auth_publication: None,
             durable_source: Some(TransportOwnershipSource::C2s(delivery)),
             mix_handoff: None,
             transport_receipt: None,
@@ -175,6 +178,7 @@ impl OutboundItem {
             Self {
                 stanza,
                 bosh_auth_control: false,
+                auth_publication: None,
                 durable_source: Some(TransportOwnershipSource::Mix(delivery)),
                 mix_handoff: Some(handoff),
                 transport_receipt: None,
@@ -214,6 +218,7 @@ impl OutboundItem {
         Self {
             stanza,
             bosh_auth_control: false,
+            auth_publication: None,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: Some(receipt),
@@ -239,6 +244,7 @@ impl OutboundItem {
         Self {
             stanza,
             bosh_auth_control: false,
+            auth_publication: None,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
@@ -247,13 +253,24 @@ impl OutboundItem {
         }
     }
 
-    pub(crate) fn with_bosh_auth_control(mut self) -> Self {
-        self.bosh_auth_control = true;
-        self
-    }
-
     pub(crate) fn is_bosh_auth_control(&self) -> bool {
         self.bosh_auth_control
+    }
+
+    pub(crate) fn with_auth_publication(
+        mut self,
+        holder: crate::xmpp::auth_publication::AuthControlHolder,
+    ) -> anyhow::Result<Self> {
+        holder.validate_control(&self.stanza)?;
+        self.bosh_auth_control = true;
+        self.auth_publication = Some(holder);
+        Ok(self)
+    }
+
+    pub(crate) fn auth_publication(
+        &self,
+    ) -> Option<&crate::xmpp::auth_publication::AuthControlHolder> {
+        self.auth_publication.as_ref()
     }
 
     pub fn confirm_transport_ownership(&self) {
@@ -528,6 +545,10 @@ impl OutboundSender {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Rejected queue admission returns the same item and ownership by value for recovery"
+    )]
     fn try_send_item(
         &self,
         item: OutboundItem,

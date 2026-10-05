@@ -20,6 +20,90 @@ impl PostgresAuthenticationRepository {
             fast_token_secret,
         }
     }
+    // The legacy repository entry and observed control publication share the
+    // exact SQL body. Observation changes no predicate or error mapping.
+    async fn publish_credential_commit_inner(
+        &self,
+        receipt: &CredentialCommitReceipt,
+        invocation: Option<&publication::Invocation<'_>>,
+    ) -> AuthenticationResult<Option<i64>> {
+        if receipt.staged_login_epoch().is_none() && receipt.binding_publication().is_none() {
+            if invocation.is_some_and(|invocation| invocation.not_required().is_err()) {
+                return AuthenticationResult::IntegrityFailure;
+            }
+            return AuthenticationResult::Authenticated(None);
+        }
+        let mut tx = match self.pool.begin().await {
+            Ok(tx) => tx,
+            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
+        };
+        // Take the user/generation and operation locks before capacity rows,
+        // matching phase-two finalization. If the binding transfer fails, the
+        // epoch publication and claim consumption roll back with it.
+        let published_epoch = if let Some(stage) = receipt.staged_login_epoch() {
+            match db::publish_user_agent_login_epoch_in_transaction(
+                &mut tx,
+                stage.operation_id,
+                stage.connection_id,
+                stage.user_id,
+                stage.device_id,
+                stage.auth_generation,
+                receipt.binding_publication().is_some(),
+            )
+            .await
+            {
+                Ok(Some(epoch)) => Some(epoch),
+                Ok(None) => {
+                    let _ = match invocation {
+                        Some(invocation) => invocation
+                            .rollback(tx.rollback())
+                            .await
+                            .map_err(anyhow::Error::from),
+                        None => tx.rollback().await.map_err(anyhow::Error::from),
+                    };
+                    return AuthenticationResult::ExpiredCredentials;
+                }
+                Err(error) => return AuthenticationResult::BackendFailure(error),
+            }
+        } else {
+            None
+        };
+        if let Some(binding) = receipt.binding_publication() {
+            match db::publish_binding_live_session_in_transaction(
+                &mut tx,
+                binding.connection_id,
+                binding.user_id,
+                &binding.full_jid,
+                binding.lease_seconds,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = match invocation {
+                        Some(invocation) => invocation
+                            .rollback(tx.rollback())
+                            .await
+                            .map_err(anyhow::Error::from),
+                        None => tx.rollback().await.map_err(anyhow::Error::from),
+                    };
+                    return AuthenticationResult::ExpiredCredentials;
+                }
+                Err(error) => return AuthenticationResult::BackendFailure(error),
+            }
+        }
+        let committed = match invocation {
+            Some(invocation) => invocation
+                .commit(tx.commit(), published_epoch)
+                .await
+                .map_err(anyhow::Error::from),
+            None => tx.commit().await.map_err(anyhow::Error::from),
+        };
+        match committed {
+            Ok(()) => AuthenticationResult::Authenticated(published_epoch),
+            Err(error) => AuthenticationResult::BackendFailure(error),
+        }
+    }
     pub(crate) async fn authenticate_plain_with_hook<F, Fut>(
         &self,
         username: &str,
@@ -558,60 +642,17 @@ impl AuthenticationRepository for PostgresAuthenticationRepository {
         &self,
         receipt: &CredentialCommitReceipt,
     ) -> AuthenticationResult<Option<i64>> {
-        if receipt.staged_login_epoch().is_none() && receipt.binding_publication().is_none() {
-            return AuthenticationResult::Authenticated(None);
+        self.publish_credential_commit_inner(receipt, None).await
+    }
+    async fn publish_credential_commit_observed(
+        &self,
+        invocation: &publication::Invocation<'_>,
+    ) -> AuthenticationResult<Option<i64>> {
+        if invocation.enter_repository().is_err() {
+            return AuthenticationResult::IntegrityFailure;
         }
-        let mut tx = match self.pool.begin().await {
-            Ok(tx) => tx,
-            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
-        };
-        // Take the user/generation and operation locks before capacity rows,
-        // matching phase-two finalization. If the binding transfer fails, the
-        // epoch publication and claim consumption roll back with it.
-        let published_epoch = if let Some(stage) = receipt.staged_login_epoch() {
-            match db::publish_user_agent_login_epoch_in_transaction(
-                &mut tx,
-                stage.operation_id,
-                stage.connection_id,
-                stage.user_id,
-                stage.device_id,
-                stage.auth_generation,
-                receipt.binding_publication().is_some(),
-            )
+        self.publish_credential_commit_inner(invocation.receipt(), Some(invocation))
             .await
-            {
-                Ok(Some(epoch)) => Some(epoch),
-                Ok(None) => {
-                    let _ = tx.rollback().await;
-                    return AuthenticationResult::ExpiredCredentials;
-                }
-                Err(error) => return AuthenticationResult::BackendFailure(error),
-            }
-        } else {
-            None
-        };
-        if let Some(binding) = receipt.binding_publication() {
-            match db::publish_binding_live_session_in_transaction(
-                &mut tx,
-                binding.connection_id,
-                binding.user_id,
-                &binding.full_jid,
-                binding.lease_seconds,
-            )
-            .await
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    let _ = tx.rollback().await;
-                    return AuthenticationResult::ExpiredCredentials;
-                }
-                Err(error) => return AuthenticationResult::BackendFailure(error),
-            }
-        }
-        match tx.commit().await {
-            Ok(()) => AuthenticationResult::Authenticated(published_epoch),
-            Err(error) => AuthenticationResult::BackendFailure(error.into()),
-        }
     }
 }
 pub(crate) async fn stage_login_epoch_in_transaction(

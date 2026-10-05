@@ -14,6 +14,7 @@
 //! authentication recovery after bytes have already reached the client.
 
 use super::protocol::ClientTransport;
+use crate::services::authentication::publication;
 use crate::services::message_admission::witness::DirectOperationHandle;
 use crate::services::mix::foreground::{self, MixForegroundSlot};
 use crate::services::muc::discussion::{self, MucDiscussionSlot};
@@ -231,6 +232,7 @@ struct Progress {
     direct_operation: DirectOperationHandle,
     muc_discussion: MucDiscussionSlot,
     mix_foreground: MixForegroundSlot,
+    auth_receipt: std::sync::Mutex<Option<publication::Observation>>,
     sequence: u64,
     policy: Policy,
     stage: AtomicU8,
@@ -246,7 +248,6 @@ pub(super) struct FrameExecution(Arc<Progress>);
 #[derive(Default)]
 pub(super) struct SessionExecutions {
     current: Option<FrameExecution>,
-    publication: Option<FrameExecution>,
 }
 
 impl SessionExecutions {
@@ -256,14 +257,13 @@ impl SessionExecutions {
         execution
     }
 
-    pub(super) fn defer_publication(&mut self, execution: FrameExecution) {
-        self.publication = Some(execution);
-    }
-
-    pub(super) fn take_publication(&mut self) -> Option<FrameExecution> {
-        let execution = self.publication.take()?;
-        self.current = Some(execution.clone());
-        Some(execution)
+    pub(super) fn auth_origin(&self) -> Option<FrameExecution> {
+        self.current
+            .as_ref()
+            .filter(|execution| {
+                execution.0.outcome.load(Ordering::Relaxed) == Outcome::Pending as u8
+            })
+            .cloned()
     }
 
     pub(super) fn enter(&self, stage: Stage) {
@@ -326,6 +326,7 @@ impl FrameExecution {
             direct_operation: DirectOperationHandle::new(operation_id),
             muc_discussion: MucDiscussionSlot::default(),
             mix_foreground: MixForegroundSlot::default(),
+            auth_receipt: std::sync::Mutex::new(None),
             sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             policy: Policy::for_frame(transport, frame),
             stage: AtomicU8::new(Stage::Validation as u8),
@@ -345,6 +346,27 @@ impl FrameExecution {
 
     pub(super) fn direct_operation(&self) -> DirectOperationHandle {
         self.0.direct_operation.clone()
+    }
+
+    pub(super) fn operation_id(&self) -> Uuid {
+        self.0.operation_id
+    }
+
+    pub(super) fn retain_auth_receipt(
+        &self,
+        observation: publication::Observation,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            observation.snapshot().frame == Some(self.0.operation_id),
+            "auth receipt belongs to another frame"
+        );
+        let mut slot = self.0.auth_receipt.lock().unwrap();
+        anyhow::ensure!(
+            slot.is_none(),
+            "frame already returned a credential receipt"
+        );
+        *slot = Some(observation);
+        Ok(())
     }
 
     pub(super) fn enter(&self, stage: Stage) {
@@ -577,6 +599,17 @@ impl Observation {
                     terminal = ?summary.terminal,
                     "frame MIX foreground ownership retired"
                 );
+            }
+        }
+        if self.phase == "frame" {
+            if let Some(auth) = progress.auth_receipt.lock().unwrap().as_ref() {
+                auth.handler_returned(match outcome {
+                    Outcome::Completed => publication::HandlerReturn::Completed,
+                    Outcome::TimedOut => publication::HandlerReturn::TimedOut,
+                    Outcome::Cancelled => publication::HandlerReturn::Cancelled,
+                    Outcome::Panicked => publication::HandlerReturn::Panicked,
+                    _ => publication::HandlerReturn::Failed,
+                });
             }
         }
         progress.outcome.store(outcome as u8, Ordering::Relaxed);
@@ -1413,19 +1446,18 @@ mod tests {
     async fn deferred_publication_retains_origin_after_later_bosh_frame() {
         let mut executions = SessionExecutions::default();
         let origin = executions.begin(ClientTransport::Bosh, "<authenticate/>");
+        let publication = executions.auth_origin().unwrap();
         origin.run(async { Ok(()) }).await.unwrap();
-        executions.defer_publication(origin.clone());
         let later = executions.begin(ClientTransport::Bosh, "<iq/>");
         later.run(async { Ok(()) }).await.unwrap();
         assert_ne!(origin.0.operation_id, later.0.operation_id);
 
-        let publication = executions.take_publication().unwrap();
         assert_eq!(publication.0.operation_id, origin.0.operation_id);
         assert_eq!(publication.0.sequence, origin.0.sequence);
         assert!(
             publication
                 .observe_publication(async {
-                    executions.enter(Stage::CapsPublication);
+                    publication.enter(Stage::CapsPublication);
                     PublicationResult::Completed
                 })
                 .await
@@ -1438,7 +1470,7 @@ mod tests {
             Stage::from_raw(later.0.stage.load(Ordering::Relaxed)),
             Stage::Validation
         );
-        assert!(executions.take_publication().is_none());
+        assert!(executions.auth_origin().is_none());
     }
 
     #[tokio::test]
@@ -1622,6 +1654,7 @@ mod tests {
         let (capture, _subscriber) = TraceCapture::install();
         let mut executions = SessionExecutions::default();
         let origin = executions.begin(ClientTransport::Bosh, "<authenticate/>");
+        let publication = executions.auth_origin().unwrap();
         origin
             .run(async {
                 executions.enter(Stage::Handler);
@@ -1629,14 +1662,12 @@ mod tests {
             })
             .await
             .unwrap();
-        executions.defer_publication(origin.clone());
         let later = executions.begin(ClientTransport::Bosh, "<iq/>");
         later.run(async { Ok(()) }).await.unwrap();
-        let publication = executions.take_publication().unwrap();
         assert!(
             publication
                 .observe_publication(async {
-                    executions.enter(Stage::CapsPublication);
+                    publication.enter(Stage::CapsPublication);
                     PublicationResult::Completed
                 })
                 .await

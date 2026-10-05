@@ -537,7 +537,7 @@ impl ProtocolSession {
         let payload = XmlElement::namespaced("bind", "urn:ietf:params:xml:ns:xmpp-bind")
             .child(XmlElement::new("jid").text(jid))
             .finish();
-        Ok(Action::SendManyThenActivate(vec![iq_result(id, &payload)]))
+        self.auth_replies(vec![iq_result(id, &payload)])
     }
 
     /// Registers one authenticated resource. Both RFC 6120 IQ binding and
@@ -786,7 +786,7 @@ impl ProtocolSession {
             }
         };
         let issued_fast = receipt.take_issued_fast();
-        self.pending_credential_commit = Some(receipt);
+        self.retain_credential_commit(receipt)?;
         let route_is_current = self.state.staged_session_is_current(
             &key,
             self.connection_id,

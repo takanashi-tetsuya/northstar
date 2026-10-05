@@ -7,6 +7,7 @@ use super::{
     take_response_payload, terminal_response_with_content, BoshHttpResponse, BoshRequest,
     BoshResponseBody, CachedResponse, RESPONSE_CACHE_SIZE,
 };
+use crate::xmpp::auth_publication::{OwnedPublication, SelectedControls};
 use crate::{
     outbound::{BoshResponseOwnership, OutboundItem},
     services::{
@@ -161,6 +162,8 @@ pub(super) struct BoundResponse {
     ownership: Arc<BoshResponseOwnership>,
     bound: response::BoundResponse,
     auth_control_selected: bool,
+    auth_controls: SelectedControls,
+    auth_connection: Option<uuid::Uuid>,
 }
 impl std::fmt::Debug for BoundResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -175,6 +178,7 @@ pub(super) struct ExposedResponse {
     exposure: response::Exposure,
     accepted: bool,
     auth_control_selected: bool,
+    auth_controls: SelectedControls,
 }
 /// A consuming local continuation, not proof of SQL credential publication.
 /// Only successful publication (or no selected auth control) creates it.
@@ -182,7 +186,20 @@ pub(super) struct PublicationReadyResponse {
     exposed: ExposedResponse,
 }
 impl BoundResponse {
-    pub(super) fn expose(self, responders: Vec<Responder>) -> Result<ExposedResponse> {
+    pub(super) fn for_connection(mut self, connection: uuid::Uuid) -> Result<Self> {
+        self.auth_controls.validate_connection(connection)?;
+        self.auth_connection = Some(connection);
+        Ok(self)
+    }
+    pub(super) fn expose(mut self, responders: Vec<Responder>) -> Result<ExposedResponse> {
+        anyhow::ensure!(
+            self.auth_controls.is_empty() || self.auth_connection.is_some(),
+            "auth response has no bound connection"
+        );
+        if let Some(connection) = self.auth_connection {
+            self.auth_controls.validate_connection(connection)?;
+        }
+        self.auth_controls.begin_exposure(self.metadata.rid)?;
         let exposure = self.bound.begin_exposure()?;
         let mut accepted = false;
         for responder in responders {
@@ -193,6 +210,7 @@ impl BoundResponse {
                 |accepted| exposure.sent(accepted),
             );
         }
+        self.auth_controls.exposure(self.metadata.rid, accepted)?;
         Ok(ExposedResponse {
             metadata: self.metadata,
             response: self.response,
@@ -201,6 +219,7 @@ impl BoundResponse {
             exposure,
             accepted,
             auth_control_selected: self.auth_control_selected,
+            auth_controls: self.auth_controls,
         })
     }
 }
@@ -210,12 +229,24 @@ impl ExposedResponse {
         self.accepted
     }
     pub(super) async fn publish_authentication<F: Future<Output = bool>>(
-        self,
-        publish: impl FnOnce() -> F,
+        mut self,
+        publish: impl FnOnce(Vec<OwnedPublication>) -> F,
     ) -> Result<PublicationReadyResponse> {
         if self.auth_control_selected {
             anyhow::ensure!(self.accepted, "BOSH authentication control was not exposed");
-            anyhow::ensure!(publish().await, "BOSH authentication publication failed");
+            let selected = std::mem::replace(&mut self.auth_controls, SelectedControls::empty());
+            let observations = selected.observations();
+            let owners = selected.take_all()?;
+            anyhow::ensure!(
+                publish(owners).await,
+                "BOSH authentication publication failed"
+            );
+            anyhow::ensure!(
+                observations
+                    .iter()
+                    .all(|observation| observation.completed()),
+                "BOSH auth callback did not complete its selected owners"
+            );
         }
         Ok(PublicationReadyResponse { exposed: self })
     }
@@ -389,7 +420,31 @@ pub(super) async fn prepare<P: ReplayPort>(
                     )
                 })?;
                 let ownership = bound.ownership().clone();
-                let auth_control_selected = selected.iter().any(OutboundItem::is_bosh_auth_control);
+                if selected
+                    .iter()
+                    .any(|item| item.is_bosh_auth_control() != item.auth_publication().is_some())
+                {
+                    return Err(PreparationFailure::new(
+                        FailureStage::Construction,
+                        "internal-server-error",
+                        anyhow::anyhow!("auth control marker and holder disagree"),
+                        Some(&build),
+                    ));
+                }
+                let auth_controls = SelectedControls::new(
+                    selected
+                        .iter()
+                        .map(|item| (item.stanza.as_str(), item.auth_publication())),
+                )
+                .map_err(|error| {
+                    PreparationFailure::new(
+                        FailureStage::Construction,
+                        "internal-server-error",
+                        error,
+                        Some(&build),
+                    )
+                })?;
+                let auth_control_selected = !auth_controls.is_empty();
                 return Ok(BoundResponse {
                     metadata,
                     response,
@@ -397,6 +452,8 @@ pub(super) async fn prepare<P: ReplayPort>(
                     ownership,
                     bound,
                     auth_control_selected,
+                    auth_controls,
+                    auth_connection: None,
                 });
             }
             Err(error) => {
@@ -581,6 +638,8 @@ pub(super) async fn renew_and_acknowledge<P: ReplayPort>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xmpp::auth_publication::{fixture_control, publish_unbound_fixture};
+    const AUTH_CONNECTION: Uuid = Uuid::from_u128(701);
     use crate::outbound::{
         DurableDelivery, DurableDeliverySuperseded, MixDelivery, TransportOwnershipSource as Source,
     };
@@ -893,7 +952,7 @@ mod tests {
             rid: u64,
             condition: Option<&str>,
         ) -> Result<BoundResponse, PreparationFailure> {
-            prepare(
+            let bound = prepare(
                 &mut Fields {
                     output: &mut self.output,
                     output_bytes: &mut self.bytes,
@@ -909,7 +968,10 @@ mod tests {
                 operation,
                 port,
             )
-            .await
+            .await?;
+            Ok(bound
+                .for_connection(AUTH_CONNECTION)
+                .expect("fixture auth controls belong to the declared connection"))
         }
     }
     fn durable_item(id: u128) -> OutboundItem {
@@ -940,8 +1002,152 @@ mod tests {
     }
 
     fn auth_control() -> OutboundItem {
-        OutboundItem::plain("<success xmlns='urn:xmpp:sasl:2'/>".to_owned())
-            .with_bosh_auth_control()
+        let control = "<success xmlns='urn:xmpp:sasl:2'/>";
+        let (holder, _) = fixture_control(control, AUTH_CONNECTION);
+        OutboundItem::plain(control.to_owned())
+            .with_auth_publication(holder)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn actual_bounded_selection_publishes_unbound_u_without_taking_queued_bind_b() {
+        use crate::services::authentication::publication::{Knowledge, Terminal};
+        let u_bytes = "<success xmlns='urn:xmpp:sasl:2'/>";
+        let b_bytes =
+            "<iq type='result' id='B'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></iq>";
+        let (u_holder, u) = fixture_control(u_bytes, AUTH_CONNECTION);
+        let (b_holder, b) =
+            crate::xmpp::auth_publication::fixture_bound_control(b_bytes, AUTH_CONNECTION, false);
+        u_holder.recording().unwrap();
+        b_holder.recording().unwrap();
+        let prior_b = b.snapshot();
+        let limit = 16 * 1024;
+        let padding_bytes = limit - 256 - u_bytes.len();
+        let wrapper = "<presence><status></status></presence>";
+        let prefix = format!(
+            "<presence><status>{}</status></presence>",
+            "x".repeat(padding_bytes - wrapper.len())
+        );
+        let mut harness = Harness::new([
+            OutboundItem::plain(prefix),
+            OutboundItem::plain(u_bytes.to_owned())
+                .with_auth_publication(u_holder)
+                .unwrap(),
+            OutboundItem::plain("<features/>".to_owned()),
+            OutboundItem::plain(b_bytes.to_owned())
+                .with_auth_publication(b_holder)
+                .unwrap(),
+        ]);
+        harness.max_bytes = limit;
+        assert!(harness.bytes <= 64 * 1024);
+        let operation = operation();
+        let bound = harness
+            .prepare(&operation, &FakeReplay::default(), 10, None)
+            .await
+            .unwrap();
+        let (tx, rx) = oneshot::channel();
+        let ready = bound
+            .expose(vec![tx])
+            .unwrap()
+            .publish_authentication(publish_unbound_fixture)
+            .await
+            .unwrap();
+        let response = rx.await.unwrap();
+        assert!(body(&response).contains(u_bytes));
+        assert!(!body(&response).contains(b_bytes));
+        assert_eq!(harness.output.len(), 2);
+        assert_eq!(harness.output[0].stanza, "<features/>");
+        assert_eq!(harness.output[1].stanza, b_bytes);
+        assert_eq!(b.snapshot(), prior_b);
+        assert_eq!(u.snapshot().publication, Knowledge::NotRequired);
+        assert_eq!(u.snapshot().terminal, Some(Terminal::Completed));
+        assert!(u.snapshot().effects.unbound);
+        assert!(!u.snapshot().effects.caps_entered);
+        ready
+            .finish(&mut Instant::now(), &mut 0, &mut harness.replay)
+            .unwrap();
+        assert_eq!(b.snapshot(), prior_b);
+    }
+
+    #[tokio::test]
+    async fn true_callback_without_selected_owner_completion_cannot_cache() {
+        use crate::services::authentication::publication::{Knowledge, Terminal};
+        for forge_terminal in [false, true] {
+            let operation = operation();
+            let control = "<success xmlns='urn:xmpp:sasl:2'/>";
+            let (holder, observation) = fixture_control(control, AUTH_CONNECTION);
+            let mut harness = Harness::new([OutboundItem::plain(control.to_owned())
+                .with_auth_publication(holder)
+                .unwrap()]);
+            let bound = harness
+                .prepare(&operation, &FakeReplay::default(), 10, None)
+                .await
+                .unwrap();
+            let (tx, rx) = oneshot::channel();
+            let observed = &observation;
+            let result = bound
+                .expose(vec![tx])
+                .unwrap()
+                .publish_authentication(|owners| async move {
+                    if forge_terminal {
+                        observed.retire(Terminal::Completed);
+                    }
+                    drop(owners);
+                    true
+                })
+                .await;
+            assert!(result.is_err());
+            assert!(rx.await.is_ok());
+            assert_eq!(observation.snapshot().publication, Knowledge::NotStarted);
+            assert_eq!(
+                observation.snapshot().terminal,
+                Some(if forge_terminal {
+                    Terminal::Completed
+                } else {
+                    Terminal::ExposedNotAttempted
+                })
+            );
+            assert!(!observation.completed());
+            assert!(harness.replay.is_empty());
+            assert!(!operation.snapshot().responses[0].bookkeeping);
+        }
+    }
+
+    #[tokio::test]
+    async fn wrong_connection_or_repeated_selected_alias_cannot_expose_auth_bytes() {
+        let operation = operation();
+        let mut harness = Harness::new([auth_control()]);
+        let bound = harness
+            .prepare(&operation, &FakeReplay::default(), 10, None)
+            .await
+            .unwrap();
+        assert!(bound.for_connection(Uuid::from_u128(999)).is_err());
+        assert_eq!(operation.summary().responses.accepted_responders, 0);
+
+        let operation = self::operation();
+        let item = auth_control();
+        let mut first = Harness::new([item.clone()]);
+        let mut second = Harness::new([item]);
+        let first = first
+            .prepare(&operation, &FakeReplay::default(), 11, None)
+            .await
+            .unwrap();
+        let second = second
+            .prepare(&operation, &FakeReplay::default(), 12, None)
+            .await
+            .unwrap();
+        let (tx, rx) = oneshot::channel();
+        let exposed = first.expose(vec![tx]).unwrap();
+        assert!(rx.await.is_ok());
+        let (tx, mut rx) = oneshot::channel();
+        assert!(second.expose(vec![tx]).is_err());
+        assert!(rx.try_recv().is_err());
+        let ready = exposed
+            .publish_authentication(publish_unbound_fixture)
+            .await
+            .unwrap();
+        drop(ready);
+        assert_eq!(operation.summary().responses.accepted_responders, 1);
     }
 
     #[test]
@@ -981,9 +1187,9 @@ mod tests {
         assert!(old_actor_pending && exposed.any_accepted());
         let calls = std::cell::Cell::new(0);
         let ready = exposed
-            .publish_authentication(|| {
+            .publish_authentication(|owners| {
                 calls.set(calls.get() + 1);
-                std::future::ready(true)
+                publish_unbound_fixture(owners)
             })
             .await
             .unwrap();
@@ -1004,9 +1210,9 @@ mod tests {
         let exposed = bound.expose(vec![tx]).unwrap();
         assert!(body(&rx.await.unwrap()).contains("success"));
         let ready = exposed
-            .publish_authentication(|| {
+            .publish_authentication(|owners| {
                 calls.set(calls.get() + 1);
-                std::future::ready(true)
+                publish_unbound_fixture(owners)
             })
             .await
             .unwrap();
@@ -1045,9 +1251,9 @@ mod tests {
             let exposed = bound.expose(responders).unwrap();
             let calls = std::cell::Cell::new(0);
             let result = exposed
-                .publish_authentication(|| {
+                .publish_authentication(|owners| {
                     calls.set(calls.get() + 1);
-                    std::future::ready(true)
+                    publish_unbound_fixture(owners)
                 })
                 .await;
             let accepted = accepts.iter().filter(|accept| **accept).count();
@@ -1079,9 +1285,9 @@ mod tests {
             assert!(!body(&rx.await.unwrap()).contains("success"));
             let calls = std::cell::Cell::new(0);
             let ready = exposed
-                .publish_authentication(|| {
+                .publish_authentication(|owners| {
                     calls.set(calls.get() + 1);
-                    std::future::ready(true)
+                    publish_unbound_fixture(owners)
                 })
                 .await
                 .unwrap();
@@ -1130,9 +1336,9 @@ mod tests {
             );
             let calls = std::cell::Cell::new(0);
             let ready = exposed
-                .publish_authentication(|| {
+                .publish_authentication(|owners| {
                     calls.set(calls.get() + 1);
-                    std::future::ready(true)
+                    publish_unbound_fixture(owners)
                 })
                 .await
                 .unwrap();
@@ -1145,13 +1351,17 @@ mod tests {
     async fn auth_control_membership_survives_construction_and_supersession_restoration() {
         let operation = operation();
         let port = FakeReplay::default();
-        let malformed = OutboundItem::plain("<success>".to_owned()).with_bosh_auth_control();
+        let (holder, malformed_observation) = fixture_control("<success>", AUTH_CONNECTION);
+        let malformed = OutboundItem::plain("<success>".to_owned())
+            .with_auth_publication(holder)
+            .unwrap();
         let pointer = malformed.stanza.as_ptr();
         let mut harness = Harness::new([malformed]);
         assert!(harness.prepare(&operation, &port, 10, None).await.is_err());
         assert!(harness.output[0].is_bosh_auth_control());
         assert_eq!(harness.output[0].stanza.as_ptr(), pointer);
         assert_eq!(operation.summary().responses.accepted_responders, 0);
+        assert_eq!(malformed_observation.snapshot().terminal, None);
 
         let operation = self::operation();
         let port = FakeReplay::bind_cuts([Cut::Superseded]);
@@ -1165,9 +1375,9 @@ mod tests {
         assert!(body(&rx.await.unwrap()).contains("success"));
         let calls = std::cell::Cell::new(0);
         let ready = exposed
-            .publish_authentication(|| {
+            .publish_authentication(|owners| {
                 calls.set(calls.get() + 1);
-                std::future::ready(true)
+                publish_unbound_fixture(owners)
             })
             .await
             .unwrap();
@@ -1191,9 +1401,10 @@ mod tests {
             let mut highest = 7;
             let mut continuation = Box::pin(async {
                 let ready = exposed
-                    .publish_authentication(|| {
+                    .publish_authentication(|owners| {
                         calls.set(calls.get() + 1);
-                        async {
+                        async move {
+                            let _owners = owners;
                             if pending {
                                 std::future::pending::<()>().await;
                             }
@@ -1255,9 +1466,9 @@ mod tests {
         let ready = bound
             .expose(vec![tx])
             .unwrap()
-            .publish_authentication(|| {
+            .publish_authentication(|owners| {
                 calls.set(calls.get() + 1);
-                std::future::ready(true)
+                publish_unbound_fixture(owners)
             })
             .await
             .unwrap();
@@ -1291,9 +1502,9 @@ mod tests {
         let ready = bound
             .expose(vec![tx])
             .unwrap()
-            .publish_authentication(|| {
+            .publish_authentication(|owners| {
                 calls.set(calls.get() + 1);
-                std::future::ready(true)
+                publish_unbound_fixture(owners)
             })
             .await
             .unwrap();

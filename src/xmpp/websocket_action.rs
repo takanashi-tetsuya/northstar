@@ -76,17 +76,46 @@ pub(super) async fn apply(
             }
         }
         Ok(Action::SendManyThenActivate(replies)) => {
-            for (index, reply) in replies.into_iter().enumerate() {
+            let (replies, holder) = replies.into_parts();
+            let mut holder = Some(holder);
+            for reply in replies {
+                if let Some(holder) = &holder {
+                    if holder
+                        .validate_connection(session.connection_id)
+                        .and_then(|_| holder.validate_control(&reply))
+                        .is_err()
+                    {
+                        session.forbid_sm_resume();
+                        return false;
+                    }
+                    if holder.recording().is_err() {
+                        session.forbid_sm_resume();
+                        return false;
+                    }
+                }
                 if session.record_outbound(&reply).await.is_err() {
                     session.forbid_sm_resume();
                     return false;
                 }
-                if !websocket_send_live(socket, Message::Text(reply.into()), send_cancellation)
-                    .await
+                if let Some(holder) = holder.take() {
+                    let Some(owner) =
+                        write_auth_control(socket, reply, holder, send_cancellation).await
+                    else {
+                        return false;
+                    };
+                    if !session
+                        .publish_committed_authentication_and_route(owner)
+                        .await
+                    {
+                        return false;
+                    }
+                } else if !websocket_send_live(
+                    socket,
+                    Message::Text(reply.into()),
+                    send_cancellation,
+                )
+                .await
                 {
-                    return false;
-                }
-                if index == 0 && !session.publish_committed_authentication_and_route().await {
                     return false;
                 }
             }
@@ -102,8 +131,31 @@ pub(super) async fn apply(
                 post_control,
                 replay,
                 activate_route,
+                auth_publication,
                 transient_capacity: _resume_transport_capacity,
             } = payload.into_transport_parts();
+            if activate_route != auth_publication.is_some() {
+                session.forbid_sm_resume();
+                return false;
+            }
+            if activate_route {
+                let Some(holder) = &auth_publication else {
+                    session.forbid_sm_resume();
+                    return false;
+                };
+                if holder
+                    .validate_connection(session.connection_id)
+                    .and_then(|_| holder.validate_control(&control))
+                    .is_err()
+                {
+                    session.forbid_sm_resume();
+                    return false;
+                }
+                if holder.recording().is_err() {
+                    session.forbid_sm_resume();
+                    return false;
+                }
+            }
             if session.record_outbound(&control).await.is_err() {
                 session.forbid_sm_resume();
                 let domain = session.local_domain().to_owned();
@@ -117,11 +169,22 @@ pub(super) async fn apply(
                 .await;
                 return false;
             }
-            if !websocket_send_live(socket, Message::Text(control.into()), send_cancellation).await
+            if activate_route {
+                let holder = auth_publication.expect("validated activating resume owner");
+                let Some(owner) =
+                    write_auth_control(socket, control, holder, send_cancellation).await
+                else {
+                    return false;
+                };
+                if !session
+                    .publish_committed_authentication_and_route(owner)
+                    .await
+                {
+                    return false;
+                }
+            } else if !websocket_send_live(socket, Message::Text(control.into()), send_cancellation)
+                .await
             {
-                return false;
-            }
-            if activate_route && !session.publish_committed_authentication_and_route().await {
                 return false;
             }
             for nonza in post_control {
@@ -181,4 +244,22 @@ pub(super) async fn apply(
         }
     }
     true
+}
+
+async fn write_auth_control(
+    socket: &mut WebSocket,
+    control: String,
+    holder: super::auth_publication::AuthControlHolder,
+    cancellation: &WebSocketSendCancellation<'_>,
+) -> Option<super::auth_publication::OwnedPublication> {
+    holder
+        .write(control, |control| async move {
+            if websocket_send_live(socket, Message::Text(control.into()), cancellation).await {
+                Ok(())
+            } else {
+                anyhow::bail!("authentication control WebSocket write did not complete")
+            }
+        })
+        .await
+        .ok()
 }

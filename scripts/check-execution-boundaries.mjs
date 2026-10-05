@@ -5,6 +5,13 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
   frame: 'src/xmpp/frame_execution.rs',
+  authFacts: 'src/services/authentication/publication.rs',
+  authOwner: 'src/xmpp/auth_publication.rs',
+  authService: 'src/services/authentication.rs',
+  authDb: 'src/db/authentication.rs',
+  authCaps: 'src/xmpp/protocol/caps.rs',
+  sasl2: 'src/xmpp/protocol/sasl2.rs',
+  authMisc: 'src/xmpp/protocol/misc.rs',
   protocol: 'src/xmpp/protocol.rs',
   transport: 'src/xmpp/mod.rs',
   tcp: 'src/xmpp/tcp_action.rs',
@@ -416,8 +423,9 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   ordered(prepare, ['.begin_response(', 'loop{', 'fields.body(', 'build.attempt(sources,selected.iter().map(|item|item.durable_source))',
     'letresult=ifrequest.sources().is_empty(){Ok(BoshResponseOwnership::default())}else{port.bind(&request).await};',
     'letbound=request.returned(ownership)', 'letownership=bound.ownership().clone();',
-    'letauth_control_selected=selected.iter().any(OutboundItem::is_bosh_auth_control);',
-    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,})'],
+    'letauth_controls=SelectedControls::new(selected.iter().map(|item|(item.stanza.as_str(),item.auth_publication())))',
+    'letauth_control_selected=!auth_controls.is_empty();',
+    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None,})'],
   'BOSH must bind selected sources and consume the actual returned membership before releasing response bytes');
   ordered(prepare, ['ifletSome(message_id)=superseded_bosh_message_id(&error){', 'ifletOk(restoration)=request.supersession(message_id){',
     'restore_response_items_observed(', 'restoration.restored(removed_indices)', 'ifremoved&&superseded_rebuilds<fields.max_output_stanzas{'],
@@ -491,7 +499,238 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   }
 }
 
-export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, websocket, bosh, boshAction, boshResponse, outbound }) {
+// Auth-specific lexical drift checks. The returned receipt is the lower bound
+// of this slice; these checks make no claim about earlier credential COMMITs.
+export function verifyAuthPublicationBoundaries(sources) {
+  const { authFacts, authOwner, authService, authDb, authCaps, protocol, frame,
+    transport, websocket, bosh, boshResponse, sasl2, smProtocol, authMisc } = sources;
+  const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
+  const method = (source, name) => normalize(body(productionModule(source), `(?:async\\s+)?fn\\s+${name}\\b`));
+  const facts = productionModule(authFacts);
+  const owner = productionModule(authOwner);
+  const observation = body(facts, 'impl\\s+Observation\\b');
+  const invocation = body(facts, "impl\\s+Invocation<'_>");
+  const receipt = normalize(body(authService, 'pub\\(crate\\)\\s+struct\\s+CredentialCommitReceipt\\b'));
+  requireBoundary(receipt.includes('publication_identity:Uuid') && !/pub(?:\([^)]*\))?publication_identity:/.test(receipt),
+    'auth receipt instance identity must remain private');
+  const receiptImpl = body(authService, 'impl\\s+CredentialCommitReceipt\\b');
+  requireBoundary(method(receiptImpl, 'new').includes('publication_identity:Uuid::new_v4()'),
+    'auth receipt instance identity must be minted at its actual constructor');
+  for (const [source, name] of [[authService, 'CredentialCommitReceipt'], [owner, 'KnownCredentialOwner'],
+    [owner, 'OwnedPublication'], [owner, 'SelectedControls'], [facts, 'Invocation']]) {
+    const code = codeOnly(productionModule(source));
+    const declaration = code.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)(?:pub\\([^)]*\\)\\s+)?struct\\s+${name}\\b`));
+    requireBoundary(declaration && !/\bderive\s*\([^)]*\b(?:Clone|Copy)\b/.test(declaration[1]) &&
+      !new RegExp(`\\bimpl\\b[^{};]*\\b(?:Clone|Copy)\\s+for\\s+${name}\\b`).test(code),
+    `auth ${name} cannot derive or implement Clone or Copy`);
+  }
+  requireBoundary(normalize(body(owner, 'pub\\(crate\\)\\s+struct\\s+OwnedPublication\\b')) ===
+    'pending:PendingPublication,holder:AuthControlHolder,managed:bool' &&
+    normalize(body(owner, 'struct\\s+PendingPublication\\b')) ===
+    'receipt:CredentialCommitReceipt,origin:Option<FrameExecution>,effects:CapturedEffects',
+    'auth consuming owner must keep its exact receipt, origin and effects private');
+  // Closed inventory for the actual owners, including their reviewed named
+  // and Self construction sites. Alternate Rust syntax/macros remain review.
+  for (const [source, name, declaration, methods, construction, sites, selfSites] of [
+    [owner, 'AuthControlHolder', 'impl\\s+AuthControlHolder\\b',
+      ['validate_connection', 'validates', 'validate_control', 'recording', 'write'], /\bAuthControlHolder\s*\(/g, 2, 0],
+    [owner, 'OwnedPublication', 'impl\\s+OwnedPublication\\b',
+      ['receipt', 'observation', 'effects', 'origin', 'connection', 'publish', 'run'], /\bOwnedPublication\s*\{/g, 4, 0],
+    // Three Self-plus-brace tokens: empty's bare-Self return head and the
+    // two constructors, whose exact method locations are pinned below.
+    [owner, 'SelectedControls', 'impl\\s+SelectedControls\\b',
+      ['empty', 'new', 'is_empty', 'observations', 'validate_connection', 'begin_exposure', 'exposure', 'take_all'], /\bSelectedControls\s*\{/g, 4, 3],
+    [facts, 'Invocation', "impl\\s+Invocation<'_>",
+      ['receipt', 'validate', 'enter_service', 'enter_repository', 'not_required', 'commit', 'rollback', 'returned'], /\bInvocation\s*\{/g, 1, 0],
+  ]) {
+    const code = codeOnly(source);
+    const implementation = body(source, declaration);
+    requireBoundary([...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]).join(',') === methods.join(','),
+      `auth ${name} must retain its closed inherent-method inventory`);
+    requireBoundary([...code.matchAll(construction)].length === sites &&
+      [...implementation.matchAll(/\bSelf\s*[{(]/g)].length === selfSites,
+    `auth ${name} cannot add named or Self construction sites`);
+  }
+  const selectionImpl = body(owner, 'impl\\s+SelectedControls\\b');
+  requireBoundary(method(selectionImpl, 'empty') === 'Self{holders:Vec::new(),exposed:false,proof:None}' &&
+    method(selectionImpl, 'new').endsWith('Ok(Self{holders,exposed:false,proof:None})'),
+    'auth selected Self constructors must remain empty or validated unexposed membership');
+  const begin = method(observation, 'begin');
+  ordered(begin, ['state.receipt_id==receipt.publication_identity()&&state.receipt==ReceiptProjection::of(receipt)',
+    'state.snapshot.terminal.is_none()&&state.snapshot.publication==Knowledge::NotStarted',
+    'Transport::Written|Transport::BoshAccepted{..}', 'state.snapshot.publication=Knowledge::BeforeCommit;',
+    'Ok(Invocation{observation:self,receipt})'], 'auth publication must bind the actual receipt and successful control transport before invocation');
+  const serviceStart = method(invocation, 'enter_service');
+  const repositoryStart = method(invocation, 'enter_repository');
+  requireBoundary(serviceStart === 'letmutstate=self.observation.0.lock().unwrap();self.validate(&state)?;ensure!(!state.snapshot.service_started);state.snapshot.service_started=true;Ok(())' &&
+    repositoryStart === 'letmutstate=self.observation.0.lock().unwrap();self.validate(&state)?;ensure!(state.snapshot.service_started&&!state.snapshot.repository_started);state.snapshot.repository_started=true;Ok(())',
+    'auth service and repository starts must be distinct one-use transitions before I/O');
+  const validate = method(invocation, 'validate');
+  requireBoundary(validate.includes('state.receipt_id==self.receipt.publication_identity()&&state.receipt==ReceiptProjection::of(self.receipt)') &&
+    validate.includes('state.snapshot.terminal.is_none()&&state.snapshot.publication==Knowledge::BeforeCommit&&state.snapshot.returned.is_none()'),
+    'auth borrowed invocation must revalidate actual identity and current phase');
+  const observedService = method(body(authService, 'impl<R:\\s*AuthenticationRepository>\\s+AuthenticationService<R>'), 'publish_credential_commit_observed');
+  requireBoundary(observedService === 'ifinvocation.enter_service().is_err(){returnAuthenticationResult::IntegrityFailure;}letreceipt=invocation.receipt();letresult=ifreceipt.staged_login_epoch.is_none()&&receipt.binding_publication.is_none(){ifinvocation.not_required().is_err(){AuthenticationResult::IntegrityFailure}else{AuthenticationResult::Authenticated(None)}}else{self.repository.publish_credential_commit_observed(invocation).await};if!invocation.returned(&result){returnAuthenticationResult::IntegrityFailure;}result',
+    'auth service must retain the no-SQL branch and observe the actual repository return');
+  requireBoundary(method(authDb, 'publish_credential_commit_observed') === 'ifinvocation.enter_repository().is_err(){returnAuthenticationResult::IntegrityFailure;}self.publish_credential_commit_inner(invocation.receipt(),Some(invocation)).await' &&
+    method(authDb, 'publish_credential_commit') === 'self.publish_credential_commit_inner(receipt,None).await',
+    'auth repository must start its current invocation before shared SQL while preserving the bare-receipt entry');
+  const sql = method(authDb, 'publish_credential_commit_inner');
+  ordered(sql, ['self.pool.begin().await', 'db::publish_user_agent_login_epoch_in_transaction(',
+    'db::publish_binding_live_session_in_transaction(', 'invocation.commit(tx.commit(),published_epoch).await',
+    'Ok(())=>AuthenticationResult::Authenticated(published_epoch)'],
+    'auth SQL publication must retain actual transaction order and returned stored epoch');
+  requireBoundary(count(sql, 'invocation.rollback(tx.rollback()).await') === 2 &&
+    count(sql, 'None=>tx.rollback().await') === 2 && count(sql, 'None=>tx.commit().await') === 1,
+    'auth SQL publication must preserve both explicit rollbacks and legacy COMMIT');
+  const commit = method(invocation, 'commit');
+  ordered(commit, ['self.validate(&state)', '!state.snapshot.repository_started||state.snapshot.rollback!=Rollback::NotRequested',
+    'state.snapshot.publication=Knowledge::CommitCallEntered;', 'future.await.map_err(CommitError::Repository)?;',
+    'snapshot.publication=Knowledge::ReceiptKnown(epoch);'],
+    'auth COMMIT entry, receipt and return must remain independent and use the stored epoch');
+  const returned = method(invocation, 'returned');
+  requireBoundary(returned.includes('ifstate.snapshot.returned.is_some(){returnfalse;}') &&
+    returned.includes('Knowledge::NotRequiredifepoch.is_none()') &&
+    returned.includes('state.snapshot.publication==Knowledge::ReceiptKnown(epoch)') &&
+    returned.includes('state.snapshot.returned=Some(returned);state.snapshot.return_matches=matches;'),
+    'auth return cannot synthesize COMMIT knowledge or substitute an epoch hint');
+  const retireFrame = method(observation, 'handler_returned');
+  requireBoundary(retireFrame.includes('if!state.snapshot.sealed&&state.snapshot.terminal.is_none(){state.snapshot.terminal=Some(Terminal::Abandoned);}') &&
+    !retireFrame.includes('publication='), 'auth handler completion must leave sealed publication independently owned');
+  requireBoundary(method(frame, 'retain_auth_receipt') === 'anyhow::ensure!(observation.snapshot().frame==Some(self.0.operation_id));letmutslot=self.0.auth_receipt.lock().unwrap();anyhow::ensure!(slot.is_none());*slot=Some(observation);Ok(())',
+    'auth frame registration must reject a different origin before storing its observation');
+  requireBoundary(method(observation, 'completed') === 'matchself.snapshot().terminal{Some(Terminal::Completed)=>self.successful_completion(false),Some(Terminal::DeferredNotification)=>self.successful_completion(true),_=>false}' &&
+    method(observation, 'successful_completion').includes('if!snapshot.return_matches{returnfalse;}') &&
+    method(observation, 'successful_completion').includes('effects.route_mapping!=Some(true)||effects.route_activation!=Some(true)||!effects.caps_entered||!effects.caps_returned') &&
+    method(observation, 'successful_completion').includes('effects.notification_entered&&effects.notification_returned==Some(!deferred)'),
+    'auth completion must require retained publication and captured effect results');
+  const transportFacts = method(observation, 'transport');
+  requireBoundary(transportFacts.includes('ensure!(state.snapshot.terminal.is_none())') &&
+    transportFacts.includes('ensure!(allowed);state.snapshot.transport=transport;') &&
+    transportFacts.includes('(Transport::WriteEntered,Transport::Written)') &&
+    transportFacts.includes('ifprevious==rid'),
+    'auth transport observations must remain monotone and phase checked');
+  const retain = method(protocol, 'retain_credential_commit');
+  ordered(retain, ['letorigin=self.frame_executions.auth_origin();',
+    'KnownCredentialOwner::from_returned(receipt,origin.clone(),self.connection_id)',
+    'self.pending_credential_commit.is_none()', 'origin.retain_auth_receipt(owner.observation().clone())?;',
+    'self.pending_credential_commit=Some(owner);'], 'auth originating frame must be captured at actual receipt handoff');
+  requireBoundary(!normalize(codeOnly(productionModule(frame))).includes('take_publication') &&
+    !normalize(codeOnly(productionModule(protocol))).includes('defer_publication'),
+    'auth publication cannot restore a session-wide latest-frame slot');
+  const seal = method(protocol, 'seal_auth_control');
+  for (const captured of ['key:key.clone(),user:user.id,generation:user.auth_generation,connection:self.connection_id,lifecycle:self.route_lifecycle.clone(),disconnect:self.disconnect.clone()',
+    'self.presence.resumed_caps_presence.take()', 'gate:self.presence.mix_presence_gate.clone(),generation:self.presence.caps_observation_generation.clone()',
+    'user:user.id,device,excluded_key:key', '(RouteIntent::Unbound,None,None)',
+    'owner.seal(control,CapturedEffects{route,caps,notification})']) {
+    requireBoundary(seal.includes(captured), 'auth control must seal exact captured route, caps and notification inputs');
+  }
+  const known = body(owner, 'impl\\s+KnownCredentialOwner\\b');
+  const sealed = method(known, 'seal');
+  ordered(sealed, ['effects.validate(receipt,self.connection)?;', 'self.observation.sealed(',
+    'self.receipt.take()', 'length:control.len(),digest:Sha256::digest(control.as_bytes()).into()',
+    'PendingPublication{receipt,origin:self.origin.take(),effects}'],
+    'auth final control seal must consume its exact receipt with private length and SHA-256 binding');
+  const holder = body(owner, 'impl\\s+AuthControlHolder\\b');
+  requireBoundary(method(holder, 'validates') === 'self.0.length==control.len()&&self.0.digest==<[u8;32]>::from(Sha256::digest(control.as_bytes()))',
+    'auth control bytes must match length and digest without constructing authority');
+  const write = method(holder, 'write');
+  ordered(write, ['self.validate_control(&control)?;', 'state.pending.is_some()&&state.phase==HolderPhase::Recording',
+    'self.0.observation.transport(Transport::WriteEntered)?;', 'state.phase=HolderPhase::Writing;',
+    'write(control).await?;', 'state.phase==HolderPhase::Writing', 'self.0.observation.transport(Transport::Written)?;',
+    'proof:Some(TakeProof::NativeWritten)', 'selected.take_all()?'],
+    'auth native write must claim its current holder before I/O and consume only its actual write continuation');
+  const selected = body(owner, 'impl\\s+SelectedControls\\b');
+  const select = method(selected, 'new');
+  ordered(select, ['holder.validate_control(control)?;',
+    'ids.insert(holder.0.id)&&pointers.insert(Arc::as_ptr(&holder.0)asusize)',
+    'connection.is_none_or(|id|id==holder.0.connection)', 'holders.push(holder.clone());'],
+    'auth selected set must reject duplicate IDs and aliases before any holder locks');
+  requireBoundary(!select.includes('.lock()'), 'auth duplicate validation must precede acquiring holder locks');
+  const take = method(selected, 'take_all');
+  ordered(take, ['self.proof.ok_or_else(', 'sorted.sort_by_key(|(_,holder)|holder.0.id);',
+    'for(_,holder)in&sorted{guards.push(holder.0.pending.lock().unwrap());}',
+    'for((_,holder),pending)insorted.iter().zip(&guards){', 'matchproof{',
+    'pending.pending.as_ref()', 'pending.effects.validate(&pending.receipt,holder.0.connection)?;',
+    'for((ordinal,holder),pending)insorted.iter().zip(guards.iter_mut()){',
+    'pending.phase=HolderPhase::Taken;', 'pending.pending.take()', 'drop(guards);',
+    'self.holders.clear();', 'owned.sort_by_key(|(ordinal,_)|*ordinal);'],
+    'auth selected take must lock and revalidate the entire set before FIFO consumption');
+  requireBoundary(!take.includes('.await'), 'auth selected locks cannot cross an await');
+  const sequence = method(owner, 'publish_owned');
+  ordered(sequence, ['owner.connection()!=port.connection()', 'observation.begin(owner.receipt())',
+    'port.publish(&invocation).await', 'AuthenticationResult::Authenticated(epoch)ifobservation.authenticated_return(epoch)=>{epoch}',
+    'letRouteIntent::Bound(route)=&effects.routeelse{observation.effects(|facts|facts.unbound=true);returnPublicationResult::Completed;};',
+    'port.epoch_and_mapping(route,epoch)', 'port.activate(route)',
+    'facts.caps_entered=true', 'port.caps(effects.caps.take()).await;', 'facts.caps_returned=true',
+    'port.notify_local(intent,epoch);', 'port.notify_remote(intent,epoch).await',
+    'facts.notification_returned=Some(result.is_ok())'],
+    'auth consuming sequence must preserve publication, captured route, caps and notifier ordering');
+  for (const [result, fragment] of [
+    ['BackendFailure', 'AuthenticationResult::BackendFailure(error)=>{port.rejected(PublicationResult::BackendFailure,Some(&error));returnPublicationResult::BackendFailure;}'],
+    ['IntegrityRejected', 'AuthenticationResult::Authenticated(_)|AuthenticationResult::IntegrityFailure=>{port.rejected(PublicationResult::IntegrityRejected,None);returnPublicationResult::IntegrityRejected;}'],
+    ['credential fence', '_=>{port.rejected(PublicationResult::CredentialRejected,None);returnPublicationResult::CredentialRejected;}'],
+  ]) requireBoundary(sequence.includes(fragment), `auth ${result} publication classification must remain distinct`);
+  requireBoundary(sequence.includes('port.notification_deferred(&error);returnPublicationResult::CompletedWithDeferredNotification;') &&
+    !/timeout|spawn|select!/.test(sequence), 'auth notification must stay visibly deferred without a new publication deadline');
+  const adapter = body(protocol, "impl\\s+super::auth_publication::PublicationPort\\s+for\\s+SessionAuthPublication<'_>");
+  requireBoundary(method(adapter, 'publish') === 'self.session.state.authentication_service().publish_credential_commit_observed(invocation).await',
+    'auth production port must invoke the actual observed service');
+  const mapping = method(adapter, 'epoch_and_mapping');
+  requireBoundary(mapping.includes('self.session.registered_key.as_deref()!=Some(route.key.as_str())') &&
+    mapping.includes('self.session.authenticated.as_ref().is_none_or(|user|{user.id!=route.user||user.auth_generation!=route.generation})') &&
+    mapping.includes('!Arc::ptr_eq(&self.session.route_lifecycle,&route.lifecycle)') &&
+    mapping.includes('publish_user_agent_epoch_if_current(&route.key,route.connection,route.user,route.generation,&route.lifecycle,epoch)') &&
+    mapping.includes('ifcurrent{self.session.user_agent_epoch=epoch;}current'),
+    'auth missing principal and changed route must reject with captured identity');
+  requireBoundary(method(adapter, 'activate') === 'self.session.state.activate_session_if_current(&route.key,route.connection,route.user,route.generation,&route.lifecycle,&route.disconnect)' &&
+    method(adapter, 'notify_remote') === 'self.session.state.notify_remote_user_agent_replacement(&intent.account,intent.user,intent.device,epoch).await' &&
+    method(adapter, 'rejected').endsWith('self.session.sm.resume_allowed=false;'),
+    'auth adapter must preserve captured activation, notification and failure resume fence');
+  const caps = method(authCaps, 'rebind_captured_caps_observation');
+  ordered(caps, ['letSome(intent)=intentelse{return;};', 'Document::parse(&intent.presence)',
+    'Arc::clone(&intent.gate).lock_owned().await',
+    'local_caps_observer_connection_is_current(full_jid,intent.connection,&intent.gate)',
+    'self.commit_caps_observation_for(presence,full_jid,intent.connection,&intent.gate,&intent.generation)'],
+    'auth caps must use captured presence, gate, generation and route identity');
+  const poll = method(body(owner, 'impl<F:\\s*Future<Output\\s*=\\s*PublicationResult>>\\s+Future\\s+for\\s+PublicationRunner<F>'), 'poll');
+  ordered(poll, ['this.retirement.polling=true;', '.poll(cx)',
+    'Poll::Pending=>{this.retirement.polling=false;Poll::Pending}',
+    'drop(this.child.take());', 'this.retirement.polling=false;',
+    'this.retirement.observation.successful_completion(', 'this.retirement.finish(matchresult{'],
+    'auth publication must destroy its child before checking success facts and retiring');
+  requireBoundary(method(body(owner, 'impl<F>\\s+Drop\\s+for\\s+PublicationRunner<F>'), 'drop') === 'drop(self.child.take());' &&
+    method(body(owner, 'impl\\s+Drop\\s+for\\s+PublicationRetirement\\b'), 'drop') === 'self.finish(ifself.polling||std::thread::panicking(){Terminal::Panicked}else{Terminal::Cancelled});' &&
+    normalize(body(owner, 'struct\\s+PublicationRunner<F>')) === 'child:Option<Pin<Box<F>>>,retirement:PublicationRetirement',
+    'auth retirement field guard must survive child destructor and caught poll panics');
+  const tcp = method(transport, 'tcp_record_and_send_auth');
+  ordered(tcp, ['holder.validate_connection(session.connection_id)?;', 'holder.validate_control(&stanza)?;',
+    'holder.recording()?;', 'session.record_outbound(&stanza).await',
+    'holder.write(stanza,|stanza|asyncmove{send(io,&stanza).await}).await?', 'Ok(Some(owner))'],
+    'auth TCP adapter must validate before recording and use the actual send helper');
+  requireBoundary(method(websocket, 'write_auth_control') === 'holder.write(control,|control|asyncmove{ifwebsocket_send_live(socket,Message::Text(control.into()),cancellation).await{Ok(())}else{anyhow::bail!()}}).await.ok()',
+    'auth WebSocket adapter must retain actual live-write cancellation');
+  const finish = method(bosh, 'finish_pending');
+  ordered(finish, ['bound.for_connection(self.protocol.connection_id)', 'bound.expose(pending.responders)',
+    '.publish_authentication(|owners|async{forownerinowners{if!self.protocol.publish_committed_authentication_and_route(owner).await{returnfalse;}}true})',
+    'ready.finish('], 'auth BOSH continuation must preserve selected FIFO, early failure and exact connection');
+  const expose = method(body(boshResponse, 'impl\\s+BoundResponse\\b'), 'expose');
+  ordered(expose, ['self.auth_controls.is_empty()||self.auth_connection.is_some()',
+    'self.auth_controls.validate_connection(connection)?;', 'self.auth_controls.begin_exposure(self.metadata.rid)?;',
+    'self.bound.begin_exposure()?;', 'forresponderinresponders{', 'self.auth_controls.exposure(self.metadata.rid,accepted)?;'],
+    'auth BOSH exposure must claim exact holders before any actual responder send');
+  const inline = normalize(codeOnly(productionModule(sasl2)));
+  ordered(inline, ['payload.replace_envelope(', 'payload.activate_route=true;', 'self.seal_resume_authentication(&mutpayload)?;'],
+    'auth inline resume must seal only the final replaced control envelope');
+  requireBoundary(count(inline, 'self.retain_credential_commit(receipt)?;') === 2 &&
+    normalize(codeOnly(productionModule(authMisc))).includes('self.retain_credential_commit(receipt)?;') &&
+    normalize(codeOnly(productionModule(smProtocol))).includes('if!defer_visibility{self.seal_resume_authentication(&mutresume_payload)?;}'),
+    'auth producers must retain actual receipts and preserve standalone versus inline sealing');
+}
+
+export function verifyExecutionBoundaries(sources) {
+  let { frame, protocol, transport, tcp, websocket, bosh, boshAction, boshResponse, outbound } = sources;
+  const normalize = value => compact(value).replace(/,([)}])/g, '$1');
   boshResponse = productionModule(boshResponse);
   for (const name of ['drive_io', 'websocket_connection']) {
     const ingress = compact(body(transport, `async\\s+fn\\s+${name}\\b`));
@@ -499,12 +738,12 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
       `${name} must enter the observed frame runner`);
   }
   const ingress = compact(body(protocol, 'async\\s+fn\\s+process_frame\\b'));
-  requireBoundary(ingress === 'letexecution=self.frame_executions.begin(self.transport,frame);letresult=execution.run(self.handle(frame)).await;ifmatches!(&result,Ok(Action::SendManyThenActivate(_)))||matches!(&result,Ok(Action::Resume(payload))ifpayload.activate_route){self.frame_executions.defer_publication(execution);}result',
-    'activation actions must retain their originating frame observation under the reviewed live condition');
-
-  const publication = compact(body(protocol, 'async\\s+fn\\s+publish_committed_authentication_and_route\\b'));
-  requireBoundary(publication === 'ifletSome(execution)=self.frame_executions.take_publication(){execution.observe_publication(self.publish_committed_authentication_and_route_inner()).await}else{self.publish_committed_authentication_and_route_inner().await.transport_succeeded()}',
-    'publication must use the observed typed owner and preserve the direct-test fallback');
+  requireBoundary(ingress === 'letexecution=self.frame_executions.begin(self.transport,frame);execution.run(self.handle(frame)).await',
+    'frame ingress must run its exact originating frame without a latest publication slot');
+  const publication = normalize(body(protocol, 'async\\s+fn\\s+publish_committed_authentication_and_route\\b'));
+  requireBoundary(publication === 'letorigin=owner.origin();letmutport=SessionAuthPublication{session:self};letfuture=owner.publish(&mutport);ifletSome(execution)=origin{execution.observe_publication(future).await}else{future.await.transport_succeeded()}',
+    'publication must use the observed typed owner and captured absent-origin compatibility');
+  verifyAuthPublicationBoundaries(sources);
   const observer = compact(body(frame, 'async\\s+fn\\s+observe_publication\\b'));
   requireBoundary(observer.includes('Observation::new(self.clone(),') &&
     observer.includes(',None)') && observer.includes('letresult=future.await;') &&
@@ -557,57 +796,41 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
   requireBoundary(boolResult === 'matches!(self,Self::Completed|Self::CompletedWithDeferredNotification)',
     'only authoritative publication success may continue the transport');
 
-  const inner = body(protocol, 'async\\s+fn\\s+publish_committed_authentication_and_route_inner\\b');
-  for (const [source, result] of [['BackendFailure\\(error\\)', 'BackendFailure'], ['IntegrityFailure', 'IntegrityRejected']]) {
-    const arm = compact(body(inner, `AuthenticationResult::${source}\\s*=>`));
-    requireBoundary(arm.includes(`self.sm.resume_allowed=false;returnPublicationResult::${result};`),
-      `authentication ${result} must retain its failure classification and resume fence`);
-  }
-  const credential = compact(body(inner, '_\\s*=>'));
-  requireBoundary(credential.includes('self.sm.resume_allowed=false;returnPublicationResult::CredentialRejected;'),
-    'credential fence rejection must retain its typed failure and resume fence');
-  const innerCode = compact(inner);
-  requireBoundary(!/timeout|spawn|select!/.test(innerCode) &&
-    innerCode.includes('matchself.state.authentication_service().publish_credential_commit(&receipt).await{'),
-  'inner credential publication must not add a deadline, task or cancellation race');
-  requireBoundary(innerCode.includes('if!route_is_current||!self.activate_committed_route(){self.sm.resume_allowed=false;returnPublicationResult::RouteRejected;}') &&
-    innerCode.includes('letSome(user)=self.authenticated.clone()else{returnPublicationResult::RouteRejected;};'),
-  'route fence and missing principal must reject without changing existing resume decisions');
-  const notification = compact(body(inner, 'if\\s+let\\s+Err\\(error\\)\\s*=\\s*self\\s*\\.state\\s*\\.notify_remote_user_agent_replacement\\('));
-  requireBoundary(notification.includes('returnPublicationResult::CompletedWithDeferredNotification;'),
-    'best-effort replacement notification must remain successful but visibly deferred');
-
   for (const [label, source] of [['tcp', tcp], ['websocket', websocket]]) {
     const apply = body(source, 'async\\s+fn\\s+apply\\b');
-    const code = compact(apply);
-    requireBoundary(count(code, '.publish_committed_authentication_and_route().await') === 2 &&
+    const code = normalize(apply);
+    requireBoundary(count(code, '.publish_committed_authentication_and_route(owner).await') === 2 &&
       !code.includes('publish_committed_authentication_and_route_inner'),
     `${label} must use exactly its two observed publication continuations`);
-    for (const [variant, value, activation] of [
-      ['SendManyThenActivate', 'reply', 'index==0'], ['Resume', 'control', 'activate_route'],
-    ]) {
-      const arm = compact(body(apply, `(?:Ok\\()?Action::${variant}\\([^)]*\\)\\)?\\s*=>`));
-      const successGuard = label === 'tcp'
-        ? `if!tcp_record_and_send(io,session,&${value},opening).await?{returnOk(TcpActionDisposition::Close);}`
-        : `if!websocket_send_live(socket,Message::Text(${value}.into()),send_cancellation).await{returnfalse;}`;
-      const publish = `if${activation}&&!session.publish_committed_authentication_and_route().await`;
+    for (const [variant, value] of [['SendManyThenActivate', 'reply'], ['Resume', 'control']]) {
+      const arm = normalize(body(apply, `(?:Ok\\()?Action::${variant}\\([^)]*\\)\\)?\\s*=>`));
+      const write = label === 'tcp'
+        ? `letSome(owner)=tcp_record_and_send_auth(io,session,${value},holder,opening).await?else{returnOk(TcpActionDisposition::Close);};`
+        : `letSome(owner)=write_auth_control(socket,${value},holder,send_cancellation).awaitelse{returnfalse;};`;
       const rejection = label === 'tcp' ? '{returnOk(TcpActionDisposition::Close);}' : '{returnfalse;}';
-      requireBoundary(arm.includes(successGuard + publish + rejection),
+      requireBoundary(arm.includes(write + 'if!session.publish_committed_authentication_and_route(owner).await' + rejection),
         `${label} ${variant} must publish only after the successful first/control write`);
+      if (variant === 'SendManyThenActivate') {
+        ordered(arm, ['let(replies,holder)=replies.into_parts();', 'letmutholder=Some(holder);', 'forreplyinreplies{', 'ifletSome(holder)=holder.take(){', write],
+          `${label} first control must transfer its actual one-use holder`);
+      } else {
+        requireBoundary(arm.includes('activate_route') && arm.includes('auth_publication.is_some()') && arm.includes('ifactivate_route{'),
+          `${label} resume must preserve activation and holder agreement`);
+      }
     }
   }
 
   const boshIngress = compact(body(bosh, 'async\\s+fn\\s+process_pending\\b'));
   requireBoundary(boshIngress.includes('matchself.protocol.process_frame(payload).await{') &&
     !boshIngress.includes('self.protocol.handle('), 'BOSH must enter the observed frame runner');
-  const boshPublication = compact(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
-  const exposure = 'letexposed=matchbound.expose(pending.responders){Ok(exposed)=>exposed,Err(error)=>{tracing::error!(?error,rid,);returnfalse;}};';
-  const continuation = 'letready=matchexposed.publish_authentication(||self.protocol.publish_committed_authentication_and_route()).await{Ok(ready)=>ready,Err(_)=>returnfalse,};';
+  const boshPublication = normalize(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
+  const exposure = 'letexposed=matchbound.expose(pending.responders){Ok(exposed)=>exposed,Err(error)=>{tracing::error!(?error,rid);returnfalse;}};';
+  const continuation = 'letready=matchexposed.publish_authentication(|owners|async{forownerinowners{if!self.protocol.publish_committed_authentication_and_route(owner).await{returnfalse;}}true}).await{Ok(ready)=>ready,Err(_)=>returnfalse};';
   requireBoundary(boshPublication.includes(exposure + continuation +
-    'ready.finish(&mutself.last_response,&mutself.highest_responded,&mutself.replay,).is_ok()'),
+    'ready.finish(&mutself.last_response,&mutself.highest_responded,&mutself.replay).is_ok()'),
   'BOSH must observe publication only after response exposure and before cache bookkeeping');
   requireBoundary(count(boshPublication, 'bound.expose(') === 1 &&
-    count(boshPublication, '.publish_committed_authentication_and_route()') === 1 &&
+    count(boshPublication, '.publish_committed_authentication_and_route(owner)') === 1 &&
     !boshPublication.includes('publish_committed_authentication_and_route_inner') &&
     !compact(codeOnly(productionModule(bosh))).includes('auth_publication_pending'),
   'BOSH must observe publication only after response exposure and reject publication failure');
@@ -616,11 +839,11 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
   requireBoundary(send === 'entering();letaccepted=responder.send(response).is_ok();returned(accepted);accepted' &&
     expose.includes('letexposure=self.bound.begin_exposure()?;letmutaccepted=false;') &&
     expose.includes('accepted|=send_one(self.response.clone(),responder,||exposure.sending(),|accepted|exposure.sent(accepted),);') &&
-    expose.includes('exposure,accepted,auth_control_selected:self.auth_control_selected,})') &&
+    expose.includes('exposure,accepted,auth_control_selected:self.auth_control_selected,auth_controls:self.auth_controls,})') &&
     compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+any_accepted\\b')) === 'self.accepted',
   'BOSH response exposure must preserve the actual responder acceptance');
-  const gate = compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'async\\s+fn\\s+publish_authentication\\b'));
-  requireBoundary(gate === 'ifself.auth_control_selected{anyhow::ensure!(self.accepted,);anyhow::ensure!(publish().await,);}Ok(PublicationReadyResponse{exposed:self})',
+  const gate = normalize(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'async\\s+fn\\s+publish_authentication\\b'));
+  requireBoundary(gate === 'ifself.auth_control_selected{anyhow::ensure!(self.accepted);letselected=std::mem::replace(&mutself.auth_controls,SelectedControls::empty());letobservations=selected.observations();letowners=selected.take_all()?;anyhow::ensure!(publish(owners).await);anyhow::ensure!(observations.iter().all(|observation|observation.completed()));}Ok(PublicationReadyResponse{exposed:self})',
     'BOSH publication gate must consume selected exposure, require actual acceptance and successful lazy publication');
   // Closed lexical inventory for these three concrete owners, not a Rust
   // parser or a proof over alternate syntax, macro expansion or other files.
@@ -628,12 +851,12 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
   const commonFields = 'metadata:Metadata,response:BoshHttpResponse,receipts:Vec<mpsc::UnboundedSender<()>>,ownership:Arc<BoshResponseOwnership>,';
   const finishHead = 'pub(super)fnfinish(self,last_response:&mutInstant,highest_responded:&mutu64,replay:&mutVecDeque<CachedResponse>,)->Result<()>{';
   const ownerShapes = [
-    ['BoundResponse', commonFields + 'bound:response::BoundResponse,auth_control_selected:bool,',
-      ['expose'], ['pub(super)fnexpose(self,responders:Vec<Responder>)->Result<ExposedResponse>{']],
-    ['ExposedResponse', commonFields + 'exposure:response::Exposure,accepted:bool,auth_control_selected:bool,',
+    ['BoundResponse', commonFields + 'bound:response::BoundResponse,auth_control_selected:bool,auth_controls:SelectedControls,auth_connection:Option<uuid::Uuid>,',
+      ['for_connection', 'expose'], ['pub(super)fnfor_connection(mutself,connection:uuid::Uuid)->Result<Self>{', 'pub(super)fnexpose(mutself,responders:Vec<Responder>)->Result<ExposedResponse>{']],
+    ['ExposedResponse', commonFields + 'exposure:response::Exposure,accepted:bool,auth_control_selected:bool,auth_controls:SelectedControls,',
       ['any_accepted', 'publish_authentication', 'finish'], [
         '#[cfg(test)]pub(super)fnany_accepted(&self)->bool{',
-        'pub(super)asyncfnpublish_authentication<F:Future<Output=bool>>(self,publish:implFnOnce()->F,)->Result<PublicationReadyResponse>{',
+        'pub(super)asyncfnpublish_authentication<F:Future<Output=bool>>(mutself,publish:implFnOnce(Vec<OwnedPublication>)->F,)->Result<PublicationReadyResponse>{',
         '#[cfg(test)]' + finishHead,
       ]],
     ['PublicationReadyResponse', 'exposed:ExposedResponse,', ['finish'], [finishHead]],
@@ -650,7 +873,7 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
     requireBoundary(actualMethods.join(',') === methods.join(','),
       `BOSH ${name} must retain its closed inherent-method inventory`);
     for (const head of heads) {
-      requireBoundary(compact(implementation).includes(head),
+      requireBoundary(normalize(implementation).includes(normalize(head)),
         `BOSH ${name} must retain its named consuming declaration heads and test-only compatibility methods`);
     }
     requireBoundary(!/\bSelf\s*\{/.test(implementation),
@@ -664,10 +887,11 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
   const plainFinish = compact(body(body(boshResponse, 'impl\\s+ExposedResponse\\b'), 'fn\\s+finish\\b'));
   requireBoundary(plainFinish === 'anyhow::ensure!(!self.auth_control_selected,);PublicationReadyResponse{exposed:self}.finish(last_response,highest_responded,replay)',
     'BOSH plain compatibility finish must reject selected auth before bookkeeping');
-  const prepare = compact(body(boshResponse, 'async\\s+fn\\s+prepare\\b'));
+  const prepare = normalize(body(boshResponse, 'async\\s+fn\\s+prepare\\b'));
   ordered(prepare, ['loop{', 'let(response,sources,receipts,selected)=built',
-    'letbound=request.returned(ownership)', 'letauth_control_selected=selected.iter().any(OutboundItem::is_bosh_auth_control);',
-    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,})'],
+    'letbound=request.returned(ownership)', 'letauth_controls=SelectedControls::new(selected.iter().map(|item|(item.stanza.as_str(),item.auth_publication())))',
+    'letauth_control_selected=!auth_controls.is_empty();',
+    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None})'],
     'BOSH auth membership must come from the final bound selection on every rebuild');
   const cached = compact(body(bosh, 'struct\\s+CachedResponse\\b'));
   const replay = compact(body(boshResponse, 'async\\s+fn\\s+replay_cached\\b'));
@@ -675,24 +899,32 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
     'BOSH cache and replay cannot recreate auth publication membership or authority');
   const item = compact(body(outbound, 'pub\\s+struct\\s+OutboundItem\\b'));
   requireBoundary(item.includes('bosh_auth_control:bool,') && !/pub(?:\([^)]*\))?bosh_auth_control/.test(item) &&
-    compact(body(outbound, 'fn\\s+with_bosh_auth_control\\b')) === 'self.bosh_auth_control=true;self' &&
+    item.includes('auth_publication:Option<crate::xmpp::auth_publication::AuthControlHolder>,') &&
+    !/pub(?:\([^)]*\))?auth_publication:/.test(item) &&
+    compact(body(outbound, 'fn\\s+with_auth_publication\\b')) === 'holder.validate_control(&self.stanza)?;self.bosh_auth_control=true;self.auth_publication=Some(holder);Ok(self)' &&
     compact(body(outbound, 'fn\\s+is_bosh_auth_control\\b')) === 'self.bosh_auth_control',
     'BOSH auth control must remain private item selection metadata with an exact marker accessor');
   const boshApply = body(boshAction, 'async\\s+fn\\s+apply_action\\b');
   requireBoundary(!compact(boshApply).includes('publish_committed_authentication'),
     'BOSH FIFO admission must defer authentication publication until response exposure');
-  const boshActivate = compact(body(boshApply, 'Action::SendManyThenActivate\\([^)]*\\)\\s*=>'));
-  requireBoundary(boshActivate.includes('ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}letitem=crate::outbound::OutboundItem::plain(reply);letitem=ifindex==0{item.with_bosh_auth_control()}else{item};if!self.push_output_item(item){returnfalse;}'),
-    'BOSH activation must record then enqueue the exact first control with selection membership');
-  const boshResume = compact(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));
-  requireBoundary(boshResume.includes('ifself.protocol.record_outbound(&control).await.is_err(){returnfalse;}') &&
-    boshResume.includes('ResumeTransportParts{control,post_control,replay,activate_route,transient_capacity,}') &&
-    !boshResume.includes('with_bosh_auth_control'),
-    'BOSH resume must retain activation intent for atomic queue admission');
-  const resumeQueue = compact(body(bosh, 'fn\\s+queue_bosh_resume_payload\\b'));
-  ordered(resumeQueue, ['activate_route,', '.is_none_or(|count|count>max_output_stanzas)',
+  const boshActivate = normalize(body(boshApply, 'Action::SendManyThenActivate\\([^)]*\\)\\s*=>'));
+  ordered(boshActivate, ['ifindex==0{', 'holder.validate_connection(self.protocol.connection_id)',
+    '.and_then(|_|holder.validate_control(&reply))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
+    'ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}',
+    'letitem=crate::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
+    'item.with_auth_publication(holder.take().expect())', 'if!self.push_output_item(item){returnfalse;}'],
+    'BOSH activation must validate before recording then enqueue the exact first control holder');
+  const boshResume = normalize(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));
+  ordered(boshResume, ['ifactivate_route!=auth_publication.is_some(){returnfalse;}',
+    'ifletSome(holder)=&auth_publication{', 'holder.validate_connection(self.protocol.connection_id)',
+    '.and_then(|_|holder.validate_control(&control))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
+    'ifself.protocol.record_outbound(&control).await.is_err(){returnfalse;}',
+    'ResumeTransportParts{control,post_control,replay,activate_route,auth_publication,transient_capacity}'],
+    'BOSH resume must validate exact control before recording and retain its holder for atomic queue admission');
+  const resumeQueue = normalize(body(bosh, 'fn\\s+queue_bosh_resume_payload\\b'));
+  ordered(resumeQueue, ['activate_route,auth_publication,', '.is_none_or(|count|count>max_output_stanzas)',
     '.is_none_or(|bytes|bytes>max_output_bytes){returnfalse;}',
-    'letcontrol=ifactivate_route{control.with_bosh_auth_control()}else{control};',
+    'letcontrol=ifactivate_route{letSome(holder)=auth_publicationelse{returnfalse;};matchcontrol.with_auth_publication(holder){Ok(control)=>control,Err(_)=>returnfalse}}else{ifauth_publication.is_some(){returnfalse;}control};',
     'output.push_back(control);', 'forstanzainpost_control.into_iter().chain(replay){', '*output_bytes+=batch_bytes;'],
     'BOSH resume must mark only the exact control after complete batch capacity admission');
 }

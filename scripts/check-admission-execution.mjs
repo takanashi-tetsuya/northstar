@@ -267,6 +267,7 @@ export function verifyAdmissionBoundaries(sources) {
     'operation_id,direct_operation:DirectOperationHandle::new(operation_id),' +
     'muc_discussion:MucDiscussionSlot::default(),' +
     'mix_foreground:MixForegroundSlot::default(),' +
+    'auth_receipt:std::sync::Mutex::new(None),' +
     'sequence:NEXT_SEQUENCE.fetch_add(1,Ordering::Relaxed),' +
     'policy:Policy::for_frame(transport,frame),stage:AtomicU8::new(Stage::Validationasu8),' +
     'started:tokio::time::Instant::now(),outcome:AtomicU8::new(Outcome::Pendingasu8),}))',

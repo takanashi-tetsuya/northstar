@@ -9,7 +9,7 @@ function changed(file, before, after) {
   return { ...baseline, [file]: baseline[file].replace(before, after) };
 }
 function rejects(name, file, before, after, expected) {
-  test(name, () => assert.throws(() => verifyExecutionBoundaries(changed(file, before, after)), expected));
+  test(name, () => assert.throws(() => verifyExecutionBoundaries(changedMuc(file, before, after)), expected));
 }
 
 test('current production execution owners satisfy the gate', () => verifyExecutionBoundaries(baseline));
@@ -24,16 +24,16 @@ rejects('native WebSocket ingress cannot bypass observed frame execution', 'tran
   'let action = match session.process_frame(&frame).await {\n                            Ok(action) => Ok(action),',
   'let action = match session.handle(&frame).await {\n                            Ok(action) => Ok(action),', /websocket_connection/);
 rejects('activation must retain originating frame', 'protocol',
-  'self.frame_executions.defer_publication(execution);', 'drop(execution);', /originating frame/);
+  'let origin = self.frame_executions.auth_origin();', 'let origin = None;', /originating frame/);
 rejects('comment cannot replace originating frame ownership', 'protocol',
-  'self.frame_executions.defer_publication(execution);',
-  '/* self.frame_executions.defer_publication(execution); */', /originating frame/);
+  'let origin = self.frame_executions.auth_origin();',
+  '/* let origin = self.frame_executions.auth_origin(); */', /originating frame/);
 rejects('raw string cannot replace originating frame ownership', 'protocol',
-  'self.frame_executions.defer_publication(execution);',
-  'let ignored = r###"self.frame_executions.defer_publication(execution);"###;', /originating frame/);
+  'let origin = self.frame_executions.auth_origin();',
+  'let ignored = r###"let origin = self.frame_executions.auth_origin();"###;', /originating frame/);
 rejects('publication cannot bypass typed observation', 'protocol',
-  '.observe_publication(self.publish_committed_authentication_and_route_inner())',
-  '.run(self.publish_committed_authentication_and_route_inner())', /observed typed owner/);
+  '.observe_publication(future)',
+  '.run(future)', /observed typed owner/);
 rejects('publication cannot add a deadline', 'frame',
   'let result = future.await;',
   'let result = tokio::time::timeout(FRAME_BUDGET, future).await.unwrap();', /without adding a deadline/);
@@ -46,39 +46,45 @@ rejects('frame budget cannot be expanded to hide a stall', 'frame',
 rejects('WebSocket inline budget cannot drift', 'frame',
   'const INLINE_AUTH_BUDGET: Duration = Duration::from_secs(8);',
   'const INLINE_AUTH_BUDGET: Duration = Duration::from_secs(9);', /reviewed budget/);
-rejects('backend failure cannot be flattened to credential rejection', 'protocol',
+rejects('backend failure cannot be flattened to credential rejection', 'authOwner',
   'return PublicationResult::BackendFailure;', 'return PublicationResult::CredentialRejected;', /BackendFailure/);
-rejects('integrity failure cannot be flattened to credential rejection', 'protocol',
-  'return PublicationResult::IntegrityRejected;', 'return PublicationResult::CredentialRejected;', /IntegrityRejected/);
-rejects('credential fence loss cannot continue transport', 'protocol',
+rejects('integrity failure cannot be flattened to credential rejection', 'authOwner',
+  'AuthenticationResult::Authenticated(_) | AuthenticationResult::IntegrityFailure => { port.rejected(PublicationResult::IntegrityRejected, None); return PublicationResult::IntegrityRejected; }',
+  'AuthenticationResult::Authenticated(_) | AuthenticationResult::IntegrityFailure => { port.rejected(PublicationResult::CredentialRejected, None); return PublicationResult::CredentialRejected; }', /IntegrityRejected/);
+rejects('credential fence loss cannot continue transport', 'authOwner',
   'return PublicationResult::CredentialRejected;', 'return PublicationResult::Completed;', /credential fence/);
 rejects('missing principal cannot become successful publication', 'protocol',
-  'let Some(user) = self.authenticated.clone() else {\n            return PublicationResult::RouteRejected;\n        };',
-  'let Some(user) = self.authenticated.clone() else {\n            return PublicationResult::Completed;\n        };', /missing principal/);
-rejects('deferred replacement notification must remain visible', 'protocol',
+  'self.session.authenticated.as_ref().is_none_or(|user| { user.id != route.user || user.auth_generation != route.generation })',
+  'self.session.authenticated.as_ref().is_some_and(|user| { user.id != route.user || user.auth_generation != route.generation })', /missing principal/);
+rejects('deferred replacement notification must remain visible', 'authOwner',
   'return PublicationResult::CompletedWithDeferredNotification;',
   'return PublicationResult::Completed;', /visibly deferred/);
 rejects('deferred replacement notification cannot force a client retry', 'frame',
   'Self::Completed | Self::CompletedWithDeferredNotification',
   'Self::Completed', /only authoritative publication success/);
-for (const file of ['tcp', 'websocket']) {
+for (const [file, helper, end] of [
+  ['tcp', 'tcp_record_and_send_auth(io, session, reply, holder, opening).await?', 'return Ok(TcpActionDisposition::Close);'],
+  ['websocket', 'write_auth_control(socket, reply, holder, send_cancellation).await', 'return false;'],
+]) {
   rejects(`${file} first write must succeed before activation`, file,
-    'if index == 0 && !session.publish_committed_authentication_and_route().await {',
-    'if !session.publish_committed_authentication_and_route().await && index == 0 {', /successful first\/control write/);
+    `let Some(owner) = ${helper} else { ${end} };`,
+    `let Some(owner) = ${helper} else { ${end} }; tokio::task::yield_now().await;`, /successful first\/control write/);
   rejects(`${file} resumed control must succeed before activation`, file,
-    'if activate_route && !session.publish_committed_authentication_and_route().await {',
-    'if !session.publish_committed_authentication_and_route().await && activate_route {', /successful first\/control write/);
+    `let Some(owner) = ${helper.replace('reply', 'control')} else { ${end} };`,
+    `let Some(owner) = ${helper.replace('reply', 'control')} else { ${end} }; tokio::task::yield_now().await;`, /successful first\/control write/);
   rejects(`${file} publication guard cannot be supplied by a comment`, file,
-    'if index == 0 && !session.publish_committed_authentication_and_route().await {',
-    '/* if index == 0 && !session.publish_committed_authentication_and_route().await */ if false {', /two observed publication continuations/);
+    `let Some(owner) = ${helper} else { ${end} };`,
+    `/* let Some(owner) = ${helper} else { ${end} }; */`, /successful first\/control write/);
+  rejects(`${file} rejected publication must close rather than continue`, file,
+    `let Some(owner) = ${helper} else { ${end} }; if !session.publish_committed_authentication_and_route(owner).await { ${end} }`,
+    `let Some(owner) = ${helper} else { ${end} }; if !session.publish_committed_authentication_and_route(owner).await { continue; }`, /successful first\/control write/);
 }
 
-// Concrete independent-review escapes. Keep these on the production validator:
-// runtime trace tests alone do not prevent a later adapter/owner bypass.
-rejects('inner credential publication cannot acquire a new five-second deadline', 'protocol',
-  'match self\n                .state\n                .authentication_service()\n                .publish_credential_commit(&receipt)\n                .await',
-  'match tokio::time::timeout(\n                std::time::Duration::from_secs(5),\n                self.state.authentication_service().publish_credential_commit(&receipt)\n            ).await.unwrap_or(crate::services::authentication::AuthenticationResult::StaleGeneration)',
-  /inner credential publication/);
+// Runtime trace tests alone do not prevent an adapter/owner bypass.
+rejects('inner credential publication cannot acquire a new five-second deadline', 'authOwner',
+  'match port.publish(&invocation).await {',
+  'match tokio::time::timeout(std::time::Duration::from_secs(5), port.publish(&invocation)).await.unwrap_or(AuthenticationResult::StaleGeneration) {',
+  /auth consuming sequence/);
 rejects('backend publication outcome cannot report completed', 'frame',
   'Self::BackendFailure => Outcome::BackendFailure,',
   'Self::BackendFailure => Outcome::Completed,', /result-to-outcome classification/);
@@ -108,15 +114,9 @@ rejects('runner drop cannot omit child destruction', 'frame',
   'drop(self.child.take());', '', /destroy the child first/);
 rejects('runner drop cannot forget a caught panic', 'frame',
   'if self.poll_in_progress {', 'if std::thread::panicking() {', /preserve a caught panic/);
-rejects('deferral behind a dead condition is not originating ownership', 'protocol',
-  'self.frame_executions.defer_publication(execution);',
-  'if false { self.frame_executions.defer_publication(execution); }', /reviewed live condition/);
-rejects('TCP rejected publication must close rather than continue', 'tcp',
-  'if index == 0 && !session.publish_committed_authentication_and_route().await {\n                    return Ok(TcpActionDisposition::Close);\n                }',
-  'if index == 0 && !session.publish_committed_authentication_and_route().await {\n                    continue;\n                }', /successful first\/control write/);
-rejects('WebSocket rejected publication must close rather than continue', 'websocket',
-  'if index == 0 && !session.publish_committed_authentication_and_route().await {\n                    return false;\n                }',
-  'if index == 0 && !session.publish_committed_authentication_and_route().await {\n                    continue;\n                }', /successful first\/control write/);
+rejects('capture behind a dead condition is not originating ownership', 'protocol',
+  'let origin = self.frame_executions.auth_origin();',
+  'let origin = if false { self.frame_executions.auth_origin() } else { None };', /originating frame/);
 rejects('inline classifier remains transport-specific', 'frame',
   'let inline = transport == ClientTransport::WebSocket && is_inline_auth(frame);',
   'let inline = is_inline_auth(frame);', /guarded WebSocket inline/);
@@ -124,14 +124,14 @@ rejects('BOSH ingress cannot bypass observed execution', 'bosh',
   'match self.protocol.process_frame(payload).await {',
   'match self.protocol.handle(payload).await {', /BOSH must enter/);
 rejects('BOSH publication cannot bypass observed owner', 'bosh',
-  '.publish_authentication(|| self.protocol.publish_committed_authentication_and_route())',
-  '.publish_authentication(|| self.protocol.publish_committed_authentication_and_route_inner())', /BOSH must observe publication/);
+  '.publish_committed_authentication_and_route(owner)',
+  '.publish_committed_authentication_and_route_inner(owner)', /auth BOSH continuation/);
 rejects('BOSH unexposed response cannot publish authentication', 'boshResponse',
   'anyhow::ensure!(self.accepted, "BOSH authentication control was not exposed");',
   'anyhow::ensure!(true, "BOSH authentication control was not exposed");', /BOSH publication gate/);
 rejects('BOSH publication failure cannot succeed', 'bosh',
-  'Ok(ready) => ready,\n            Err(_) => return false,',
-  'Ok(ready) => ready,\n            Err(_) => return true,', /BOSH must observe publication/);
+  'Ok(ready) => ready,\n            Err(_) => return false',
+  'Ok(ready) => ready,\n            Err(_) => return true', /BOSH must observe publication/);
 rejects('BOSH exposure must reflect actual responder acceptance', 'boshResponse',
   'let accepted = responder.send(response).is_ok();',
   'let accepted = true; let _ = responder.send(response);', /actual responder acceptance/);
@@ -148,11 +148,11 @@ rejects('BOSH publication cannot treat every accepted response as selected', 'bo
   'if self.auth_control_selected {',
   'if true {', /BOSH publication gate/);
 rejects('BOSH publication callback failure cannot mint readiness', 'boshResponse',
-  'anyhow::ensure!(publish().await, "BOSH authentication publication failed");',
-  'let _ = publish().await;', /BOSH publication gate/);
+  'anyhow::ensure!(publish(owners).await, "BOSH authentication publication failed");',
+  'let _ = publish(owners).await;', /BOSH publication gate/);
 rejects('BOSH selected membership must use the final response items', 'boshResponse',
-  'let auth_control_selected = selected.iter().any(OutboundItem::is_bosh_auth_control);',
-  'let auth_control_selected = fields.output.iter().any(OutboundItem::is_bosh_auth_control);', /BOSH auth membership/);
+  'SelectedControls::new(selected.iter().map(|item| (item.stanza.as_str(), item.auth_publication())))',
+  'SelectedControls::new(fields.output.iter().map(|item| (item.stanza.as_str(), item.auth_publication())))', /BOSH auth membership/);
 rejects('BOSH exposure cannot discard selected membership', 'boshResponse',
   'auth_control_selected: self.auth_control_selected,',
   'auth_control_selected: false,', /actual responder acceptance/);
@@ -163,8 +163,8 @@ rejects('BOSH item marker cannot become public mutable authority', 'outbound',
   '    bosh_auth_control: bool,',
   '    pub(crate) bosh_auth_control: bool,', /private item selection metadata/);
 rejects('BOSH marker accessor cannot synthesize selected membership', 'outbound',
-  '        self.bosh_auth_control\n',
-  '        true\n', /private item selection metadata/);
+  'pub(crate) fn is_bosh_auth_control(&self) -> bool { self.bosh_auth_control }',
+  'pub(crate) fn is_bosh_auth_control(&self) -> bool { true }', /private item selection metadata/);
 rejects('BOSH cache cannot retain auth selection membership', 'bosh',
   'struct CachedResponse {',
   'struct CachedResponse {\n    auth_control_selected: bool,', /cache and replay/);
@@ -184,10 +184,10 @@ rejects('BOSH exposed owner cannot manually implement Copy', 'boshResponse',
   'impl ExposedResponse {',
   'impl Copy for ExposedResponse {}\nimpl ExposedResponse {', /cannot derive or manually implement Clone or Copy/);
 rejects('BOSH bound exposure must consume its owner', 'boshResponse',
-  'pub(super) fn expose(self, responders: Vec<Responder>)',
+  'pub(super) fn expose(mut self, responders: Vec<Responder>)',
   'pub(super) fn expose(&self, responders: Vec<Responder>)', /named consuming declaration heads/);
 rejects('BOSH publication cannot borrow its exposed owner', 'boshResponse',
-  'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        self,',
+  'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        mut self,',
   'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        &self,', /named consuming declaration heads/);
 rejects('BOSH ready bookkeeping must consume its owner', 'boshResponse',
   'impl PublicationReadyResponse {\n    pub(super) fn finish(\n        self,',
@@ -196,8 +196,8 @@ rejects('BOSH bound owner cannot expose mutable selected membership', 'boshRespo
   '    bound: response::BoundResponse,\n    auth_control_selected: bool,',
   '    bound: response::BoundResponse,\n    pub(super) auth_control_selected: bool,', /exact private field shape/);
 rejects('BOSH ready owner cannot expose its inner continuation', 'boshResponse',
-  'pub(super) struct PublicationReadyResponse {\n    exposed: ExposedResponse,',
-  'pub(super) struct PublicationReadyResponse {\n    pub(super) exposed: ExposedResponse,', /exact private field shape/);
+  'pub(super) struct PublicationReadyResponse {\n    exposed: ExposedResponse',
+  'pub(super) struct PublicationReadyResponse {\n    pub(super) exposed: ExposedResponse', /exact private field shape/);
 rejects('BOSH ready owner cannot add an into_exposed escape', 'boshResponse',
   'impl PublicationReadyResponse {',
   'impl PublicationReadyResponse {\n    pub(super) fn into_exposed(self) -> Result<ExposedResponse> { Ok(self.exposed) }',
@@ -216,9 +216,108 @@ rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
   '#[cfg(test)]\n    pub(super) fn finish(',
   'pub(super) fn finish(', /test-only compatibility methods/);
 
+// Finite auth owner/adapter negatives reuse the same exact token-span helper.
+rejects('auth receipt identity cannot become public substitution authority', 'authService',
+  'publication_identity: Uuid,', 'pub publication_identity: Uuid,', /receipt instance identity must remain private/);
+rejects('auth value-equal receipt cannot substitute its private instance', 'authFacts',
+  'state.receipt_id == receipt.publication_identity() && state.receipt == ReceiptProjection::of(receipt)',
+  'state.receipt == ReceiptProjection::of(receipt)', /actual receipt and successful control transport/);
+rejects('auth invocation cannot begin before successful control transport', 'authFacts',
+  'ensure!(matches!(state.snapshot.transport, Transport::Written | Transport::BoshAccepted { .. }), "auth publication requires successful control transport");',
+  '', /actual receipt and successful control transport/);
+rejects('auth service start cannot be repeated through another borrow', 'authFacts',
+  'ensure!(!state.snapshot.service_started, "auth publication service already started");',
+  '', /distinct one-use transitions/);
+rejects('auth repository start cannot be repeated before pool begin', 'authFacts',
+  'state.snapshot.repository_started = true;',
+  'state.snapshot.repository_started = false;', /distinct one-use transitions/);
+rejects('auth actual return must pass the observed service', 'protocol',
+  '.publish_credential_commit_observed(invocation).await',
+  '.publish_credential_commit(invocation.receipt()).await', /actual observed service/);
+rejects('auth frame registration cannot accept another origin', 'frame',
+  'observation.snapshot().frame == Some(self.0.operation_id)',
+  'true', /frame registration/);
+rejects('auth completed handler cannot retire a sealed publication', 'authFacts',
+  'if !state.snapshot.sealed && state.snapshot.terminal.is_none() {',
+  'if state.snapshot.terminal.is_none() {', /independently owned/);
+rejects('auth COMMIT knowledge cannot be recorded after the await', 'authFacts',
+  'state.snapshot.publication = Knowledge::CommitCallEntered;',
+  'state.snapshot.publication = Knowledge::BeforeCommit;', /COMMIT entry, receipt and return/);
+rejects('auth SQL publication cannot replace the stored epoch with a hint', 'authDb',
+  'invocation.commit(tx.commit(), published_epoch)',
+  'invocation.commit(tx.commit(), receipt.staged_login_epoch().map(|stage| stage.epoch))', /actual transaction order/);
+rejects('auth actual return cannot mint a matching receipt', 'authFacts',
+  'state.snapshot.publication == Knowledge::ReceiptKnown(epoch)',
+  'true', /return cannot synthesize/);
+rejects('auth final control binding cannot ignore its digest', 'authOwner',
+  'self.0.length == control.len() && self.0.digest == <[u8; 32]>::from(Sha256::digest(control.as_bytes()))',
+  'self.0.length == control.len()', /control bytes must match/);
+rejects('auth native alias cannot write before claiming the current holder', 'authOwner',
+  'state.pending.is_some() && state.phase == HolderPhase::Recording',
+  'state.pending.is_some()', /native write must claim/);
+rejects('auth late transport observation cannot overwrite written facts', 'authFacts',
+  'ensure!(allowed, "auth transport observation is late or out of order");',
+  '', /transport observations must remain monotone/);
+rejects('auth selected controls cannot skip duplicate IDs', 'authOwner',
+  'ids.insert(holder.0.id) && pointers.insert(Arc::as_ptr(&holder.0) as usize)',
+  'pointers.insert(Arc::as_ptr(&holder.0) as usize)', /reject duplicate IDs and aliases/);
+rejects('auth selected controls cannot skip duplicate holder addresses', 'authOwner',
+  'ids.insert(holder.0.id) && pointers.insert(Arc::as_ptr(&holder.0) as usize)',
+  'ids.insert(holder.0.id)', /reject duplicate IDs and aliases/);
+rejects('auth selected take cannot remove a holder during validation', 'authOwner',
+  'let pending = pending.pending.as_ref().ok_or_else(|| anyhow::anyhow!("auth holder was already consumed"))?;',
+  'let pending = pending.pending.take().ok_or_else(|| anyhow::anyhow!("auth holder was already consumed"))?;', /entire set before FIFO consumption/);
+rejects('auth selected lock set cannot cross an await', 'authOwner',
+  'drop(guards);\n        drop(sorted);',
+  'tokio::task::yield_now().await; drop(guards); drop(sorted);', /locks cannot cross an await/);
+rejects('auth selection completion cannot ignore one selected owner', 'boshResponse',
+  'observations.iter().all(|observation| observation.completed())',
+  'observations.iter().any(|observation| observation.completed())', /BOSH publication gate/);
+rejects('auth bound caps publication cannot use latest session intent', 'authOwner',
+  'port.caps(effects.caps.take()).await;',
+  'port.caps(None).await;', /captured route, caps and notifier ordering/);
+rejects('auth caps adapter cannot replace the captured connection', 'authCaps',
+  'self.commit_caps_observation_for(presence, full_jid, intent.connection, &intent.gate, &intent.generation);',
+  'self.commit_caps_observation_for(presence, full_jid, self.connection_id, &intent.gate, &intent.generation);', /captured presence, gate, generation/);
+rejects('auth route adapter cannot use latest connection for captured activation', 'protocol',
+  '&route.key, route.connection, route.user, route.generation, &route.lifecycle, &route.disconnect',
+  '&route.key, self.session.connection_id, route.user, route.generation, &route.lifecycle, &route.disconnect', /captured activation/);
+rejects('auth forged terminal marker cannot mint completed ownership', 'authFacts',
+  'Some(Terminal::Completed) => self.successful_completion(false),',
+  'Some(Terminal::Completed) => true,', /captured effect results/);
+rejects('auth completion cannot flatten missing caps result', 'authFacts',
+  '|| !effects.caps_entered || !effects.caps_returned',
+  '|| !effects.caps_entered', /captured effect results/);
+rejects('auth publication ready child must be destroyed before retirement', 'authOwner',
+  'drop(this.child.take());\n                this.retirement.polling = false;',
+  'this.retirement.polling = false; drop(this.child.take());', /destroy its child/);
+rejects('auth retirement field cannot precede its child', 'authOwner',
+  'struct PublicationRunner<F> { child: Option<Pin<Box<F>>>, retirement: PublicationRetirement }',
+  'struct PublicationRunner<F> { retirement: PublicationRetirement, child: Option<Pin<Box<F>>> }', /retirement field guard/);
+rejects('auth retirement cannot forget a caught poll panic', 'authOwner',
+  'if self.polling || std::thread::panicking() { Terminal::Panicked } else { Terminal::Cancelled }',
+  'if std::thread::panicking() { Terminal::Panicked } else { Terminal::Cancelled }', /retirement field guard/);
+rejects('auth actual TCP record cannot start before exact byte validation', 'transport',
+  'holder.validate_control(&stanza)?;',
+  '', /TCP adapter must validate/);
+rejects('auth inline resume cannot seal before final activation', 'sasl2',
+  'payload.activate_route = true;\n                    self.seal_resume_authentication(&mut payload)?;',
+  'self.seal_resume_authentication(&mut payload)?; payload.activate_route = true;', /inline resume must seal/);
+for (const [file, owner] of [['authService', 'CredentialCommitReceipt'], ['authOwner', 'KnownCredentialOwner'],
+  ['authOwner', 'OwnedPublication'], ['authOwner', 'SelectedControls']]) {
+  rejects(`auth ${owner} cannot derive Clone`, file,
+    `pub(crate) struct ${owner}`, `#[derive(Clone)] pub(crate) struct ${owner}`, /cannot derive or implement Clone or Copy/);
+}
+rejects('auth owner cannot publish its mutable receipt field', 'authOwner',
+  'struct PendingPublication {\n    receipt: CredentialCommitReceipt,',
+  'struct PendingPublication {\n    pub(crate) receipt: CredentialCommitReceipt,', /receipt, origin and effects private/);
+rejects('auth holder cannot add a factory that takes before write', 'authOwner',
+  'impl AuthControlHolder {',
+  'impl AuthControlHolder { pub(crate) fn take_without_write(self) -> OwnedPublication { let pending = self.0.pending.lock().unwrap().pending.take().unwrap(); OwnedPublication { pending, holder: self, managed: false } }',
+  /closed inherent-method inventory/);
 
-// MUC is awaiting its coordinated formatting checkpoint. Match the exact
-// selected token span while tolerating whitespace and optional final commas;
+// Reuse the bounded token-span mutation helper for auth and room guards.
+// Match the exact selected token span while tolerating whitespace and optional final commas;
 // the production gate still masks comments/literals independently.
 function changedMuc(file, before, after, expectedMatches = 1) {
   function dense(source) {

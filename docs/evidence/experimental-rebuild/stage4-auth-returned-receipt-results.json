@@ -1,0 +1,76 @@
+{
+  "schema": "northstar-stage4-auth-returned-receipt-results-v1",
+  "status": "OrdinaryPassed_Stage4Open",
+  "change": "An actual returned credential receipt now owns its exact final auth control, transport boundary, publication and captured effects through a private consuming continuation.",
+  "behavior": [
+    "The retained owner begins at the actual returned CredentialCommitReceipt. Its private receipt-instance identity binds the original frame and connection; copied field values cannot substitute another receipt or invocation.",
+    "The final UTF-8 control is sealed with byte length and SHA-256 under the existing collision-resistance assumption. Actual native writes or final BOSH-selected controls must match those bytes and the original owner before continuation. The digest is a check, not independent publication authority.",
+    "Native TCP and WebSocket action paths consume one transport start before their existing send/flush or live-write boundary. Successful exposure remains recorded even if later publication fails or is cancelled.",
+    "BOSH validates the exact final selected set before taking any holder, rejects duplicate identities, and consumes publication owners in FIFO order. An unbound success selected while a later bind success remains queued can consume only its own no-SQL publication; the queued bind owner remains untouched.",
+    "Restoration and supersession preserve the same unconsumed holder. A later failure or cancellation stops the selected continuation and retires abandoned exposed owners. Only successful publication/effect facts for every selected auth owner permit response bookkeeping and cache completion; a true callback or a terminal label alone is insufficient.",
+    "Publication uses captured route, Caps and notification inputs together with the existing current-owner checks. Transaction-entry, COMMIT acknowledgement and raw returned class remain separate; mismatches retain diagnostic facts and grant no further permission.",
+    "Inline SASL2 resume seals after the final control-envelope replacement. Handler return and publication retirement remain separate so a queued control can outlive its handler. Children are destroyed before retirement, including caught poll and destructor panics; Drop performs no SQL, retry or compensation."
+  ],
+  "compatibility": [
+    "Existing protocol outcomes, native write/flush policy, BOSH queue/selection policy, publication SQL/query/rollback order, captured-effect order and deadlines are preserved.",
+    "Returned-only compatibility facades remain available. No new dependency, migration, session-wide latest-receipt authority, general executor or queue is introduced."
+  ],
+  "validation": {
+    "status": "Accepted within the finite ordinary returned-receipt source/component scope after independent review.",
+    "commands_passed": 64,
+    "rust_exact_selected": 54,
+    "rust_added_selected": 24,
+    "rust_changed_selected": 10,
+    "rust_reused_selected": 20,
+    "rust_exact_passed": 54,
+    "rust_exact_failed": 0,
+    "rust_exact_ignored": 0,
+    "node_passed": 504,
+    "server_inventory_names": 1925,
+    "format_compile_clippy_and_source_gates": "Passed, including warnings-denied Clippy and the migration/source checker.",
+    "control_scope": "Finite in-process owner/receipt identity, actual BOSH selection, production native/publication sequencing with supplied I/O and repository outcomes, and cancellation/panic/lifetime controls. Four reused outer-publication controls retain the no-new-deadline boundary.",
+    "live_sql_wire_or_saved_workload_validation": "Outside this ordinary component batch."
+  },
+  "engineering_corrections": [
+    "The first auth attempt stopped during Node suite loading because the Caps architecture guard still inspected a forwarding facade. The corrected guard pins exact forwarding and applies its original ordering predicate to the shared helper.",
+    "The second attempt passed all 504 Node cases and compilation, then stopped on two by-value size lints and a needless borrow. Documented method-local and enum-local expectations preserve the recoverable OutboundItem and credential-receipt APIs; the redundant borrow and its exact lexical anchor were corrected.",
+    "The retained bare-receipt facade has a documented non-test, method-local dead-code expectation. A redundant conversion in an already-anyhow error arm was removed before execution.",
+    "Both failed auth attempts remain excluded from acceptance. The separately reviewed corrected batch used settled owned caches under the same command and output limits and completed with owned cleanup."
+  ],
+  "limits": [
+    "This slice begins after a credential receipt has returned. It does not observe initial FAST, bind or resume transaction entry, COMMIT-loss or pre-receipt Unknown. That credential phase remains an explicit later obligation.",
+    "Publication transaction placement and unchanged SQL behavior are source/gate correspondence claims. Supplied commit outcomes and controlled I/O do not qualify PostgreSQL locks, rollback, network peers or wire behavior.",
+    "The successful ordinary batch does not complete saved cross-domain compositions, SM retention, real-adapter qualification or full Stage4. Historical Stage3/component acceptances keep their original scope.",
+    "The earlier TLS response-EOF cause and historical interruption cleanup uncertainties remain unresolved. This successful owned run does not upgrade those outcomes."
+  ],
+  "related": [
+    "stage4-bosh-auth-control-results.json",
+    "stage4-muc-discussion-results.json",
+    "stage4-mix-foreground-results.json",
+    "stage4-mix-worker-results.json"
+  ],
+  "parent_ci": {
+    "commit": "62ed819c35aed2ac3f833761ed2e13e66f025976",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37368756063",
+    "status": "failure",
+    "attempts": [
+      {
+        "attempt": 1,
+        "successful": 18,
+        "cancelled": 10,
+        "skipped": 3,
+        "failed": 1
+      },
+      {
+        "attempt": 2,
+        "successful": 20,
+        "cancelled": 10,
+        "skipped": 2,
+        "failed": 1
+      }
+    ],
+    "finding": "Both attempts ended in terminal failure because required jobs were cancelled and their aggregate failed. Cancelled jobs had no executed steps; no assertion failure was observed. Cancellation cause remains unknown.",
+    "scope": "The single approved retry was used. This prior CI result is separate from the current local ordinary pass and does not predict the next checkpoint CI."
+  },
+  "detailed_evidence": "Detailed source snapshots, retained stops and execution records are held separately; this summary contains no raw execution metadata."
+}

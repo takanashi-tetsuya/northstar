@@ -1,3 +1,4 @@
+pub(crate) mod auth_publication;
 pub(crate) mod capabilities;
 mod direct_delivery;
 pub(crate) mod extensions;
@@ -887,6 +888,26 @@ async fn tcp_record_and_send<S: AsyncWrite + Unpin>(
     }
     send(io, stanza).await?;
     Ok(true)
+}
+
+async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
+    io: &mut S,
+    session: &mut ProtocolSession,
+    stanza: String,
+    holder: auth_publication::AuthControlHolder,
+    opening: bool,
+) -> Result<Option<auth_publication::OwnedPublication>> {
+    holder.validate_connection(session.connection_id)?;
+    holder.validate_control(&stanza)?;
+    holder.recording()?;
+    if let Err(error) = session.record_outbound(&stanza).await {
+        tcp_internal_backend_error(io, session, opening, "record outbound stanza", &error).await;
+        return Ok(None);
+    }
+    let owner = holder
+        .write(stanza, |stanza| async move { send(io, &stanza).await })
+        .await?;
+    Ok(Some(owner))
 }
 
 async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(

@@ -479,16 +479,17 @@ impl ProtocolSession {
     /// then runs the ordinary observation pipeline. The pipeline allocates a
     /// fresh `(connection_id,generation)` epoch and sends any disco query to
     /// the replacement transport.
-    pub(crate) async fn rebind_resumed_caps_observation(&mut self) {
-        let Some(raw_presence) = self.presence.resumed_caps_presence.take() else {
+    pub(crate) async fn rebind_captured_caps_observation(
+        &self,
+        intent: Option<crate::xmpp::auth_publication::CapsIntent>,
+    ) {
+        let Some(intent) = intent else {
             return;
         };
-        let Some(full_jid) = self.registered_key.clone() else {
-            return;
-        };
-        let Ok(document) = roxmltree::Document::parse(&raw_presence) else {
+        let full_jid = &intent.key;
+        let Ok(document) = roxmltree::Document::parse(&intent.presence) else {
             tracing::warn!(
-                connection_id = %self.connection_id,
+                connection_id = %intent.connection,
                 "discarded malformed persisted presence while rebinding entity capabilities"
             );
             return;
@@ -502,16 +503,20 @@ impl ProtocolSession {
             return;
         }
 
-        let _resource_epoch = Arc::clone(&self.presence.mix_presence_gate)
-            .lock_owned()
-            .await;
+        let _resource_epoch = Arc::clone(&intent.gate).lock_owned().await;
         let route_is_current = self.state.local_caps_observer_connection_is_current(
-            &full_jid,
-            self.connection_id,
-            &self.presence.mix_presence_gate,
+            full_jid,
+            intent.connection,
+            &intent.gate,
         );
         if route_is_current {
-            self.commit_caps_observation(presence, &full_jid);
+            self.commit_caps_observation_for(
+                presence,
+                full_jid,
+                intent.connection,
+                &intent.gate,
+                &intent.generation,
+            );
         }
     }
 
@@ -553,6 +558,23 @@ impl ProtocolSession {
     /// handler has durably applied the matching MIX projection and updated
     /// availability while holding `mix_presence_gate`.
     pub(crate) fn commit_caps_observation(&self, presence: Node<'_, '_>, full_jid: &str) {
+        self.commit_caps_observation_for(
+            presence,
+            full_jid,
+            self.connection_id,
+            &self.presence.mix_presence_gate,
+            &self.presence.caps_observation_generation,
+        );
+    }
+
+    fn commit_caps_observation_for(
+        &self,
+        presence: Node<'_, '_>,
+        full_jid: &str,
+        connection: uuid::Uuid,
+        gate: &Arc<tokio::sync::Mutex<()>>,
+        generation: &std::sync::atomic::AtomicU64,
+    ) {
         if !self
             .state
             .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
@@ -562,18 +584,13 @@ impl ProtocolSession {
         let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
             return;
         };
-        let connection_is_current = self.state.local_caps_observer_connection_is_current(
-            &full_jid,
-            self.connection_id,
-            &self.presence.mix_presence_gate,
-        );
+        let connection_is_current = self
+            .state
+            .local_caps_observer_connection_is_current(&full_jid, connection, gate);
         if !connection_is_current {
             return;
         }
-        let epoch = allocate_local_caps_epoch(
-            self.connection_id,
-            &self.presence.caps_observation_generation,
-        );
+        let epoch = allocate_local_caps_epoch(connection, generation);
         let _observation_fence = LocalCapsObservationFence {
             state: &self.state,
             full_jid: &full_jid,
@@ -584,14 +601,14 @@ impl ProtocolSession {
         // a late old actor cannot cancel a replacement's pending work.
         self.state
             .pending_caps()
-            .remove_local_resource(&full_jid, self.connection_id);
+            .remove_local_resource(&full_jid, connection);
         if presence
             .attribute("type")
             .is_some_and(|kind| kind != "available")
         {
             self.state
                 .caps_by_jid()
-                .remove_local_resource(&full_jid, self.connection_id);
+                .remove_local_resource(&full_jid, connection);
             return;
         }
         let now = Instant::now();

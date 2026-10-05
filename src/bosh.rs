@@ -1200,6 +1200,10 @@ impl BoshActor {
                 return false;
             }
         };
+        let bound = match bound.for_connection(self.protocol.connection_id) {
+            Ok(bound) => bound,
+            Err(_) => return false,
+        };
         let exposed = match bound.expose(pending.responders) {
             Ok(exposed) => exposed,
             Err(error) => {
@@ -1208,7 +1212,18 @@ impl BoshActor {
             }
         };
         let ready = match exposed
-            .publish_authentication(|| self.protocol.publish_committed_authentication_and_route())
+            .publish_authentication(|owners| async {
+                for owner in owners {
+                    if !self
+                        .protocol
+                        .publish_committed_authentication_and_route(owner)
+                        .await
+                    {
+                        return false;
+                    }
+                }
+                true
+            })
             .await
         {
             Ok(ready) => ready,
@@ -1266,6 +1281,7 @@ fn queue_bosh_resume_payload(
         post_control,
         replay,
         activate_route,
+        auth_publication,
         transient_capacity,
     } = payload;
     let Some(batch_count) = 1usize
@@ -1297,8 +1313,17 @@ fn queue_bosh_resume_payload(
     let hold = Arc::new(transient_capacity);
     let control = crate::outbound::OutboundItem::resume_fragment(control, Arc::clone(&hold));
     let control = if activate_route {
-        control.with_bosh_auth_control()
+        let Some(holder) = auth_publication else {
+            return false;
+        };
+        match control.with_auth_publication(holder) {
+            Ok(control) => control,
+            Err(_) => return false,
+        }
     } else {
+        if auth_publication.is_some() {
+            return false;
+        }
         control
     };
     output.push_back(control);
@@ -2580,6 +2605,13 @@ mod tests {
                 post_control: vec!["<features/>".to_owned()],
                 replay: vec!["<message id='replay'/>".to_owned()],
                 activate_route,
+                auth_publication: activate_route.then(|| {
+                    crate::xmpp::auth_publication::fixture_control(
+                        "<resumed xmlns='urn:xmpp:sm:3'/>",
+                        uuid::Uuid::from_u128(701),
+                    )
+                    .0
+                }),
                 transient_capacity: Vec::new(),
             };
             let prefix = "<presence/>";

@@ -569,6 +569,10 @@ pub(crate) enum BindingReservationOutcome {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Finalization returns the actual credential receipt by value without another allocation"
+)]
 pub(crate) enum BindingFinalizationOutcome {
     Committed {
         receipt: crate::services::authentication::CredentialCommitReceipt,

@@ -4,6 +4,8 @@
 //! PostgreSQL capability or the FAST derivation secret. Every successful
 //! identity is fenced to an exact account UUID and credential generation.
 
+pub(crate) mod publication;
+
 use crate::auth;
 use northstar_archive_core::ArchiveBoundary;
 use std::sync::Arc;
@@ -234,6 +236,7 @@ impl std::fmt::Debug for StagedLoginEpoch {
 /// consumed exactly once for the SASL2 success XML; the staged login epoch is
 /// published only by the transport-success callback.
 pub(crate) struct CredentialCommitReceipt {
+    publication_identity: Uuid,
     issued_fast: Option<IssuedFastToken>,
     staged_login_epoch: Option<StagedLoginEpoch>,
     binding_publication: Option<BindingPublication>,
@@ -274,6 +277,9 @@ impl std::fmt::Debug for CredentialCommitReceipt {
 }
 
 impl CredentialCommitReceipt {
+    pub(crate) fn publication_identity(&self) -> Uuid {
+        self.publication_identity
+    }
     pub(crate) fn staged_login_epoch(&self) -> Option<StagedLoginEpoch> {
         self.staged_login_epoch
     }
@@ -287,6 +293,7 @@ impl CredentialCommitReceipt {
         binding_publication: Option<BindingPublication>,
     ) -> Self {
         Self {
+            publication_identity: Uuid::new_v4(),
             issued_fast,
             staged_login_epoch,
             binding_publication,
@@ -368,6 +375,10 @@ pub(crate) trait AuthenticationRepository: Send + Sync {
     fn publish_credential_commit(
         &self,
         receipt: &CredentialCommitReceipt,
+    ) -> impl std::future::Future<Output = AuthenticationResult<Option<i64>>> + Send;
+    fn publish_credential_commit_observed(
+        &self,
+        invocation: &publication::Invocation<'_>,
     ) -> impl std::future::Future<Output = AuthenticationResult<Option<i64>>> + Send;
 }
 
@@ -572,6 +583,13 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             .await
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Returned-receipt compatibility for SQL controls; live transports use observed publication"
+        )
+    )]
     pub(crate) async fn publish_credential_commit(
         &self,
         receipt: &CredentialCommitReceipt,
@@ -580,6 +598,32 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             return AuthenticationResult::Authenticated(None);
         }
         self.repository.publish_credential_commit(receipt).await
+    }
+
+    pub(crate) async fn publish_credential_commit_observed(
+        &self,
+        invocation: &publication::Invocation<'_>,
+    ) -> AuthenticationResult<Option<i64>> {
+        if invocation.enter_service().is_err() {
+            return AuthenticationResult::IntegrityFailure;
+        }
+        let receipt = invocation.receipt();
+        let result =
+            if receipt.staged_login_epoch.is_none() && receipt.binding_publication.is_none() {
+                if invocation.not_required().is_err() {
+                    AuthenticationResult::IntegrityFailure
+                } else {
+                    AuthenticationResult::Authenticated(None)
+                }
+            } else {
+                self.repository
+                    .publish_credential_commit_observed(invocation)
+                    .await
+            };
+        if !invocation.returned(&result) {
+            return AuthenticationResult::IntegrityFailure;
+        }
+        result
     }
 }
 

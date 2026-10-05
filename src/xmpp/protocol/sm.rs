@@ -936,7 +936,7 @@ impl ProtocolSession {
             }
         };
         let issued_fast = receipt.take_issued_fast();
-        self.pending_credential_commit = Some(receipt);
+        self.retain_credential_commit(receipt)?;
         let remaining: VecDeque<crate::outbound::SmUnackedStanza> = activated.unacked.into();
         let exact_base_bytes = remaining.iter().map(|entry| entry.stanza.len()).sum();
         let muc_resume_ready = self
@@ -1163,7 +1163,7 @@ impl ProtocolSession {
         // lease by another full replay copy per connection.
         let resume_control =
             northstar_xep_0198::build_resumed(previd.as_str(), self.sm.inbound_h, None);
-        let resume_payload = match super::ResumePayload::from_sm_unacked(
+        let mut resume_payload = match super::ResumePayload::from_sm_unacked(
             self.state.sm_memory_governor(),
             resume_control,
             Vec::new(),
@@ -1351,6 +1351,9 @@ impl ProtocolSession {
                 )
                 .await;
             })?;
+        }
+        if !defer_visibility {
+            self.seal_resume_authentication(&mut resume_payload)?;
         }
         Ok((Action::Resume(resume_payload), issued_fast))
     }

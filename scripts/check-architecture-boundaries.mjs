@@ -3274,13 +3274,23 @@ if (/\.take\(128\)/.test(capsProtocolSource + read('src/xmpp/protocol/pep.rs')))
 if (countMatches(capsProtocolSource, /self\.entries\.insert\(\s*full_jid,/g) < 2) {
   throw new Error('local and federated Caps observations must use atomic single-key replacement');
 }
-const commitCapsObservation = structBody(
+const commitCapsObservationWrapper = structBody(
   capsProtocolSource,
   'pub(crate) fn commit_caps_observation(',
 );
+if (
+  commitCapsObservationWrapper.replace(/\s+/g, '').replace(/,\)/g, ')') !==
+    'self.commit_caps_observation_for(presence,full_jid,self.connection_id,&self.presence.mix_presence_gate,&self.presence.caps_observation_generation);'
+) {
+  throw new Error('ordinary Caps observation must forward its exact connection, gate and generation');
+}
+const commitCapsObservation = structBody(
+  capsProtocolSource,
+  'fn commit_caps_observation_for(',
+);
 const localObservationInsert = commitCapsObservation.indexOf('.observe_local(');
 const unavailableLocalRemoval = commitCapsObservation.lastIndexOf(
-  '.remove_local_resource(&full_jid, self.connection_id)',
+  '.remove_local_resource(&full_jid, connection)',
   localObservationInsert,
 );
 const unavailableBranch = commitCapsObservation.indexOf('if presence');

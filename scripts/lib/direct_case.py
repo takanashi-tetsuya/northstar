@@ -2273,8 +2273,26 @@ def _original_fixture_findings(value, ledger, payload):
             if held['remote'] == 'AcceptanceReported':
                 _finding(findings, 'handoff_remote_receipt_after_call', any(item['returned'] is True for item in remote_before))
             if held['rearm'] != 'NotRequested':
-                _finding(findings, 'handoff_rearm_after_call', bool(rearm_before) and
-                         (held['rearm'] != 'CallReturned' or any(item['returned'] for item in rearm_before)))
+                # Initial no-health recovery issues its real rearm permit
+                # before entering the port. The adapter snapshots that actual
+                # CallEntered state immediately before logging the sole call.
+                # This permits no pre-call return, other owner/source, routed
+                # recovery, intervening observation or duplicate invocation.
+                initial_rearm_entry = (
+                    held['rearm'] == 'CallEntered' and expected['route_action'] == 'Rearm' and
+                    not expected['health_modes'] and not route['health_reads'] and
+                    actual['frame_id'] == expected['frame_id'] and
+                    held['correlation'] == expected['correlations']['handoff'] and
+                    held['source'] == expected['source'] and held['local_call'] == 'NotRequested' and
+                    not held['local_accepted'] and held['last_local_refusal'] is None and
+                    held['remote'] == 'NotRequested' and not held['prior_remote_uncertain'] and
+                    held['route_end'] == 'Running' and held['retired'] is False and
+                    len(route['rearm_calls']) == 1 and
+                    route['rearm_calls'][0]['seq'] == prefix['seq'] + 1 and
+                    route['rearm_calls'][0]['source'] == held['source'])
+                _finding(findings, 'handoff_rearm_after_call', initial_rearm_entry or
+                         (bool(rearm_before) and
+                          (held['rearm'] != 'CallReturned' or any(item['returned'] for item in rearm_before))))
         phases = ['PostFinalize'] + ['Router'] * (len(expected['health_modes']) - 1) if expected['health_modes'] else []
         _finding(findings, 'health_reads', [(item['phase'], item['mode']) for item in route['health_reads']] ==
                  list(zip(phases, expected['health_modes'])))

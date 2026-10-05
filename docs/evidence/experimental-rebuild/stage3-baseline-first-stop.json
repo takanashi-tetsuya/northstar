@@ -1,0 +1,19 @@
+{
+  "schema": "northstar-stage3-baseline-stop-summary-v1",
+  "source_commit": "066818e736a256c2c905dc3c12717dc17e679780",
+  "case": "C01",
+  "status": "UnqualifiedStoppedAfter1Of16",
+  "completed_cases": 1,
+  "planned_cases": 16,
+  "qualified": false,
+  "classification": "ReplayDivergence/DirectFixtureDivergence",
+  "expected": "The saved observer retains finalization return before the subsequent health decision.",
+  "observed": "The saved trace lacked that boundary snapshot. Source review found the shared continuation still awaits finalization before health; the adapter observation cadence was incomplete.",
+  "correction": "Capture actual retained state at the PostFinalize health and initial-rearm boundaries, while preserving strict return-order checks.",
+  "limits": [
+    "The first attempt remains Unqualified and cannot be relabeled after correction.",
+    "This attempt does not establish a complete baseline record, replay or mutant result.",
+    "The controlled helper scope does not establish live SQL, wire or resource qualification.",
+    "Detailed validation data are retained privately."
+  ]
+}

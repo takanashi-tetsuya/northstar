@@ -950,6 +950,7 @@ class NativeFullMatcherTests(unittest.TestCase):
             state['begin']['knowledge'] = {'kind': 'ReceiptKnown', 'receipt': reservation}
             snapshot()
             state['begin']['returned'] = {'kind': 'Proceed', 'fence': copy.deepcopy(fence)}
+            snapshot()  # Actual retained begin service return.
         repository = value['direct_repository'][original_index]
         transaction = copy.deepcopy(repository['transaction'])
         direct_prepared = {'correlation': correlation(3), 'transaction': transaction,
@@ -964,6 +965,7 @@ class NativeFullMatcherTests(unittest.TestCase):
         snapshot()
         if unrated:
             state['direct']['returned'] = {'commit': {'kind': 'Replay'}, 'mode': 'Live', 'live_claim_id': None}
+            snapshot()  # Actual application result before continuation.
             original['continuation'] = {'kind': 'Accepted', 'error_type': None, 'error_condition': None}
             return sender_only('Completed', 'Ready')
         returned_mode = repository['completion'].get('mode', 'Live')
@@ -973,6 +975,9 @@ class NativeFullMatcherTests(unittest.TestCase):
                                        'mode': returned_mode, 'live_claim_id': transaction['live_claim_id']}
         if sender_cut == 'receipt_preserved':
             state['direct'].update(returned=None, preserved_transaction=copy.deepcopy(transaction), application_error=True)
+        snapshot()  # Actual application result/error mapping.
+        if sender_cut == 'receipt_preserved':
+            snapshot()  # Existing post_accept_failed callback before finalize.
         finalization = {'correlation': correlation(2), 'scope': 'AdmissionFinalize',
                         'fact': {'kind': 'Finalized', 'fence': copy.deepcopy(fence), 'result': 'PendingAccepted'}}
         state['finalize'] = {'correlation': correlation(2), 'started': True,
@@ -984,7 +989,7 @@ class NativeFullMatcherTests(unittest.TestCase):
             state['finalize']['returned'] = {'kind': 'AcceptPending'}
         else:
             state['finalize']['returned'] = {'kind': 'Error'}
-        snapshot()
+            snapshot()  # Existing post_accept_failed callback after the error.
         source = {'kind': 'C2s', 'recipient_id': roles['recipient_id'], 'message_id': identity['recipient_stable_id'],
                   'claim_id': transaction['live_claim_id']}
         state['handoff'] = {'correlation': correlation(4), 'source': source, 'local_call': 'NotRequested',
@@ -993,26 +998,37 @@ class NativeFullMatcherTests(unittest.TestCase):
         if sender_cut == 'receipt_preserved' or returned_mode == 'SpoolOnly':
             if source['claim_id'] is not None:
                 state['handoff']['rearm'] = 'CallEntered'
+                snapshot()  # Initial recovery entry: actual permit, before call.
                 original['route']['rearm_calls'].append({'seq': seq(), 'source': source, 'returned': True})
+                snapshot()  # Existing in-port snapshot, before permit return.
                 state['handoff']['rearm'] = 'CallReturned'
             state['handoff']['route_end'] = 'Returned'
             original['continuation'] = {'kind': 'Accepted', 'error_type': None, 'error_condition': None}
             return sender_only('Completed', 'Ready')
+        state['handoff']['route_end'] = 'NotStarted'
         for phase in ('PostFinalize', 'Router'):
+            if phase == 'PostFinalize':
+                snapshot()  # Only routing=false reads add the return boundary.
+            else:
+                state['handoff']['route_end'] = 'Running'  # Real route grant consumption.
             original['route']['health_reads'].append({'seq': seq(), 'phase': phase, 'mode': 'Live'})
         if sender_cut == 'rearm_pending':
             original['route']['enqueue'].append({'seq': seq(), 'source': source, 'xml': live, 'result': 'Full'})
             original['route']['backpressure_disconnected'] = True
             original['route']['queue_remaining'] = [{'xml': "<message id='plain'/>", 'source': None}]
             state['handoff'].update(local_call='Refused', last_local_refusal='Full')
+            snapshot()  # Actual refused try_local callback.
             original['route']['remote_calls'].append({'seq': seq(), 'source': source, 'returned': False})
             state['handoff'].update(remote='NoPositiveReceipt', prior_remote_uncertain=True, rearm='CallEntered')
             original['route']['rearm_calls'].append({'seq': seq(), 'source': source, 'returned': False})
+            snapshot()  # Routed rearm keeps only the existing post-call prefix.
             state['handoff']['route_end'] = 'Dropped'
             original['continuation'] = {'kind': 'Live', 'error_type': None, 'error_condition': None}
             return sender_only('Cancelled', 'Pending')
         original['route']['enqueue'].append({'seq': seq(), 'source': source, 'xml': live, 'result': 'Accepted'})
         state['handoff'].update(local_call='Accepted', local_accepted=True)
+        snapshot()  # Actual accepted try_local callback.
+        snapshot()  # Existing record_local_accept callback.
         original['route']['health_reads'].append({'seq': seq(), 'phase': 'Router', 'mode': 'Live'})
         state['handoff']['route_end'] = 'Returned'
         original['continuation'] = {'kind': 'Live', 'error_type': None, 'error_condition': None}
@@ -1433,6 +1449,76 @@ class NativeFullMatcherTests(unittest.TestCase):
         result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
         self.assertFalse(result[2])
         self.assertIn('finalization_return_before_rearm', result[1]['mismatches'])
+
+    def test_post_finalize_return_boundary_is_actual_not_inferred_from_receipt(self):
+        fixture = self.fixture('C01')
+        payload = self.supplied_facts(fixture)
+        original = payload['originals'][0]
+        health_seq = original['route']['health_reads'][0]['seq']
+        boundary = next(item for item in original['prefixes'] if item['seq'] == health_seq - 1)
+        self.assertEqual(boundary['state']['finalize']['returned'], {'kind': 'AcceptPending'})
+        self.assertEqual(boundary['state']['handoff']['route_end'], 'NotStarted')
+        self.assertTrue(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+        # Keep the receipt and all real callbacks, but erase the only observed
+        # finalization return before health, as in the retained failed C01.
+        boundary['state']['finalize']['returned'] = None
+        result = direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)
+        self.assertFalse(result[2])
+        self.assertEqual(result[1]['violations'], [])
+        self.assertIn('finalization_return_before_health', result[1]['mismatches'])
+
+    def test_initial_rearm_entry_binds_only_its_actual_owner_source_and_unreturned_permit(self):
+        fixture = self.fixture('C04')
+        payload = self.supplied_facts(fixture, sender_cut='receipt_preserved')
+        original = payload['originals'][0]
+        call = original['route']['rearm_calls'][0]
+        boundary_index = next(index for index, item in enumerate(original['prefixes']) if item['seq'] == call['seq'] - 1)
+        self.assertEqual(original['prefixes'][boundary_index]['state']['handoff']['rearm'], 'CallEntered')
+        self.assertTrue(direct_case._inspect_native_fixture(fixture, self.complete_record(), payload)[2])
+        for field, value in (('rearm', 'CallReturned'), ('retired', True), ('route_end', 'Returned'),
+                             ('source', direct_case._c2s(direct_case._uuid(20401), direct_case._uuid(99))),
+                             ('correlation', {'operation_id': direct_case._uuid(99), 'effect': 4, 'generation': 0, 'attempt': 1})):
+            bad = copy.deepcopy(payload)
+            bad['originals'][0]['prefixes'][boundary_index]['state']['handoff'][field] = value
+            direct_case.validate_case_evidence(bad)
+            result = direct_case._inspect_native_fixture(fixture, self.complete_record(), bad)
+            self.assertFalse(result[2], field)
+            self.assertIn('handoff_rearm_after_call', result[1]['mismatches'], field)
+
+    def test_initial_rearm_entry_requires_adjacency_and_one_actual_call(self):
+        fixture = self.fixture('C04')
+        payload = self.supplied_facts(fixture, sender_cut='receipt_preserved')
+        first_call = payload['originals'][0]['route']['rearm_calls'][0]['seq']
+        def shift(value, start):
+            if type(value) is dict:
+                if 'seq' in value and value['seq'] >= start:
+                    value['seq'] += 1
+                for item in value.values():
+                    shift(item, start)
+            elif type(value) is list:
+                for item in value:
+                    shift(item, start)
+        variants = []
+        bad = copy.deepcopy(payload)
+        prefixes = bad['originals'][0]['prefixes']
+        index = next(index for index, item in enumerate(prefixes) if item['seq'] == first_call - 1)
+        intervening = copy.deepcopy(prefixes[index])
+        shift(bad, first_call)
+        intervening['seq'] = first_call
+        prefixes.insert(index + 1, intervening)
+        variants.append(bad)
+        bad = copy.deepcopy(payload)
+        calls = bad['originals'][0]['route']['rearm_calls']
+        duplicate = copy.deepcopy(calls[0])
+        shift(bad, first_call + 1)
+        duplicate['seq'] = first_call + 1
+        calls.append(duplicate)
+        variants.append(bad)
+        for bad in variants:
+            direct_case.validate_case_evidence(bad)
+            result = direct_case._inspect_native_fixture(fixture, self.complete_record(), bad)
+            self.assertFalse(result[2])
+            self.assertIn('handoff_rearm_after_call', result[1]['mismatches'])
 
     def test_native_callbacks_and_ack_boundary_match_the_actual_shared_port(self):
         for identity, omit_flush, prefix_count in (('C01', False, 7), ('C02', False, 6),
@@ -2944,6 +3030,22 @@ class FixedProfileOrchestrationTests(unittest.TestCase):
                     if profile == direct_case.FIXED16:
                         verdicts.append(evaluation['verdict'])
         self.assertEqual([verdicts.count(name) for name in ('Pass', 'Cancelled', 'InvalidScenario')], [8, 5, 3])
+
+    def test_supplied_callback_cadence_matches_the_fixed_source_fact_counts(self):
+        counts = {'C01': 29, 'C02': 28, 'C03': 23, 'C04': 14, 'C05': 6, 'C06': 18,
+                  'C07': 167, 'C08': 53, 'C09': 24, 'C10': 58, 'C11': 38, 'C12': 49, 'C13': 44,
+                  'R01': 0, 'R02': 0, 'R03': 0, 'M1': 170, 'M2': 165, 'M3': 25, 'M4': 165}
+        def sequences(value):
+            if type(value) is dict:
+                return ([value['seq']] if 'seq' in value else []) + [seq for item in value.values() for seq in sequences(item)]
+            if type(value) is list:
+                return [seq for item in value for seq in sequences(item)]
+            return []
+        for profile in (direct_case.FIXED16, direct_case.FIXED4):
+            for fixture in direct_case.fixture_plan(profile):
+                payload = self.supplied(fixture)
+                observed = sequences(payload)
+                self.assertEqual(sorted(observed), list(range(1, counts[fixture['id']] + 1)), fixture['id'])
 
     def test_actual_no_flush_safety_precedes_baseline_fixture_mismatch(self):
         fixture = next(item for item in direct_case._fixture_plan(direct_case.FIXED16) if item['id'] == 'C07')

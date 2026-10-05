@@ -1,6 +1,6 @@
 # Northstar 實驗架構現況
 
-更新：2026-10-04。Stage0／1與Stage2 reservation/finalization受控子退出已驗收。
+更新：2026-10-05。Stage0／1與Stage2 reservation/finalization受控子退出已驗收。
 來源版本與測試 hash 見下列結果索引。
 
 ## 階段與退出條件
@@ -10,7 +10,7 @@
 | 0 基線 | 固定來源；admission、commit、handoff、write、ACK、settlement各有明確權威；Unknown不當rollback | 已驗收 |
 | 1 規格 | actor共用容量／TTL、初態與混合負載預檢；精確oracle；取消、中斷、缺證據與cleanup分判 | 限定synthetic／fixture scope已驗收 |
 | 2 Shared admission | production與controlled共用transitions；真實outcome、完整effect/fence關聯；可保存、重播、縮減的正常／拒絕／replay／expiry／Unknown案例 | Reservation/finalization子退出已驗收 |
-| 3 Direct lifecycle | 真mode-aware commit連接既有router、exact queue item、write及SM/BOSH owner；取消、partial write、replacement與stale ACK不丟失責任 | [Saved callback觀測修正普通檢查通過](../evidence/experimental-rebuild/stage3-finalization-boundary-results.json)，整鏈仍未驗收 |
+| 3 Direct lifecycle | 真mode-aware commit連接既有router、exact queue item、write及SM/BOSH owner；取消、partial write、replacement與stale ACK不丟失責任 | [固定16案record與16案replay已驗收](../evidence/experimental-rebuild/stage3-baseline-record-replay-results.json)；mutation／shrink與reader篡改檢查待完成，整階段仍未驗收 |
 | 4 高風險域 | MUC/MIX、auth publication（含write/exposure後failure/cancel）、worker claim/recovery皆有production共用受控案例及跨域組合 | 未完成 |
 | 5 Real adapters | PostgreSQL交易／鎖／fence／Unknown與模型相符；stock wire與獨立peer；確切版本及cleanup | 未完成 |
 | 6 有限qualification | 有效負載、資源／事件／時間界限、backpressure／recovery觀測及獨立cleanup；缺terminal不能Pass | 未完成；72h soak已取消 |
@@ -47,7 +47,7 @@ Reconcile保留實際返回的effect與as-of，但尚無production runtime consu
 舊相容案例的首個failure在case8/op-1，native／shrink目標在op-2。
 
 [Saved-case source readiness](../evidence/experimental-rebuild/stage3-profile-readiness-results.json)已完成；[首次record](../evidence/experimental-rebuild/stage3-baseline-first-stop.json)在C01因finalization-return觀測缺口停止（1/16），原始驗證資料私有保留。
-[Callback觀測修正](../evidence/experimental-rebuild/stage3-finalization-boundary-results.json)已通過普通檢查；需重新綁定artifact及fresh record/replay，不能將原停止紀錄改稱通過。
+[Callback觀測修正](../evidence/experimental-rebuild/stage3-finalization-boundary-results.json)後，重新綁定的[固定16案record與16案replay](../evidence/experimental-rebuild/stage3-baseline-record-replay-results.json)各自通過獨立審查；每次為8 Pass、5 planned Cancelled、3 InvalidScenario，完整DTO（含seq）與evaluation一致。舊C01停止及另一次零案例的prelaunch失敗仍保留，不能改稱通過。
 Stage3須保留reservation、durable message commit、finalization各自的Unknown／receipt與外層取消owner。
 Queue接受不等於write或peer ACK；可恢復storage不等於已排程retry。Guard-only沒有durable reservation receipt。
 Stage5才驗真SQL／clock／crypto／wire fidelity；成功的有限supervision不證明所有OS資源或fault邊界。

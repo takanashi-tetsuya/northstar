@@ -1,0 +1,40 @@
+{
+  "schema": "northstar-experimental-rebuild-engineering-summary-v1",
+  "status": "FiniteControlledBaselineRecordReplayAccepted",
+  "source_commit": "107a79284f79a1e3348c099dd5b49b5f41f68c81",
+  "scope": "One complete fixed 16-case controlled baseline record and one saved-input replay, independently reviewed. Full Stage3 remains open.",
+  "outcomes": {
+    "record": {
+      "fixture_matched": 16,
+      "Pass": 8,
+      "planned_Cancelled": 5,
+      "InvalidScenario": 3
+    },
+    "replay": {
+      "fixture_matched": 16,
+      "Pass": 8,
+      "planned_Cancelled": 5,
+      "InvalidScenario": 3
+    }
+  },
+  "qualification": "The five planned cancellations and three rejections retain their own outcomes and are not qualified Pass results.",
+  "observed_obligations": [
+    "Finalization return is retained before dependent health and recovery actions.",
+    "Native flush failure suppresses acknowledgement.",
+    "SM persistence precedes native writing, and acknowledgement preserves the expected FIFO suffix.",
+    "SM and BOSH cancellation retain unresolved persistence knowledge.",
+    "BOSH transfer, renewal, response binding, exposure, cache and acknowledgement follow the tested owner histories.",
+    "The delayed old token is rejected while the replacement owner completes under the controlled row authority."
+  ],
+  "retained_failures": [
+    "The earlier one-case baseline stop remains Unqualified; see stage3-baseline-first-stop.json.",
+    "An earlier trusted prelaunch check stopped before any case ran and remains separately retained."
+  ],
+  "evidence_scope": "Actual bounded saved-case observations and independently recomputed results. Detailed execution and replay materials are retained privately.",
+  "limits": [
+    "Repository responses, completion cuts and I/O are controlled test adapters.",
+    "This record does not establish live SQL, real network delivery, lease expiry, retention recovery or aggregate resource qualification.",
+    "Effective no-flush mutation and shrink checks, saved-reader tamper checks and full Stage3 acceptance remain pending."
+  ],
+  "replay_comparison": "All 16 input bytes, complete validated observation objects including deterministic sequence values, and evaluations equal the accepted record. Runtime diagnostics outside those objects are checked separately."
+}

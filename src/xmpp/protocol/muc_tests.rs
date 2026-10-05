@@ -12,6 +12,138 @@ use super::{
 };
 
 #[test]
+fn discussion_envelope_rejects_mismatched_archive_room_and_live_identity() {
+    use crate::services::muc::discussion::fixture::{self, Cut};
+    let application = fixture::application(Cut::Return);
+    for change in 0..6 {
+        let (mut command, mut room_jid, mut live) = fixture::live_input();
+        let mut room = fixture::room();
+        match change {
+            0 => command.stanza.push_str("changed"),
+            1 => room.id = uuid::Uuid::from_u128(100),
+            2 => room.room_epoch = uuid::Uuid::from_u128(101),
+            3 => {
+                live = live.replace("/Alice", "/Mallory");
+                command.stanza = live.clone();
+            }
+            4 => {
+                live = live.replace(
+                    &command.id.to_string(),
+                    &uuid::Uuid::from_u128(102).to_string(),
+                );
+                command.stanza = live.clone();
+            }
+            5 => room_jid = "other@conference.local.test".to_owned(),
+            _ => unreachable!(),
+        }
+        assert!(super::PreparedMucDiscussion::new(
+            application.prepare_discussion(command),
+            &room,
+            room_jid,
+            live
+        )
+        .is_err());
+    }
+}
+
+#[tokio::test]
+async fn discussion_envelope_binds_exact_input_and_rejects_another_invocations_completion() {
+    use crate::services::muc::discussion::fixture::{self, Cut};
+    use northstar_room_application::discussion::Observation;
+    let application = fixture::application(Cut::Return);
+    let (command, room_jid, live) = fixture::live_input();
+    let prepared = application.prepare_discussion(command.clone());
+    let other = application.prepare_discussion(command);
+    let first = Observation::new(prepared.clone());
+    let second = Observation::new(other.clone());
+    let wrong = super::PreparedMucDiscussion::new(
+        prepared.clone(),
+        &fixture::room(),
+        room_jid.clone(),
+        live.clone(),
+    )
+    .unwrap();
+    assert!(wrong.bind(second.clone()).is_err());
+    assert!(!second.snapshot().request_issued);
+    let bound = super::PreparedMucDiscussion::new(
+        prepared,
+        &fixture::room(),
+        room_jid.clone(),
+        live.clone(),
+    )
+    .unwrap()
+    .bind(first.clone())
+    .unwrap();
+    let foreign = super::PreparedMucDiscussion::new(other, &fixture::room(), room_jid, live)
+        .unwrap()
+        .bind(second)
+        .unwrap();
+    let completion = application
+        .admit_discussion_observed(&foreign.request)
+        .await
+        .unwrap();
+    assert!(bound.finish(completion).is_err());
+    assert_eq!(
+        first.snapshot().knowledge,
+        northstar_room_application::discussion::Knowledge::NoCommitRequested
+    );
+}
+
+#[tokio::test]
+async fn discussion_envelope_preserves_original_live_bytes_after_observed_acceptance() {
+    use crate::services::muc::discussion::fixture::{self, Cut};
+    use northstar_room_application::discussion::Observation;
+    let application = fixture::application(Cut::Return);
+    let (mut command, room_jid, live) = fixture::live_input();
+    command.encrypted = true;
+    command.stanza = super::encrypted_archive_stanza(&live);
+    let prepared = application.prepare_discussion(command);
+    let owner = Observation::new(prepared.clone());
+    let bound = super::PreparedMucDiscussion::new(
+        prepared,
+        &fixture::room(),
+        room_jid.clone(),
+        live.clone(),
+    )
+    .unwrap()
+    .bind(owner)
+    .unwrap();
+    let completion = application
+        .admit_discussion_observed(&bound.request)
+        .await
+        .unwrap();
+    let accepted = bound.finish(completion).unwrap().unwrap();
+    assert_eq!(accepted.live.room_jid, room_jid);
+    assert_eq!(accepted.live.room_from, "room@conference.local.test/Alice");
+    assert_eq!(accepted.live.sender, "alice@local.test/phone");
+    assert_eq!(accepted.live.stanza, live);
+}
+
+#[tokio::test]
+async fn discussion_replay_consumes_completion_without_a_live_envelope() {
+    use crate::services::muc::discussion::fixture::{self, Cut, Repository};
+    use northstar_room_application::{discussion::Observation, RoomApplication};
+    let original = super::MucDiscussionAdmission::Replay(uuid::Uuid::from_u128(90));
+    let mut repository = Repository::new(Cut::Return);
+    repository.outcome = Some(original);
+    let application = RoomApplication::new(repository, "local.test");
+    let (command, room_jid, live) = fixture::live_input();
+    let prepared = application.prepare_discussion(command);
+    let owner = Observation::new(prepared.clone());
+    let bound = super::PreparedMucDiscussion::new(prepared, &fixture::room(), room_jid, live)
+        .unwrap()
+        .bind(owner.clone())
+        .unwrap();
+    let completion = application
+        .admit_discussion_observed(&bound.request)
+        .await
+        .unwrap();
+    assert_eq!(completion.outcome(), original);
+    assert!(bound.finish(completion).unwrap().is_none());
+    assert_eq!(owner.snapshot().summary().receipt_class, None);
+}
+
+#[test]
 fn voice_request_preserves_room_and_occupant_fields() {
     let xml = muc_voice_request(
         "room@conference.example.test",

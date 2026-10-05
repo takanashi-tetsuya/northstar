@@ -1,0 +1,50 @@
+{
+  "schema": "northstar-stage4-muc-discussion-results-v1",
+  "status": "LimitedMucDiscussionComponentPassed_Stage4Open",
+  "base_commit": "27053ce2f7183177aa9a416105cb2b04bee9a3af",
+  "change": "Ordinary MUC discussion now retains its bound admission, COMMIT knowledge, returned result and consuming live-fanout continuation through the existing frame owner.",
+  "behavior": [
+    "Preparation retains the exact command and validates the receiving application configuration before repository start; another invocation with equal IDs cannot supply its receipt or completion.",
+    "The observed PostgreSQL path wraps the same three COMMIT sites while preserving query text, authority predicates, lock order, retention and rollback behavior.",
+    "Four fresh acceptance classes preserve archive/identity independence. Volatile acceptance does not imply a durable recovery row; Replay retains the original ID and grants no fanout.",
+    "COMMIT entry, successful receipt, returned value, fanout prefix and outer terminal reason remain separate. Error or cancellation cannot erase a retained receipt or turn an unknown COMMIT into rollback.",
+    "The observed continuation binds the original live room, sender and stanza. It consumes fresh fanout once, preserves acquired recipient order and the existing local room guard, and starts no later recipient after cancellation.",
+    "Legitimate no-frame compatibility remains distinct from retired/conflicting registration errors. The existing runner drops its child before freezing the optional MUC owner."
+  ],
+  "validation": {
+    "ordinary_commands_passed": 49,
+    "rust_exact_passed": 39,
+    "rust_failed": 0,
+    "rust_ignored": 0,
+    "rust_selection": "22 new pure/fake component cases and17 unchanged affected controls; each inventory-verified full name ran once with --exact.",
+    "node_passed": 329,
+    "node_failed": 0,
+    "format": "Passed",
+    "room_and_server_all_target_check": "Passed",
+    "clippy_warnings_denied": "Passed",
+    "source_gates": "Execution, admission, architecture and outbound XML checks passed.",
+    "saved_workload_starts": 0,
+    "live_sql_or_network_fixture_starts": 0
+  },
+  "source_review": "The three lexical integration gaps were corrected before execution: the exact frame initializer, the unfiltered observed dispatch, and the receiving-configuration forwarding chain. Existing unrelated guards remain intact.",
+  "limits": [
+    "This is ordinary source/component evidence, not a saved whole-MUC composition, live PostgreSQL transaction test or full Stage4 acceptance.",
+    "The COMMIT tests use controlled futures. They do not prove SQLx cancellation, server-side commit response loss or lease behavior.",
+    "Cluster callback return and recipient endpoint acceptance retain their existing meanings; neither is proof of peer delivery.",
+    "Standalone legacy returned-only behavior is retained without fabricating an observed COMMIT receipt.",
+    "Historical Stage3 saved evidence remains bound to its original source and was not rerun. MIX, full auth correlation/publication, workers and cross-domain controlled composition remain open.",
+    "The earlier TLS response-EOF failure remains RootCauseUnknown. Later green CI does not establish its resolution; real adapters and aggregate resource qualification remain later-stage work."
+  ],
+  "base_ci": {
+    "commit": "27053ce2f7183177aa9a416105cb2b04bee9a3af",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37303977120",
+    "successful": 32,
+    "failed": 0,
+    "skipped": 1
+  },
+  "related": [
+    "stage4-bosh-auth-control-results.json",
+    "stage3-controlled-acceptance.json"
+  ],
+  "detailed_evidence": "Exact source snapshots, ordinary command records and both tested artifact identities are retained privately; the compact public summary omits raw execution metadata."
+}

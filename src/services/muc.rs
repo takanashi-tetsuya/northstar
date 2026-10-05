@@ -1,5 +1,6 @@
 //! Room authorization, local ordering and committed-operation notifications.
 
+pub(crate) mod discussion;
 pub(crate) mod fanout;
 
 use anyhow::Result;
@@ -1096,6 +1097,27 @@ impl<R: MucRepository> MucService<R> {
         command: &MucDiscussion,
     ) -> Result<MucDiscussionAdmission> {
         self.admit_local_discussion(command.clone()).await
+    }
+
+    pub(crate) fn prepare_muc_discussion(
+        &self,
+        command: MucDiscussion,
+    ) -> northstar_room_application::discussion::PreparedDiscussion {
+        self.discussion_application.prepare_discussion(command)
+    }
+
+    pub(crate) async fn execute_muc_discussion_observed(
+        &self,
+        request: &northstar_room_application::discussion::Request,
+    ) -> Result<northstar_room_application::discussion::Completion> {
+        use northstar_room_application::discussion::AdmissionError;
+        self.discussion_application
+            .admit_discussion_observed(request)
+            .await
+            .map_err(|error| match error {
+                AdmissionError::Observation(error) => anyhow::Error::from(error),
+                AdmissionError::Repository(error) => error,
+            })
     }
 
     pub(crate) async fn execute_muc_subject(

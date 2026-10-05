@@ -15,6 +15,7 @@
 
 use super::protocol::ClientTransport;
 use crate::services::message_admission::witness::DirectOperationHandle;
+use crate::services::muc::discussion::{self, MucDiscussionSlot};
 use northstar_message_application::direct_lifecycle::TerminalReason;
 use std::{
     future::Future,
@@ -227,6 +228,7 @@ fn is_inline_auth(frame: &str) -> bool {
 struct Progress {
     operation_id: Uuid,
     direct_operation: DirectOperationHandle,
+    muc_discussion: MucDiscussionSlot,
     sequence: u64,
     policy: Policy,
     stage: AtomicU8,
@@ -276,6 +278,19 @@ impl SessionExecutions {
             })
             .map(FrameExecution::direct_operation)
     }
+
+    pub(super) fn muc_discussion(
+        &self,
+        prepared: &discussion::PreparedDiscussion,
+    ) -> Result<Option<discussion::Observation>, discussion::Rejected> {
+        let Some(execution) = &self.current else {
+            return Ok(None);
+        };
+        if execution.0.outcome.load(Ordering::Relaxed) != Outcome::Pending as u8 {
+            return Err(discussion::Rejected::Retired);
+        }
+        execution.0.muc_discussion.register(prepared).map(Some)
+    }
 }
 
 #[derive(Debug)]
@@ -293,6 +308,7 @@ impl FrameExecution {
         Self(Arc::new(Progress {
             operation_id,
             direct_operation: DirectOperationHandle::new(operation_id),
+            muc_discussion: MucDiscussionSlot::default(),
             sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             policy: Policy::for_frame(transport, frame),
             stage: AtomicU8::new(Stage::Validation as u8),
@@ -500,6 +516,25 @@ impl Observation {
                     handoff = ?snapshot.handoff,
                     terminal = ?snapshot.terminal,
                     "frame admission ownership retired"
+                );
+            }
+            let muc_reason = match reason {
+                TerminalReason::Completed => discussion::TerminalReason::Completed,
+                TerminalReason::BackendFailure => discussion::TerminalReason::BackendFailure,
+                TerminalReason::TimedOut => discussion::TerminalReason::TimedOut,
+                TerminalReason::Cancelled => discussion::TerminalReason::Cancelled,
+                TerminalReason::Panicked => discussion::TerminalReason::Panicked,
+            };
+            if let Some(summary) = progress.muc_discussion.retire(muc_reason) {
+                tracing::debug!(target: "rust_xmpp_server::xmpp::muc_discussion",
+                    operation_id = %progress.operation_id,
+                    repository_started = summary.repository_started,
+                    knowledge = ?summary.knowledge,
+                    receipt_class = ?summary.receipt_class,
+                    returned = ?summary.returned,
+                    fanout = ?summary.fanout,
+                    terminal = ?summary.terminal,
+                    "frame MUC discussion ownership retired"
                 );
             }
         }
@@ -718,6 +753,179 @@ mod tests {
 
     fn outcome(execution: &FrameExecution) -> u8 {
         execution.0.outcome.load(Ordering::Relaxed)
+    }
+
+    struct MucChildDropMarker {
+        owner: discussion::Observation,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Drop for MucChildDropMarker {
+        fn drop(&mut self) {
+            assert_eq!(
+                self.owner.snapshot().terminal,
+                None,
+                "MUC owner retired before child destruction"
+            );
+            self.dropped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn muc_receipt_return_and_terminal_survive_actual_frame_drop_timeout_and_panic() {
+        use crate::services::muc::discussion::fixture::{self, Cut};
+        use northstar_room_application::discussion::{
+            AcceptanceClass, AdmissionError, KnowledgeClass, ReturnClass,
+        };
+        for cut in 0..9 {
+            let application = fixture::application(match cut {
+                1 => Cut::BeforeCommit,
+                2 => Cut::DuringCommit,
+                3 | 7 => Cut::AfterReceipt,
+                5 => Cut::PanicAfterReceipt,
+                8 => Cut::FailAfterReceipt,
+                _ => Cut::Return,
+            });
+            let prepared = application.prepare_discussion(fixture::command(false, false));
+            let mut sessions = SessionExecutions::default();
+            let execution = sessions.begin(ClientTransport::Tcp, "<message type='groupchat'/>");
+            let owner = sessions.muc_discussion(&prepared).unwrap().unwrap();
+            let request = owner.request().unwrap();
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let marker = MucChildDropMarker {
+                owner: owner.clone(),
+                dropped: dropped.clone(),
+            };
+            let gate = Arc::new(tokio::sync::Mutex::new(()));
+            let child_gate = gate.clone();
+            let mut runner = Box::pin(execution.run(async move {
+                let _marker = marker;
+                let _authority = child_gate.lock().await;
+                let _completion = application
+                    .admit_discussion_observed(&request)
+                    .await
+                    .map_err(|error| match error {
+                        AdmissionError::Observation(error) => anyhow::Error::from(error),
+                        AdmissionError::Repository(error) => error,
+                    })?;
+                if cut == 4 {
+                    pending::<()>().await;
+                }
+                Ok(())
+            }));
+            match cut {
+                0 => {}
+                5 => {
+                    let payload = AssertUnwindSafe(&mut runner)
+                        .catch_unwind()
+                        .await
+                        .unwrap_err();
+                    assert_eq!(
+                        payload.downcast_ref::<&str>(),
+                        Some(&"MUC receipt-before-return panic")
+                    );
+                }
+                6 => assert!(matches!(futures::poll!(&mut runner), Poll::Ready(Ok(())))),
+                8 => assert!(matches!(
+                    futures::poll!(&mut runner),
+                    Poll::Ready(Err(FrameFailure::Backend(_)))
+                )),
+                _ => {
+                    assert!(futures::poll!(&mut runner).is_pending());
+                    assert!(gate.try_lock().is_err());
+                    if cut == 7 {
+                        tokio::time::advance(FRAME_BUDGET).await;
+                        assert!(matches!(
+                            futures::poll!(&mut runner),
+                            Poll::Ready(Err(FrameFailure::TimedOut))
+                        ));
+                    }
+                }
+            }
+            drop(runner);
+            assert!(dropped.load(Ordering::Relaxed));
+            assert!(gate.try_lock().is_ok());
+            let summary = owner.snapshot().summary();
+            assert_eq!(
+                summary.knowledge,
+                match cut {
+                    0 | 1 => KnowledgeClass::NoCommitRequested,
+                    2 => KnowledgeClass::CommitCallEntered,
+                    _ => KnowledgeClass::ReceiptKnown,
+                }
+            );
+            assert_eq!(
+                summary.receipt_class,
+                (cut >= 3).then_some(AcceptanceClass::Volatile)
+            );
+            assert_eq!(
+                summary.returned,
+                match cut {
+                    4 | 6 => ReturnClass::Stored,
+                    8 => ReturnClass::Error,
+                    _ => ReturnClass::NotReturned,
+                }
+            );
+            assert_eq!(
+                summary.terminal,
+                Some(match cut {
+                    5 => discussion::TerminalReason::Panicked,
+                    6 => discussion::TerminalReason::Completed,
+                    7 => discussion::TerminalReason::TimedOut,
+                    8 => discussion::TerminalReason::BackendFailure,
+                    _ => discussion::TerminalReason::Cancelled,
+                })
+            );
+            assert!(matches!(
+                sessions.muc_discussion(&prepared),
+                Err(discussion::Rejected::Retired)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn muc_slot_distinguishes_legacy_absence_conflict_and_retired_frames() {
+        use crate::services::muc::discussion::fixture::{self, Cut};
+        let application = fixture::application(Cut::Return);
+        let prepared = application.prepare_discussion(fixture::command(true, true));
+        let conflicting = application.prepare_discussion(fixture::command(true, true));
+        let mut sessions = SessionExecutions::default();
+        assert!(sessions.muc_discussion(&prepared).unwrap().is_none());
+        let original = sessions.begin(ClientTransport::Bosh, "<message/>");
+        let owner = sessions.muc_discussion(&prepared).unwrap().unwrap();
+        assert!(matches!(
+            sessions.muc_discussion(&conflicting),
+            Err(discussion::Rejected::Input)
+        ));
+        assert!(!owner.snapshot().repository_started);
+        drop(original.run(async { pending::<anyhow::Result<()>>().await }));
+        let before = owner.snapshot();
+        assert!(matches!(
+            sessions.muc_discussion(&prepared),
+            Err(discussion::Rejected::Retired)
+        ));
+        assert!(matches!(
+            original.0.muc_discussion.register(&prepared),
+            Err(discussion::Rejected::Retired)
+        ));
+        let next = sessions.begin(ClientTransport::Bosh, "<message/>");
+        let next_owner = sessions.muc_discussion(&conflicting).unwrap().unwrap();
+        next.run(async { Ok(()) }).await.unwrap();
+        assert_eq!(owner.snapshot(), before);
+        assert_eq!(
+            next_owner.snapshot().terminal,
+            Some(discussion::TerminalReason::Completed)
+        );
+        assert!(matches!(
+            sessions.muc_discussion(&conflicting),
+            Err(discussion::Rejected::Retired)
+        ));
+        let empty = sessions.begin(ClientTransport::Bosh, "<iq/>");
+        empty.run(async { Ok(()) }).await.unwrap();
+        assert!(matches!(
+            empty.0.muc_discussion.register(&prepared),
+            Err(discussion::Rejected::Retired)
+        ));
     }
 
     struct ChildDropMarker {

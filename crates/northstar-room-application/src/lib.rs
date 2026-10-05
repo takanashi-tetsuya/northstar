@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod discussion;
+
 use northstar_room_core::{
     MucActorAuthority, MucAffiliationBatchOutcome, MucAffiliationBatchWrite,
     MucConfigurationOutcome, MucConfigurationWrite, MucDiscussion, MucDiscussionAdmission,
@@ -276,6 +278,15 @@ pub trait MucDiscussionRepository: Send + Sync {
         &'a self,
         command: &'a MucDiscussion,
     ) -> RepositoryFuture<'a, Self::Error>;
+
+    /// Compatibility returns remain returned-only. The PostgreSQL adapter
+    /// overrides this with the actual transaction's COMMIT observations.
+    fn admit_discussion_observed<'a>(
+        &'a self,
+        request: &'a discussion::Request,
+    ) -> RepositoryFuture<'a, Self::Error> {
+        self.admit_discussion(request.command())
+    }
 }
 
 #[derive(Clone)]
@@ -303,6 +314,35 @@ where
             return Ok(MucDiscussionAdmission::Unauthorized);
         }
         self.repository.admit_discussion(command).await
+    }
+
+    pub fn prepare_discussion(&self, command: MucDiscussion) -> discussion::PreparedDiscussion {
+        discussion::PreparedDiscussion::new(command, self.configured_domain.clone())
+    }
+
+    pub async fn admit_discussion_observed(
+        &self,
+        request: &discussion::Request,
+    ) -> Result<discussion::Completion, discussion::AdmissionError<R::Error>> {
+        use discussion::AdmissionError;
+        if !request
+            .valid_for_domain(&self.configured_domain)
+            .map_err(AdmissionError::Observation)?
+        {
+            return request
+                .refuse_invalid_authority()
+                .map_err(AdmissionError::Observation);
+        }
+        request.start().map_err(AdmissionError::Observation)?;
+        match self.repository.admit_discussion_observed(request).await {
+            Ok(outcome) => request
+                .returned(outcome)
+                .map_err(AdmissionError::Observation),
+            Err(error) => {
+                request.failed().map_err(AdmissionError::Observation)?;
+                Err(AdmissionError::Repository(error))
+            }
+        }
     }
 }
 

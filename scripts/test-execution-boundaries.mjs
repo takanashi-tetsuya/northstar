@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -217,8 +217,41 @@ rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
   'pub(super) fn finish(', /test-only compatibility methods/);
 
 
+// MUC is awaiting its coordinated formatting checkpoint. Match the exact
+// selected token span while tolerating whitespace and optional final commas;
+// the production gate still masks comments/literals independently.
+function changedMuc(file, before, after, expectedMatches = 1) {
+  function dense(source) {
+    let text = '';
+    const offsets = [];
+    for (let index = 0; index < source.length; index++) {
+      if (/\s/.test(source[index])) continue;
+      if (source[index] === ',') {
+        let next = index + 1;
+        while (next < source.length && /\s/.test(source[next])) next++;
+        if (source[next] === ')' || source[next] === '}') continue;
+      }
+      offsets.push(index);
+      text += source[index];
+    }
+    return { text, offsets };
+  }
+  const source = baseline[file];
+  const indexed = dense(source);
+  const needle = dense(before).text;
+  const matches = [];
+  for (let index = indexed.text.indexOf(needle); index >= 0; index = indexed.text.indexOf(needle, index + needle.length)) matches.push(index);
+  assert.equal(matches.length, expectedMatches, `MUC mutation must match its exact token span: ${before}`);
+  assert.notEqual(dense(before).text, dense(after).text, 'MUC mutation must not be a no-op');
+  const start = indexed.offsets[matches[0]];
+  const end = indexed.offsets[matches[0] + needle.length - 1] + 1;
+  return { ...baseline, [file]: source.slice(0, start) + after + source.slice(end) };
+}
+
 function rejectsRoom(name, file, before, after, expected) {
-  test(name, () => assert.throws(() => verifyRoomExecutionBoundaries(changed(file, before, after)), expected));
+  test(name, () => assert.throws(() => verifyRoomExecutionBoundaries(
+    ['muc', 'mucFanout'].includes(file) ? changedMuc(file, before, after) : changed(file, before, after)
+  ), expected));
 }
 test('current production room owners satisfy the gate', () => verifyRoomExecutionBoundaries(baseline));
 rejectsRoom('MUC policy observation cannot be removed', 'muc',
@@ -232,17 +265,22 @@ for (const call of [
   'match self\n                .state\n                .muc_service()\n                .execute_muc_retraction(',
   'match service\n                    .set_local_cluster_subject(',
   'match service\n                .execute_muc_subject(',
-  'let admission = self\n                .state\n                .muc_service()\n                .execute_muc_discussion(',
 ]) {
   const gap = call.includes('set_local_cluster_subject') ? '\n                ' : '\n            ';
   rejectsRoom(`MUC admission hook cannot disappear before ${call.split('.').at(-1)}`, 'muc',
     'self.enter_frame_stage(Stage::MucAdmission);' + gap + call, call, /MUC admission stage/);
 }
+rejectsRoom('observed MUC admission must retain its frame stage', 'muc',
+  'self.enter_frame_stage(Stage::MucAdmission);\n                let completion = self',
+  'let completion = self', /MUC admission stage/);
+rejectsRoom('legacy MUC admission must retain its frame stage', 'muc',
+  'self.enter_frame_stage(Stage::MucAdmission);\n                self.state\n                    .muc_service()\n                    .execute_muc_discussion(',
+  'self.state\n                    .muc_service()\n                    .execute_muc_discussion(', /MUC admission stage/);
 rejectsRoom('MUC replay cannot become fresh live fanout', 'muc',
   'fanout_disposition = MucFanoutDisposition::Replay;',
   'fanout_disposition = MucFanoutDisposition::Accepted;', /MUC replay and accepted fanout/);
 rejectsRoom('MUC message cannot bypass reviewed fanout owner', 'muc',
-  'if !run_muc_fanout(', 'if !unreviewed_fanout(', /MUC replay and accepted fanout/);
+  'accepted.fanout(self).await?', 'unreviewed_fanout(self).await?', /MUC replay and accepted fanout/);
 rejectsRoom('MUC fanout stage adapter cannot swap local and cluster meaning', 'muc',
   'MucFanoutStage::Cluster => Stage::MucClusterFanout,',
   'MucFanoutStage::Cluster => Stage::MucLocalFanout,', /MUC fanout adapter/);
@@ -250,8 +288,8 @@ rejectsRoom('MUC fanout cannot report effects for replay', 'mucFanout',
   'if disposition == MucFanoutDisposition::Replay {\n        return false;\n    }',
   'if disposition == MucFanoutDisposition::Replay {\n        return true;\n    }', /MUC fanout must skip replay/);
 rejectsRoom('MUC fanout cannot move local stage before cluster publication', 'mucFanout',
-  'port.publish_cluster().await;\n    port.enter(MucFanoutStage::Local);',
-  'port.enter(MucFanoutStage::Local);\n    port.publish_cluster().await;', /MUC fanout must skip replay/);
+  'port.enter(MucFanoutStage::Cluster);\n    port.publish_cluster().await;',
+  'port.enter(MucFanoutStage::Local);\n    port.publish_cluster().await;', /MUC effects must preserve/);
 rejectsRoom('C2S MIX cannot discard originating frame observation', 'mix',
   'Some(&self.frame_executions),', 'None,', /C2S MIX must attribute/);
 rejectsRoom('MIX shared message owner cannot lose policy observation', 'mix',
@@ -275,7 +313,7 @@ rejectsRoom('worker-owned MIX result cannot skip acknowledgement', 'mix',
 rejectsRoom('MIX claimed delivery cannot bypass lazy settlement owner', 'mix',
   'finish_mix_delivery_owner(outcome, || {', 'unreviewed_delivery_owner(outcome, || {', /MIX claimed delivery/);
 test('MUC room guard cannot be released before accepted fanout', () => {
-  const start = baseline.muc.indexOf('        if !run_muc_fanout(');
+  const start = baseline.muc.indexOf('        let attempted = if let Some(accepted) = discussion_fanout {');
   const release = '        drop(local_authority_guard);';
   const end = baseline.muc.indexOf(release, start);
   assert.ok(start >= 0 && end > start);
@@ -283,6 +321,91 @@ test('MUC room guard cannot be released before accepted fanout', () => {
   const after = release + '\n' + before.slice(0, -release.length);
   assert.throws(() => verifyRoomExecutionBoundaries(changed('muc', before, after)), /before releasing the room guard/);
 });
+
+function rejectsMucDiscussion(name, file, before, after, expected) {
+  test(name, () => assert.throws(() => verifyMucDiscussionBoundaries(changedMuc(file, before, after)), expected));
+}
+test('current MUC discussion source bridges retain accepted knowledge', () => verifyMucDiscussionBoundaries(baseline));
+rejectsMucDiscussion('MUC prepared domain must come from receiving configuration', 'mucApplication',
+  'discussion::PreparedDiscussion::new(command, self.configured_domain.clone())',
+  'discussion::PreparedDiscussion::new(command, caller_domain())', /receiving application configuration/);
+rejectsMucDiscussion('MUC request cannot validate its own foreign domain', 'mucCore',
+  'self.observation.0.prepared.0.configured_domain == configured_domain',
+  'true', /cannot authorize its own configured domain/);
+rejectsMucDiscussion('MUC observed repository cannot start before domain refusal', 'mucApplication',
+  'request.start().map_err(AdmissionError::Observation)?;', '', /before repository start/);
+rejectsMucDiscussion('MUC repository must project input from the bound request', 'mucDb',
+  'super::room::discussion_to_db(request.command()),',
+  'unrelated_command(),', /projected from its bound request/);
+rejectsMucDiscussion('MUC actual COMMIT entry cannot disappear', 'mucCore',
+  'let prepared = request.enter_commit(outcome).map_err(CommitError::Observation)?;',
+  'let prepared = fabricated_commit();', /actual entry and successful receipt/);
+rejectsMucDiscussion('MUC receipt must precede any post-COMMIT suspension', 'mucCore',
+  'request.received(prepared).map_err(CommitError::Observation)',
+  'unrelated().await; request.received(prepared).map_err(CommitError::Observation)', /actual entry and successful receipt/);
+rejectsMucDiscussion('MUC receipt token cannot cross invocations', 'mucCore',
+  'if !self.observation.same_invocation(&prepared.observation) {',
+  'if false {', /exact active invocation/);
+rejectsMucDiscussion('MUC stored result cannot substitute another fresh identity', 'mucCore',
+  'MucDiscussionAdmission::Stored(id) if id == self.command().id => {',
+  'MucDiscussionAdmission::Stored(id) if true => {', /Stored must match fresh identity/);
+rejectsMucDiscussion('MUC replay cannot infer original archive presence from the new request', 'mucCore',
+  'MucDiscussionAdmission::Replay(_) if self.command().origin_id.is_some() => None,',
+  'MucDiscussionAdmission::Replay(_) if self.command().origin_id.is_some() => Some(self.observation.0.prepared.requested_class()),', /Replay must keep original identity/);
+rejectsMucDiscussion('MUC volatile acceptance cannot gain identity recovery', 'mucCore',
+  '(false, false) => Self::Volatile',
+  '(false, false) => Self::IdentityOnly', /archive and identity independence/);
+rejectsMucDiscussion('MUC returned-only success cannot mint an observed permit', 'mucCore',
+  'return Err(Rejected::MissingReceipt);',
+  '/* receipt was not observed */', /returned-only success/);
+test('MUC first fresh SQL COMMIT exit cannot bypass observation', () => {
+  const before = 'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Stored(message.id)).await';
+  const sources = changedMuc('mucDb', before, 'legacy_commit(transaction).await', 2);
+  assert.throws(() => verifyMucDiscussionBoundaries(sources), /all three existing COMMIT exits/);
+});
+rejectsMucDiscussion('MUC replay SQL COMMIT must observe its original ID', 'mucDb',
+  'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Replay(existing_id)).await',
+  'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Replay(message.id)).await', /all three existing COMMIT exits/);
+rejectsMucDiscussion('MUC PostgreSQL repository cannot select legacy returned-only admission', 'mucRepository',
+  'db::admit_muc_discussion_observed(&self.pool, request).await?',
+  'db::admit_muc_discussion(&self.pool, discussion_to_db(request.command())).await?', /observed SQL entry/);
+rejectsMucDiscussion('MUC service cannot skip the request-bound application', 'mucService',
+  '.admit_discussion_observed(request)', '.legacy_discussion(request)', /request-bound application/);
+rejectsMucDiscussion('MUC service constructor cannot substitute a different configured domain', 'mucService',
+  'discussion_application: RoomApplication::new(repository.clone(), configured_domain.to_string())',
+  'discussion_application: RoomApplication::new(repository.clone(), "evil.test")', /actual receiving configuration/);
+rejectsMucDiscussion('MUC service preparation cannot select another application', 'mucService',
+  'self.discussion_application.prepare_discussion(command)',
+  'self.other_application.prepare_discussion(command)', /configured discussion application/);
+rejectsMucDiscussion('MUC retired lazy slot cannot register another invocation', 'mucSlot',
+  'if slot.terminal.is_some() {', 'if false {', /retired\/conflicting rejection/);
+rejectsMucDiscussion('MUC conflicting slot cannot masquerade as an existing matching input', 'mucSlot',
+  'if !observation.is_for(prepared) {', 'if false {', /retired\/conflicting rejection/);
+rejectsMucDiscussion('MUC retired current frame cannot fall back to legacy absence', 'frame',
+  'return Err(discussion::Rejected::Retired);', 'return Ok(None);', /legacy absence must remain distinct/);
+rejectsMucDiscussion('MUC protocol accessor cannot swallow registration errors', 'protocol',
+  'self.frame_executions.muc_discussion(prepared)',
+  'Ok(self.frame_executions.muc_discussion(prepared).ok().flatten())', /propagate registration errors/);
+rejectsMucDiscussion('MUC frame completion must retire its discussion slot', 'frame',
+  'progress.muc_discussion.retire(muc_reason)', 'None', /frame retirement/);
+rejectsMucDiscussion('MUC envelope cannot skip archive/live pairing', 'muc',
+  'anyhow::ensure!(command.stanza == archive,', 'anyhow::ensure!(true,', /bind exact archive projection/);
+rejectsMucDiscussion('MUC bound envelope cannot consume another invocation result', 'muc',
+  'completion.into_fanout(&self.observation)?', 'completion.into_fanout(&other)?', /consume matching completion/);
+rejectsMucDiscussion('MUC accepted envelope cannot substitute fanout payload', 'muc',
+  'stanza: &live.stanza', 'stanza: &replacement', /cannot substitute live payload/);
+rejectsRoom('MUC discussion registration failure cannot select legacy fallback', 'muc',
+  'self.muc_discussion_operation(&prepared.prepared)?',
+  'self.muc_discussion_operation(&prepared.prepared).ok().flatten()', /MUC discussion dispatch/);
+rejectsRoom('MUC active frame cannot be filtered into legacy admission', 'muc',
+  'if let Some(operation) = operation {',
+  'if let Some(operation) = operation.filter(|_| false) {', /MUC discussion dispatch/);
+rejectsRoom('MUC observed fanout cannot borrow a reusable permit', 'mucFanout',
+  'let progress = permit.start()?;', 'let progress = permit.borrow();', /consume its permit/);
+rejectsRoom('MUC acquired recipient order cannot be silently sorted', 'mucFanout',
+  'let recipients = port.recipients();', 'let mut recipients = port.recipients(); recipients.sort();', /MUC effects must preserve/);
+rejectsRoom('MUC pending endpoint cannot advance before its actual return', 'mucFanout',
+  'let accepted = port.deliver(&recipient).await;', 'let accepted = true;', /MUC effects must preserve/);
 rejectsRoom('MIX acknowledgement cannot substitute a different exact fence', 'mix',
   '.acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),',
   '.acknowledge_mix_delivery(delivery.delivery_id, delivery.delivery_id),', /MIX claimed delivery/);

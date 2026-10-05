@@ -736,6 +736,16 @@ impl ProtocolSession {
         self.frame_executions.direct_operation()
     }
 
+    pub(super) fn muc_discussion_operation(
+        &self,
+        prepared: &crate::services::muc::discussion::PreparedDiscussion,
+    ) -> Result<
+        Option<crate::services::muc::discussion::Observation>,
+        crate::services::muc::discussion::Rejected,
+    > {
+        self.frame_executions.muc_discussion(prepared)
+    }
+
     pub(crate) fn local_domain(&self) -> &str {
         self.state.local_domain()
     }

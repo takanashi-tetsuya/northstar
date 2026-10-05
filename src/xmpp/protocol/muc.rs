@@ -3,7 +3,7 @@ mod presence;
 
 use super::{Action, ProtocolSession};
 use crate::services::muc::fanout::{
-    run_muc_fanout, MucFanoutDisposition, MucFanoutPort, MucFanoutStage,
+    run_muc_discussion_fanout, run_muc_fanout, MucFanoutDisposition, MucFanoutPort, MucFanoutStage,
 };
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
@@ -26,6 +26,7 @@ use crate::{
     state::{bare_jid, localpart},
 };
 use anyhow::Result;
+use northstar_room_application::discussion as discussion_owner;
 #[cfg(test)]
 use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
@@ -510,6 +511,130 @@ async fn run_muc_cluster_fan_out(
     })
     .expect("a one-effect MUC post-commit plan has capacity");
     run_muc_cluster_effects(state, room, plan).await;
+}
+
+/// The protocol's generated live stanza and its archive projection are bound
+/// once, before admission. No later caller supplies replacement fanout bytes.
+struct PreparedMucDiscussion {
+    prepared: discussion_owner::PreparedDiscussion,
+    live: MucDiscussionLive,
+}
+
+struct MucDiscussionLive {
+    room_jid: String,
+    room_from: String,
+    sender: String,
+    stanza: String,
+}
+
+impl PreparedMucDiscussion {
+    fn new(
+        prepared: discussion_owner::PreparedDiscussion,
+        room: &MucRoom,
+        room_jid: String,
+        stanza: String,
+    ) -> Result<Self> {
+        let command = prepared.command();
+        let room_from = format!("{room_jid}/{}", command.nick);
+        anyhow::ensure!(
+            command.room_id == room.id
+                && command.authority.expected_room_epoch == room.room_epoch
+                && CanonicalJid::parse_bare(&room_jid)?.localpart()
+                    == Some(room.localpart.as_str()),
+            "MUC discussion room projection mismatch"
+        );
+        let archive = if command.archive && command.encrypted {
+            encrypted_archive_stanza(&stanza)
+        } else {
+            stanza.clone()
+        };
+        anyhow::ensure!(
+            command.stanza == archive,
+            "MUC discussion archive projection mismatch"
+        );
+        {
+            let document = roxmltree::Document::parse(&stanza)?;
+            let root = document.root_element();
+            let stable_id = command.id.to_string();
+            anyhow::ensure!(
+                root.attribute("from") == Some(room_from.as_str())
+                    && root.attribute("to") == Some(room_jid.as_str())
+                    && root.attribute("type") == Some("groupchat")
+                    && root.children().any(|child| {
+                        child.is_element()
+                            && child.tag_name().name() == "stanza-id"
+                            && child.tag_name().namespace() == Some("urn:xmpp:sid:0")
+                            && child.attribute("by") == Some(room_jid.as_str())
+                            && child.attribute("id") == Some(stable_id.as_str())
+                    }),
+                "MUC discussion live identity mismatch"
+            );
+        }
+        let sender = command.sender_jid.clone();
+        Ok(Self {
+            prepared,
+            live: MucDiscussionLive {
+                room_jid,
+                room_from,
+                sender,
+                stanza,
+            },
+        })
+    }
+
+    fn bind(self, observation: discussion_owner::Observation) -> Result<BoundMucDiscussion> {
+        anyhow::ensure!(
+            observation.is_for(&self.prepared),
+            "MUC discussion invocation mismatch"
+        );
+        let request = observation.request()?;
+        Ok(BoundMucDiscussion {
+            request,
+            observation,
+            live: self.live,
+        })
+    }
+}
+
+struct BoundMucDiscussion {
+    request: discussion_owner::Request,
+    observation: discussion_owner::Observation,
+    live: MucDiscussionLive,
+}
+
+impl BoundMucDiscussion {
+    fn finish(
+        self,
+        completion: discussion_owner::Completion,
+    ) -> Result<Option<AcceptedMucDiscussion>> {
+        let permit = completion.into_fanout(&self.observation)?;
+        Ok(permit.map(|permit| AcceptedMucDiscussion {
+            live: self.live,
+            permit,
+        }))
+    }
+}
+
+struct AcceptedMucDiscussion {
+    live: MucDiscussionLive,
+    permit: discussion_owner::FanoutPermit,
+}
+
+impl AcceptedMucDiscussion {
+    async fn fanout(self, session: &ProtocolSession) -> Result<bool> {
+        let Self { live, permit } = self;
+        Ok(run_muc_discussion_fanout(
+            &MucMessageFanout {
+                session,
+                room_jid: &live.room_jid,
+                room_from: &live.room_from,
+                sender: &live.sender,
+                stanza: &live.stanza,
+            },
+            permit,
+        )
+        .await?)
+    }
 }
 
 /// Adapts the accepted live-message effects without exposing persistence or
@@ -2198,6 +2323,7 @@ impl ProtocolSession {
             cluster_target,
         };
         let mut fanout_disposition = MucFanoutDisposition::Accepted;
+        let mut discussion_fanout = None;
         if let Some(target_id) = author_retraction {
             let Some(original) = self
                 .state
@@ -2423,12 +2549,33 @@ impl ProtocolSession {
                 retention_days: self.state.muc_mam_retention_days(),
                 authority: actor_authority,
             };
-            self.enter_frame_stage(Stage::MucAdmission);
-            let admission = self
-                .state
-                .muc_service()
-                .execute_muc_discussion(&discussion)
-                .await?;
+            let prepared = PreparedMucDiscussion::new(
+                self.state.muc_service().prepare_muc_discussion(discussion),
+                &room,
+                room_jid.clone(),
+                rewritten.clone(),
+            )?;
+            // Only genuine absence of a frame uses the compatibility entry.
+            // Retired/conflicting registration propagates before any SQL.
+            let operation = self.muc_discussion_operation(&prepared.prepared)?;
+            let admission = if let Some(operation) = operation {
+                let bound = prepared.bind(operation)?;
+                self.enter_frame_stage(Stage::MucAdmission);
+                let completion = self
+                    .state
+                    .muc_service()
+                    .execute_muc_discussion_observed(&bound.request)
+                    .await?;
+                let admission = completion.outcome();
+                discussion_fanout = bound.finish(completion)?;
+                admission
+            } else {
+                self.enter_frame_stage(Stage::MucAdmission);
+                self.state
+                    .muc_service()
+                    .execute_muc_discussion(prepared.prepared.command())
+                    .await?
+            };
             match admission {
                 MucDiscussionAdmission::Stored(_) => {}
                 MucDiscussionAdmission::Replay(_) => {
@@ -2449,18 +2596,22 @@ impl ProtocolSession {
                 }
             }
         }
-        if !run_muc_fanout(
-            &MucMessageFanout {
-                session: self,
-                room_jid: &room_jid,
-                room_from: &room_from,
-                sender: from,
-                stanza: &rewritten,
-            },
-            fanout_disposition,
-        )
-        .await
-        {
+        let attempted = if let Some(accepted) = discussion_fanout {
+            accepted.fanout(self).await?
+        } else {
+            run_muc_fanout(
+                &MucMessageFanout {
+                    session: self,
+                    room_jid: &room_jid,
+                    room_from: &room_from,
+                    sender: from,
+                    stanza: &rewritten,
+                },
+                fanout_disposition,
+            )
+            .await
+        };
+        if !attempted {
             return Ok(Action::None);
         }
         // The single-node authority gate is intentionally released only after

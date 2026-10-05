@@ -40,5 +40,16 @@
     "stage3-controlled-acceptance.json",
     "stage3-bosh-response-results.json"
   ],
-  "detailed_evidence": "Exact source snapshots, command records and tested artifact identity are retained privately."
+  "detailed_evidence": "Fresh recovery-validation evidence is saved privately; the initial local raw artifacts remain unavailable.",
+  "evidence_recovery": {
+    "original_status": "Original local raw logs, snapshots and tested binary were lost when the workspace reverted. The historical pass is preserved, not relabeled as recovered files.",
+    "fresh_revalidation_source": "27053ce2f7183177aa9a416105cb2b04bee9a3af",
+    "fresh_rust_exact_passed": 24,
+    "fresh_rust_ignored": 0,
+    "fresh_node_passed": 295,
+    "fresh_compile_and_clippy": "Passed",
+    "independent_review": "Accepted within the same ordinary component scope",
+    "fresh_evidence": "Saved privately and downloaded bytes verified; this is new execution, not restoration of the original raw artifacts.",
+    "saved_workload_starts": 0
+  }
 }

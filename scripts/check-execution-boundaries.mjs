@@ -14,6 +14,12 @@ const files = {
   outbound: 'src/outbound.rs',
   muc: 'src/xmpp/protocol/muc.rs',
   mucFanout: 'src/services/muc/fanout.rs',
+  mucCore: 'crates/northstar-room-application/src/discussion.rs',
+  mucApplication: 'crates/northstar-room-application/src/lib.rs',
+  mucService: 'src/services/muc.rs',
+  mucSlot: 'src/services/muc/discussion.rs',
+  mucDb: 'src/db/muc.rs',
+  mucRepository: 'src/db/room.rs',
   mix: 'src/xmpp/protocol/mix.rs',
   mixService: 'src/services/mix.rs',
   nativeWrite: 'src/xmpp/direct_delivery.rs',
@@ -683,7 +689,116 @@ export function verifyExecutionBoundaries({ frame, protocol, transport, tcp, web
     'BOSH resume must mark only the exact control after complete batch capacity admission');
 }
 
-export function verifyRoomExecutionBoundaries({ muc, mucFanout, mix }) {
+export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mucService, mucSlot, mucDb, mucRepository, frame, protocol }) {
+  const compact = source => source.replace(/\s+/g, '').replace(/,([)}])/g, '$1');
+  requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(productionModule(mucCore))),
+    'MUC discussion core must remain free of ambient I/O, clocks and application state');
+  const application = body(mucApplication, 'impl<R>\\s+RoomApplication<R>');
+  const prepare = compact(body(application, 'fn\\s+prepare_discussion\\b'));
+  requireBoundary(prepare === 'discussion::PreparedDiscussion::new(command,self.configured_domain.clone())',
+    'MUC preparation must use the receiving application configuration');
+  const admit = compact(body(application, 'async\\s+fn\\s+admit_discussion_observed\\b'));
+  ordered(admit, ['if!request.valid_for_domain(&self.configured_domain).map_err(AdmissionError::Observation)?{',
+    'returnrequest.refuse_invalid_authority().map_err(AdmissionError::Observation);',
+    'request.start().map_err(AdmissionError::Observation)?;',
+    'self.repository.admit_discussion_observed(request).await',
+    'request.returned(outcome).map_err(AdmissionError::Observation)'],
+  'MUC observed application must validate receiving domain before repository start and validate return');
+  const request = body(mucCore, 'impl\\s+Request\\b');
+  const domain = compact(body(request, 'fn\\s+valid_for_domain\\b'));
+  requireBoundary(domain.includes('self.observation.0.prepared.0.configured_domain==configured_domain&&self.command().authority_is_consistent(configured_domain)'),
+    'MUC prepared input cannot authorize its own configured domain');
+  const coreCommit = compact(body(mucCore, 'async\\s+fn\\s+commit_observed\\b'));
+  requireBoundary(coreCommit === 'letprepared=request.enter_commit(outcome).map_err(CommitError::Observation)?;commit.await.map_err(CommitError::Commit)?;request.received(prepared).map_err(CommitError::Observation)',
+    'MUC COMMIT must record actual entry and successful receipt before return without another await');
+  const received = compact(body(request, 'fn\\s+received\\b'));
+  ordered(received, ['if!self.observation.same_invocation(&prepared.observation){returnErr(Rejected::Invocation);}',
+    'awaiting_return(&state)?;', 'ifstate.knowledge!=Knowledge::CommitCallEntered(prepared.fact){returnErr(Rejected::Knowledge);}',
+    'state.knowledge=Knowledge::ReceiptKnown(prepared.fact);'],
+  'MUC receipt must match its exact active invocation and prepared COMMIT');
+  const returned = compact(body(request, 'fn\\s+returned\\b'));
+  requireBoundary(returned.includes('Knowledge::ReceiptKnown(receipt)ifreceipt==proposed=>{}') &&
+    returned.includes('state.returned=Some(Returned::Outcome(outcome));returnErr(Rejected::MissingReceipt);') &&
+    returned.includes('state.fanout.stage=FanoutStage::Ready;Some(FanoutPermit{observation:self.observation.clone()})'),
+  'MUC returned-only success must not mint the observed fanout permit');
+  const proposed = compact(body(request, 'fn\\s+proposed\\b'));
+  requireBoundary(proposed.includes('MucDiscussionAdmission::Stored(id)ifid==self.command().id=>') &&
+    proposed.includes('MucDiscussionAdmission::Replay(_)ifself.command().origin_id.is_some()=>None,'),
+  'MUC Stored must match fresh identity and Replay must keep original identity without a fresh class');
+  const classes = compact(body(mucCore, 'impl\\s+AcceptanceClass\\b'));
+  requireBoundary(classes.includes('(true,true)=>Self::ArchiveAndIdentity,') &&
+    classes.includes('(true,false)=>Self::ArchiveOnly,') &&
+    classes.includes('(false,true)=>Self::IdentityOnly,') &&
+    classes.includes('(false,false)=>Self::Volatile'), 'MUC fresh classes must preserve archive and identity independence');
+
+  const observedDb = compact(body(mucDb, 'async\\s+fn\\s+admit_muc_discussion_observed\\b'));
+  requireBoundary(observedDb === 'admit_muc_discussion_inner(pool,super::room::discussion_to_db(request.command()),Some(request)).await',
+    'MUC SQL input must be projected from its bound request');
+  const transaction = compact(body(mucDb, 'async\\s+fn\\s+admit_muc_discussion_inner\\b'));
+  requireBoundary(count(transaction, 'commit_muc_discussion(transaction,request,MucDiscussionAdmission::Stored(message.id)).await') === 2 &&
+    count(transaction, 'commit_muc_discussion(transaction,request,MucDiscussionAdmission::Replay(existing_id)).await') === 1 &&
+    !transaction.includes('transaction.commit('), 'MUC must observe all three existing COMMIT exits with exact Stored/Replay facts');
+  const commit = compact(body(mucDb, 'async\\s+fn\\s+commit_muc_discussion\\b'));
+  requireBoundary(commit.includes('commit_observed(transaction.commit(),request,observed).await') &&
+    commit.includes('MucDiscussionAdmission::Stored(id)=>{northstar_room_core::MucDiscussionAdmission::Stored(id)}') &&
+    commit.includes('MucDiscussionAdmission::Replay(id)=>{northstar_room_core::MucDiscussionAdmission::Replay(id)}'),
+  'MUC SQL wrapper must observe the actual transaction and its unchanged result identity');
+  const repository = compact(body(mucRepository, 'fn\\s+admit_discussion_observed\\b'));
+  requireBoundary(repository.includes('db::admit_muc_discussion_observed(&self.pool,request).await?'),
+    'MUC production repository must use the observed SQL entry');
+  const serviceOwner = body(mucService, 'impl<R:\\s*MucRepository>\\s+MucService<R>');
+  const serviceNew = compact(body(serviceOwner, 'fn\\s+new\\b'));
+  ordered(serviceNew, ['letconfigured_domain:Arc<str>=Arc::from(configured_domain.as_ref());',
+    'discussion_application:RoomApplication::new(repository.clone(),configured_domain.to_string())',
+    'repository,configured_domain,local_join_gates'],
+  'MUC service constructor must bind its actual receiving configuration to RoomApplication');
+  const servicePrepare = compact(body(serviceOwner, 'fn\\s+prepare_muc_discussion\\b'));
+  requireBoundary(servicePrepare === 'self.discussion_application.prepare_discussion(command)',
+    'MUC service preparation must forward to its configured discussion application');
+  const service = compact(body(mucService, 'async\\s+fn\\s+execute_muc_discussion_observed\\b'));
+  requireBoundary(service.includes('self.discussion_application.admit_discussion_observed(request).await'),
+    'MUC production service must use the request-bound application');
+
+  const slot = body(mucSlot, 'impl\\s+MucDiscussionSlot\\b');
+  const register = compact(body(slot, 'fn\\s+register\\b'));
+  ordered(register, ['letmutslot=self.0.lock()', 'ifslot.terminal.is_some(){returnErr(Rejected::Retired);}',
+    'if!observation.is_for(prepared){returnErr(Rejected::Input);}',
+    'letobservation=Observation::new(prepared.clone());', 'slot.observation=Some(observation.clone());'],
+  'MUC lazy slot must serialize retired/conflicting rejection before registration');
+  const session = body(frame, 'impl\\s+SessionExecutions\\b');
+  const selection = compact(body(session, 'fn\\s+muc_discussion\\b'));
+  requireBoundary(selection === 'letSome(execution)=&self.currentelse{returnOk(None);};ifexecution.0.outcome.load(Ordering::Relaxed)!=Outcome::Pendingasu8{returnErr(discussion::Rejected::Retired);}execution.0.muc_discussion.register(prepared).map(Some)',
+    'MUC legacy absence must remain distinct from retired or conflicting frame registration');
+  const accessor = compact(body(protocol, 'fn\\s+muc_discussion_operation\\b'));
+  requireBoundary(accessor === 'self.frame_executions.muc_discussion(prepared)',
+    'MUC protocol accessor must propagate registration errors without legacy fallback');
+  const finish = compact(body(frame, 'fn\\s+finish\\(&mut\\s+self,\\s*outcome:\\s*Outcome\\)'));
+  ordered(finish, ['ifself.phase==', 'letmuc_reason=matchreason{', 'progress.muc_discussion.retire(muc_reason)', 'progress.outcome.store('],
+    'MUC frame retirement must remain in the existing frame terminal hook');
+
+  const envelope = body(muc, 'impl\\s+PreparedMucDiscussion\\b');
+  const envelopeNew = compact(body(envelope, 'fn\\s+new\\b'));
+  requireBoundary(envelopeNew.includes('command.stanza==archive') &&
+    envelopeNew.includes('command.room_id==room.id&&command.authority.expected_room_epoch==room.room_epoch') &&
+    envelopeNew.includes('letarchive=ifcommand.archive&&command.encrypted{encrypted_archive_stanza(&stanza)}else{stanza.clone()};'),
+  'MUC live envelope must bind exact archive projection and room authority');
+  const bind = compact(body(envelope, 'fn\\s+bind\\b'));
+  ordered(bind, ['observation.is_for(&self.prepared)', 'letrequest=observation.request()?;', 'live:self.live'],
+    'MUC live envelope must bind its private input before issuing the request');
+  const bound = body(muc, 'impl\\s+BoundMucDiscussion\\b');
+  const boundFinish = compact(body(bound, 'fn\\s+finish\\b'));
+  requireBoundary(boundFinish.includes('completion.into_fanout(&self.observation)?') &&
+    boundFinish.includes('AcceptedMucDiscussion{live:self.live,permit}'),
+    'MUC accepted envelope must consume matching completion and retain original live bytes');
+  const accepted = body(muc, 'impl\\s+AcceptedMucDiscussion\\b');
+  const fanout = compact(body(accepted, 'async\\s+fn\\s+fanout\\b'));
+  requireBoundary(fanout.includes('letSelf{live,permit}=self;') &&
+    fanout.includes('run_muc_discussion_fanout(&MucMessageFanout{session,room_jid:&live.room_jid,room_from:&live.room_from,sender:&live.sender,stanza:&live.stanza},permit).await?'),
+    'MUC accepted fanout must consume its envelope and cannot substitute live payload');
+}
+
+export function verifyRoomExecutionBoundaries(sources) {
+  const { muc, mucFanout, mix } = sources;
   const message = compact(body(muc, 'async\\s+fn\\s+muc_message\\b'));
   requireBoundary(message.startsWith('self.enter_frame_stage(Stage::MucPolicy);'),
     'MUC message policy stage must precede principal and protocol policy checks');
@@ -693,21 +808,41 @@ export function verifyRoomExecutionBoundaries({ muc, mucFanout, mix }) {
     'matchself.state.muc_service().execute_muc_retraction(',
     'matchservice.set_local_cluster_subject(',
     'matchservice.execute_muc_subject(',
-    'letadmission=self.state.muc_service().execute_muc_discussion(',
+    'letcompletion=self.state.muc_service().execute_muc_discussion_observed(',
+    'self.state.muc_service().execute_muc_discussion(',
   ]) {
     requireBoundary(message.includes('self.enter_frame_stage(Stage::MucAdmission);' + call),
       `MUC admission stage must immediately precede ${call}`);
   }
+  const discussionDispatch = 'letoperation=self.muc_discussion_operation(&prepared.prepared)?;' +
+    'letadmission=ifletSome(operation)=operation{' +
+    'letbound=prepared.bind(operation)?;' +
+    'self.enter_frame_stage(Stage::MucAdmission);' +
+    'letcompletion=self.state.muc_service().execute_muc_discussion_observed(&bound.request).await?;' +
+    'letadmission=completion.outcome();discussion_fanout=bound.finish(completion)?;admission' +
+    '}else{self.enter_frame_stage(Stage::MucAdmission);' +
+    'self.state.muc_service().execute_muc_discussion(prepared.prepared.command()).await?};';
+  requireBoundary(message.replace(/,\)/g, ')').includes(discussionDispatch),
+    'MUC discussion dispatch must retain the unfiltered active-frame branch and bound request/completion chain');
   requireBoundary(message.includes('MucDiscussionAdmission::Replay(_)=>{fanout_disposition=MucFanoutDisposition::Replay;}') &&
-    message.includes('if!run_muc_fanout(&MucMessageFanout{session:self,room_jid:&room_jid,room_from:&room_from,sender:from,stanza:&rewritten,},fanout_disposition,).await{returnOk(Action::None);}drop(local_authority_guard);'),
+    message.includes('letoperation=self.muc_discussion_operation(&prepared.prepared)?;') &&
+    message.includes('discussion_fanout=bound.finish(completion)?;') &&
+    message.includes('letattempted=ifletSome(accepted)=discussion_fanout{accepted.fanout(self).await?}else{run_muc_fanout(&MucMessageFanout{session:self,room_jid:&room_jid,room_from:&room_from,sender:from,stanza:&rewritten,},fanout_disposition,).await};if!attempted{returnOk(Action::None);}drop(local_authority_guard);'),
   'MUC replay and accepted fanout must use the typed owner before releasing the room guard');
   const adapter = body(muc, 'impl\\s+MucFanoutPort\\s+for\\s+MucMessageFanout\\b');
   const stageAdapter = compact(body(adapter, 'fn\\s+enter\\b'));
   requireBoundary(stageAdapter === 'self.session.enter_frame_stage(matchstage{MucFanoutStage::Cluster=>Stage::MucClusterFanout,MucFanoutStage::Local=>Stage::MucLocalFanout,});',
     'MUC fanout adapter must attribute both stages to the originating session');
   const fanout = compact(body(mucFanout, 'async\\s+fn\\s+run_muc_fanout\\b'));
-  requireBoundary(fanout === 'ifdisposition==MucFanoutDisposition::Replay{returnfalse;}port.enter(MucFanoutStage::Cluster);port.publish_cluster().await;port.enter(MucFanoutStage::Local);letrecipients=port.recipients();letblocked=port.blocked(&recipients).await;forrecipientinrecipients{ifport.is_blocked(&recipient,&blocked){continue;}if!port.deliver(&recipient).await{port.record_failure(&recipient);}}true',
+  requireBoundary(fanout === 'ifdisposition==MucFanoutDisposition::Replay{returnfalse;}run_muc_fanout_effects(port,None).await.expect();true',
     'MUC fanout must skip replay and preserve cluster, owned snapshot, privacy and sequential local delivery');
+  const observedFanout = compact(body(mucFanout, 'async\\s+fn\\s+run_muc_discussion_fanout\\b'));
+  requireBoundary(observedFanout === 'letprogress=permit.start()?;run_muc_fanout_effects(port,Some(&progress)).await?;progress.complete()?;Ok(true)',
+    'MUC observed fanout must consume its permit and complete only after actual effects');
+  const effects = compact(body(mucFanout, 'async\\s+fn\\s+run_muc_fanout_effects\\b'));
+  requireBoundary(effects === 'ifletSome(progress)=progress{progress.enter_cluster()?;}port.enter(MucFanoutStage::Cluster);port.publish_cluster().await;ifletSome(progress)=progress{progress.cluster_returned()?;}port.enter(MucFanoutStage::Local);letrecipients=port.recipients();ifletSome(progress)=progress{progress.enter_privacy(recipients.len())?;}letblocked=port.blocked(&recipients).await;ifletSome(progress)=progress{progress.privacy_returned()?;}for(index,recipient)inrecipients.into_iter().enumerate(){ifport.is_blocked(&recipient,&blocked){ifletSome(progress)=progress{progress.blocked(index)?;}continue;}ifletSome(progress)=progress{progress.enter_delivery(index)?;}letaccepted=port.deliver(&recipient).await;ifletSome(progress)=progress{progress.delivery_returned(index,accepted)?;}if!accepted{port.record_failure(&recipient);}}Ok(())',
+    'MUC effects must preserve cluster, acquired order, privacy, sequential delivery and observed prefix');
+  verifyMucDiscussionBoundaries(sources);
 
   const mixIngress = compact(body(mix, 'async\\s+fn\\s+try_mix_message\\b'));
   requireBoundary(mixIngress.includes('if!CanonicalJid::parse(to).is_ok_and(|target|target.domainpart()==self.mix_domain()){returnOk(None);}self.enter_frame_stage(Stage::MixPolicy);letSome(user)=self.authenticated.as_ref()') &&

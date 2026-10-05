@@ -353,7 +353,7 @@ fn actor_authority_to_db(authority: &MucActorAuthority) -> db::MucActorAuthority
     }
 }
 
-fn discussion_to_db(command: &MucDiscussion) -> db::MucDiscussion<'_> {
+pub(super) fn discussion_to_db(command: &MucDiscussion) -> db::MucDiscussion<'_> {
     db::MucDiscussion {
         id: command.id,
         room_id: command.room_id,
@@ -379,6 +379,24 @@ impl MucDiscussionRepository for PostgresMucRepository {
         Box::pin(async move {
             Ok(
                 match db::admit_muc_discussion(&self.pool, discussion_to_db(command)).await? {
+                    db::MucDiscussionAdmission::Stored(id) => MucDiscussionAdmission::Stored(id),
+                    db::MucDiscussionAdmission::Replay(id) => MucDiscussionAdmission::Replay(id),
+                    db::MucDiscussionAdmission::Unauthorized => {
+                        MucDiscussionAdmission::Unauthorized
+                    }
+                    db::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
+                },
+            )
+        })
+    }
+
+    fn admit_discussion_observed<'a>(
+        &'a self,
+        request: &'a northstar_room_application::discussion::Request,
+    ) -> RepositoryFuture<'a, Self::Error> {
+        Box::pin(async move {
+            Ok(
+                match db::admit_muc_discussion_observed(&self.pool, request).await? {
                     db::MucDiscussionAdmission::Stored(id) => MucDiscussionAdmission::Stored(id),
                     db::MucDiscussionAdmission::Replay(id) => MucDiscussionAdmission::Replay(id),
                     db::MucDiscussionAdmission::Unauthorized => {

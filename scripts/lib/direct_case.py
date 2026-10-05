@@ -1104,7 +1104,8 @@ def _xml(value, *, projected=False):
     except (ET.ParseError, ValueError) as error:
         raise DirectCaseInvalid('xml_document') from error
     expected_root = '{' + CLIENT_NAMESPACE + '}message' if projected else 'message'
-    _need(element.tag == expected_root, 'projected_message_namespace' if projected else 'original_message_root')
+    allowed = ('message', '{' + CLIENT_NAMESPACE + '}message') if projected is None else (expected_root,)
+    _need(element.tag in allowed, 'projected_message_namespace' if projected else 'original_message_root')
     return element
 
 
@@ -1768,7 +1769,7 @@ def _original_fixture_findings(value, ledger, payload):
             _finding(findings, 'remote_before_rearm', route['remote_calls'][-1]['seq'] < route['rearm_calls'][0]['seq'])
         if len(route['health_reads']) == 3 and route['enqueue']:
             _finding(findings, 'after_routing_health', route['enqueue'][-1]['seq'] < route['health_reads'][-1]['seq'])
-        receiving = ledger['native'] is not None and ledger['native']['frame_id'] == expected['frame_id']
+        receiving = value['recipient_owner'].get('frame_id') == expected['frame_id']
         _finding(findings, 'dequeue_lineage', [item['source'] for item in route['dequeued']] ==
                  ([expected['source']] if receiving and enqueue_result == 'Accepted' else []))
         prefill = value['route'][index]['prefill']
@@ -1912,6 +1913,321 @@ def _native_failure_target(ledger):
     return {'id': 'NativeAckWithoutSuccessfulFlush', 'class': 'Safety',
             'target': {'frame_id': native['frame_id'], 'connection_id': native['connection_id'], 'owner': 'Tcp',
                        'purpose': 'NativeSettlement', 'source': copy.deepcopy(native['fenced_source'])}}
+
+
+def _sm_receipt_matches(state, expected):
+    return (state['scope'] == expected['scope'] and state['binding'] == expected['binding'] and
+            state['knowledge'] == {'kind': 'ReceiptKnown', 'fact': expected['knowledge']['fact']})
+
+
+def sm_safety_findings(value, payload):
+    """Observed SM authority precedes fixture expectations and native work."""
+    ledger = derive_owner_ledger(value)
+    validate_case_evidence(payload)
+    if ledger['owner']['kind'] != 'Sm' or payload['rejection'] is not None or payload['recipient']['kind'] != 'Sm':
+        return []
+    expected, actual = ledger['owner'], payload['recipient']
+    violations = []
+    for index, turn in enumerate(actual['sm_turns']):
+        wanted = expected['turns'][index]['state'] if index < len(expected['turns']) else None
+        target = {'frame_id': expected['frame_id'], 'connection_id': turn['scope']['connection_id'],
+                  'owner': 'Sm', 'purpose': copy.deepcopy(turn['scope']['purpose']),
+                  'item_index': expected['turns'][index]['item_index'] if wanted is not None else None}
+        states = [prefix['state'] for prefix in turn['prefixes']] + [turn]
+        def violation(identity):
+            violations.append({'id': identity, 'class': 'Safety', 'target': copy.deepcopy(target)})
+        authority = lambda state: wanted is not None and _sm_receipt_matches(state, wanted)
+        if any(state['knowledge']['kind'] == 'ReceiptKnown' and not authority(state) for state in states):
+            violation('SmCheckpointReceiptIdentityMismatch')
+        if any((state['ownership_applied'] or state['record_managed_by_sm'] is True) and
+               not authority(state) for state in states):
+            violation('SmOwnershipWithoutCheckpointReceipt')
+        if any(state['notification_attempted'] and not authority(state) for state in states):
+            violation('SmNotificationWithoutCheckpointReceipt')
+        if any(state['acknowledged_h_applied'] is not None and not (
+                authority(state) and state['scope']['purpose'] == {'kind': 'Acknowledge', 'h': state['acknowledged_h_applied']} and
+                state['binding']['acked_h'] == state['acknowledged_h_applied']) for state in states) or any(
+                state['capacity_completed'] is True and not (authority(state) and
+                state['scope']['purpose']['kind'] == 'Acknowledge') for state in states):
+            violation('SmAcknowledgementAppliedWithoutReceipt')
+        commit_seen = restored_after_entry = False
+        for state in states:
+            commit_seen = commit_seen or state['knowledge']['kind'] in ('CommitCallEntered', 'ReceiptKnown')
+            restored_after_entry = restored_after_entry or (commit_seen and state['restored'])
+        if restored_after_entry:
+            violation('SmRestorationAfterCommitEntry')
+    for index, native in enumerate(actual['native_writes']):
+        wanted = expected['turns'][index]['state'] if index < len(expected['native_writes']) else None
+        turn = actual['sm_turns'][index] if index < len(actual['sm_turns']) else None
+        prefixes = turn['prefixes'] if turn is not None else []
+        target = {'frame_id': native['frame_id'], 'connection_id': native['connection_id'],
+                  'owner': 'Tcp', 'purpose': 'Write', 'item_index': index}
+        owner_matches = (index < len(expected['native_writes']) and native['frame_id'] == expected['frame_id'] and
+                         native['connection_id'] == expected['native_writes'][index]['connection_id'] and
+                         wanted is not None and native['connection_id'] == wanted['scope']['connection_id'])
+        source_matches = index < len(expected['native_writes']) and native['original'] == expected['native_writes'][index]['state']['original']
+        if (native['write_calls'] or native['ack_calls']) and not owner_matches:
+            violations.append({'id': 'SmNativeOwnerIdentityMismatch', 'class': 'Safety', 'target': copy.deepcopy(target)})
+        if (native['write_calls'] or native['ack_calls']) and not source_matches:
+            violations.append({'id': 'SmNativeItemSourceMismatch', 'class': 'Safety', 'target': copy.deepcopy(target)})
+        def completed_before(seq):
+            return owner_matches and any(prefix['seq'] < seq and _sm_receipt_matches(prefix['state'], wanted) and
+                prefix['state']['ownership_applied'] and prefix['state']['returned_updated'] is True and
+                prefix['state']['record_managed_by_sm'] is not None and prefix['state']['terminal'] == 'Returned'
+                for prefix in prefixes)
+        if any(not completed_before(call['seq']) for call in native['write_calls']):
+            violations.append({'id': 'NativeWriteBeforeSmCheckpointReturn', 'class': 'Safety', 'target': target})
+        durable = wanted is not None and wanted['binding']['remaining'][-1] is not None
+        if any(prefix['state']['managed_by_sm'] is True and not completed_before(prefix['seq'])
+               for prefix in native['prefixes']):
+            violations.append({'id': 'NativeManagedWithoutSmReceipt', 'class': 'Safety', 'target': copy.deepcopy(target)})
+        if (native['fence_entered'] and native['managed_by_sm'] is True) or (durable and any(
+                prefix['state']['fence_entered'] and completed_before(prefix['seq']) for prefix in native['prefixes'])):
+            violations.append({'id': 'NativeFenceAfterSmOwnership', 'class': 'Safety', 'target': copy.deepcopy(target)})
+        for ack in native['ack_calls']:
+            ack_target = {'frame_id': native['frame_id'], 'connection_id': native['connection_id'],
+                          'owner': 'Tcp', 'purpose': 'NativeSettlement', 'source': copy.deepcopy(ack['source'])}
+            transferred = completed_before(ack['seq']) and durable
+            violations.append({'id': 'NativeAckAfterSmOwnership' if transferred else 'NativeAckWithoutMatchingFence',
+                               'class': 'Safety', 'target': ack_target})
+    for handoff in actual['mix_handoffs']:
+        result = handoff['result']
+        if result['kind'] not in ('SmPersisted', 'BoshPersisted', 'SocketFenced'):
+            continue
+        matching = False
+        for index, wanted in enumerate(expected['turns'][:len(expected['native_writes'])]):
+            if index >= len(actual['sm_turns']):
+                continue
+            rotations = wanted['state']['knowledge']['fact']['rotations']
+            if not any(item['previous']['delivery_id'] == handoff['delivery_id'] for item in rotations):
+                continue
+            matching = result == {'kind': 'SmPersisted', 'session_id': wanted['state']['scope']['session_id']} and any(
+                prefix['seq'] < handoff['seq'] and _sm_receipt_matches(prefix['state'], wanted['state']) and
+                prefix['state']['ownership_applied'] for prefix in actual['sm_turns'][index]['prefixes'])
+        if not matching:
+            violations.append({'id': 'MixSmHandoffWithoutMatchingReceipt', 'class': 'Safety',
+                               'target': {'owner': 'Sm', 'delivery_id': handoff['delivery_id'], 'purpose': 'MixHandoff'}})
+    return violations
+
+
+def _sm_turn_findings(turn, wanted, findings):
+    expected = wanted['state']
+    _finding(findings, 'sm_final_state', {name: turn[name] for name in SM_STATE_FIELDS.split()} == expected)
+    _finding(findings, 'sm_direct_polls', [item['result'] for item in turn['polls']] == wanted['polls'])
+    prefixes = turn['prefixes']
+    _finding(findings, 'sm_final_retirement_prefix', bool(prefixes) and prefixes[-1]['state'] == expected)
+    record = expected['scope']['purpose']['kind'] == 'Record'
+    known = expected['knowledge']['kind'] == 'ReceiptKnown'
+    phases = (['NotRequested'] if record else []) + ['CommitCallEntered'] + (['ReceiptKnown'] if known else []) + [expected['knowledge']['kind']]
+    _finding(findings, 'sm_prefix_cadence', [prefix['state']['knowledge']['kind'] for prefix in prefixes] == phases)
+    if record:
+        initial = copy.deepcopy(expected)
+        initial.update(binding=None, knowledge={'kind': 'NotRequested'}, appended=False, restored=False,
+                       ownership_applied=False, acknowledged_h_applied=None, notification_attempted=False,
+                       capacity_completed=None, returned_updated=None, returned_error=False,
+                       record_managed_by_sm=None, terminal=None)
+        _finding(findings, 'sm_recorded_before_append', bool(prefixes) and prefixes[0]['state'] == initial)
+    entered = receipt = None
+    previous = None
+    rank = -1
+    for prefix in prefixes:
+        state = prefix['state']
+        _finding(findings, 'sm_prefix_scope', state['scope'] == expected['scope'])
+        if state['binding'] is not None:
+            _finding(findings, 'sm_prefix_binding', state['binding'] == expected['binding'])
+        knowledge = state['knowledge']
+        current = {'NotRequested': 0, 'NoCommitRequested': 1, 'CommitCallEntered': 2, 'ReceiptKnown': 3}.get(knowledge['kind'])
+        _finding(findings, 'sm_expected_commit_path', current is not None)
+        if current is not None:
+            _finding(findings, 'sm_prefix_knowledge', current >= rank and
+                     (expected['knowledge']['kind'] == 'ReceiptKnown' or current < 3))
+            rank = current
+        if knowledge['kind'] in ('CommitCallEntered', 'ReceiptKnown'):
+            _finding(findings, 'sm_prefix_fact', knowledge['fact'] == expected['knowledge']['fact'])
+            if knowledge['kind'] == 'CommitCallEntered' and entered is None:
+                entered = prefix['seq']
+            if knowledge['kind'] == 'ReceiptKnown' and receipt is None:
+                receipt = prefix['seq']
+                _finding(findings, 'sm_receipt_before_local_application', not state['ownership_applied'] and
+                         not state['notification_attempted'] and state['acknowledged_h_applied'] is None and
+                         state['capacity_completed'] is None and state['returned_updated'] is None and
+                         state['record_managed_by_sm'] is None and state['terminal'] is None)
+        if state['returned_updated'] is not None:
+            _finding(findings, 'sm_return_requires_receipt', knowledge['kind'] == 'ReceiptKnown' and state['returned_updated'] is True)
+        if state['record_managed_by_sm'] is not None:
+            _finding(findings, 'sm_managed_return_after_record', state['returned_updated'] is True and
+                     state['record_managed_by_sm'] == expected['record_managed_by_sm'])
+        for name in ('h_decision', 'restored', 'returned_error'):
+            _finding(findings, 'sm_prefix_' + name, state[name] == expected[name])
+        _finding(findings, 'sm_prefix_appended', state['appended'] == (record and knowledge['kind'] != 'NotRequested'))
+        if previous is not None:
+            for name in ('binding', 'acknowledged_h_applied', 'capacity_completed', 'returned_updated',
+                         'record_managed_by_sm', 'terminal'):
+                if previous[name] is not None:
+                    _finding(findings, 'sm_retained_' + name, state[name] == previous[name])
+            for name in ('appended', 'ownership_applied', 'notification_attempted'):
+                _finding(findings, 'sm_retained_' + name, not previous[name] or state[name])
+        if state['terminal'] is not None:
+            _finding(findings, 'sm_terminal_only_final', prefix is prefixes[-1] and state['terminal'] == expected['terminal'])
+        previous = state
+    _finding(findings, 'sm_entered_prefix', entered is not None)
+    if expected['knowledge']['kind'] == 'ReceiptKnown':
+        _finding(findings, 'sm_receipt_prefix', entered is not None and receipt is not None and
+                 bool(prefixes) and entered < receipt < prefixes[-1]['seq'])
+    if wanted['polls']:
+        _finding(findings, 'sm_final_after_poll', len(turn['polls']) == 1 and bool(prefixes) and
+                 prefixes[-1]['seq'] > turn['polls'][0]['seq'] and
+                 all(prefix['seq'] < turn['polls'][0]['seq'] for prefix in prefixes[:-1]))
+    return entered, receipt
+
+
+def _sm_fixture_findings(value, ledger, payload):
+    wanted = ledger['owner']
+    if payload['recipient']['kind'] != 'Sm':
+        return ['missing_sm_owner']
+    actual, findings = payload['recipient'], []
+    _finding(findings, 'sm_owner_inventory', len(actual['sm_turns']) == len(wanted['turns']) and
+             len(actual['native_writes']) == len(wanted['native_writes']))
+    original = next((item for item in payload['originals'] if item['frame_id'] == wanted['frame_id']), None)
+    dequeued = original['route']['dequeued'] if original is not None else []
+    raw_items = [dequeued[0]['xml'].encode('utf-8') if len(dequeued) == 1 else b''] + [
+        item['xml'].encode('utf-8') for item in value['recipient_owner']['extra_items']]
+    previous_end = dequeued[0]['seq'] if len(dequeued) == 1 else 0
+    for index, (turn, expected_turn) in enumerate(zip(actual['sm_turns'], wanted['turns'])):
+        entered, receipt = _sm_turn_findings(turn, expected_turn, findings)
+        _finding(findings, 'sm_owner_sequence', entered is not None and bool(turn['prefixes']) and
+                 previous_end < turn['prefixes'][0]['seq'] <= entered)
+        if expected_turn['item_index'] is None:
+            previous_end = turn['prefixes'][-1]['seq'] if turn['prefixes'] else previous_end
+            continue
+        if index >= len(actual['native_writes']):
+            continue
+        native, expected_native = actual['native_writes'][index], wanted['native_writes'][index]
+        state = expected_native['state']
+        _finding(findings, 'sm_native_identity', native['frame_id'] == expected_native['frame_id'] and
+                 native['connection_id'] == expected_native['connection_id'])
+        _finding(findings, 'sm_native_final_state', {name: native[name] for name in NATIVE_STATE_FIELDS.split()} == state)
+        _finding(findings, 'sm_native_poll', [item['result'] for item in native['polls']] == expected_native['polls'])
+        _finding(findings, 'sm_native_receipt_channels', not native['ownership_receipts'] and not native['write_receipts'])
+        _finding(findings, 'sm_native_no_ack', not native['ack_calls'])
+        _retained_native_prefixes(native['prefixes'], findings)
+        pending = state['terminal'] == 'Cancelled'
+        raw = raw_items[index]
+        writes = [] if pending else [{'offered_len': len(raw), 'offered_sha256': _hash(raw),
+                                      'accepted_bytes_hex': raw.hex(), 'result': 'Accepted'}]
+        _finding(findings, 'sm_native_write_calls', bool(raw) and
+                 [{name: call[name] for name in ('offered_len', 'offered_sha256', 'accepted_bytes_hex', 'result')}
+                  for call in native['write_calls']] == writes)
+        _finding(findings, 'sm_native_flush_calls', [call['result'] for call in native['flush_calls']] == ([] if pending else ['Ok']))
+        prefixes, polls = native['prefixes'], native['polls']
+        final_seq = prefixes[-1]['seq'] if prefixes else 0
+        sm_final = turn['prefixes'][-1]['seq'] if turn['prefixes'] else 0
+        recording = copy.deepcopy(state)
+        recording.update(preparation='Recording', managed_by_sm=None, writer_entered=False,
+                         writer_result=None, write_decision=None, terminal=None)
+        _finding(findings, 'sm_native_prefix_cadence', len(prefixes) == (2 if pending else 3))
+        _finding(findings, 'sm_native_recording_prefix', bool(prefixes) and prefixes[0]['state'] == recording and
+                 bool(turn['prefixes']) and previous_end < prefixes[0]['seq'] < turn['prefixes'][0]['seq'])
+        _finding(findings, 'sm_native_final_snapshot', bool(prefixes) and prefixes[-1]['state'] == state and
+                 len(polls) == 1 and polls[0]['seq'] < final_seq)
+        if len(polls) == 1:
+            _finding(findings, 'sm_native_post_poll_snapshot',
+                     [prefix['seq'] for prefix in prefixes if prefix['seq'] > polls[0]['seq']] == ([final_seq] if prefixes else []))
+        _finding(findings, 'sm_native_call_poll_boundary', len(polls) == 1 and all(call['seq'] < polls[0]['seq']
+                 for call in native['write_calls'] + native['flush_calls'] + native['ack_calls']))
+        for prefix in prefixes:
+            observed = prefix['state']
+            _finding(findings, 'sm_native_prefix_source', observed['original'] == state['original'])
+            _finding(findings, 'sm_native_no_fence', not observed['fence_entered'] and observed['returned_fence'] is None)
+            _finding(findings, 'sm_native_ack_not_requested', observed['ack'] == {'kind': 'NotRequested'} and observed['ack_returned'] is None)
+            if observed['terminal'] is not None:
+                _finding(findings, 'sm_native_terminal_after_poll', prefix is prefixes[-1] and len(polls) == 1 and
+                         polls[0]['seq'] < prefix['seq'])
+            if observed['writer_result'] is not None:
+                _finding(findings, 'sm_native_result_after_flush', observed['writer_result'] == 'FullWrite' and
+                         len(native['flush_calls']) == 1 and native['flush_calls'][0]['seq'] < prefix['seq'])
+        if pending:
+            _finding(findings, 'sm_nested_cancelled_after_parent_poll', len(polls) == 1 and entered is not None and
+                     entered < polls[0]['seq'] < sm_final < final_seq)
+        else:
+            first_write = native['write_calls'][0]['seq'] if len(native['write_calls']) == 1 else 0
+            _finding(findings, 'sm_record_return_before_native_prepare', any(sm_final < prefix['seq'] < first_write and
+                     prefix['state']['preparation'] == 'Prepared' and prefix['state']['managed_by_sm'] == state['managed_by_sm'] and
+                     not prefix['state']['writer_entered'] for prefix in prefixes))
+            _finding(findings, 'sm_write_then_flush', len(native['flush_calls']) == 1 and
+                     first_write < native['flush_calls'][0]['seq'])
+        previous_end = final_seq
+    _finding(findings, 'sm_final_counters', (actual['outbound_h'], actual['acked_h']) == (wanted['outbound_h'], wanted['acked_h']))
+    _finding(findings, 'sm_typed_handoff_inventory', [{name: item[name] for name in ('delivery_id', 'result')}
+             for item in actual['mix_handoffs']] == wanted['mix_handoffs'])
+    for handoff in actual['mix_handoffs']:
+        indexes = [index for index, item in enumerate(wanted['native_writes']) if item['state']['original'] is not None and
+                   item['state']['original']['kind'] == 'Mix' and item['state']['original']['delivery_id'] == handoff['delivery_id']]
+        if len(indexes) == 1 and indexes[0] < len(actual['native_writes']) and indexes[0] < len(actual['sm_turns']):
+            index = indexes[0]
+            native, turn = actual['native_writes'][index], actual['sm_turns'][index]
+            _finding(findings, 'sm_handoff_between_record_and_write', bool(turn['prefixes']) and bool(native['write_calls']) and
+                     turn['prefixes'][-1]['seq'] < handoff['seq'] < native['write_calls'][0]['seq'] and
+                     any(turn['prefixes'][-1]['seq'] < prefix['seq'] < handoff['seq'] and
+                         prefix['state']['preparation'] == 'Prepared' for prefix in native['prefixes']))
+    fifo = [{'xml': _tree(_xml(slot['xml'], projected=None)),
+             'source': slot['source']} for slot in actual['fifo_after']]
+    _finding(findings, 'sm_final_fifo', fifo == wanted['fifo_after'])
+    acknowledged = wanted['turns'][-1]['state']['h_decision'].get('count', 0) if wanted['turns'] else 0
+    _finding(findings, 'sm_fifo_byte_continuity', [slot['xml'].encode('utf-8') for slot in actual['fifo_after']] ==
+             raw_items[acknowledged:len(wanted['native_writes'])])
+    return findings
+
+
+def _inspect_sm_fixture(fixture, record, payload):
+    """Pure SM supplied-evidence matcher; no public profile can invoke it yet."""
+    if type(record) is not dict or record.get('observation') != 'Complete':
+        return None, None, False, record.get('observation', 'IncompleteProcess') if type(record) is dict else 'IncompleteProcess'
+    process = record.get('process')
+    if type(process) is not dict or type(process.get('returncode')) is not int or process['returncode'] != 0:
+        return None, None, False, 'ProcessFailure'
+    value = parse_case_input(fixture['bytes'])
+    ledger = derive_owner_ledger(value)
+    _need(ledger['owner']['kind'] == 'Sm', 'sm_fixture_owner')
+    try:
+        validate_case_evidence(payload)
+    except (DirectCaseInvalid, DirectCaseIncomplete, TypeError, KeyError, ValueError) as error:
+        evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': 'Inconclusive', 'qualified': False,
+                      'invariant': None, 'violations': [], 'mismatches': ['malformed_evidence:' + str(error)[:160]]}
+        return None, evaluation, False, 'MalformedOrUnexpectedOutput'
+    if payload['input_sha256'] != _hash(fixture['bytes']):
+        evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': 'Inconclusive', 'qualified': False,
+                      'invariant': None, 'violations': [], 'mismatches': ['raw_input_binding']}
+        return copy.deepcopy(payload), evaluation, False, 'InputBindingMismatch'
+    findings, violations = [], []
+    if payload['rejection'] is not None:
+        findings.append('unexpected_rejection')
+    else:
+        violations = _authority_safety_findings(ledger['sender'], payload) + sm_safety_findings(value, payload)
+        try:
+            findings.extend(projection_findings(ledger['sender'], payload))
+            findings.extend(_sm_fixture_findings(value, ledger, payload))
+        except (DirectCaseInvalid, ET.ParseError, ValueError) as error:
+            findings.append('owner_xml:' + str(error)[:160])
+        findings.extend(_original_fixture_findings(value, ledger['sender'], payload))
+        _finding(findings, 'driver_execution', payload['execution'] == ledger['owner']['execution'])
+        _finding(findings, 'unexpected_safety_failure', not violations)
+    invariant = violations[0] if violations else None
+    if violations:
+        verdict = 'InvariantViolation'
+    elif payload['rejection'] is not None:
+        verdict = 'InvalidScenario'
+    elif payload['execution'] == 'Cancelled':
+        verdict = 'Cancelled'
+    elif findings:
+        verdict = 'InvariantViolation'
+        invariant = {'id': 'DirectFixtureDivergence', 'class': 'ReplayDivergence', 'location': findings[0]}
+    else:
+        verdict = 'Pass'
+    matched = not findings and verdict == fixture['expected_verdict']
+    evaluation = {'schema': 'northstar-direct-evaluation-v1', 'verdict': verdict, 'qualified': verdict == 'Pass',
+                  'invariant': invariant, 'violations': violations, 'mismatches': findings}
+    return copy.deepcopy(payload), evaluation, matched, None if matched else 'FixtureMismatch'
 
 
 def _authority_safety_findings(ledger, payload):

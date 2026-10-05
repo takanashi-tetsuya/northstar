@@ -841,7 +841,7 @@ class NativeFullMatcherTests(unittest.TestCase):
         values = direct_case.mutation_fixtures() if identity.startswith('M') else direct_case.native_fixtures()
         return next(item for item in values if item['id'] == identity)
 
-    def supplied_facts(self, fixture, *, omit_flush=False, sender_cut=None, original_index=0, start_seq=0):
+    def supplied_facts(self, fixture, *, omit_flush=False, sender_cut=None, original_index=0, start_seq=0, sender_capture=False):
         """Hand-authored fixed-literal facts, independent of oracle predictions.
 
         Identifier and controlled-response constants come from the literal input;
@@ -1005,6 +1005,10 @@ class NativeFullMatcherTests(unittest.TestCase):
             original[name] = copy.deepcopy(state[name])
         original['route']['handoff'] = copy.deepcopy(state['handoff'])
         original['route']['dequeued'].append({'seq': seq(), 'source': source, 'xml': live})
+        if sender_capture:
+            return {'schema': direct_case.EVIDENCE_SCHEMA, 'entry': direct_case.ENTRY,
+                    'input_sha256': direct_case._hash(fixture['bytes']), 'rejection': None, 'execution': 'Complete',
+                    'originals': [original], 'recipient': {'kind': 'None'}}
         native_input = value['recipient_owner']['native']
         fenced = copy.deepcopy(native_input['fence']['returned_source'])
         native_state = {'original': source, 'preparation': 'Prepared', 'managed_by_sm': False, 'fence_entered': True,
@@ -1646,6 +1650,343 @@ class OwnerLiteralAndLedgerTests(unittest.TestCase):
         bad['recipient']['row_events'][0]['matches'] = 1
         with self.assertRaises(direct_case.DirectCaseInvalid):
             direct_case.validate_case_evidence(bad)
+
+
+class SmFullMatcherTests(unittest.TestCase):
+    def fixture(self, identity):
+        return next(item for item in direct_case.owner_fixtures() if item['id'] == identity)
+
+    @staticmethod
+    def complete_record():
+        return {'observation': 'Complete', 'process': {'returncode': 0}}
+
+    def supplied_facts(self, fixture):
+        """Literal SM observations built without oracle prediction helpers."""
+        payload = NativeFullMatcherTests.supplied_facts(self, fixture, sender_capture=True)
+        original = payload['originals'][0]
+        dequeue = original['route']['dequeued'][0]
+        counter = dequeue['seq']
+        def seq():
+            nonlocal counter
+            counter += 1
+            return counter
+        spec = fixture['value']['recipient_owner']
+        pending = spec['record_replies'][0]['commit'] == 'Pending'
+        c2s = copy.deepcopy(dequeue['source'])
+        items = [{'xml': dequeue['xml'], 'source': c2s}]
+        if not pending:
+            items.extend(({'xml': "<message id='plain'/>", 'source': None},
+                          {'xml': "<message id='mix'/>", 'source': direct_case._mix(8)}))
+        before_h = [0] if pending else [4294967294, 4294967295, 0]
+        after_h = [1] if pending else [4294967295, 0, 1]
+        initial_ack = 0 if pending else 4294967294
+        recipient = {'kind': 'Sm', 'native_writes': [], 'sm_turns': [], 'fifo_after': [],
+                     'outbound_h': 1, 'acked_h': initial_ack, 'mix_handoffs': []}
+        fifo = []
+        for index, item in enumerate(items):
+            fifo.append(copy.deepcopy(item))
+            sources = [copy.deepcopy(slot['source']) for slot in fifo]
+            rotations = [{'previous': direct_case._mix(8), 'current': direct_case._mix(9)}] if index == 2 else []
+            sm = {'scope': {'purpose': {'kind': 'Record'}, 'session_id': direct_case._uuid(4),
+                            'connection_id': direct_case._uuid(3), 'inbound_h': 2,
+                            'outbound_h': before_h[index], 'acked_h': initial_ack, 'queued': index},
+                  'binding': {'session_id': direct_case._uuid(4), 'connection_id': direct_case._uuid(3),
+                              'inbound_h': 2, 'outbound_h': after_h[index], 'acked_h': initial_ack,
+                              'whole': sources, 'acknowledged': [], 'remaining': copy.deepcopy(sources)},
+                  'h_decision': {'kind': 'NotRequested'},
+                  'knowledge': {'kind': 'CommitCallEntered', 'fact': {'kind': 'Checkpoint', 'rotations': rotations, 'settled': []}},
+                  'appended': True, 'restored': False, 'ownership_applied': False, 'acknowledged_h_applied': None,
+                  'notification_attempted': False, 'capacity_completed': None, 'returned_updated': None,
+                  'returned_error': False, 'record_managed_by_sm': None, 'terminal': None}
+            recorded = copy.deepcopy(sm)
+            recorded.update(binding=None, knowledge={'kind': 'NotRequested'}, appended=False)
+            turn = {'prefixes': [], 'polls': []}
+            native_state = {'original': copy.deepcopy(item['source']), 'preparation': 'Recording', 'managed_by_sm': None,
+                            'fence_entered': False, 'returned_fence': None, 'writer_entered': False,
+                            'writer_result': None, 'write_decision': None, 'ack': {'kind': 'NotRequested'},
+                            'ack_returned': None, 'terminal': None}
+            native = {'frame_id': spec['frame_id'], 'connection_id': direct_case._uuid(3),
+                      'write_calls': [], 'flush_calls': [], 'ack_calls': [], 'ownership_receipts': [],
+                      'write_receipts': [], 'prefixes': [], 'polls': []}
+            native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(native_state)})
+            turn['prefixes'].extend(({'seq': seq(), 'state': recorded}, {'seq': seq(), 'state': copy.deepcopy(sm)}))
+            if pending:
+                native['polls'].append({'seq': seq(), 'result': 'Pending'})
+                sm['terminal'] = 'Cancelled'
+                turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(sm)})
+                native_state['terminal'] = 'Cancelled'
+                native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(native_state)})
+            else:
+                sm['knowledge']['kind'] = 'ReceiptKnown'
+                turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(sm)})
+                managed = item['source'] is not None
+                sm.update(ownership_applied=True, notification_attempted=managed, returned_updated=True,
+                          record_managed_by_sm=managed, terminal='Returned')
+                turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(sm)})
+                native_state.update(preparation='Prepared', managed_by_sm=managed)
+                native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(native_state)})
+                if index == 2:
+                    fifo[-1]['source'] = direct_case._mix(9)
+                    recipient['mix_handoffs'].append({'seq': seq(), 'delivery_id': direct_case._uuid(7),
+                        'result': {'kind': 'SmPersisted', 'session_id': direct_case._uuid(4)}})
+                raw = item['xml'].encode('utf-8')
+                native_state['writer_entered'] = True
+                native['write_calls'].append({'seq': seq(), 'offered_len': len(raw), 'offered_sha256': direct_case._hash(raw),
+                                              'accepted_bytes_hex': raw.hex(), 'result': 'Accepted'})
+                native['flush_calls'].append({'seq': seq(), 'result': 'Ok'})
+                native_state.update(writer_result='FullWrite', write_decision='Written')
+                native['polls'].append({'seq': seq(), 'result': 'Ready'})
+                native_state['terminal'] = 'Returned'
+                native['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(native_state)})
+            native.update(copy.deepcopy(native_state))
+            turn.update(copy.deepcopy(sm))
+            recipient['native_writes'].append(native)
+            recipient['sm_turns'].append(turn)
+        if not pending:
+            whole = [c2s, None, direct_case._mix(9)]
+            state = {'scope': {'purpose': {'kind': 'Acknowledge', 'h': 0}, 'session_id': direct_case._uuid(4),
+                               'connection_id': direct_case._uuid(3), 'inbound_h': 2, 'outbound_h': 1,
+                               'acked_h': 4294967294, 'queued': 3},
+                     'binding': {'session_id': direct_case._uuid(4), 'connection_id': direct_case._uuid(3),
+                                 'inbound_h': 2, 'outbound_h': 1, 'acked_h': 0,
+                                 'whole': whole, 'acknowledged': [c2s, None], 'remaining': [direct_case._mix(9)]},
+                     'h_decision': {'kind': 'Prefix', 'count': 2},
+                     'knowledge': {'kind': 'CommitCallEntered', 'fact': {'kind': 'Checkpoint', 'rotations': [], 'settled': [c2s]}},
+                     'appended': False, 'restored': False, 'ownership_applied': False, 'acknowledged_h_applied': None,
+                     'notification_attempted': False, 'capacity_completed': None, 'returned_updated': None,
+                     'returned_error': False, 'record_managed_by_sm': None, 'terminal': None}
+            turn = {'prefixes': [{'seq': seq(), 'state': copy.deepcopy(state)}], 'polls': []}
+            state['knowledge']['kind'] = 'ReceiptKnown'
+            turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(state)})
+            state.update(ownership_applied=True, acknowledged_h_applied=0, capacity_completed=True, returned_updated=True)
+            turn['polls'].append({'seq': seq(), 'result': 'Ready'})
+            state['terminal'] = 'Returned'
+            turn['prefixes'].append({'seq': seq(), 'state': copy.deepcopy(state)})
+            turn.update(copy.deepcopy(state))
+            recipient['sm_turns'].append(turn)
+            recipient['acked_h'] = 0
+            fifo = fifo[2:]
+        recipient['fifo_after'] = fifo
+        payload['recipient'] = recipient
+        payload['execution'] = 'Cancelled' if pending else 'Complete'
+        return payload
+
+    def inspect(self, fixture, payload):
+        return direct_case._inspect_sm_fixture(fixture, self.complete_record(), payload)
+
+    def test_complete_sm_wraparound_matches_independently_supplied_observations(self):
+        fixture = self.fixture('C08')
+        with patch.object(direct_case, 'derive_owner_ledger', side_effect=AssertionError('prediction is not observation')), \
+                patch.object(direct_case, '_sm_owner_ledger', side_effect=AssertionError('prediction is not observation')):
+            payload = self.supplied_facts(fixture)
+        _semantic, evaluation, matched, stop = self.inspect(fixture, payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual((evaluation['verdict'], evaluation['qualified']), ('Pass', True))
+        self.assertEqual(evaluation['violations'], [])
+
+    def test_nested_pending_sm_is_cancelled_with_append_without_write_or_ownership(self):
+        fixture = self.fixture('C09')
+        payload = self.supplied_facts(fixture)
+        _semantic, evaluation, matched, stop = self.inspect(fixture, payload)
+        self.assertTrue(matched)
+        self.assertIsNone(stop)
+        self.assertEqual((evaluation['verdict'], evaluation['qualified']), ('Cancelled', False))
+        self.assertEqual(payload['recipient']['native_writes'][0]['write_calls'], [])
+        self.assertEqual(payload['recipient']['sm_turns'][0]['knowledge']['kind'], 'CommitCallEntered')
+        self.assertEqual(direct_case._inspect_sm_fixture(fixture, {'observation': 'EnvironmentInterrupted'}, payload),
+                         (None, None, False, 'EnvironmentInterrupted'))
+
+    def test_plain_write_also_requires_its_completed_counted_checkpoint(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        plain, turn = payload['recipient']['native_writes'][1], payload['recipient']['sm_turns'][1]
+        self.assertIs(plain['managed_by_sm'], False)
+        turn['prefixes'][-1]['seq'], plain['write_calls'][0]['seq'] = plain['write_calls'][0]['seq'], turn['prefixes'][-1]['seq']
+        direct_case.validate_case_evidence(payload)
+        _semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertFalse(matched)
+        self.assertIn('NativeWriteBeforeSmCheckpointReturn', [item['id'] for item in evaluation['violations']])
+
+    def test_unknown_checkpoint_cannot_claim_ownership_or_notification(self):
+        fixture = self.fixture('C09')
+        payload = self.supplied_facts(fixture)
+        turn = payload['recipient']['sm_turns'][0]
+        for state in (turn, turn['prefixes'][-1]['state']):
+            state.update(ownership_applied=True, notification_attempted=True, record_managed_by_sm=True)
+        direct_case.validate_case_evidence(payload)
+        _semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertFalse(matched)
+        self.assertEqual(evaluation['verdict'], 'InvariantViolation')
+        self.assertIn('SmOwnershipWithoutCheckpointReceipt', [item['id'] for item in evaluation['violations']])
+        self.assertIn('SmNotificationWithoutCheckpointReceipt', [item['id'] for item in evaluation['violations']])
+
+    def test_known_checkpoint_wrong_rotation_or_settlement_is_safety_before_fixture_comparison(self):
+        fixture = self.fixture('C08')
+        for index in (2, 3):
+            payload = self.supplied_facts(fixture)
+            turn = payload['recipient']['sm_turns'][index]
+            for state in [turn] + [item['state'] for item in turn['prefixes'] if item['state']['knowledge']['kind'] == 'ReceiptKnown']:
+                fact = state['knowledge']['fact']
+                if index == 2:
+                    fact['rotations'][0]['current']['lease_token'] = direct_case._uuid(10)
+                else:
+                    fact['settled'][0]['claim_id'] = direct_case._uuid(99)
+            _semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+            self.assertFalse(matched)
+            self.assertIn('SmCheckpointReceiptIdentityMismatch', [item['id'] for item in evaluation['violations']])
+
+    def test_typed_mix_handoff_requires_the_actual_session_and_complete_inventory(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['mix_handoffs'][0]['result']['session_id'] = direct_case._uuid(5)
+        _semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertFalse(matched)
+        self.assertIn('MixSmHandoffWithoutMatchingReceipt', [item['id'] for item in evaluation['violations']])
+        payload = self.supplied_facts(fixture)
+        handoff = payload['recipient']['mix_handoffs'].pop()
+        self.shift_after(payload, handoff['seq'], -1)
+        _semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertFalse(matched)
+        self.assertEqual(evaluation['invariant']['class'], 'ReplayDivergence')
+        self.assertIn('sm_typed_handoff_inventory', evaluation['mismatches'])
+
+    @staticmethod
+    def shift_after(value, boundary, delta):
+        if type(value) is dict:
+            if 'seq' in value and value['seq'] > boundary:
+                value['seq'] += delta
+            for item in value.values():
+                SmFullMatcherTests.shift_after(item, boundary, delta)
+        elif type(value) is list:
+            for item in value:
+                SmFullMatcherTests.shift_after(item, boundary, delta)
+
+    def test_native_ack_after_persisted_sm_ownership_remains_visible_to_safety(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        native = payload['recipient']['native_writes'][0]
+        boundary = native['polls'][0]['seq'] - 1
+        self.shift_after(payload, boundary, 1)
+        native['ack_calls'].append({'seq': boundary + 1, 'source': copy.deepcopy(native['original']), 'returned': True})
+        direct_case.validate_case_evidence(payload)
+        _semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertFalse(matched)
+        self.assertIn('NativeAckAfterSmOwnership', [item['id'] for item in evaluation['violations']])
+
+    def test_raw_sm_extra_namespace_and_exact_fifo_bytes_are_preserved(self):
+        fixture = self.fixture('C08')
+        for xml in ('<message xmlns="jabber:client" id="mix"/>', '<message id="mix"/>'):
+            payload = self.supplied_facts(fixture)
+            payload['recipient']['fifo_after'][0]['xml'] = xml
+            semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+            self.assertEqual(semantic, payload)
+            self.assertFalse(matched)
+            self.assertIn('sm_fifo_byte_continuity', evaluation['mismatches'])
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['fifo_after'][0]['xml'] = '<message'
+        semantic, evaluation, matched, _stop = self.inspect(fixture, payload)
+        self.assertEqual(semantic, payload)
+        self.assertFalse(matched)
+        self.assertTrue(any(item.startswith('owner_xml:') for item in evaluation['mismatches']))
+
+    def test_sm_retained_knowledge_and_nested_poll_inventory_cannot_be_rewritten(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        turn = payload['recipient']['sm_turns'][0]
+        turn['prefixes'][-1]['state']['knowledge'] = copy.deepcopy(turn['prefixes'][0]['state']['knowledge'])
+        self.assertFalse(self.inspect(fixture, payload)[2])
+        payload = self.supplied_facts(fixture)
+        turn = payload['recipient']['sm_turns'][0]
+        boundary = turn['prefixes'][-1]['seq']
+        self.shift_after(payload, boundary, 1)
+        turn['polls'].append({'seq': boundary + 1, 'result': 'Ready'})
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('sm_direct_polls', result[1]['mismatches'])
+
+    def test_receipt_wrapper_snapshot_precedes_local_sm_application(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        receipt = next(item['state'] for item in payload['recipient']['sm_turns'][0]['prefixes']
+                       if item['state']['knowledge']['kind'] == 'ReceiptKnown')
+        receipt.update(ownership_applied=True, notification_attempted=True,
+                       returned_updated=True, record_managed_by_sm=True)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertEqual(result[1]['violations'], [])
+        self.assertIn('sm_receipt_before_local_application', result[1]['mismatches'])
+
+    def test_false_native_managed_flag_cannot_erase_prior_durable_sm_ownership(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        native = payload['recipient']['native_writes'][0]
+        native.update(managed_by_sm=False, fence_entered=True)
+        for prefix in native['prefixes']:
+            prefix['state'].update(managed_by_sm=False, fence_entered=True)
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('NativeFenceAfterSmOwnership', [item['id'] for item in result[1]['violations']])
+
+    def test_recorded_prefix_is_required_and_precedes_append_and_binding(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        removed = payload['recipient']['sm_turns'][0]['prefixes'].pop(0)
+        self.shift_after(payload, removed['seq'], -1)
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('sm_prefix_cadence', result[1]['mismatches'])
+        fixture = self.fixture('C09')
+        payload = self.supplied_facts(fixture)
+        payload['recipient']['sm_turns'][0]['prefixes'][0]['state']['appended'] = True
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('sm_recorded_before_append', result[1]['mismatches'])
+
+    def test_sm_native_prefixes_match_actual_recording_prepared_and_final_callbacks(self):
+        for identity, expected in (('C08', ['Recording', 'Prepared', 'Prepared']),
+                                   ('C09', ['Recording', 'Recording'])):
+            payload = self.supplied_facts(self.fixture(identity))
+            native = payload['recipient']['native_writes'][0]
+            self.assertEqual([item['state']['preparation'] for item in native['prefixes']], expected)
+            self.assertIsNone(native['prefixes'][0]['state']['managed_by_sm'])
+            self.assertEqual([item['state']['writer_result'] for item in native['prefixes'][:-1]], [None] * (len(expected) - 1))
+            self.assertGreater(native['prefixes'][-1]['seq'], native['polls'][-1]['seq'])
+
+    def test_restore_after_observed_commit_entry_is_not_authorized_by_later_rollback_label(self):
+        fixture = self.fixture('C09')
+        payload = self.supplied_facts(fixture)
+        turn = payload['recipient']['sm_turns'][0]
+        for state in (turn, turn['prefixes'][-1]['state']):
+            state.update(restored=True, knowledge={'kind': 'RollbackKnown'})
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('SmRestorationAfterCommitEntry', [item['id'] for item in result[1]['violations']])
+
+    def test_writer_frame_and_connection_cannot_borrow_another_sm_receipt(self):
+        fixture = self.fixture('C08')
+        for field in ('frame_id', 'connection_id'):
+            payload = self.supplied_facts(fixture)
+            payload['recipient']['native_writes'][0][field] = direct_case._uuid(99)
+            direct_case.validate_case_evidence(payload)
+            result = self.inspect(fixture, payload)
+            self.assertFalse(result[2])
+            self.assertIn('SmNativeOwnerIdentityMismatch', [item['id'] for item in result[1]['violations']])
+
+    def test_acknowledged_h_must_equal_the_actual_receipt_binding_and_request(self):
+        fixture = self.fixture('C08')
+        payload = self.supplied_facts(fixture)
+        turn = payload['recipient']['sm_turns'][-1]
+        turn['acknowledged_h_applied'] = 99
+        turn['prefixes'][-1]['state']['acknowledged_h_applied'] = 99
+        direct_case.validate_case_evidence(payload)
+        result = self.inspect(fixture, payload)
+        self.assertFalse(result[2])
+        self.assertIn('SmAcknowledgementAppliedWithoutReceipt', [item['id'] for item in result[1]['violations']])
 
 
 if __name__ == '__main__':

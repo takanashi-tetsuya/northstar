@@ -269,7 +269,7 @@ def _derivation(record, contract):
     _need(original['path'] != runnable['path'], 'derivation_distinct_output')
     _need(type(derivation['argv']) is list and derivation['argv'] == [
         derivation['tool']['path'], '--strip-all', '--no-merge-notes',
-        '--output=' + runnable['path'], original['path']], 'derivation_argv')
+        '-o', runnable['path'], original['path']], 'derivation_argv')
     _need(type(derivation['environment']) is dict and derivation['environment'] ==
           {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}, 'derivation_environment')
     _need(all(derivation[key] is True for key in

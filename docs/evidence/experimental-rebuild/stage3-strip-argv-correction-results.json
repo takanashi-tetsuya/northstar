@@ -1,0 +1,212 @@
+{
+  "schema": "northstar-stage3-strip-argv-correction-v1",
+  "status": "SourceCorrectionPassed_PreparationContinuationPending",
+  "base_commit": "d0faf425f263ff2a47d7b77ef609bd02fe9d47a9",
+  "base_tree": "1f6d33b131fc8de3896002ac5ceab3321288299d",
+  "scope": "Correct the exact GNU strip output option in the pure build-record reader and its synthetic fixture. The real failed preparation remains retained; this ordinary batch performs no strip or saved workload.",
+  "changed_sources": [
+    "scripts/lib/direct_build_record.py",
+    "scripts/test-direct-build-record.py"
+  ],
+  "source_files": {
+    "scripts/capture-controlled-admission.py": {
+      "sha256": "29ad59f97a5ad991cd481d0620173994b0dd3e44d0335b89e72e1c450b7f54f4",
+      "bytes": 14083
+    },
+    "scripts/lib/controlled_admission.py": {
+      "sha256": "526922ae45d484626d846eda5b696780ab5ae2418e506b078a4d650809aff12c",
+      "bytes": 112557
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "sha256": "f626356bb0b0d6be4e07c15495f31ec9bbe5cfe7a1604312cdac27f824546c3e",
+      "bytes": 111938
+    },
+    "scripts/lib/direct_build_record.py": {
+      "sha256": "3992877f58e37849ec1e0b73554f434e6bf0d702a204a6470dc686f11e7eaaba",
+      "bytes": 19397
+    },
+    "scripts/lib/direct_case.py": {
+      "sha256": "a926ce0dbc9d5e703b1d2c5588d0b56d456fcdeeed99d7eacc413ba702ce4a6a",
+      "bytes": 233346
+    },
+    "scripts/lib/experiment_contract.py": {
+      "sha256": "04ee1bc5f475d027eaf3c3f5a4834746252a5d9f49524478f7e120912eba3eac",
+      "bytes": 29666
+    },
+    "scripts/mixed-traffic-soak.py": {
+      "sha256": "6d5347b1e69b3c4f5eac0bd89e31f47be6982609a82fe6582f87a96e6bf1515f",
+      "bytes": 53514
+    },
+    "scripts/run-controlled-admission.py": {
+      "sha256": "bd6ac59916ee2507ab11f6845a2d92185cba6fa530235313a904545dce9f8e31",
+      "bytes": 1709
+    },
+    "scripts/test-controlled-admission.py": {
+      "sha256": "b6d27d486c539402ce85c0b922df1fcba803245855d5620993a0cc0b64670aa6",
+      "bytes": 121742
+    },
+    "scripts/test-direct-build-record.py": {
+      "sha256": "128622db47f399a614d0f329659b08b154c7483fd9820b726901b4b9a3402119",
+      "bytes": 29253
+    },
+    "scripts/test-direct-case.py": {
+      "sha256": "70081f29b7a5c754b39584beeb52b4cce3c91d2761eb979ef209caa6ca0d545e",
+      "bytes": 196460
+    },
+    "scripts/test-experiment-contract.py": {
+      "sha256": "b5ca4126350e69354bca4173dcfdaffd64c4503d9fa091b99a9f683099b0cd95",
+      "bytes": 52778
+    }
+  },
+  "source_bytes": 976443,
+  "source_manifest_sha256": "f9ded075f12b473e9e60108fb35909600f5e4c451a2262be805d3923356831c4",
+  "source_manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline; this is the twelve-file ordinary Python scope, not the final whole-project build manifest",
+  "checks": {
+    "python_ast": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.314617988",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "direct_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "2.892730638",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 26304,
+      "log_sha256": "4aaa9e0106c22c280515c8472dd21c7232de7536da14cf241da3448776729b07"
+    },
+    "build_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.151586784",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 4780,
+      "log_sha256": "b9692ba1eedc9e4df6bcf4f21db8a541d84f631bda43a738c92cf129c3da95c0"
+    }
+  },
+  "test_suites": {
+    "direct_mock": {
+      "entry": "scripts/test-direct-case.py",
+      "ran": 148,
+      "passed": 148,
+      "failed": 0,
+      "skipped": 0,
+      "unittest_seconds": "2.692",
+      "name_list_sha256": "17f310dec909f65a4526d59c9857caea65ffa1952daeda2d76f761fcf6471199",
+      "guard_sha256": "03a3e01886955c4371cf7dc122ee761ae584f3d79ef8c99cae0f6f6f4248e9e2",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      }
+    },
+    "build_mock": {
+      "entry": "scripts/test-direct-build-record.py",
+      "ran": 33,
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0,
+      "unittest_seconds": "0.050",
+      "name_list_sha256": "d47b266fdc5c9f1d7909019d3d8d3808ab7e1f4011a17cf6dec994acdba2b128",
+      "guard_sha256": "e1e4c6dd94caf7dd484becbb87e37a31c6ba8cffd8b1222549576384ecd89d83",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      }
+    }
+  },
+  "name_list_encoding": "Per-entry UTF-8 compact JSON array of [method, full parenthesized unittest identifier including __main__.Class.method] pairs in actual log order, no trailing newline",
+  "total_method_invocations": 181,
+  "change": [
+    "Canonical derivation argv is exactly [tool, --strip-all, --no-merge-notes, -o, destination, original]. Tool, output path, input path and ordering remain bound.",
+    "The existing strict-argv test rejects the former ambiguous --output= spelling, a wrong destination and reordered arguments. Method count remains33; direct integration reuses the corrected fixture."
+  ],
+  "retained_preparation_failure": {
+    "candidate_sha256": "1733d51c99114f546622cef3126f39b64dd6eb55c40ffe62b85ab72283c21a8f",
+    "script_sha256": "bcf2a23c340db69f4d4189b856b150fbe646adffc5b679680636a794b0f28733",
+    "observed": "GNU strip2.44 returned1 because --output= is ambiguous; its captured usage explicitly documents -o <file>. The earlier design statement that --output was supported was incorrect.",
+    "strip_invocations": 1,
+    "strip_result": {
+      "exit_code": 1,
+      "stderr": {
+        "bytes": 2802,
+        "complete": true,
+        "sha256": "18d3174b27b858668a12b4c3d6b35090be5f757701e6e2bf5f1602c424c75c5f"
+      },
+      "stdout": {
+        "bytes": 0,
+        "complete": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "termination": "Incomplete"
+    },
+    "strip_status_sha256": "ebd7e89c8526d7b7c2a20ff9c9aff469fc44aedc3e86398fd5eb9e55533ce0b6",
+    "failure_record_sha256": "e2f24f50d9b2a2adcdb7abeb849efe4d357855d1fdd0008d0855e9e63e472515",
+    "cargo_result": {
+      "exit_code": 0,
+      "stderr": {
+        "bytes": 61,
+        "complete": true,
+        "sha256": "8eaa7940c5cbabee4ca0e057d1b1006bf05a670ea4beb08977390aa3a61a32cc"
+      },
+      "stdout": {
+        "bytes": 413020,
+        "complete": true,
+        "sha256": "afe786bf05715322e56d2fb0107a6f2be939f57cc1e8c9f41aa58abf84e4ccb9"
+      },
+      "termination": "Exited"
+    },
+    "cargo_status_sha256": "213e9818efdfcfe78f5135af35134e1e1b5760e8eacd1d727ea85953461d071e",
+    "source_summary": {
+      "bytes": 17744458,
+      "files": 904,
+      "sha256": "0cf5b0c08ff919610e1994c5768b66e3d949ff758dd72cc03e094c681f776375"
+    },
+    "source_before_after_build_equal": true,
+    "retained_original": {
+      "bytes": 204301528,
+      "sha256": "73ac92cee036c7fe7dd4a48fb5af3e57bdeea227e2a50f7e57ea6342214030b0",
+      "mode": "0644"
+    },
+    "derivative_created": false,
+    "build_record_created": false,
+    "record_contract_created": false,
+    "test_executable_starts": 0,
+    "saved_workload_starts": 0,
+    "cleanup_limit": "The wrapper terminal and both strip stream EOFs are observed. No independent descendant or resource cleanup audit is claimed."
+  },
+  "continuation_requirements": [
+    "Save and bind the corrected source before a separately reviewed continuation. These Python changes alter the complete project-local manifest.",
+    "Under the existing single-manifest schema, observe one cache-allowed Cargo --no-run against the corrected manifest; preserve both old and new provenance, and reuse the original only after the unique selected artifact has the same full hash and size. No force clean is required.",
+    "Use a fresh derivative destination with corrected exact argv and unchanged time/byte caps. Retain the original failed invocation; never relabel it as successful or auto-run any saved profile."
+  ],
+  "limits": [
+    "Only AST and181 guarded pure/mock methods ran in this correction batch; no Rust, legacy113 suite, build or strip rerun occurred.",
+    "Runnable size, actual build-record/record-contract completion, fixed16/16/4/4 passes, saved-reader evidence and full Stage3 remain pending.",
+    "Later SQL/wire/TLS/retention/resource obligations remain open."
+  ],
+  "prior_result": "stage3-profile-readiness-results.json",
+  "python_runtime": {
+    "version": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "executable_sha256": "fa67443527ed9647f760d807e2a38f26340757123e643c4639cf273ed15d5ea7",
+    "flags": [
+      "-E",
+      "-S",
+      "-B"
+    ]
+  }
+}

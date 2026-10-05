@@ -99,7 +99,7 @@ def fixture(*, derived=False, mutant=False):
                      'version_verbose': 'GNU strip (GNU Binutils for Debian) 2.44\n'},
             'cwd': root,
             'argv': ['/usr/bin/strip', '--strip-all', '--no-merge-notes',
-                     '--output=' + runnable['path'], original['path']],
+                     '-o', runnable['path'], original['path']],
             'environment': {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
             'result': result(), 'input_unchanged': True, 'tool_unchanged': True, 'output_absent_before': True,
         }
@@ -367,6 +367,14 @@ class BuildRecordTests(unittest.TestCase):
 
     def test_strip_command_tool_environment_and_fresh_output(self):
         original, contract, summary, current = fixture(derived=True)
+        prefix = ['/usr/bin/strip', '--strip-all', '--no-merge-notes']
+        for arguments in (prefix + ['--output=' + original['runnable']['path'], original['original']['path']],
+                          prefix + ['-o', '/different/runnable', original['original']['path']],
+                          prefix + [original['original']['path'], '-o', original['runnable']['path']]):
+            with self.subTest(arguments=arguments):
+                value = copy.deepcopy(original)
+                value['derivation']['argv'] = arguments
+                self.invalid(value, contract, summary, current, 'derivation_argv')
         for field, replacement in (('argv', ['/usr/bin/strip', '--strip-debug']),
                                    ('cwd', '/other/root'), ('environment', {'LANG': 'C'}),
                                    ('kind', 'other-strip'), ('input_unchanged', False),

@@ -1,0 +1,77 @@
+{
+  "schema": "northstar-stage4-sm-retention-results-v1",
+  "status": "OrdinaryAccepted_RealAdaptersAndStage4Open",
+  "change": "Expired live-session leases retain their exact existing binding and capacity allocation while authoritative SM recovery remains eligible, using one eligibility classifier in runtime cleanup and startup reconciliation.",
+  "behavior": [
+    "One read-only classifier handles multiple SM rows for a connection and requires exact account/JID, enabled owner and current authentication generation. Eligible resumable state or a live Resume-purpose claim can protect the existing lease; a Teardown claim cannot stand in for recovery authority.",
+    "The new purpose fact is paired with the existing claim token. Claim acquisition, release, activation, authority and transfer keep purpose explicit. Activation locks and revalidates the exact live target binding before changing SM connection state; an existing Resume claim remains usable across the original SM expiry.",
+    "Runtime cleanup screens protected rows before the existing result limit, takes nonblocking account/SM locks for revalidation, preserves canonical capacity lock order, and deletes only the exact revalidated tuples. Only the declared lock-contention case is skipped; other failures abort the transaction.",
+    "Cleanup and startup explicitly establish Read Committed isolation for fresh post-lock reads. Startup uses one trusted transaction timestamp for protection, deletion, repair and consistency decisions; this can conservatively delay cleanup while locks are acquired.",
+    "Startup verifies protected mappings and shared counters before repair, excludes those counters from unconditional reconstruction, records actual doomed-row/orphan/backfill changes and checks the final exact projection before either COMMIT path. Missing or changed protected identity and unexplained accounting changes are refused.",
+    "The existing lease identifier, allocation shard and capacity charge are retained. Retention does not reacquire or renew an expired live lease. Actual auth transaction, receipt and publication boundaries remain separately observed."
+  ],
+  "source_contract": {
+    "migration": "0157_sm_recovery_retention.sql",
+    "new_runtime_helpers": 1,
+    "resecured_existing_signatures": 9,
+    "old_migrations": "Immutable",
+    "catalog": "Canonical grants, capability origins, runtime attestation and generated SHA-384 ledger are updated together.",
+    "rollout": "The migration requires stopped application writers and resolution of active legacy claims under the authority gate. Old startup behavior must not run against the new retention contract. No deployment or migration application is established by this source checkpoint."
+  },
+  "validation": {
+    "status": "All 41 ordinary commands passed and were independently accepted within this finite source and in-process scope.",
+    "new_control_scope": "Five in-process tests call the production protected-projection comparison, covering missing mappings/shared charge corruption, changed identity/protected repairs, legitimate neighbor/orphan/epoch deltas, zero-net temporary allocations and unexplained accounting changes.",
+    "existing_control_scope": "Capacity classification and lock-order source checks, catalog/ledger controls, memory-only maintenance/SM cancellation and claim handling, and four BOSH ownership controls.",
+    "static_scope": "Existing source/catalog checks, exact generated-ledger verification and unchanged bounded Node suites. These parse source and use private scratch; they do not apply SQL.",
+    "commands_passed": 41,
+    "rust_exact_passed": 28,
+    "rust_added_passed": 5,
+    "rust_changed_passed": 3,
+    "rust_reused_passed": 20,
+    "node_passed": 541,
+    "rust_failed": 0,
+    "rust_ignored": 0,
+    "inventory_names": 1946,
+    "compile": "Passed",
+    "clippy": "Passed",
+    "source_gates": "Passed"
+  },
+  "fixture_compatibility": "The existing PostgreSQL audit fixture has no live-session lease rows. Its source now creates one UUID-named helper schema inside its existing rollback-only transaction with the exact classifier signature that raises if called. The old namespace guard, audit assertions and rollback are retained. This fixture accommodation is not a new retention case and was not selected for the local ordinary batch.",
+  "limits": [
+    "Pure projection tests and source checks do not execute PostgreSQL retention eligibility, locking, MVCC, rollback, COMMIT-loss or clock behavior.",
+    "The SQL result limit bounds selected/deleted rows, not the work needed to scan protected rows or multiple SM matches. Lock latency, scan cost and cleanup-resource limits require real-adapter measurement.",
+    "Live migration/legacy-claim rollout, process restart/resume/ACK, saved cross-domain compositions and full Stage4 remain open.",
+    "Existing capacity/TTL policies, the unresolved TLS response-EOF cause and earlier CI-cancellation and cleanup histories retain their documented scope."
+  ],
+  "related": [
+    "stage4-auth-pre-receipt-results.json",
+    "stage4-auth-returned-receipt-results.json",
+    "stage4-bosh-auth-control-results.json",
+    "stage3-controlled-acceptance.json"
+  ],
+  "parent_ci": {
+    "commit": "154c8ff0ad739a0e74eab1de4707251b6b77e2f8",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37404305679",
+    "status": "success",
+    "successful": 32,
+    "skipped": 1,
+    "failed": 0,
+    "cancelled": 0,
+    "scope": "This is the saved pre-receipt auth checkpoint; it does not qualify the new retention source or resolve earlier causes."
+  },
+  "detailed_evidence": "Detailed source snapshots, retained attempts and execution evidence are held separately. This summary contains only the source change, minimized results and qualification limits.",
+  "source_base_commit": "154c8ff0ad739a0e74eab1de4707251b6b77e2f8",
+  "retained_stops": [
+    {
+      "status": "Unqualified",
+      "phase": "Incomplete earlier ordinary attempt",
+      "limit": "Partial command observations without complete terminal evidence do not qualify that attempt. The later complete result is separate."
+    },
+    {
+      "status": "Unqualified",
+      "phase": "Cold server compilation",
+      "finding": "Compilation reached its fixed 600-second command limit. Clippy, inventory and exact Rust tests had not started.",
+      "limit": "The timeout remains a stop. A separate later bounded batch passed the complete ordinary scope without changing the command time or log limits."
+    }
+  ]
+}

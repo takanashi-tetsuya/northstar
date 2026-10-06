@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use uuid::Uuid;
 
 const CAPACITY_SHARDS: i64 = 64;
@@ -75,6 +75,9 @@ pub async fn reconcile_deployment_capacity(
     configured: DeploymentCapacityConfiguration,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SET LOCAL lock_timeout='30s'")
         .execute(&mut *tx)
         .await?;
@@ -94,10 +97,21 @@ pub async fn reconcile_deployment_capacity(
         .await
         .context("could not lock deployment capacity authority tables")?;
 
-    prepare_expired_live_lease_cleanup(&mut tx).await?;
-    sqlx::query_scalar::<_, i64>("SELECT northstar_session_delete_expired_live_leases()")
-        .fetch_one(&mut *tx)
-        .await?;
+    // Protect exact mappings AND shared accounting before any repair write.
+    // The DB transaction timestamp predates lock wait, conservatively retaining
+    // rows that expire while startup waits. All P/D decisions reuse it.
+    let protected_ids = sqlx::query_scalar::<_, Uuid>(
+        "SELECT lease_id FROM deployment_session_leases
+          WHERE lease_until<=transaction_timestamp()
+            AND northstar_session_recovery_retention(lease_id,transaction_timestamp())
+                  IN ('opportunity','resume_claim') ORDER BY lease_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let protected = read_retention_projection(&mut tx, &protected_ids).await?;
+    let mut retention_delta = RetentionRepairDelta::default();
+    prepare_expired_live_lease_cleanup(&mut tx, &protected, &mut retention_delta).await?;
+    delete_doomed_live_leases(&mut tx, &protected, &mut retention_delta).await?;
 
     let current = sqlx::query(
         "SELECT configuration_epoch,account_limit,muc_room_limit,
@@ -126,6 +140,12 @@ pub async fn reconcile_deployment_capacity(
         // every process start into a global repair write: runtime mutations
         // maintain these ledgers atomically, while any detected divergence
         // below deliberately takes the slower recovery path.
+        let final_projection = read_retention_projection(&mut tx, &protected_ids).await?;
+        protected.validate_final(
+            &final_projection,
+            &retention_delta,
+            configured.live_sessions,
+        )?;
         tx.commit().await?;
         return Ok(());
     }
@@ -192,8 +212,8 @@ pub async fn reconcile_deployment_capacity(
         configured.sessions_per_account
     );
 
-    reconcile_allocations(&mut tx, configured).await?;
-    rebuild_account_counters(&mut tx).await?;
+    reconcile_allocations(&mut tx, configured, &protected, &mut retention_delta).await?;
+    rebuild_account_counters(&mut tx, &protected).await?;
     sqlx::query(
         "UPDATE deployment_capacity_limits SET
             configuration_epoch=$1,account_limit=$2,muc_room_limit=$3,
@@ -211,12 +231,22 @@ pub async fn reconcile_deployment_capacity(
     .bind(configured.resumable_sessions)
     .execute(&mut *tx)
     .await?;
+    let final_projection = read_retention_projection(&mut tx, &protected_ids).await?;
+    protected.validate_final(
+        &final_projection,
+        &retention_delta,
+        configured.live_sessions,
+    )?;
     tx.commit().await?;
     Ok(())
 }
 
-async fn prepare_expired_live_lease_cleanup(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    // Expired rows are safe to remove, but their fail-closed DELETE trigger
+async fn prepare_expired_live_lease_cleanup(
+    tx: &mut Transaction<'_, Postgres>,
+    protected: &ProtectedRetentionProjection,
+    delta: &mut RetentionRepairDelta,
+) -> Result<()> {
+    // Only expired, unprotected D rows may be removed. Their DELETE trigger
     // still requires an exact allocation and owner counter. Repair only that
     // doomed subset first so a crash-corrupted/missing ledger row cannot make
     // startup cleanup impossible. Temporary headroom is transaction-local;
@@ -233,13 +263,16 @@ async fn prepare_expired_live_lease_cleanup(tx: &mut Transaction<'_, Postgres>) 
                WHERE s2.resource_kind='live_session'
                GROUP BY s2.shard
            ) q
-          WHERE s.resource_kind='live_session' AND s.shard=q.shard",
+          WHERE s.resource_kind='live_session' AND s.shard=q.shard
+            AND NOT (s.shard=ANY($1))",
     )
+    .bind(protected.shard_ids())
     .execute(&mut **tx)
     .await?;
     let missing = sqlx::query_scalar::<_, Uuid>(
         "SELECT s.lease_id FROM deployment_session_leases s
-          WHERE s.lease_until<=clock_timestamp()
+          WHERE s.lease_until<=transaction_timestamp()
+            AND northstar_session_recovery_retention(s.lease_id,transaction_timestamp())='none'
             AND NOT EXISTS(
                 SELECT 1 FROM deployment_capacity_allocations a
                  WHERE a.resource_kind='live_session' AND a.entity_id=s.lease_id
@@ -260,6 +293,10 @@ async fn prepare_expired_live_lease_cleanup(tx: &mut Transaction<'_, Postgres>) 
         .execute(&mut **tx)
         .await?;
         for lease_id in missing {
+            anyhow::ensure!(
+                !protected.bindings.contains_key(&lease_id),
+                "protected SM allocation cannot be repaired before cleanup"
+            );
             let allocation = sqlx::query_scalar::<_, Option<i16>>(
                 "SELECT northstar_capacity_acquire('live_session',$1)",
             )
@@ -270,18 +307,424 @@ async fn prepare_expired_live_lease_cleanup(tx: &mut Transaction<'_, Postgres>) 
                 allocation.is_some(),
                 "could not restore expired live-session allocation {lease_id} before cleanup"
             );
+            record_retention_allocation_addition(tx, lease_id, delta).await?;
         }
     }
-    sqlx::query("DELETE FROM deployment_account_capacity WHERE resource_kind='live_session'")
+    sqlx::query("DELETE FROM deployment_account_capacity WHERE resource_kind='live_session' AND NOT (owner_id=ANY($1))")
+        .bind(protected.owner_ids())
         .execute(&mut **tx)
         .await?;
     sqlx::query(
         "INSERT INTO deployment_account_capacity(resource_kind,owner_id,used)
          SELECT 'live_session',user_id,COUNT(*)
-           FROM deployment_session_leases GROUP BY user_id",
+           FROM deployment_session_leases WHERE NOT (user_id=ANY($1)) GROUP BY user_id",
     )
+    .bind(protected.owner_ids())
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+// This is a startup integrity projection, not a second SM eligibility model.
+// PostgreSQL alone classifies P at transaction_timestamp() under the existing
+// reconciliation table locks. Keep complete shared sets so a neighbor's valid
+// release/acquire can be distinguished from repair of a protected charge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RetentionAllocation {
+    shard: i16,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RetentionBinding {
+    connection_id: Uuid,
+    user_id: Uuid,
+    full_jid: String,
+    lease_until: chrono::DateTime<chrono::Utc>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    allocation: RetentionAllocation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RetentionShard {
+    used: i64,
+    capacity: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ProtectedRetentionProjection {
+    bindings: BTreeMap<Uuid, RetentionBinding>,
+    shards: BTreeMap<i16, RetentionShard>,
+    owners: BTreeMap<Uuid, i64>,
+    allocations: BTreeMap<Uuid, RetentionAllocation>,
+    owner_leases: BTreeMap<Uuid, Uuid>,
+}
+
+#[derive(Default)]
+struct RetentionRepairDelta {
+    added_allocations: BTreeMap<Uuid, RetentionAllocation>,
+    removed_allocations: BTreeMap<Uuid, RetentionAllocation>,
+    deleted_leases: BTreeMap<Uuid, Uuid>,
+}
+
+impl ProtectedRetentionProjection {
+    fn shard_ids(&self) -> Vec<i16> {
+        self.shards.keys().copied().collect()
+    }
+
+    fn owner_ids(&self) -> Vec<Uuid> {
+        self.owners.keys().copied().collect()
+    }
+
+    fn validate_integrity(&self) -> Result<()> {
+        for (id, binding) in &self.bindings {
+            anyhow::ensure!(
+                self.allocations.get(id) == Some(&binding.allocation)
+                    && self.shards.contains_key(&binding.allocation.shard)
+                    && self.owner_leases.get(id) == Some(&binding.user_id)
+                    && self.owners.contains_key(&binding.user_id),
+                "protected SM binding lost its exact allocation or owner charge"
+            );
+        }
+        let mut shard_counts = BTreeMap::<i16, i64>::new();
+        for allocation in self.allocations.values() {
+            anyhow::ensure!(
+                self.shards.contains_key(&allocation.shard),
+                "SM retention projection contains an undeclared shared shard"
+            );
+            let count = shard_counts.entry(allocation.shard).or_default();
+            *count = count
+                .checked_add(1)
+                .context("protected SM shard count overflow")?;
+        }
+        let mut owner_counts = BTreeMap::<Uuid, i64>::new();
+        for owner in self.owner_leases.values() {
+            anyhow::ensure!(
+                self.owners.contains_key(owner),
+                "SM retention projection contains an undeclared shared owner"
+            );
+            let count = owner_counts.entry(*owner).or_default();
+            *count = count
+                .checked_add(1)
+                .context("protected SM owner count overflow")?;
+        }
+        for (shard, counter) in &self.shards {
+            let actual = shard_counts.get(shard).copied().unwrap_or(0);
+            anyhow::ensure!(
+                counter.used == actual && counter.used >= 0 && counter.used <= counter.capacity,
+                "protected SM shard accounting is corrupt before repair or after reconciliation"
+            );
+        }
+        for (owner, used) in &self.owners {
+            let actual = owner_counts.get(owner).copied().unwrap_or(0);
+            anyhow::ensure!(
+                *used == actual && *used >= 0,
+                "protected SM account accounting is corrupt before repair or after reconciliation"
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_final(
+        &self,
+        final_projection: &Self,
+        delta: &RetentionRepairDelta,
+        live_session_limit: i64,
+    ) -> Result<()> {
+        self.validate_integrity()?;
+        final_projection.validate_integrity()?;
+        anyhow::ensure!(
+            self.bindings == final_projection.bindings,
+            "protected SM binding/allocation identity changed during startup"
+        );
+        anyhow::ensure!(
+            self.shards.keys().eq(final_projection.shards.keys())
+                && self.owners.keys().eq(final_projection.owners.keys()),
+            "protected SM shared-accounting identity changed during startup"
+        );
+        for id in self.bindings.keys() {
+            anyhow::ensure!(
+                !delta.added_allocations.contains_key(id)
+                    && !delta.removed_allocations.contains_key(id)
+                    && !delta.deleted_leases.contains_key(id),
+                "protected SM identity entered a repair or deletion set"
+            );
+        }
+        let mut expected_allocations = self.allocations.clone();
+        for (id, removed) in &delta.removed_allocations {
+            if self.shards.contains_key(&removed.shard) {
+                if let Some(original) = expected_allocations.remove(id) {
+                    anyhow::ensure!(
+                        original == *removed,
+                        "removed SM allocation identity changed"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        delta.added_allocations.get(id) == Some(removed),
+                        "unexplained protected-shard allocation removal"
+                    );
+                }
+            }
+        }
+        for (id, added) in &delta.added_allocations {
+            if self.shards.contains_key(&added.shard) {
+                if let Some(removed) = delta.removed_allocations.get(id) {
+                    anyhow::ensure!(
+                        removed == added,
+                        "temporary doomed allocation changed identity"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        expected_allocations.insert(*id, added.clone()).is_none(),
+                        "existing SM allocation was reacquired during startup"
+                    );
+                }
+            }
+        }
+        anyhow::ensure!(
+            expected_allocations == final_projection.allocations,
+            "protected SM shard changed outside exact allowed repair deltas"
+        );
+        let mut expected_leases = self.owner_leases.clone();
+        for (id, owner) in &delta.deleted_leases {
+            if self.owners.contains_key(owner) {
+                anyhow::ensure!(
+                    expected_leases.remove(id) == Some(*owner),
+                    "deleted SM neighbor was not an exact prechecked lease"
+                );
+            }
+        }
+        anyhow::ensure!(
+            expected_leases == final_projection.owner_leases,
+            "protected SM owner changed outside actual doomed-neighbor deletion"
+        );
+        for (shard, counter) in &final_projection.shards {
+            anyhow::ensure!(
+                counter.capacity == shard_budget(live_session_limit, i64::from(*shard)),
+                "protected SM shard capacity disagrees with the configured authority epoch"
+            );
+        }
+        // Integrity plus exact complete-set comparisons above imply used =
+        // previous used + actual added - actual removed on protected shards,
+        // and previous owner used - actual deleted D neighbors. A temporary D
+        // allocation present in both delta sets has net zero charge.
+        Ok(())
+    }
+}
+
+async fn read_retention_projection(
+    tx: &mut Transaction<'_, Postgres>,
+    protected_ids: &[Uuid],
+) -> Result<ProtectedRetentionProjection> {
+    let mut projection = ProtectedRetentionProjection::default();
+    if protected_ids.is_empty() {
+        return Ok(projection);
+    }
+    let rows = sqlx::query(
+        "SELECT lease.lease_id,lease.connection_id,lease.user_id,lease.full_jid,
+                lease.lease_until,lease.created_at,lease.updated_at,
+                allocation.shard,allocation.created_at AS allocation_created_at
+           FROM deployment_session_leases lease
+           LEFT JOIN deployment_capacity_allocations allocation
+             ON allocation.resource_kind='live_session' AND allocation.entity_id=lease.lease_id
+          WHERE lease.lease_id=ANY($1) ORDER BY lease.lease_id",
+    )
+    .bind(protected_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in rows {
+        let shard: Option<i16> = row.try_get("shard")?;
+        let allocation_created_at: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("allocation_created_at")?;
+        let allocation = RetentionAllocation {
+            shard: shard.context("protected SM binding is missing its existing allocation")?,
+            created_at: allocation_created_at
+                .context("protected SM binding is missing its allocation identity")?,
+        };
+        projection.bindings.insert(
+            row.try_get("lease_id")?,
+            RetentionBinding {
+                connection_id: row.try_get("connection_id")?,
+                user_id: row.try_get("user_id")?,
+                full_jid: row.try_get("full_jid")?,
+                lease_until: row.try_get("lease_until")?,
+                created_at: row.try_get("created_at")?,
+                updated_at: row.try_get("updated_at")?,
+                allocation,
+            },
+        );
+    }
+    anyhow::ensure!(
+        projection.bindings.len() == protected_ids.len(),
+        "protected SM binding disappeared during startup"
+    );
+    let shards = projection
+        .bindings
+        .values()
+        .map(|b| b.allocation.shard)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let owners = projection
+        .bindings
+        .values()
+        .map(|b| b.user_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let rows = sqlx::query(
+        "SELECT shard,used,capacity FROM deployment_capacity_shards
+          WHERE resource_kind='live_session' AND shard=ANY($1) ORDER BY shard",
+    )
+    .bind(&shards)
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in rows {
+        projection.shards.insert(
+            row.try_get("shard")?,
+            RetentionShard {
+                used: row.try_get("used")?,
+                capacity: row.try_get("capacity")?,
+            },
+        );
+    }
+    let rows = sqlx::query(
+        "SELECT owner_id,used FROM deployment_account_capacity
+          WHERE resource_kind='live_session' AND owner_id=ANY($1) ORDER BY owner_id",
+    )
+    .bind(&owners)
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in rows {
+        projection
+            .owners
+            .insert(row.try_get("owner_id")?, row.try_get("used")?);
+    }
+    let rows = sqlx::query(
+        "SELECT entity_id,shard,created_at FROM deployment_capacity_allocations
+          WHERE resource_kind='live_session' AND shard=ANY($1) ORDER BY entity_id",
+    )
+    .bind(&shards)
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in rows {
+        projection.allocations.insert(
+            row.try_get("entity_id")?,
+            RetentionAllocation {
+                shard: row.try_get("shard")?,
+                created_at: row.try_get("created_at")?,
+            },
+        );
+    }
+    let rows = sqlx::query(
+        "SELECT lease_id,user_id FROM deployment_session_leases
+          WHERE user_id=ANY($1) ORDER BY lease_id",
+    )
+    .bind(&owners)
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in rows {
+        projection
+            .owner_leases
+            .insert(row.try_get("lease_id")?, row.try_get("user_id")?);
+    }
+    projection.validate_integrity()?;
+    // These projections are proportional to P and its shared accounting sets,
+    // not constant-space. Later startup qualification must measure peak memory.
+    tracing::debug!(
+        protected_bindings = projection.bindings.len(),
+        shared_allocations = projection.allocations.len(),
+        shared_owner_leases = projection.owner_leases.len(),
+        "captured protected SM retention accounting projection"
+    );
+    Ok(projection)
+}
+
+async fn record_retention_allocation_addition(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: Uuid,
+    delta: &mut RetentionRepairDelta,
+) -> Result<()> {
+    let row = sqlx::query(
+        "SELECT shard,created_at FROM deployment_capacity_allocations
+          WHERE resource_kind='live_session' AND entity_id=$1",
+    )
+    .bind(entity)
+    .fetch_one(&mut **tx)
+    .await?;
+    anyhow::ensure!(
+        delta
+            .added_allocations
+            .insert(
+                entity,
+                RetentionAllocation {
+                    shard: row.try_get("shard")?,
+                    created_at: row.try_get("created_at")?,
+                }
+            )
+            .is_none(),
+        "live-session allocation was acquired twice during startup"
+    );
+    Ok(())
+}
+
+async fn delete_doomed_live_leases(
+    tx: &mut Transaction<'_, Postgres>,
+    protected: &ProtectedRetentionProjection,
+    delta: &mut RetentionRepairDelta,
+) -> Result<()> {
+    // Table locks and the one trusted startup time make this the same D as
+    // the no-argument mutation capability. Record actual pre-delete identities
+    // after temporary missing-allocation repair, including its net-zero rows.
+    let rows = sqlx::query(
+        "SELECT lease.lease_id,lease.user_id,allocation.shard,allocation.created_at
+           FROM deployment_session_leases lease
+           JOIN deployment_capacity_allocations allocation
+             ON allocation.resource_kind='live_session' AND allocation.entity_id=lease.lease_id
+          WHERE lease.lease_until<=transaction_timestamp()
+            AND northstar_session_recovery_retention(lease.lease_id,transaction_timestamp())='none'
+          ORDER BY lease.lease_id",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut deleted = BTreeMap::new();
+    let mut removed = BTreeMap::new();
+    for row in rows {
+        let id: Uuid = row.try_get("lease_id")?;
+        anyhow::ensure!(
+            !protected.bindings.contains_key(&id),
+            "protected SM lease entered D"
+        );
+        deleted.insert(id, row.try_get::<Uuid, _>("user_id")?);
+        removed.insert(
+            id,
+            RetentionAllocation {
+                shard: row.try_get("shard")?,
+                created_at: row.try_get("created_at")?,
+            },
+        );
+    }
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT northstar_session_delete_expired_live_leases()")
+            .fetch_one(&mut **tx)
+            .await?;
+    anyhow::ensure!(
+        count == i64::try_from(deleted.len())?,
+        "startup reaper deleted a different exact doomed set"
+    );
+    let remaining: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM deployment_session_leases WHERE lease_id=ANY($1))",
+    )
+    .bind(deleted.keys().copied().collect::<Vec<_>>())
+    .fetch_one(&mut **tx)
+    .await?;
+    anyhow::ensure!(
+        !remaining,
+        "startup reaper retained a recorded doomed lease"
+    );
+    delta.deleted_leases.extend(deleted);
+    delta.removed_allocations.extend(removed);
     Ok(())
 }
 
@@ -404,7 +847,8 @@ async fn deployment_capacity_authority_is_consistent(
               )
               AND NOT EXISTS(
                   SELECT 1 FROM deployment_session_leases
-                   WHERE lease_until <= clock_timestamp()
+                   WHERE lease_until <= transaction_timestamp()
+                     AND northstar_session_recovery_retention(lease_id,transaction_timestamp())='none' 
               )
               AND NOT EXISTS(
                   SELECT resource_kind, owner_id, used FROM expected_counters
@@ -427,22 +871,64 @@ async fn deployment_capacity_authority_is_consistent(
 async fn reconcile_allocations(
     tx: &mut Transaction<'_, Postgres>,
     configured: DeploymentCapacityConfiguration,
+    protected: &ProtectedRetentionProjection,
+    delta: &mut RetentionRepairDelta,
 ) -> Result<()> {
     // Allocation rows are the persisted shard authority. Never re-hash an
     // existing entity during startup: this keeps placement stable across
     // PostgreSQL upgrades. Remove only allocations whose authoritative object
     // is absent, recompute counters, then backfill only missing mappings.
-    sqlx::query(
+    let removed = sqlx::query(
         "DELETE FROM deployment_capacity_allocations a WHERE
              (a.resource_kind='account' AND NOT EXISTS(SELECT 1 FROM users u WHERE u.id=a.entity_id))
           OR (a.resource_kind='muc_room' AND NOT EXISTS(
                 SELECT 1 FROM muc_rooms r
                  WHERE r.id=a.entity_id AND r.destroyed_at IS NULL))
           OR (a.resource_kind='live_session' AND NOT EXISTS(SELECT 1 FROM deployment_session_leases s WHERE s.lease_id=a.entity_id))
-          OR (a.resource_kind='sm_session' AND NOT EXISTS(SELECT 1 FROM sm_resume_sessions s WHERE s.id=a.entity_id))",
+          OR (a.resource_kind='sm_session' AND NOT EXISTS(SELECT 1 FROM sm_resume_sessions s WHERE s.id=a.entity_id))
+          RETURNING a.resource_kind,a.entity_id,a.shard,a.created_at",
     )
-        .execute(&mut **tx)
+        .fetch_all(&mut **tx)
         .await?;
+    let mut protected_shard_removals = BTreeMap::<i16, i64>::new();
+    for row in removed {
+        if row.try_get::<String, _>("resource_kind")? == "live_session" {
+            let id: Uuid = row.try_get("entity_id")?;
+            let allocation = RetentionAllocation {
+                shard: row.try_get("shard")?,
+                created_at: row.try_get("created_at")?,
+            };
+            anyhow::ensure!(
+                !protected.bindings.contains_key(&id)
+                    && !delta.removed_allocations.contains_key(&id),
+                "protected or already removed SM allocation entered orphan cleanup"
+            );
+            if protected.shards.contains_key(&allocation.shard) {
+                *protected_shard_removals
+                    .entry(allocation.shard)
+                    .or_default() += 1;
+            }
+            delta.removed_allocations.insert(id, allocation);
+        }
+    }
+    // Raw orphan allocation DELETE has no release trigger. Apply only the
+    // exact known removals to a prevalidated protected shard; never recompute
+    // or repair that counter from a potentially corrupt aggregate.
+    for (shard, removed) in protected_shard_removals {
+        let changed = sqlx::query(
+            "UPDATE deployment_capacity_shards SET used=used-$2
+              WHERE resource_kind='live_session' AND shard=$1 AND used>=$2",
+        )
+        .bind(shard)
+        .bind(removed)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+        anyhow::ensure!(
+            changed == 1,
+            "protected SM orphan-release charge is corrupt"
+        );
+    }
     sqlx::query(
         "UPDATE deployment_capacity_shards s
             SET used=COALESCE(q.used,0),capacity=GREATEST(s.capacity,COALESCE(q.used,0))
@@ -453,8 +939,10 @@ async fn reconcile_allocations(
                   ON a.resource_kind=kinds.resource_kind AND a.shard=kinds.shard
                GROUP BY kinds.resource_kind,kinds.shard
            ) q
-          WHERE s.resource_kind=q.resource_kind AND s.shard=q.shard",
+          WHERE s.resource_kind=q.resource_kind AND s.shard=q.shard
+            AND NOT (s.resource_kind='live_session' AND s.shard=ANY($1))",
     )
+    .bind(protected.shard_ids())
     .execute(&mut **tx)
     .await?;
 
@@ -550,6 +1038,19 @@ async fn reconcile_allocations(
         "deployment capacity shard matrix is incomplete during reconciliation (updated={updated_shards}, expected={expected_shards})"
     );
 
+    let missing_protected: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM deployment_session_leases lease
+          WHERE lease.lease_until<=transaction_timestamp()
+            AND northstar_session_recovery_retention(lease.lease_id,transaction_timestamp())<>'none'
+            AND NOT EXISTS(SELECT 1 FROM deployment_capacity_allocations allocation
+                WHERE allocation.resource_kind='live_session' AND allocation.entity_id=lease.lease_id))",
+    )
+    .fetch_one(&mut **tx).await?;
+    anyhow::ensure!(
+        !missing_protected,
+        "protected SM allocation cannot enter general backfill"
+    );
+
     for (kind, statement) in [
         ("account", "SELECT u.id FROM users u WHERE NOT EXISTS(SELECT 1 FROM deployment_capacity_allocations a WHERE a.resource_kind='account' AND a.entity_id=u.id) ORDER BY u.id"),
         ("muc_room", "SELECT r.id FROM muc_rooms r WHERE r.destroyed_at IS NULL AND NOT EXISTS(SELECT 1 FROM deployment_capacity_allocations a WHERE a.resource_kind='muc_room' AND a.entity_id=r.id) ORDER BY r.id"),
@@ -560,6 +1061,10 @@ async fn reconcile_allocations(
             .fetch_all(&mut **tx)
             .await?;
         for entity in missing {
+            anyhow::ensure!(
+                kind != "live_session" || !protected.bindings.contains_key(&entity),
+                "protected SM allocation cannot be reacquired"
+            );
             let allocation = sqlx::query_scalar::<_, Option<i16>>(
                 "SELECT northstar_capacity_acquire($1,$2)",
             )
@@ -571,6 +1076,9 @@ async fn reconcile_allocations(
                 allocation.is_some(),
                 "deployment {kind} capacity is full while backfilling authoritative entity {entity}"
             );
+            if kind == "live_session" {
+                record_retention_allocation_addition(tx, entity, delta).await?;
+            }
         }
     }
     let accounting_matches: bool = sqlx::query_scalar(
@@ -591,8 +1099,12 @@ async fn reconcile_allocations(
     Ok(())
 }
 
-async fn rebuild_account_counters(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    sqlx::query("DELETE FROM deployment_account_capacity")
+async fn rebuild_account_counters(
+    tx: &mut Transaction<'_, Postgres>,
+    protected: &ProtectedRetentionProjection,
+) -> Result<()> {
+    sqlx::query("DELETE FROM deployment_account_capacity WHERE NOT (resource_kind='live_session' AND owner_id=ANY($1))")
+        .bind(protected.owner_ids())
         .execute(&mut **tx)
         .await?;
     sqlx::query(
@@ -604,8 +1116,10 @@ async fn rebuild_account_counters(tx: &mut Transaction<'_, Postgres>) -> Result<
     .await?;
     sqlx::query(
         "INSERT INTO deployment_account_capacity(resource_kind,owner_id,used)
-         SELECT 'live_session',user_id,COUNT(*) FROM deployment_session_leases GROUP BY user_id",
+         SELECT 'live_session',user_id,COUNT(*) FROM deployment_session_leases
+          WHERE NOT (user_id=ANY($1)) GROUP BY user_id",
     )
+    .bind(protected.owner_ids())
     .execute(&mut **tx)
     .await?;
     sqlx::query(
@@ -617,7 +1131,6 @@ async fn rebuild_account_counters(tx: &mut Transaction<'_, Postgres>) -> Result<
     Ok(())
 }
 
-#[cfg(test)]
 fn shard_budget(limit: i64, shard: i64) -> i64 {
     limit / CAPACITY_SHARDS
         + if shard < limit % CAPACITY_SHARDS {
@@ -768,6 +1281,9 @@ pub async fn try_cleanup_expired_live_session_leases(
     limit: i64,
 ) -> Result<Option<u64>> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SET LOCAL lock_timeout='500ms'")
         .execute(&mut *tx)
         .await?;
@@ -877,6 +1393,208 @@ fn is_capacity_sqlx_error(error: &sqlx::Error) -> bool {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    fn protected_retention_fixture() -> ProtectedRetentionProjection {
+        let lease = Uuid::from_u128(1);
+        let owner = Uuid::from_u128(10);
+        let timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let allocation = RetentionAllocation {
+            shard: 3,
+            created_at: timestamp,
+        };
+        ProtectedRetentionProjection {
+            bindings: BTreeMap::from([(
+                lease,
+                RetentionBinding {
+                    connection_id: Uuid::from_u128(2),
+                    user_id: owner,
+                    full_jid: "retained@example.test/device".to_owned(),
+                    lease_until: timestamp,
+                    created_at: timestamp,
+                    updated_at: timestamp,
+                    allocation: allocation.clone(),
+                },
+            )]),
+            shards: BTreeMap::from([(
+                3,
+                RetentionShard {
+                    used: 2,
+                    capacity: 2,
+                },
+            )]),
+            owners: BTreeMap::from([(owner, 2)]),
+            allocations: BTreeMap::from([
+                (lease, allocation.clone()),
+                (Uuid::from_u128(4), allocation),
+            ]),
+            owner_leases: BTreeMap::from([(lease, owner), (Uuid::from_u128(4), owner)]),
+        }
+    }
+
+    #[test]
+    fn protected_retention_precheck_rejects_missing_mapping_and_shared_charge_corruption() {
+        let original = protected_retention_fixture();
+        assert!(original.validate_integrity().is_ok());
+        let mut missing = original.clone();
+        missing.allocations.remove(&Uuid::from_u128(1));
+        assert!(missing.validate_integrity().is_err());
+        let mut missing = original.clone();
+        missing.shards.clear();
+        assert!(missing.validate_integrity().is_err());
+        let mut missing = original.clone();
+        missing.owners.clear();
+        assert!(missing.validate_integrity().is_err());
+        let mut corrupt = original.clone();
+        corrupt.shards.get_mut(&3).unwrap().used = 1;
+        assert!(corrupt.validate_integrity().is_err());
+        let mut corrupt = original.clone();
+        corrupt.shards.get_mut(&3).unwrap().capacity = 1;
+        assert!(corrupt.validate_integrity().is_err());
+        let mut corrupt = original;
+        corrupt.owners.insert(Uuid::from_u128(10), 1);
+        assert!(corrupt.validate_integrity().is_err());
+    }
+
+    #[test]
+    fn protected_retention_final_rejects_changed_identity_and_protected_repair_sets() {
+        let original = protected_retention_fixture();
+        let empty_delta = RetentionRepairDelta::default();
+        assert!(original
+            .validate_final(&original, &empty_delta, 128)
+            .is_ok());
+        for changed_field in 0..8 {
+            let mut changed = original.clone();
+            let binding = changed.bindings.get_mut(&Uuid::from_u128(1)).unwrap();
+            match changed_field {
+                0 => binding.connection_id = Uuid::from_u128(90),
+                1 => binding.user_id = Uuid::from_u128(90),
+                2 => binding.full_jid = "other@example.test/device".to_owned(),
+                3 => binding.lease_until += chrono::Duration::seconds(1),
+                4 => binding.created_at += chrono::Duration::seconds(1),
+                5 => binding.updated_at += chrono::Duration::seconds(1),
+                6 => binding.allocation.shard = 4,
+                _ => binding.allocation.created_at += chrono::Duration::seconds(1),
+            }
+            assert!(original
+                .validate_final(&changed, &empty_delta, 128)
+                .is_err());
+        }
+        let mut changed = original.clone();
+        changed.bindings.clear();
+        assert!(original
+            .validate_final(&changed, &empty_delta, 128)
+            .is_err());
+        for repair_kind in 0..3 {
+            let mut delta = RetentionRepairDelta::default();
+            let id = Uuid::from_u128(1);
+            match repair_kind {
+                0 => {
+                    delta
+                        .added_allocations
+                        .insert(id, original.allocations[&id].clone());
+                }
+                1 => {
+                    delta
+                        .removed_allocations
+                        .insert(id, original.allocations[&id].clone());
+                }
+                _ => {
+                    delta.deleted_leases.insert(id, Uuid::from_u128(10));
+                }
+            }
+            assert!(original.validate_final(&original, &delta, 128).is_err());
+        }
+    }
+
+    #[test]
+    fn protected_retention_final_accepts_exact_neighbor_deltas_and_configured_epoch_budget() {
+        let original = protected_retention_fixture();
+        let neighbor = Uuid::from_u128(4);
+        let replacement = Uuid::from_u128(5);
+        let allocation = original.allocations[&neighbor].clone();
+        let mut final_projection = original.clone();
+        final_projection.allocations.remove(&neighbor);
+        final_projection
+            .allocations
+            .insert(replacement, allocation.clone());
+        final_projection.owner_leases.remove(&neighbor);
+        final_projection.owners.insert(Uuid::from_u128(10), 1);
+        // A non-P backfill on this shared shard belongs to another owner.
+        final_projection.shards.get_mut(&3).unwrap().capacity = 3;
+        let delta = RetentionRepairDelta {
+            added_allocations: BTreeMap::from([(replacement, allocation.clone())]),
+            removed_allocations: BTreeMap::from([(neighbor, allocation)]),
+            deleted_leases: BTreeMap::from([(neighbor, Uuid::from_u128(10))]),
+        };
+        assert!(original
+            .validate_final(&final_projection, &delta, 192)
+            .is_ok());
+        assert!(original
+            .validate_final(&final_projection, &delta, 128)
+            .is_err());
+        assert!(original
+            .validate_final(&final_projection, &RetentionRepairDelta::default(), 192,)
+            .is_err());
+
+        // A raw orphan allocation has no lease DELETE trigger. Its exact
+        // RETURNING-based removal changes only the shared shard charge.
+        let mut orphan_before = original.clone();
+        orphan_before.owner_leases.remove(&neighbor);
+        orphan_before.owners.insert(Uuid::from_u128(10), 1);
+        let mut orphan_after = orphan_before.clone();
+        orphan_after.allocations.remove(&neighbor);
+        orphan_after.shards.get_mut(&3).unwrap().used = 1;
+        let orphan_delta = RetentionRepairDelta {
+            removed_allocations: BTreeMap::from([(
+                neighbor,
+                original.allocations[&neighbor].clone(),
+            )]),
+            ..RetentionRepairDelta::default()
+        };
+        assert!(orphan_before
+            .validate_final(&orphan_after, &orphan_delta, 128)
+            .is_ok());
+        assert!(orphan_before
+            .validate_final(&orphan_after, &RetentionRepairDelta::default(), 128,)
+            .is_err());
+    }
+
+    #[test]
+    fn protected_retention_final_accepts_temporary_doomed_allocation_with_zero_net_charge() {
+        let original = protected_retention_fixture();
+        let mut before = original.clone();
+        let doomed = Uuid::from_u128(6);
+        let owner = Uuid::from_u128(10);
+        before.owner_leases.insert(doomed, owner);
+        before.owners.insert(owner, 3);
+        let allocation = before.allocations[&Uuid::from_u128(1)].clone();
+        let delta = RetentionRepairDelta {
+            added_allocations: BTreeMap::from([(doomed, allocation.clone())]),
+            removed_allocations: BTreeMap::from([(doomed, allocation)]),
+            deleted_leases: BTreeMap::from([(doomed, owner)]),
+        };
+        assert!(before.validate_final(&original, &delta, 128).is_ok());
+    }
+
+    #[test]
+    fn protected_retention_final_rejects_unexplained_shared_accounting_changes() {
+        let original = protected_retention_fixture();
+        let empty_delta = RetentionRepairDelta::default();
+        let mut changed = original.clone();
+        changed.allocations.remove(&Uuid::from_u128(4));
+        changed.shards.get_mut(&3).unwrap().used = 1;
+        assert!(changed.validate_integrity().is_ok());
+        assert!(original
+            .validate_final(&changed, &empty_delta, 128)
+            .is_err());
+        let mut changed = original.clone();
+        changed.owner_leases.remove(&Uuid::from_u128(4));
+        changed.owners.insert(Uuid::from_u128(10), 1);
+        assert!(changed.validate_integrity().is_ok());
+        assert!(original
+            .validate_final(&changed, &empty_delta, 128)
+            .is_err());
+    }
 
     #[test]
     fn shard_budgets_sum_to_exact_limit() {
@@ -1025,7 +1743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_DATABASE_URL; uses only transaction-local temporary tables"]
+    #[ignore = "requires TEST_DATABASE_URL; rollback-only temporary tables and classifier-name helper schema"]
     async fn postgres_capacity_audit_compares_complete_entity_and_counter_sets() {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
@@ -1075,6 +1793,32 @@ mod tests {
         .execute(&mut *tx)
         .await
         .unwrap();
+        // This existing audit has no live leases. Its SQL now resolves the
+        // production classifier name, but must never evaluate retention here.
+        // PostgreSQL does not resolve functions through pg_temp; install only
+        // this raising signature in a unique rollback-only helper schema.
+        let helper_schema = format!("capacity_audit_helper_{}", Uuid::new_v4().simple());
+        sqlx::raw_sql(&format!(
+            "CREATE SCHEMA {helper_schema};
+             CREATE FUNCTION {helper_schema}.northstar_session_recovery_retention(
+                 requested_lease UUID,observed_at TIMESTAMPTZ
+             ) RETURNS TEXT LANGUAGE plpgsql VOLATILE SECURITY INVOKER AS $audit_retention$
+             BEGIN
+                 RAISE EXCEPTION 'empty-lease capacity audit must not evaluate SM retention'
+                     USING ERRCODE='55000';
+             END;
+             $audit_retention$;
+             SET LOCAL search_path=pg_temp,pg_catalog,{helper_schema};"
+        ))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        assert!(sqlx::query_scalar::<_, bool>(
+            "SELECT NOT EXISTS(SELECT 1 FROM deployment_session_leases)"
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap());
         assert!(sqlx::query_scalar::<_, bool>(
             "SELECT current_schema()=(pg_my_temp_schema()::regnamespace)::text"
         )

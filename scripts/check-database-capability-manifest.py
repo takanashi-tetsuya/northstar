@@ -60,6 +60,7 @@ MIGRATIONS = {
     "0154": ROOT / "migrations/0154_admin_panic_disconnect_command_capability.sql",
     "0155": ROOT / "migrations/0155_direct_spool_revision_wakes.sql",
     "0156": ROOT / "migrations/0156_admin_registration_command_capability.sql",
+    "0157": ROOT / "migrations/0157_sm_recovery_retention.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -97,6 +98,17 @@ RESECURED_BY_MIGRATION = {
     "0143": {"northstar_upload_queue_snapshot()"},
     "0146": {"northstar_upload_capability_catalog_healthy(text)"},
     "0147": {"northstar_upload_capability_catalog_healthy(text)"},
+    "0157": {
+        "northstar_session_delete_expired_live_leases()",
+        "northstar_session_cleanup_live(int8)",
+        "northstar_sm_claim(bytea,uuid,inet,uuid,text,bool,uuid,int8)",
+        "northstar_sm_take_teardown(text,uuid,uuid,int8,text,uuid,int8)",
+        "northstar_sm_activate(uuid,uuid,uuid,int8,inet,uuid,int8,int8)",
+        "northstar_sm_release_claim(uuid,uuid)",
+        "northstar_sm_claim_authority(uuid,uuid)",
+        "northstar_session_transfer_sm(uuid,uuid,uuid,uuid,uuid,text,int8)",
+        "northstar_session_capability_catalog_healthy(text)",
+    },
 }
 
 # A replacement migration may preserve a callable identity while changing its
@@ -112,7 +124,7 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|storage|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156|0157)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -848,7 +860,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -862,8 +874,16 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156", "0157")
 }
+require_exact(
+    "SM retention helper introduction",
+    by_origin["0157"],
+    {"northstar_session_recovery_retention(uuid,timestamptz)"},
+)
+if "northstar_session_recovery_retention(uuid,timestamptz)" not in by_workload["runtime"]:
+    fail("SM retention classifier must remain in the runtime capability partition")
+
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows
 }

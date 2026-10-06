@@ -25,6 +25,7 @@ pub async fn current_application_schema(pool: &PgPool) -> Result<String> {
 }
 
 const SESSION_AUTHORITY_FIXED_DIAGNOSTIC_CODES: &[&str] = &[
+    "session_retention:purpose_or_index_mismatch",
     "session_schema:missing_or_ambiguous",
     "session_relation:deployment_session_leases:missing_or_owner_mismatch",
     "session_relation:deployment_session_binding_claims:missing_or_owner_mismatch",
@@ -225,6 +226,79 @@ async fn session_authority_attestation_diagnostics(
                SELECT oid,nspowner,current_schema() AS schema_name
                  FROM pg_catalog.pg_namespace
                 WHERE nspname=current_schema()
+), retention_relation AS (
+  SELECT relation.oid,namespace.nspowner FROM namespace
+    JOIN pg_catalog.pg_class relation ON relation.relnamespace=namespace.oid
+   WHERE relation.relname='sm_resume_sessions' AND relation.relkind='r'
+), expected_purpose_constraint(name,expression) AS (
+  VALUES
+    ('sm_resume_sessions_claim_purpose_pair',
+     '((claim_purpose IS NULL) = (claim_token IS NULL))'),
+    ('sm_resume_sessions_claim_purpose_value',
+     '((claim_purpose IS NULL) OR (claim_purpose = ANY (ARRAY[''resume''::text, ''teardown''::text])))')
+), retention_shape AS (
+  SELECT EXISTS(
+    SELECT 1 FROM retention_relation relation
+      JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=relation.oid
+     WHERE attribute.attname='claim_purpose' AND attribute.attnum>0
+       AND NOT attribute.attisdropped AND NOT attribute.attnotnull
+       AND attribute.atttypid='pg_catalog.text'::pg_catalog.regtype
+       AND attribute.atttypmod=-1 AND NOT attribute.atthasdef
+       AND attribute.attgenerated='' AND attribute.attidentity=''
+  ) AND NOT EXISTS(
+    SELECT 1 FROM expected_purpose_constraint expected
+     WHERE NOT EXISTS(
+       SELECT 1 FROM retention_relation relation
+         JOIN pg_catalog.pg_constraint constraint_row ON constraint_row.conrelid=relation.oid
+        WHERE constraint_row.conname=expected.name AND constraint_row.contype='c'
+          AND constraint_row.convalidated AND NOT constraint_row.connoinherit
+          AND NOT constraint_row.condeferrable AND NOT constraint_row.condeferred
+          AND constraint_row.conislocal AND constraint_row.coninhcount=0
+          AND pg_catalog.pg_get_expr(constraint_row.conbin,constraint_row.conrelid)=expected.expression
+     )
+  ) AND EXISTS(
+    SELECT 1 FROM retention_relation relation
+      JOIN pg_catalog.pg_index index_row ON index_row.indrelid=relation.oid
+      JOIN pg_catalog.pg_class index_relation ON index_relation.oid=index_row.indexrelid
+      JOIN pg_catalog.pg_am method ON method.oid=index_relation.relam
+      JOIN namespace ON index_relation.relnamespace=namespace.oid
+     WHERE index_relation.relname='sm_resume_sessions_connection_id_idx'
+       AND index_relation.relowner=namespace.nspowner AND index_relation.relkind='i'
+       AND method.amname='btree' AND index_row.indisvalid AND index_row.indisready
+       AND index_row.indislive AND NOT index_row.indisunique
+       AND NOT index_row.indisprimary AND NOT index_row.indisexclusion
+       AND index_row.indnkeyatts=2 AND index_row.indnatts=2
+       AND index_row.indpred IS NULL AND index_row.indexprs IS NULL
+       AND ARRAY(
+         SELECT attribute.attname::pg_catalog.text
+           FROM pg_catalog.unnest(index_row.indkey::pg_catalog.int2[])
+                WITH ORDINALITY key(attnum,position)
+           JOIN pg_catalog.pg_attribute attribute
+             ON attribute.attrelid=relation.oid AND attribute.attnum=key.attnum
+          ORDER BY key.position
+       )=ARRAY['connection_id','id']::pg_catalog.text[]
+       AND NOT EXISTS(
+         SELECT 1 FROM pg_catalog.unnest(index_row.indoption::pg_catalog.int2[]) option_value
+          WHERE option_value<>0
+       )
+       AND NOT EXISTS(
+         SELECT 1 FROM pg_catalog.unnest(index_row.indcollation::pg_catalog.oid[]) collation_oid
+          WHERE collation_oid<>0
+       )
+       AND NOT EXISTS(
+         SELECT 1 FROM pg_catalog.unnest(index_row.indclass::pg_catalog.oid[]) opclass_oid
+           LEFT JOIN pg_catalog.pg_opclass opclass ON opclass.oid=opclass_oid
+          WHERE opclass.oid IS NULL OR opclass.opcmethod<>method.oid
+             OR opclass.opcnamespace<>'pg_catalog'::pg_catalog.regnamespace
+             OR opclass.opcname<>'uuid_ops'
+       )
+  ) AND EXISTS(
+    SELECT 1 FROM namespace JOIN pg_catalog.pg_proc routine ON routine.pronamespace=namespace.oid
+     WHERE routine.oid=pg_catalog.to_regprocedure(
+       pg_catalog.format('%I.northstar_session_recovery_retention(uuid,timestamptz)',namespace.schema_name))
+       AND routine.prorettype='pg_catalog.text'::pg_catalog.regtype
+       AND NOT routine.proretset AND routine.provolatile='v'
+  ) AS healthy
              ), expected_relation(relation_name) AS (
                VALUES ('deployment_session_leases'),
                       ('deployment_session_binding_claims'),
@@ -279,6 +353,7 @@ async fn session_authority_attestation_diagnostics(
                  ('northstar_session_release_live(uuid)','runtime'),
                  ('northstar_session_refresh_live(uuid[],int8)','runtime'),
                  ('northstar_session_cleanup_live(int8)','runtime'),
+                 ('northstar_session_recovery_retention(uuid,timestamptz)','runtime'),
                  ('northstar_session_extend_live(uuid,int8)','runtime'),
                  ('northstar_sm_create(uuid,bytea,uuid,int8,text,text,text,uuid,int8,int8,int8,int8,bool,bool,int2,bool,bool,text,bool,inet,uuid,jsonb,jsonb,text,int8,int8)','runtime'),
                  ('northstar_sm_update_snapshot(uuid,uuid,int8,int8,int8,bool,bool,int2,bool,bool,text,bool,inet,uuid,jsonb,jsonb,text,bool,int8,int8)','runtime'),
@@ -387,6 +462,9 @@ async fn session_authority_attestation_diagnostics(
                           'search_path=pg_catalog, %I, pg_temp',namespace.schema_name
                         )
                       ]::pg_catalog.text[]
+               UNION ALL
+               SELECT 'session_retention:purpose_or_index_mismatch'
+                WHERE NOT (SELECT healthy FROM retention_shape)
                UNION ALL
                SELECT 'session_acl:relation_grant_drift'
                 WHERE EXISTS(
@@ -844,6 +922,9 @@ mod tests {
 
     #[test]
     fn session_authority_reason_catalog_covers_every_fixed_category() {
+        let retention = "session_retention:purpose_or_index_mismatch";
+        let summary = summarize_session_authority_diagnostics(Ok(vec![retention.to_owned()]));
+        assert_eq!(summary.issues, vec![retention]);
         for code in SESSION_AUTHORITY_FIXED_DIAGNOSTIC_CODES {
             assert_eq!(known_session_authority_diagnostic(code), Some(*code));
         }

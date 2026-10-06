@@ -1462,6 +1462,116 @@ if grep -Eq 'public\.|AFTER DELETE ON upload_storage_jobs|AFTER DELETE ON upload
 fi
 echo "migration 0140 releases a logical upload owner once across multi-row physical deletion"
 
+# This is a source-contract guard, not an executed PostgreSQL retention proof.
+# Keep the historical 0114/0138 exact-count guards above unchanged.
+sm_retention_migration="migrations/0157_sm_recovery_retention.sql"
+[ -f "$sm_retention_migration" ] || {
+    echo "SM recovery retention migration is missing" >&2
+    exit 1
+}
+for required_fragment in \
+    'STOPPED-WRITER ROLLOUT REQUIRED: stop claim writers AND old startup binaries.' \
+    'old startup reconciliation remains forbidden after' \
+    'SELECT pg_catalog.pg_advisory_xact_lock(1314079572,3);' \
+    'LOCK TABLE sm_resume_sessions IN ACCESS EXCLUSIVE MODE;' \
+    'WHERE claim_token IS NOT NULL OR claimed_until IS NOT NULL' \
+    'ADD COLUMN claim_purpose TEXT' \
+    'CHECK ((claim_purpose IS NULL) = (claim_token IS NULL))' \
+    "CHECK (claim_purpose IS NULL OR claim_purpose IN ('resume','teardown'))" \
+    'ON sm_resume_sessions(connection_id,id);' \
+    'CREATE FUNCTION northstar_session_recovery_retention(' \
+    'requested_lease UUID,observed_at TIMESTAMPTZ' \
+    'malformed durable SM claim purpose' \
+    "THEN RETURN 'resume_claim'; END IF;" \
+    "THEN RETURN 'opportunity'; END IF;" \
+    "claim_token=requested_claim_token,claim_purpose='resume'," \
+    "claim_token=requested_token,claim_purpose='teardown'," \
+    'claim_token=NULL,claimed_until=NULL,claim_purpose=NULL,' \
+    'AND (SELECT healthy FROM retention_shape)' \
+    'pg_catalog.pg_get_expr(constraint_row.conbin,constraint_row.conrelid)=expected.expression' \
+    "AND NOT routine.proretset AND routine.provolatile='v'" \
+    'SECURITY DEFINER SET search_path TO pg_catalog, %I, pg_temp'
+do
+    if ! grep -Fq "$required_fragment" "$sm_retention_migration"; then
+        echo "migration 0157 is missing SM retention source invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'public.' "$sm_retention_migration"; then
+    echo "migration 0157 must remain installation-schema-local" >&2
+    exit 1
+fi
+if [ "$(grep -Fc "current_setting('transaction_isolation')<>'read committed'" "$sm_retention_migration")" -ne 2 ]; then
+    echo "both migration 0157 cleanup capabilities must reject unchecked isolation" >&2
+    exit 1
+fi
+sm_runtime_cleanup=$(sed -n '/^CREATE OR REPLACE FUNCTION northstar_session_cleanup_live(/,/^\$\$;/p' "$sm_retention_migration")
+for required_fragment in \
+    "scan_at := pg_catalog.clock_timestamp();" \
+    "northstar_session_recovery_retention(lease.lease_id,scan_at)='none'" \
+    'FOR UPDATE OF lease SKIP LOCKED' \
+    'FOR SHARE NOWAIT;' \
+    'ORDER BY stream.id FOR UPDATE NOWAIT;' \
+    'EXCEPTION WHEN lock_not_available THEN' \
+    'decision_at := pg_catalog.clock_timestamp();' \
+    'current_binding IS DISTINCT FROM candidate' \
+    "northstar_session_recovery_retention(candidate.lease_id,decision_at)<>'none'" \
+    'northstar_capacity_lock_batch(entries)<>pg_catalog.cardinality(doomed)' \
+    'ORDER BY counter.owner_id FOR UPDATE;' \
+    'counter.owner_id IS NULL OR counter.used<expected.required' \
+    'WHERE shard.used<expected.required OR shard.used>shard.capacity' \
+    'AND lease.lease_until=doomed_binding.lease_until' \
+    'IF affected<>1 THEN'
+do
+    if ! printf '%s\n' "$sm_runtime_cleanup" | grep -Fq "$required_fragment"; then
+        echo "migration 0157 runtime cleanup is missing exact lock/revalidation invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if [ "$(printf '%s\n' "$sm_runtime_cleanup" | grep -c 'EXCEPTION WHEN')" -ne 1 ]; then
+    echo "migration 0157 runtime cleanup must only catch the account/SM NOWAIT block" >&2
+    exit 1
+fi
+sm_startup_cleanup=$(sed -n '/^CREATE OR REPLACE FUNCTION northstar_session_delete_expired_live_leases(/,/^\$\$;/p' "$sm_retention_migration")
+for required_fragment in \
+    'PERFORM northstar_session_capacity_reconcile_lock();' \
+    'lease.lease_until<=pg_catalog.transaction_timestamp()' \
+    "lease.lease_id,pg_catalog.transaction_timestamp())='none'"
+do
+    if ! printf '%s\n' "$sm_startup_cleanup" | grep -Fq "$required_fragment"; then
+        echo "migration 0157 startup cleanup lacks trusted-time/table-lock invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+sm_activation=$(sed -n '/^CREATE OR REPLACE FUNCTION northstar_sm_activate(/,/^\$\$;/p' "$sm_retention_migration")
+for required_fragment in \
+    'INTO hinted_user,hinted_full_jid' \
+    'SELECT lease.lease_id INTO target_lease' \
+    'FOR SHARE;' \
+    'stream.user_id=hinted_user AND stream.full_jid=hinted_full_jid' \
+    "AND stream.claim_purpose='resume'" \
+    'lease.lease_id=target_lease AND lease.connection_id=requested_connection' \
+    'lease.user_id=hinted_user AND lease.full_jid=hinted_full_jid' \
+    'AND lease.lease_until>clock_timestamp()'
+do
+    if ! printf '%s\n' "$sm_activation" | grep -Fq "$required_fragment"; then
+        echo "migration 0157 activation lacks exact target-binding invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if printf '%s\n' "$sm_activation" | grep -Eq 'stream\.expires_at[[:space:]]*>'; then
+    echo "migration 0157 must preserve activation of a live Resume claim across original TTL" >&2
+    exit 1
+fi
+for routine in northstar_sm_claim_authority northstar_session_transfer_sm; do
+    if ! sed -n "/^CREATE OR REPLACE FUNCTION $routine(/,/^\$\$;/p" "$sm_retention_migration" \
+        | grep -Fq "AND stream.claim_purpose='resume'"; then
+        echo "migration 0157 claim authority/transfer must require Resume purpose: $routine" >&2
+        exit 1
+    fi
+done
+echo "migration 0157 source contract preserves exact recovery bindings; real SQL/clock/rollout qualification remains required"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

@@ -372,6 +372,15 @@ pub(crate) trait AuthenticationRepository: Send + Sync {
         device_id: Option<Uuid>,
         connection_id: Uuid,
     ) -> impl std::future::Future<Output = AuthenticationResult<CredentialCommitReceipt>> + Send;
+    fn commit_fast_with_login_epoch_observed(
+        &self,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        plan: &FastCommitPlan,
+        device_id: Option<Uuid>,
+        connection_id: Uuid,
+        invocation: &publication::CredentialInvocation<'_>,
+    ) -> impl std::future::Future<Output = AuthenticationResult<CredentialCommitReceipt>> + Send;
     fn publish_credential_commit(
         &self,
         receipt: &CredentialCommitReceipt,
@@ -583,6 +592,51 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn commit_fast_with_login_epoch_observed(
+        &self,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        plan: &FastCommitPlan,
+        device_id: Option<Uuid>,
+        connection_id: Uuid,
+        prepared: Option<&publication::PreparedCredential>,
+    ) -> AuthenticationResult<CredentialCommitReceipt> {
+        let Some(prepared) = prepared else {
+            return self
+                .commit_fast_with_login_epoch(
+                    user_id,
+                    expected_auth_generation,
+                    plan,
+                    device_id,
+                    connection_id,
+                )
+                .await;
+        };
+        let Ok(invocation) = prepared.fast(
+            user_id,
+            expected_auth_generation,
+            plan,
+            device_id,
+            connection_id,
+        ) else {
+            return AuthenticationResult::IntegrityFailure;
+        };
+        let result = self
+            .repository
+            .commit_fast_with_login_epoch_observed(
+                user_id,
+                expected_auth_generation,
+                plan,
+                device_id,
+                connection_id,
+                &invocation,
+            )
+            .await;
+        invocation.fast_returned(&result);
+        result
+    }
+
     #[cfg_attr(
         not(test),
         expect(
@@ -635,6 +689,310 @@ mod tests {
     use sqlx::PgPool;
     use std::time::Duration;
     use tokio::sync::oneshot;
+
+    #[derive(Clone, Copy)]
+    enum CredentialCut {
+        Matching,
+        NoAck,
+        WrongInstance,
+        WrongProjection,
+        ErrorAfterAck,
+        PendingAfterAck,
+        CommitError,
+        CommitPending,
+    }
+    struct CredentialRepository {
+        cut: CredentialCut,
+    }
+    impl AuthenticationRepository for CredentialRepository {
+        async fn scram_credentials(
+            &self,
+            _username: &str,
+            _algorithm: auth::ScramAlgorithm,
+        ) -> AuthenticationResult<ScramCredentialSet> {
+            panic!("unexpected credential read")
+        }
+        async fn authenticate_plain(
+            &self,
+            _username: &str,
+            _password: &str,
+            _policy: AuthenticationPolicy,
+        ) -> AuthenticationResult<AuthenticatedAccount> {
+            panic!("unexpected credential read")
+        }
+        async fn account_by_id(&self, _user_id: Uuid) -> anyhow::Result<Option<LoadedAccount>> {
+            panic!("unexpected credential read")
+        }
+        async fn account_by_username(
+            &self,
+            _username: &str,
+        ) -> anyhow::Result<Option<LoadedAccount>> {
+            panic!("unexpected credential read")
+        }
+        async fn generation_state(&self, _fence: AuthenticationFence) -> AuthenticationResult<()> {
+            panic!("unexpected credential read")
+        }
+        async fn bind2_archive_boundaries(
+            &self,
+            _user_id: Uuid,
+            _expected_auth_generation: i64,
+        ) -> AuthenticationResult<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)> {
+            panic!("unexpected credential read")
+        }
+        async fn authenticate_fast(
+            &self,
+            _request: FastProofRequest<'_>,
+        ) -> AuthenticationResult<FastAuthenticationSuccess> {
+            panic!("unexpected credential read")
+        }
+        async fn commit_fast_with_login_epoch(
+            &self,
+            _user_id: Uuid,
+            _expected_auth_generation: i64,
+            _plan: &FastCommitPlan,
+            _device_id: Option<Uuid>,
+            _connection_id: Uuid,
+        ) -> AuthenticationResult<CredentialCommitReceipt> {
+            AuthenticationResult::Authenticated(CredentialCommitReceipt::new(None, None, None))
+        }
+        async fn commit_fast_with_login_epoch_observed(
+            &self,
+            user_id: Uuid,
+            expected_auth_generation: i64,
+            plan: &FastCommitPlan,
+            device_id: Option<Uuid>,
+            connection_id: Uuid,
+            invocation: &publication::CredentialInvocation<'_>,
+        ) -> AuthenticationResult<CredentialCommitReceipt> {
+            use publication::{CredentialInvocation, CredentialPreparation, PreparationResult};
+            assert_eq!(
+                (user_id, expected_auth_generation, device_id, connection_id),
+                (Uuid::from_u128(2), 7, None, Uuid::from_u128(3))
+            );
+            assert_eq!(plan.issue.as_ref().unwrap().device_id, Uuid::from_u128(9));
+            invocation
+                .enter_fast(
+                    user_id,
+                    expected_auth_generation,
+                    plan,
+                    device_id,
+                    connection_id,
+                )
+                .unwrap();
+            CredentialInvocation::begin(Some(invocation), std::future::ready(Ok::<(), ()>(())))
+                .await
+                .unwrap();
+            CredentialInvocation::eligibility(
+                Some(invocation),
+                std::future::ready(Ok::<_, ()>(Some(true))),
+            )
+            .await
+            .unwrap();
+            invocation.transaction_returned();
+            invocation.preparation_entered(CredentialPreparation::Stage);
+            invocation.stage_returned(&Ok(None));
+            invocation.preparation_entered(CredentialPreparation::Fast);
+            invocation
+                .preparation_returned(CredentialPreparation::Fast, PreparationResult::Present);
+            if !matches!(self.cut, CredentialCut::NoAck) {
+                let result = CredentialInvocation::commit(Some(invocation), async {
+                    if matches!(self.cut, CredentialCut::CommitPending) {
+                        std::future::pending::<()>().await;
+                    }
+                    if matches!(self.cut, CredentialCut::CommitError) {
+                        Err(std::io::Error::other("synthetic lost COMMIT reply"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .await;
+                if let Err(error) = result {
+                    return AuthenticationResult::BackendFailure(error.into());
+                }
+            }
+            // This fake delay/error is synthetic: production constructs and
+            // returns synchronously after the acknowledged COMMIT.
+            if matches!(self.cut, CredentialCut::PendingAfterAck) {
+                std::future::pending::<()>().await;
+            }
+            if matches!(self.cut, CredentialCut::ErrorAfterAck) {
+                return AuthenticationResult::BackendFailure(anyhow::anyhow!(
+                    "synthetic post-ack error"
+                ));
+            }
+            let binding =
+                matches!(self.cut, CredentialCut::WrongProjection).then(|| BindingPublication {
+                    connection_id,
+                    user_id,
+                    full_jid: "private@example.test/wrong".to_owned(),
+                    lease_seconds: 77,
+                });
+            let receipt = CredentialCommitReceipt::new(None, None, binding);
+            invocation.constructed(&receipt);
+            let receipt = if matches!(self.cut, CredentialCut::WrongInstance) {
+                CredentialCommitReceipt::new(None, None, None)
+            } else {
+                receipt
+            };
+            AuthenticationResult::Authenticated(receipt)
+        }
+        async fn publish_credential_commit(
+            &self,
+            _receipt: &CredentialCommitReceipt,
+        ) -> AuthenticationResult<Option<i64>> {
+            panic!("unexpected publication")
+        }
+        async fn publish_credential_commit_observed(
+            &self,
+            _invocation: &publication::Invocation<'_>,
+        ) -> AuthenticationResult<Option<i64>> {
+            panic!("unexpected publication")
+        }
+    }
+    fn credential_service(cut: CredentialCut) -> AuthenticationService<CredentialRepository> {
+        AuthenticationService::new(
+            CredentialRepository { cut },
+            Arc::new(Zeroizing::new(vec![0; 32])),
+            auth::MIN_SCRAM_ITERATIONS,
+            false,
+        )
+    }
+    fn credential_plan() -> FastCommitPlan {
+        FastCommitPlan {
+            token_id: Some(Uuid::from_u128(8)),
+            token_was_new: true,
+            invalidate: true,
+            issue: Some(FastTokenIssue {
+                device_id: Uuid::from_u128(9),
+                mechanism: "HT-SHA-256-NONE".to_owned(),
+                ttl_days: 7,
+                strong_reauth_max_days: 30,
+                inherited_chain: None,
+            }),
+        }
+    }
+    #[tokio::test]
+    async fn observed_fast_service_preserves_raw_success_error_pending_and_same_attempt_authority()
+    {
+        use publication::{
+            CredentialCall, CredentialKind, CredentialReturned, CredentialTerminal,
+            PreparedCredential,
+        };
+        for cut in [
+            CredentialCut::Matching,
+            CredentialCut::NoAck,
+            CredentialCut::WrongInstance,
+            CredentialCut::WrongProjection,
+            CredentialCut::ErrorAfterAck,
+            CredentialCut::PendingAfterAck,
+            CredentialCut::CommitError,
+            CredentialCut::CommitPending,
+        ] {
+            let service = credential_service(cut);
+            let prepared = PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                0,
+                CredentialKind::UnboundFast,
+            );
+            let plan = credential_plan();
+            let mut call = Box::pin(service.commit_fast_with_login_epoch_observed(
+                Uuid::from_u128(2),
+                7,
+                &plan,
+                None,
+                Uuid::from_u128(3),
+                Some(&prepared),
+            ));
+            let result = futures::poll!(&mut call);
+            if matches!(
+                cut,
+                CredentialCut::PendingAfterAck | CredentialCut::CommitPending
+            ) {
+                assert!(result.is_pending());
+                drop(call);
+                let snapshot = prepared.observation().snapshot();
+                assert_eq!(snapshot.returned, None);
+                assert_eq!(snapshot.call_terminal, Some(CredentialTerminal::Cancelled));
+                assert_eq!(
+                    snapshot.commit,
+                    if matches!(cut, CredentialCut::PendingAfterAck) {
+                        CredentialCall::Ok
+                    } else {
+                        CredentialCall::Entered
+                    }
+                );
+            } else {
+                let std::task::Poll::Ready(result) = result else {
+                    panic!("finite fake unexpectedly pending")
+                };
+                drop(call);
+                let snapshot = prepared.observation().snapshot();
+                assert_eq!(
+                    matches!(&result, AuthenticationResult::Authenticated(_)),
+                    matches!(
+                        cut,
+                        CredentialCut::Matching
+                            | CredentialCut::NoAck
+                            | CredentialCut::WrongInstance
+                            | CredentialCut::WrongProjection
+                    )
+                );
+                if let AuthenticationResult::Authenticated(receipt) = result {
+                    assert_eq!(
+                        snapshot.commit,
+                        if matches!(cut, CredentialCut::NoAck) {
+                            CredentialCall::NotEntered
+                        } else {
+                            CredentialCall::Ok
+                        }
+                    );
+                    assert_eq!(snapshot.returned, Some(CredentialReturned::Authenticated));
+                    assert_eq!(
+                        prepared
+                            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+                            .is_ok(),
+                        matches!(cut, CredentialCut::Matching)
+                    );
+                } else {
+                    assert!(matches!(result, AuthenticationResult::BackendFailure(_)));
+                    assert_eq!(snapshot.returned, Some(CredentialReturned::BackendFailure));
+                    assert_eq!(
+                        snapshot.commit,
+                        if matches!(cut, CredentialCut::CommitError) {
+                            CredentialCall::Err
+                        } else {
+                            CredentialCall::Ok
+                        }
+                    );
+                }
+                assert_eq!(snapshot.call_terminal, Some(CredentialTerminal::Returned));
+            }
+        }
+    }
+    #[tokio::test]
+    async fn explicit_fast_returned_only_compatibility_does_not_create_pre_receipt_facts() {
+        let service = credential_service(CredentialCut::NoAck);
+        let result = service
+            .commit_fast_with_login_epoch_observed(
+                Uuid::from_u128(2),
+                7,
+                &credential_plan(),
+                None,
+                Uuid::from_u128(3),
+                None,
+            )
+            .await;
+        let AuthenticationResult::Authenticated(receipt) = result else {
+            panic!("compatibility result changed")
+        };
+        let observation = publication::Observation::returned_receipt(&receipt, None);
+        assert!(observation.credential().is_none());
+        assert_eq!(
+            observation.snapshot().publication,
+            publication::Knowledge::NotStarted
+        );
+    }
 
     #[tokio::test]
     async fn dummy_scram_identity_is_independent_from_fast_key_rotation() {

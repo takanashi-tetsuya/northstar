@@ -227,12 +227,19 @@ fn is_inline_auth(frame: &str) -> bool {
         })
 }
 
+#[derive(Default)]
+struct CredentialAttempts {
+    closed: bool,
+    slots: [Option<publication::CredentialObservation>; 3],
+}
+
 struct Progress {
     operation_id: Uuid,
     direct_operation: DirectOperationHandle,
     muc_discussion: MucDiscussionSlot,
     mix_foreground: MixForegroundSlot,
     auth_receipt: std::sync::Mutex<Option<publication::Observation>>,
+    credential_attempts: std::sync::Mutex<CredentialAttempts>,
     sequence: u64,
     policy: Policy,
     stage: AtomicU8,
@@ -327,6 +334,7 @@ impl FrameExecution {
             muc_discussion: MucDiscussionSlot::default(),
             mix_foreground: MixForegroundSlot::default(),
             auth_receipt: std::sync::Mutex::new(None),
+            credential_attempts: std::sync::Mutex::new(CredentialAttempts::default()),
             sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             policy: Policy::for_frame(transport, frame),
             stage: AtomicU8::new(Stage::Validation as u8),
@@ -350,6 +358,26 @@ impl FrameExecution {
 
     pub(super) fn operation_id(&self) -> Uuid {
         self.0.operation_id
+    }
+
+    pub(super) fn prepare_credential(
+        &self,
+        kind: publication::CredentialKind,
+        connection: Uuid,
+    ) -> anyhow::Result<publication::PreparedCredential> {
+        let mut attempts = self.0.credential_attempts.lock().unwrap();
+        anyhow::ensure!(!attempts.closed, "credential frame already retired");
+        // Source-bound to one of each kind: inline resume may fall through to
+        // one binding or unbound FAST attempt. Never replace an earlier Unknown.
+        anyhow::ensure!(
+            attempts.slots[kind.index()].is_none(),
+            "credential kind already attempted in this frame"
+        );
+        let ordinal = attempts.slots.iter().flatten().count() as u8;
+        let prepared =
+            publication::PreparedCredential::new(self.operation_id(), connection, ordinal, kind);
+        attempts.slots[kind.index()] = Some(prepared.observation());
+        Ok(prepared)
     }
 
     pub(super) fn retain_auth_receipt(
@@ -602,14 +630,35 @@ impl Observation {
             }
         }
         if self.phase == "frame" {
-            if let Some(auth) = progress.auth_receipt.lock().unwrap().as_ref() {
-                auth.handler_returned(match outcome {
-                    Outcome::Completed => publication::HandlerReturn::Completed,
-                    Outcome::TimedOut => publication::HandlerReturn::TimedOut,
-                    Outcome::Cancelled => publication::HandlerReturn::Cancelled,
-                    Outcome::Panicked => publication::HandlerReturn::Panicked,
-                    _ => publication::HandlerReturn::Failed,
-                });
+            let returned = match outcome {
+                Outcome::Completed => publication::HandlerReturn::Completed,
+                Outcome::TimedOut => publication::HandlerReturn::TimedOut,
+                Outcome::Cancelled => publication::HandlerReturn::Cancelled,
+                Outcome::Panicked => publication::HandlerReturn::Panicked,
+                _ => publication::HandlerReturn::Failed,
+            };
+            let attempts = {
+                let mut attempts = progress.credential_attempts.lock().unwrap();
+                attempts.closed = true;
+                attempts.slots.clone()
+            };
+            for attempt in attempts.into_iter().flatten() {
+                attempt.handler_returned(returned);
+                let snapshot = attempt.snapshot();
+                tracing::debug!(target: "rust_xmpp_server::xmpp::auth_credential",
+                    operation_id = %snapshot.frame, attempt = %snapshot.attempt,
+                    ordinal = snapshot.ordinal, kind = ?snapshot.kind,
+                    begin = ?snapshot.begin, eligibility = ?snapshot.eligibility,
+                    rollback = ?snapshot.rollback, commit = ?snapshot.commit,
+                    returned = ?snapshot.returned, return_matches = snapshot.return_matches,
+                    transferred = snapshot.transferred, call_terminal = ?snapshot.call_terminal,
+                    handler = ?snapshot.handler, integrity_failure = snapshot.integrity_failure,
+                    "frame credential observation retained"
+                );
+            }
+            let auth = progress.auth_receipt.lock().unwrap().clone();
+            if let Some(auth) = auth {
+                auth.handler_returned(returned);
             }
         }
         progress.outcome.store(outcome as u8, Ordering::Relaxed);
@@ -658,6 +707,251 @@ mod tests {
     use super::*;
     use futures::FutureExt;
     use std::{future::pending, io::Write, panic::AssertUnwindSafe, sync::Mutex, task::Poll};
+
+    struct CredentialChildDrop {
+        observation: publication::CredentialObservation,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+        panic_on_drop: bool,
+    }
+    impl Drop for CredentialChildDrop {
+        fn drop(&mut self) {
+            assert!(
+                self.observation.snapshot().handler.is_none(),
+                "credential handler retired before child destruction"
+            );
+            self.dropped.store(true, Ordering::Relaxed);
+            assert!(
+                !self.panic_on_drop,
+                "controlled credential child destructor panic"
+            );
+        }
+    }
+    #[derive(Clone, Copy)]
+    enum CredentialFrameCut {
+        Unpolled,
+        Preparation,
+        Rollback,
+        Commit,
+        ReturnedReceipt,
+        Timeout,
+        PollPanic,
+        DropPanic,
+    }
+    #[tokio::test(start_paused = true)]
+    async fn credential_attempts_survive_actual_frame_pending_timeout_and_unwind_cuts() {
+        use crate::services::authentication::{
+            AuthenticationResult, CredentialCommitReceipt, FastCommitPlan,
+        };
+        use publication::{
+            CredentialCall, CredentialInvocation, CredentialKind, CredentialPreparation,
+            CredentialReturned, CredentialRollbackSite, CredentialTerminal, HandlerReturn,
+            PreparationResult,
+        };
+        for cut in [
+            CredentialFrameCut::Unpolled,
+            CredentialFrameCut::Preparation,
+            CredentialFrameCut::Rollback,
+            CredentialFrameCut::Commit,
+            CredentialFrameCut::ReturnedReceipt,
+            CredentialFrameCut::Timeout,
+            CredentialFrameCut::PollPanic,
+            CredentialFrameCut::DropPanic,
+        ] {
+            let frame = FrameExecution::new(ClientTransport::Tcp, "<authenticate/>");
+            let prepared = frame
+                .prepare_credential(CredentialKind::UnboundFast, Uuid::from_u128(3))
+                .unwrap();
+            let observation = prepared.observation();
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let marker = CredentialChildDrop {
+                observation: observation.clone(),
+                dropped: dropped.clone(),
+                panic_on_drop: matches!(cut, CredentialFrameCut::DropPanic),
+            };
+            let origin = frame.clone();
+            let mut runner = Box::pin(frame.run(async move {
+                let _marker = marker;
+                let plan = FastCommitPlan::default();
+                let invocation =
+                    prepared.fast(Uuid::from_u128(2), 7, &plan, None, Uuid::from_u128(3))?;
+                invocation.enter_fast(Uuid::from_u128(2), 7, &plan, None, Uuid::from_u128(3))?;
+                CredentialInvocation::begin(
+                    Some(&invocation),
+                    std::future::ready(Ok::<(), std::io::Error>(())),
+                )
+                .await
+                .map_err(publication::credential_error)?;
+                CredentialInvocation::eligibility(
+                    Some(&invocation),
+                    std::future::ready(Ok::<_, std::io::Error>(Some(true))),
+                )
+                .await
+                .map_err(publication::credential_error)?;
+                invocation.transaction_returned();
+                invocation.preparation_entered(CredentialPreparation::Stage);
+                if matches!(cut, CredentialFrameCut::Preparation) {
+                    pending::<()>().await;
+                }
+                invocation.stage_returned(&Ok(None));
+                invocation.preparation_entered(CredentialPreparation::Fast);
+                invocation.preparation_returned(
+                    CredentialPreparation::Fast,
+                    if matches!(cut, CredentialFrameCut::Rollback) {
+                        PreparationResult::Absent
+                    } else {
+                        PreparationResult::Present
+                    },
+                );
+                if matches!(cut, CredentialFrameCut::Rollback) {
+                    CredentialInvocation::rollback(
+                        Some(&invocation),
+                        CredentialRollbackSite::FastExpired,
+                        pending::<std::result::Result<(), std::io::Error>>(),
+                    )
+                    .await
+                    .map_err(publication::credential_error)?;
+                }
+                CredentialInvocation::commit(Some(&invocation), async {
+                    if !matches!(cut, CredentialFrameCut::ReturnedReceipt) {
+                        assert!(
+                            !matches!(cut, CredentialFrameCut::PollPanic),
+                            "controlled credential poll panic"
+                        );
+                        pending::<()>().await;
+                    }
+                    Ok::<(), std::io::Error>(())
+                })
+                .await
+                .map_err(publication::credential_error)?;
+                let receipt = CredentialCommitReceipt::new(None, None, None);
+                invocation.constructed(&receipt);
+                let result = AuthenticationResult::Authenticated(receipt);
+                invocation.fast_returned(&result);
+                drop(invocation);
+                let AuthenticationResult::Authenticated(receipt) = result else {
+                    unreachable!()
+                };
+                let owner = super::super::auth_publication::KnownCredentialOwner::from_observed(
+                    receipt,
+                    origin.clone(),
+                    Uuid::from_u128(3),
+                    &prepared,
+                )?;
+                origin.retain_auth_receipt(owner.observation().clone())?;
+                let _owner = owner;
+                pending::<()>().await;
+                Ok(())
+            }));
+            if matches!(cut, CredentialFrameCut::PollPanic) {
+                assert!(AssertUnwindSafe(runner.as_mut())
+                    .catch_unwind()
+                    .await
+                    .is_err());
+            } else if !matches!(cut, CredentialFrameCut::Unpolled) {
+                assert!(futures::poll!(&mut runner).is_pending());
+            }
+            if matches!(cut, CredentialFrameCut::Timeout) {
+                tokio::time::advance(frame.0.policy.budget + std::time::Duration::from_millis(1))
+                    .await;
+                assert!(matches!(runner.as_mut().await, Err(FrameFailure::TimedOut)));
+            }
+            let dropped_runner = std::panic::catch_unwind(AssertUnwindSafe(|| drop(runner)));
+            assert_eq!(
+                dropped_runner.is_err(),
+                matches!(cut, CredentialFrameCut::DropPanic)
+            );
+            assert!(dropped.load(Ordering::Relaxed));
+            let snapshot = observation.snapshot();
+            assert_eq!(
+                snapshot.handler,
+                Some(match cut {
+                    CredentialFrameCut::Timeout => HandlerReturn::TimedOut,
+                    CredentialFrameCut::PollPanic | CredentialFrameCut::DropPanic =>
+                        HandlerReturn::Panicked,
+                    _ => HandlerReturn::Cancelled,
+                })
+            );
+            assert_eq!(
+                snapshot.commit,
+                match cut {
+                    CredentialFrameCut::Unpolled
+                    | CredentialFrameCut::Preparation
+                    | CredentialFrameCut::Rollback => CredentialCall::NotEntered,
+                    CredentialFrameCut::ReturnedReceipt => CredentialCall::Ok,
+                    _ => CredentialCall::Entered,
+                }
+            );
+            assert_eq!(
+                snapshot.rollback,
+                if matches!(cut, CredentialFrameCut::Rollback) {
+                    Some((CredentialRollbackSite::FastExpired, CredentialCall::Entered))
+                } else {
+                    None
+                }
+            );
+            assert_eq!(
+                snapshot.returned,
+                if matches!(cut, CredentialFrameCut::ReturnedReceipt) {
+                    Some(CredentialReturned::Authenticated)
+                } else {
+                    None
+                }
+            );
+            if matches!(cut, CredentialFrameCut::Unpolled) {
+                assert!(!snapshot.service_started);
+                assert!(snapshot.call_terminal.is_none());
+            }
+            if matches!(cut, CredentialFrameCut::ReturnedReceipt) {
+                assert!(snapshot.transferred);
+                assert_eq!(snapshot.call_terminal, Some(CredentialTerminal::Returned));
+            }
+            assert!(frame
+                .prepare_credential(CredentialKind::Resume, Uuid::from_u128(3))
+                .is_err());
+        }
+    }
+    #[tokio::test]
+    async fn credential_registration_closes_atomically_before_retirement_snapshots() {
+        let frame = FrameExecution::new(ClientTransport::Tcp, "<authenticate/>");
+        let first = frame
+            .prepare_credential(publication::CredentialKind::Resume, Uuid::from_u128(3))
+            .unwrap();
+        let original = first.observation().snapshot();
+        assert!(frame
+            .prepare_credential(publication::CredentialKind::Resume, Uuid::from_u128(3))
+            .is_err());
+        assert_eq!(first.observation().snapshot(), original);
+        let retained = {
+            let attempts = frame.0.credential_attempts.lock().unwrap();
+            assert_eq!(attempts.slots.iter().flatten().count(), 1);
+            attempts.slots[publication::CredentialKind::Resume.index()]
+                .as_ref()
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(retained.snapshot().attempt, original.attempt);
+        frame.run(async { Ok(()) }).await.unwrap();
+        assert!(frame.0.credential_attempts.lock().unwrap().closed);
+        assert!(frame
+            .prepare_credential(publication::CredentialKind::Binding, Uuid::from_u128(3))
+            .is_err());
+        assert_eq!(
+            first.observation().snapshot().handler,
+            Some(publication::HandlerReturn::Completed)
+        );
+        assert_eq!(
+            frame
+                .0
+                .credential_attempts
+                .lock()
+                .unwrap()
+                .slots
+                .iter()
+                .flatten()
+                .count(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn supplied_frame_identity_preserves_initial_policy_and_actual_runner_retirement() {
@@ -1550,6 +1844,118 @@ mod tests {
         );
         assert_eq!(outcome(&execution), Outcome::RouteRejected as u8);
     }
+    #[tokio::test]
+    async fn credential_trace_retains_bounded_facts_without_private_request_receipt_or_error_data()
+    {
+        use crate::services::authentication::{
+            CredentialCommitReceipt, FastCommitPlan, IssuedFastToken,
+        };
+        use crate::services::sm::{
+            ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
+            SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
+        };
+        let (capture, _subscriber) =
+            TraceCapture::install_with_filter("off,rust_xmpp_server::xmpp::auth_credential=debug");
+        let bearer = "PRIVATE_FAST_BEARER_71829";
+        let key = "private-credential@example.test/resource";
+        let privacy = "PRIVATE_RESUME_PRIVACY_731";
+        let error = "PRIVATE_DATABASE_ERROR_826";
+        let claim = Uuid::from_u128(873621);
+        let xml = format!("<authenticate jid='{key}'><token>{bearer}</token></authenticate>");
+        let frame = FrameExecution::new(ClientTransport::Tcp, &xml);
+        let resume = frame
+            .prepare_credential(publication::CredentialKind::Resume, Uuid::from_u128(3))
+            .unwrap();
+        let binding = frame
+            .prepare_credential(publication::CredentialKind::Binding, Uuid::from_u128(3))
+            .unwrap();
+        let result = frame
+            .run(async {
+                let plan = FastCommitPlan::default();
+                let request = SmResumeFinalizationRequest {
+                    session_id: Uuid::from_u128(6),
+                    claim_token: claim,
+                    connection_id: Uuid::from_u128(3),
+                    user_id: Uuid::from_u128(2),
+                    expected_auth_generation: 7,
+                    client_h: 1,
+                    acknowledged_count: 0,
+                    peer_ip: "192.0.2.19".parse().unwrap(),
+                    user_agent_id: None,
+                    active_privacy_list: Some(privacy),
+                    ttl_seconds: 90,
+                    live_lease_seconds: 43,
+                    max_stanzas: 17,
+                    max_bytes: 801,
+                    fast_plan: Some(&plan),
+                };
+                let invocation = resume.resume(&request)?;
+                invocation.enter_resume(&request)?;
+                // Deliberately contradictory raw success is retained diagnostically.
+                // There is no COMMIT witness and it grants no publication owner.
+                let receipt = CredentialCommitReceipt::new(
+                    Some(IssuedFastToken {
+                        token: zeroize::Zeroizing::new(bearer.to_owned()),
+                        expires_at: chrono::Utc::now(),
+                    }),
+                    None,
+                    None,
+                );
+                invocation.constructed(&receipt);
+                invocation.resume_returned(&Ok(SmResumeFinalizationOutcome::Committed(Box::new(
+                    SmResumeFinalizationCommit {
+                        activated: ActivatedSmSession {
+                            outbound_h: 1,
+                            unacked: Vec::new(),
+                        },
+                        receipt,
+                    },
+                ))));
+                drop(invocation);
+                let invocation = binding.binding(
+                    Uuid::from_u128(3),
+                    Uuid::from_u128(2),
+                    7,
+                    key,
+                    43,
+                    None,
+                    None,
+                )?;
+                invocation.enter_binding(
+                    Uuid::from_u128(3),
+                    Uuid::from_u128(2),
+                    7,
+                    key,
+                    43,
+                    None,
+                    None,
+                )?;
+                let result: anyhow::Result<BindingFinalizationOutcome> =
+                    Err(anyhow::anyhow!(error));
+                invocation.binding_returned(&result);
+                Ok(())
+            })
+            .await;
+        assert!(result.is_ok());
+        let events = capture.events();
+        assert_eq!(events.len(), 2);
+        let rendered = serde_json::to_string(&events).unwrap();
+        let claim_text = claim.to_string();
+        for private in [bearer, key, privacy, error, "192.0.2.19", &claim_text, &xml] {
+            assert!(
+                !rendered.contains(private),
+                "credential trace leaked private input"
+            );
+        }
+        for event in events {
+            assert_eq!(event["target"], "rust_xmpp_server::xmpp::auth_credential");
+            assert!(event["fields"].get("commit").is_some());
+            assert!(event["fields"].get("returned").is_some());
+            assert!(event["fields"].get("handler").is_some());
+            assert_eq!(event["fields"].as_object().unwrap().len(), 15);
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn actual_trace_terminal_cardinality_and_privacy_cover_every_exit() {
         let (capture, _subscriber) = TraceCapture::install();

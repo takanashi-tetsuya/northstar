@@ -24,13 +24,13 @@ rejects('native WebSocket ingress cannot bypass observed frame execution', 'tran
   'let action = match session.process_frame(&frame).await {\n                            Ok(action) => Ok(action),',
   'let action = match session.handle(&frame).await {\n                            Ok(action) => Ok(action),', /websocket_connection/);
 rejects('activation must retain originating frame', 'protocol',
-  'let origin = self.frame_executions.auth_origin();', 'let origin = None;', /originating frame/);
+  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)', 'CredentialAttempt::new(None, self.connection_id, kind)', /originating frame/);
 rejects('comment cannot replace originating frame ownership', 'protocol',
-  'let origin = self.frame_executions.auth_origin();',
-  '/* let origin = self.frame_executions.auth_origin(); */', /originating frame/);
+  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)',
+  '/* CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind) */', /originating frame/);
 rejects('raw string cannot replace originating frame ownership', 'protocol',
-  'let origin = self.frame_executions.auth_origin();',
-  'let ignored = r###"let origin = self.frame_executions.auth_origin();"###;', /originating frame/);
+  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)',
+  'r###"CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)"###', /originating frame/);
 rejects('publication cannot bypass typed observation', 'protocol',
   '.observe_publication(future)',
   '.run(future)', /observed typed owner/);
@@ -115,8 +115,8 @@ rejects('runner drop cannot omit child destruction', 'frame',
 rejects('runner drop cannot forget a caught panic', 'frame',
   'if self.poll_in_progress {', 'if std::thread::panicking() {', /preserve a caught panic/);
 rejects('capture behind a dead condition is not originating ownership', 'protocol',
-  'let origin = self.frame_executions.auth_origin();',
-  'let origin = if false { self.frame_executions.auth_origin() } else { None };', /originating frame/);
+  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)',
+  'CredentialAttempt::new(if false { self.frame_executions.auth_origin() } else { None }, self.connection_id, kind)', /originating frame/);
 rejects('inline classifier remains transport-specific', 'frame',
   'let inline = transport == ClientTransport::WebSocket && is_inline_auth(frame);',
   'let inline = is_inline_auth(frame);', /guarded WebSocket inline/);
@@ -229,8 +229,8 @@ rejects('auth service start cannot be repeated through another borrow', 'authFac
   'ensure!(!state.snapshot.service_started, "auth publication service already started");',
   '', /distinct one-use transitions/);
 rejects('auth repository start cannot be repeated before pool begin', 'authFacts',
-  'state.snapshot.repository_started = true;',
-  'state.snapshot.repository_started = false;', /distinct one-use transitions/);
+  'ensure!(state.snapshot.service_started && !state.snapshot.repository_started, "auth publication repository is not pending");',
+  'ensure!(state.snapshot.service_started, "auth publication repository is not pending");', /distinct one-use transitions/);
 rejects('auth actual return must pass the observed service', 'protocol',
   '.publish_credential_commit_observed(invocation).await',
   '.publish_credential_commit(invocation.receipt()).await', /actual observed service/);
@@ -315,6 +315,83 @@ rejects('auth holder cannot add a factory that takes before write', 'authOwner',
   'impl AuthControlHolder {',
   'impl AuthControlHolder { pub(crate) fn take_without_write(self) -> OwnedPublication { let pending = self.0.pending.lock().unwrap().pending.take().unwrap(); OwnedPublication { pending, holder: self, managed: false } }',
   /closed inherent-method inventory/);
+
+// Pre-receipt controls use the same exact-one token-span mutation helper.
+rejects('credential prepared owner cannot become Clone', 'authFacts',
+  'pub(crate) struct PreparedCredential', '#[derive(Clone)] pub(crate) struct PreparedCredential', /cannot derive or implement Clone or Copy/);
+rejects('credential receipt handoff cannot acquire the latest frame', 'protocol',
+  'let owner = attempt.into_owner(receipt)?;', 'let owner = latest_attempt().into_owner(receipt)?;', /exact captured attempt/);
+rejects('credential observed mode cannot downgrade after a missing witness', 'authOwner',
+  '(Some(origin), Some(prepared)) => { KnownCredentialOwner::from_observed(receipt, origin, self.connection, &prepared) }',
+  '(Some(origin), Some(prepared)) => Ok(KnownCredentialOwner::from_returned(receipt, Some(origin), self.connection))', /cannot downgrade/);
+rejects('credential checked owner cannot skip independent transfer validation', 'authOwner',
+  'let credential = prepared.transfer(&receipt, origin.operation_id(), connection).map_err(|_| CredentialHandoffIntegrity)?;',
+  'let credential = prepared.observation();', /validate before creating/);
+rejects('credential handoff cannot accept an equal replacement receipt', 'authFacts',
+  'state.constructed.as_ref() == Some(&actual) && state.returned.as_ref() == Some(&actual)',
+  'state.constructed.is_some() && state.returned.is_some()', /exact constructed\/returned instance/);
+rejects('credential raw success cannot replace its independent witness', 'authFacts',
+  'state.snapshot.return_matches && state.integrity', 'state.snapshot.returned.is_some()', /same-attempt witness/);
+rejects('credential COMMIT cannot freeze after polling the driver', 'authFacts',
+  'state.snapshot.commit = CredentialCall::Entered;', 'state.snapshot.commit = CredentialCall::Ok;', /freeze preparation/);
+rejects('credential COMMIT acknowledgement cannot be inferred from entry', 'authFacts',
+  'state.snapshot.commit = if result.is_ok() { CredentialCall::Ok } else { CredentialCall::Err };',
+  'state.snapshot.commit = CredentialCall::Ok;', /acknowledge only the actual result/);
+rejects('credential COMMIT cannot replace the frozen projection after await', 'authFacts',
+  'if result.is_ok() { state.witness = state.prospective.take(); }',
+  'if result.is_ok() { state.witness = fresh_witness(); }', /freeze preparation/);
+rejects('credential true eligibility cannot flatten SQL false or missing', 'authFacts',
+  'snapshot.eligibility != Eligibility::Returned(Some(true))', 'false', /true eligibility/);
+rejects('credential stage projection cannot substitute another SQL operation', 'authFacts',
+  'Some(stage.operation_id) == snapshot.stage_id', 'true', /original SQL stage/);
+rejects('credential rollback cannot ignore its actual refusal site', 'authFacts',
+  '&& site.permitted(snapshot)', '', /exact rollback sites/);
+rejects('credential duplicate construction cannot replace its original receipt', 'authFacts',
+  'if state.constructed.is_some() { state.integrity = false; return; }', '', /preserve first facts/);
+rejects('credential repository errors cannot lose the original downcast identity', 'authFacts',
+  'CommitError::Repository(error) => error.into()', 'CommitError::Repository(error) => anyhow::anyhow!("wrapper")', /original repository error identity/);
+rejects('credential hidden helper begin cannot bypass observation', 'authUsers',
+  'CredentialInvocation::begin(observation, pool.begin()).await.map_err(credential_error)?',
+  'pool.begin().await?', /real begin\/query\/refusal rollback/);
+rejects('credential hidden helper cannot collapse false into missing', 'authUsers',
+  'if eligible != Some(true) {', 'if eligible.is_none() {', /None and false/);
+rejects('credential hidden helper rollback cannot be inferred from Drop', 'authUsers',
+  'CredentialInvocation::rollback(observation, CredentialRollbackSite::GenerationRefused, tx.rollback()).await.map_err(credential_error)?;',
+  'drop(tx);', /real begin\/query\/refusal rollback/);
+rejects('credential helper compatibility must explicitly remain unobserved', 'authUsers',
+  'lock_auth_generation_observed(pool, user_id, expected_generation, None).await',
+  'lock_auth_generation_observed(pool, user_id, expected_generation, current_observation()).await', /compatibility must share/);
+rejects('credential generated stage identity must be recorded before SQL', 'authDb',
+  'if let Some(observation) = observation { observation.stage_id(operation_id); }',
+  '', /original generated ID before the query/);
+rejects('credential staged SQL cannot generate a replacement identity', 'authDb',
+  'connection_id, operation_id, LOGIN_EPOCH_STAGE_TTL_SECONDS',
+  'connection_id, Uuid::new_v4(), LOGIN_EPOCH_STAGE_TTL_SECONDS', /original generated ID before the query/);
+rejects('credential FAST cannot lose its actual COMMIT observation', 'authDb',
+  'match CredentialInvocation::commit(observation, tx.commit()).await {',
+  'match tx.commit().await {', /actual transaction and construct/);
+for (const [file, site] of [['authDb', 'FastExpired'], ['credentialSmDb', 'BindingReservationLost'],
+  ['credentialSmDb', 'BindingStageMissing'], ['credentialSmDb', 'BindingFastExpired'],
+  ['credentialSmDb', 'ResumeStageMissing'], ['credentialSmDb', 'ResumeClaimLost'],
+  ['credentialSmDb', 'ResumeFastExpired'], ['credentialSmDb', 'ResumePrivacyMissing']]) {
+  rejects(`credential ${site} cannot omit its actual rollback`, file,
+    `CredentialInvocation::rollback(observation, CredentialRollbackSite::${site}, tx.rollback()).await`,
+    'tx.rollback().await', /exact COMMIT and rollback inventory|ignored versus propagated rollback errors/);
+}
+rejects('credential binding state must retain configured lease policy', 'state',
+  'self.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await',
+  'self.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, 99, device_id, fast_plan, observation).await', /actual lease and exact resume request/);
+rejects('credential fixed history cannot replace an earlier attempt', 'frame',
+  'attempts.slots[kind.index()].is_none()', 'true', /original fixed-kind attempts/);
+rejects('credential registration cannot reopen after retirement snapshot', 'frame',
+  'attempts.closed = true;', 'attempts.closed = false;', /close registration and copy handles atomically/);
+rejects('credential frame history cannot retain only the latest attempt', 'frame',
+  'attempts.slots.clone()', 'latest_credential_only()', /close registration and copy handles atomically/);
+rejects('credential contradictory returned success cannot fall through as ordinary Unknown', 'sasl2',
+  '|| crate::xmpp::auth_publication::credential_handoff_failed(&error)', '', /contradictory returned success must close/);
+rejects('credential resume Unknown cannot prohibit the existing fallback', 'sasl2',
+  'if bind_plan.is_none() && !unbound_state_committed {',
+  'if bind_plan.is_none() && !unbound_state_committed && !resume_was_unknown {', /existing separate fallback attempt/);
 
 // Reuse the bounded token-span mutation helper for auth and room guards.
 // Match the exact selected token span while tolerating whitespace and optional final commas;

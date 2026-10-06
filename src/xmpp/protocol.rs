@@ -1044,21 +1044,28 @@ impl ProtocolSession {
             .start(&self.state.c2s_post_action_telemetry());
     }
 
+    pub(super) fn prepare_credential_attempt(
+        &self,
+        kind: crate::services::authentication::publication::CredentialKind,
+    ) -> Result<super::auth_publication::CredentialAttempt> {
+        super::auth_publication::CredentialAttempt::new(
+            self.frame_executions.auth_origin(),
+            self.connection_id,
+            kind,
+        )
+    }
+
     pub(super) fn retain_credential_commit(
         &mut self,
         receipt: crate::services::authentication::CredentialCommitReceipt,
+        attempt: super::auth_publication::CredentialAttempt,
     ) -> Result<()> {
-        let origin = self.frame_executions.auth_origin();
-        let owner = super::auth_publication::KnownCredentialOwner::from_returned(
-            receipt,
-            origin.clone(),
-            self.connection_id,
-        );
+        let owner = attempt.into_owner(receipt)?;
         anyhow::ensure!(
             self.pending_credential_commit.is_none(),
             "unsealed credential receipt already pending"
         );
-        if let Some(origin) = origin {
+        if let Some(origin) = owner.origin() {
             origin.retain_auth_receipt(owner.observation().clone())?;
         }
         self.pending_credential_commit = Some(owner);

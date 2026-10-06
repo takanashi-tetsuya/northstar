@@ -1194,9 +1194,9 @@ impl ProtocolSession {
                 .commit_sasl2_unbound_state(&fast_plan, &user, expected_auth_generation)
                 .await?
             {
-                Ok((token_xml, receipt)) => {
+                Ok((token_xml, receipt, credential_attempt)) => {
                     unbound_state_committed = true;
-                    self.retain_credential_commit(receipt)?;
+                    self.retain_credential_commit(receipt, credential_attempt)?;
                     token_xml
                 }
                 Err(condition) => {
@@ -1298,15 +1298,19 @@ impl ProtocolSession {
                     return Ok(Action::Close);
                 }
                 Ok(_) => resume_xml = crate::xmpp::xml_util::sm_failed("undefined-condition"),
-                Err(error) if self.pending_credential_commit.is_some() => {
-                    // The SM/FAST transaction has already committed. A
-                    // compensation or post-commit staging failure cannot be
+                Err(error)
+                    if self.pending_credential_commit.is_some()
+                        || crate::xmpp::auth_publication::credential_handoff_failed(&error) =>
+                {
+                    // An actual receipt was retained or its same-attempt
+                    // ownership handoff failed. Neither that contradiction nor
+                    // a compensation or post-commit staging failure can be
                     // converted into an ordinary inline-resume failure and
                     // must never fall through to the unbound FAST commit.
                     tracing::error!(
                         ?error,
                         user_id = %user.id,
-                        "inline SM resumption failed after credential commit; closing"
+                        "inline SM resumption failed with retained receipt or invalid ownership handoff; closing"
                     );
                     self.sm.resume_allowed = false;
                     self.sasl_state = None;
@@ -1323,8 +1327,8 @@ impl ProtocolSession {
                 .commit_sasl2_unbound_state(&fast_plan, &user, expected_auth_generation)
                 .await?
             {
-                Ok((token_xml, receipt)) => {
-                    self.retain_credential_commit(receipt)?;
+                Ok((token_xml, receipt, credential_attempt)) => {
+                    self.retain_credential_commit(receipt, credential_attempt)?;
                     token_xml
                 }
                 Err(condition) => {
@@ -1519,14 +1523,18 @@ impl ProtocolSession {
             (
                 String,
                 crate::services::authentication::CredentialCommitReceipt,
+                crate::xmpp::auth_publication::CredentialAttempt,
             ),
             &'static str,
         >,
     > {
+        let credential_attempt = self.prepare_credential_attempt(
+            crate::services::authentication::publication::CredentialKind::UnboundFast,
+        )?;
         match self
             .state
             .authentication_service()
-            .commit_fast_with_login_epoch(
+            .commit_fast_with_login_epoch_observed(
                 user.id,
                 expected_auth_generation,
                 plan,
@@ -1536,6 +1544,7 @@ impl ProtocolSession {
                 // cannot evict an established device session.
                 None,
                 self.connection_id,
+                credential_attempt.prepared(),
             )
             .await
         {
@@ -1545,7 +1554,7 @@ impl ProtocolSession {
                     .as_ref()
                     .map(fast_token_xml)
                     .unwrap_or_default();
-                Ok(Ok((token_xml, receipt)))
+                Ok(Ok((token_xml, receipt, credential_attempt)))
             }
             crate::services::authentication::AuthenticationResult::Disabled
             | crate::services::authentication::AuthenticationResult::StaleGeneration

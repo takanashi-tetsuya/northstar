@@ -840,25 +840,31 @@ impl ProtocolSession {
             .state
             .pause_suspended_muc_delivery(claim.session_id)
             .await;
+        let credential_attempt = self.prepare_credential_attempt(
+            crate::services::authentication::publication::CredentialKind::Resume,
+        )?;
         let finalized = self
             .state
-            .finalize_sm_resume(SmResumeFinalizationRequest {
-                session_id: claim.session_id,
-                claim_token: claim.claim_token,
-                connection_id: self.connection_id,
-                user_id: current_user.id,
-                expected_auth_generation: current_user.auth_generation,
-                client_h,
-                acknowledged_count: delta,
-                peer_ip: self.peer_ip,
-                user_agent_id: effective_user_agent,
-                active_privacy_list: claim.active_privacy_list.as_deref(),
-                ttl_seconds: claim.resume_timeout_seconds,
-                live_lease_seconds: self.sm_runtime_policy.session.live_lease_seconds,
-                max_stanzas: self.sm_runtime_policy.buffer.max_unacked_stanzas,
-                max_bytes: self.sm_runtime_policy.buffer.max_unacked_bytes,
-                fast_plan,
-            })
+            .finalize_sm_resume(
+                SmResumeFinalizationRequest {
+                    session_id: claim.session_id,
+                    claim_token: claim.claim_token,
+                    connection_id: self.connection_id,
+                    user_id: current_user.id,
+                    expected_auth_generation: current_user.auth_generation,
+                    client_h,
+                    acknowledged_count: delta,
+                    peer_ip: self.peer_ip,
+                    user_agent_id: effective_user_agent,
+                    active_privacy_list: claim.active_privacy_list.as_deref(),
+                    ttl_seconds: claim.resume_timeout_seconds,
+                    live_lease_seconds: self.sm_runtime_policy.session.live_lease_seconds,
+                    max_stanzas: self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                    max_bytes: self.sm_runtime_policy.buffer.max_unacked_bytes,
+                    fast_plan,
+                },
+                credential_attempt.prepared(),
+            )
             .await;
         let (activated, mut receipt) = match finalized {
             Ok(SmResumeFinalizationOutcome::Committed(committed)) => {
@@ -936,7 +942,7 @@ impl ProtocolSession {
             }
         };
         let issued_fast = receipt.take_issued_fast();
-        self.retain_credential_commit(receipt)?;
+        self.retain_credential_commit(receipt, credential_attempt)?;
         let remaining: VecDeque<crate::outbound::SmUnackedStanza> = activated.unacked.into();
         let exact_base_bytes = remaining.iter().map(|entry| entry.stanza.len()).sum();
         let muc_resume_ready = self

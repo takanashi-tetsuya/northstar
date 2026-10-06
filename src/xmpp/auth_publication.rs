@@ -104,6 +104,64 @@ impl CapturedEffects {
     }
 }
 
+#[derive(Debug)]
+struct CredentialHandoffIntegrity;
+impl std::fmt::Display for CredentialHandoffIntegrity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("credential receipt handoff integrity failure")
+    }
+}
+impl std::error::Error for CredentialHandoffIntegrity {}
+pub(super) fn credential_handoff_failed(error: &anyhow::Error) -> bool {
+    error.is::<CredentialHandoffIntegrity>()
+}
+
+// The mode and original frame are captured before the credential service is
+// polled. Missing evidence after an observed call can never choose compatibility.
+pub(super) struct CredentialAttempt {
+    origin: Option<FrameExecution>,
+    prepared: Option<crate::services::authentication::publication::PreparedCredential>,
+    connection: Uuid,
+}
+impl CredentialAttempt {
+    pub(super) fn new(
+        origin: Option<FrameExecution>,
+        connection: Uuid,
+        kind: crate::services::authentication::publication::CredentialKind,
+    ) -> Result<Self> {
+        let prepared = origin
+            .as_ref()
+            .map(|frame| frame.prepare_credential(kind, connection))
+            .transpose()?;
+        Ok(Self {
+            origin,
+            prepared,
+            connection,
+        })
+    }
+    pub(super) fn prepared(
+        &self,
+    ) -> Option<&crate::services::authentication::publication::PreparedCredential> {
+        self.prepared.as_ref()
+    }
+    pub(super) fn into_owner(
+        self,
+        receipt: CredentialCommitReceipt,
+    ) -> Result<KnownCredentialOwner> {
+        match (self.origin, self.prepared) {
+            (Some(origin), Some(prepared)) => {
+                KnownCredentialOwner::from_observed(receipt, origin, self.connection, &prepared)
+            }
+            (None, None) => Ok(KnownCredentialOwner::from_returned(
+                receipt,
+                None,
+                self.connection,
+            )),
+            _ => Err(CredentialHandoffIntegrity.into()),
+        }
+    }
+}
+
 pub(crate) struct KnownCredentialOwner {
     receipt: Option<CredentialCommitReceipt>,
     origin: Option<FrameExecution>,
@@ -126,6 +184,27 @@ impl KnownCredentialOwner {
             connection,
             observation,
         }
+    }
+    pub(super) fn from_observed(
+        receipt: CredentialCommitReceipt,
+        origin: FrameExecution,
+        connection: Uuid,
+        prepared: &crate::services::authentication::publication::PreparedCredential,
+    ) -> Result<Self> {
+        let credential = prepared
+            .transfer(&receipt, origin.operation_id(), connection)
+            .map_err(|_| CredentialHandoffIntegrity)?;
+        let observation =
+            Observation::observed_receipt(&receipt, origin.operation_id(), credential);
+        Ok(Self {
+            receipt: Some(receipt),
+            origin: Some(origin),
+            connection,
+            observation,
+        })
+    }
+    pub(super) fn origin(&self) -> Option<&FrameExecution> {
+        self.origin.as_ref()
     }
     pub(super) fn observation(&self) -> &Observation {
         &self.observation
@@ -715,6 +794,214 @@ mod tests {
         task::Waker,
     };
 
+    async fn observed_unbound_owner(
+        frame: &FrameExecution,
+        connection: Uuid,
+    ) -> KnownCredentialOwner {
+        use crate::services::authentication::{
+            publication::{
+                CredentialInvocation, CredentialKind, CredentialPreparation, PreparationResult,
+            },
+            FastCommitPlan,
+        };
+        let prepared = frame
+            .prepare_credential(CredentialKind::UnboundFast, connection)
+            .unwrap();
+        let plan = FastCommitPlan::default();
+        let invocation = prepared
+            .fast(Uuid::from_u128(2), 7, &plan, None, connection)
+            .unwrap();
+        invocation
+            .enter_fast(Uuid::from_u128(2), 7, &plan, None, connection)
+            .unwrap();
+        CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        CredentialInvocation::eligibility(
+            Some(&invocation),
+            std::future::ready(Ok::<_, ()>(Some(true))),
+        )
+        .await
+        .unwrap();
+        invocation.transaction_returned();
+        invocation.preparation_entered(CredentialPreparation::Stage);
+        invocation.stage_returned(&Ok(None));
+        invocation.preparation_entered(CredentialPreparation::Fast);
+        invocation.preparation_returned(CredentialPreparation::Fast, PreparationResult::Present);
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        let receipt = CredentialCommitReceipt::new(None, None, None);
+        invocation.constructed(&receipt);
+        let result = AuthenticationResult::Authenticated(receipt);
+        invocation.fast_returned(&result);
+        drop(invocation);
+        let AuthenticationResult::Authenticated(receipt) = result else {
+            unreachable!()
+        };
+        KnownCredentialOwner::from_observed(receipt, frame.clone(), connection, &prepared).unwrap()
+    }
+    #[tokio::test]
+    async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_attempts() {
+        {
+            use crate::services::authentication::publication::{
+                CredentialCall, CredentialKind, CredentialReturned,
+            };
+            let frame = FrameExecution::for_saved_case(
+                super::super::protocol::ClientTransport::Bosh,
+                "<authenticate/>",
+                Uuid::from_u128(700),
+            );
+            let prepared = frame
+                .prepare_credential(CredentialKind::Resume, Uuid::from_u128(302))
+                .unwrap();
+            let request = crate::services::sm::SmResumeFinalizationRequest {
+                session_id: Uuid::from_u128(21),
+                claim_token: Uuid::from_u128(22),
+                connection_id: Uuid::from_u128(302),
+                user_id: Uuid::from_u128(2),
+                expected_auth_generation: 7,
+                client_h: 4,
+                acknowledged_count: 1,
+                peer_ip: "192.0.2.8".parse().unwrap(),
+                user_agent_id: None,
+                active_privacy_list: None,
+                ttl_seconds: 90,
+                live_lease_seconds: 43,
+                max_stanzas: 11,
+                max_bytes: 901,
+                fast_plan: None,
+            };
+            let invocation = prepared.resume(&request).unwrap();
+            invocation.enter_resume(&request).unwrap();
+            let receipt = CredentialCommitReceipt::new(None, None, None);
+            invocation.constructed(&receipt);
+            let result = Ok(crate::services::sm::SmResumeFinalizationOutcome::Committed(
+                Box::new(crate::services::sm::SmResumeFinalizationCommit {
+                    activated: crate::services::sm::ActivatedSmSession {
+                        outbound_h: 1,
+                        unacked: Vec::new(),
+                    },
+                    receipt,
+                }),
+            ));
+            invocation.resume_returned(&result);
+            drop(invocation);
+            let Ok(crate::services::sm::SmResumeFinalizationOutcome::Committed(commit)) = result
+            else {
+                unreachable!()
+            };
+            let error = KnownCredentialOwner::from_observed(
+                commit.receipt,
+                frame,
+                Uuid::from_u128(302),
+                &prepared,
+            )
+            .err()
+            .expect("missing witness must reject ownership");
+            assert!(credential_handoff_failed(&error));
+            assert!(!credential_handoff_failed(&anyhow::anyhow!(
+                "synthetic ordinary repository error"
+            )));
+            let snapshot = prepared.observation().snapshot();
+            assert_eq!(snapshot.returned, Some(CredentialReturned::ResumeCommitted));
+            assert_eq!(snapshot.commit, CredentialCall::NotEntered);
+            assert!(!snapshot.return_matches);
+            assert!(!snapshot.transferred);
+        }
+        use crate::services::authentication::publication::{
+            CredentialCall, CredentialInvocation, CredentialKind, CredentialPreparation,
+            CredentialReturned, PreparationResult,
+        };
+        let frame = FrameExecution::for_saved_case(
+            super::super::protocol::ClientTransport::Bosh,
+            "<authenticate/>",
+            Uuid::from_u128(701),
+        );
+        let prepared = frame
+            .prepare_credential(CredentialKind::Resume, Uuid::from_u128(302))
+            .unwrap();
+        let resume = prepared.observation();
+        let request = crate::services::sm::SmResumeFinalizationRequest {
+            session_id: Uuid::from_u128(21),
+            claim_token: Uuid::from_u128(22),
+            connection_id: Uuid::from_u128(302),
+            user_id: Uuid::from_u128(2),
+            expected_auth_generation: 7,
+            client_h: 4,
+            acknowledged_count: 1,
+            peer_ip: "192.0.2.8".parse().unwrap(),
+            user_agent_id: None,
+            active_privacy_list: Some("private-resume-list"),
+            ttl_seconds: 90,
+            live_lease_seconds: 43,
+            max_stanzas: 11,
+            max_bytes: 901,
+            fast_plan: None,
+        };
+        let invocation = prepared.resume(&request).unwrap();
+        invocation.enter_resume(&request).unwrap();
+        CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        CredentialInvocation::eligibility(
+            Some(&invocation),
+            std::future::ready(Ok::<_, ()>(Some(true))),
+        )
+        .await
+        .unwrap();
+        invocation.transaction_returned();
+        invocation.preparation_entered(CredentialPreparation::Stage);
+        invocation.stage_returned(&Ok(None));
+        for operation in [
+            CredentialPreparation::Activation,
+            CredentialPreparation::Privacy,
+        ] {
+            invocation.preparation_entered(operation);
+            invocation.preparation_returned(operation, PreparationResult::Present);
+        }
+        assert!(CredentialInvocation::commit(
+            Some(&invocation),
+            std::future::ready(Err::<(), ()>(()))
+        )
+        .await
+        .is_err());
+        invocation.resume_returned(&Err(anyhow::anyhow!("synthetic lost resume COMMIT reply")));
+        drop(invocation);
+        let owner = observed_unbound_owner(&frame, Uuid::from_u128(302)).await;
+        let publication = owner.observation().clone();
+        let fallback = publication.credential().unwrap();
+        frame.retain_auth_receipt(publication.clone()).unwrap();
+        let holder = frame
+            .run(async move {
+                owner.seal(
+                    "<success/>",
+                    CapturedEffects {
+                        route: RouteIntent::Unbound,
+                        caps: None,
+                        notification: None,
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(resume.snapshot().commit, CredentialCall::Err);
+        assert_eq!(resume.snapshot().returned, Some(CredentialReturned::Error));
+        assert_eq!(resume.snapshot().ordinal, 0);
+        assert!(!resume.snapshot().transferred);
+        assert_eq!(fallback.snapshot().ordinal, 1);
+        assert_eq!(fallback.snapshot().commit, CredentialCall::Ok);
+        assert!(fallback.snapshot().transferred);
+        assert_ne!(resume.snapshot().attempt, fallback.snapshot().attempt);
+        assert_eq!(resume.snapshot().frame, fallback.snapshot().frame);
+        assert_eq!(resume.snapshot().handler, Some(HandlerReturn::Completed));
+        assert_eq!(fallback.snapshot().handler, Some(HandlerReturn::Completed));
+        assert_eq!(publication.snapshot().terminal, None);
+        drop(holder);
+        assert_eq!(publication.snapshot().terminal, Some(Terminal::Abandoned));
+        assert_eq!(resume.snapshot().commit, CredentialCall::Err);
+    }
+
     pub(crate) fn fixture_control(
         control: &str,
         connection: Uuid,
@@ -763,6 +1050,14 @@ mod tests {
         );
         let owner = KnownCredentialOwner::from_returned(receipt, None, connection);
         let observation = owner.observation().clone();
+        let holder = owner
+            .seal(control, fixture_bound_effects(connection, notify))
+            .unwrap();
+        (holder, observation)
+    }
+    fn fixture_bound_effects(connection: Uuid, notify: bool) -> CapturedEffects {
+        let user = Uuid::from_u128(303);
+        let device = Uuid::from_u128(304);
         let route = BoundRoute {
             key: "fixture@example.test/captured".to_owned(),
             user,
@@ -784,17 +1079,11 @@ mod tests {
             device,
             excluded_key: route.key.clone(),
         });
-        let holder = owner
-            .seal(
-                control,
-                CapturedEffects {
-                    route: RouteIntent::Bound(route),
-                    caps: Some(caps),
-                    notification,
-                },
-            )
-            .unwrap();
-        (holder, observation)
+        CapturedEffects {
+            route: RouteIntent::Bound(route),
+            caps: Some(caps),
+            notification,
+        }
     }
     #[derive(Clone, Copy, Default)]
     enum Cut {
@@ -1050,10 +1339,122 @@ mod tests {
 
     #[tokio::test]
     async fn unbound_selected_control_does_not_take_queued_bind_owner() {
+        use crate::services::authentication::publication::{
+            CredentialCall, CredentialInvocation, CredentialKind, CredentialPreparation,
+            PreparationResult,
+        };
         let connection = Uuid::from_u128(302);
-        let (unbound, u) = fixture_control("<success/>", connection);
-        let (bound, b) = fixture_bound_control("<iq type='result'/>", connection, true);
+        let unbound_frame = FrameExecution::for_saved_case(
+            super::super::protocol::ClientTransport::Bosh,
+            "<authenticate/>",
+            Uuid::from_u128(710),
+        );
+        let u_owner = observed_unbound_owner(&unbound_frame, connection).await;
+        let u = u_owner.observation().clone();
+        let unbound = u_owner
+            .seal(
+                "<success/>",
+                CapturedEffects {
+                    route: RouteIntent::Unbound,
+                    caps: None,
+                    notification: None,
+                },
+            )
+            .unwrap();
+        let bound_frame = FrameExecution::for_saved_case(
+            super::super::protocol::ClientTransport::Bosh,
+            "<iq/>",
+            Uuid::from_u128(711),
+        );
+        let prepared = bound_frame
+            .prepare_credential(CredentialKind::Binding, connection)
+            .unwrap();
+        let invocation = prepared
+            .binding(
+                connection,
+                Uuid::from_u128(303),
+                2,
+                "fixture@example.test/captured",
+                120,
+                Some(Uuid::from_u128(304)),
+                None,
+            )
+            .unwrap();
+        invocation
+            .enter_binding(
+                connection,
+                Uuid::from_u128(303),
+                2,
+                "fixture@example.test/captured",
+                120,
+                Some(Uuid::from_u128(304)),
+                None,
+            )
+            .unwrap();
+        CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        CredentialInvocation::eligibility(
+            Some(&invocation),
+            std::future::ready(Ok::<_, ()>(Some(true))),
+        )
+        .await
+        .unwrap();
+        invocation.transaction_returned();
+        invocation.preparation_entered(CredentialPreparation::Binding);
+        invocation.preparation_returned(CredentialPreparation::Binding, PreparationResult::Present);
+        invocation.preparation_entered(CredentialPreparation::Stage);
+        let stage = StagedLoginEpoch {
+            operation_id: Uuid::from_u128(301),
+            connection_id: connection,
+            user_id: Uuid::from_u128(303),
+            device_id: Uuid::from_u128(304),
+            auth_generation: 2,
+            epoch: 999,
+        };
+        invocation.stage_id(stage.operation_id);
+        invocation.stage_returned(&Ok(Some(stage)));
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        let receipt = CredentialCommitReceipt::new(
+            None,
+            Some(stage),
+            Some(BindingPublication {
+                connection_id: connection,
+                user_id: Uuid::from_u128(303),
+                full_jid: "fixture@example.test/captured".to_owned(),
+                lease_seconds: 120,
+            }),
+        );
+        invocation.constructed(&receipt);
+        let result = Ok(crate::services::sm::BindingFinalizationOutcome::Committed { receipt });
+        invocation.binding_returned(&result);
+        drop(invocation);
+        let Ok(crate::services::sm::BindingFinalizationOutcome::Committed { receipt }) = result
+        else {
+            unreachable!()
+        };
+        let owner =
+            KnownCredentialOwner::from_observed(receipt, bound_frame, connection, &prepared)
+                .unwrap();
+        let b = owner.observation().clone();
+        let bound = owner
+            .seal(
+                "<iq type='result'/>",
+                fixture_bound_effects(connection, true),
+            )
+            .unwrap();
+        let u_credential = u.credential().unwrap();
+        let b_credential = b.credential().unwrap();
+        assert_eq!(u_credential.snapshot().commit, CredentialCall::Ok);
+        assert_eq!(b_credential.snapshot().commit, CredentialCall::Ok);
+        assert_ne!(
+            u_credential.snapshot().attempt,
+            b_credential.snapshot().attempt
+        );
         let prior = b.snapshot();
+        let prior_credential = b_credential.snapshot();
         let owners = selected(&[("<success/>", &unbound)], 10)
             .take_all()
             .unwrap();
@@ -1061,6 +1462,7 @@ mod tests {
         assert_eq!(u.snapshot().publication, Knowledge::NotRequired);
         assert_eq!(u.snapshot().terminal, Some(Terminal::Completed));
         assert_eq!(b.snapshot(), prior);
+        assert_eq!(b_credential.snapshot(), prior_credential);
         assert!(bound.0.pending.lock().unwrap().pending.is_some());
     }
 
@@ -1232,12 +1634,11 @@ mod tests {
             "<authenticate/>",
             Uuid::from_u128(350),
         );
-        let owner = KnownCredentialOwner::from_returned(
-            CredentialCommitReceipt::new(None, None, None),
-            Some(execution.clone()),
-            Uuid::from_u128(302),
-        );
+        let owner = observed_unbound_owner(&execution, Uuid::from_u128(302)).await;
         let observation = owner.observation().clone();
+        let credential = observation.credential().unwrap();
+        assert!(credential.snapshot().transferred);
+
         let wrong = FrameExecution::for_saved_case(
             super::super::protocol::ClientTransport::Bosh,
             "<iq/>",
@@ -1269,6 +1670,14 @@ mod tests {
         assert_eq!(
             observation.snapshot().handler,
             Some(HandlerReturn::Completed)
+        );
+        assert_eq!(
+            credential.snapshot().handler,
+            Some(HandlerReturn::Completed)
+        );
+        assert_eq!(
+            credential.snapshot().commit,
+            crate::services::authentication::publication::CredentialCall::Ok
         );
         assert_eq!(observation.snapshot().terminal, None);
         assert_eq!(observation.snapshot().frame, Some(Uuid::from_u128(350)));

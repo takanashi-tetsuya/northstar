@@ -9,6 +9,9 @@ const files = {
   authOwner: 'src/xmpp/auth_publication.rs',
   authService: 'src/services/authentication.rs',
   authDb: 'src/db/authentication.rs',
+  authUsers: 'src/db/users.rs',
+  credentialSmService: 'src/services/sm.rs',
+  credentialSmDb: 'src/db/sm_repository.rs',
   authCaps: 'src/xmpp/protocol/caps.rs',
   sasl2: 'src/xmpp/protocol/sasl2.rs',
   authMisc: 'src/xmpp/protocol/misc.rs',
@@ -499,11 +502,11 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   }
 }
 
-// Auth-specific lexical drift checks. The returned receipt is the lower bound
-// of this slice; these checks make no claim about earlier credential COMMITs.
+// Auth-specific lexical drift checks for independent credential transaction
+// observations and the existing receipt/transport-bound publication owner.
 export function verifyAuthPublicationBoundaries(sources) {
-  const { authFacts, authOwner, authService, authDb, authCaps, protocol, frame,
-    transport, websocket, bosh, boshResponse, sasl2, smProtocol, authMisc } = sources;
+  const { authFacts, authOwner, authService, authDb, authUsers, credentialSmService, credentialSmDb, authCaps, protocol, frame,
+    transport, websocket, bosh, boshResponse, sasl2, smProtocol, authMisc, state } = sources;
   const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const method = (source, name) => normalize(body(productionModule(source), `(?:async\\s+)?fn\\s+${name}\\b`));
   const facts = productionModule(authFacts);
@@ -517,7 +520,8 @@ export function verifyAuthPublicationBoundaries(sources) {
   requireBoundary(method(receiptImpl, 'new').includes('publication_identity:Uuid::new_v4()'),
     'auth receipt instance identity must be minted at its actual constructor');
   for (const [source, name] of [[authService, 'CredentialCommitReceipt'], [owner, 'KnownCredentialOwner'],
-    [owner, 'OwnedPublication'], [owner, 'SelectedControls'], [facts, 'Invocation']]) {
+    [owner, 'OwnedPublication'], [owner, 'SelectedControls'], [facts, 'Invocation'],
+    [facts, 'PreparedCredential'], [facts, 'CredentialInvocation'], [owner, 'CredentialAttempt']]) {
     const code = codeOnly(productionModule(source));
     const declaration = code.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)(?:pub\\([^)]*\\)\\s+)?struct\\s+${name}\\b`));
     requireBoundary(declaration && !/\bderive\s*\([^)]*\b(?:Clone|Copy)\b/.test(declaration[1]) &&
@@ -611,10 +615,13 @@ export function verifyAuthPublicationBoundaries(sources) {
     transportFacts.includes('ifprevious==rid'),
     'auth transport observations must remain monotone and phase checked');
   const retain = method(protocol, 'retain_credential_commit');
-  ordered(retain, ['letorigin=self.frame_executions.auth_origin();',
-    'KnownCredentialOwner::from_returned(receipt,origin.clone(),self.connection_id)',
-    'self.pending_credential_commit.is_none()', 'origin.retain_auth_receipt(owner.observation().clone())?;',
-    'self.pending_credential_commit=Some(owner);'], 'auth originating frame must be captured at actual receipt handoff');
+  requireBoundary(method(protocol, 'prepare_credential_attempt') === 'super::auth_publication::CredentialAttempt::new(self.frame_executions.auth_origin(),self.connection_id,kind)',
+    'auth originating frame must be captured before credential service polling');
+  ordered(retain, ['letowner=attempt.into_owner(receipt)?;',
+    'self.pending_credential_commit.is_none()', 'ifletSome(origin)=owner.origin()',
+    'origin.retain_auth_receipt(owner.observation().clone())?;',
+    'self.pending_credential_commit=Some(owner);'], 'auth originating frame must remain the exact captured attempt at receipt handoff');
+  requireBoundary(!retain.includes('auth_origin('), 'auth receipt handoff cannot look up a later frame');
   requireBoundary(!normalize(codeOnly(productionModule(frame))).includes('take_publication') &&
     !normalize(codeOnly(productionModule(protocol))).includes('defer_publication'),
     'auth publication cannot restore a session-wide latest-frame slot');
@@ -722,10 +729,148 @@ export function verifyAuthPublicationBoundaries(sources) {
   const inline = normalize(codeOnly(productionModule(sasl2)));
   ordered(inline, ['payload.replace_envelope(', 'payload.activate_route=true;', 'self.seal_resume_authentication(&mutpayload)?;'],
     'auth inline resume must seal only the final replaced control envelope');
-  requireBoundary(count(inline, 'self.retain_credential_commit(receipt)?;') === 2 &&
-    normalize(codeOnly(productionModule(authMisc))).includes('self.retain_credential_commit(receipt)?;') &&
+  requireBoundary(count(inline, 'self.retain_credential_commit(receipt,credential_attempt)?;') === 2 &&
+    normalize(codeOnly(productionModule(authMisc))).includes('self.retain_credential_commit(receipt,credential_attempt)?;') &&
     normalize(codeOnly(productionModule(smProtocol))).includes('if!defer_visibility{self.seal_resume_authentication(&mutresume_payload)?;}'),
     'auth producers must retain actual receipts and preserve standalone versus inline sealing');
+  // These finite source shapes pin real SQL cuts. They do not execute SQL or
+  // infer rollback from a transaction destructor.
+  const prepared = body(facts, 'impl\\s+PreparedCredential\\b');
+  const credential = body(facts, "impl\\s+CredentialInvocation<'_>");
+  const attempt = body(owner, 'impl\\s+CredentialAttempt\\b');
+  requireBoundary(normalize(body(facts, 'pub\\(crate\\)\\s+struct\\s+PreparedCredential\\b')) === 'observation:CredentialObservation' &&
+    normalize(body(facts, "pub\\(crate\\)\\s+struct\\s+CredentialInvocation<'a>")) === "prepared:&'aPreparedCredential" &&
+    normalize(body(facts, 'struct\\s+CredentialWitness\\b')) === 'attempt:Uuid,request:CredentialRequest,receipt:ReceiptProjection',
+    'credential invocation and witness must keep private original attempt/request/projection authority');
+  for (const [implementation, names, label] of [
+    [prepared, ['new', 'observation', 'bind', 'fast', 'binding', 'resume', 'transfer'], 'prepared credential'],
+    [credential, ['update', 'preparation_update', 'start', 'enter_repository', 'enter_fast', 'enter_binding', 'enter_resume', 'begin', 'eligibility', 'transaction_returned', 'preparation_entered', 'preparation_returned', 'stage_id', 'stage_returned', 'rollback', 'prepared_projection', 'commit', 'constructed', 'returned', 'fast_returned', 'binding_returned', 'resume_returned'], 'credential invocation'],
+    [attempt, ['new', 'prepared', 'into_owner'], 'credential attempt'],
+  ]) requireBoundary([...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]).join(',') === names.join(','),
+    `${label} must retain its closed inherent-method inventory`);
+  requireBoundary(count(normalize(codeOnly(facts)), 'CredentialWitness{') === 2 &&
+    count(normalize(codeOnly(facts)), 'CredentialInvocation{') === 1 &&
+    count(normalize(codeOnly(productionModule(frame))), 'publication::PreparedCredential::new(') === 1,
+    'credential witness and invocation constructors must remain at their exact one-use sites');
+  const bindCredential = method(prepared, 'bind');
+  ordered(bindCredential, ['state.snapshot.kind==kind&&state.snapshot.connection==request.connection',
+    '!state.snapshot.service_started&&state.snapshot.handler.is_none()', 'state.request=Some(request);',
+    'state.snapshot.service_started=true;', 'Ok(CredentialInvocation{prepared:self})'],
+    'credential service invocation must bind once from actual request values');
+  const transfer = method(prepared, 'transfer');
+  ordered(transfer, ['letactual=(receipt.publication_identity(),ReceiptProjection::of(receipt));',
+    'state.snapshot.frame==frame&&state.snapshot.connection==connection',
+    'state.snapshot.handler.is_none()&&!state.snapshot.transferred', 'state.snapshot.return_matches&&state.integrity',
+    'state.constructed.as_ref()==Some(&actual)&&state.returned.as_ref()==Some(&actual)',
+    'witness.attempt==state.snapshot.attempt', 'Some(&witness.request)==state.request.as_ref()&&witness.receipt==actual.1',
+    'state.snapshot.transferred=true;'], 'credential handoff requires independent same-attempt witness and exact constructed/returned instance');
+  requireBoundary(method(attempt, 'into_owner').includes('(Some(origin),Some(prepared))=>{KnownCredentialOwner::from_observed(receipt,origin,self.connection,&prepared)}') &&
+    method(attempt, 'into_owner').includes('(None,None)=>Ok(KnownCredentialOwner::from_returned(receipt,None,self.connection))') &&
+    !method(attempt, 'into_owner').includes('or_else'), 'credential observed mismatch cannot downgrade to returned-only compatibility');
+  ordered(method(known, 'from_observed'), ['prepared.transfer(&receipt,origin.operation_id(),connection).map_err(|_|CredentialHandoffIntegrity)?;',
+    'Observation::observed_receipt(&receipt,origin.operation_id(),credential)', 'receipt:Some(receipt),origin:Some(origin),connection,observation'],
+    'credential checked owner must validate before creating publication observation');
+  const credentialCommit = method(credential, 'commit');
+  ordered(credentialCommit, ['!state.integrity||state.snapshot.handler.is_some()||state.snapshot.returned.is_some()',
+    'state.snapshot.commit!=CredentialCall::NotEntered||state.snapshot.rollback.is_some()',
+    'letSome(receipt)=Self::prepared_projection(&state)else{', 'returnErr(CommitError::Observation(',
+    'state.prospective=Some(CredentialWitness{', 'state.snapshot.commit=CredentialCall::Entered;',
+    'future.await.map_err(CommitError::Repository)', 'state.snapshot.commit=ifresult.is_ok(){CredentialCall::Ok}else{CredentialCall::Err};',
+    'ifresult.is_ok(){state.witness=state.prospective.take();}'],
+    'credential COMMIT must reject before polling, freeze preparation, and acknowledge only the actual result');
+  const projection = method(credential, 'prepared_projection');
+  requireBoundary(projection.includes('snapshot.eligibility!=Eligibility::Returned(Some(true))||!snapshot.transaction_returned||snapshot.rollback.is_some()') &&
+    projection.includes('Some(stage.operation_id)==snapshot.stage_id') &&
+    projection.includes('stage.device_id==device') &&
+    projection.includes('snapshot.kind==CredentialKind::UnboundFast&&snapshot.stage_id.is_some()&&stage_result==PreparationResult::Absent'),
+    'credential COMMIT projection must use true eligibility, original SQL stage and exact device semantics');
+  for (const name of ['begin', 'eligibility', 'rollback']) {
+    const operation = method(credential, name);
+    ordered(operation, ['observation.start(', '.map_err(CommitError::Observation)?;', 'future.await.map_err(CommitError::Repository)'],
+      `credential ${name} must reject duplicate or late starts before polling`);
+  }
+  requireBoundary(method(credential, 'rollback').includes('site.permitted(snapshot)') &&
+    method(credential, 'update').includes('ifstate.snapshot.handler.is_some()||state.snapshot.returned.is_some(){state.integrity=false;return;}') &&
+    method(credential, 'stage_id').includes('state.snapshot.stage_id.is_some()') &&
+    method(credential, 'constructed').includes('ifstate.constructed.is_some(){state.integrity=false;return;}'),
+    'credential duplicate/late callbacks must preserve first facts and exact rollback sites');
+  const credentialReturn = method(credential, 'returned');
+  requireBoundary(credentialReturn.includes('state.constructed.as_ref()==Some(actual)') &&
+    credentialReturn.includes('state.snapshot.returned=Some(returned);') &&
+    !/snapshot\.commit=|\.witness=|CredentialCommitReceipt::new/.test(credentialReturn),
+    'credential raw return must be retained without manufacturing COMMIT or receipt authority');
+  requireBoundary(method(facts, 'credential_error') === 'matcherror{CommitError::Observation(error)=>error,CommitError::Repository(error)=>error.into()}',
+    'credential SQL adapters must preserve the original repository error identity');
+  requireBoundary(!/\.await|spawn|rollback\(|commit\(/.test(method(body(facts, "impl\\s+Drop\\s+for\\s+CredentialInvocation<'_>"), 'drop')),
+    'credential invocation Drop cannot perform SQL or I/O');
+  const generation = method(authUsers, 'lock_auth_generation_observed');
+  ordered(generation, ['CredentialInvocation::begin(observation,pool.begin()).await.map_err(credential_error)?;',
+    'CredentialInvocation::eligibility(observation,sqlx::query_scalar::<_,bool>(', '.bind(user_id).bind(expected_generation).fetch_optional(&mut*tx)',
+    '.await.map_err(credential_error)?;', 'ifeligible!=Some(true){',
+    'CredentialInvocation::rollback(observation,CredentialRollbackSite::GenerationRefused,tx.rollback()).await.map_err(credential_error)?;',
+    'returnOk(None);', 'observation.transaction_returned();', 'Ok(Some(tx))'],
+    'credential generation helper must observe real begin/query/refusal rollback without collapsing None and false');
+  requireBoundary(method(authUsers, 'lock_auth_generation') === 'lock_auth_generation_observed(pool,user_id,expected_generation,None).await' &&
+    count(body(productionModule(authUsers), '(?:async\\s+)?fn\\s+lock_auth_generation_observed\\b', true), '"SELECT northstar_lock_auth_generation($1,$2)"') === 1,
+    'credential generation compatibility must share the unchanged exact SQL query');
+  const stageCredential = method(authDb, 'stage_login_epoch_in_transaction_observed');
+  ordered(stageCredential, ['observation.preparation_entered(publication::CredentialPreparation::Stage)',
+    'letSome(device_id)=device_idelse{', 'observation.stage_returned(&Ok(None))', 'returnOk(None);',
+    'letoperation_id=Uuid::new_v4();', 'observation.stage_id(operation_id);',
+    'db::stage_user_agent_login_epoch_in_transaction(tx,user_id,device_id,auth_generation,connection_id,operation_id,LOGIN_EPOCH_STAGE_TTL_SECONDS)',
+    'StagedLoginEpoch{operation_id,connection_id,user_id,device_id,auth_generation,epoch}', 'observation.stage_returned(&result);'],
+    'credential SQL stage must retain the original generated ID before the query and reuse it in the returned row');
+  for (const [source, name, start, receiptResult, sites] of [
+    [authDb, 'commit_fast_with_login_epoch_inner', 'observation.enter_fast(', 'AuthenticationResult::Authenticated(receipt)', ['FastExpired']],
+    [credentialSmDb, 'finalize_binding_inner', 'observation.enter_binding(', 'Ok(BindingFinalizationOutcome::Committed{receipt})', ['BindingReservationLost', 'BindingStageMissing', 'BindingFastExpired']],
+    [credentialSmDb, 'finalize_resume_inner', 'observation.enter_resume(', 'SmResumeFinalizationCommit{activated:activated.into(),receipt}', ['ResumeStageMissing', 'ResumeClaimLost', 'ResumeFastExpired', 'ResumePrivacyMissing']],
+  ]) {
+    const transaction = method(source, name);
+    ordered(transaction, [start, 'db::users::lock_auth_generation_observed(', 'stage_login_epoch_in_transaction_observed(',
+      'CredentialInvocation::commit(observation,tx.commit()).await', 'CredentialCommitReceipt::new(', 'observation.constructed(&receipt)', receiptResult],
+      `credential ${name} must observe its actual transaction and construct only after acknowledged COMMIT`);
+    requireBoundary(count(transaction, 'CredentialInvocation::commit(observation,tx.commit()).await') === 1 &&
+      count(transaction, 'CredentialInvocation::rollback(') === sites.length,
+      `credential ${name} must retain its exact COMMIT and rollback inventory`);
+    for (const site of sites) requireBoundary(transaction.includes(`CredentialInvocation::rollback(observation,CredentialRollbackSite::${site},tx.rollback()).await` + (name === 'commit_fast_with_login_epoch_inner' ? ';' : '.map_err(credential_error)?;')),
+      `credential ${site} must preserve ignored versus propagated rollback errors`);
+  }
+  const fastService = method(body(authService, 'impl<R:\\s*AuthenticationRepository>\\s+AuthenticationService<R>'), 'commit_fast_with_login_epoch_observed');
+  ordered(fastService, ['letSome(prepared)=preparedelse{', 'self.commit_fast_with_login_epoch(',
+    'prepared.fast(user_id,expected_auth_generation,plan,device_id,connection_id)', 'self.repository.commit_fast_with_login_epoch_observed(',
+    'connection_id,&invocation).await;', 'invocation.fast_returned(&result);', 'result'],
+    'credential FAST service must select compatibility at entry and retain the exact raw repository return');
+  const smService = body(credentialSmService, 'impl<R:\\s*SmRepository>\\s+SmService<R>');
+  for (const kind of ['binding', 'resume']) ordered(method(smService, `finalize_${kind}_observed`),
+    ['letSome(prepared)=preparedelse{', `self.finalize_${kind}(`, `prepared.${kind}(`,
+      `self.repository.finalize_${kind}_observed(`, ').await;', `invocation.${kind}_returned(&result);`, 'result'],
+    `credential ${kind} service must retain the exact raw repository return`);
+  requireBoundary(method(state, 'finalize_resource_binding') === 'self.sm_service.finalize_binding_observed(connection_id,user_id,expected_auth_generation,full_jid,self.config.capacity_session_lease_seconds,device_id,fast_plan,observation).await' &&
+    method(state, 'finalize_sm_resume') === 'self.sm_service.finalize_resume_observed(request,observation).await',
+    'credential state forwarding must preserve the actual lease and exact resume request');
+  const registerCredential = method(frame, 'prepare_credential');
+  ordered(registerCredential, ['letmutattempts=self.0.credential_attempts.lock().unwrap();', 'anyhow::ensure!(!attempts.closed)',
+    'attempts.slots[kind.index()].is_none()', 'attempts.slots.iter().flatten().count()asu8',
+    'publication::PreparedCredential::new(self.operation_id(),connection,ordinal,kind)', 'attempts.slots[kind.index()]=Some(prepared.observation());'],
+    'credential frame history must retain original fixed-kind attempts under the retirement lock');
+  const finishCredential = method(body(frame, 'impl\\s+Observation\\b'), 'finish');
+  ordered(finishCredential, ['letmutattempts=progress.credential_attempts.lock().unwrap();', 'attempts.closed=true;',
+    'attempts.slots.clone()', 'forattemptinattempts.into_iter().flatten(){', 'attempt.handler_returned(returned);'],
+    'credential frame retirement must close registration and copy handles atomically before visiting cells');
+  for (const [source, kind, service] of [[sasl2, 'UnboundFast', '.commit_fast_with_login_epoch_observed('],
+    [authMisc, 'Binding', '.finalize_resource_binding('], [smProtocol, 'Resume', '.finalize_sm_resume(']]) {
+    const code = normalize(codeOnly(productionModule(source)));
+    ordered(code, [`self.prepare_credential_attempt(crate::services::authentication::publication::CredentialKind::${kind})?;`, service, 'credential_attempt.prepared()'],
+      `credential ${kind} ingress must capture its original attempt before service polling`);
+  }
+  requireBoundary(method(owner, 'credential_handoff_failed') === 'error.is::<CredentialHandoffIntegrity>()' &&
+    inline.includes('Err(error)ifself.pending_credential_commit.is_some()||crate::xmpp::auth_publication::credential_handoff_failed(&error)=>{'),
+    'credential contradictory returned success must close through the existing internal error branch');
+  requireBoundary(inline.includes('ifbind_plan.is_none()&&!unbound_state_committed{') &&
+    count(inline, '.commit_sasl2_unbound_state(&fast_plan,&user,expected_auth_generation).await?') === 2 &&
+    inline.includes('Err(error)=>{tracing::error!(?error,user_id=%user.id);resume_xml=crate::xmpp::xml_util::sm_failed();}'),
+    'credential resume Unknown must preserve the existing separate fallback attempt');
+
 }
 
 export function verifyExecutionBoundaries(sources) {

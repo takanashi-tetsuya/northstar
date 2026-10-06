@@ -5464,9 +5464,10 @@ impl AppState {
         full_jid: &str,
         device_id: Option<uuid::Uuid>,
         fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        observation: Option<&crate::services::authentication::publication::PreparedCredential>,
     ) -> anyhow::Result<crate::services::sm::BindingFinalizationOutcome> {
         self.sm_service
-            .finalize_binding(
+            .finalize_binding_observed(
                 connection_id,
                 user_id,
                 expected_auth_generation,
@@ -5474,6 +5475,7 @@ impl AppState {
                 self.config.capacity_session_lease_seconds,
                 device_id,
                 fast_plan,
+                observation,
             )
             .await
     }
@@ -5481,8 +5483,11 @@ impl AppState {
     pub(crate) async fn finalize_sm_resume(
         &self,
         request: crate::services::sm::SmResumeFinalizationRequest<'_>,
+        observation: Option<&crate::services::authentication::publication::PreparedCredential>,
     ) -> anyhow::Result<crate::services::sm::SmResumeFinalizationOutcome> {
-        self.sm_service.finalize_resume(request).await
+        self.sm_service
+            .finalize_resume_observed(request, observation)
+            .await
     }
 
     fn start_locked_muc_expiry(state: Arc<Self>, cancel: CancellationToken) {

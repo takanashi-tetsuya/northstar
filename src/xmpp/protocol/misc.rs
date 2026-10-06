@@ -725,6 +725,9 @@ impl ProtocolSession {
         // revoke an older suspended SM epoch yet: that teardown has durable
         // and externally visible side effects which cannot be rolled back if
         // FAST issuance or the login transaction fails below.
+        let credential_attempt = self.prepare_credential_attempt(
+            crate::services::authentication::publication::CredentialKind::Binding,
+        )?;
         let finalized = self
             .state
             .finalize_resource_binding(
@@ -734,6 +737,7 @@ impl ProtocolSession {
                 &key,
                 login_device,
                 fast_plan,
+                credential_attempt.prepared(),
             )
             .await;
         let mut receipt = match finalized {
@@ -786,7 +790,7 @@ impl ProtocolSession {
             }
         };
         let issued_fast = receipt.take_issued_fast();
-        self.retain_credential_commit(receipt)?;
+        self.retain_credential_commit(receipt, credential_attempt)?;
         let route_is_current = self.state.staged_session_is_current(
             &key,
             self.connection_id,

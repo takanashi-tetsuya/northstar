@@ -1,4 +1,8 @@
 //! Atomic SM ownership, transport acknowledgements and binding persistence.
+use crate::services::authentication::publication::{
+    credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
+    PreparationResult,
+};
 use crate::{db, services::sm::*};
 use anyhow::Result;
 use sqlx::PgPool;
@@ -17,6 +21,314 @@ impl PostgresSmRepository {
             pool,
             fast_token_secret,
         }
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_binding_inner(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        observation: Option<&CredentialInvocation<'_>>,
+    ) -> Result<BindingFinalizationOutcome> {
+        if let Some(observation) = observation {
+            observation.enter_binding(
+                connection_id,
+                user_id,
+                expected_auth_generation,
+                full_jid,
+                lease_seconds,
+                device_id,
+                fast_plan,
+            )?;
+        }
+        let Some(mut tx) = db::users::lock_auth_generation_observed(
+            &self.pool,
+            user_id,
+            expected_auth_generation,
+            observation,
+        )
+        .await?
+        else {
+            return Ok(BindingFinalizationOutcome::CredentialsExpired);
+        };
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Binding);
+        }
+        let binding_result = db::finalize_binding_live_session_in_transaction(
+            &mut tx,
+            connection_id,
+            user_id,
+            full_jid,
+            lease_seconds,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Binding,
+                match &binding_result {
+                    Ok(true) => PreparationResult::Present,
+                    Ok(false) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        if !binding_result? {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::BindingReservationLost,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(BindingFinalizationOutcome::ReservationLost);
+        }
+        let staged_login_epoch =
+            crate::db::authentication::stage_login_epoch_in_transaction_observed(
+                &mut tx,
+                user_id,
+                device_id,
+                expected_auth_generation,
+                connection_id,
+                observation,
+            )
+            .await?;
+        if device_id.is_some() && staged_login_epoch.is_none() {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::BindingStageMissing,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(BindingFinalizationOutcome::CredentialsExpired);
+        }
+        let issued_fast = if let Some(plan) = fast_plan {
+            let db_plan = db::FastCommitPlan::from(plan);
+            if let Some(observation) = observation {
+                observation.preparation_entered(CredentialPreparation::Fast);
+            }
+            let fast_result = db::commit_fast_state_in_transaction(
+                &mut tx,
+                self.fast_token_secret.as_slice(),
+                user_id,
+                expected_auth_generation,
+                &db_plan,
+            )
+            .await;
+            if let Some(observation) = observation {
+                observation.preparation_returned(
+                    CredentialPreparation::Fast,
+                    match &fast_result {
+                        Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
+                        Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                        Err(_) => PreparationResult::Err,
+                    },
+                );
+            }
+            match fast_result? {
+                db::FastCommitOutcome::Committed(issued) => {
+                    issued.map(crate::services::authentication::IssuedFastToken::from)
+                }
+                db::FastCommitOutcome::CredentialsExpired => {
+                    CredentialInvocation::rollback(
+                        observation,
+                        CredentialRollbackSite::BindingFastExpired,
+                        tx.rollback(),
+                    )
+                    .await
+                    .map_err(credential_error)?;
+                    return Ok(BindingFinalizationOutcome::CredentialsExpired);
+                }
+            }
+        } else {
+            None
+        };
+        CredentialInvocation::commit(observation, tx.commit())
+            .await
+            .map_err(credential_error)?;
+        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+            issued_fast,
+            staged_login_epoch,
+            Some(crate::services::authentication::BindingPublication {
+                connection_id,
+                user_id,
+                full_jid: full_jid.to_owned(),
+                lease_seconds,
+            }),
+        );
+        if let Some(observation) = observation {
+            observation.constructed(&receipt);
+        }
+        Ok(BindingFinalizationOutcome::Committed { receipt })
+    }
+    async fn finalize_resume_inner(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+        observation: Option<&CredentialInvocation<'_>>,
+    ) -> Result<SmResumeFinalizationOutcome> {
+        if let Some(observation) = observation {
+            observation.enter_resume(&request)?;
+        }
+        let Some(mut tx) = db::users::lock_auth_generation_observed(
+            &self.pool,
+            request.user_id,
+            request.expected_auth_generation,
+            observation,
+        )
+        .await?
+        else {
+            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
+        };
+        let staged_login_epoch =
+            crate::db::authentication::stage_login_epoch_in_transaction_observed(
+                &mut tx,
+                request.user_id,
+                request.user_agent_id,
+                request.expected_auth_generation,
+                request.connection_id,
+                observation,
+            )
+            .await?;
+        if request.user_agent_id.is_some() && staged_login_epoch.is_none() {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::ResumeStageMissing,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
+        }
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Activation);
+        }
+        let activation_result = db::activate_claimed_sm_session_in_transaction(
+            &mut tx,
+            request.session_id,
+            request.claim_token,
+            request.connection_id,
+            request.client_h,
+            request.acknowledged_count,
+            request.peer_ip,
+            request.user_agent_id,
+            request.ttl_seconds,
+            request.live_lease_seconds,
+            request.max_stanzas,
+            request.max_bytes,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Activation,
+                match &activation_result {
+                    Ok(Some(_)) => PreparationResult::Present,
+                    Ok(None) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        let Some(activated) = activation_result? else {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::ResumeClaimLost,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(SmResumeFinalizationOutcome::ClaimLost);
+        };
+        let issued_fast = if let Some(plan) = request.fast_plan {
+            let db_plan = db::FastCommitPlan::from(plan);
+            if let Some(observation) = observation {
+                observation.preparation_entered(CredentialPreparation::Fast);
+            }
+            let fast_result = db::commit_fast_state_in_transaction(
+                &mut tx,
+                self.fast_token_secret.as_slice(),
+                request.user_id,
+                request.expected_auth_generation,
+                &db_plan,
+            )
+            .await;
+            if let Some(observation) = observation {
+                observation.preparation_returned(
+                    CredentialPreparation::Fast,
+                    match &fast_result {
+                        Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
+                        Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                        Err(_) => PreparationResult::Err,
+                    },
+                );
+            }
+            match fast_result? {
+                db::FastCommitOutcome::Committed(issued) => {
+                    issued.map(crate::services::authentication::IssuedFastToken::from)
+                }
+                db::FastCommitOutcome::CredentialsExpired => {
+                    CredentialInvocation::rollback(
+                        observation,
+                        CredentialRollbackSite::ResumeFastExpired,
+                        tx.rollback(),
+                    )
+                    .await
+                    .map_err(credential_error)?;
+                    return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Privacy);
+        }
+        let privacy_result = db::set_active_privacy_list_in_transaction(
+            &mut tx,
+            request.user_id,
+            request.connection_id,
+            request.active_privacy_list,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Privacy,
+                match &privacy_result {
+                    Ok(true) => PreparationResult::Present,
+                    Ok(false) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        if !privacy_result? {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::ResumePrivacyMissing,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(SmResumeFinalizationOutcome::PrivacySelectionMissing);
+        }
+        CredentialInvocation::commit(observation, tx.commit())
+            .await
+            .map_err(credential_error)?;
+        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+            issued_fast,
+            staged_login_epoch,
+            None,
+        );
+        if let Some(observation) = observation {
+            observation.constructed(&receipt);
+        }
+        Ok(SmResumeFinalizationOutcome::Committed(Box::new(
+            SmResumeFinalizationCommit {
+                activated: activated.into(),
+                receipt,
+            },
+        )))
     }
 }
 impl SmRepository for PostgresSmRepository {
@@ -260,159 +572,54 @@ impl SmRepository for PostgresSmRepository {
         device_id: Option<Uuid>,
         fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
-        let Some(mut tx) =
-            db::lock_auth_generation(&self.pool, user_id, expected_auth_generation).await?
-        else {
-            return Ok(BindingFinalizationOutcome::CredentialsExpired);
-        };
-        if !db::finalize_binding_live_session_in_transaction(
-            &mut tx,
+        self.finalize_binding_inner(
             connection_id,
             user_id,
+            expected_auth_generation,
             full_jid,
             lease_seconds,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            return Ok(BindingFinalizationOutcome::ReservationLost);
-        }
-        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
-            &mut tx,
-            user_id,
             device_id,
-            expected_auth_generation,
-            connection_id,
+            fast_plan,
+            None,
         )
-        .await?;
-        if device_id.is_some() && staged_login_epoch.is_none() {
-            tx.rollback().await?;
-            return Ok(BindingFinalizationOutcome::CredentialsExpired);
-        }
-        let issued_fast = if let Some(plan) = fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
-            match db::commit_fast_state_in_transaction(
-                &mut tx,
-                self.fast_token_secret.as_slice(),
-                user_id,
-                expected_auth_generation,
-                &db_plan,
-            )
-            .await?
-            {
-                db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
-                }
-                db::FastCommitOutcome::CredentialsExpired => {
-                    tx.rollback().await?;
-                    return Ok(BindingFinalizationOutcome::CredentialsExpired);
-                }
-            }
-        } else {
-            None
-        };
-        tx.commit().await?;
-        Ok(BindingFinalizationOutcome::Committed {
-            receipt: crate::services::authentication::CredentialCommitReceipt::new(
-                issued_fast,
-                staged_login_epoch,
-                Some(crate::services::authentication::BindingPublication {
-                    connection_id,
-                    user_id,
-                    full_jid: full_jid.to_owned(),
-                    lease_seconds,
-                }),
-            ),
-        })
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_binding_observed(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        invocation: &CredentialInvocation<'_>,
+    ) -> Result<BindingFinalizationOutcome> {
+        self.finalize_binding_inner(
+            connection_id,
+            user_id,
+            expected_auth_generation,
+            full_jid,
+            lease_seconds,
+            device_id,
+            fast_plan,
+            Some(invocation),
+        )
+        .await
     }
     async fn finalize_resume(
         &self,
         request: SmResumeFinalizationRequest<'_>,
     ) -> Result<SmResumeFinalizationOutcome> {
-        let Some(mut tx) = db::lock_auth_generation(
-            &self.pool,
-            request.user_id,
-            request.expected_auth_generation,
-        )
-        .await?
-        else {
-            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-        };
-        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.user_agent_id,
-            request.expected_auth_generation,
-            request.connection_id,
-        )
-        .await?;
-        if request.user_agent_id.is_some() && staged_login_epoch.is_none() {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-        }
-        let Some(activated) = db::activate_claimed_sm_session_in_transaction(
-            &mut tx,
-            request.session_id,
-            request.claim_token,
-            request.connection_id,
-            request.client_h,
-            request.acknowledged_count,
-            request.peer_ip,
-            request.user_agent_id,
-            request.ttl_seconds,
-            request.live_lease_seconds,
-            request.max_stanzas,
-            request.max_bytes,
-        )
-        .await?
-        else {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::ClaimLost);
-        };
-        let issued_fast = if let Some(plan) = request.fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
-            match db::commit_fast_state_in_transaction(
-                &mut tx,
-                self.fast_token_secret.as_slice(),
-                request.user_id,
-                request.expected_auth_generation,
-                &db_plan,
-            )
-            .await?
-            {
-                db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
-                }
-                db::FastCommitOutcome::CredentialsExpired => {
-                    tx.rollback().await?;
-                    return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-                }
-            }
-        } else {
-            None
-        };
-        if !db::set_active_privacy_list_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.connection_id,
-            request.active_privacy_list,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::PrivacySelectionMissing);
-        }
-        tx.commit().await?;
-        Ok(SmResumeFinalizationOutcome::Committed(Box::new(
-            SmResumeFinalizationCommit {
-                activated: activated.into(),
-                receipt: crate::services::authentication::CredentialCommitReceipt::new(
-                    issued_fast,
-                    staged_login_epoch,
-                    None,
-                ),
-            },
-        )))
+        self.finalize_resume_inner(request, None).await
+    }
+    async fn finalize_resume_observed(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+        invocation: &CredentialInvocation<'_>,
+    ) -> Result<SmResumeFinalizationOutcome> {
+        self.finalize_resume_inner(request, Some(invocation)).await
     }
     async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
         crate::db::release_sm_claim(&self.pool, session_id, claim_token).await

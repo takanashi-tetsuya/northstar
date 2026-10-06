@@ -329,14 +329,18 @@ for (const name of migrationFiles) {
 }
 const currentMigration = [...migrationVersions].sort().at(-1);
 if (!currentMigration) throw new Error('documentation gate found no migrations');
+const currentMigrationFile = migrationFiles.at(-1);
+// A bare number can name an unrelated XEP. Require the actual current SQL
+// migration link in each operational document instead of accepting that match.
+const currentMigrationLink = `(../migrations/${currentMigrationFile})`;
 for (const relativePath of [
   'docs/PRODUCTION_OPERATIONS.md',
   'docs/DATABASE_ROLES.md',
   'docs/RELEASE_CHECKLIST.md',
   'docs/TRACEABILITY.md',
 ]) {
-  if (!read(relativePath).includes(currentMigration)) {
-    throw new Error(`${relativePath} does not name current migration ${currentMigration}`);
+  if (!read(relativePath).includes(currentMigrationLink)) {
+    throw new Error(`${relativePath} does not link current migration ${currentMigrationFile}`);
   }
 }
 

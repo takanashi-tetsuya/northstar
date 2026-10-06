@@ -1079,11 +1079,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 155 files from `0001` through
-`0156`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 157 files from `0001` through
+`0158`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0156`, with the exact SQLx description and SHA-384 checksum, before it
+through `0158`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1122,6 +1122,19 @@ Migration `0156` moves the REST registration toggle to three fixed command-role
 functions. Reconcile their EXECUTE grants before starting the updated server;
 the setting, audit and encrypted 200 replay commit together under the current
 administrator bearer and generation.
+[Migration `0157`](../migrations/0157_sm_recovery_retention.sql) retains only the
+exact existing live-session binding and capacity allocation while authoritative
+SM recovery remains eligible. It is a stopped-writer boundary: stop claim
+writers and old startup binaries, and resolve every legacy claim pair through
+its existing owner before the migration authority gate. Expired legacy claims
+are not silently cleared or relabeled by the migration. Resume and Teardown
+purpose remain distinct; retention does not renew or reacquire an expired lease.
+[Migration `0158`](../migrations/0158_sm_cleanup_claim_alias.sql) corrects a
+PL/pgSQL record/table-alias collision in the cleanup function's expired binding
+claim subquery. It preserves the published `0157` checksum and all retention,
+locking and bounded-deletion policy. Apply both migrations and reconcile exact
+grants before starting the matching binary. Retention SQL/clock/rollout and
+restart/resume qualification remain separate release checks.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1295,7 +1308,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0156` manifest
+5. run the one-shot migration job through the complete `0001`-`0158` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

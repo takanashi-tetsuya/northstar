@@ -1720,8 +1720,8 @@ mod tests {
         // The ledger has one intentional historical gap (0021).  Keep this
         // assertion exact so adding a migration requires reviewing both the
         // embedded capability manifest and its attestation expectation.
-        assert_eq!(manifest.versions.last(), Some(&157));
-        assert_eq!(manifest.versions.len(), 156);
+        assert_eq!(manifest.versions.last(), Some(&158));
+        assert_eq!(manifest.versions.len(), 157);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

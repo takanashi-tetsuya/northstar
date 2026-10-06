@@ -311,7 +311,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-155 migrations from `0001` through `0156`; `0021` is the sole intentional gap.
+157 migrations from `0001` through `0158`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -320,7 +320,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0156` manifest, not merely the
+requires the complete checked-in `0001`-`0158` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -486,8 +486,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 155 checked-in migrations from `0001`
-through `0156` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 157 checked-in migrations from `0001`
+through `0158` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -583,7 +583,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0156` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0158` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -633,3 +633,17 @@ Its three fixed functions fence the current administrator bearer and generation,
 then commit the setting, audit and encrypted 200 replay in one transaction.
 Runtime cannot execute them and the command role still cannot write tables
 directly.
+
+[Migration `0157`](../migrations/0157_sm_recovery_retention.sql) adds the runtime
+retention classifier and resecures the existing session/SM capabilities. It
+requires stopped claim writers and old startup binaries, with every legacy
+claim pair resolved by its existing owner before the authority gate. The new
+claim-purpose fact distinguishes Resume from Teardown without granting runtime
+direct access to protected SM columns or capacity tables.
+[Migration `0158`](../migrations/0158_sm_cleanup_claim_alias.sql) replaces only
+`northstar_session_cleanup_live(int8)` to give its expired binding-claim subquery
+a distinct alias. The function's introduction origin remains `0114`; the
+classifier's remains `0157`. Workload grants, owner requirements, pinned
+search_path, PUBLIC revocation and the original retention/lock policy are
+unchanged. Exact reconciliation requires the forward migration's ledger row;
+never rewrite the applied `0157` checksum to perform this correction.

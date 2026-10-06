@@ -1572,6 +1572,63 @@ for routine in northstar_sm_claim_authority northstar_session_transfer_sm; do
 done
 echo "migration 0157 source contract preserves exact recovery bindings; real SQL/clock/rollout qualification remains required"
 
+# The capability checker above enforces byte-for-byte equality of the 0158
+# replacement CREATE statement to 0157 modulo the first subquery alias fix.
+# Reapply every historical runtime cleanup assertion to the final body too.
+sm_cleanup_alias_migration="migrations/0158_sm_cleanup_claim_alias.sql"
+[ -f "$sm_cleanup_alias_migration" ] || {
+    echo "SM cleanup alias forward migration is missing" >&2
+    exit 1
+}
+sm_runtime_cleanup=$(sed -n '/^CREATE OR REPLACE FUNCTION northstar_session_cleanup_live(/,/^\$\$;/p' "$sm_cleanup_alias_migration")
+for required_fragment in \
+    "scan_at := pg_catalog.clock_timestamp();" \
+    "northstar_session_recovery_retention(lease.lease_id,scan_at)='none'" \
+    'FOR UPDATE OF lease SKIP LOCKED' \
+    'FOR SHARE NOWAIT;' \
+    'ORDER BY stream.id FOR UPDATE NOWAIT;' \
+    'EXCEPTION WHEN lock_not_available THEN' \
+    'decision_at := pg_catalog.clock_timestamp();' \
+    'current_binding IS DISTINCT FROM candidate' \
+    "northstar_session_recovery_retention(candidate.lease_id,decision_at)<>'none'" \
+    'northstar_capacity_lock_batch(entries)<>pg_catalog.cardinality(doomed)' \
+    'ORDER BY counter.owner_id FOR UPDATE;' \
+    'counter.owner_id IS NULL OR counter.used<expected.required' \
+    'WHERE shard.used<expected.required OR shard.used>shard.capacity' \
+    'AND lease.lease_until=doomed_binding.lease_until' \
+    'IF affected<>1 THEN'
+do
+    if ! printf '%s\n' "$sm_runtime_cleanup" | grep -Fq "$required_fragment"; then
+        echo "migration 0158 runtime cleanup is missing exact lock/revalidation invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if [ "$(printf '%s\n' "$sm_runtime_cleanup" | grep -c 'EXCEPTION WHEN')" -ne 1 ]; then
+    echo "migration 0158 runtime cleanup must only catch the account/SM NOWAIT block" >&2
+    exit 1
+fi
+for required_fragment in \
+    "current_setting('transaction_isolation')<>'read committed'" \
+    'candidate deployment_session_leases%ROWTYPE;' \
+    'SELECT expired_claim.connection_id' \
+    'FROM deployment_session_binding_claims expired_claim' \
+    'WHERE expired_claim.expires_at<=clock_timestamp()' \
+    'ORDER BY expired_claim.expires_at,expired_claim.connection_id' \
+    'LIMIT LEAST(GREATEST(requested_limit,1),10000)' \
+    'FOR UPDATE SKIP LOCKED' \
+    'FOR candidate IN'
+do
+    if ! printf '%s\n' "$sm_runtime_cleanup" | grep -Fq "$required_fragment"; then
+        echo "migration 0158 cleanup lost its disjoint claim alias/lease record or original bound: $required_fragment" >&2
+        exit 1
+    fi
+done
+if printf '%s\n' "$sm_runtime_cleanup" | grep -Eq 'deployment_session_binding_claims[[:space:]]+(AS[[:space:]]+)?candidate([[:space:]]|$)'; then
+    echo "migration 0158 must not reuse the candidate lease record as a binding-claims alias" >&2
+    exit 1
+fi
+echo "migration 0158 fixes only the cleanup claim alias and preserves the historical runtime authority gates"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

@@ -189,6 +189,38 @@ pub(crate) struct CredentialSnapshot {
     pub(crate) call_terminal: Option<CredentialTerminal>,
     pub(crate) integrity_failure: bool,
 }
+// These test-only joins describe the actual receipt instances at each cut.
+// They contain no request projection and confer no credential authority.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CredentialAttemptJoin {
+    pub(crate) attempt: Uuid,
+    pub(crate) frame: Uuid,
+    pub(crate) connection: Uuid,
+    pub(crate) ordinal: u8,
+    pub(crate) kind: CredentialKind,
+}
+#[cfg(test)]
+impl CredentialAttemptJoin {
+    fn of(snapshot: &CredentialSnapshot) -> Self {
+        Self {
+            attempt: snapshot.attempt,
+            frame: snapshot.frame,
+            connection: snapshot.connection,
+            ordinal: snapshot.ordinal,
+            kind: snapshot.kind,
+        }
+    }
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CredentialJoins {
+    pub(crate) owner: CredentialAttemptJoin,
+    pub(crate) constructed_receipt: Option<Uuid>,
+    pub(crate) returned_receipt: Option<Uuid>,
+    pub(crate) transferred_receipt: Option<Uuid>,
+}
+
 // All request values are private, non-bearer authority inputs. They are never
 // formatted in diagnostics. In particular FAST issue-device and login-device
 // remain different fields, and resume keeps the original claim and limits.
@@ -294,6 +326,8 @@ struct CredentialState {
     prospective: Option<CredentialWitness>,
     constructed: Option<(Uuid, ReceiptProjection)>,
     returned: Option<(Uuid, ReceiptProjection)>,
+    #[cfg(test)]
+    transferred_receipt: Option<Uuid>,
     integrity: bool,
 }
 #[derive(Clone)]
@@ -304,6 +338,16 @@ impl std::fmt::Debug for CredentialObservation {
     }
 }
 impl CredentialObservation {
+    #[cfg(test)]
+    pub(crate) fn joins(&self) -> CredentialJoins {
+        let state = self.0.lock().unwrap();
+        CredentialJoins {
+            owner: CredentialAttemptJoin::of(&state.snapshot),
+            constructed_receipt: state.constructed.as_ref().map(|(id, _)| *id),
+            returned_receipt: state.returned.as_ref().map(|(id, _)| *id),
+            transferred_receipt: state.transferred_receipt,
+        }
+    }
     pub(crate) fn snapshot(&self) -> CredentialSnapshot {
         let state = self.0.lock().unwrap();
         let mut snapshot = state.snapshot.clone();
@@ -334,6 +378,8 @@ impl PreparedCredential {
                 prospective: None,
                 constructed: None,
                 returned: None,
+                #[cfg(test)]
+                transferred_receipt: None,
                 integrity: true,
                 snapshot: CredentialSnapshot {
                     attempt: Uuid::new_v4(),
@@ -445,6 +491,10 @@ impl PreparedCredential {
             "credential receipt has no matching same-attempt COMMIT witness"
         );
         state.snapshot.transferred = true;
+        #[cfg(test)]
+        {
+            state.transferred_receipt = Some(receipt.publication_identity());
+        }
         Ok(self.observation.clone())
     }
 }
@@ -1004,8 +1054,21 @@ pub(crate) struct Snapshot {
     pub(crate) effects: Effects,
     pub(crate) terminal: Option<Terminal>,
 }
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PublicationJoins {
+    pub(crate) control: Uuid,
+    pub(crate) frame: Option<Uuid>,
+    pub(crate) receipt: Uuid,
+    pub(crate) credential: Option<CredentialAttemptJoin>,
+    pub(crate) begun_receipt: Option<Uuid>,
+    pub(crate) bound_effects: bool,
+    pub(crate) notification_expected: bool,
+}
 struct State {
     receipt_id: Uuid,
+    #[cfg(test)]
+    begun_receipt: Option<Uuid>,
     receipt: ReceiptProjection,
     bound_effects: bool,
     notification_expected: bool,
@@ -1023,6 +1086,8 @@ impl Observation {
     pub(crate) fn returned_receipt(receipt: &CredentialCommitReceipt, frame: Option<Uuid>) -> Self {
         Self(Arc::new(Mutex::new(State {
             receipt_id: receipt.publication_identity(),
+            #[cfg(test)]
+            begun_receipt: None,
             bound_effects: false,
             notification_expected: false,
             credential: None,
@@ -1056,6 +1121,22 @@ impl Observation {
     #[cfg(test)]
     pub(crate) fn credential(&self) -> Option<CredentialObservation> {
         self.0.lock().unwrap().credential.clone()
+    }
+    #[cfg(test)]
+    pub(crate) fn joins(&self) -> PublicationJoins {
+        let state = self.0.lock().unwrap();
+        PublicationJoins {
+            control: state.snapshot.control,
+            frame: state.snapshot.frame,
+            receipt: state.receipt_id,
+            credential: state
+                .credential
+                .as_ref()
+                .map(|credential| credential.joins().owner),
+            begun_receipt: state.begun_receipt,
+            bound_effects: state.bound_effects,
+            notification_expected: state.notification_expected,
+        }
     }
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.0.lock().unwrap().snapshot.clone()
@@ -1189,6 +1270,10 @@ impl Observation {
             "auth publication requires successful control transport"
         );
         state.snapshot.publication = Knowledge::BeforeCommit;
+        #[cfg(test)]
+        {
+            state.begun_receipt = Some(receipt.publication_identity());
+        }
         Ok(Invocation {
             observation: self,
             receipt,
@@ -1405,6 +1490,265 @@ mod tests {
             },
         );
     }
+    #[tokio::test]
+    async fn credential_joins_preserve_actual_construction_return_and_transfer_cuts() {
+        let prepared = PreparedCredential::new(
+            Uuid::from_u128(1),
+            Uuid::from_u128(3),
+            0,
+            CredentialKind::UnboundFast,
+        );
+        let observation = prepared.observation();
+        let before = observation.snapshot();
+        let introduced = observation.joins();
+        assert_eq!(introduced.owner.attempt, before.attempt);
+        assert_eq!(introduced.owner.frame, Uuid::from_u128(1));
+        assert_eq!(introduced.owner.connection, Uuid::from_u128(3));
+        assert_eq!(introduced.owner.ordinal, 0);
+        assert_eq!(introduced.owner.kind, CredentialKind::UnboundFast);
+        assert_eq!(introduced.constructed_receipt, None);
+        assert_eq!(introduced.returned_receipt, None);
+        assert_eq!(introduced.transferred_receipt, None);
+        assert_eq!(observation.snapshot(), before);
+
+        let invocation = prepared
+            .fast(
+                Uuid::from_u128(2),
+                7,
+                &FastCommitPlan::default(),
+                None,
+                Uuid::from_u128(3),
+            )
+            .unwrap();
+        prepare_empty_fast(&invocation).await;
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        assert_eq!(observation.joins(), introduced);
+        let receipt = CredentialCommitReceipt::new(None, None, None);
+        let id = receipt.publication_identity();
+        invocation.constructed(&receipt);
+        let constructed = observation.joins();
+        assert_eq!(constructed.owner, introduced.owner);
+        assert_eq!(constructed.constructed_receipt, Some(id));
+        assert_eq!(constructed.returned_receipt, None);
+        assert_eq!(constructed.transferred_receipt, None);
+        let result = AuthenticationResult::Authenticated(receipt);
+        invocation.fast_returned(&result);
+        drop(invocation);
+        let AuthenticationResult::Authenticated(receipt) = result else {
+            unreachable!()
+        };
+        let returned = observation.joins();
+        assert_eq!(returned.constructed_receipt, Some(id));
+        assert_eq!(returned.returned_receipt, Some(id));
+        assert_eq!(returned.transferred_receipt, None);
+        let before = observation.snapshot();
+        assert_eq!(observation.joins(), returned);
+        assert_eq!(observation.snapshot(), before);
+
+        prepared
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+            .unwrap();
+        let transferred = observation.joins();
+        assert_eq!(transferred.owner, introduced.owner);
+        assert_eq!(transferred.transferred_receipt, Some(id));
+        assert!(prepared
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+            .is_err());
+        assert_eq!(observation.joins(), transferred);
+    }
+
+    #[tokio::test]
+    async fn credential_joins_expose_swapped_raw_returns_after_anchored_construction() {
+        let prepared = [
+            PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                0,
+                CredentialKind::UnboundFast,
+            ),
+            PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                1,
+                CredentialKind::UnboundFast,
+            ),
+        ];
+        let invocations = prepared.each_ref().map(|prepared| {
+            prepared
+                .fast(
+                    Uuid::from_u128(2),
+                    7,
+                    &FastCommitPlan::default(),
+                    None,
+                    Uuid::from_u128(3),
+                )
+                .unwrap()
+        });
+        for invocation in &invocations {
+            prepare_empty_fast(invocation).await;
+            CredentialInvocation::commit(Some(invocation), std::future::ready(Ok::<(), ()>(())))
+                .await
+                .unwrap();
+        }
+        let first = CredentialCommitReceipt::new(None, None, None);
+        let second = CredentialCommitReceipt::new(None, None, None);
+        invocations[0].constructed(&first);
+        invocations[1].constructed(&second);
+        let introduced = prepared
+            .each_ref()
+            .map(|prepared| prepared.observation().joins());
+        assert_ne!(introduced[0].owner.attempt, introduced[1].owner.attempt);
+        assert_ne!(
+            introduced[0].constructed_receipt,
+            introduced[1].constructed_receipt,
+        );
+        assert_eq!(introduced[0].owner.ordinal, 0);
+        assert_eq!(introduced[1].owner.ordinal, 1);
+
+        // Both receipts are real and previously introduced. Reassign only the
+        // returned association, leaving each original attempt and witness intact.
+        let results = [
+            AuthenticationResult::Authenticated(second),
+            AuthenticationResult::Authenticated(first),
+        ];
+        for (invocation, result) in invocations.iter().zip(&results) {
+            invocation.fast_returned(result);
+        }
+        drop(invocations);
+        for (index, (prepared, result)) in prepared.iter().zip(&results).enumerate() {
+            let AuthenticationResult::Authenticated(receipt) = result else {
+                unreachable!()
+            };
+            let observation = prepared.observation();
+            let actual = observation.joins();
+            assert_eq!(actual.owner, introduced[index].owner);
+            assert_eq!(
+                actual.constructed_receipt,
+                introduced[index].constructed_receipt,
+            );
+            assert_eq!(
+                actual.returned_receipt,
+                introduced[1 - index].constructed_receipt,
+            );
+            assert_eq!(
+                actual.returned_receipt,
+                Some(receipt.publication_identity())
+            );
+            assert!(!observation.snapshot().return_matches);
+            assert!(prepared
+                .transfer(receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+                .is_err());
+            assert_eq!(observation.joins(), actual);
+            assert_eq!(actual.transferred_receipt, None);
+        }
+    }
+
+    #[test]
+    fn publication_joins_project_actual_sealed_effect_intent_without_fixture_inference() {
+        for (bound, notification) in [(false, false), (true, false), (true, true)] {
+            let receipt = CredentialCommitReceipt::new(None, None, None);
+            let observation = Observation::returned_receipt(&receipt, None);
+            let initial = observation.joins();
+            assert!(!initial.bound_effects);
+            assert!(!initial.notification_expected);
+            observation.sealed(bound, notification).unwrap();
+            let sealed = observation.joins();
+            assert_eq!(sealed.bound_effects, bound);
+            assert_eq!(sealed.notification_expected, notification);
+            assert_eq!(sealed.receipt, initial.receipt);
+            assert_eq!(sealed.control, initial.control);
+            assert_eq!(sealed.credential, None);
+            assert_eq!(sealed.begun_receipt, None);
+            let snapshot = observation.snapshot();
+            assert_eq!(snapshot.effects, Effects::default());
+            assert_eq!(observation.joins(), sealed);
+            assert_eq!(observation.snapshot(), snapshot);
+            assert!(observation.sealed(!bound, !notification).is_err());
+            assert_eq!(observation.joins(), sealed);
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_transfer_remains_distinct_from_publication_begin_after_bosh_exposure() {
+        let frame = Uuid::from_u128(1);
+        let connection = Uuid::from_u128(3);
+        let prepared = PreparedCredential::new(frame, connection, 0, CredentialKind::UnboundFast);
+        let invocation = prepared
+            .fast(
+                Uuid::from_u128(2),
+                7,
+                &FastCommitPlan::default(),
+                None,
+                connection,
+            )
+            .unwrap();
+        prepare_empty_fast(&invocation).await;
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        let receipt = CredentialCommitReceipt::new(None, None, None);
+        invocation.constructed(&receipt);
+        let result = AuthenticationResult::Authenticated(receipt);
+        invocation.fast_returned(&result);
+        drop(invocation);
+        let AuthenticationResult::Authenticated(receipt) = result else {
+            unreachable!()
+        };
+        let credential = prepared.transfer(&receipt, frame, connection).unwrap();
+        let transferred = credential.joins();
+        let id = receipt.publication_identity();
+        assert_eq!(transferred.constructed_receipt, Some(id));
+        assert_eq!(transferred.returned_receipt, Some(id));
+        assert_eq!(transferred.transferred_receipt, Some(id));
+        let publication = Observation::observed_receipt(&receipt, frame, credential.clone());
+        publication.sealed(false, false).unwrap();
+        publication
+            .transport(Transport::BoshExposureEntered { rid: 48 })
+            .unwrap();
+        publication
+            .transport(Transport::BoshAccepted { rid: 48 })
+            .unwrap();
+        let joins = publication.joins();
+        assert_eq!(joins.credential, Some(transferred.owner));
+        assert_eq!(joins.receipt, id);
+        assert_eq!(joins.begun_receipt, None);
+        assert_eq!(publication.snapshot().publication, Knowledge::NotStarted);
+        assert_eq!(credential.joins(), transferred);
+        // This checks only the existing observation cuts. It constructs no
+        // holder or response and claims no selected-owner transfer or cache.
+    }
+
+    #[test]
+    fn publication_joins_keep_return_only_origin_and_actual_begin_distinct() {
+        let receipt = receipt();
+        let observation = written(&receipt, true);
+        let before = observation.snapshot();
+        let joins = observation.joins();
+        assert_eq!(joins.control, before.control);
+        assert_eq!(joins.frame, Some(Uuid::from_u128(6)));
+        assert_eq!(joins.receipt, receipt.publication_identity());
+        assert_eq!(joins.credential, None);
+        assert_eq!(joins.begun_receipt, None);
+        assert_eq!(observation.snapshot(), before);
+        let replacement = CredentialCommitReceipt::new(None, receipt.staged_login_epoch(), None);
+        assert!(observation.begin(&replacement).is_err());
+        assert_eq!(observation.joins(), joins);
+        assert_eq!(observation.snapshot(), before);
+        let invocation = observation.begin(&receipt).unwrap();
+        let begun = observation.joins();
+        assert_eq!(begun.receipt, joins.receipt);
+        assert_eq!(
+            begun.begun_receipt,
+            Some(invocation.receipt().publication_identity()),
+        );
+        assert_eq!(begun.credential, None);
+        assert!(!observation.snapshot().service_started);
+        assert!(observation.begin(&replacement).is_err());
+        assert_eq!(observation.joins(), begun);
+    }
+
     #[tokio::test]
     async fn credential_acknowledgement_and_receipt_instance_are_independent_authority() {
         for acknowledgement in [false, true] {

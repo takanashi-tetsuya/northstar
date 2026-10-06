@@ -224,12 +224,14 @@ impl KnownCredentialOwner {
             effects.notification.is_some(),
         )?;
         let receipt = self.receipt.take().expect("validated auth receipt");
-        Ok(AuthControlHolder(Arc::new(Holder {
+        let holder = AuthControlHolder(Arc::new(Holder {
             id: self.observation.snapshot().control,
             connection: self.connection,
             length: control.len(),
             digest: Sha256::digest(control.as_bytes()).into(),
             observation: self.observation.clone(),
+            #[cfg(test)]
+            joins: ControlJoinObservation(Arc::new(Mutex::new(ControlJoins::default()))),
             pending: Mutex::new(HolderState {
                 pending: Some(PendingPublication {
                     receipt,
@@ -238,7 +240,16 @@ impl KnownCredentialOwner {
                 }),
                 phase: HolderPhase::Queued,
             }),
-        })))
+        }));
+        #[cfg(test)]
+        {
+            let pending = holder.0.pending.lock().unwrap();
+            holder.0.joins.0.lock().unwrap().introduced = Some(control_association(
+                &holder.0,
+                pending.pending.as_ref().expect("sealed auth receipt"),
+            ));
+        }
+        Ok(holder)
     }
 }
 impl Drop for KnownCredentialOwner {
@@ -268,12 +279,54 @@ struct HolderState {
     pending: Option<PendingPublication>,
     phase: HolderPhase,
 }
+// A read handle retains only fixed-size facts, never a holder or receipt.
+// In particular, retaining it cannot delay abandonment of a queued owner.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ControlAssociation {
+    pub(crate) control: Uuid,
+    pub(crate) connection: Uuid,
+    pub(crate) frame: Option<Uuid>,
+    pub(crate) receipt: Uuid,
+    pub(crate) length: usize,
+    pub(crate) digest: [u8; 32],
+    pub(crate) publication: crate::services::authentication::publication::PublicationJoins,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ControlJoins {
+    pub(crate) introduced: Option<ControlAssociation>,
+    pub(crate) transferred: Option<ControlAssociation>,
+}
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);
+#[cfg(test)]
+impl ControlJoinObservation {
+    pub(crate) fn snapshot(&self) -> ControlJoins {
+        *self.0.lock().unwrap()
+    }
+}
+#[cfg(test)]
+fn control_association(holder: &Holder, pending: &PendingPublication) -> ControlAssociation {
+    ControlAssociation {
+        control: holder.id,
+        connection: holder.connection,
+        frame: pending.origin.as_ref().map(FrameExecution::operation_id),
+        receipt: pending.receipt.publication_identity(),
+        length: holder.length,
+        digest: holder.digest,
+        publication: holder.observation.joins(),
+    }
+}
 struct Holder {
     id: Uuid,
     connection: Uuid,
     length: usize,
     digest: [u8; 32],
     observation: Observation,
+    #[cfg(test)]
+    joins: ControlJoinObservation,
     pending: Mutex<HolderState>,
 }
 impl Drop for Holder {
@@ -352,6 +405,10 @@ impl AuthControlHolder {
         };
         let mut owned = selected.take_all()?;
         Ok(owned.pop().expect("one validated native auth control"))
+    }
+    #[cfg(test)]
+    pub(crate) fn join_observation(&self) -> ControlJoinObservation {
+        self.0.joins.clone()
     }
 }
 
@@ -529,6 +586,12 @@ impl SelectedControls {
                     managed: false,
                 },
             ));
+            #[cfg(test)]
+            {
+                let owner = &owned.last().expect("transferred auth owner").1;
+                holder.0.joins.0.lock().unwrap().transferred =
+                    Some(control_association(&holder.0, &owner.pending));
+            }
         }
         drop(guards);
         drop(sorted);
@@ -1249,6 +1312,211 @@ mod tests {
     }
     fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
         future.poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[tokio::test]
+    async fn observed_control_joins_anchor_actual_bytes_and_native_or_bosh_transfer() {
+        for native in [false, true] {
+            let connection = Uuid::from_u128(302);
+            let frame_id = Uuid::from_u128(720);
+            let frame = FrameExecution::for_saved_case(
+                if native {
+                    super::super::protocol::ClientTransport::Tcp
+                } else {
+                    super::super::protocol::ClientTransport::Bosh
+                },
+                "<authenticate/>",
+                frame_id,
+            );
+            let owner = observed_unbound_owner(&frame, connection).await;
+            let publication = owner.observation().clone();
+            let credential = publication.credential().unwrap();
+            let credential_joins = credential.joins();
+            let receipt_id = owner.receipt.as_ref().unwrap().publication_identity();
+            assert_eq!(credential_joins.constructed_receipt, Some(receipt_id));
+            assert_eq!(credential_joins.returned_receipt, Some(receipt_id));
+            assert_eq!(credential_joins.transferred_receipt, Some(receipt_id));
+            let control = "<success note='é'/>";
+            let holder = owner
+                .seal(
+                    control,
+                    CapturedEffects {
+                        route: RouteIntent::Unbound,
+                        caps: None,
+                        notification: None,
+                    },
+                )
+                .unwrap();
+            let joins = holder.join_observation();
+            let alias = holder.join_observation();
+            let introduced = joins.snapshot().introduced.unwrap();
+            assert_eq!(introduced.control, publication.snapshot().control);
+            assert_eq!(introduced.connection, connection);
+            assert_eq!(introduced.frame, Some(frame_id));
+            assert_eq!(introduced.receipt, receipt_id);
+            assert_eq!(introduced.length, control.len());
+            assert_eq!(
+                introduced.digest,
+                <[u8; 32]>::from(Sha256::digest(control.as_bytes())),
+            );
+            assert_ne!(introduced.length, control.chars().count());
+            assert_eq!(introduced.publication.receipt, receipt_id);
+            assert_eq!(introduced.publication.frame, Some(frame_id));
+            assert_eq!(
+                introduced.publication.credential,
+                Some(credential_joins.owner),
+            );
+            assert_eq!(introduced.publication.begun_receipt, None);
+            assert_eq!(joins.snapshot().transferred, None);
+            let before = publication.snapshot();
+            assert_eq!(joins.snapshot(), alias.snapshot());
+            assert_eq!(publication.snapshot(), before);
+            assert_eq!(credential.joins(), credential_joins);
+            assert!(holder.validate_control("<changed/>").is_err());
+            assert_eq!(joins.snapshot().introduced, Some(introduced));
+            assert_eq!(joins.snapshot().transferred, None);
+
+            let owners = if native {
+                holder.recording().unwrap();
+                vec![holder
+                    .clone()
+                    .write(control.to_owned(), |actual| async move {
+                        assert_eq!(actual, control);
+                        Ok(())
+                    })
+                    .await
+                    .unwrap()]
+            } else {
+                let selection = selected(&[(control, &holder)], 17);
+                assert_eq!(joins.snapshot().transferred, None);
+                selection.take_all().unwrap()
+            };
+            let transferred = joins.snapshot();
+            assert_eq!(transferred.introduced, Some(introduced));
+            assert_eq!(transferred.transferred, Some(introduced));
+            assert_eq!(owners[0].receipt().publication_identity(), receipt_id);
+            assert!(holder.recording().is_err());
+            assert_eq!(joins.snapshot(), transferred);
+            assert!(publish_unbound_fixture(owners).await);
+            assert_eq!(publication.joins().begun_receipt, Some(receipt_id));
+            assert_eq!(publication.snapshot().terminal, Some(Terminal::Completed));
+            assert_eq!(joins.snapshot(), transferred);
+            assert_eq!(alias.snapshot(), transferred);
+        }
+    }
+
+    #[test]
+    fn control_join_read_handle_does_not_retain_authority_or_invent_credential_history() {
+        let (holder, publication) = fixture_control("<success/>", Uuid::from_u128(302));
+        let joins = holder.join_observation();
+        let before = joins.snapshot();
+        let introduced = before.introduced.unwrap();
+        assert_eq!(introduced.frame, None);
+        assert_eq!(introduced.publication.credential, None);
+        assert_eq!(introduced.receipt, publication.joins().receipt);
+        assert_eq!(before.transferred, None);
+        let before_publication = publication.snapshot();
+        for _ in 0..3 {
+            assert_eq!(joins.snapshot(), before);
+            assert_eq!(publication.snapshot(), before_publication);
+        }
+        drop(holder);
+        assert_eq!(publication.snapshot().terminal, Some(Terminal::Abandoned));
+        assert_eq!(joins.snapshot(), before);
+        assert_eq!(publication.joins().begun_receipt, None);
+    }
+
+    #[tokio::test]
+    async fn control_joins_expose_reassigned_receipts_after_sealed_introduction() {
+        let connection = Uuid::from_u128(302);
+        let frame = FrameExecution::for_saved_case(
+            super::super::protocol::ClientTransport::Bosh,
+            "<authenticate/>",
+            Uuid::from_u128(730),
+        );
+        let first = observed_unbound_owner(&frame, connection)
+            .await
+            .seal(
+                "<success id='1'/>",
+                CapturedEffects {
+                    route: RouteIntent::Unbound,
+                    caps: None,
+                    notification: None,
+                },
+            )
+            .unwrap();
+        let second_frame = FrameExecution::for_saved_case(
+            super::super::protocol::ClientTransport::Bosh,
+            "<authenticate/>",
+            Uuid::from_u128(731),
+        );
+        let second = observed_unbound_owner(&second_frame, connection)
+            .await
+            .seal(
+                "<success id='2'/>",
+                CapturedEffects {
+                    route: RouteIntent::Unbound,
+                    caps: None,
+                    notification: None,
+                },
+            )
+            .unwrap();
+        let observations = [first.join_observation(), second.join_observation()];
+        let introduced = observations
+            .each_ref()
+            .map(|observation| observation.snapshot().introduced.unwrap());
+        assert_ne!(introduced[0].control, introduced[1].control);
+        assert_ne!(introduced[0].receipt, introduced[1].receipt);
+        assert_ne!(introduced[0].digest, introduced[1].digest);
+        assert_eq!(introduced[0].publication.credential.unwrap().ordinal, 0);
+        assert_eq!(introduced[1].publication.credential.unwrap().ordinal, 0);
+        assert_ne!(introduced[0].frame, introduced[1].frame);
+        assert_ne!(
+            introduced[0].publication.credential.unwrap().attempt,
+            introduced[1].publication.credential.unwrap().attempt,
+        );
+
+        // Reassign real receipts only after both control introductions. The
+        // original control, frame and attempt associations remain unchanged.
+        {
+            let mut first = first.0.pending.lock().unwrap();
+            let mut second = second.0.pending.lock().unwrap();
+            std::mem::swap(
+                &mut first.pending.as_mut().unwrap().receipt,
+                &mut second.pending.as_mut().unwrap().receipt,
+            );
+        }
+        let owners = selected(
+            &[
+                ("<success id='1'/>", &first),
+                ("<success id='2'/>", &second),
+            ],
+            18,
+        )
+        .take_all()
+        .unwrap();
+        for (index, owner) in owners.into_iter().enumerate() {
+            let observed = observations[index].snapshot();
+            assert_eq!(observed.introduced, Some(introduced[index]));
+            let transferred = observed.transferred.unwrap();
+            assert_eq!(transferred.control, introduced[index].control);
+            assert_eq!(transferred.digest, introduced[index].digest);
+            assert_eq!(transferred.frame, introduced[index].frame);
+            assert_eq!(transferred.connection, introduced[index].connection);
+            assert_eq!(transferred.publication, introduced[index].publication);
+            assert_eq!(transferred.receipt, introduced[1 - index].receipt);
+            assert_ne!(transferred.receipt, transferred.publication.receipt);
+            assert_eq!(transferred.receipt, owner.receipt().publication_identity());
+            let publication = owner.observation().clone();
+            let mut port = FakePort::new(connection, Cut::Success);
+            assert_eq!(
+                owner.publish(&mut port).await,
+                PublicationResult::IntegrityRejected,
+            );
+            assert_eq!(port.events, ["rejected"]);
+            assert_eq!(publication.joins().begun_receipt, None);
+            assert_eq!(observations[index].snapshot(), observed);
+        }
     }
 
     #[tokio::test]

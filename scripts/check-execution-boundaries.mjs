@@ -40,6 +40,7 @@ const files = {
   mixWorker: 'src/xmpp/protocol/mix/worker.rs',
   mixArchive: 'src/db/archive.rs',
   state: 'src/state.rs',
+  mixOutboxState: 'src/state/mix_outbox.rs',
   nativeWrite: 'src/xmpp/direct_delivery.rs',
   nativeCore: 'crates/northstar-delivery-core/src/native_write.rs',
   replayDb: 'src/db/replay.rs',
@@ -428,7 +429,8 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
     'letbound=request.returned(ownership)', 'letownership=bound.ownership().clone();',
     'letauth_controls=SelectedControls::new(selected.iter().map(|item|(item.stanza.as_str(),item.auth_publication())))',
     'letauth_control_selected=!auth_controls.is_empty();',
-    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None,})'],
+    '#[cfg(test)]letselection=SelectionObservation::capture(&selected,operation,metadata);',
+    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None,#[cfg(test)]selection,})'],
   'BOSH must bind selected sources and consume the actual returned membership before releasing response bytes');
   ordered(prepare, ['ifletSome(message_id)=superseded_bosh_message_id(&error){', 'ifletOk(restoration)=request.supersession(message_id){',
     'restore_response_items_observed(', 'restoration.restored(removed_indices)', 'ifremoved&&superseded_rebuilds<fields.max_output_stanzas{'],
@@ -500,6 +502,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
     requireBoundary(commit === `letpermit=request.enter_commit(${argument}).map_err(CompletionError::Binding)?;future.await.map_err(CompletionError::Repository)?;permit.received();Ok(())`,
       'BOSH response COMMIT wrappers must bind first, await once and record the exact receipt synchronously');
   }
+  verifyBoshSelectionObservations({ boshResponse });
 }
 
 // Auth-specific lexical drift checks for independent credential transaction
@@ -537,7 +540,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   // and Self construction sites. Alternate Rust syntax/macros remain review.
   for (const [source, name, declaration, methods, construction, sites, selfSites] of [
     [owner, 'AuthControlHolder', 'impl\\s+AuthControlHolder\\b',
-      ['validate_connection', 'validates', 'validate_control', 'recording', 'write'], /\bAuthControlHolder\s*\(/g, 2, 0],
+      ['validate_connection', 'validates', 'validate_control', 'recording', 'write', 'join_observation'], /\bAuthControlHolder\s*\(/g, 2, 0],
     [owner, 'OwnedPublication', 'impl\\s+OwnedPublication\\b',
       ['receipt', 'observation', 'effects', 'origin', 'connection', 'publish', 'run'], /\bOwnedPublication\s*\{/g, 4, 0],
     // Three Self-plus-brace tokens: empty's bare-Self return head and the
@@ -639,6 +642,9 @@ export function verifyAuthPublicationBoundaries(sources) {
     'PendingPublication{receipt,origin:self.origin.take(),effects}'],
     'auth final control seal must consume its exact receipt with private length and SHA-256 binding');
   const holder = body(owner, 'impl\\s+AuthControlHolder\\b');
+  requireBoundary(/#\[cfg\(test\)\]\s*pub\(crate\)\s+fn\s+join_observation\s*\(\s*&self\s*\)\s*->\s*ControlJoinObservation\s*\{/.test(holder) &&
+    method(holder, 'join_observation') === 'self.0.joins.clone()',
+    'auth holder join observation must remain a test-only read-only clone of its actual captured joins');
   requireBoundary(method(holder, 'validates') === 'self.0.length==control.len()&&self.0.digest==<[u8;32]>::from(Sha256::digest(control.as_bytes()))',
     'auth control bytes must match length and digest without constructing authority');
   const write = method(holder, 'write');
@@ -870,7 +876,203 @@ export function verifyAuthPublicationBoundaries(sources) {
     count(inline, '.commit_sasl2_unbound_state(&fast_plan,&user,expected_auth_generation).await?') === 2 &&
     inline.includes('Err(error)=>{tracing::error!(?error,user_id=%user.id);resume_xml=crate::xmpp::xml_util::sm_failed();}'),
     'credential resume Unknown must preserve the existing separate fallback attempt');
+  // Read-only test observations must retain actual private association facts.
+  const testOnlyItem = (source, declaration) => new RegExp(
+    '#\\[cfg\\(test\\)\\]\\s*(?:#\\[[^\\]]*\\]\\s*)*' + declaration,
+  ).test(codeOnly(source));
+  for (const [source, name, fields] of [
+    [facts, 'CredentialAttemptJoin', 'pub(crate)attempt:Uuid,pub(crate)frame:Uuid,pub(crate)connection:Uuid,pub(crate)ordinal:u8,pub(crate)kind:CredentialKind'],
+    [facts, 'CredentialJoins', 'pub(crate)owner:CredentialAttemptJoin,pub(crate)constructed_receipt:Option<Uuid>,pub(crate)returned_receipt:Option<Uuid>,pub(crate)transferred_receipt:Option<Uuid>'],
+    [facts, 'PublicationJoins', 'pub(crate)control:Uuid,pub(crate)frame:Option<Uuid>,pub(crate)receipt:Uuid,pub(crate)credential:Option<CredentialAttemptJoin>,pub(crate)begun_receipt:Option<Uuid>,pub(crate)bound_effects:bool,pub(crate)notification_expected:bool'],
+    [owner, 'ControlAssociation', 'pub(crate)control:Uuid,pub(crate)connection:Uuid,pub(crate)frame:Option<Uuid>,pub(crate)receipt:Uuid,pub(crate)length:usize,pub(crate)digest:[u8;32],pub(crate)publication:crate::services::authentication::publication::PublicationJoins'],
+    [owner, 'ControlJoins', 'pub(crate)introduced:Option<ControlAssociation>,pub(crate)transferred:Option<ControlAssociation>'],
+  ]) {
+    const declaration = 'pub\\(crate\\)\\s+struct\\s+' + name + '\\b';
+    requireBoundary(testOnlyItem(source, declaration) && normalize(body(source, declaration)) === fields,
+      `auth ${name} must remain test-only association facts without retained authority`);
+  }
+  requireBoundary(testOnlyItem(facts, 'impl\\s+CredentialAttemptJoin\\b') &&
+    method(body(facts, 'impl\\s+CredentialAttemptJoin\\b'), 'of') ===
+      'Self{attempt:snapshot.attempt,frame:snapshot.frame,connection:snapshot.connection,ordinal:snapshot.ordinal,kind:snapshot.kind}',
+    'auth credential join anchor must read the original actual attempt snapshot');
+  const credentialObservation = body(facts, 'impl\\s+CredentialObservation\\b');
+  requireBoundary(testOnlyItem(credentialObservation, 'pub\\(crate\\)\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*CredentialJoins') &&
+    method(credentialObservation, 'joins') ===
+      'letstate=self.0.lock().unwrap();CredentialJoins{owner:CredentialAttemptJoin::of(&state.snapshot),constructed_receipt:state.constructed.as_ref().map(|(id,_)|*id),returned_receipt:state.returned.as_ref().map(|(id,_)|*id),transferred_receipt:state.transferred_receipt}',
+    'auth credential join reader must independently read actual constructed and raw-returned receipt identities');
+  requireBoundary(normalize(body(facts, 'struct\\s+CredentialState\\b')).includes('#[cfg(test)]transferred_receipt:Option<Uuid>') &&
+    method(prepared, 'new').includes('#[cfg(test)]transferred_receipt:None') &&
+    transfer.includes('state.snapshot.transferred=true;#[cfg(test)]{state.transferred_receipt=Some(receipt.publication_identity());}Ok(self.observation.clone())'),
+    'auth transferred receipt observation must remain test-only and follow actual checked transfer');
+  requireBoundary(testOnlyItem(observation, 'pub\\(crate\\)\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*PublicationJoins') &&
+    method(observation, 'joins') ===
+      'letstate=self.0.lock().unwrap();PublicationJoins{control:state.snapshot.control,frame:state.snapshot.frame,receipt:state.receipt_id,credential:state.credential.as_ref().map(|credential|credential.joins().owner),begun_receipt:state.begun_receipt,bound_effects:state.bound_effects,notification_expected:state.notification_expected}' &&
+    method(observation, 'returned_receipt').includes('credential:None'),
+    'auth publication join reader must preserve actual receipt identity and only an observed credential anchor with actual State effect intent');
+  const publicationJoinDeclarations = [...codeOnly(facts).matchAll(/((?:#\[[^\]]*\]\s*)*)pub\(crate\)\s+struct\s+PublicationJoins\b/g)];
+  requireBoundary(publicationJoinDeclarations.length === 1 &&
+    compact(publicationJoinDeclarations[0][0]) === '#[cfg(test)]#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub(crate)structPublicationJoins',
+    'auth PublicationJoins must preserve its exact test-only derives');
+  requireBoundary(normalize(body(facts, 'struct\\s+State\\b')).includes('#[cfg(test)]begun_receipt:Option<Uuid>') &&
+    method(observation, 'returned_receipt').includes('#[cfg(test)]begun_receipt:None') &&
+    begin.includes('state.snapshot.publication=Knowledge::BeforeCommit;#[cfg(test)]{state.begun_receipt=Some(receipt.publication_identity());}Ok(Invocation{observation:self,receipt})'),
+    'auth begun receipt observation must remain test-only and follow actual publication acceptance');
+  requireBoundary(testOnlyItem(owner, 'pub\\(crate\\)\\s+struct\\s+ControlJoinObservation\\(Arc<Mutex<ControlJoins>>\\);') &&
+    testOnlyItem(owner, 'impl\\s+ControlJoinObservation\\b') &&
+    normalize(body(owner, 'impl\\s+ControlJoinObservation\\b')) ===
+      'pub(crate)fnsnapshot(&self)->ControlJoins{*self.0.lock().unwrap()}',
+    'auth control join reader must retain only test facts and a read-only snapshot');
+  requireBoundary(testOnlyItem(owner, 'fn\\s+control_association\\b') &&
+    method(owner, 'control_association') ===
+      'ControlAssociation{control:holder.id,connection:holder.connection,frame:pending.origin.as_ref().map(FrameExecution::operation_id),receipt:pending.receipt.publication_identity(),length:holder.length,digest:holder.digest,publication:holder.observation.joins()}',
+    'auth control association must read the actual holder and moved pending receipt independently');
+  requireBoundary(normalize(body(owner, 'struct\\s+Holder\\b')).includes('#[cfg(test)]joins:ControlJoinObservation') &&
+    sealed.includes('#[cfg(test)]joins:ControlJoinObservation(Arc::new(Mutex::new(ControlJoins::default())))') &&
+    sealed.endsWith('#[cfg(test)]{letpending=holder.0.pending.lock().unwrap();holder.0.joins.0.lock().unwrap().introduced=Some(control_association(&holder.0,pending.pending.as_ref().expect()));}Ok(holder)') &&
+    take.includes('managed:false}));#[cfg(test)]{letowner=&owned.last().expect().1;holder.0.joins.0.lock().unwrap().transferred=Some(control_association(&holder.0,&owner.pending));}'),
+    'auth control introduction and transfer must capture their actual owner at each test-only handoff cut');
 
+}
+
+// Closed lexical pins for the bounded, fact-only cfg(test) selection observer.
+// These inspect source wiring; they are not the Stage 4 oracle or runtime proof.
+export function verifyBoshSelectionObservations({ boshResponse }) {
+  const source = productionModule(boshResponse);
+  const code = codeOnly(source);
+  const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
+  const exactDeclaration = (declaration, expected, label) => {
+    const matches = [...code.matchAll(new RegExp('((?:#\\[[^\\]]*\\]\\s*)*)' + declaration, 'g'))];
+    requireBoundary(matches.length === 1 && compact(matches[0][0]) === expected,
+      `BOSH selection ${label} must retain its exact test-only declaration and derives`);
+  };
+  exactDeclaration('const\\s+MAX_SELECTED_FACTS\\s*:\\s*usize\\s*=\\s*\\d+\\s*;',
+    '#[cfg(test)]constMAX_SELECTED_FACTS:usize=4;', 'capacity');
+  requireBoundary([...code.matchAll(/\bMAX_SELECTED_FACTS\b/g)].length === 5,
+    'BOSH selection capacity must remain the fixed four-slot observation bound');
+  for (const [name, kind, visibility, derives, fields] of [
+    ['SelectionReadStatus', 'enum', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
+      'Complete,Incomplete{omitted_items:usize,missing_auth_associations:usize,connection_changed:bool}'],
+    ['SelectedItemSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
+      'pub(super)ordinal:usize,pub(super)source:Option<crate::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<crate::xmpp::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<crate::xmpp::auth_publication::ControlJoins>'],
+    ['SelectionSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
+      'pub(super)session:uuid::Uuid,pub(super)rid:u64,pub(super)fingerprint:[u8;32],pub(super)first_validated_connection:Option<uuid::Uuid>,pub(super)validated_connection:Option<uuid::Uuid>,pub(super)selected_count:usize,pub(super)status:SelectionReadStatus,pub(super)items:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
+    ['SelectedItemRead', 'struct', '', '',
+      'at_selection:SelectedItemSnapshot,joins:Option<crate::xmpp::auth_publication::ControlJoinObservation>'],
+    ['SelectionState', 'struct', '', '',
+      'session:uuid::Uuid,rid:u64,fingerprint:[u8;32],first_validated_connection:Option<uuid::Uuid>,validated_connection:Option<uuid::Uuid>,selected_count:usize,status:SelectionReadStatus,items:[Option<SelectedItemRead>;MAX_SELECTED_FACTS]'],
+  ]) {
+    const declaration = (visibility ? 'pub\\(super\\)\\s+' : '') + kind + '\\s+' + name + '\\b';
+    exactDeclaration(declaration,
+      '#[cfg(test)]' + (derives ? `#[derive(${derives})]` : '') + visibility + kind + name, name);
+    requireBoundary(normalize(body(source, declaration)) === fields,
+      `BOSH selection ${name} must retain its exact fact-only field shape`);
+  }
+  exactDeclaration('pub\\(super\\)\\s+struct\\s+SelectionObservation\\s*\\(\\s*Arc\\s*<\\s*std\\s*::\\s*sync\\s*::\\s*Mutex\\s*<\\s*SelectionState\\s*>\\s*>\\s*\\)\\s*;',
+    '#[cfg(test)]#[derive(Clone)]pub(super)structSelectionObservation(Arc<std::sync::Mutex<SelectionState>>);', 'handle');
+  exactDeclaration('impl\\s+SelectionObservation\\b', '#[cfg(test)]implSelectionObservation', 'implementation');
+  const implementation = body(source, 'impl\\s+SelectionObservation\\b');
+  requireBoundary([...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]).join(',') === 'capture,snapshot' &&
+    [...code.matchAll(/\bimpl\b[^{};]*\b(?:SelectionReadStatus|SelectedItemSnapshot|SelectionSnapshot|SelectedItemRead|SelectionState|SelectionObservation)\b[^{};]*\{/g)].length === 1,
+    'BOSH selection must retain its closed capture and read-only snapshot inventory');
+  requireBoundary(normalize(implementation).startsWith('fncapture(selected:&VecDeque<OutboundItem>,operation:&Operation,metadata:Metadata)->Self{') &&
+    normalize(implementation).includes('pub(super)fnsnapshot(&self)->SelectionSnapshot{'),
+    'BOSH selection methods must retain private capture and immutable fact-only snapshot declarations');
+  requireBoundary(normalize(body(implementation, 'fn\\s+capture\\b')) ===
+    'usesha2::{Digest,Sha256};letmutmissing_auth_associations=0;letitems:[Option<SelectedItemRead>;MAX_SELECTED_FACTS]=std::array::from_fn(|ordinal|{selected.get(ordinal).map(|item|{letjoins=item.auth_publication().map(|holder|holder.join_observation());letholder_joins=joins.as_ref().map(|joins|joins.snapshot());letassociation=holder_joins.and_then(|joins|joins.introduced);letauth_marker=item.is_bosh_auth_control();ifauth_marker&&association.is_none(){missing_auth_associations+=1;}SelectedItemRead{at_selection:SelectedItemSnapshot{ordinal,source:item.durable_source,utf8_length:item.stanza.len(),sha256:Sha256::digest(item.stanza.as_bytes()).into(),auth_marker,sealed_association:association,holder_joins},joins}})});letomitted_items=selected.len().saturating_sub(MAX_SELECTED_FACTS);letstatus=ifomitted_items==0&&missing_auth_associations==0{SelectionReadStatus::Complete}else{SelectionReadStatus::Incomplete{omitted_items,missing_auth_associations,connection_changed:false}};Self(Arc::new(std::sync::Mutex::new(SelectionState{session:operation.session_id(),rid:metadata.rid,fingerprint:metadata.fingerprint,first_validated_connection:None,validated_connection:None,selected_count:selected.len(),status,items})))',
+    'BOSH selection capture must preserve actual final FIFO facts, sealed introduction and explicit bounded loss');
+  requireBoundary(normalize(body(implementation, 'fn\\s+snapshot\\b')) ===
+    'letstate=self.0.lock().unwrap();SelectionSnapshot{session:state.session,rid:state.rid,fingerprint:state.fingerprint,first_validated_connection:state.first_validated_connection,validated_connection:state.validated_connection,selected_count:state.selected_count,status:state.status,items:std::array::from_fn(|ordinal|{state.items[ordinal].as_ref().map(|item|{letmutsnapshot=item.at_selection;snapshot.holder_joins=item.joins.as_ref().map(|joins|joins.snapshot());snapshot})})}',
+    'BOSH selection snapshot must preserve sealed facts and read only the live fact-only holder joins');
+  const bound = body(source, 'impl\\s+BoundResponse\\b');
+  requireBoundary(normalize(bound).includes('#[cfg(test)]pub(super)fnselection_observation(&self)->SelectionObservation{self.selection.clone()}') &&
+    normalize(body(bound, 'fn\\s+selection_observation\\b')) === 'self.selection.clone()',
+    'BOSH selection getter must remain test-only and clone only its fact handle');
+  requireBoundary(normalize(body(source, 'pub\\(super\\)\\s+struct\\s+BoundResponse\\b')).endsWith('auth_connection:Option<uuid::Uuid>,#[cfg(test)]selection:SelectionObservation'),
+    'BOSH selection owner field must remain a private test-only fact handle');
+  requireBoundary(normalize(body(bound, 'fn\\s+for_connection\\b')) ===
+    'self.auth_controls.validate_connection(connection)?;self.auth_connection=Some(connection);#[cfg(test)]{letmutselection=self.selection.0.lock().unwrap();ifletSome(previous)=selection.validated_connection{ifprevious!=connection{let(omitted_items,missing_auth_associations)=matchselection.status{SelectionReadStatus::Complete=>(0,0),SelectionReadStatus::Incomplete{omitted_items,missing_auth_associations,..}=>(omitted_items,missing_auth_associations)};selection.status=SelectionReadStatus::Incomplete{omitted_items,missing_auth_associations,connection_changed:true};}}else{selection.first_validated_connection=Some(connection);}selection.validated_connection=Some(connection);}Ok(self)',
+    'BOSH selection connection facts must follow successful validation and retain first/latest binding with sticky loss');
+  const prepare = normalize(body(source, 'async\\s+fn\\s+prepare\\b'));
+  const successful = normalize(body(prepare, 'Ok\\(ownership\\)\\s*=>'));
+  requireBoundary(successful ===
+    'letbound=request.returned(ownership).map_err(|error|{PreparationFailure::new(FailureStage::Binding,,error.into(),Some(&build))})?;letownership=bound.ownership().clone();ifselected.iter().any(|item|item.is_bosh_auth_control()!=item.auth_publication().is_some()){returnErr(PreparationFailure::new(FailureStage::Construction,,anyhow::anyhow!(),Some(&build)));}letauth_controls=SelectedControls::new(selected.iter().map(|item|(item.stanza.as_str(),item.auth_publication()))).map_err(|error|{PreparationFailure::new(FailureStage::Construction,,error,Some(&build))})?;letauth_control_selected=!auth_controls.is_empty();#[cfg(test)]letselection=SelectionObservation::capture(&selected,operation,metadata);returnOk(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None,#[cfg(test)]selection});' &&
+    count(normalize(code), 'SelectionObservation::capture(') === 1,
+    'BOSH selection capture must occur once inside final successful bind after actual selected-control validation');
+  // Count all reviewed named construction sites, including declaration/return
+  // heads. No new factory or callback may mint an observation or replace facts.
+  for (const [name, expected] of [['SelectedItemRead', 2], ['SelectedItemSnapshot', 2], ['SelectionState', 2], ['SelectionSnapshot', 3]]) {
+    requireBoundary([...code.matchAll(new RegExp('\\b' + name + '\\s*\\{', 'g'))].length === expected,
+      `BOSH selection ${name} must retain only its reviewed construction sites`);
+  }
+  requireBoundary([...code.matchAll(/\bSelectionObservation\s*\(/g)].length === 1,
+    'BOSH selection handle cannot add an unreviewed named constructor');
+}
+
+// Narrow lexical correspondence for the three shared production route helpers.
+// Inspect complete files: state.rs has earlier test modules followed by production.
+// Mask each source once, reject duplicate names and cfg/test-only or wrong-owner
+// declarations, then compare full bodies so map guards cannot end before effects.
+export function verifyRouteHelperBoundaries({ state, mixOutboxState, mix }) {
+  const normalize = value => compact(value).replace(/,([)}])/g, '$1');
+  const stateCode = codeOnly(state);
+  const capsCode = codeOnly(mixOutboxState);
+  const mixCode = codeOnly(mix);
+  function closing(code, opening) {
+    let depth = 1;
+    for (let index = opening + 1; index < code.length; index++) {
+      if (code[index] === '{') depth++;
+      else if (code[index] === '}' && --depth === 0) return index;
+    }
+    throw new Error('execution boundary: route helper source has an unterminated scope');
+  }
+  function item(code, name, declaration, owner = '') {
+    const matches = [...code.matchAll(new RegExp('\\bfn\\s+' + name + '\\b', 'g'))];
+    requireBoundary(matches.length === 1, `route helper ${name} must have one unique production declaration`);
+    const start = matches[0].index;
+    const scopes = [];
+    let boundary = 0;
+    for (let index = 0; index < start; index++) {
+      if (code[index] === '{') {
+        scopes.push(normalize(code.slice(boundary, index)));
+        boundary = index + 1;
+      } else if (code[index] === '}') {
+        scopes.pop();
+        boundary = index + 1;
+      } else if (code[index] === ';') boundary = index + 1;
+    }
+    requireBoundary(owner ? scopes.length === 1 && scopes[0] === `impl${owner}` : scopes.length === 0,
+      `route helper ${name} must stay in its exact production scope`);
+    const opening = code.indexOf('{', start);
+    requireBoundary(opening >= 0 && normalize(code.slice(boundary, opening)) === normalize(declaration),
+      `route helper ${name} must retain its unconditioned production signature`);
+    return normalize(code.slice(opening + 1, closing(code, opening)));
+  }
+  requireBoundary(item(stateCode, "publish_user_agent_epoch_if_current_in", "pub(crate)fnpublish_user_agent_epoch_if_current_in(sessions:&DashMap<String,OnlineSession>,key:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,user_agent_epoch:Option<i64>)->bool", "") ===
+    "letSome(mutsession)=sessions.get_mut(key)else{returnfalse;};ifsession.connection_id!=connection_id||session.user_id!=user_id||session.auth_generation!=auth_generation||!Arc::ptr_eq(&session.lifecycle,lifecycle)||session.disconnect.is_cancelled()||session.lifecycle.load(Ordering::Acquire)!=0{returnfalse;}session.user_agent_epoch=user_agent_epoch;true",
+    "route helper publish_user_agent_epoch_if_current_in must preserve exact-key write guard, identity/pointer/lifecycle rejection and actual Option assignment");
+  requireBoundary(item(stateCode, "activate_session_if_current_in", "pub(crate)fnactivate_session_if_current_in(sessions:&DashMap<String,OnlineSession>,full_jid:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,disconnect:&CancellationToken)->bool", "") ===
+    "letSome(session)=sessions.get_mut(full_jid)else{returnfalse;};if!staged_route_activation_allowed(StagedRouteActivationCheck{session:StagedRouteIdentity{connection_id:session.connection_id,user_id:session.user_id,auth_generation:session.auth_generation},expected:StagedRouteIdentity{connection_id,user_id,auth_generation},same_lifecycle:Arc::ptr_eq(&session.lifecycle,lifecycle),lifecycle_state:session.lifecycle.load(Ordering::Acquire),session_cancelled:session.disconnect.is_cancelled(),owner_cancelled:disconnect.is_cancelled()}){returnfalse;}session.routable.store(true,Ordering::Release);ifsession.lifecycle.load(Ordering::Acquire)!=0||session.disconnect.is_cancelled()||disconnect.is_cancelled(){session.routable.store(false,Ordering::Release);returnfalse;}true",
+    "route helper activate_session_if_current_in must preserve write guard, real predicate inputs, release true-store and post-store recheck/rollback");
+  requireBoundary(item(capsCode, "session_mix_capability_in", "pub(crate)fnsession_mix_capability_in(sessions:&DashMap<String,OnlineSession>,caps_by_jid:&CapsResourceIndex,pending_caps:&PendingCapsIndex,full_jid:&str)->MixSessionCapability", "") ===
+    "letOk(full_jid)=crate::jid::canonical_session_key(full_jid)else{returnMixSessionCapability::Unknown;};letSome(observation)=caps_by_jid.snapshot(&full_jid)else{returnMixSessionCapability::Unknown;};ifletCapsObservationOwner::Local(epoch)=observation.owner{letcurrent=sessions.get(&full_jid).is_some_and(|session|{local_caps_route_epoch_matches(session.connection_id,session.caps_observation_generation.load(Ordering::Acquire),session.routable.load(Ordering::Acquire),session.disconnect.is_cancelled(),session.lifecycle.load(Ordering::Acquire),true,epoch)});if!current{pending_caps.remove_local_epoch(&full_jid,epoch);caps_by_jid.remove_local_epoch(&full_jid,epoch);returnMixSessionCapability::Unknown;}}matchobservation.summary{Some(summary)ifsummary.has_feature(CORE_NS)||summary.has_feature(PAM_NS)=>{MixSessionCapability::Supported}Some(_)=>MixSessionCapability::Unsupported,None=>MixSessionCapability::Unknown}",
+    "route helper session_mix_capability_in must preserve canonical snapshot, actual local epoch fence, pending-before-resource exact-epoch eviction and CORE-or-PAM classification");
+  requireBoundary(item(stateCode, "publish_user_agent_epoch_if_current", "pub(crate)fnpublish_user_agent_epoch_if_current(&self,key:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,user_agent_epoch:Option<i64>)->bool", "AppState") ===
+    "publish_user_agent_epoch_if_current_in(&self.sessions,key,connection_id,user_id,auth_generation,lifecycle,user_agent_epoch)",
+    "route helper publish_user_agent_epoch_if_current must preserve all exact epoch-publication arguments");
+  requireBoundary(item(stateCode, "activate_session_if_current", "pub(crate)fnactivate_session_if_current(&self,full_jid:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,disconnect:&CancellationToken)->bool", "AppState") ===
+    "activate_session_if_current_in(&self.sessions,full_jid,connection_id,user_id,auth_generation,lifecycle,disconnect)",
+    "route helper activate_session_if_current must preserve all exact activation arguments");
+  requireBoundary(item(capsCode, "session_mix_capability", "pub(crate)fnsession_mix_capability(&self,full_jid:&str)->MixSessionCapability", "MixOutboxContext") ===
+    "session_mix_capability_in(&self.sessions,&self.caps_by_jid,&self.pending_caps,full_jid)",
+    "route helper session_mix_capability must preserve all exact capability map/index/key arguments");
+  const route = item(mixCode, 'deliver_channel_stanza_inner',
+    "async fn deliver_channel_stanza_inner(context: &MixOutboxContext, delivery: ChannelStanzaDelivery<'_>, observation: Option<&mix_worker::RouteRequest>) -> Result<ChannelStanzaDeliveryOutcome>");
+  const targets = 'letmutlocal_targets=context.session_entries_for(&recipient.jid);local_targets.sort_unstable_by(|(left,_),(right,_)|left.cmp(right));ifletSome(delivery_id)=durable_delivery_id{tracing::debug!(delivery_id=%delivery_id,target_count=local_targets.len());}letmuthad_deliverable_target=false;letmuthad_unknown_target=false;letmuthad_route_target=!local_targets.is_empty();letmutcluster_delivery_failed=false;letmutaccepted=false;letmuttransferred_to_recoverable_transport=false;for(jid,session)in&local_targets{matchcontext.session_mix_capability(jid){';
+  const archive = route.indexOf('ifarchive{');
+  requireBoundary(count(route, 'ifarchive{') === 1 && route.includes(targets) &&
+    route.indexOf(targets) > closing(route, archive + 'ifarchive'.length) &&
+    [...route.matchAll(/\bsession_mix_capability(?:_in)?\(/g)].length === 1,
+    'route helper capability lookup must stay lazy inside the unchanged sorted production target loop after archive work');
 }
 
 export function verifyExecutionBoundaries(sources) {
@@ -996,8 +1198,8 @@ export function verifyExecutionBoundaries(sources) {
   const commonFields = 'metadata:Metadata,response:BoshHttpResponse,receipts:Vec<mpsc::UnboundedSender<()>>,ownership:Arc<BoshResponseOwnership>,';
   const finishHead = 'pub(super)fnfinish(self,last_response:&mutInstant,highest_responded:&mutu64,replay:&mutVecDeque<CachedResponse>,)->Result<()>{';
   const ownerShapes = [
-    ['BoundResponse', commonFields + 'bound:response::BoundResponse,auth_control_selected:bool,auth_controls:SelectedControls,auth_connection:Option<uuid::Uuid>,',
-      ['for_connection', 'expose'], ['pub(super)fnfor_connection(mutself,connection:uuid::Uuid)->Result<Self>{', 'pub(super)fnexpose(mutself,responders:Vec<Responder>)->Result<ExposedResponse>{']],
+    ['BoundResponse', commonFields + 'bound:response::BoundResponse,auth_control_selected:bool,auth_controls:SelectedControls,auth_connection:Option<uuid::Uuid>,#[cfg(test)]selection:SelectionObservation,',
+      ['selection_observation', 'for_connection', 'expose'], ['#[cfg(test)]pub(super)fnselection_observation(&self)->SelectionObservation{', 'pub(super)fnfor_connection(mutself,connection:uuid::Uuid)->Result<Self>{', 'pub(super)fnexpose(mutself,responders:Vec<Responder>)->Result<ExposedResponse>{']],
     ['ExposedResponse', commonFields + 'exposure:response::Exposure,accepted:bool,auth_control_selected:bool,auth_controls:SelectedControls,',
       ['any_accepted', 'publish_authentication', 'finish'], [
         '#[cfg(test)]pub(super)fnany_accepted(&self)->bool{',
@@ -1036,7 +1238,8 @@ export function verifyExecutionBoundaries(sources) {
   ordered(prepare, ['loop{', 'let(response,sources,receipts,selected)=built',
     'letbound=request.returned(ownership)', 'letauth_controls=SelectedControls::new(selected.iter().map(|item|(item.stanza.as_str(),item.auth_publication())))',
     'letauth_control_selected=!auth_controls.is_empty();',
-    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None})'],
+    '#[cfg(test)]letselection=SelectionObservation::capture(&selected,operation,metadata);',
+    'Ok(BoundResponse{metadata,response,receipts,ownership,bound,auth_control_selected,auth_controls,auth_connection:None,#[cfg(test)]selection})'],
     'BOSH auth membership must come from the final bound selection on every rebuild');
   const cached = compact(body(bosh, 'struct\\s+CachedResponse\\b'));
   const replay = compact(body(boshResponse, 'async\\s+fn\\s+replay_cached\\b'));
@@ -1072,6 +1275,8 @@ export function verifyExecutionBoundaries(sources) {
     'letcontrol=ifactivate_route{letSome(holder)=auth_publicationelse{returnfalse;};matchcontrol.with_auth_publication(holder){Ok(control)=>control,Err(_)=>returnfalse}}else{ifauth_publication.is_some(){returnfalse;}control};',
     'output.push_back(control);', 'forstanzainpost_control.into_iter().chain(replay){', '*output_bytes+=batch_bytes;'],
     'BOSH resume must mark only the exact control after complete batch capacity admission');
+  verifyBoshSelectionObservations(sources);
+  verifyRouteHelperBoundaries(sources);
 }
 
 export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mucService, mucSlot, mucDb, mucRepository, frame, protocol }) {
@@ -1336,6 +1541,8 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   const method = (source, name) => dense(body(source, `fn\\s+${name}\\b`));
   const implementation = (source, name) => body(source, `impl\\s+${name}\\b`);
   const core = productionModule(mixWorkerCore);
+  const mixTestBoundary = codeOnly(mix).search(/\n#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)?mod\s+\w+\b/);
+  const mixProduction = mixTestBoundary < 0 ? mix : mix.slice(0, mixTestBoundary);
   const coreCode = dense(codeOnly(core));
   requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(core)),
     'MIX worker core must remain free of ambient effects');
@@ -1494,41 +1701,70 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   requireBoundary(method(mixArchive, 'commit_mix_archive').includes('SourceArchiveAdmission::Stored(id)=>{northstar_delivery_core::mix_outbox::ArchiveResult::Stored(id)}SourceArchiveAdmission::Replay(id)=>{northstar_delivery_core::mix_outbox::ArchiveResult::Replay(id)}') &&
     method(mixArchive, 'commit_mix_archive').includes('northstar_delivery_core::mix_outbox::archive_commit_observed(transaction.commit(),request,result).await.map_err(crate::services::mix::outbox::commit_error)'),
     'MIX personal archive receipt must preserve its actual variant and ID');
-  const route = method(mix, 'deliver_claimed_channel_stanza');
+  const route = method(mixProduction, 'deliver_claimed_channel_stanza');
   requireBoundary(route.startsWith('request.start()?;letrow=request.row();') && route.includes('delivery_id:Some(row.source.delivery_id),mix_source:Some(row.source),channel_jid:&row.channel_jid,recipient:&recipient,stanza:request.stanza().to_owned(),authoritative_stanza_id:row.authoritative_stanza_id,archive:row.archive,encrypted:row.encrypted,durable:true,database_lane:ChannelStanzaDatabaseLane::DurableOutbox},Some(request)).await'),
     'MIX route adapter must preserve the actual claimed optional-ID and archive shape');
-  const routeInner = method(mix, 'deliver_channel_stanza_inner');
+  const routeInner = method(mixProduction, 'deliver_channel_stanza_inner');
   for (const span of [
     'letadmission=ifletSome(owner)=observation{letrequest=owner.archive_request(user.id,archive_id,Some(client_stanza_id.clone()))?;context.service().outbox_archive_mix_message_once_observed(&request).await',
     'letresult=ifletSome(owner)=observation{letrequest=owner.local_request(jid.clone())?;try_send_local_durable_mix_observed(&session.sender,&session.disconnect,&request).await}',
     'letresult=ifletSome(owner)=observation{letrequest=owner.cluster_request(node_id.clone())?;send_claimed_cluster_mix(context,&request).await}',
   ]) requireBoundary(routeInner.includes(span), 'MIX observed route must retain the unfiltered bound archive/local/cluster branches');
-  requireBoundary(method(mix, 'try_send_local_durable_mix_observed') === 'try_send_local_durable_mix_inner(sender,disconnect,request.stanza().to_owned(),request.source(),Some(request)).await',
+  requireBoundary(method(mixProduction, 'try_send_local_durable_mix_observed') === 'try_send_local_durable_mix_inner(sender,disconnect,request.stanza().to_owned(),request.source(),Some(request)).await',
     'MIX local effect must send the request-bound stanza and source');
-  const local = method(mix, 'try_send_local_durable_mix_inner');
+  const local = method(mixProduction, 'try_send_local_durable_mix_inner');
   requireBoundary(local.startsWith('ifletSome(request)=observation{request.start().map_err(MixLocalTransportFailure::Observation)?;}letreceiver=matchsender.try_send_durable_mix(stanza,source){') &&
     local.includes('letmutpending=PendingMixLocalHandoff::new(sender.clone(),disconnect.clone());ifletSome(request)=observation{request.enqueued().map_err(MixLocalTransportFailure::Observation)?;}letcompletion=matchreceiver.await{'),
     'MIX local effect must start before enqueue and retain the existing pending-disconnect guard');
   requireBoundary(local.includes('pending.mark_completed();ifletSome(request)=observation{letboundary=matchcompletion{crate::outbound::MixTransportCompletion::SocketFenced{connection_id}=>{mix_worker::TransferBoundary::SocketFenced(connection_id)}crate::outbound::MixTransportCompletion::SmPersisted{session_id}=>{mix_worker::TransferBoundary::SmPersisted(session_id)}crate::outbound::MixTransportCompletion::BoshPersisted{session_id}=>{mix_worker::TransferBoundary::BoshPersisted(session_id)}};request.returned(mix_worker::LocalResult::Transferred(boundary)).map_err(MixLocalTransportFailure::Observation)?;}Ok(completion)'),
     'MIX local typed transfer must be consumed immediately before any later await or return');
-  requireBoundary(method(mix, 'send_claimed_cluster_mix') === 'request.start()?;letresult=context.send_cluster_mix(request.node(),request.recipient(),request.stanza(),Some(request.source())).await;record_claimed_cluster_result(request,&result)?;result',
+  requireBoundary(method(mixProduction, 'send_claimed_cluster_mix') === 'request.start()?;letresult=context.send_cluster_mix(request.node(),request.recipient(),request.stanza(),Some(request.source())).await;record_claimed_cluster_result(request,&result)?;result',
     'MIX cluster invocation must consume its actual typed result before returning');
-  requireBoundary(method(mix, 'record_claimed_cluster_result') === 'lethandoff=matchresult{Ok(receipt)ifreceipt.acknowledged=>receipt.mix_handoff.map(|handoff|matchhandoff{crate::cluster::ClusterMixHandoff::SocketFenced=>{mix_worker::TransferBoundary::ClusterSocketFenced}crate::cluster::ClusterMixHandoff::SmPersisted=>{mix_worker::TransferBoundary::ClusterSmPersisted}crate::cluster::ClusterMixHandoff::BoshPersisted=>{mix_worker::TransferBoundary::ClusterBoshPersisted}}),_=>None};request.returned(handoff)?;Ok(())',
+  requireBoundary(method(mixProduction, 'record_claimed_cluster_result') === 'lethandoff=matchresult{Ok(receipt)ifreceipt.acknowledged=>receipt.mix_handoff.map(|handoff|matchhandoff{crate::cluster::ClusterMixHandoff::SocketFenced=>{mix_worker::TransferBoundary::ClusterSocketFenced}crate::cluster::ClusterMixHandoff::SmPersisted=>{mix_worker::TransferBoundary::ClusterSmPersisted}crate::cluster::ClusterMixHandoff::BoshPersisted=>{mix_worker::TransferBoundary::ClusterBoshPersisted}}),_=>None};request.returned(handoff)?;Ok(())',
     'MIX cluster transfer requires acknowledged typed handoff, never a delivered boolean');
-  const worker = method(mix, 'process_claimed_mix_delivery');
+  requireBoundary(method(mixProduction, 'process_claimed_mix_delivery') ===
+    'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort{context},attempt,handle,cancel).await',
+    'MIX production wrapper must delegate its exact attempt, handle and cancellation to the shared policy');
+  requireBoundary(dense(body(mixProduction, 'trait\\s+ClaimedMixDeliveryPort\\b')) ===
+    'fnroute(&self,request:&mix_worker::RouteRequest)->implstd::future::Future<Output=Result<ChannelStanzaDeliveryOutcome>>+Send;' +
+    'fnrenew(&self,request:&mix_worker::RenewalRequest)->implstd::future::Future<Output=Result<bool>>+Send;' +
+    'fnsettle(&self,request:&mix_worker::SettlementRequest)->implstd::future::Future<Output=Result<mix_worker::SettlementResult>>+Send;',
+    'MIX shared policy port must contain only route and observed renewal/settlement turns');
+  requireBoundary(dense(body(mixProduction, 'struct\\s+MixOutboxDeliveryPort\\b')) === 'context:Arc<MixOutboxContext>,',
+    'MIX production port must retain only its existing context');
+  const port = body(mixProduction, 'impl\\s+ClaimedMixDeliveryPort\\s+for\\s+MixOutboxDeliveryPort\\b');
+  requireBoundary(method(port, 'route') === 'deliver_claimed_channel_stanza(&self.context,request).await' &&
+    method(port, 'renew') === 'self.context.service().renew_mix_delivery_lease_observed(request).await' &&
+    method(port, 'settle') === 'self.context.service().settle_mix_delivery_observed(request).await',
+    'MIX production port must forward each exact request to its existing observed effect');
+  const worker = method(mixProduction, 'process_claimed_mix_delivery_with_port');
+  requireBoundary(worker.startsWith('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;letsource=attempt.row().source;letevent_id=attempt.row().event_id;letchannel_id=attempt.row().channel_id;letstanza=matchaddressed_mix_delivery(&attempt.row().stanza,&attempt.row().recipient_jid){') &&
+    worker.includes('letrequest=attempt.invalid_template(error.to_string())?;letmoved=matchbounded_mix_outbox_turn(&cancel,attempt_deadline,port.settle(&request)).await{Ok(mix_worker::SettlementResult::DeadLetter(moved))=>moved,Ok(_)=>anyhow::bail!()'),
+    'MIX shared policy must retain exact row addressing and bounded invalid-template settlement');
   requireBoundary(worker.includes('Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker)=>(mix_worker::RouteResult::CompletedByWorker,mix_worker::SettlementCommand::Ack)') &&
     worker.includes('(mix_worker::RouteResult::Pending,mix_worker::SettlementCommand::Defer{delay_seconds:MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS})') &&
     worker.includes('(mix_worker::RouteResult::Permanent,mix_worker::SettlementCommand::DeadLetter{reason:permanent.reason.to_owned(),error:permanent.detail.clone()})') &&
     worker.includes('(mix_worker::RouteResult::Retry,mix_worker::SettlementCommand::Retry{error:error.to_string()})'),
     'MIX worker must preserve each actual route result and exclusive settlement command');
-  requireBoundary(worker.includes('letrequest=attempt.route(stanza)?;') && worker.includes('async{Ok(deliver_claimed_channel_stanza(&context,&request).await)}') &&
-    worker.includes('letrenewal=owner.renewal_request()?;context.service().renew_mix_delivery_lease_observed(&renewal).await') &&
+  requireBoundary(worker.includes('letrequest=attempt.route(stanza)?;') && worker.includes('letrenewal_port=port.clone();letrenewal_owner=handle.observation.clone();letresult=run_claimed_mix_effect_with_lease(cancel.clone(),attempt_deadline,MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,async{Ok(port.route(&request).await)}') &&
+    worker.includes('letport=renewal_port.clone();letowner=renewal_owner.clone();Box::pin(asyncmove{letrenewal=owner.renewal_request()?;port.renew(&renewal).await})') &&
     worker.includes('}).await;letclosed=handle.observation.close_renewal_scope()?;letresult=matchresult{'),
     'MIX worker must close renewal scope only after the existing route-only helper destroys its children');
   requireBoundary(worker.includes('Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport)=>{request.returned(mix_worker::RouteResult::Transferred)?.transferred(closed)?;returnOk(());}') &&
-    worker.includes('letcompletion=request.returned(outcome)?;letsettlement=completion.settlement(command,closed)?.context()?;letcompletion=bounded_mix_outbox_turn(&cancel,attempt_deadline,context.service().settle_mix_delivery_observed(&settlement)).await;') &&
+    worker.includes('letcompletion=request.returned(outcome)?;letsettlement=completion.settlement(command,closed)?.context()?;letcompletion=bounded_mix_outbox_turn(&cancel,attempt_deadline,port.settle(&settlement)).await;') &&
     !worker.includes('.acknowledge_mix_delivery(') && !worker.includes('.retry_mix_delivery('),
     'MIX claimed delivery must consume transfer or lazily start its one bound settlement under the existing deadline');
+  requireBoundary(count(worker, 'handle.finish_as(mix_worker::TerminalReason::Cancelled);') === 4 &&
+    count(worker, 'handle.finish_as(mix_worker::TerminalReason::TimedOut);') === 3 &&
+    worker.includes('Ok(Some(result))=>result,Ok(None)=>{tracing::warn!(delivery_id=%source.delivery_id,event_id=%event_id,channel_id=%channel_id);returnOk(());}') &&
+    count(worker, 'Err(error)ifmix_outbox_is_shutting_down(&error)=>{') === 2 &&
+    count(worker, 'Err(error)ifmix_outbox_deadline_elapsed(&error)=>{') === 2 &&
+    worker.includes('ifmix_outbox_is_shutting_down(&error){handle.finish_as(mix_worker::TerminalReason::Cancelled);returnOk(());}elseiferror.downcast_ref::<MixDeliveryRoutePending>().is_some()'),
+    'MIX shared policy must retain nested route/renewal results and cancellation classes');
+  requireBoundary(worker.includes('mix_worker::SettlementResult::DeadLetter(false)=>{tracing::warn!(delivery_id=%source.delivery_id,event_id=%event_id,channel_id=%channel_id);}') &&
+    worker.includes('mix_worker::SettlementResult::Ack(false)|mix_worker::SettlementResult::Defer(false)|mix_worker::SettlementResult::Retry(mix_worker::RetryResult::LeaseLost)=>{tracing::warn!(delivery_id=%source.delivery_id,event_id=%event_id,channel_id=%channel_id);}') &&
+    count(worker, 'tracing::warn!(delivery_id=%source.delivery_id,event_id=%event_id,channel_id=%channel_id)') === 7,
+    'MIX shared policy must retain NotMoved and exact-fence warnings with their row identity facts');
 }
 
 export function verifyRoomExecutionBoundaries(sources) {

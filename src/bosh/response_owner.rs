@@ -154,6 +154,143 @@ impl PreparationFailure {
         }
     }
 }
+// The closed Stage 4 profile needs at most four selected items per response.
+// This is a test-observation bound, never a limit on production selection.
+#[cfg(test)]
+const MAX_SELECTED_FACTS: usize = 4;
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SelectionReadStatus {
+    Complete,
+    Incomplete {
+        omitted_items: usize,
+        missing_auth_associations: usize,
+        connection_changed: bool,
+    },
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SelectedItemSnapshot {
+    // Ordinal in the actual final selection, not an inferred input queue index.
+    pub(super) ordinal: usize,
+    pub(super) source: Option<crate::outbound::TransportOwnershipSource>,
+    pub(super) utf8_length: usize,
+    pub(super) sha256: [u8; 32],
+    pub(super) auth_marker: bool,
+    pub(super) sealed_association: Option<crate::xmpp::auth_publication::ControlAssociation>,
+    pub(super) holder_joins: Option<crate::xmpp::auth_publication::ControlJoins>,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SelectionSnapshot {
+    pub(super) session: uuid::Uuid,
+    pub(super) rid: u64,
+    pub(super) fingerprint: [u8; 32],
+    pub(super) first_validated_connection: Option<uuid::Uuid>,
+    pub(super) validated_connection: Option<uuid::Uuid>,
+    pub(super) selected_count: usize,
+    pub(super) status: SelectionReadStatus,
+    pub(super) items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS],
+}
+#[cfg(test)]
+struct SelectedItemRead {
+    at_selection: SelectedItemSnapshot,
+    joins: Option<crate::xmpp::auth_publication::ControlJoinObservation>,
+}
+#[cfg(test)]
+struct SelectionState {
+    session: uuid::Uuid,
+    rid: u64,
+    fingerprint: [u8; 32],
+    first_validated_connection: Option<uuid::Uuid>,
+    validated_connection: Option<uuid::Uuid>,
+    selected_count: usize,
+    status: SelectionReadStatus,
+    items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS],
+}
+// Retains only bounded facts and the existing read-only join cells. No holder,
+// receipt, response bytes, publication Observation or consuming continuation is
+// retained or exposed. Keeping this handle cannot delay holder abandonment.
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);
+#[cfg(test)]
+impl SelectionObservation {
+    fn capture(
+        selected: &VecDeque<OutboundItem>,
+        operation: &Operation,
+        metadata: Metadata,
+    ) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut missing_auth_associations = 0;
+        let items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS] =
+            std::array::from_fn(|ordinal| {
+                selected.get(ordinal).map(|item| {
+                    let joins = item
+                        .auth_publication()
+                        .map(|holder| holder.join_observation());
+                    let holder_joins = joins.as_ref().map(|joins| joins.snapshot());
+                    let association = holder_joins.and_then(|joins| joins.introduced);
+                    let auth_marker = item.is_bosh_auth_control();
+                    if auth_marker && association.is_none() {
+                        missing_auth_associations += 1;
+                    }
+                    SelectedItemRead {
+                        at_selection: SelectedItemSnapshot {
+                            ordinal,
+                            source: item.durable_source,
+                            utf8_length: item.stanza.len(),
+                            sha256: Sha256::digest(item.stanza.as_bytes()).into(),
+                            auth_marker,
+                            sealed_association: association,
+                            holder_joins,
+                        },
+                        joins,
+                    }
+                })
+            });
+        let omitted_items = selected.len().saturating_sub(MAX_SELECTED_FACTS);
+        let status = if omitted_items == 0 && missing_auth_associations == 0 {
+            SelectionReadStatus::Complete
+        } else {
+            SelectionReadStatus::Incomplete {
+                omitted_items,
+                missing_auth_associations,
+                connection_changed: false,
+            }
+        };
+        Self(Arc::new(std::sync::Mutex::new(SelectionState {
+            session: operation.session_id(),
+            rid: metadata.rid,
+            fingerprint: metadata.fingerprint,
+            first_validated_connection: None,
+            validated_connection: None,
+            selected_count: selected.len(),
+            status,
+            items,
+        })))
+    }
+    pub(super) fn snapshot(&self) -> SelectionSnapshot {
+        let state = self.0.lock().unwrap();
+        SelectionSnapshot {
+            session: state.session,
+            rid: state.rid,
+            fingerprint: state.fingerprint,
+            first_validated_connection: state.first_validated_connection,
+            validated_connection: state.validated_connection,
+            selected_count: state.selected_count,
+            status: state.status,
+            items: std::array::from_fn(|ordinal| {
+                state.items[ordinal].as_ref().map(|item| {
+                    let mut snapshot = item.at_selection;
+                    snapshot.holder_joins = item.joins.as_ref().map(|joins| joins.snapshot());
+                    snapshot
+                })
+            }),
+        }
+    }
+}
+
 /// Only this owning continuation may expose the selected response bytes.
 pub(super) struct BoundResponse {
     metadata: Metadata,
@@ -164,6 +301,8 @@ pub(super) struct BoundResponse {
     auth_control_selected: bool,
     auth_controls: SelectedControls,
     auth_connection: Option<uuid::Uuid>,
+    #[cfg(test)]
+    selection: SelectionObservation,
 }
 impl std::fmt::Debug for BoundResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -186,9 +325,38 @@ pub(super) struct PublicationReadyResponse {
     exposed: ExposedResponse,
 }
 impl BoundResponse {
+    /// Retain before expose/publish; later snapshots do not need the callback.
+    #[cfg(test)]
+    pub(super) fn selection_observation(&self) -> SelectionObservation {
+        self.selection.clone()
+    }
     pub(super) fn for_connection(mut self, connection: uuid::Uuid) -> Result<Self> {
         self.auth_controls.validate_connection(connection)?;
         self.auth_connection = Some(connection);
+        #[cfg(test)]
+        {
+            let mut selection = self.selection.0.lock().unwrap();
+            if let Some(previous) = selection.validated_connection {
+                if previous != connection {
+                    let (omitted_items, missing_auth_associations) = match selection.status {
+                        SelectionReadStatus::Complete => (0, 0),
+                        SelectionReadStatus::Incomplete {
+                            omitted_items,
+                            missing_auth_associations,
+                            ..
+                        } => (omitted_items, missing_auth_associations),
+                    };
+                    selection.status = SelectionReadStatus::Incomplete {
+                        omitted_items,
+                        missing_auth_associations,
+                        connection_changed: true,
+                    };
+                }
+            } else {
+                selection.first_validated_connection = Some(connection);
+            }
+            selection.validated_connection = Some(connection);
+        }
         Ok(self)
     }
     pub(super) fn expose(mut self, responders: Vec<Responder>) -> Result<ExposedResponse> {
@@ -445,6 +613,8 @@ pub(super) async fn prepare<P: ReplayPort>(
                     )
                 })?;
                 let auth_control_selected = !auth_controls.is_empty();
+                #[cfg(test)]
+                let selection = SelectionObservation::capture(&selected, operation, metadata);
                 return Ok(BoundResponse {
                     metadata,
                     response,
@@ -454,6 +624,8 @@ pub(super) async fn prepare<P: ReplayPort>(
                     auth_control_selected,
                     auth_controls,
                     auth_connection: None,
+                    #[cfg(test)]
+                    selection,
                 });
             }
             Err(error) => {
@@ -1021,6 +1193,8 @@ mod tests {
         u_holder.recording().unwrap();
         b_holder.recording().unwrap();
         let prior_b = b.snapshot();
+        let prior_b_joins = b_holder.join_observation().snapshot();
+        let u_association = u_holder.join_observation().snapshot().introduced.unwrap();
         let limit = 16 * 1024;
         let padding_bytes = limit - 256 - u_bytes.len();
         let wrapper = "<presence><status></status></presence>";
@@ -1045,6 +1219,28 @@ mod tests {
             .prepare(&operation, &FakeReplay::default(), 10, None)
             .await
             .unwrap();
+        let selection = bound.selection_observation();
+        let selected = selection.snapshot();
+        assert_eq!(selected.status, SelectionReadStatus::Complete);
+        assert_eq!(selected.selected_count, 2);
+        assert_eq!(selected.items[0].unwrap().ordinal, 0);
+        assert!(!selected.items[0].unwrap().auth_marker);
+        assert_eq!(selected.items[0].unwrap().utf8_length, padding_bytes);
+        assert_eq!(selected.items[1].unwrap().ordinal, 1);
+        assert!(selected.items[1].unwrap().auth_marker);
+        assert_eq!(
+            selected.items[1].unwrap().sealed_association,
+            Some(u_association)
+        );
+        assert_eq!(selected.items[1].unwrap().source, None);
+        assert_eq!(selected.items[2], None);
+        assert_eq!(selected.items[3], None);
+        assert_ne!(Some(u_association), prior_b_joins.introduced);
+        let queued_b = harness.output[1]
+            .auth_publication()
+            .unwrap()
+            .join_observation();
+        assert_eq!(queued_b.snapshot(), prior_b_joins);
         let (tx, rx) = oneshot::channel();
         let ready = bound
             .expose(vec![tx])
@@ -1067,6 +1263,459 @@ mod tests {
             .finish(&mut Instant::now(), &mut 0, &mut harness.replay)
             .unwrap();
         assert_eq!(b.snapshot(), prior_b);
+        assert_eq!(queued_b.snapshot(), prior_b_joins);
+        let after_cache = selection.snapshot();
+        assert_eq!(
+            after_cache.items[1].unwrap().sealed_association,
+            Some(u_association)
+        );
+        assert_eq!(
+            after_cache.items[1]
+                .unwrap()
+                .holder_joins
+                .unwrap()
+                .transferred,
+            Some(u_association),
+        );
+    }
+
+    #[tokio::test]
+    async fn selected_facts_keep_actual_fifo_bytes_sources_and_distinct_same_byte_controls() {
+        use sha2::{Digest, Sha256};
+        let control = "<success note='é'/>";
+        let plain = "<presence><status>é</status></presence>";
+        let (first, first_publication) = fixture_control(control, AUTH_CONNECTION);
+        let (second, second_publication) = fixture_control(control, AUTH_CONNECTION);
+        let introduced = [
+            first.join_observation().snapshot().introduced.unwrap(),
+            second.join_observation().snapshot().introduced.unwrap(),
+        ];
+        assert_ne!(introduced[0].control, introduced[1].control);
+        assert_ne!(introduced[0].receipt, introduced[1].receipt);
+        let mut harness = Harness::new([
+            durable_item(506),
+            OutboundItem::plain(plain.to_owned()),
+            OutboundItem::plain(control.to_owned())
+                .with_auth_publication(first)
+                .unwrap(),
+            OutboundItem::plain(control.to_owned())
+                .with_auth_publication(second)
+                .unwrap(),
+        ]);
+        let operation = operation();
+        let bound = harness
+            .prepare(&operation, &FakeReplay::default(), 41, None)
+            .await
+            .unwrap();
+        let selection = bound.selection_observation();
+        let before = selection.snapshot();
+        assert_eq!(before.session, operation.session_id());
+        assert_eq!(before.rid, 41);
+        assert_eq!(before.fingerprint, metadata(41).fingerprint);
+        assert_eq!(before.validated_connection, Some(AUTH_CONNECTION));
+        assert_eq!(before.status, SelectionReadStatus::Complete);
+        assert_eq!(before.selected_count, MAX_SELECTED_FACTS);
+        assert_eq!(before.items[0].unwrap().source, Some(Source::C2s(c2s(506))));
+        let plain_facts = before.items[1].unwrap();
+        assert_eq!(plain_facts.utf8_length, plain.len());
+        assert_ne!(plain_facts.utf8_length, plain.chars().count());
+        assert_eq!(
+            plain_facts.sha256,
+            <[u8; 32]>::from(Sha256::digest(plain.as_bytes()))
+        );
+        assert!(!plain_facts.auth_marker);
+        assert_eq!(plain_facts.sealed_association, None);
+        assert_eq!(plain_facts.holder_joins, None);
+        for (offset, association) in introduced.iter().copied().enumerate() {
+            let item = before.items[offset + 2].unwrap();
+            assert_eq!(item.ordinal, offset + 2);
+            assert_eq!(item.source, None);
+            assert_eq!(item.utf8_length, control.len());
+            assert_eq!(
+                item.sha256,
+                <[u8; 32]>::from(Sha256::digest(control.as_bytes()))
+            );
+            assert!(item.auth_marker);
+            assert_eq!(item.sealed_association, Some(association));
+            assert_eq!(item.holder_joins.unwrap().transferred, None);
+            assert_eq!(association.publication.credential, None);
+        }
+        // Swapped equal-byte controls remain different actual associations.
+        assert_ne!(
+            before.items[2].unwrap().sealed_association,
+            Some(introduced[1])
+        );
+        assert_ne!(
+            before.items[3].unwrap().sealed_association,
+            Some(introduced[0])
+        );
+        assert_eq!(selection.snapshot(), before);
+        let (tx, rx) = oneshot::channel();
+        let exposed = bound.expose(vec![tx]).unwrap();
+        assert_eq!(selection.snapshot(), before);
+        let response = rx.await.unwrap();
+        assert!(body(&response).contains(plain));
+        assert_eq!(body(&response).matches(control).count(), 2);
+        let ready = exposed
+            .publish_authentication(publish_unbound_fixture)
+            .await
+            .unwrap();
+        let before_finish = selection.snapshot();
+        for (offset, association) in introduced.iter().copied().enumerate() {
+            assert_eq!(
+                before_finish.items[offset + 2].unwrap().sealed_association,
+                Some(association)
+            );
+            assert_eq!(
+                before_finish.items[offset + 2]
+                    .unwrap()
+                    .holder_joins
+                    .unwrap()
+                    .transferred,
+                Some(association),
+            );
+        }
+        assert_eq!(
+            first_publication.joins().begun_receipt,
+            Some(introduced[0].receipt)
+        );
+        assert_eq!(
+            second_publication.joins().begun_receipt,
+            Some(introduced[1].receipt)
+        );
+        ready
+            .finish(&mut Instant::now(), &mut 0, &mut harness.replay)
+            .unwrap();
+        assert_eq!(selection.snapshot(), before_finish);
+        assert_eq!(harness.replay[0].rid, before.rid);
+        assert_eq!(harness.replay[0].fingerprint, before.fingerprint);
+        assert_eq!(harness.replay[0].response.body, response.body);
+    }
+
+    #[tokio::test]
+    async fn selected_facts_record_connection_only_after_actual_successful_validation() {
+        for valid in [false, true] {
+            let operation = operation();
+            let port = FakeReplay::default();
+            let mut harness = Harness::new([auth_control()]);
+            let bound = prepare(
+                &mut Fields {
+                    output: &mut harness.output,
+                    output_bytes: &mut harness.bytes,
+                    replay: &mut harness.replay,
+                    governor: &harness.governor,
+                    max_response_bytes: harness.max_bytes,
+                    max_output_stanzas: harness.max_stanzas,
+                    content_type: "text/xml; charset=utf-8",
+                    received_rid: Some(42),
+                },
+                metadata(42),
+                None,
+                &operation,
+                &port,
+            )
+            .await
+            .unwrap();
+            let selection = bound.selection_observation();
+            assert_eq!(selection.snapshot().validated_connection, None);
+            let result = bound.for_connection(if valid {
+                AUTH_CONNECTION
+            } else {
+                Uuid::from_u128(999)
+            });
+            if valid {
+                let bound = result.unwrap();
+                assert_eq!(
+                    selection.snapshot().validated_connection,
+                    Some(AUTH_CONNECTION)
+                );
+                let before = selection.snapshot();
+                assert!(bound.for_connection(Uuid::from_u128(999)).is_err());
+                assert_eq!(selection.snapshot(), before);
+            } else {
+                assert!(result.is_err());
+                assert_eq!(selection.snapshot().validated_connection, None);
+            }
+            assert_eq!(operation.summary().responses.accepted_responders, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_fact_rebinding_keeps_actual_connections_and_sticky_history_loss() {
+        // Empty auth selection legitimately permits repeated successful binds.
+        // Observation must not turn that existing behavior into rejection.
+        for overflow in [false, true] {
+            let count = if overflow { MAX_SELECTED_FACTS + 1 } else { 1 };
+            let mut harness = Harness::new(
+                (0..count).map(|id| OutboundItem::plain(format!("<presence id='{id}'/>"))),
+            );
+            let operation = operation();
+            let bound = harness
+                .prepare(&operation, &FakeReplay::default(), 49, None)
+                .await
+                .unwrap();
+            let selection = bound.selection_observation();
+            let first = selection.snapshot();
+            assert_eq!(first.first_validated_connection, Some(AUTH_CONNECTION));
+            assert_eq!(first.validated_connection, Some(AUTH_CONNECTION));
+            let bound = bound.for_connection(AUTH_CONNECTION).unwrap();
+            assert_eq!(selection.snapshot(), first);
+            let other = Uuid::from_u128(999);
+            let bound = bound.for_connection(other).unwrap();
+            let second = selection.snapshot();
+            assert_eq!(second.first_validated_connection, Some(AUTH_CONNECTION));
+            assert_eq!(second.validated_connection, Some(other));
+            assert_eq!(bound.auth_connection, Some(other));
+            let loss = SelectionReadStatus::Incomplete {
+                omitted_items: if overflow { 1 } else { 0 },
+                missing_auth_associations: 0,
+                connection_changed: true,
+            };
+            assert_eq!(second.status, loss);
+            let bound = bound.for_connection(AUTH_CONNECTION).unwrap();
+            assert_eq!(
+                selection.snapshot().first_validated_connection,
+                Some(AUTH_CONNECTION)
+            );
+            assert_eq!(
+                selection.snapshot().validated_connection,
+                Some(AUTH_CONNECTION)
+            );
+            assert_eq!(selection.snapshot().status, loss);
+            assert_eq!(bound.auth_connection, Some(AUTH_CONNECTION));
+            let (tx, rx) = oneshot::channel();
+            let exposed = bound.expose(vec![tx]).unwrap();
+            assert!(rx.await.is_ok());
+            let ready = exposed
+                .publish_authentication(|_| async {
+                    panic!("plain response must not invoke publication")
+                })
+                .await
+                .unwrap();
+            ready
+                .finish(&mut Instant::now(), &mut 0, &mut harness.replay)
+                .unwrap();
+            assert_eq!(harness.replay.len(), 1);
+            assert_eq!(selection.snapshot().status, loss);
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_fact_handle_cannot_keep_bound_or_exposed_auth_authority_alive() {
+        use crate::services::authentication::publication::{Knowledge, Terminal, Transport};
+        for expose in [false, true] {
+            let control = "<success/>";
+            let (holder, publication) = fixture_control(control, AUTH_CONNECTION);
+            let mut harness = Harness::new([OutboundItem::plain(control.to_owned())
+                .with_auth_publication(holder)
+                .unwrap()]);
+            let operation = operation();
+            let bound = harness
+                .prepare(&operation, &FakeReplay::default(), 43, None)
+                .await
+                .unwrap();
+            let selection = bound.selection_observation();
+            let alias = selection.clone();
+            let before = selection.snapshot();
+            if expose {
+                let (tx, rx) = oneshot::channel();
+                let exposed = bound.expose(vec![tx]).unwrap();
+                assert!(body(&rx.await.unwrap()).contains(control));
+                assert_eq!(
+                    publication.snapshot().transport,
+                    Transport::BoshAccepted { rid: 43 }
+                );
+                // Ordinary owner drop, not a bypass implementation: no callback
+                // is constructed and no selected-owner transfer can be inferred.
+                assert_eq!(selection.snapshot(), before);
+                drop(exposed);
+            } else {
+                drop(bound);
+            }
+            assert_eq!(selection.snapshot(), before);
+            assert_eq!(alias.snapshot(), before);
+            assert_eq!(
+                before.items[0].unwrap().holder_joins.unwrap().transferred,
+                None
+            );
+            assert_eq!(publication.joins().begun_receipt, None);
+            assert_eq!(publication.snapshot().publication, Knowledge::NotStarted);
+            assert_eq!(
+                publication.snapshot().terminal,
+                Some(if expose {
+                    Terminal::ExposedNotAttempted
+                } else {
+                    Terminal::Abandoned
+                })
+            );
+            assert!(harness.replay.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_fact_handle_survives_publication_callback_error_and_pending_drop() {
+        use crate::services::authentication::publication::Knowledge;
+        for pending in [false, true] {
+            let (holder, publication) = fixture_control("<success/>", AUTH_CONNECTION);
+            let mut harness = Harness::new([OutboundItem::plain("<success/>".to_owned())
+                .with_auth_publication(holder)
+                .unwrap()]);
+            let operation = operation();
+            let bound = harness
+                .prepare(&operation, &FakeReplay::default(), 44, None)
+                .await
+                .unwrap();
+            let selection = bound.selection_observation();
+            let introduced = selection.snapshot().items[0]
+                .unwrap()
+                .sealed_association
+                .unwrap();
+            let (tx, rx) = oneshot::channel();
+            let exposed = bound.expose(vec![tx]).unwrap();
+            let response = rx.await.unwrap();
+            let mut future = Box::pin(exposed.publish_authentication(|owners| async move {
+                let _owners = owners;
+                if pending {
+                    std::future::pending::<()>().await;
+                }
+                false
+            }));
+            let polled = poll_once(future.as_mut());
+            if pending {
+                assert!(polled.is_pending());
+            } else {
+                assert!(matches!(polled, Poll::Ready(Err(_))));
+            }
+            let before_drop = selection.snapshot();
+            assert_eq!(
+                before_drop.items[0].unwrap().sealed_association,
+                Some(introduced)
+            );
+            assert_eq!(
+                before_drop.items[0]
+                    .unwrap()
+                    .holder_joins
+                    .unwrap()
+                    .transferred,
+                Some(introduced)
+            );
+            drop(future);
+            assert_eq!(selection.snapshot(), before_drop);
+            assert_eq!(publication.joins().begun_receipt, None);
+            assert_eq!(publication.snapshot().publication, Knowledge::NotStarted);
+            assert!(body(&response).contains("<success/>"));
+            assert!(harness.replay.is_empty());
+            assert!(!operation.snapshot().responses[0].bookkeeping);
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_facts_use_only_successful_superseded_rebuild_final_membership() {
+        let operation = operation();
+        let port = FakeReplay::bind_cuts([Cut::Superseded, Cut::Success]);
+        let mut harness = Harness::new([durable_item(506), durable_item(507), auth_control()]);
+        let bound = harness.prepare(&operation, &port, 45, None).await.unwrap();
+        let selection = bound.selection_observation();
+        let snapshot = selection.snapshot();
+        assert_eq!(operation.snapshot().responses[0].attempts.len(), 2);
+        assert_eq!(snapshot.status, SelectionReadStatus::Complete);
+        assert_eq!(snapshot.selected_count, 2);
+        assert_eq!(snapshot.items[0].unwrap().ordinal, 0);
+        assert_eq!(
+            snapshot.items[0].unwrap().source,
+            Some(Source::C2s(c2s(507)))
+        );
+        assert_eq!(snapshot.items[1].unwrap().ordinal, 1);
+        assert_eq!(snapshot.items[1].unwrap().source, None);
+        assert!(snapshot.items[1].unwrap().auth_marker);
+        assert_eq!(snapshot.items[2], None);
+        assert_eq!(snapshot.items[3], None);
+        let (tx, rx) = oneshot::channel();
+        let exposed = bound.expose(vec![tx]).unwrap();
+        let response = rx.await.unwrap();
+        assert!(!body(&response).contains("id='506'"));
+        assert!(body(&response).contains("id='507'"));
+        drop(exposed);
+        assert_eq!(selection.snapshot(), snapshot);
+    }
+
+    #[tokio::test]
+    async fn selected_fact_overflow_is_explicit_and_does_not_truncate_actual_selection() {
+        for count in [MAX_SELECTED_FACTS, MAX_SELECTED_FACTS + 1] {
+            let (holder, publication) = fixture_control("<success/>", AUTH_CONNECTION);
+            let mut items: Vec<_> = (0..count - 1)
+                .map(|id| OutboundItem::plain(format!("<presence id='{id}'/>")))
+                .collect();
+            items.push(
+                OutboundItem::plain("<success/>".to_owned())
+                    .with_auth_publication(holder)
+                    .unwrap(),
+            );
+            let mut harness = Harness::new(items);
+            let operation = operation();
+            let bound = harness
+                .prepare(&operation, &FakeReplay::default(), 46, None)
+                .await
+                .unwrap();
+            let selection = bound.selection_observation();
+            let before = selection.snapshot();
+            assert_eq!(before.selected_count, count);
+            assert_eq!(before.items.iter().flatten().count(), MAX_SELECTED_FACTS);
+            assert_eq!(
+                before.status,
+                if count == MAX_SELECTED_FACTS {
+                    SelectionReadStatus::Complete
+                } else {
+                    SelectionReadStatus::Incomplete {
+                        omitted_items: 1,
+                        missing_auth_associations: 0,
+                        connection_changed: false,
+                    }
+                }
+            );
+            assert_eq!(
+                before.items[3].unwrap().auth_marker,
+                count == MAX_SELECTED_FACTS
+            );
+            let (tx, rx) = oneshot::channel();
+            let exposed = bound.expose(vec![tx]).unwrap();
+            let response = rx.await.unwrap();
+            assert_eq!(body(&response).matches("<presence ").count(), count - 1);
+            assert!(body(&response).contains("<success/>"));
+            assert!(harness.output.is_empty());
+            let ready = exposed
+                .publish_authentication(publish_unbound_fixture)
+                .await
+                .unwrap();
+            assert!(publication.completed());
+            ready
+                .finish(&mut Instant::now(), &mut 0, &mut harness.replay)
+                .unwrap();
+            assert_eq!(harness.replay[0].response.body, response.body);
+            assert_eq!(selection.snapshot().status, before.status);
+            assert_eq!(selection.snapshot().selected_count, count);
+        }
+    }
+
+    #[tokio::test]
+    async fn altered_selected_control_bytes_cannot_produce_a_successful_selection_view() {
+        let (holder, publication) = fixture_control("<success id='original'/>", AUTH_CONNECTION);
+        let joins = holder.join_observation();
+        let before = joins.snapshot();
+        let mut item = OutboundItem::plain("<success id='original'/>".to_owned())
+            .with_auth_publication(holder)
+            .unwrap();
+        item.stanza = "<success id='altered'/>".to_owned();
+        let operation = operation();
+        let mut harness = Harness::new([item]);
+        assert!(harness
+            .prepare(&operation, &FakeReplay::default(), 47, None)
+            .await
+            .is_err());
+        assert_eq!(joins.snapshot(), before);
+        assert_eq!(publication.joins().begun_receipt, None);
+        assert_eq!(operation.summary().responses.accepted_responders, 0);
+        assert!(harness.replay.is_empty());
     }
 
     #[tokio::test]

@@ -1,0 +1,144 @@
+{
+  "actual_validation": {
+    "cargo": {
+      "all_targets_check": "Passed",
+      "all_targets_clippy_warnings_denied": "Passed",
+      "locked": true,
+      "offline": true,
+      "packages": [
+        "rust-xmpp-server",
+        "northstar-delivery-core"
+      ]
+    },
+    "cleanup": "Complete",
+    "commands_passed": 167,
+    "formatting_checked_changed_rust_files": 6,
+    "node": {
+      "cancelled": 0,
+      "failed": 0,
+      "names_sha256": "26bf501a56c2be33c90bbe00cbcaad61e8e09bfaab7db3c6907645f55a63e879",
+      "skipped": 0,
+      "todo": 0,
+      "unique_passed": 720
+    },
+    "rust": {
+      "actual_full_inventories": {
+        "northstar-delivery-core": 54,
+        "rust-xmpp-server": 1979
+      },
+      "enhanced_existing_bosh_control": 1,
+      "exact_package_names_sha256": "114559b111848ad1dbb1d750ce7cb9d287da7cbe2cd7298cda34c8d2880ac2d7",
+      "exact_passed": 156,
+      "failed": 0,
+      "ignored": 0,
+      "inventory_counts_are_not_pass_counts": true,
+      "new_controls": {
+        "authentication_joins": 6,
+        "selection_and_intent_observation": 10,
+        "shared_route_helpers": 9,
+        "shared_worker_policy": 8
+      },
+      "selected_by_package": {
+        "northstar-delivery-core": 16,
+        "rust-xmpp-server": 140
+      }
+    },
+    "source_gates": [
+      "execution boundaries",
+      "admission execution",
+      "architecture boundaries",
+      "outbound XML construction",
+      "migration source consistency"
+    ],
+    "source_preserved": true
+  },
+  "base_ci": {
+    "commit": "c22a2c49cb0da9c12185b1229dd67d7976bc7883",
+    "conclusion": "failure",
+    "jobs": {
+      "failure": 2,
+      "skipped": 1,
+      "success": 30
+    },
+    "narrow_regression_evidence": "Previously failing SQL/runtime/documentation jobs and both regular 2x50 listener stress jobs passed after the immutable forward migration. This does not validate all SM retention behavior.",
+    "remaining_direct_failure": "Disaster recovery could not read s3-results.tsv in the abort-upload cutover fixture; its inner abort stderr was discarded, so the initiating cause remains unknown. The other failed job is the dependent required-CI aggregate.",
+    "reruns": 0,
+    "run_id": 37427742900,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37427742900"
+  },
+  "base_commit": "c22a2c49cb0da9c12185b1229dd67d7976bc7883",
+  "date_utc": "2026-10-06",
+  "independent_review": "Accepted",
+  "qualification": "FiniteOrdinaryOnly",
+  "remaining_boundaries": [
+    "Saved Stage4 baseline, replay, mutant and causal-shrink cases are not implemented or executed by this checkpoint.",
+    "Later private schema, frame accessors and saved adapters are excluded from these sources and counts.",
+    "Ordinary controls use supplied repository/transport facts and actual in-memory owners; they do not establish live SQL, wire or full-handler fidelity.",
+    "The full production MIX route sorting/fallback, ProtocolSession prechecks/mirror and CAPS discovery/rebinding remain source correspondence.",
+    "S08 saved scope must retain production first-renewal timing: no active-renewal claim from a five-second saved case. Active renewal/drop is ordinary component evidence only.",
+    "Production UUID entropy is unchanged. This checkpoint retains actual association facts; a saved identity-normalization contract is not part of its qualification.",
+    "Stage4 composition, Stage5 real adapters and Stage6 finite resource qualification remain open. The 72-hour soak is cancelled.",
+    "No full CI-green or production-readiness claim."
+  ],
+  "retained_history": {
+    "corrected_static_checkpoint": "Seven commands and 580 Node cases passed for that earlier source. The current integrated source passed the full 720-case batch above.",
+    "initial_foundation_static_attempt": "Stopped before Cargo because one source guard expected a struct body without its actual trailing comma; the exact expected literal and two focused negatives were corrected.",
+    "prior_sm_partial_and_cold_stop": "Their earlier incomplete/failed qualifications and cleanup classifications are unchanged."
+  },
+  "schema": "northstar-stage4-composition-foundation-results-v1",
+  "source_scope": {
+    "production_route_helpers": [
+      "Exact session epoch mapping",
+      "Exact staged-route activation",
+      "Actual local CAPS lookup/classification and stale-epoch eviction"
+    ],
+    "production_shared_worker_policy": "Production delegates the existing claimed-MIX delivery policy through the same private port used by finite controls.",
+    "source_files": [
+      {
+        "path": "scripts/check-architecture-boundaries.mjs",
+        "sha256": "d51721c9986307323fd7ac9e19308e508552bed36cf203e0151f1c27eae2067c"
+      },
+      {
+        "path": "scripts/check-execution-boundaries.mjs",
+        "sha256": "c0fd625e8caba9636c689a7c57e19b0e258ccd2691c339d2986b8d0b963257c2"
+      },
+      {
+        "path": "scripts/test-execution-boundaries.mjs",
+        "sha256": "dfc0eb15737d6ae493361dfaf8d54655c0a96724f5b5fbc5cad7c41541ff1ee9"
+      },
+      {
+        "path": "scripts/test-mix-outbox-boundaries.mjs",
+        "sha256": "cbda1575a654272cbc6419a03f03483b4372cc5737d3f7159a8acd9775cbd5c9"
+      },
+      {
+        "path": "src/bosh/response_owner.rs",
+        "sha256": "e210371b41f214986df83fe02612214dd3daa61754a308911e2176cd749c90e2"
+      },
+      {
+        "path": "src/services/authentication/publication.rs",
+        "sha256": "6ffb5c4483219a3219bc75b83fbc0c6e78594af46e7d91dcb436c565fa262995"
+      },
+      {
+        "path": "src/state.rs",
+        "sha256": "d511eed0b98c9d13f34bfe5bd4eab6da699c5a59cdeb9236e782490ac48680ea"
+      },
+      {
+        "path": "src/state/mix_outbox.rs",
+        "sha256": "9a69887c6579d00d51e4e7f1dee6d67f6759f55b123ab689d599642012de296b"
+      },
+      {
+        "path": "src/xmpp/auth_publication.rs",
+        "sha256": "f61f198b7ed77d6c8686d6d65700218c55eb1205225dbfa6bc316442751fac7c"
+      },
+      {
+        "path": "src/xmpp/protocol/mix.rs",
+        "sha256": "5dfc59047260a25784701d8293dfb4a62f829aeda95e58c8038f7a18a325cc94"
+      }
+    ],
+    "test_only_observations": [
+      "Actual credential/receipt/control association joins",
+      "Final BOSH selection slots and live fact-only join observations",
+      "Sealed publication intent fields"
+    ]
+  }
+}

@@ -51,6 +51,7 @@ for (const [constant, seconds] of [
   ['MIX_OUTBOX_DRAIN_GRACE', 14],
   ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
   ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
+  ['MIX_OUTBOX_LEASE_RENEWAL_INTERVAL', 10],
 ]) {
   test(`reject changed ${constant} budget`, () => {
     const before = `const ${constant}: Duration = Duration::from_secs(${seconds});`;
@@ -151,4 +152,21 @@ test('test-only copies cannot conceal a broken production claim helper', () => {
   const changed = replaceIn(baseline, claim, 'cancellable_mix_outbox_turn(cancel, claim).await', 'claim.await');
   const proof = baseline.slice(baseline.indexOf(claim), baseline.indexOf('\n}\n', baseline.indexOf(claim)) + 2);
   assert.throws(() => verifyMixOutboxLifecycle(changed + '\n#[cfg(test)]\nmod fake {\n' + proof + '\n}\n'), admission);
+});
+
+rejects('production delivery cannot bypass shared worker policy', 'async fn process_claimed_mix_delivery(',
+  'process_claimed_mix_delivery_with_port(\n        MixOutboxDeliveryPort { context },\n        attempt,\n        handle,\n        cancel,\n    )',
+  'unshared_delivery_policy(context, attempt, handle, cancel)', /wrapper must delegate/);
+rejects('production delivery cannot detach its original attempt handle', 'async fn process_claimed_mix_delivery(',
+  'attempt,\n        handle,\n        cancel,\n    )', 'attempt, other_handle, cancel)', /wrapper must delegate/);
+rejects('shared delivery policy must retain the original absolute deadline', 'async fn process_claimed_mix_delivery_with_port<',
+  'tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE',
+  'tokio::time::Instant::now() + Duration::from_secs(1)', /original attempt deadline/);
+test('test-only shared policy cannot conceal a missing production deadline', () => {
+  const declaration = 'async fn process_claimed_mix_delivery_with_port<';
+  const changed = replaceIn(baseline, declaration,
+    'tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE',
+    'tokio::time::Instant::now() + Duration::from_secs(1)');
+  const proof = baseline.slice(baseline.indexOf(declaration), baseline.indexOf('\n}\n', baseline.indexOf(declaration)) + 2);
+  assert.throws(() => verifyMixOutboxLifecycle(changed + '\n#[cfg(test)]\nmod fake {\n' + proof + '\n}\n'), /original attempt deadline/);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 function changed(file, before, after) {
@@ -315,6 +315,57 @@ rejects('auth holder cannot add a factory that takes before write', 'authOwner',
   'impl AuthControlHolder {',
   'impl AuthControlHolder { pub(crate) fn take_without_write(self) -> OwnedPublication { let pending = self.0.pending.lock().unwrap().pending.take().unwrap(); OwnedPublication { pending, holder: self, managed: false } }',
   /closed inherent-method inventory/);
+
+rejects('auth holder join observation cannot become a production accessor', 'authOwner',
+  '#[cfg(test)] pub(crate) fn join_observation(&self) -> ControlJoinObservation',
+  'pub(crate) fn join_observation(&self) -> ControlJoinObservation', /test-only read-only clone/);
+rejects('auth holder join observation cannot substitute unrelated joins', 'authOwner',
+  'pub(crate) fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }',
+  'pub(crate) fn join_observation(&self) -> ControlJoinObservation { other_joins.clone() }', /test-only read-only clone/);
+
+for (const [file, name, derive] of [
+  ['authFacts', 'CredentialAttemptJoin', 'Clone, Copy, Debug, Eq, PartialEq'],
+  ['authFacts', 'CredentialJoins', 'Clone, Copy, Debug, Eq, PartialEq'],
+  ['authFacts', 'PublicationJoins', 'Clone, Copy, Debug, Eq, PartialEq'],
+  ['authOwner', 'ControlAssociation', 'Clone, Copy, Debug, Eq, PartialEq'],
+  ['authOwner', 'ControlJoins', 'Clone, Copy, Debug, Default, Eq, PartialEq'],
+]) {
+  rejects(`auth ${name} facts cannot escape test configuration`, file,
+    `#[cfg(test)] #[derive(${derive})] pub(crate) struct ${name}`,
+    `#[derive(${derive})] pub(crate) struct ${name}`, /test-only association facts/);
+}
+for (const [file, field, expected] of [
+  ['authFacts', 'transferred_receipt: Option<Uuid>', /test-only and follow actual checked transfer/],
+  ['authFacts', 'begun_receipt: Option<Uuid>', /test-only and follow actual publication acceptance/],
+  ['authOwner', 'joins: ControlJoinObservation,', /test-only handoff cut/],
+]) {
+  rejects(`auth private ${field} cannot escape test configuration`, file,
+    `#[cfg(test)] ${field}`, field, expected);
+}
+rejects('auth credential joins cannot replace raw returned identity with constructed identity', 'authFacts',
+  'returned_receipt: state.returned.as_ref().map(|(id, _)| *id)',
+  'returned_receipt: state.constructed.as_ref().map(|(id, _)| *id)', /independently read actual constructed/);
+rejects('auth credential joins cannot fabricate an observed transfer identity', 'authFacts',
+  'state.transferred_receipt = Some(receipt.publication_identity());',
+  'state.transferred_receipt = state.constructed.as_ref().map(|(id, _)| *id);', /follow actual checked transfer/);
+rejects('auth publication joins cannot fabricate a begun receipt identity', 'authFacts',
+  'state.begun_receipt = Some(receipt.publication_identity());',
+  'state.begun_receipt = Some(state.receipt_id);', /follow actual publication acceptance/);
+rejects('auth publication joins cannot erase their actual credential anchor', 'authFacts',
+  'credential: state.credential.as_ref().map(|credential| credential.joins().owner)',
+  'credential: None', /only an observed credential anchor/);
+rejects('auth retained join reader cannot keep a holder alive', 'authOwner',
+  'pub(crate) struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);',
+  'pub(crate) struct ControlJoinObservation(Arc<Holder>);', /retain only test facts/);
+rejects('auth control joins cannot copy introduction into the transferred association', 'authOwner',
+  'holder.0.joins.0.lock().unwrap().transferred = Some(control_association(&holder.0, &owner.pending));',
+  'holder.0.joins.0.lock().unwrap().transferred = holder.0.joins.0.lock().unwrap().introduced;', /test-only handoff cut/);
+rejects('auth control joins cannot replace the moved pending receipt with the earlier observation', 'authOwner',
+  'receipt: pending.receipt.publication_identity()',
+  'receipt: holder.observation.joins().receipt', /moved pending receipt independently/);
+rejects('auth control joins cannot erase the actual frame association', 'authOwner',
+  'frame: pending.origin.as_ref().map(FrameExecution::operation_id)',
+  'frame: None', /actual holder and moved pending receipt/);
 
 // Pre-receipt controls use the same exact-one token-span mutation helper.
 rejects('credential prepared owner cannot become Clone', 'authFacts',
@@ -941,6 +992,58 @@ function rejectsMixWorker(name, file, before, after, expected, matches = 1) {
 }
 
 test('MIX worker production adapters and private permissions satisfy their gate', () => verifyMixWorkerBoundaries(baseline));
+rejectsMixWorker('MIX production wrapper cannot bypass its shared policy', 'mix',
+  'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort { context }, attempt, handle, cancel).await',
+  'Ok(())', /production wrapper must delegate/);
+rejectsMixWorker('MIX production wrapper cannot substitute its cancellation token', 'mix',
+  'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort { context }, attempt, handle, cancel).await',
+  'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort { context }, attempt, handle, other_cancel).await', /production wrapper must delegate/);
+rejectsMixWorker('MIX shared worker port cannot grow a generic executor operation', 'mix',
+  "trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static {",
+  "trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static { fn execute(&self);", /port must contain only/);
+test('MIX production port cannot retain an extra field', () => {
+  assert.throws(() => verifyMixWorkerBoundaries(changed('mix',
+    'struct MixOutboxDeliveryPort {\n    context: Arc<MixOutboxContext>,\n}',
+    'struct MixOutboxDeliveryPort {\n    context: Arc<MixOutboxContext>,\n    retained: bool,\n}')),
+  { message: 'execution boundary: MIX production port must retain only its existing context' });
+});
+test('MIX production port cannot substitute its context type', () => {
+  assert.throws(() => verifyMixWorkerBoundaries(changed('mix',
+    'struct MixOutboxDeliveryPort {\n    context: Arc<MixOutboxContext>,\n}',
+    'struct MixOutboxDeliveryPort {\n    context: Arc<()>,\n}')),
+  { message: 'execution boundary: MIX production port must retain only its existing context' });
+});
+rejectsMixWorker('MIX production route port cannot substitute its request', 'mix',
+  'deliver_claimed_channel_stanza(&self.context, request).await',
+  'deliver_claimed_channel_stanza(&self.context, other_request).await', /port must forward/);
+for (const operation of ['renew_mix_delivery_lease_observed', 'settle_mix_delivery_observed']) {
+  rejectsMixWorker(`MIX production ${operation} port cannot bypass observed service work`, 'mix',
+    `self.context.service().${operation}(request).await`, 'Ok(true)', /port must forward/);
+}
+rejectsMixWorker('MIX shared policy cannot retarget its addressed row', 'mix',
+  'let stanza = match addressed_mix_delivery(&attempt.row().stanza, &attempt.row().recipient_jid)',
+  'let stanza = match addressed_mix_delivery(&attempt.row().stanza, other_recipient)', /exact row addressing/);
+rejectsMixWorker('MIX invalid-template settlement cannot bypass the shared deadline', 'mix',
+  'bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&request))',
+  'unbounded_turn(port.settle(&request))', /bounded invalid-template/);
+rejectsMixWorker('MIX shared policy cannot flatten route errors into renewal errors', 'mix',
+  'async { Ok(port.route(&request).await) }',
+  'async { port.route(&request).await }', /close renewal scope/);
+rejectsMixWorker('MIX shared policy cannot shorten its first renewal interval', 'mix',
+  'MIX_OUTBOX_LEASE_RENEWAL_INTERVAL, async { Ok(port.route(&request).await) }',
+  'Duration::from_millis(1), async { Ok(port.route(&request).await) }', /close renewal scope/);
+rejectsMixWorker('MIX shared policy cannot renew without its bound observation request', 'mix',
+  'let renewal = owner.renewal_request()?; port.renew(&renewal).await',
+  'port.renew(&other_renewal).await', /close renewal scope/);
+rejectsMixWorker('MIX shared policy cannot settle an unrelated request', 'mix',
+  'bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&settlement))',
+  'bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&other_settlement))', /consume transfer or lazily/);
+rejectsMixWorker('MIX shared policy cannot reinterpret LeaseLost as success', 'mix',
+  'mix_worker::SettlementResult::Ack(false) | mix_worker::SettlementResult::Defer(false) | mix_worker::SettlementResult::Retry(mix_worker::RetryResult::LeaseLost)',
+  'mix_worker::SettlementResult::Ack(false) | mix_worker::SettlementResult::Defer(false) | mix_worker::SettlementResult::Retry(mix_worker::RetryResult::Retried)', /NotMoved and exact-fence/);
+rejectsMixWorker('MIX shared policy cannot relabel route cancellation as timeout', 'mix',
+  'if mix_outbox_is_shutting_down(&error) { handle.finish_as(mix_worker::TerminalReason::Cancelled); return Ok(()); } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some()',
+  'if mix_outbox_is_shutting_down(&error) { handle.finish_as(mix_worker::TerminalReason::TimedOut); return Ok(()); } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some()', /cancellation classes/);
 rejectsMixWorker('MIX claim cannot accept value-equal substituted row storage', 'mixWorkerCore',
   'ClaimKnowledge::StatementReceipt(receipt) => Arc::ptr_eq(receipt, &rows)',
   'ClaimKnowledge::StatementReceipt(receipt) => receipt == &rows', /exact returned storage/);
@@ -1103,3 +1206,364 @@ for (const [name, request, result] of [
     `${declaration} let _admission = self.outbox_db_admission_guard().await;`, declaration,
     /fair admission and exact request/);
 }
+
+// The baseline is the untouched source read from disk, including the proposed
+// Rust observer after an authorized integration. Do not synthesize a positive
+// fixture by patching baseline source into the gate's expected contract.
+test('untouched BOSH selection observer satisfies focused and complete production gates', () => {
+  verifyBoshSelectionObservations(baseline);
+  verifyExecutionBoundaries(baseline);
+  verifyBoshResponseBoundaries(baseline);
+});
+function rejectsSelection(name, before, after, expected) {
+  test(name, () => {
+    const mutant = changedMuc('boshResponse', before, after);
+    assert.throws(() => verifyBoshSelectionObservations(mutant), expected);
+    assert.throws(() => verifyExecutionBoundaries(mutant));
+    assert.throws(() => verifyBoshResponseBoundaries(mutant));
+  });
+}
+for (const [name, declaration] of [
+  ['capacity', 'const MAX_SELECTED_FACTS: usize = 4;'],
+  ['status', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) enum SelectionReadStatus'],
+  ['item snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) struct SelectedItemSnapshot'],
+  ['response snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) struct SelectionSnapshot'],
+  ['retained item', 'struct SelectedItemRead'],
+  ['retained state', 'struct SelectionState'],
+  ['handle', '#[derive(Clone)] pub(super) struct SelectionObservation'],
+  ['implementation', 'impl SelectionObservation'],
+]) {
+  rejectsSelection(`BOSH selection ${name} cannot escape test configuration`,
+    `#[cfg(test)] ${declaration}`, declaration, /exact test-only declaration/);
+}
+rejectsSelection('BOSH selection observation capacity cannot grow',
+  'const MAX_SELECTED_FACTS: usize = 4;', 'const MAX_SELECTED_FACTS: usize = 5;', /exact test-only declaration/);
+rejectsSelection('BOSH selection snapshot cannot retain an unbounded collection',
+  'pub(super) items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS]',
+  'pub(super) items: Vec<SelectedItemSnapshot>', /capacity|fact-only field shape/);
+rejectsSelection('BOSH selection retained state cannot retain an unbounded collection',
+  'status: SelectionReadStatus, items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS]',
+  'status: SelectionReadStatus, items: Vec<SelectedItemRead>', /capacity|fact-only field shape/);
+rejectsSelection('BOSH selection capture cannot allocate an unbounded collection',
+  'let items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS] = std::array::from_fn(|ordinal|',
+  'let items: Vec<SelectedItemRead> = selected.iter().map(|ordinal|', /capacity|final FIFO facts/);
+rejectsSelection('BOSH selection status cannot lose its missing-association count',
+  'Incomplete { omitted_items: usize, missing_auth_associations: usize, connection_changed: bool, }',
+  'Incomplete { omitted_items: usize, connection_changed: bool, }', /fact-only field shape/);
+rejectsSelection('BOSH selection status cannot lose its sticky connection-change fact',
+  'Incomplete { omitted_items: usize, missing_auth_associations: usize, connection_changed: bool, }',
+  'Incomplete { omitted_items: usize, missing_auth_associations: usize, }', /fact-only field shape/);
+for (const [name, field] of [
+  ['holder', 'Option<crate::xmpp::auth_publication::AuthControlHolder>'],
+  ['receipt', 'Option<crate::services::authentication::CredentialCommitReceipt>'],
+  ['publication observation', 'Option<crate::services::authentication::publication::Observation>'],
+  ['consuming owner', 'Option<crate::xmpp::auth_publication::OwnedPublication>'],
+  ['response bytes', 'Option<BoshHttpResponse>'],
+]) {
+  rejectsSelection(`BOSH selection retained item cannot extend ${name} lifetime`,
+    'struct SelectedItemRead {', `struct SelectedItemRead { retained: ${field},`, /fact-only field shape/);
+}
+rejectsSelection('BOSH selection handle cannot retain actual holders',
+  'pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
+  'pub(super) struct SelectionObservation(Arc<Vec<crate::xmpp::auth_publication::AuthControlHolder>>);', /exact test-only declaration/);
+rejectsSelection('BOSH selection handle tuple field cannot become public',
+  'pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
+  'pub(super) struct SelectionObservation(pub(super) Arc<std::sync::Mutex<SelectionState>>);', /exact test-only declaration/);
+rejectsSelection('BOSH selection state cannot expose mutable facts',
+  'struct SelectionState { session: uuid::Uuid,',
+  'struct SelectionState { pub(super) session: uuid::Uuid,', /fact-only field shape/);
+rejectsSelection('BOSH selection snapshot cannot silently lose its digest field',
+  'pub(super) sha256: [u8; 32],', '', /fact-only field shape/);
+rejectsSelection('BOSH selection snapshot cannot acquire unreviewed derives',
+  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) struct SelectionSnapshot',
+  '#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)] pub(super) struct SelectionSnapshot', /exact test-only declaration/);
+rejectsSelection('BOSH selection cannot add a mutable reset API',
+  'impl SelectionObservation {',
+  'impl SelectionObservation { pub(super) fn reset(&self) { self.0.lock().unwrap().status = SelectionReadStatus::Complete; }', /closed capture/);
+rejectsSelection('BOSH selection snapshots cannot acquire an authority conversion',
+  'impl SelectionObservation {',
+  'impl SelectionSnapshot { fn into_owner(self) -> OwnedPublication { panic!() } } impl SelectionObservation {', /exact test-only declaration|closed capture/);
+rejectsSelection('BOSH selection capture cannot become a public constructor',
+  'fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self',
+  'pub(super) fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self', /immutable fact-only snapshot declarations/);
+rejectsSelection('BOSH selection capture cannot retain a borrowed queue lifetime',
+  'fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self',
+  "fn capture<'a>(selected: &'a VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self", /immutable fact-only snapshot declarations/);
+rejectsSelection('BOSH selection snapshot getter cannot return mutable state',
+  'pub(super) fn snapshot(&self) -> SelectionSnapshot',
+  'pub(super) fn snapshot(&mut self) -> &mut SelectionState', /immutable fact-only snapshot declarations/);
+rejectsSelection('BOSH selection owner getter cannot escape test configuration',
+  '#[cfg(test)] pub(super) fn selection_observation(&self) -> SelectionObservation',
+  'pub(super) fn selection_observation(&self) -> SelectionObservation', /test-only and clone only/);
+rejectsSelection('BOSH selection owner field cannot escape test configuration',
+  '#[cfg(test)] selection: SelectionObservation', 'selection: SelectionObservation', /private test-only fact handle/);
+rejectsSelection('BOSH selection owner getter cannot mutate its stored facts',
+  'pub(super) fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
+  'pub(super) fn selection_observation(&self) -> SelectionObservation { self.selection.0.lock().unwrap().status = SelectionReadStatus::Complete; self.selection.clone() }', /test-only and clone only/);
+rejectsSelection('BOSH selection owner getter cannot leak selected controls',
+  'pub(super) fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
+  'pub(super) fn selection_observation(&self) -> &SelectedControls { &self.auth_controls }', /test-only and clone only/);
+for (const [name, before, after] of [
+  ['original selected FIFO', 'selected.get(ordinal).map(|item|', 'selected.get(selected.len() - 1 - ordinal).map(|item|'],
+  ['actual source', 'source: item.durable_source,', 'source: expected_source,'],
+  ['actual UTF8 length', 'utf8_length: item.stanza.len(),', 'utf8_length: item.stanza.chars().count(),'],
+  ['same-item digest', 'sha256: Sha256::digest(item.stanza.as_bytes()).into(),', 'sha256: Sha256::digest(selected.front().unwrap().stanza.as_bytes()).into(),'],
+  ['actual auth marker', 'let auth_marker = item.is_bosh_auth_control();', 'let auth_marker = association.is_some();'],
+  ['independent holder joins', 'let joins = item.auth_publication().map(|holder| holder.join_observation());', 'let joins = supplied_holder_joins;'],
+  ['original sealed introduction', 'let association = holder_joins.and_then(|joins| joins.introduced);', 'let association = holder_joins.and_then(|joins| joins.transferred);'],
+  ['actual sealed association', 'sealed_association: association,', 'sealed_association: expected_association,'],
+  ['missing associations', 'if auth_marker && association.is_none() {', 'if false {'],
+  ['retained missing-association count', 'missing_auth_associations += 1;', 'missing_auth_associations += 0;'],
+  ['explicit overflow count', 'let omitted_items = selected.len().saturating_sub(MAX_SELECTED_FACTS);', 'let omitted_items = 0;'],
+  ['overflow status', 'if omitted_items == 0 && missing_auth_associations == 0 {', 'if missing_auth_associations == 0 {'],
+  ['missing-association status', 'if omitted_items == 0 && missing_auth_associations == 0 {', 'if omitted_items == 0 {'],
+  ['actual session', 'session: operation.session_id(),', 'session: uuid::Uuid::nil(),'],
+  ['actual RID', 'rid: metadata.rid, fingerprint: metadata.fingerprint, first_validated_connection: None,', 'rid: 0, fingerprint: metadata.fingerprint, first_validated_connection: None,'],
+  ['actual fingerprint', 'rid: metadata.rid, fingerprint: metadata.fingerprint, first_validated_connection: None,', 'rid: metadata.rid, fingerprint: [0; 32], first_validated_connection: None,'],
+  ['actual selected count', 'selected_count: selected.len(),', 'selected_count: items.len(),'],
+  ['absent initial connection', 'first_validated_connection: None, validated_connection: None,', 'first_validated_connection: Some(operation.session_id()), validated_connection: Some(operation.session_id()),'],
+]) {
+  rejectsSelection(`BOSH selection capture must retain ${name}`, before, after, /capacity|final FIFO facts/);
+}
+for (const [name, before, after] of [
+  ['sealed association after transfer', 'let mut snapshot = item.at_selection;', 'let mut snapshot = item.at_selection; snapshot.sealed_association = item.joins.as_ref().and_then(|joins| joins.snapshot().transferred);'],
+  ['live holder facts', 'snapshot.holder_joins = item.joins.as_ref().map(|joins| joins.snapshot());', 'snapshot.holder_joins = item.at_selection.holder_joins;'],
+  ['captured selection order', 'state.items[ordinal].as_ref().map(|item|', 'state.items[MAX_SELECTED_FACTS - 1 - ordinal].as_ref().map(|item|'],
+  ['loss status', 'status: state.status,', 'status: SelectionReadStatus::Complete,'],
+  ['first successful connection', 'first_validated_connection: state.first_validated_connection,', 'first_validated_connection: state.validated_connection,'],
+  ['latest successful connection', 'validated_connection: state.validated_connection,', 'validated_connection: state.first_validated_connection,'],
+]) {
+  rejectsSelection(`BOSH selection snapshot must retain ${name}`, before, after, /capacity|live fact-only holder joins/);
+}
+rejectsSelection('BOSH selection final capture cannot read the remaining queue',
+  'SelectionObservation::capture(&selected, operation, metadata)',
+  'SelectionObservation::capture(fields.output, operation, metadata)', /final successful bind/);
+rejectsSelection('BOSH selection final capture cannot use supplied fixture membership',
+  'SelectionObservation::capture(&selected, operation, metadata)',
+  'SelectionObservation::capture(&expected_selection, operation, metadata)', /final successful bind/);
+rejectsSelection('BOSH selection final capture cannot substitute operation identity',
+  'SelectionObservation::capture(&selected, operation, metadata)',
+  'SelectionObservation::capture(&selected, other_operation, metadata)', /final successful bind/);
+rejectsSelection('BOSH selection final capture cannot substitute metadata identity',
+  'SelectionObservation::capture(&selected, operation, metadata)',
+  'SelectionObservation::capture(&selected, operation, other_metadata)', /final successful bind/);
+rejectsSelection('BOSH selection final capture cannot escape test configuration',
+  '#[cfg(test)] let selection = SelectionObservation::capture(&selected, operation, metadata);',
+  'let selection = SelectionObservation::capture(&selected, operation, metadata);', /final successful bind/);
+rejectsSelection('BOSH selection constructor field cannot escape test configuration',
+  'auth_connection: None, #[cfg(test)] selection', 'auth_connection: None, selection', /final successful bind/);
+rejectsSelection('BOSH selection capture cannot be duplicated before binding',
+  'let bound = request.returned(ownership).map_err(|error|',
+  '#[cfg(test)] let early_selection = SelectionObservation::capture(&selected, operation, metadata); let bound = request.returned(ownership).map_err(|error|', /final successful bind/);
+rejectsSelection('BOSH selection capture cannot depend on a publication callback',
+  '#[cfg(test)] let selection = SelectionObservation::capture(&selected, operation, metadata);',
+  '#[cfg(test)] let selection = { publish(owners).await; SelectionObservation::capture(&selected, operation, metadata) };', /final successful bind/);
+rejectsSelection('BOSH selection callback cannot mint another selection observation',
+  'let owners = selected.take_all()?;',
+  'let owners = selected.take_all()?; #[cfg(test)] let later_selection = SelectionObservation::capture(&supplied_selection, operation, metadata);', /final successful bind/);
+rejectsSelection('BOSH selection success cannot add a suspension before capture',
+  'let auth_control_selected = !auth_controls.is_empty();',
+  'let auth_control_selected = !auth_controls.is_empty(); tokio::task::yield_now().await;', /final successful bind/);
+for (const [name, before, after] of [
+  ['connection assignment before validation', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.auth_connection = Some(connection); self.auth_controls.validate_connection(connection)?;'],
+  ['observer connection before validation', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.selection.0.lock().unwrap().validated_connection = Some(connection); self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);'],
+  ['ignored validation error', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'let _ = self.auth_controls.validate_connection(connection); self.auth_connection = Some(connection);'],
+  ['connection capture outside test configuration', '#[cfg(test)] { let mut selection = self.selection.0.lock().unwrap();', '{ let mut selection = self.selection.0.lock().unwrap();'],
+  ['first binding overwritten by rebinding', 'selection.validated_connection = Some(connection);', 'selection.first_validated_connection = Some(connection); selection.validated_connection = Some(connection);'],
+  ['latest binding lost on successful rebind', 'selection.validated_connection = Some(connection);', 'selection.validated_connection = selection.first_validated_connection;'],
+  ['return to first connection clearing loss', 'if previous != connection {', 'if selection.first_validated_connection != Some(connection) {'],
+  ['rebinding silently complete', 'selection.status = SelectionReadStatus::Incomplete { omitted_items, missing_auth_associations, connection_changed: true, };', 'selection.status = SelectionReadStatus::Complete;'],
+  ['previous overflow forgotten on rebinding', '} => (omitted_items, missing_auth_associations)', '} => (0, missing_auth_associations)'],
+  ['previous missing association forgotten on rebinding', '} => (omitted_items, missing_auth_associations)', '} => (omitted_items, 0)'],
+  ['equal successful validation adding loss', 'if previous != connection {', 'if true {'],
+  ['auth-free rebinding becoming production rejection', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.auth_controls.validate_connection(connection)?; anyhow::ensure!(self.auth_connection.is_none()); self.auth_connection = Some(connection);'],
+]) {
+  rejectsSelection(`BOSH selection forbids ${name}`, before, after, /successful validation.*sticky loss/);
+}
+for (const [name, before, after] of [
+  ['bound effect literal', 'bound_effects: state.bound_effects,', 'bound_effects: true,'],
+  ['notification literal', 'notification_expected: state.notification_expected', 'notification_expected: false'],
+  ['bound effect fixture', 'bound_effects: state.bound_effects,', 'bound_effects: expected_bound_effects,'],
+  ['notification fixture', 'notification_expected: state.notification_expected', 'notification_expected: expected_notification'],
+  ['bound effect receipt-kind inference', 'bound_effects: state.bound_effects,', 'bound_effects: state.snapshot.receipt == ReceiptKind::Binding,'],
+  ['notification receipt-kind inference', 'notification_expected: state.notification_expected', 'notification_expected: state.snapshot.receipt == ReceiptKind::Resume'],
+]) {
+  rejects(`auth publication joins reject ${name}`, 'authFacts', before, after, /actual State effect intent/);
+}
+rejects('auth publication intent fields cannot retain an authoritative observation', 'authFacts',
+  'pub(crate) bound_effects: bool, pub(crate) notification_expected: bool',
+  'pub(crate) bound_effects: bool, pub(crate) notification_expected: bool, pub(crate) retained: Observation', /test-only association facts/);
+rejects('auth publication joins preserve exact read-only derives', 'authFacts',
+  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins',
+  '#[derive(Clone, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins', /exact test-only derives/);
+
+test('auth publication joins reject a separate preceding derive attribute', () => {
+  const mutant = changedMuc('authFacts',
+    '#[cfg(test)] #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins',
+    '#[derive(Default)] #[cfg(test)] #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins');
+  assert.throws(() => verifyExecutionBoundaries(mutant),
+    { message: 'execution boundary: auth PublicationJoins must preserve its exact test-only derives' });
+});
+
+// Actual untouched production input, never a synthesized positive source fixture.
+test('untouched route helpers satisfy focused and complete production gates', () => {
+  verifyRouteHelperBoundaries(baseline);
+  verifyExecutionBoundaries(baseline);
+});
+function rejectsRoute(name, file, before, after, complete = false) {
+  test(name, () => {
+    const mutant = changedMuc(file, before, after);
+    assert.throws(() => verifyRouteHelperBoundaries(mutant), /execution boundary: route helper/);
+    if (complete) assert.throws(() => verifyExecutionBoundaries(mutant), /execution boundary: route helper/);
+  });
+}
+rejectsRoute("route epoch helper cannot become test-only", "state",
+  "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool",
+  "#[cfg(test)] pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool");
+rejectsRoute("route activation helper cannot become test-only", "state",
+  "pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool",
+  "#[cfg(test)] pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool");
+rejectsRoute("route caps helper cannot become test-only", "mixOutboxState",
+  "pub(crate) fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability",
+  "#[cfg(test)] pub(crate) fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability");
+rejectsRoute("route epoch helper cannot be replaced by a test-module shadow", "state",
+  "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n",
+  "#[cfg(test)] mod shadow_route { pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n }");
+rejectsRoute("route epoch helper rejects duplicate test-module shadow", "state",
+  "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n",
+  "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n\n#[cfg(test)] mod shadow_route { pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n }");
+rejectsRoute("route epoch delegate cannot become test-only", "state",
+  "pub(crate) fn publish_user_agent_epoch_if_current(\n        &self,\n        key: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        user_agent_epoch: Option<i64>,\n    ) -> bool",
+  "#[cfg(test)] pub(crate) fn publish_user_agent_epoch_if_current(\n        &self,\n        key: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        user_agent_epoch: Option<i64>,\n    ) -> bool");
+rejectsRoute("route activation delegate cannot become test-only", "state",
+  "pub(crate) fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool",
+  "#[cfg(test)] pub(crate) fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool");
+rejectsRoute("route caps delegate cannot become test-only", "mixOutboxState",
+  "pub(crate) fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability",
+  "#[cfg(test)] pub(crate) fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability");
+rejectsRoute("route epoch delegate preserves the supplied key", "state",
+  "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
+  "publish_user_agent_epoch_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)", true);
+rejectsRoute("route epoch delegate preserves the supplied Option", "state",
+  "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
+  "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, None)");
+rejectsRoute("route activation delegate preserves the lifecycle Arc", "state",
+  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
+  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, &other_lifecycle, disconnect)");
+rejectsRoute("route activation delegate preserves owner cancellation", "state",
+  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
+  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, &CancellationToken::new())");
+rejectsRoute("route CAPS delegate preserves the pending index", "mixOutboxState",
+  "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, full_jid)",
+  "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &other_pending_caps, full_jid)");
+rejectsRoute("route CAPS delegate preserves the queried key", "mixOutboxState",
+  "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, full_jid)",
+  "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, other_jid)");
+rejectsRoute("route epoch assignment retains the map write guard", "state",
+  "let Some(mut session) = sessions.get_mut(key) else { return false; };",
+  "let Some(mut session) = sessions.get(key).map(|entry| entry.value().clone()) else { return false; };");
+rejectsRoute("route epoch assignment preserves connection rejection", "state",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
+  "if session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
+rejectsRoute("route epoch assignment preserves user rejection", "state",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
+  "if session.connection_id != connection_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
+rejectsRoute("route epoch assignment preserves generation rejection", "state",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
+  "if session.connection_id != connection_id || session.user_id != user_id || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
+rejectsRoute("route epoch assignment preserves lifecycle pointer rejection", "state",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
+rejectsRoute("route epoch assignment preserves session cancellation rejection", "state",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.lifecycle.load(Ordering::Acquire) != 0");
+rejectsRoute("route epoch assignment preserves lifecycle state rejection", "state",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
+  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled()");
+rejectsRoute("route epoch assignment uses the actual Option", "state",
+  "session.user_agent_epoch = user_agent_epoch;",
+  "session.user_agent_epoch = Some(43);");
+rejectsRoute("route epoch missing key cannot return success", "state",
+  "let Some(mut session) = sessions.get_mut(key) else { return false; };",
+  "let Some(mut session) = sessions.get_mut(key) else { return true; };");
+rejectsRoute("route activation must call the actual shared predicate", "state",
+  "if !staged_route_activation_allowed(StagedRouteActivationCheck {\n        session: StagedRouteIdentity {\n            connection_id: session.connection_id,\n            user_id: session.user_id,\n            auth_generation: session.auth_generation,\n        },\n        expected: StagedRouteIdentity {\n            connection_id,\n            user_id,\n            auth_generation,\n        },\n        same_lifecycle: Arc::ptr_eq(&session.lifecycle, lifecycle),\n        lifecycle_state: session.lifecycle.load(Ordering::Acquire),\n        session_cancelled: session.disconnect.is_cancelled(),\n        owner_cancelled: disconnect.is_cancelled(),\n    }) {\n        return false;\n    }",
+  "if false { return false; }", true);
+rejectsRoute("route activation passes actual staged identity", "state",
+  "session: StagedRouteIdentity { connection_id: session.connection_id, user_id: session.user_id, auth_generation: session.auth_generation, }",
+  "session: StagedRouteIdentity { connection_id, user_id, auth_generation, }");
+rejectsRoute("route activation passes actual lifecycle identity", "state",
+  "same_lifecycle: Arc::ptr_eq(&session.lifecycle, lifecycle),",
+  "same_lifecycle: true,");
+rejectsRoute("route activation passes actual owner cancellation", "state",
+  "owner_cancelled: disconnect.is_cancelled(), }) {",
+  "owner_cancelled: false, }) {");
+rejectsRoute("route activation retains its map write guard", "state",
+  "pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool {\n    let Some(session) = sessions.get_mut(full_jid) else {\n        return false;\n    };\n",
+  "pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool {\n    let Some(session) = sessions.get(full_jid).map(|entry| entry.value().clone()) else {\n        return false;\n    };\n");
+rejectsRoute("route activation must publish true before rechecking", "state",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
+  " if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
+rejectsRoute("route activation rechecks the lifecycle after publication", "state",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
+  "session.routable.store(true, Ordering::Release); if session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
+rejectsRoute("route activation rechecks the session token after publication", "state",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
+rejectsRoute("route activation rechecks the owner token after publication", "state",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
+rejectsRoute("route activation must roll back false on a failed recheck", "state",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
+  "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() {  return false; } true");
+rejectsRoute("route CAPS lookup must canonicalize the queried key", "mixOutboxState",
+  "let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else { return MixSessionCapability::Unknown; };",
+  "let full_jid = full_jid.to_owned();");
+rejectsRoute("route CAPS snapshot uses the canonical queried key", "mixOutboxState",
+  "let Some(observation) = caps_by_jid.snapshot(&full_jid) else { return MixSessionCapability::Unknown; };",
+  "let Some(observation) = caps_by_jid.snapshot(&other_jid) else { return MixSessionCapability::Unknown; };");
+rejectsRoute("route CAPS keeps local owner fencing separate from federated owners", "mixOutboxState",
+  "if let CapsObservationOwner::Local(epoch) = observation.owner {",
+  "if let CapsObservationOwner::Federated(epoch) = observation.owner {");
+rejectsRoute("route CAPS fence reads the actual map epoch", "mixOutboxState",
+  "session.caps_observation_generation.load(Ordering::Acquire),",
+  "epoch.generation,");
+rejectsRoute("route CAPS fence retains the same-gate argument", "mixOutboxState",
+  "session.lifecycle.load(Ordering::Acquire), true, epoch, )",
+  "session.lifecycle.load(Ordering::Acquire), false, epoch, )");
+rejectsRoute("route CAPS stale observations cannot skip eviction", "mixOutboxState",
+  "if !current {",
+  "if false {");
+rejectsRoute("route CAPS evicts pending before resource observation", "mixOutboxState",
+  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
+  "caps_by_jid.remove_local_epoch(&full_jid, epoch); pending_caps.remove_local_epoch(&full_jid, epoch);");
+rejectsRoute("route CAPS must evict the stale pending epoch", "mixOutboxState",
+  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
+  "caps_by_jid.remove_local_epoch(&full_jid, epoch);");
+rejectsRoute("route CAPS must evict the stale resource epoch", "mixOutboxState",
+  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
+  "pending_caps.remove_local_epoch(&full_jid, epoch);");
+rejectsRoute("route CAPS pending eviction uses the exact observed epoch", "mixOutboxState",
+  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
+  "pending_caps.remove_local_epoch(&full_jid, other_epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);");
+rejectsRoute("route CAPS resource eviction uses the exact observed epoch", "mixOutboxState",
+  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
+  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, other_epoch);");
+rejectsRoute("route CAPS support remains CORE or PAM", "mixOutboxState",
+  "summary.has_feature(CORE_NS) || summary.has_feature(PAM_NS)",
+  "summary.has_feature(CORE_NS) && summary.has_feature(PAM_NS)");
+rejectsRoute("route CAPS missing summaries cannot become supported", "mixOutboxState",
+  "None => MixSessionCapability::Unknown, }",
+  "None => MixSessionCapability::Supported, }");
+rejectsRoute("route CAPS lookup cannot be hoisted out of the actual target loop", "mix",
+  "for (jid, session) in &local_targets { match context.session_mix_capability(jid) {",
+  "let capability = context.session_mix_capability(&local_targets[0].0); for (jid, session) in &local_targets { match capability {", true);
+rejectsRoute("route CAPS lookup keeps the existing sorted target order", "mix",
+  "local_targets.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));",
+  "");
+rejectsRoute("route CAPS lookup keeps the current target key", "mix",
+  "for (jid, session) in &local_targets { match context.session_mix_capability(jid) {",
+  "for (jid, session) in &local_targets { match context.session_mix_capability(&recipient.jid) {");
+rejectsRoute("route CAPS lookup cannot sweep targets eagerly before routing", "mix",
+  "let mut local_targets = context.session_entries_for(&recipient.jid);",
+  "let mut local_targets = context.session_entries_for(&recipient.jid); for (jid, _) in &local_targets { context.session_mix_capability(jid); }");

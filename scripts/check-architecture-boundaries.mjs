@@ -678,6 +678,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     ['MIX_OUTBOX_DRAIN_GRACE', 14],
     ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
     ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
+    ['MIX_OUTBOX_LEASE_RENEWAL_INTERVAL', 10],
   ]) {
     requireMix(compact(mixProtocolProduction).includes(
       'const' + name + ':Duration=Duration::from_secs(' + seconds + ');'),
@@ -740,8 +741,15 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
   'production lanes must share a fresh independent hard token and receive the parent stop separately');
   requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
   'supervisor must enforce the existing 14-second whole-worker drain');
-  for (const name of ['process_claimed_mix_delivery', 'process_claimed_pam_result']) {
-    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + '('));
+  const deliveryWrapper = compact(structBody(mixProtocolProduction, 'async fn process_claimed_mix_delivery('));
+  requireMix(deliveryWrapper ===
+    'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort{context},attempt,handle,cancel).await',
+  'production delivery wrapper must delegate its exact attempt to the shared policy');
+  for (const [name, suffix] of [
+    ['process_claimed_mix_delivery_with_port', '<'],
+    ['process_claimed_pam_result', '('],
+  ]) {
+    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + suffix));
     requireMix(attempt.includes('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;') &&
       attempt.includes('bounded_mix_outbox_turn(&cancel,attempt_deadline,'),
     name + ' must share its original attempt deadline with final durable transitions');
@@ -1323,11 +1331,14 @@ for (const [index, [liveMethod, outboxMethod]] of channelStanzaDurableLaneOperat
 }
 const processClaimedMixDelivery = structBody(
   mixProtocolProduction,
-  'async fn process_claimed_mix_delivery(',
+  'async fn process_claimed_mix_delivery_with_port<',
 );
+const mixDeliveryPort = structBody(mixProtocolProduction, 'impl ClaimedMixDeliveryPort for MixOutboxDeliveryPort');
+const mixDeliveryPortRoute = structBody(mixDeliveryPort, 'async fn route(');
 const deliverClaimedMixStanza = structBody(mixProtocolProduction, 'async fn deliver_claimed_channel_stanza(');
 if (
-  !/deliver_claimed_channel_stanza\s*\(\s*&context\s*,\s*&request\s*\)/.test(processClaimedMixDelivery) ||
+  !/port\.route\s*\(\s*&request\s*\)/.test(processClaimedMixDelivery) ||
+  !/deliver_claimed_channel_stanza\s*\(\s*&self\.context\s*,\s*request\s*\)/.test(mixDeliveryPortRoute) ||
   !/deliver_channel_stanza_inner\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(deliverClaimedMixStanza) ||
   !/Some\(request\)\s*,?\s*\)\s*\.await/.test(deliverClaimedMixStanza)
 ) {

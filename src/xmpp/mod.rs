@@ -5,6 +5,10 @@ pub(crate) mod extensions;
 pub(crate) mod frame_execution;
 pub(crate) mod framing;
 pub(crate) mod protocol;
+#[cfg(test)]
+mod stage4_frame_capture;
+#[cfg(test)]
+pub(crate) mod stage4_native;
 pub(crate) mod stanza_validation;
 mod tcp_action;
 mod websocket_action;

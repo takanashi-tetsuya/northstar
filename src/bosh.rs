@@ -10,6 +10,8 @@ mod action;
 mod ownership;
 mod response_owner;
 #[cfg(test)]
+pub(crate) use response_owner::stage4_saved;
+#[cfg(test)]
 mod saved_case;
 #[cfg(test)]
 pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};

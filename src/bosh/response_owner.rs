@@ -1,6 +1,9 @@
 //! Actual response selection, binding and cache continuations over the actor's
 //! existing fields. The selected auth control gates the actor's existing
 //! publication callback after accepted exposure and before cache bookkeeping.
+#[cfg(test)]
+pub(crate) mod stage4_saved;
+
 use super::{
     bosh_body_element, bosh_response_bytes, bosh_unacknowledged_limit_exceeded,
     restore_response_items, restore_response_items_observed, superseded_bosh_message_id,

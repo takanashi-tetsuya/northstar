@@ -6,6 +6,8 @@
 //! or banned items without going through the MIX authorization model.
 
 mod forms;
+#[cfg(test)]
+pub(crate) mod stage4_saved;
 mod worker;
 
 use super::{Action, ProtocolSession};

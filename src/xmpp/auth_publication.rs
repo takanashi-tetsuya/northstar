@@ -1,5 +1,8 @@
 //! Per-control auth ownership. The FIFO marker is metadata; only the private
 //! holder can transfer its actual credential receipt into publication.
+#[cfg(test)]
+pub(crate) mod stage4_saved;
+
 use super::frame_execution::{FrameExecution, PublicationResult};
 use crate::services::authentication::{
     publication::{Invocation, Observation, Terminal, Transport},

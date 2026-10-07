@@ -250,6 +250,15 @@ struct Progress {
 #[derive(Clone)]
 pub(super) struct FrameExecution(Arc<Progress>);
 
+/// Copied raw facts only; this value retains no frame owner or mutation authority.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FrameObservation {
+    pub(super) operation_id: Uuid,
+    pub(super) stage_raw: u8,
+    pub(super) outcome_raw: u8,
+}
+
 /// Observation ownership only. A BOSH response can defer publication while
 /// later payloads replace the current frame; the originating context survives.
 #[derive(Default)]
@@ -258,6 +267,14 @@ pub(super) struct SessionExecutions {
 }
 
 impl SessionExecutions {
+    /// Retains exactly the supplied frame and its existing lifecycle state.
+    #[cfg(test)]
+    pub(super) fn for_saved_frame(frame: FrameExecution) -> Self {
+        Self {
+            current: Some(frame),
+        }
+    }
+
     pub(super) fn begin(&mut self, transport: ClientTransport, frame: &str) -> FrameExecution {
         let execution = FrameExecution::new(transport, frame);
         self.current = Some(execution.clone());
@@ -350,6 +367,23 @@ impl FrameExecution {
         operation_id: Uuid,
     ) -> Self {
         Self::initialize(transport, frame, operation_id)
+    }
+
+    /// Copies actual stored facts without interpreting unknown raw values.
+    ///
+    /// The two Relaxed loads are not a linearizable multi-field snapshot. A
+    /// saved adapter must prove that no retained task, runner, or frame clone
+    /// can mutate these fields at its actual quiescent capture cut. Returning
+    /// from a manual poll or completing synchronous destruction alone does not
+    /// prove that other retained owners are quiescent. Without that proof the
+    /// adapter must report missing facts and observation loss, not infer them.
+    #[cfg(test)]
+    pub(super) fn observation_for_saved_case(&self) -> FrameObservation {
+        FrameObservation {
+            operation_id: self.0.operation_id,
+            stage_raw: self.0.stage.load(Ordering::Relaxed),
+            outcome_raw: self.0.outcome.load(Ordering::Relaxed),
+        }
     }
 
     pub(super) fn direct_operation(&self) -> DirectOperationHandle {
@@ -707,6 +741,427 @@ mod tests {
     use super::*;
     use futures::FutureExt;
     use std::{future::pending, io::Write, panic::AssertUnwindSafe, sync::Mutex, task::Poll};
+
+    #[tokio::test]
+    async fn supplied_session_frame_keeps_registered_room_owners_through_actual_retirement() {
+        use crate::services::mix::foreground::fixture as mix_fixture;
+        use crate::services::muc::discussion::fixture as muc_fixture;
+
+        for complete in [false, true] {
+            let id = Uuid::from_u128(if complete { 701 } else { 702 });
+            let frame = FrameExecution::for_saved_case(ClientTransport::Tcp, "<message/>", id);
+            frame.enter(Stage::MucPolicy);
+            let before = frame.observation_for_saved_case();
+            let sessions = SessionExecutions::for_saved_frame(frame.clone());
+            let current = sessions.current.as_ref().unwrap();
+            assert!(Arc::ptr_eq(&current.0, &frame.0));
+            assert_eq!(current.observation_for_saved_case(), before);
+            let auth = sessions.auth_origin().unwrap();
+            assert!(Arc::ptr_eq(&auth.0, &frame.0));
+            assert_eq!(
+                sessions.direct_operation().unwrap().snapshot().operation,
+                id
+            );
+
+            let application = muc_fixture::application(muc_fixture::Cut::Return);
+            let muc_prepared = application.prepare_discussion(muc_fixture::command(false, false));
+            let mix_prepared = mix_fixture::prepared(false);
+            let muc = sessions.muc_discussion(&muc_prepared).unwrap().unwrap();
+            let mix = sessions
+                .mix_foreground(|| Ok(mix_prepared.clone()))
+                .unwrap()
+                .unwrap();
+            // Wrapping a populated frame must preserve its already-owned slots.
+            let rewrapped = SessionExecutions::for_saved_frame(frame.clone());
+            let muc_again = rewrapped.muc_discussion(&muc_prepared).unwrap().unwrap();
+            let mix_again = rewrapped
+                .mix_foreground(|| Ok(mix_prepared.clone()))
+                .unwrap()
+                .unwrap();
+            assert_eq!(muc_again.snapshot(), muc.snapshot());
+            assert_eq!(mix_again.snapshot(), mix.snapshot());
+            assert!(muc.snapshot().terminal.is_none());
+            assert!(mix.snapshot().terminal.is_none());
+
+            let muc_dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mix_dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let muc_marker = MucChildDropMarker {
+                owner: muc.clone(),
+                dropped: muc_dropped.clone(),
+            };
+            let mix_marker = MixChildDropMarker {
+                owner: mix.clone(),
+                dropped: mix_dropped.clone(),
+            };
+            let mut runner = Box::pin(frame.run(async {
+                let _muc_marker = muc_marker;
+                let _mix_marker = mix_marker;
+                sessions.enter(Stage::MixAdmission);
+                if !complete {
+                    pending::<()>().await;
+                }
+                Ok(())
+            }));
+            if complete {
+                assert!(matches!(futures::poll!(&mut runner), Poll::Ready(Ok(()))));
+            } else {
+                assert!(futures::poll!(&mut runner).is_pending());
+            }
+            drop(runner);
+            assert!(muc_dropped.load(Ordering::Relaxed));
+            assert!(mix_dropped.load(Ordering::Relaxed));
+            assert_eq!(
+                muc.snapshot().terminal,
+                Some(if complete {
+                    discussion::TerminalReason::Completed
+                } else {
+                    discussion::TerminalReason::Cancelled
+                })
+            );
+            assert_eq!(
+                mix.snapshot().terminal,
+                Some(if complete {
+                    foreground::TerminalReason::Completed
+                } else {
+                    foreground::TerminalReason::Cancelled
+                })
+            );
+            assert_eq!(muc_again.snapshot(), muc.snapshot());
+            assert_eq!(mix_again.snapshot(), mix.snapshot());
+            assert_eq!(
+                frame.observation_for_saved_case(),
+                FrameObservation {
+                    operation_id: id,
+                    stage_raw: Stage::MixAdmission as u8,
+                    outcome_raw: if complete {
+                        Outcome::Completed as u8
+                    } else {
+                        Outcome::Cancelled as u8
+                    },
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn supplied_retired_session_frame_preserves_existing_authority_guards_and_slots() {
+        use crate::services::mix::foreground::fixture as mix_fixture;
+        use crate::services::muc::discussion::fixture as muc_fixture;
+
+        for complete in [false, true] {
+            for populated in [false, true] {
+                let frame = FrameExecution::for_saved_case(
+                    ClientTransport::Tcp,
+                    "<message/>",
+                    Uuid::from_u128(801),
+                );
+                let application = muc_fixture::application(muc_fixture::Cut::Return);
+                let muc_prepared =
+                    application.prepare_discussion(muc_fixture::command(false, false));
+                let mix_prepared = mix_fixture::prepared(false);
+                let initial = SessionExecutions::for_saved_frame(frame.clone());
+                let owners = populated.then(|| {
+                    (
+                        initial.muc_discussion(&muc_prepared).unwrap().unwrap(),
+                        initial
+                            .mix_foreground(|| Ok(mix_prepared.clone()))
+                            .unwrap()
+                            .unwrap(),
+                    )
+                });
+                frame.enter(Stage::MucAdmission);
+                if complete {
+                    frame.run(async { Ok(()) }).await.unwrap();
+                } else {
+                    drop(frame.run(pending::<anyhow::Result<()>>()));
+                }
+                drop(initial);
+                let before = frame.observation_for_saved_case();
+                let direct_before = frame.direct_operation().snapshot();
+                let room_before = owners
+                    .as_ref()
+                    .map(|(muc, mix)| (muc.snapshot(), mix.snapshot()));
+                let reused = SessionExecutions::for_saved_frame(frame.clone());
+                assert!(Arc::ptr_eq(&reused.current.as_ref().unwrap().0, &frame.0));
+                assert!(reused.auth_origin().is_none());
+                assert!(reused.direct_operation().is_none());
+                assert!(matches!(
+                    reused.muc_discussion(&muc_prepared),
+                    Err(discussion::Rejected::Retired)
+                ));
+                let preparation_calls = std::cell::Cell::new(0);
+                assert!(matches!(
+                    reused.mix_foreground(|| {
+                        preparation_calls.set(preparation_calls.get() + 1);
+                        Ok(mix_prepared.clone())
+                    }),
+                    Err(foreground::Rejected::Retired)
+                ));
+                assert_eq!(preparation_calls.get(), 0);
+                assert!(matches!(
+                    frame.0.muc_discussion.register(&muc_prepared),
+                    Err(discussion::Rejected::Retired)
+                ));
+                assert!(matches!(
+                    frame.0.mix_foreground.register(&mix_prepared),
+                    Err(foreground::Rejected::Retired)
+                ));
+                assert_eq!(frame.observation_for_saved_case(), before);
+                assert_eq!(frame.direct_operation().snapshot(), direct_before);
+                assert_eq!(
+                    owners
+                        .as_ref()
+                        .map(|(muc, mix)| (muc.snapshot(), mix.snapshot())),
+                    room_before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn copied_frame_observation_keeps_actual_identity_and_stage_without_retaining_owner() {
+        let supplied_id = Uuid::from_u128(501);
+        let supplied =
+            FrameExecution::for_saved_case(ClientTransport::Tcp, "<message/>", supplied_id);
+        assert_eq!(supplied.operation_id(), supplied_id);
+        for frame in [execution(), supplied] {
+            let operation_id = frame.operation_id();
+            let owners = Arc::strong_count(&frame.0);
+            let initial = frame.observation_for_saved_case();
+            let copied = initial;
+            assert_eq!(
+                initial,
+                FrameObservation {
+                    operation_id,
+                    stage_raw: Stage::Validation as u8,
+                    outcome_raw: Outcome::Pending as u8,
+                }
+            );
+            for stage in [Stage::Handler, Stage::SmCheckpoint, Stage::MessageRouting] {
+                frame.enter(stage);
+                assert_eq!(
+                    frame.observation_for_saved_case(),
+                    FrameObservation {
+                        operation_id,
+                        stage_raw: stage as u8,
+                        outcome_raw: Outcome::Pending as u8,
+                    }
+                );
+            }
+            assert_eq!(copied, initial);
+            assert_eq!(copied.stage_raw, Stage::Validation as u8);
+            assert_eq!(Arc::strong_count(&frame.0), owners);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn copied_frame_observation_follows_actual_runner_retirement_after_child_drop() {
+        #[derive(Clone, Copy)]
+        enum Cut {
+            Unpolled,
+            Pending,
+            Completed,
+            Failed,
+            TimedOut,
+            Panicked,
+        }
+        for (cut, expected_outcome, expected_terminal) in [
+            (Cut::Unpolled, Outcome::Cancelled, TerminalReason::Cancelled),
+            (Cut::Pending, Outcome::Cancelled, TerminalReason::Cancelled),
+            (
+                Cut::Completed,
+                Outcome::Completed,
+                TerminalReason::Completed,
+            ),
+            (
+                Cut::Failed,
+                Outcome::BackendFailure,
+                TerminalReason::BackendFailure,
+            ),
+            (Cut::TimedOut, Outcome::TimedOut, TerminalReason::TimedOut),
+            (Cut::Panicked, Outcome::Panicked, TerminalReason::Panicked),
+        ] {
+            let frame = execution();
+            let owner = frame.direct_operation();
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let marker = ChildDropMarker {
+                owner: owner.clone(),
+                dropped: dropped.clone(),
+            };
+            let child_frame = frame.clone();
+            let mut runner = Box::pin(frame.run(async move {
+                let _marker = marker;
+                child_frame.enter(Stage::MessageRouting);
+                match cut {
+                    Cut::Completed => Ok(()),
+                    Cut::Failed => Err(anyhow::anyhow!("controlled observation failure")),
+                    Cut::Panicked => panic!("controlled observation poll panic"),
+                    _ => pending::<anyhow::Result<()>>().await,
+                }
+            }));
+            // Every possible writer is local to this test. No task is spawned;
+            // the runner and its captured clone are idle at these read cuts.
+            match cut {
+                Cut::Unpolled => {}
+                Cut::Pending | Cut::TimedOut => {
+                    assert!(futures::poll!(&mut runner).is_pending());
+                    let pending = frame.observation_for_saved_case();
+                    assert_eq!(pending.operation_id, frame.operation_id());
+                    assert_eq!(pending.stage_raw, Stage::MessageRouting as u8);
+                    assert_eq!(pending.outcome_raw, Outcome::Pending as u8);
+                    if matches!(cut, Cut::TimedOut) {
+                        tokio::time::advance(FRAME_BUDGET).await;
+                        assert!(matches!(
+                            futures::poll!(&mut runner),
+                            Poll::Ready(Err(FrameFailure::TimedOut))
+                        ));
+                    }
+                }
+                Cut::Completed => {
+                    assert!(matches!(futures::poll!(&mut runner), Poll::Ready(Ok(()))));
+                }
+                Cut::Failed => {
+                    assert!(matches!(
+                        futures::poll!(&mut runner),
+                        Poll::Ready(Err(FrameFailure::Backend(_)))
+                    ));
+                }
+                Cut::Panicked => {
+                    assert!(AssertUnwindSafe(&mut runner).catch_unwind().await.is_err());
+                }
+            }
+            drop(runner);
+            assert!(dropped.load(Ordering::Relaxed));
+            assert_eq!(owner.snapshot().terminal, Some(expected_terminal));
+            assert_eq!(
+                frame.observation_for_saved_case(),
+                FrameObservation {
+                    operation_id: frame.operation_id(),
+                    stage_raw: if matches!(cut, Cut::Unpolled) {
+                        Stage::Validation as u8
+                    } else {
+                        Stage::MessageRouting as u8
+                    },
+                    outcome_raw: expected_outcome as u8,
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn copied_frame_observation_keeps_prior_outcome_during_pending_publication() {
+        let frame = execution();
+        frame
+            .run(async {
+                frame.enter(Stage::Handler);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let completed = frame.observation_for_saved_case();
+        let mut publication =
+            Box::pin(frame.observe_publication(async { pending::<PublicationResult>().await }));
+        assert!(futures::poll!(&mut publication).is_pending());
+        // This local, unspawned future cannot advance between these reads.
+        // Publication entry changes the stage, not the prior frame outcome.
+        assert_eq!(
+            frame.observation_for_saved_case(),
+            FrameObservation {
+                operation_id: frame.operation_id(),
+                stage_raw: Stage::AuthPublication as u8,
+                outcome_raw: Outcome::Completed as u8,
+            }
+        );
+        drop(publication);
+        assert_eq!(
+            frame.observation_for_saved_case(),
+            FrameObservation {
+                operation_id: frame.operation_id(),
+                stage_raw: Stage::AuthPublication as u8,
+                outcome_raw: Outcome::Cancelled as u8,
+            }
+        );
+        assert_eq!(completed.stage_raw, Stage::Handler as u8);
+        assert_eq!(completed.outcome_raw, Outcome::Completed as u8);
+    }
+
+    #[tokio::test]
+    async fn copied_frame_observation_follows_actual_publication_results() {
+        for (result, expected_outcome, expected_success) in [
+            (PublicationResult::Completed, Outcome::Completed, true),
+            (
+                PublicationResult::BackendFailure,
+                Outcome::BackendFailure,
+                false,
+            ),
+            (
+                PublicationResult::IntegrityRejected,
+                Outcome::IntegrityRejected,
+                false,
+            ),
+            (
+                PublicationResult::CredentialRejected,
+                Outcome::CredentialRejected,
+                false,
+            ),
+            (
+                PublicationResult::RouteRejected,
+                Outcome::RouteRejected,
+                false,
+            ),
+            (
+                PublicationResult::CompletedWithDeferredNotification,
+                Outcome::CompletedWithDeferredNotification,
+                true,
+            ),
+        ] {
+            let frame = execution();
+            frame.run(async { Ok(()) }).await.unwrap();
+            let stage = if matches!(result, PublicationResult::CompletedWithDeferredNotification) {
+                Stage::ReplacementNotification
+            } else {
+                Stage::CapsPublication
+            };
+            assert_eq!(
+                frame
+                    .observe_publication(async {
+                        frame.enter(stage);
+                        result
+                    })
+                    .await,
+                expected_success
+            );
+            assert_eq!(
+                frame.observation_for_saved_case(),
+                FrameObservation {
+                    operation_id: frame.operation_id(),
+                    stage_raw: stage as u8,
+                    outcome_raw: expected_outcome as u8,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn copied_frame_observation_preserves_literal_unknown_raw_values() {
+        let frame = execution();
+        for (stage_raw, outcome_raw) in [(18, 10), (254, 255), (255, 254)] {
+            // Test-only malformed-state injection. No runner or other frame
+            // clone exists; the getter must not coerce either unknown byte.
+            frame.0.stage.store(stage_raw, Ordering::Relaxed);
+            frame.0.outcome.store(outcome_raw, Ordering::Relaxed);
+            assert_eq!(
+                frame.observation_for_saved_case(),
+                FrameObservation {
+                    operation_id: frame.operation_id(),
+                    stage_raw,
+                    outcome_raw,
+                }
+            );
+            assert_eq!(frame.0.stage.load(Ordering::Relaxed), stage_raw);
+            assert_eq!(frame.0.outcome.load(Ordering::Relaxed), outcome_raw);
+        }
+    }
 
     struct CredentialChildDrop {
         observation: publication::CredentialObservation,

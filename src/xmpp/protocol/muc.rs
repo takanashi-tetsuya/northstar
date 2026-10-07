@@ -1,6 +1,9 @@
 mod message;
 mod presence;
 
+#[cfg(test)]
+pub(crate) mod saved_stage4;
+
 use super::{Action, ProtocolSession};
 use crate::services::muc::fanout::{
     run_muc_discussion_fanout, run_muc_fanout, MucFanoutDisposition, MucFanoutPort, MucFanoutStage,

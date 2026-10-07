@@ -29,6 +29,8 @@ mod pie;
 mod retention;
 mod s2s;
 mod services;
+#[cfg(test)]
+mod stage4_replay;
 mod state;
 mod storage;
 mod subscription_cleanup;

@@ -523,6 +523,13 @@ fn sasl2_success_xml(
     Ok(success.finish())
 }
 
+/// Test-only access to the production success builder, with no bearer or
+/// additional-data extension admitted by the closed Stage4 profile.
+#[cfg(test)]
+pub(crate) fn stage4_saved_success_xml(authorization_identifier: &str) -> Result<String> {
+    sasl2_success_xml(None, authorization_identifier, &[])
+}
+
 fn inline_resume_envelope_reservation_bytes(
     additional_data: Option<&[u8]>,
     authorization_identifier: &str,

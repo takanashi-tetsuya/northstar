@@ -44,6 +44,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
+use tokio_util::sync::CancellationToken;
 
 const HTTP_BIND_NS: &str = "http://jabber.org/protocol/httpbind";
 const XBOSH_NS: &str = "urn:xmpp:xbosh";
@@ -78,6 +79,7 @@ struct BoshHandle {
     commands: mpsc::Sender<BoshCommand>,
     requests: Arc<Semaphore>,
     control_request: Arc<Semaphore>,
+    overactivity: CancellationToken,
 }
 
 enum BoshCommand {
@@ -85,7 +87,21 @@ enum BoshCommand {
         request: Box<BoshRequest>,
         response: oneshot::Sender<BoshHttpResponse>,
     },
+    // Actor-only event synthesized from the sticky signal, never enqueued.
     Overactivity,
+}
+
+async fn next_bosh_command(
+    commands: &mut mpsc::Receiver<BoshCommand>,
+    overactivity: &CancellationToken,
+) -> Option<BoshCommand> {
+    // Prioritize overload over queued requests without changing the actor's
+    // other event priorities or cancelling an already selected operation.
+    tokio::select! {
+        biased;
+        _ = overactivity.cancelled() => Some(BoshCommand::Overactivity),
+        command = commands.recv() => command,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -216,7 +232,8 @@ struct BoshActor {
     delivery_fence_ttl_seconds: u64,
     /// One current-or-last operation; retained old readers remain independent.
     ownership_operation: Option<northstar_delivery_core::bosh_ownership::Operation>,
-    actor_shutdown: tokio_util::sync::CancellationToken,
+    actor_shutdown: CancellationToken,
+    overactivity: CancellationToken,
     _connection_guard: ClientConnectionGuard,
     _session_slot: OwnedSemaphorePermit,
 }
@@ -308,6 +325,7 @@ impl BoshManager {
         let features = protocol.features();
 
         let (command_tx, command_rx) = mpsc::channel(4);
+        let overactivity = CancellationToken::new();
         let handle = BoshHandle {
             commands: command_tx,
             requests: Arc::new(Semaphore::new(requests)),
@@ -315,6 +333,7 @@ impl BoshManager {
             // negotiated `requests` window when that request terminates or
             // pauses the session.
             control_request: Arc::new(Semaphore::new(1)),
+            overactivity: overactivity.clone(),
         };
         let (sid, session_key) = loop {
             let mut bytes = [0_u8; 32];
@@ -369,6 +388,7 @@ impl BoshManager {
                 .min(86_400),
             ownership_operation: None,
             actor_shutdown,
+            overactivity,
             _connection_guard: connection_guard,
             _session_slot: session_slot,
         };
@@ -419,6 +439,9 @@ impl BoshManager {
         let Some(handle) = self.inner.sessions.get(&key).map(|entry| entry.clone()) else {
             return terminal_response("item-not-found");
         };
+        if handle.overactivity.is_cancelled() {
+            return terminal_response("policy-violation");
+        }
         let is_extra_control = request.pause.is_some() || request.terminate;
         let permit = match Arc::clone(&handle.requests).try_acquire_owned() {
             Ok(permit) => permit,
@@ -426,16 +449,15 @@ impl BoshManager {
                 match Arc::clone(&handle.control_request).try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => {
-                        let _ = handle.commands.send(BoshCommand::Overactivity).await;
+                        handle.overactivity.cancel();
                         return terminal_response("policy-violation");
                     }
                 }
             }
             Err(_) => {
-                // Do not use `try_send` here: losing the command while the
-                // actor mailbox is full would return a terminal response but
-                // leave the offending session alive.
-                let _ = handle.commands.send(BoshCommand::Overactivity).await;
+                // One sticky signal survives caller cancellation and a full
+                // mailbox without retaining an unpermitted HTTP send waiter.
+                handle.overactivity.cancel();
                 return terminal_response("policy-violation");
             }
         };
@@ -509,6 +531,12 @@ impl BoshActor {
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut keep_running = true;
         while keep_running {
+            // A selected operation keeps its existing completion/deadline.
+            // At the next event boundary, overload wins over queued work.
+            if self.overactivity.is_cancelled() {
+                self.terminate_for_overactivity();
+                break;
+            }
             let now = Instant::now();
             let hold_deadline = self
                 .held
@@ -546,7 +574,7 @@ impl BoshActor {
                     self.terminate_waiters("system-shutdown");
                     break;
                 }
-                command = self.commands.recv() => {
+                command = next_bosh_command(&mut self.commands, &self.overactivity) => {
                     match command {
                         Some(BoshCommand::Request { request, response }) => {
                             let operation = self.begin_ownership_operation(northstar_delivery_core::bosh_ownership::OperationKind::Request);
@@ -567,8 +595,7 @@ impl BoshActor {
                             }
                         }
                         Some(BoshCommand::Overactivity) => {
-                            self.protocol.forbid_sm_resume();
-                            self.terminate_waiters("policy-violation");
+                            self.terminate_for_overactivity();
                             keep_running = false;
                         }
                         None => break,
@@ -1253,6 +1280,11 @@ impl BoshActor {
             &mut self.highest_responded,
             operation,
         );
+    }
+
+    fn terminate_for_overactivity(&mut self) {
+        self.protocol.forbid_sm_resume();
+        self.terminate_waiters("policy-violation");
     }
 
     fn terminate_waiters(&mut self, condition: &str) {
@@ -2252,6 +2284,7 @@ mod tests {
             commands: mpsc::channel(1).0,
             requests: Arc::new(Semaphore::new(2)),
             control_request: Arc::new(Semaphore::new(1)),
+            overactivity: CancellationToken::new(),
         };
         let first = Arc::clone(&handle.requests).try_acquire_owned().unwrap();
         let second = Arc::clone(&handle.requests).try_acquire_owned().unwrap();
@@ -2262,6 +2295,216 @@ mod tests {
         drop(first);
         assert!(Arc::clone(&handle.requests).try_acquire_owned().is_ok());
         drop(second);
+    }
+
+    fn overactivity_test_request(attributes: &str) -> BoshRequest {
+        parse_body(
+            &format!(
+                "<body xmlns='http://jabber.org/protocol/httpbind' rid='2' sid='overactivity-test' {attributes}/>"
+            ),
+            64,
+        )
+        .unwrap()
+    }
+
+    fn overactivity_test_session() -> (BoshManager, BoshHandle, mpsc::Receiver<BoshCommand>) {
+        let manager = BoshManager::new(1, 1);
+        let (commands, receiver) = mpsc::channel(4);
+        let handle = BoshHandle {
+            commands,
+            requests: Arc::new(Semaphore::new(2)),
+            control_request: Arc::new(Semaphore::new(1)),
+            overactivity: CancellationToken::new(),
+        };
+        manager
+            .inner
+            .sessions
+            .insert(manager.sid_key("overactivity-test"), handle.clone());
+        (manager, handle, receiver)
+    }
+
+    fn queue_overactivity_test_request(handle: &BoshHandle) -> oneshot::Receiver<BoshHttpResponse> {
+        let (response, receiver) = oneshot::channel();
+        assert!(handle
+            .commands
+            .try_send(BoshCommand::Request {
+                request: Box::new(overactivity_test_request("")),
+                response,
+            })
+            .is_ok());
+        receiver
+    }
+
+    #[test]
+    fn overactivity_rejected_normal_request_does_not_wait_for_full_mailbox() {
+        let (manager, handle, receiver) = overactivity_test_session();
+        let _requests = Arc::clone(&handle.requests)
+            .try_acquire_many_owned(2)
+            .unwrap();
+        for _ in 0..4 {
+            // An enqueued request outlives its cancelled HTTP responder.
+            drop(queue_overactivity_test_request(&handle));
+        }
+        let response = manager
+            .request(overactivity_test_request(""))
+            .now_or_never()
+            .expect("overactivity rejection must finish without a mailbox waiter");
+        assert!(response_body_text(&response).contains("policy-violation"));
+        assert!(handle.overactivity.is_cancelled());
+        assert_eq!(receiver.len(), 4);
+        assert_eq!(handle.requests.available_permits(), 0);
+        assert_eq!(handle.control_request.available_permits(), 1);
+    }
+
+    #[test]
+    fn overactivity_rejected_pause_and_terminate_do_not_wait_for_full_mailbox() {
+        for attributes in ["pause='1'", "type='terminate'"] {
+            let (manager, handle, receiver) = overactivity_test_session();
+            let _requests = Arc::clone(&handle.requests)
+                .try_acquire_many_owned(2)
+                .unwrap();
+            let _control = Arc::clone(&handle.control_request)
+                .try_acquire_owned()
+                .unwrap();
+            for _ in 0..4 {
+                drop(queue_overactivity_test_request(&handle));
+            }
+            let response = manager
+                .request(overactivity_test_request(attributes))
+                .now_or_never()
+                .expect("extra-control rejection must finish without a mailbox waiter");
+            assert!(response_body_text(&response).contains("policy-violation"));
+            assert!(handle.overactivity.is_cancelled());
+            assert_eq!(receiver.len(), 4);
+            assert_eq!(handle.control_request.available_permits(), 0);
+        }
+    }
+
+    #[test]
+    fn overactivity_rejections_coalesce_and_survive_caller_drop() {
+        let (manager, handle, receiver) = overactivity_test_session();
+        let actor_signal = handle.overactivity.clone();
+        let requests = Arc::clone(&handle.requests)
+            .try_acquire_many_owned(2)
+            .unwrap();
+        assert!(manager
+            .request(overactivity_test_request(""))
+            .now_or_never()
+            .is_some());
+        drop(requests);
+        for _ in 0..64 {
+            let response = manager
+                .request(overactivity_test_request(""))
+                .now_or_never()
+                .expect("a signalled session must not start another request");
+            assert!(response_body_text(&response).contains("policy-violation"));
+            handle.overactivity.cancel();
+        }
+        assert_eq!(receiver.len(), 0);
+        assert_eq!(handle.requests.available_permits(), 2);
+        drop(handle);
+        drop(manager);
+        assert!(actor_signal.is_cancelled());
+    }
+
+    #[test]
+    fn overactivity_signal_precedes_queued_requests() {
+        let (_manager, handle, mut receiver) = overactivity_test_session();
+        let mut response = queue_overactivity_test_request(&handle);
+        handle.overactivity.cancel();
+        assert!(matches!(
+            next_bosh_command(&mut receiver, &handle.overactivity).now_or_never(),
+            Some(Some(BoshCommand::Overactivity))
+        ));
+        assert_eq!(receiver.len(), 1);
+        assert!(matches!(
+            response.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn overactivity_signal_survives_cancelled_wait_and_precedes_channel_close() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let overactivity = CancellationToken::new();
+        // Dropping a pending selection must not consume a later signal.
+        assert!(next_bosh_command(&mut receiver, &overactivity)
+            .now_or_never()
+            .is_none());
+        overactivity.cancel();
+        drop(sender);
+        assert!(matches!(
+            next_bosh_command(&mut receiver, &overactivity).now_or_never(),
+            Some(Some(BoshCommand::Overactivity))
+        ));
+    }
+
+    #[test]
+    fn overactivity_signal_wakes_an_already_pending_selection() {
+        use std::future::Future;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::{Context, Poll, Wake, Waker};
+
+        struct WakeCount(AtomicUsize);
+        impl Wake for WakeCount {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let (_sender, mut receiver) = mpsc::channel(1);
+        let overactivity = CancellationToken::new();
+        let wake_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wake_count));
+        let mut context = Context::from_waker(&waker);
+        let mut selection = Box::pin(next_bosh_command(&mut receiver, &overactivity));
+        assert!(selection.as_mut().poll(&mut context).is_pending());
+        overactivity.cancel();
+        assert!(wake_count.0.load(Ordering::SeqCst) > 0);
+        assert!(matches!(
+            selection.as_mut().poll(&mut context),
+            Poll::Ready(Some(BoshCommand::Overactivity))
+        ));
+    }
+
+    #[test]
+    fn overactivity_preserves_selected_operation_before_next_command() {
+        let (_manager, handle, mut receiver) = overactivity_test_session();
+        let mut selected_response = queue_overactivity_test_request(&handle);
+        let mut queued_response = queue_overactivity_test_request(&handle);
+        let (complete, completion) = oneshot::channel();
+        // Model the actor's select-then-await boundary with a finite local
+        // operation. This does not exercise protocol or durable finalization.
+        let mut operation = Box::pin(async {
+            let Some(BoshCommand::Request { response, .. }) =
+                next_bosh_command(&mut receiver, &handle.overactivity).await
+            else {
+                panic!("the first request must be selected before overload");
+            };
+            completion.await.unwrap();
+            let _ = response.send(terminal_response("selected-operation-completed"));
+            next_bosh_command(&mut receiver, &handle.overactivity).await
+        });
+        assert!(operation.as_mut().now_or_never().is_none());
+        handle.overactivity.cancel();
+        assert!(operation.as_mut().now_or_never().is_none());
+        assert!(matches!(
+            selected_response.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        complete.send(()).unwrap();
+        assert!(matches!(
+            operation.as_mut().now_or_never(),
+            Some(Some(BoshCommand::Overactivity))
+        ));
+        drop(operation);
+        assert!(response_body_text(&selected_response.try_recv().unwrap())
+            .contains("selected-operation-completed"));
+        assert_eq!(receiver.len(), 1);
+        assert!(matches!(
+            queued_response.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
     }
 
     #[test]

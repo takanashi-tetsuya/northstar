@@ -40,3 +40,9 @@ start with [Runtime experiment map](runtime-experiments.md) and the separate
 already checked by the architecture gate; declared experiments are never
 reported as executed results. The [execution plan](experimental-clarity-plan.zh-TW.md)
 records this phase's original acceptance criteria.
+
+The [resource ownership and bounds review](resource-bounds.zh-TW.md) summarizes
+admission limits, backpressure, release paths, verified test scope and remaining
+gaps across connections, input, outbound queues, stream management and workers.
+It distinguishes the 16 selected local BOSH checks from full actor, SQL and
+wire-protocol acceptance, and tracks the new checkpoint's publication separately.

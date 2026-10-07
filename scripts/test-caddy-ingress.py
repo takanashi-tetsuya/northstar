@@ -21,6 +21,8 @@ import tempfile
 import threading
 import time
 
+from lib.http_response_diagnostics import summarize_http_response
+
 
 class Backend(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -89,6 +91,7 @@ def read_to_close(stream, *, rejection_status=None):
                 print(
                     f"synthetic early-body-rejection: case=POST /api/reject/{rejection_status} "
                     f"expected_status={rejection_status} declared_body_bytes=128 sent_body_bytes=1 "
+                    f"transport=tls response_diagnostic={json.dumps(summarize_http_response(chunks), separators=(',', ':'))} "
                     f"partial_reply_prefix_512={preview!r}",
                     file=sys.stderr, flush=True,
                 )

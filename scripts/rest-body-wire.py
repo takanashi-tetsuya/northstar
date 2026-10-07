@@ -7,6 +7,8 @@ import ssl
 import sys
 import time
 
+from lib.http_response_diagnostics import summarize_http_response
+
 TLS_PORT = None
 TLS_CONTEXT = None
 
@@ -39,6 +41,8 @@ def read_closed(stream, expected, *, diagnostic_case=None, diagnostic_request="P
                         f"synthetic slow-body admission: case={diagnostic_case} "
                         f"request={diagnostic_request} expected_status={expected} "
                         f"held_incomplete_bodies=8 declared_body_bytes=128 sent_body_bytes=1 "
+                        f"transport={'tls' if isinstance(stream, ssl.SSLSocket) else 'tcp'} "
+                        f"response_diagnostic={json.dumps(summarize_http_response((data,)), separators=(',', ':'))} "
                         f"partial_status_line_80={status_line!r} partial_reply_prefix_512={preview!r}",
                         file=sys.stderr, flush=True,
                     )

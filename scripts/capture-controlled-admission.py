@@ -47,8 +47,8 @@ def verify_material(contract):
         # Source/import-layout checks precede this oracle/helper import. The
         # caller repeats the same preparation-record/runnable binding after
         # capture; every preflight check must succeed before a timeout launch.
-        from lib import direct_case
-        supervision.check_current_material(direct_case, contract, verified_sources)
+        controlled = supervision.load_controlled(supervision.contract_profile(contract)['id'])
+        supervision.check_current_material(controlled, contract, verified_sources)
     identities = {}
     materials = [(Path(supervision.TIMEOUT_PATH), contract['caller']['timeout_sha256'],
                   contract['budgets']['binary_bytes']),

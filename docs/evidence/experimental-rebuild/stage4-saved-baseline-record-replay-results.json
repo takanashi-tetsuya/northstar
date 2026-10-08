@@ -1,0 +1,96 @@
+{
+  "schema": "northstar-stage4-saved-baseline-record-replay-results-v1",
+  "date_utc": "2026-10-08",
+  "status": "BaselineRecordReplayAccepted_FixtureAndSupervisionOnly",
+  "runtime_source_commit": "f1e4f834fc929f99502ebad97249dcce4a52f8fb",
+  "independent_review": "Accepted within the bounded baseline scope",
+  "record": {
+    "completed_cases": 16,
+    "fixture_matches": 16,
+    "verdicts": {
+      "Pass": 9,
+      "Cancelled": 4,
+      "InvalidScenario": 3
+    },
+    "complete_frames": 16,
+    "complete_frame_bytes": 275262,
+    "largest_complete_frame_bytes": 94897,
+    "whole_frame_cap_bytes": 131072,
+    "corpus_complete": true,
+    "cleanup": "Complete"
+  },
+  "replay": {
+    "completed_cases": 16,
+    "fixture_matches": 16,
+    "verdicts": {
+      "Pass": 9,
+      "Cancelled": 4,
+      "InvalidScenario": 3
+    },
+    "complete_frames": 16,
+    "complete_frame_bytes": 275262,
+    "largest_complete_frame_bytes": 94897,
+    "whole_frame_cap_bytes": 131072,
+    "corpus_complete": true,
+    "cleanup": "Complete"
+  },
+  "comparison": {
+    "separate_actual_record_and_replay_executions": true,
+    "authority": "The replay compares against the accepted current record. Earlier unavailable or unqualified records are not substituted.",
+    "all_16_whole_inputs_equal": true,
+    "all_16_complete_frames_equal": true,
+    "all_16_complete_evaluation_files_equal": true,
+    "frame_scope": "Comparison includes the tag, declared length, payload and complete frame trailer. It is not limited to a selected projection."
+  },
+  "verdict_semantics": {
+    "Pass": "Within the selected semantic reader's checked invariants, no violation is reported. This need not mean that the business operation succeeded; an expected publication failure can retain Pass.",
+    "intentional_Cancelled_cases": [
+      "S03",
+      "S04",
+      "S10",
+      "S12"
+    ],
+    "Cancelled": "The planned cut retains actual pending/completed knowledge without inventing returns, commit receipts, transfer or settlement.",
+    "InvalidScenario": {
+      "S14": "Json",
+      "S15": "Json",
+      "S16": "Relationship"
+    },
+    "invalid_scenario_scope": "Rejected inputs retain no ownership facts.",
+    "raw_qualified": false,
+    "raw_qualified_scope": "The pinned adapter intentionally leaves qualified=false on every raw evaluation. Independent acceptance is recorded separately; the producer values are not promoted or rewritten.",
+    "FixtureMatched": "The actual verdict equals the fixture's expected category. A match can be Pass, intentional Cancelled or InvalidScenario."
+  },
+  "scope": [
+    "The accepted result covers these 16 finite fixtures, their actual record/replay relation, complete observation streams and bounded execution cleanup.",
+    "The earlier same-execution before/after reader-copy checks retain their narrower scope. The current record and replay are distinct executions.",
+    "No new full ordinary-suite, compiler-build or binary-rebuild result is claimed by this comparison. Historical test results keep their original source and scope.",
+    "Portable tooling or metadata-fixture changes require their own validation; these accepted executions do not automatically qualify later packaging edits."
+  ],
+  "open_boundaries": [
+    "Mutant detection, mutant replay, causal shrinking and four-role joins are not qualified by this baseline.",
+    "Full Stage4 acceptance remains open. Real PostgreSQL, network transport, clock and restart fidelity are not established by the fixture evidence.",
+    "Stage5 and Stage6 remain open; bounded cleanup does not prove all operating-system resource or fault boundaries.",
+    "The historical TLS timeout and earlier incomplete, unavailable, failed or held results retain their recorded status. The 72-hour soak remains cancelled."
+  ],
+  "parent_ci": {
+    "commit": "f1e4f834fc929f99502ebad97249dcce4a52f8fb",
+    "run_id": 37590077990,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37590077990",
+    "conclusion": "success",
+    "successful": 32,
+    "skipped": 1,
+    "failed": 0,
+    "scope": "This is the existing public BOSH checkpoint. It is separate from the accepted baseline record/replay and does not establish CI for a later tooling or documentation checkpoint."
+  },
+  "related": [
+    "stage4-saved-composition-codec-results.json",
+    "stage4-composition-foundation-results.json"
+  ],
+  "detailed_evidence": "Complete results and retained historical stops are preserved separately. This public summary contains only the accepted scope, minimized outcomes and remaining boundaries.",
+  "profile": "stage4-composition-fixed16-v2",
+  "tested_runnable": {
+    "sha256": "7fed8de58a18230a6064aa9c1a9f5cf57049eb5a002e08d17342734b7861379c",
+    "bytes": 131315712
+  }
+}

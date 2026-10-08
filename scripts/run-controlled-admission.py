@@ -21,7 +21,8 @@ def main(argv=None):
     parser.add_argument('--contract-sha256', required=True, help='external canonical-contract SHA256')
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--mode', required=True, choices=('record', 'replay'))
-    parser.add_argument('--profile', choices=(supervision.DIRECT_PROFILE, supervision.NO_FLUSH_PROFILE))
+    parser.add_argument('--profile', choices=(supervision.DIRECT_PROFILE, supervision.NO_FLUSH_PROFILE,
+                                            *supervision.COMPOSITION_PROFILES))
     args = parser.parse_args(argv)
     if not (sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode):
         parser.error('the dedicated owner requires python3 -I -S -B')

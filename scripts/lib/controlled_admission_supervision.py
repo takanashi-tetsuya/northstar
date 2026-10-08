@@ -30,6 +30,10 @@ DIRECT_CONTRACT_SCHEMA = 'northstar-controlled-execution-contract-v3'
 LEGACY_PROFILE = 'stage2-admission-fixed82-v2'  # Internal only: v2 has no profile field.
 DIRECT_PROFILE = 'stage3-direct-fixed16-v1'
 NO_FLUSH_PROFILE = 'stage3-direct-no-flush-fixed4-v1'
+COMPOSITION_CONTRACT_SCHEMA = 'northstar-controlled-execution-contract-v5'
+COMPOSITION_PROFILE = 'stage4-composition-fixed16-v2'
+AUTH_CACHE_PROFILE = 'stage4-composition-auth-cache-bypass-fixed3-v2'
+COMPOSITION_PROFILES = (COMPOSITION_PROFILE, AUTH_CACHE_PROFILE)
 CASE_SCHEMA = 'northstar-controlled-case-v2'
 RESULT_SCHEMA = 'northstar-controlled-case-result-v2'
 CORPUS_SCHEMA = 'northstar-admission-controlled-corpus-v2'
@@ -137,10 +141,72 @@ DIRECT_FIXED_FILES = DIRECT_MANIFEST_FILES | DIRECT_EMBEDDED_FILES | DIRECT_HELP
 DIRECT_BUILD_ABSENCES = tuple((name + '/' if name else '') + 'build.rs' for name in DIRECT_PACKAGE_ROOTS) + (
     '.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'src/lib.rs',
 )
+COMPOSITION_HELPER_FILES = DIRECT_HELPER_FILES | frozenset({
+    'scripts/lib/stage4_saved_case.py', 'scripts/lib/stage4_build_record.py',
+    'scripts/lib/stage4_corpus_join.py', 'scripts/lib/stage4_case.py',
+    'scripts/lib/stage4_shapes.json', 'scripts/test-stage4-saved-profile.py',
+    'scripts/test-stage4-case-controls.py',
+    'scripts/lib/stage4_compact.py', 'scripts/lib/stage4_compact_shapes.json',
+    'scripts/test-stage4-compact-codec.py', 'scripts/test-stage4-compact-semantic-controls.py',
+})
+# Explicit v5/V2 producer/reader correspondence, never inferred from a frame or
+# a caller-selected grammar. The named table preserves its historical identity.
+# Independent correspondence, actual-frame/reader acceptance and final source/
+# build/profile/start reviews remain prerequisites; these hashes cannot grant them.
+COMPOSITION_V2_SOURCE_HASHES = {
+    'src/stage4_replay.rs': 'ba4fd261eae7848745072b7ee604dc9a49850281c9ee0874d339446be1b48851',
+    'src/stage4_replay/compact.rs': '0623d1148d78d3ea3613987579e7413eaea44e5000406b7f50ab1b49188c04b8',
+    'scripts/lib/stage4_case.py': 'aa7daefd7265c6804443fcf44c94ffb9c63a7561e6da1577c1e31fe2e94095c0',
+    'scripts/lib/stage4_shapes.json': 'fc481c94bbd99e3891235b54f32450ec951c41ab4d56b3b04477ed3c01d30e38',
+    'scripts/lib/stage4_compact.py': 'd5005a7e838900f507479ba662de2b36d8fe3887208eb1fc3ea47568db4ccc74',
+    'scripts/lib/stage4_compact_shapes.json': '0d28af4728b2a9fb08abf6408d0b5a970442307c69eae93cd225ab436622f7e4',
+    'scripts/test-stage4-case-controls.py': '38661c3ceb903c10771226d1392490c8eafd7c52064e36d98c58c3e99b244d06',
+    'scripts/test-stage4-compact-codec.py': '329d9156b0b44c1237bad7d30b51b294add9548419e1f560631125108407a884',
+    'scripts/test-stage4-compact-semantic-controls.py': 'dc81c763531cbf178936920830a4751d5ca9abeaa3aee62216f4b80cfe13f968',
+}
+COMPOSITION_LITERAL_FILES = frozenset(
+    f'src/stage4_replay/fixtures/S{index:02d}.json' for index in range(1, 17))
+COMPOSITION_FIXED_FILES = DIRECT_FIXED_FILES | COMPOSITION_HELPER_FILES | COMPOSITION_LITERAL_FILES
+COMPOSITION_ENTRY = 'stage4_replay::replay_saved_case'
+COMPOSITION_TOOLCHAIN_TAG = 'rustup-toolchain:1.97.1-x86_64-unknown-linux-gnu'
+COMPOSITION_ARGUMENTS = ('--exact', COMPOSITION_ENTRY, '--ignored', '--nocapture',
+                         '--test-threads=1', '--color', 'never', '--format', 'pretty')
+COMPOSITION_FRAME_TAG = b'\x1eNORTHSTAR_STAGE4_COMPOSITION_V2 '
+# Additional scripts-first stdlib resolutions introduced by dataclasses.
+# The existing trusted-invoker check still precedes the first project import.
+COMPOSITION_PARSER_IMPORTS = DIRECT_PARSER_IMPORTS + (
+    'dataclasses', 'inspect', 'ast', '_ast', 'dis', 'opcode', '_opcode',
+    'linecache', 'tokenize', 'token', 'types', 'keyword')
+COMPOSITION_RELEASE_FIELDS = (
+    'source_review_sha256 effect_review_sha256 ordinary_acceptance_sha256 '
+    'reader_review_sha256 profile_review_sha256 budget_review_sha256 '
+    'allowed_starts_sha256 mutation_review_sha256')
+
+
+def composition_profile(profile_id):
+    """Two closed Stage4 routes, never an extension of a Stage3 profile."""
+    need(profile_id in COMPOSITION_PROFILES, 'composition_profile')
+    baseline = profile_id == COMPOSITION_PROFILE
+    counts = ({'normal': 13, 'rejection': 3, 'shrink': 0, 'total': 16} if baseline else
+              {'normal': 3, 'rejection': 0, 'shrink': 0, 'total': 3})
+    budgets = PROPOSED_BUDGETS.copy()
+    budgets.update(launches=counts['total'], case_ms=5000, input_bytes=64 * 1024,
+                   stdout_bytes=256 * 1024, evaluation_bytes=256 * 1024,
+                   evidence_bytes=32 * 1024 ** 2)
+    return {'id': profile_id, 'legacy': False, 'counts': counts, 'budgets': budgets,
+            'helpers': COMPOSITION_HELPER_FILES,
+            'ids': tuple(f'S{index:02d}' for index in range(1, 17)) if baseline else ('M1', 'M2', 'M3'),
+            'kinds': ('normal',) * counts['normal'] + ('rejection',) * counts['rejection'],
+            'result_schema': 'northstar-stage4-composition-case-result-v1',
+            'corpus_schema': 'northstar-stage4-composition-controlled-corpus-v1',
+            # The positive S13 is in another contract. No fourth mutant start.
+            'shrink': None}
 
 
 def fixed_profile(profile_id=LEGACY_PROFILE):
     """Source-fixed choices only; no supplied counts, callbacks or child argv."""
+    if profile_id in COMPOSITION_PROFILES:
+        return composition_profile(profile_id)
     need(profile_id in (LEGACY_PROFILE, DIRECT_PROFILE, NO_FLUSH_PROFILE), 'execution_profile')
     legacy = profile_id == LEGACY_PROFILE
     counts = PLAN_COUNTS.copy() if legacy else (
@@ -172,6 +238,9 @@ def contract_profile(contract):
     if contract.get('schema') == CONTRACT_SCHEMA:
         need('profile' not in contract, 'legacy_profile_field')
         return fixed_profile()
+    if contract.get('schema') == COMPOSITION_CONTRACT_SCHEMA:
+        need(contract.get('profile') in COMPOSITION_PROFILES, 'composition_contract_profile')
+        return fixed_profile(contract['profile'])
     need(contract.get('schema') == DIRECT_CONTRACT_SCHEMA and
          contract.get('profile') in (DIRECT_PROFILE, NO_FLUSH_PROFILE), 'execution_contract_version_or_profile')
     return fixed_profile(contract['profile'])
@@ -179,7 +248,28 @@ def contract_profile(contract):
 
 def child_arguments(binary, input_path, profile_id=LEGACY_PROFILE):
     profile = fixed_profile(profile_id)
+    if profile_id in COMPOSITION_PROFILES:
+        return [binary, *COMPOSITION_ARGUMENTS]
     return [binary, input_path] if profile['legacy'] else [binary, *DIRECT_ARGUMENTS]
+
+
+def extract_composition_frame(stdout):
+    """Preserve exact whole-frame bytes for the independent closed reader."""
+    need(type(stdout) is bytes and len(stdout) <= 256 * 1024, 'composition_stdout_budget')
+    need(stdout.count(COMPOSITION_FRAME_TAG) == 1 and stdout.count(b'\x1eEND\n') == 1,
+         'composition_frame_count')
+    start = stdout.index(COMPOSITION_FRAME_TAG)
+    digits_start = start + len(COMPOSITION_FRAME_TAG)
+    header_end = stdout.find(b'\n', digits_start, digits_start + 8)
+    need(header_end != -1, 'composition_frame_header')
+    digits = stdout[digits_start:header_end]
+    need(re.fullmatch(rb'[1-9][0-9]{0,5}', digits) is not None, 'composition_frame_length')
+    size = number(int(digits), 1, DIRECT_FRAME_BYTES)
+    end = header_end + 1 + size
+    need(stdout[end:end + len(DIRECT_FRAME_END)] == DIRECT_FRAME_END, 'composition_frame_trailer')
+    frame = stdout[start:end + len(DIRECT_FRAME_END)]
+    need(len(frame) <= DIRECT_FRAME_BYTES, 'composition_whole_frame_budget')
+    return frame
 
 
 def decode_direct_frame(stdout):
@@ -265,6 +355,8 @@ def validate_contract(value):
     """Validate an externally trusted contract; saved evidence is not authority."""
     profile = contract_profile(value)
     additional = '' if profile['legacy'] else ' profile case_inventory build_record'
+    if profile['id'] in COMPOSITION_PROFILES:
+        additional += ' release'
     exact(value, 'schema run_id mode root binary evidence_dir replay_dir replay_authority provenance helper_source_files budgets plan_counts caller' + additional,
           'execution_contract_fields')
     need(type(value['run_id']) is str and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}', value['run_id']), 'run_id')
@@ -312,6 +404,23 @@ def validate_contract(value):
         need(provenance['schema'] == 'northstar-admission-controlled-provenance-v1' and
              provenance['model'] == 'admission-controlled-v1' and provenance['binding_version'] == 'synthetic-material-v1',
              'provenance_version')
+    elif profile['id'] in COMPOSITION_PROFILES:
+        need(provenance['schema'] == 'northstar-stage4-composition-controlled-provenance-v1' and
+             provenance['model'] == 'stage4-composition-controlled-v1' and
+             provenance['binding_version'] == 'stage4-project-local-build-material-v1' and
+             provenance['artifact_role'] == ('baseline' if profile['id'] == COMPOSITION_PROFILE else
+                                              'auth-cache-bypass-mutant'), 'composition_provenance_version')
+        valid_hash(provenance['compiler_sha256'])
+        valid_hash(provenance['build_record_file_sha256'])
+        need(provenance['source_files'].get('Cargo.lock') == provenance['cargo_lock_sha256'],
+             'composition_lockfile_binding')
+        need(all(provenance['source_files'].get(path) == digest
+                 for path, digest in COMPOSITION_V2_SOURCE_HASHES.items()),
+             'composition_v2_source_binding')
+        exact(value['release'], COMPOSITION_RELEASE_FIELDS, 'composition_external_release_fields')
+        for digest in value['release'].values():
+            valid_hash(digest)
+        validate_case_inventory(value['case_inventory'], profile['id'])
     else:
         need(provenance['schema'] == 'northstar-direct-controlled-provenance-v1' and
              provenance['model'] == 'direct-controlled-v1' and
@@ -323,8 +432,12 @@ def validate_contract(value):
         need(provenance['source_files'].get('Cargo.lock') == provenance['cargo_lock_sha256'],
              'direct_lockfile_binding')
         validate_case_inventory(value['case_inventory'], profile['id'])
-    need(provenance['adapter'] == 'controlled_rust' and type(provenance['toolchain']) is str and
-         provenance['toolchain'].startswith('rustc 1.97.1 '), 'provenance_toolchain_adapter')
+    expected_adapter = ('local-stage4-composition-controlled-v1' if profile['id'] in COMPOSITION_PROFILES
+                        else 'controlled_rust')
+    need(provenance['adapter'] == expected_adapter and type(provenance['toolchain']) is str and
+         (provenance['toolchain'].startswith('rustc 1.97.1 ') or
+          (profile['id'] in COMPOSITION_PROFILES and
+           provenance['toolchain'] == COMPOSITION_TOOLCHAIN_TAG)), 'provenance_toolchain_adapter')
     for name, value_hash in provenance['source_files'].items():
         need(type(name) is str and not Path(name).is_absolute() and '..' not in Path(name).parts and
              str(Path(name)) == name and '\\' not in name, 'source_path')
@@ -350,7 +463,14 @@ def validate_case_inventory(inventory, profile_id):
     profile = fixed_profile(profile_id)
     need(not profile['legacy'] and type(inventory) is list and len(inventory) == profile['counts']['total'],
          'direct_inventory_count')
-    if profile_id == DIRECT_PROFILE:
+    if profile_id in COMPOSITION_PROFILES:
+        identities = profile['ids']
+        cancelled = {'S03', 'S04', 'S10', 'S12'}
+        verdicts = [('InvalidScenario' if index >= 13 else
+                     'Cancelled' if identity in cancelled else 'Pass')
+                    for index, identity in enumerate(identities)] if profile_id == COMPOSITION_PROFILE else \
+                   ['InvariantViolation'] * 3
+    elif profile_id == DIRECT_PROFILE:
         identities = profile['ids']
         cancelled = {'C02', 'C05', 'C06', 'C09', 'C11'}
         verdicts = [('Cancelled' if identity in cancelled else 'Pass') if identity.startswith('C') else
@@ -698,6 +818,8 @@ def evaluate_fixture(controlled, fixture, record, stdout, profile_id=LEGACY_PROF
     try:
         if not profile['legacy']:
             need(record['process']['returncode'] == 0, 'direct_entry_exit')
+            if profile_id in COMPOSITION_PROFILES:
+                return controlled.evaluate_fixture(fixture, record, extract_composition_frame(stdout), profile_id)
             payload = decode_direct_frame(stdout)
             # Input-derived expectations must already exist in fixture. The
             # module validates the DTO, applies Safety, then fixture equality.
@@ -968,7 +1090,7 @@ def _path_metadata(path, *, missing_ok=False):
     return metadata
 
 
-def check_direct_import_layout(root):
+def check_direct_import_layout(root, profile_id=DIRECT_PROFILE):
     """Exact project-helper alternatives, also required by trusted preparation.
 
     Entry scripts themselves already rely on supervision. Their trusted invoker
@@ -978,15 +1100,20 @@ def check_direct_import_layout(root):
     root = Path(root)
     stems = ('controlled_admission_supervision', 'controlled_admission', 'experiment_contract',
              'direct_case', 'direct_build_record')
+    parser_imports = DIRECT_PARSER_IMPORTS
+    if profile_id in COMPOSITION_PROFILES:
+        stems += ('stage4_saved_case', 'stage4_build_record', 'stage4_corpus_join', 'stage4_case',
+                  'stage4_compact')
+        parser_imports = COMPOSITION_PARSER_IMPORTS
     absent = ['scripts/lib.py', 'scripts/lib.pyc', 'scripts/lib/__init__.py',
               'scripts/lib/__init__.pyc', 'scripts/lib/__pycache__']
-    for name in DIRECT_PARSER_IMPORTS:
+    for name in parser_imports:
         absent.extend(('scripts/' + name, 'scripts/' + name + '.py', 'scripts/' + name + '.pyc'))
     for stem in stems:
         absent.extend(('scripts/lib/' + stem, 'scripts/lib/' + stem + '.pyc'))
     for name in absent:
         need(_path_metadata(root / name, missing_ok=True) is None, 'helper_import_alternative')
-    for directory, names in (('scripts', ('lib',) + DIRECT_PARSER_IMPORTS), ('scripts/lib', ('__init__',) + stems)):
+    for directory, names in (('scripts', ('lib',) + parser_imports), ('scripts/lib', ('__init__',) + stems)):
         metadata = _path_metadata(root / directory)
         need(stat.S_ISDIR(metadata.st_mode), 'helper_directory')
         # Examine names only, never unrelated script contents or environments.
@@ -1010,13 +1137,16 @@ def check_direct_inventory(contract):
     need(not contract_profile(contract)['legacy'], 'direct_inventory_profile')
     root = Path(contract['root'])
     source_keys = set(contract['provenance']['source_files'])
-    check_direct_import_layout(root)
+    profile_id = contract_profile(contract)['id']
+    check_direct_import_layout(root, profile_id)
     for name in DIRECT_BUILD_ABSENCES:
         need(_path_metadata(root / name, missing_ok=True) is None, 'automatic_build_input_present')
     discovered = set()
     for source_root in DIRECT_SOURCE_ROOTS:
         leaves = {name for name in source_keys if name.startswith(source_root + '/')}
-        need(leaves and all(name.endswith('.rs') for name in leaves), 'fixed_source_root_inventory')
+        need(leaves and all(name.endswith('.rs') or
+             (profile_id in COMPOSITION_PROFILES and name in COMPOSITION_LITERAL_FILES)
+             for name in leaves), 'fixed_source_root_inventory')
         expected_children = {}
         for name in leaves:
             path = Path(name)
@@ -1047,7 +1177,8 @@ def check_direct_inventory(contract):
     need({'migrations/' + entry.name for entry in entries} == migrations, 'migration_directory_membership')
     need(all(stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode) for entry in entries), 'migration_regular_leaf')
     discovered.update(migrations)
-    for name in DIRECT_FIXED_FILES:
+    fixed_files = COMPOSITION_FIXED_FILES if profile_id in COMPOSITION_PROFILES else DIRECT_FIXED_FILES
+    for name in fixed_files:
         need(stat.S_ISREG(_path_metadata(root / name).st_mode), 'fixed_material_regular_file')
         discovered.add(name)
     need(discovered == source_keys, 'fixed_source_inventory_equality')
@@ -1070,12 +1201,33 @@ def _check_worker_sources(contract):
     """Hashes execute only in the limited worker, before dynamic project import."""
     need(Path(__file__).resolve() == Path(contract['root']) / 'scripts/lib/controlled_admission_supervision.py',
          'executing_helper_root_changed')
+    return _check_source_data(contract)
+
+
+def check_retained_source_data(contract):
+    """Stage4 join only: authenticate another retained root strictly as data.
+
+    This does NOT authenticate the executing Python helpers. The separately
+    trusted caller must authenticate that fixed closure first. Saved workers
+    continue through _check_worker_sources and its unchanged self-location pin.
+    No module is loaded, reloaded or selected from this retained source root.
+    """
+    contract = validate_contract(contract)
+    need(contract_profile(contract)['id'] in COMPOSITION_PROFILES,
+         'composition_retained_source_profile')
+    return _check_source_data(contract)
+
+
+def _check_source_data(contract):
+    """Bounded inventory/hash body; Stage4 also measures the fixed compile subset."""
     source_files = contract['provenance']['source_files']
     profile = contract_profile(contract)
     need(set(contract['helper_source_files']).issubset(source_files), 'helper_scope')
     if not profile['legacy']:
         check_direct_inventory(contract)
     used, mutation_bytes = 0, None
+    composition = profile['id'] in COMPOSITION_PROFILES
+    compilation_files, compilation_bytes = {}, 0
     # Helpers first. No controlled-admission/project module has been imported yet.
     for name in list(sorted(profile['helpers'])) + sorted(set(source_files) - profile['helpers']):
         path = Path(name)
@@ -1085,25 +1237,42 @@ def _check_worker_sources(contract):
         data = reader(Path(contract['root']) / path, contract['budgets']['source_bytes'] - used)
         used += len(data)
         need(fingerprint(data) == source_files[name], 'source_identity_changed')
-        if not profile['legacy'] and name == 'src/xmpp/mod.rs':
+        if composition and name not in COMPOSITION_HELPER_FILES:
+            compilation_files[name] = source_files[name]
+            compilation_bytes += len(data)
+        mutation_path = ('src/bosh/response_owner.rs' if profile['id'] in COMPOSITION_PROFILES
+                         else 'src/xmpp/mod.rs')
+        if not profile['legacy'] and name == mutation_path:
             mutation_bytes = data
     need(object_hash(source_files) == contract['provenance']['source_sha256'], 'source_manifest_hash')
     if not profile['legacy']:
         check_direct_inventory(contract)
-        return {'summary': {'sha256': object_hash(source_files), 'files': len(source_files), 'bytes': used},
-                'mutation_bytes': mutation_bytes}
+        result = {'summary': {'sha256': object_hash(source_files), 'files': len(source_files), 'bytes': used},
+                  'mutation_bytes': mutation_bytes}
+        if composition:
+            # The existing fixed inventory, never a caller-selected exclusion.
+            # These bytes were authenticated in the SAME reads above. The two
+            # public reanchor documents are outside that existing inventory.
+            result['compilation_summary'] = {'sha256': object_hash(compilation_files),
+                'files': len(compilation_files), 'bytes': compilation_bytes}
+        return result
 
 
 def _current_build_record(controlled, contract, verified_sources):
     """Authenticate bounded preparation bytes before opening any runnable."""
     need(not contract_profile(contract)['legacy'], 'build_record_profile')
-    need(type(verified_sources) is dict and set(verified_sources) == {'summary', 'mutation_bytes'},
+    composition = contract_profile(contract)['id'] in COMPOSITION_PROFILES
+    fields = {'summary', 'mutation_bytes'} | ({'compilation_summary'} if composition else set())
+    need(type(verified_sources) is dict and set(verified_sources) == fields,
          'verified_source_summary_required')
     path = Path(contract['build_record'])
     need(stat.S_ISREG(_path_metadata(path).st_mode), 'build_record_regular_file')
     raw = read_regular_bounded(path, MAX_CONTRACT)
-    return controlled.check_current_provenance(contract, record_bytes=raw,
-        verified_source_summary=verified_sources['summary'], current_mutation_bytes=verified_sources['mutation_bytes'])
+    arguments = {'record_bytes': raw, 'verified_source_summary': verified_sources['summary'],
+                 'current_mutation_bytes': verified_sources['mutation_bytes']}
+    if composition:
+        arguments['verified_compilation_summary'] = verified_sources['compilation_summary']
+    return controlled.check_current_provenance(contract, **arguments)
 
 
 def _check_build_runnable(controlled, contract, record, descriptor):
@@ -1136,7 +1305,7 @@ def direct_preflight(contract):
     profile = contract_profile(contract)
     need(not profile['legacy'], 'direct_preflight_profile')
     verified_sources = _check_worker_sources(contract)
-    from . import direct_case as controlled
+    controlled = load_controlled(profile['id'])
     controlled.validate_provenance(contract['provenance'])
     check_current_material(controlled, contract, verified_sources)
     plan = fixture_plan(controlled, profile['id'])
@@ -1145,6 +1314,18 @@ def direct_preflight(contract):
     if prior is not None:
         validate_direct_prior(controlled, contract['replay_dir'], prior, plan)
     return controlled, plan, prior
+
+
+def load_controlled(profile_id):
+    """Call only AFTER existing source/import-layout verification, never from owner."""
+    if profile_id in COMPOSITION_PROFILES:
+        from . import stage4_saved_case as controlled
+    elif profile_id == LEGACY_PROFILE:
+        from . import controlled_admission as controlled
+    else:
+        need(profile_id in (DIRECT_PROFILE, NO_FLUSH_PROFILE), 'fixed_controlled_route')
+        from . import direct_case as controlled
+    return controlled
 
 
 def _child_bootstrap(expected_parent, ceiling, ready_write, gate_read, stdout_write, stderr_write,
@@ -1744,10 +1925,7 @@ def worker_main(channel, contract_bytes, run_id, mode, contract_sha256, startup_
          'external_contract_identity')
     need(profile['id'] == profile_id, 'external_profile_identity')
     verified_sources = _check_worker_sources(contract)
-    if profile['legacy']:
-        from . import controlled_admission as controlled
-    else:
-        from . import direct_case as controlled
+    controlled = load_controlled(profile['id'])
     controlled.validate_provenance(contract['provenance'])
     check_current_material(controlled, contract, verified_sources)
     plan = fixture_plan(controlled) if profile['legacy'] else fixture_plan(controlled, profile['id'])

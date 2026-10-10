@@ -446,6 +446,7 @@ jobs:
           node scripts/check-federated-route-boundaries.mjs
           node --test scripts/test-federated-route-boundaries.mjs
           node --test scripts/test-mix-outbox-boundaries.mjs
+          node --test scripts/test-source-module.mjs
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
           node scripts/check-outbound-xml-construction.mjs

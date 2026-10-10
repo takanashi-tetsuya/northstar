@@ -671,3 +671,49 @@ async fn renewal_failure_stops_the_cleanup_effect() {
         "an effect must not outlive its failed renewal fence"
     );
 }
+
+#[tokio::test]
+async fn spawned_heartbeat_stops_after_effect_completes() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let result = execute_with_spawned_heartbeat(async { 7 }, |stop| async move {
+        stop.cancelled().await;
+        let _ = tx.send(());
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(result, 7);
+    rx.await.unwrap();
+}
+
+#[tokio::test]
+async fn spawned_heartbeat_stops_when_effect_future_is_dropped() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let task = execute_with_spawned_heartbeat(std::future::pending::<()>(), |stop| async move {
+        stop.cancelled().await;
+        let _ = tx.send(());
+        Ok(())
+    });
+    let timeout_result = tokio::time::timeout(Duration::from_millis(20), task).await;
+    assert!(timeout_result.is_err()); // Times out, dropping the future
+
+    tokio::time::timeout(Duration::from_secs(1), rx)
+        .await
+        .expect("should not time out waiting for receiver")
+        .expect("should receive oneshot message");
+}
+
+#[tokio::test]
+async fn spawned_heartbeat_failure_is_reported_after_effect() {
+    let error = execute_with_spawned_heartbeat(
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        },
+        |_stop| async move { Err(anyhow::anyhow!("lease fencing was lost")) },
+    )
+    .await
+    .expect_err("should return heartbeat error");
+
+    assert!(error.to_string().contains("lease fencing was lost"));
+}

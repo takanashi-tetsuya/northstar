@@ -171,6 +171,31 @@ async fn run_one_admin_session_cleanup(
     Ok(true)
 }
 
+/// Run an ordinary operation effect while a spawned task renews its lease
+/// fence. The heartbeat is stopped when the effect completes and also when
+/// this future is dropped (for example when `serve` is cancelled during
+/// shutdown), so an abandoned target is never renewed by an orphaned task. A
+/// heartbeat failure is reported after the effect returns, as before.
+async fn execute_with_spawned_heartbeat<T, Effect, Heartbeat, HeartbeatFactory>(
+    effect: Effect,
+    heartbeat_factory: HeartbeatFactory,
+) -> Result<T>
+where
+    Effect: Future<Output = T>,
+    Heartbeat: Future<Output = Result<()>> + Send + 'static,
+    HeartbeatFactory: FnOnce(CancellationToken) -> Heartbeat,
+{
+    let heartbeat_stop = CancellationToken::new();
+    let _stop_heartbeat_on_drop = heartbeat_stop.clone().drop_guard();
+    let heartbeat = tokio::spawn(heartbeat_factory(heartbeat_stop.clone()));
+    let output = effect.await;
+    heartbeat_stop.cancel();
+    heartbeat
+        .await
+        .context("operation lease heartbeat panicked")??;
+    Ok(output)
+}
+
 /// Run one effect and its lease renewal in a single cancellation scope.
 ///
 /// The renewal is deliberately a child future rather than a spawned task:
@@ -314,28 +339,21 @@ async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bo
         let fenced = control
             .effects()
             .execute_after_commit(&lease, &target, || async {
-                let heartbeat_stop = CancellationToken::new();
-                let heartbeat = tokio::spawn(lease_heartbeat(
-                    Arc::clone(control),
-                    lease.clone(),
-                    target.clone(),
-                    heartbeat_stop.clone(),
-                ));
-                let effect = execute_effect(
-                    &runtime.session_effects,
-                    &runtime.tls_reload_effects,
-                    &runtime.island_effects,
-                    &runtime.muc_destroy_effects,
-                    &runtime.panic_effects,
-                    &lease.operation,
-                    &target.target.payload,
+                execute_with_spawned_heartbeat(
+                    execute_effect(
+                        &runtime.session_effects,
+                        &runtime.tls_reload_effects,
+                        &runtime.island_effects,
+                        &runtime.muc_destroy_effects,
+                        &runtime.panic_effects,
+                        &lease.operation,
+                        &target.target.payload,
+                    ),
+                    |stop| {
+                        lease_heartbeat(Arc::clone(control), lease.clone(), target.clone(), stop)
+                    },
                 )
-                .await;
-                heartbeat_stop.cancel();
-                heartbeat
-                    .await
-                    .context("operation lease heartbeat panicked")??;
-                Ok(effect)
+                .await
             })
             .await?;
         let FencedEffect::Executed(effect) = fenced else {

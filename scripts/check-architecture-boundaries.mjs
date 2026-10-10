@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
 import { verifyNativeAckService } from './check-execution-boundaries.mjs';
+import { readProductionModule, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2100,8 +2101,9 @@ if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswor
 // above. Its MAM slice must nevertheless use the same authorized snapshot
 // service as local XEP-0313: no room lookup, affiliation check, boundary read,
 // cursor validation or archive page may be composed directly in the protocol
-// handler.
-const federatedMucSource = read('src/xmpp/protocol/federated_muc.rs');
+// handler. These checks apply to the whole production module (the file and its
+// non-test child files).
+const federatedMucSource = readProductionModule('src/xmpp/protocol/federated_muc.rs', { root });
 if (/\bstate\s*\.\s*cluster\b/.test(federatedMucSource)) {
   throw new Error('federated MUC handlers must use purpose-specific state operations, not cluster authority');
 }
@@ -2126,7 +2128,7 @@ for (const authority of [
 if (!/\.mam_service\s*\(\s*\)/.test(federatedMucSource)) {
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
 }
-const federatedIqHandler = structBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
+const federatedIqHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
 const federatedMetadataCall = federatedIqHandler.indexOf('.execute_federated_mam_metadata(command)');
 const federatedActorCheck = federatedIqHandler.indexOf('authenticated_remote_actor(authenticated_domain, from)');
 const federatedBareActor = federatedIqHandler.indexOf('let actor_bare_jid = crate::jid::canonical_bare_key(&actor_full_jid)?;');
@@ -2141,11 +2143,18 @@ if (federatedMetadataCall < 0
   || federatedIqHandler.includes('.authorized_federated_room_boundaries(')) {
   throw new Error('federated MAM metadata must use an authenticated actor and typed archive command');
 }
+const selfTestPattern = new RegExp(`\\bdb\\s*::\\s*enqueue_s2s_outbox_in_transaction\\b`);
+if (!selfTestPattern.test('db::enqueue_s2s_outbox_in_transaction(')
+    || !selfTestPattern.test('db :: enqueue_s2s_outbox_in_transaction(')
+    || selfTestPattern.test('xdb::enqueue_s2s_outbox_in_transaction(')
+    || selfTestPattern.test('db::enqueue_s2s_outbox_in_transaction_v2(')) {
+  throw new Error('architecture gate regex self-test failed');
+}
 for (const forbidden of [
   'enqueue_s2s_outbox_in_transaction',
   'mam_federated_room_archive_page_authorized_in_transaction',
 ]) {
-  if (new RegExp(`\bdb\s*::\s*${forbidden}\b`).test(federatedMucSource)) {
+  if (new RegExp(`\\bdb\\s*::\\s*${forbidden}\\b`).test(federatedMucSource)) {
     throw new Error(`federated_muc.rs regained transactional authority via db::${forbidden}`);
   }
 }
@@ -2256,10 +2265,10 @@ for (const [name, accessor, forbiddenAuthority] of [
     read(`src/xmpp/protocol/${name}`),
     `${name} production`,
   );
-  if (new RegExp(`\bdb\s*::\s*${forbiddenAuthority}\b`).test(production)) {
+  if (new RegExp(`\\bdb\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
     throw new Error(`${name} bypasses ${accessor}() via db::${forbiddenAuthority}`);
   }
-  if (!new RegExp(`\.${accessor}\s*\(\s*\)`).test(production)) {
+  if (!new RegExp(`\\.${accessor}\\s*\\(\\s*\\)`).test(production)) {
     throw new Error(`${name} no longer routes persistence through ${accessor}()`);
   }
 }
@@ -3884,7 +3893,7 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sasl2.rs'))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(c2sProtocol)
     || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/messaging.rs'))
-    || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/federated_muc.rs'))) {
+    || /(?:self\.)?state\.metrics\b/.test(federatedMucSource)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
 const componentTransport = read('src/components.rs');

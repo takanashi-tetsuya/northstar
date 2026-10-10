@@ -233,7 +233,11 @@ impl<T> DeferredQueue<T> {
                             && !self.entries.is_empty()
                         {
                             if let Some(removed) = self.entries.pop_front() {
-                                current_bytes = current_bytes.saturating_sub(removed.byte_size);
+                                // The projected replacement total already excludes
+                                // the target's old bytes, even if it is evicted.
+                                if removed.key.as_deref() != Some(k.as_str()) {
+                                    current_bytes = current_bytes.saturating_sub(removed.byte_size);
+                                }
                                 evicted.push(removed.payload);
                             }
                         }

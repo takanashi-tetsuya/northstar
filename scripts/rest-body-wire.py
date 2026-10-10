@@ -4,7 +4,10 @@ import argparse
 import json
 import socket
 import ssl
+import sys
 import time
+
+from lib.http_response_diagnostics import summarize_http_response
 
 TLS_PORT = None
 TLS_CONTEXT = None
@@ -23,11 +26,29 @@ def connect(port, method, path, body=b"{", length=128):
     return stream
 
 
-def read_closed(stream, expected):
+def read_closed(stream, expected, *, diagnostic_case=None, diagnostic_request="POST /api/v1/login"):
     with stream:
         data = bytearray()
-        while part := stream.recv(65536):
-            data.extend(part)
+        try:
+            while part := stream.recv(65536):
+                data.extend(part)
+        except OSError:
+            if diagnostic_case is not None:
+                try:
+                    preview = bytes(data[:512])
+                    status_line = preview.split(b"\r\n", 1)[0][:80]
+                    print(
+                        f"synthetic slow-body admission: case={diagnostic_case} "
+                        f"request={diagnostic_request} expected_status={expected} "
+                        f"held_incomplete_bodies=8 declared_body_bytes=128 sent_body_bytes=1 "
+                        f"transport={'tls' if isinstance(stream, ssl.SSLSocket) else 'tcp'} "
+                        f"response_diagnostic={json.dumps(summarize_http_response((data,)), separators=(',', ':'))} "
+                        f"partial_status_line_80={status_line!r} partial_reply_prefix_512={preview!r}",
+                        file=sys.stderr, flush=True,
+                    )
+                except Exception:
+                    pass  # Preserve the original receive failure if diagnostics fail.
+            raise
     assert data.startswith(f"HTTP/1.1 {expected} ".encode()), data[:300]
     assert b"x-request-id:" in data.lower(), data[:300]
     return bytes(data)
@@ -68,10 +89,16 @@ def main():
         for port in [args.port, args.admin_port]:
             denied = connect(port, "POST", "/api/v1/login")
             denied.settimeout(3)
-            reply = read_closed(denied, 429)
+            if port == args.port:
+                diagnostic_case = "public_tls" if args.tls else "public"
+            else:
+                diagnostic_case = "admin"
+            reply = read_closed(denied, 429, diagnostic_case=diagnostic_case)
             assert b"retry-after: 1" in reply.lower(), reply
-        for stream in pending:
-            reply = read_closed(stream, 408)
+        for index, stream in enumerate(pending, start=1):
+            method, path = routes[index - 1]
+            diagnostic_case = f"{'public_tls' if args.tls else 'public'}_held_{index}_of_8"
+            reply = read_closed(stream, 408, diagnostic_case=diagnostic_case, diagnostic_request=f"{method} {path}")
             assert b'"code":"request_timeout"' in reply, reply
             assert b"connection: close" in reply.lower(), reply
         elapsed = time.monotonic() - started

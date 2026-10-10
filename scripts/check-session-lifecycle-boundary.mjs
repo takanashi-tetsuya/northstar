@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import assert from "node:assert/strict";
 
 function read(path) {
   return fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -8,11 +9,55 @@ function requireMatch(value, pattern, message) {
   if (!pattern.test(value)) throw new Error(message);
 }
 
+function verifyMucSmAssociationBoundary(source) {
+  // Inspect only this production function, not its helper, tests, comments or
+  // diagnostics. Preserve offsets while masking comments and string literals.
+  const code = source.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
+    (text) => text.replace(/[^\n]/g, " "));
+  const start = code.search(/\bpub\s+async\s+fn\s+associate_local_muc_sm_session\s*\(/);
+  if (start < 0) throw new Error("MUC SM association function is missing");
+  const open = code.indexOf("{", start);
+  let depth = 0;
+  let body;
+  for (let index = open; index < code.length; index++) {
+    if (code[index] === "{") depth++;
+    if (code[index] === "}" && --depth === 0) {
+      body = code.slice(open + 1, index);
+      break;
+    }
+  }
+  if (body === undefined) throw new Error("MUC SM association function is unterminated");
+  requireMatch(
+    body,
+    /\bfor\s*\([^{};]+\)\s+in\s+local_muc_membership_snapshots\s*\(\s*memberships\s*\)\s*\{/,
+    "MUC SM association must iterate owned membership snapshots before backend awaits",
+  );
+}
+
 const protocol = read("src/xmpp/protocol.rs");
 const transport = read("src/xmpp/mod.rs");
 const bosh = read("src/bosh.rs");
 const replay = read("src/services/replay.rs");
 const sasl2 = read("src/xmpp/protocol/sasl2.rs");
+const state = read("src/state.rs");
+
+verifyMucSmAssociationBoundary(state);
+// Keep the production ownership boundary tied to the helper's runtime test.
+// Cloning an iterator item alone still leaves its shard guard in the iterator.
+const snapshotLoop = /for\s*\(\s*room_jid\s*,\s*membership\s*\)\s+in\s+local_muc_membership_snapshots\s*\(\s*memberships\s*\)\s*\{/;
+requireMatch(state, snapshotLoop, "MUC SM association mutation fixture no longer matches");
+for (const [name, replacement] of [
+  ["live iterator", "for membership in memberships {"],
+  ["cloned but uncollected iterator", "for (room_jid, membership) in memberships.iter().map(|entry| (entry.key().clone(), entry.value().clone())) {"],
+  ["discarded snapshot", "let _ = local_muc_membership_snapshots(memberships); for membership in memberships {"],
+  ["comment-only snapshot", "// for (room_jid, membership) in local_muc_membership_snapshots(memberships) {\nfor membership in memberships {"],
+]) {
+  assert.throws(
+    () => verifyMucSmAssociationBoundary(state.replace(snapshotLoop, replacement)),
+    /MUC SM association must iterate owned membership snapshots/,
+    `MUC SM association boundary accepted ${name}`,
+  );
+}
 
 const dropStart = protocol.indexOf("fn synchronous_drop_fallback");
 const dropEnd = protocol.indexOf("#[cfg(test)]", dropStart);
@@ -104,3 +149,27 @@ if (startTlsTransition < 0 || tcpFinalize < startTlsTransition) {
 }
 
 console.log("session lifecycle and durable transport authority boundaries are intact");
+
+// The frame runner is the production ingress, not an optional observer beside
+// transport-specific handling. Behavioral timeout/cancellation tests live in
+// frame_execution.rs; these mutation checks prevent adapter bypass drift.
+function verifyFrameExecutionIngress(nativeSource, boshSource) {
+  if (/\b(?:session|protocol)\.handle\s*\(/.test(nativeSource)
+      || /\bprotocol\.handle\s*\(/.test(boshSource)) {
+    throw new Error('C2S transports bypassed the owned frame execution boundary');
+  }
+  if ((nativeSource.match(/session\.process_frame\(&frame\)/g) ?? []).length !== 2
+      || (boshSource.match(/self\.protocol\.process_frame\(payload\)/g) ?? []).length !== 1) {
+    throw new Error('TCP, WebSocket and BOSH must all enter the canonical frame runner');
+  }
+}
+verifyFrameExecutionIngress(transport, bosh);
+for (const [nativeSource, boshSource] of [
+  [transport.replace('session.process_frame(&frame)', 'session.handle(&frame)'), bosh],
+  [transport, bosh.replace('self.protocol.process_frame(payload)', 'self.protocol.handle(payload)')],
+]) {
+  let rejected = false;
+  try { verifyFrameExecutionIngress(nativeSource, boshSource); } catch { rejected = true; }
+  if (!rejected) throw new Error('frame-runner bypass mutation was not rejected');
+}
+console.log('canonical frame ingress and bypass mutations are intact');

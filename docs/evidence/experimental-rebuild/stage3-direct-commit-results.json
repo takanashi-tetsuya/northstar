@@ -1,0 +1,255 @@
+{
+  "schema": "northstar-stage3-direct-commit-results-v1",
+  "status": "PassedLimitedModeAwareCommitSlice",
+  "scope": [
+    "Both mode-aware service entry points now use MessageApplication. The retained normal-local C2S path reaches the existing standalone or clustered archive transaction with an operation-bound direct witness.",
+    "The actual COMMIT wrapper records unconfirmed preparation before polling COMMIT and a positive receipt synchronously before health-turn completion or result mapping. Stored, Replay and AccountUnavailable remain distinct from returned route mode.",
+    "One private original-message preparation derives admission, identity, live, stored and complete policy-selected archive views. It preserves full/bare and delayed/live differences, self-recipient behavior and un-rated durable messages without inventing a guard grant.",
+    "Positive Stored receipt followed by continuation error preserves accepted recovery storage; Replay performs the existing no-route finalization; AccountUnavailable preserves rejection. No reconciliation read or second admission is introduced.",
+    "Reverse-order begin/finalize/direct transitions, changed prepared inputs, duplicate effect use and invalid LiveOnly admission mode reject without changing retained facts."
+  ],
+  "tested_source": {
+    "base_commit": "be27290c4513a5c182d5a52398e611b87dd35480",
+    "base_tree": "b154f74fe58c6c65a66bc3f9e79d4c5864071a3c",
+    "changed_files": {
+      "crates/northstar-message-application/src/direct_commit.rs": {
+        "sha256": "7d757125780b6858c5efb164d035fe5f41f42547f3c64cda1b23c4c00a56f52c",
+        "bytes": 26733
+      },
+      "crates/northstar-message-application/src/direct_lifecycle.rs": {
+        "sha256": "128b05eb5127271672b3c3841c404b615812b3c4affa0bb52b9ba4136c61a7b6",
+        "bytes": 42042
+      },
+      "crates/northstar-message-application/src/lib.rs": {
+        "sha256": "31245a4427e78b1e6e1abd1812e2e0ec6521d6b3fb509997d0c5ef91817f27c8",
+        "bytes": 8221
+      },
+      "crates/northstar-message-core/src/lib.rs": {
+        "sha256": "74e272f201fb77973b9644aba026b8b3945ac0366431f440654c4d32806f8b72",
+        "bytes": 9925
+      },
+      "src/cluster.rs": {
+        "sha256": "2620ce924994b85a0fa370d088407224ebd5ccaab84015f350e5853872ddfc59",
+        "bytes": 325672
+      },
+      "src/db/archive.rs": {
+        "sha256": "99450dddd10fe87b7e6c3767aa4a0d0bc7ebfbd7c873d397e30071a26e9a669a",
+        "bytes": 188688
+      },
+      "src/db/messaging.rs": {
+        "sha256": "4272c788e59c49bcec04f6a19edd66119d931a5ee5d6920367caa665c3928156",
+        "bytes": 66318
+      },
+      "src/services/message_admission/witness.rs": {
+        "sha256": "07a1f3f645367a1111a173e093612ca181ed0fffc12f8d5296c5b75110693b05",
+        "bytes": 13040
+      },
+      "src/services/messaging.rs": {
+        "sha256": "a4d978589721c86a5b436b079af415ffe9bdea8f7afc55dc0bc982c29d297bf2",
+        "bytes": 22692
+      },
+      "src/services/messaging/direct_workflow.rs": {
+        "sha256": "8882c15b80ccc2e2c10e12e7d9152879fd5828221432e2ee00237445b41c632d",
+        "bytes": 12677
+      },
+      "src/xmpp/frame_execution.rs": {
+        "sha256": "efbbbb610aaad329baabeb18e7872b220134b777c5615bdc874e1e58bff9028f",
+        "bytes": 51443
+      },
+      "src/xmpp/protocol/messaging.rs": {
+        "sha256": "5b6338f58bb2138767c9c835022b41023192f6268f9de1bfad4fe2f3c8311736",
+        "bytes": 116239
+      }
+    },
+    "manifest_sha256": "c3211f52b7cd5d18184c51f5319b267b1a55bb809411b52f1a86a7faff96c2f5",
+    "patch_sha256": "84c4145a4a5e480ce98c1f9746d198e057423c0c0147a8113b1871832853febd",
+    "unchanged_during_checks": true,
+    "manifest_encoding": "UTF-8 JSON of changed_files with sorted keys, compact comma/colon separators and no trailing newline."
+  },
+  "checks": {
+    "preparation": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.660282229",
+      "timeout_seconds": 600,
+      "log_sha256": "7ba0b749648604bb61fff3a171da36243c8e1d12bdf4de1835af15c4bbb80fad",
+      "log_bytes": 992,
+      "passed_tests": 5,
+      "ignored_tests": 0
+    },
+    "execution_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.240188546",
+      "timeout_seconds": 600,
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339",
+      "log_bytes": 40
+    },
+    "clippy": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "166.329168717",
+      "timeout_seconds": 600,
+      "log_sha256": "743e642d258df1fbf606e120c0be635374211a63e77f4a539212ce115e236a65",
+      "log_bytes": 411
+    },
+    "admission": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.310097602",
+      "timeout_seconds": 600,
+      "log_sha256": "283c4cb49357f318c24ddbf2cbe51965bf738dda0509fa7edd2a0e3acd67fb24",
+      "log_bytes": 1218,
+      "passed_tests": 8,
+      "ignored_tests": 0
+    },
+    "witness": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.282197544",
+      "timeout_seconds": 600,
+      "log_sha256": "40e7df72b174dda212c8ff958f8fe09153c74f3f07a601457ab4e990dd74dc54",
+      "log_bytes": 499,
+      "passed_tests": 2,
+      "ignored_tests": 0
+    },
+    "direct_wrapper": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "157.624823453",
+      "timeout_seconds": 600,
+      "log_sha256": "fc09ba708f68b191563f303f8eafefa2dc12f5c67f0b6f055ff0d86a5830484d",
+      "log_bytes": 1013,
+      "passed_tests": 3,
+      "ignored_tests": 0
+    },
+    "compile": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "144.277919516",
+      "timeout_seconds": 600,
+      "log_sha256": "f2a1fd9b8fd395d0134d952bbbd0b3fba6dbd822b3b27c240825b76b1d418a7d",
+      "log_bytes": 411
+    },
+    "application": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.969374269",
+      "timeout_seconds": 600,
+      "log_sha256": "c973bcde0b01d132e945ba718539c9db569d5b61984709fb0677af7e54641c73",
+      "log_bytes": 2782,
+      "passed_tests": 23,
+      "ignored_tests": 0
+    },
+    "gates": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "3.858346594",
+      "timeout_seconds": 600,
+      "log_sha256": "1389fa863b73d9ccb72120055a724f0a40b59c51d6ce47b1968c6278fa9b4773",
+      "log_bytes": 7533,
+      "passed_tests": 115
+    },
+    "graphs": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.437915309",
+      "timeout_seconds": 600,
+      "log_sha256": "01e6b56c4f30f87a4ad156f253947a378f2ad9aeaac955cf9ec55f9880df9014",
+      "log_bytes": 229
+    },
+    "protocol": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.249899983",
+      "timeout_seconds": 600,
+      "log_sha256": "c052713add570f87294fe443c181fc5f20148c2905aee86ac79ce53abee5c83f",
+      "log_bytes": 1531,
+      "passed_tests": 12,
+      "ignored_tests": 0
+    },
+    "format": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "timeout_seconds": 600
+    },
+    "admission_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.153871228",
+      "timeout_seconds": 600,
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1",
+      "log_bytes": 207
+    },
+    "frame": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.259341804",
+      "timeout_seconds": 600,
+      "log_sha256": "6ead5de572577439bd867cc8f34180b34012e273ad20612b9a1c8743c5f6ea15",
+      "log_bytes": 2114,
+      "passed_tests": 18,
+      "ignored_tests": 0
+    }
+  },
+  "test_binaries": {
+    "application": {
+      "path": "target/debug/deps/northstar_message_application-353f82d886c5605f",
+      "bytes": 2160480,
+      "sha256": "6fbf059a5a1bc6e76e133464106ac2ab6801b635e27318f2b2b9ca6017f22262"
+    },
+    "direct_wrapper": {
+      "path": "target/debug/deps/rust_xmpp_server-0f7e189afe720819",
+      "bytes": 194489856,
+      "sha256": "153796f3d44df3586d34c0c746ae7157d6d9b4299e4991e26a4a57db3cf1ecdd"
+    }
+  },
+  "graphs": {
+    "files": 10,
+    "unchanged": true
+  },
+  "reproduce": {
+    "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "environment": "jobs=1; dev/test debug=0; incremental=0; SQLX_OFFLINE=true; default features",
+    "commands": [
+      "cargo check --locked --offline -p northstar-message-core -p northstar-message-application -p rust-xmpp-server --all-targets",
+      "cargo clippy --locked --offline -p northstar-message-core -p northstar-message-application -p rust-xmpp-server --all-targets -- -D warnings",
+      "cargo test --locked --offline -p northstar-message-application --lib",
+      "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server FILTER -- --test-threads=1",
+      "node --test scripts/test-admission-execution.mjs scripts/test-execution-boundaries.mjs",
+      "node scripts/check-execution-boundaries.mjs",
+      "node scripts/check-admission-execution.mjs",
+      "cargo run --locked --offline -p architecture-validator -- validate --write"
+    ],
+    "server_filters": [
+      "services::messaging::direct_workflow::tests",
+      "xmpp::protocol::messaging::direct_preparation_tests",
+      "xmpp::protocol::messaging::tests",
+      "services::message_admission::tests",
+      "services::message_admission::witness::tests",
+      "xmpp::frame_execution::tests"
+    ],
+    "per_command_timeout_seconds": 600,
+    "kill_after_seconds": 5,
+    "retained_log_max_bytes": 4194304
+  },
+  "parent_ci": {
+    "commit": "be27290c4513a5c182d5a52398e611b87dd35480",
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37193858937",
+    "success": 32,
+    "skipped": 1,
+    "failed": 0,
+    "cancelled": 0,
+    "scope": "This CI predates the changed source above and does not qualify this batch."
+  },
+  "limits": [
+    "This is a source-reviewed ordinary compile/lint and pure/fake-unit slice, not full Stage 3 acceptance or a saved controlled direct corpus.",
+    "The private XML preparation tests exercise actual normalization/binding helpers. IDs-only direct-core tests do not substitute for them.",
+    "Commit-wrapper tests use synthetic futures. PostgreSQL lock/COMMIT-response/as-of fidelity, wire behavior and process-loss recovery remain Stage 5 work.",
+    "Actual router/queue handoff, native written capability, controlled SM/BOSH owner settlement and complete direct replay/shrinking remain open.",
+    "There is no runtime admission reconciliation consumer or new retry worker, timeout, delivery guarantee or cryptographic entropy policy.",
+    "Existing source-drift gates passed within their declared checks; this does not prove all new direct semantics or every future source change.",
+    "The 71 Rust and 115 Node tests are distinct bounded selections; ignored DB tests were not enabled. No product services or fault workload ran.",
+    "Binary identity is tied to the test base and source delta; a later Git-metadata embedding may change rebuilt binaries without changing these source bytes."
+  ]
+}

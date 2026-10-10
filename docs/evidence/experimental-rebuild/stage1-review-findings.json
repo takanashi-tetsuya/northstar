@@ -1,0 +1,63 @@
+{
+  "schema": "northstar-stage1-review-findings-v1",
+  "scope": "Preserved review findings; historical artifacts are retained unchanged. Old reader source snapshots are not available in this package, so historical execution is not newly replayed.",
+  "findings": [
+    {
+      "id": "empty-corpus-success",
+      "historical_artifacts": "historical/1502",
+      "finding": "The first saved reader could accept an empty/missing case set as replay success.",
+      "correction": "Require exact source-declared cases, input fields and source identity.",
+      "kind": "EvidenceValidatorDefect"
+    },
+    {
+      "id": "self-consistent-damaged-baseline",
+      "historical_artifacts": "historical/1504",
+      "observed_probes": [
+        {
+          "mutation": "cases[0].actual.projection[0].domain=Conflict, then regenerate cases[0].evaluation",
+          "case_verdict": "InvariantViolation",
+          "case_replay_matched": false,
+          "reader_replay_matched": true
+        },
+        {
+          "mutation": "cases[0].actual.projection=[], then regenerate cases[0].evaluation",
+          "case_verdict": "Inconclusive",
+          "case_replay_matched": false,
+          "reader_replay_matched": true
+        }
+      ],
+      "evidence_origin": "Independent reviewer and parent pure in-memory observations on 2026-10-03; this record preserves their finding rather than claiming a saved old executable.",
+      "correction": "Bind every fixed baseline case to independent source golden projection, expected terminal/verdict and no-resource cleanup before evaluating reader success.",
+      "kind": "EvidenceValidatorDefect"
+    },
+    {
+      "id": "fixture-terminal-taxonomy",
+      "finding": "The helper model classified outcomes but the real mixed fixture still collapsed setup, operator cancel and ordinary EINTR into legacy failed.",
+      "correction": "Initialize structured facts in the actual entry point; separate explicit signal origin, observed invariant, unclassified failure, evidence gaps and independent cleanup.",
+      "kind": "IntegrationGap"
+    },
+    {
+      "id": "source-stability-envelope",
+      "finding": "Post-suite hashes alone could label loaded code with later filesystem bytes.",
+      "correction": "The final outer command records and compares exact ten-file before/after maps and ordinary-result provenance.",
+      "kind": "EvidenceProvenanceGap"
+    },
+    {
+      "id": "taxonomy-wiring-review",
+      "findings": [
+        "main signal handler initially still raised InterruptedError",
+        "source drift initially only changed legacy status",
+        "bytecode import ordering could create output before invalid preflight",
+        "peer cleanup could retain inconsistent Clean status",
+        "cleanup EINTR origin could be swallowed",
+        "failed output-directory ownership could write a terminal result into prior evidence"
+      ],
+      "correction": "Source wiring and pure main/fixture mocks cover these paths; final source map binds all corrections.",
+      "kind": "IntegrationCorrection"
+    }
+  ],
+  "not_product_findings": [
+    "late-finalize-4097 is conditional source/model constructibility, not a reproduced live product bug",
+    "The historical MUC CI cause remains Unknown; exact matcher correction and later passing CI are separate facts."
+  ]
+}

@@ -1,0 +1,163 @@
+{
+  "schema": "northstar-multi-unknown-source-correction-v1",
+  "status": "ImplementedAndCompiledNotStage2Accepted",
+  "base_commit": "280da7d8984458b8211836eb72895aeb6ce84477",
+  "base_tree": "34331e8f103f3efbc9543daf57c5ac5a2329343b",
+  "source_delta": [
+    {
+      "path": "catalog/runtime-experiments.json",
+      "before_sha256": "8e6731c630523f1889f69c97b8d42c206bd464408834e13f408b4077650cbb8f",
+      "after_sha256": "dfd23794a2073aff21319582aacf10c98c32bfb6faaf4f4e26dfab45cab053ed",
+      "bytes": 77115
+    },
+    {
+      "path": "catalog/runtime-experiments.schema.json",
+      "before_sha256": "56d4deb4ce883e730826b1dfaf388822c0612806e8f6b3b910ce2bdcbaad9017",
+      "after_sha256": "5c868954bbe4cc257ed5f62f834854a98e23a95f11acb01ac439bf893aaa8ae6",
+      "bytes": 81978
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "before_sha256": "4555b8db06f9e9670737c33247965cebfbdbd5eda4b358c5d0889408091476b9",
+      "after_sha256": "3d5bb936006d9f7a1425b6ba77899df0f3932bdcd1cf24b9d7e756ad17acc11c",
+      "bytes": 57721
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/input.rs",
+      "before_sha256": "b666a845e537d9711ee1260d2906fc47089e5b2df8c49e24505ae3e13a18a086",
+      "after_sha256": "45460cf2dce27c53299d7159a7cd469d7263bd2fe5735d38f9a6857c63972658",
+      "bytes": 24725
+    },
+    {
+      "path": "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+      "before_sha256": "8278ae8aa00d3f9268ff8aa443e2a8a3df26ceb85dead2c4bc780847c2eaadbb",
+      "after_sha256": "e69fe11b21065508ef648dbd92ff7bed834623eb4efc3cab962cb9175626d766",
+      "bytes": 29711
+    },
+    {
+      "path": "scripts/lib/controlled_admission.py",
+      "before_sha256": "204acef20b974a0fc1e589fdcf955eae64b9063f7058082402d955f9bcf9005e",
+      "after_sha256": "520e1f8b5a011852f823580cbcfd70b7ff227bb8a88674046000ca84814c938a",
+      "bytes": 112649
+    },
+    {
+      "path": "scripts/test-controlled-admission.py",
+      "before_sha256": "24e44b414ac63ef0704ec81a92a006a46d9ce6d18cf5b60ae361a90d6ea733a8",
+      "after_sha256": "934a0001cc6ddd36fffdc7b65f99d30fab165a8dffe5da35ee787e8855b86d24",
+      "bytes": 61054
+    }
+  ],
+  "targeted_correction": "multi-unresolved-knowledge",
+  "output_schema": "northstar-admission-controlled-output-v3",
+  "input_and_model": "Input-v1, admission-controlled-v1 and synthetic-material-v1 remain unchanged. V3 explicitly represents knowledge completeness/stops and retained safety facts.",
+  "representation": "Finite full controlled storage alternatives, including rows/fences/expiry, actor sequences and proofs. Whole-state equality deduplicates future-equivalent state, while earlier operation/witness records retain historical Unknown facts.",
+  "observation_contract": [
+    "Only actual retained witness and accepted delivered core results constrain alternatives; injected world_commit, actual injected World/counts/proofs and desired scripted Allowed cannot choose a view.",
+    "Unknown retains both commit/no-commit storage possibilities. NoCommitRequested cancellation/failure and guard-memory outcomes do not evaluate/filter hypothetical storage.",
+    "Rejected or undelivered reconcile does not narrow views. Delivered exact/missing/expired observations constrain current states without rewriting earlier Unknown history into rollback or a successful receipt.",
+    "Unsupported proof alternatives stop with KnowledgeModelIncomplete rather than being discarded. An empty consistent set is InconsistentObservation.",
+    "caller.unresolved is operation-scoped, not an aggregate all-operations-resolved assertion. Current state bounds and historical witnesses are distinct."
+  ],
+  "fixed_model_budgets": {
+    "attempted_successors_before_filter_or_dedup": 64,
+    "aggregate_row_copy_envelope": 1000000,
+    "modeled_serialized_byte_envelope": 67108864,
+    "reservation": "Checked arithmetic before alternative clones. The row/byte envelope includes source states, worst-case successors, two full-state transaction scratch envelopes and 16 DTO slots/16KiB for eight candidates plus eight selected rows.",
+    "not_claimed": "These are caller-model accounting limits, not process RSS, actual injected-world, wall-time or full execution-memory guarantees."
+  },
+  "stop_contract": [
+    "Initial state is copied only after reservation; initial stop uses index0 plus phase BeforeInitialState and records no executed command.",
+    "A caller-state analysis stop does not rewrite the actual command outcome/witness/receipt or prior modeled facts. Its event has null count bounds/possible_states and knowledge_complete false; no subsequent command runs. Full event/receipt details are serialized only when the evidence budget permits.",
+    "Evidence trimming may omit the stopping event or shorten native/compatibility prefixes. Compact first mapping/safety failure and knowledge-stop summaries persist outside event trimming, with incomplete/nonterminal flags; full prior event details are not guaranteed.",
+    "Rust compile-time root-only JSON bound covers all simultaneous summaries and maximal valid labels within the unchanged2048-byte minimum. The current initial-stop index is0, already covered by template255.",
+    "Incomplete native stopping events do not fabricate Stage1 numeric bounds. Their compatibility entry is omitted, preserving the preceding prefix; trimming respects the shorter compatibility prefix."
+  ],
+  "oracle_and_regression_source": "Independent Python transition predicates, budgets, strict v3 schema and evaluation are synchronized. Source regressions cover Unknown A followed by confirmed B, multiple Unknowns, TTL, delivered/undelivered reconcile, proof ambiguity, whole-state deduplication, resource stops, retained first failures and maximal root size. The possible_states aggregate diagnostic is excluded only from cross-reduction target identity; full per-candidate oracle comparison remains exact.",
+  "verification": {
+    "base_commit": "280da7d8984458b8211836eb72895aeb6ce84477",
+    "end_head": "280da7d8984458b8211836eb72895aeb6ce84477",
+    "source_patch_sha256": "0245cac2c35ddaad43d709dc941cb4210fc8c1a0896699e43c50cd4fe574ffa8",
+    "tracked_source_file_count": 1666,
+    "source_unchanged": true,
+    "changed_during_command": [],
+    "before_map_sha256": "115dce6a9fb50e938b2289b80c21ac5f9734c9baea535015646ab9ba4f850d41",
+    "after_map_sha256": "115dce6a9fb50e938b2289b80c21ac5f9734c9baea535015646ab9ba4f850d41",
+    "commands": [
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2021",
+          "--config",
+          "skip_children=true",
+          "--check",
+          "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+          "crates/northstar-test-harness/src/controlled_admission/input.rs",
+          "crates/northstar-test-harness/src/controlled_admission/mod.rs"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.086,
+        "log": "command-1.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "-B",
+          "-c",
+          "import ast,pathlib,sys; [ast.parse(pathlib.Path(p).read_text(),filename=p) for p in sys.argv[1:]]",
+          "scripts/lib/controlled_admission.py",
+          "scripts/test-controlled-admission.py"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.08,
+        "log": "command-2.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "-B",
+          "-c",
+          "import json,pathlib,sys\ndef pairs(values):\n d={}\n for k,v in values:\n  if k in d: raise ValueError(\"duplicate JSON key: \"+k)\n  d[k]=v\n return d\nfor p in sys.argv[1:]: json.loads(pathlib.Path(p).read_text(),object_pairs_hook=pairs)",
+          "catalog/runtime-experiments.json",
+          "catalog/runtime-experiments.schema.json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.025,
+        "log": "command-3.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "northstar-abuse-policy",
+          "-p",
+          "northstar-test-harness",
+          "-p",
+          "rust-xmpp-server",
+          "--all-targets"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.953,
+        "log": "command-4.log",
+        "log_sha256": "96fc9f38afc5abfbd9b9bbd2e75d4da7f45bec765785da8f7c293afc9c566897"
+      }
+    ],
+    "scope": "Ordinary formatting, AST/strict JSON syntax and default-feature normal/test target compilation only. No project tests/imports, oracle, runner, corpus, replay/shrinking, SQL, service or fault execution."
+  },
+  "review": "Final independent read-only twelve-file source/evidence review passed on 2026-10-04. Exact seven-file source patch, stable 1,666-file maps, all four successful ordinary-check logs, two CI records and the qualified truncation/validation handoff were verified. Source and compile saving only; Stage2 and dedicated regression/corpus/replay/shrink qualification remain unaccepted.",
+  "remaining_original_five_source_blockers": [],
+  "remaining_qualification": [
+    "Dedicated Python oracle/reader regressions and Rust CLI corpus recording/replay/shrinking have not been executed against this corrected v3 source. Earlier pre-fix diagnostics do not qualify it.",
+    "This is a closed controlled storage model with scripted guard outcomes. Actor-policy clock control and SQL observed_at remain unimplemented authority-clock claims.",
+    "Real PostgreSQL/MVCC/lock/COMMIT-response behavior is not established by this source correction or ordinary CI.",
+    "Stage3 production outer cancellation/Unknown ownership and durable-message/route/write/ACK responsibility remain open; Stage4-6 are not rebuilt/qualified.",
+    "Existing run_saved_input measures wall time and checks captured output afterward; it does not provide external wall/RSS/output supervision. Such bounded-run controls must be declared before dedicated execution."
+  ],
+  "cancelled": "The72-hour soak remains cancelled."
+}

@@ -1,5 +1,12 @@
 //! Personal-message policy and atomic admission through a persistence port.
 
+mod direct_route;
+pub(crate) mod direct_workflow;
+pub(crate) use direct_route::{
+    DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
+    DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
+};
+
 use super::{
     muc::{ClusterMucInviteAuthority, DurableMucInviteOutcome},
     privacy::PrivacyStanzaKind,
@@ -7,15 +14,19 @@ use super::{
 };
 use crate::abuse::MessageDedupeIdentity;
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
-use crate::outbound::DurableDelivery;
+use crate::outbound::{DurableDelivery, OutboundItem, RouteEnqueue};
 use anyhow::Result;
+use northstar_message_application::direct_commit::{
+    CommitError as DirectCommitError, DirectCommitRepository,
+};
+use northstar_message_application::direct_handoff::HandoffHandle;
 use northstar_message_application::{
     CommitError, MessageApplication, PersonalMessageCommitRepository,
 };
 pub(crate) use northstar_message_core::{
-    ArchiveProjection as ArchiveWrite, FederationDelivery, IdentityAuthority, LocalDelivery,
-    MessageCommit as DurableAdmissionOutcome, MessageIdentity, MessagePostCommit,
-    PersonalMessageDestination, ValidatedPersonalMessage,
+    ArchiveProjection as ArchiveWrite, DirectPersonalMessageAdmission, FederationDelivery,
+    IdentityAuthority, LocalDelivery, MessageCommit as DurableAdmissionOutcome, MessageIdentity,
+    MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use std::future::Future;
 use uuid::Uuid;
@@ -52,16 +63,6 @@ pub(crate) enum OfflineAdmissionOutcome {
     RecipientUnavailable,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DirectPersonalMessageAdmission {
-    pub(crate) commit: DurableAdmissionOutcome,
-    pub(crate) mode: DirectPostCommitMode,
-    /// Initial PostgreSQL reservation for a newly stored clustered local
-    /// delivery whose transaction admitted a Live handoff. This remains Some
-    /// if health degrades immediately after commit so protocol can rearm it.
-    pub(crate) live_claim_id: Option<Uuid>,
-}
-
 /// A clustered committed C2S row may enter a live queue only with the exact
 /// reservation committed beside it. Standalone delivery has no claim token.
 pub(crate) fn committed_live_delivery_has_fence(
@@ -69,7 +70,9 @@ pub(crate) fn committed_live_delivery_has_fence(
     message_id: Uuid,
     claim_id: Option<Uuid>,
 ) -> bool {
-    !clustered || claim_id == Some(message_id)
+    northstar_message_application::direct_handoff::live_reservation_valid(
+        clustered, message_id, claim_id,
+    )
 }
 
 /// The first accepted online resource, if any. Cluster v1 receipts may be
@@ -88,9 +91,8 @@ pub(crate) trait OnlineRoutePort: Sync {
     fn try_local(
         &self,
         session: &Self::Session,
-        stanza: String,
-        delivery: Option<DurableDelivery>,
-    ) -> bool;
+        enqueue: RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError>;
     fn record_local_accept(&self, durable: bool);
     fn route_available_remote(
         &self,
@@ -134,8 +136,107 @@ pub(crate) struct FullJidFallback<'a> {
     pub(crate) bare_target: &'a str,
     pub(crate) sender: &'a str,
     pub(crate) recipient_id: Uuid,
-    pub(crate) stanza: &'a str,
     pub(crate) delivery: Option<DurableDelivery>,
+}
+
+/// Policy/privacy preparation is separate from enqueue so protocol owners can
+/// recheck live health after asynchronous privacy work, before any side effect.
+enum FullJidFallbackPlan<S> {
+    Finished(FullJidFallbackResult),
+    Targets(Vec<(String, S)>),
+}
+
+/// One durable item survives every refused primary/fallback local attempt.
+/// Volatile fanout deliberately creates distinct items. The queue never owns
+/// this operation handle; accepted items can outlive the sending frame.
+struct RoutePayload<'a> {
+    stanza: &'a str,
+    delivery: Option<DurableDelivery>,
+    item: Option<OutboundItem>,
+    witness: Option<HandoffHandle>,
+    binding_rejected: bool,
+}
+impl<'a> RoutePayload<'a> {
+    fn new(stanza: &'a str, delivery: Option<DurableDelivery>) -> Self {
+        Self {
+            stanza,
+            delivery,
+            item: None,
+            witness: None,
+            binding_rejected: false,
+        }
+    }
+    fn prepared(stanza: &'a str, item: OutboundItem, witness: HandoffHandle) -> Self {
+        Self {
+            stanza,
+            delivery: item.c2s_delivery(),
+            item: Some(item),
+            witness: Some(witness),
+            binding_rejected: false,
+        }
+    }
+    fn enqueue<P: OnlineRoutePort>(&mut self, port: &P, session: &P::Session) -> bool {
+        if self.binding_rejected {
+            return false;
+        }
+        let item = self.item.take().unwrap_or_else(|| match self.delivery {
+            Some(delivery) => OutboundItem::durable(self.stanza.to_owned(), delivery),
+            None => OutboundItem::plain(self.stanza.to_owned()),
+        });
+        if item.stanza != self.stanza
+            || item.c2s_delivery() != self.delivery
+            || !item.validate_durable_source_shape()
+        {
+            self.item = Some(item);
+            self.binding_rejected = true;
+            return false;
+        }
+        let permit = match (&self.witness, self.delivery) {
+            (Some(witness), Some(source)) => match witness.local_permit(source) {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    self.item = Some(item);
+                    return false;
+                }
+            },
+            _ => None,
+        };
+        let enqueue = match RouteEnqueue::bind(item, permit, self.stanza) {
+            Ok(enqueue) => enqueue,
+            Err(rejected) => {
+                self.item = Some(rejected.0);
+                self.binding_rejected = true;
+                return false;
+            }
+        };
+        match port.try_local(session, enqueue) {
+            Ok(()) => true,
+            Err(crate::outbound::RouteSendError::Binding(rejected)) => {
+                self.item = Some(rejected.0);
+                self.binding_rejected = true;
+                false
+            }
+            Err(
+                crate::outbound::RouteSendError::Full(item)
+                | crate::outbound::RouteSendError::Closed(item),
+            ) => {
+                self.item = Some(item);
+                false
+            }
+        }
+    }
+    fn returned(&self) {
+        if let Some(witness) = &self.witness {
+            witness.returned();
+        }
+    }
+}
+impl Drop for RoutePayload<'_> {
+    fn drop(&mut self) {
+        if let Some(witness) = &self.witness {
+            witness.dropped();
+        }
+    }
 }
 
 pub(crate) struct OnlineMessageRouter;
@@ -143,6 +244,7 @@ pub(crate) struct OnlineMessageRouter;
 impl OnlineMessageRouter {
     /// Route an accepted stanza without touching its transaction owner. A
     /// durable delivery has one transport owner; headline fanout is volatile.
+    #[cfg(test)]
     pub(crate) async fn dispatch<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
@@ -151,14 +253,37 @@ impl OnlineMessageRouter {
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
+        let mut payload = RoutePayload::new(stanza, delivery);
+        Self::dispatch_owned(port, jid, &mut payload, deliver_all, approved_targets).await
+    }
+
+    async fn dispatch_owned<P: OnlineRoutePort>(
+        port: &P,
+        jid: &str,
+        payload: &mut RoutePayload<'_>,
+        deliver_all: bool,
+        approved_targets: &[(String, P::Session)],
+    ) -> OnlineRouteResult {
+        let local = Self::dispatch_local_owned(port, payload, deliver_all, approved_targets);
+        Self::dispatch_remote_owned(port, jid, payload, deliver_all, local).await
+    }
+
+    fn dispatch_local_owned<P: OnlineRoutePort>(
+        port: &P,
+        payload: &mut RoutePayload<'_>,
+        deliver_all: bool,
+        approved_targets: &[(String, P::Session)],
+    ) -> OnlineRouteResult {
         debug_assert!(
-            !(delivery.is_some() && deliver_all),
+            !(payload.delivery.is_some() && deliver_all),
             "one durable C2S fence cannot be fanned out to multiple resources"
         );
         let mut result = OnlineRouteResult::default();
         for (key, session) in approved_targets {
-            if port.try_local(session, stanza.to_owned(), delivery) {
-                port.record_local_accept(delivery.is_some());
+            if payload.enqueue(port, session) {
+                // The real sender consumed its prevalidated positive permit
+                // synchronously before this telemetry or any later await.
+                port.record_local_accept(payload.delivery.is_some());
                 if result.accepted_full_jid.is_none() {
                     result.accepted_full_jid = Some(key.clone());
                 }
@@ -168,20 +293,72 @@ impl OnlineMessageRouter {
                 }
             }
         }
-        if deliver_all {
-            result.delivered |= port.route_available_remote(jid, stanza, delivery).await;
-        } else if !result.delivered {
-            result = port.route_remote_primary(jid, stanza, delivery).await;
+        result
+    }
+
+    async fn dispatch_remote_owned<P: OnlineRoutePort>(
+        port: &P,
+        jid: &str,
+        payload: &mut RoutePayload<'_>,
+        deliver_all: bool,
+        mut result: OnlineRouteResult,
+    ) -> OnlineRouteResult {
+        if payload.binding_rejected || (!deliver_all && result.delivered) {
+            return result;
+        }
+        let permit = match (&payload.witness, payload.delivery) {
+            (Some(witness), Some(source)) => match witness.remote_permit(source) {
+                Ok(permit) => Some(permit),
+                Err(_) => return result,
+            },
+            _ => None,
+        };
+        let positive = if deliver_all {
+            let accepted = port
+                .route_available_remote(jid, payload.stanza, payload.delivery)
+                .await;
+            result.delivered |= accepted;
+            accepted
+        } else {
+            result = port
+                .route_remote_primary(jid, payload.stanza, payload.delivery)
+                .await;
+            result.delivered
+        };
+        if let Some(permit) = permit {
+            permit.returned(positive);
+        }
+        if positive {
+            payload.item.take();
         }
         result
     }
 
-    /// RFC 6121 full-JID mismatch handling after the exact route declined.
+    /// RFC 6121 full-JID mismatch handling using the same refused item.
     /// Privacy for every candidate is checked before any fallback enqueue.
-    pub(crate) async fn full_jid_fallback<P: FullJidFallbackPort>(
+    async fn full_jid_fallback_owned<P: FullJidFallbackPort>(
         port: &P,
         request: FullJidFallback<'_>,
+        payload: &mut RoutePayload<'_>,
     ) -> Result<FullJidFallbackResult> {
+        let bare_target = request.bare_target;
+        let allowed = match Self::prepare_full_jid_fallback(port, request).await? {
+            FullJidFallbackPlan::Finished(result) => return Ok(result),
+            FullJidFallbackPlan::Targets(allowed) => allowed,
+        };
+        let local = Self::dispatch_local_owned(port, payload, false, &allowed);
+        let result = Self::dispatch_remote_owned(port, bare_target, payload, false, local).await;
+        Ok(if result.delivered {
+            FullJidFallbackResult::Delivered(result.accepted_full_jid)
+        } else {
+            FullJidFallbackResult::Undelivered
+        })
+    }
+
+    async fn prepare_full_jid_fallback<P: FullJidFallbackPort>(
+        port: &P,
+        request: FullJidFallback<'_>,
+    ) -> Result<FullJidFallbackPlan<P::Session>> {
         use northstar_message_core::{
             durable_full_no_match_recovers, full_no_match_route, FullNoMatchRoute,
         };
@@ -191,12 +368,15 @@ impl OnlineMessageRouter {
             bare_target,
             sender,
             recipient_id,
-            stanza,
             delivery,
         } = request;
 
         match full_no_match_route(message_type) {
-            FullNoMatchRoute::Ignore => return Ok(FullJidFallbackResult::Dropped),
+            FullNoMatchRoute::Ignore => {
+                return Ok(FullJidFallbackPlan::Finished(
+                    FullJidFallbackResult::Dropped,
+                ))
+            }
             FullNoMatchRoute::Reject
                 if durable_full_no_match_recovers(message_type, delivery.is_some()) =>
             {
@@ -206,9 +386,15 @@ impl OnlineMessageRouter {
                     target = %full_target,
                     "exact full-JID route disappeared after durable admission; resource-affine row remains replayable"
                 );
-                return Ok(FullJidFallbackResult::Undelivered);
+                return Ok(FullJidFallbackPlan::Finished(
+                    FullJidFallbackResult::Undelivered,
+                ));
             }
-            FullNoMatchRoute::Reject => return Ok(FullJidFallbackResult::Rejected),
+            FullNoMatchRoute::Reject => {
+                return Ok(FullJidFallbackPlan::Finished(
+                    FullJidFallbackResult::Rejected,
+                ))
+            }
             FullNoMatchRoute::FallbackChat => {}
         }
 
@@ -236,20 +422,7 @@ impl OnlineMessageRouter {
                 Err(error) => return Err(error),
             }
         }
-        for (key, session) in allowed {
-            if port.try_local(&session, stanza.to_owned(), delivery) {
-                port.record_local_accept(delivery.is_some());
-                return Ok(FullJidFallbackResult::Delivered(Some(key)));
-            }
-        }
-        let remote = port
-            .route_remote_primary(bare_target, stanza, delivery)
-            .await;
-        if remote.delivered {
-            Ok(FullJidFallbackResult::Delivered(remote.accepted_full_jid))
-        } else {
-            Ok(FullJidFallbackResult::Undelivered)
-        }
+        Ok(FullJidFallbackPlan::Targets(allowed))
     }
 }
 
@@ -331,17 +504,17 @@ pub(crate) struct LocalMucInviteAdmission<'a> {
 }
 
 /// Each admission commits all requested history, delivery and affiliation
-/// changes together. A denial or error must leave no partial admission.
+/// changes atomically. An error after requesting COMMIT can leave its outcome
+/// unknown; it is not evidence that an atomic admission rolled back.
 pub(crate) trait MessageRepository:
-    PersonalMessageCommitRepository<Error = anyhow::Error> + Clone + Send + Sync
+    PersonalMessageCommitRepository<Error = anyhow::Error>
+    + DirectCommitRepository<Error = anyhow::Error>
+    + Clone
+    + Send
+    + Sync
 {
     fn direct_mode(&self) -> DirectPostCommitMode;
     fn clustered_direct_admission_enabled(&self) -> bool;
-    fn commit_direct<'a>(
-        &'a self,
-        request: &'a ValidatedPersonalMessage<'a>,
-        eligibility: DirectSpoolEligibility,
-    ) -> impl Future<Output = Result<DirectPersonalMessageAdmission>> + Send + 'a;
     fn release_live_direct_claim(
         &self,
         recipient_id: Uuid,
@@ -424,9 +597,17 @@ impl<R: MessageRepository> MessageService<R> {
         request: &ValidatedPersonalMessage<'_>,
         eligibility: DirectSpoolEligibility,
     ) -> Result<DirectPersonalMessageAdmission> {
-        northstar_message_application::validate_authority(request)
-            .map_err(|error| anyhow::anyhow!("invalid personal-message command: {error:?}"))?;
-        self.repository.commit_direct(request, eligibility).await
+        self.personal
+            .commit_direct(request, eligibility, None)
+            .await
+            .map_err(direct_commit_error)
+    }
+
+    pub(crate) async fn admit_prepared_personal_message_with_mode<'command, 'live>(
+        &self,
+        prepared: direct_workflow::PreparedLocalDirect<'command, 'live>,
+    ) -> direct_workflow::AppliedLocalDirect<'live> {
+        direct_workflow::commit_prepared_application(&self.personal, prepared).await
     }
 
     /// Rearm recovery only when the initial live reservation still owns the
@@ -570,6 +751,20 @@ impl<R: MessageRepository> MessageService<R> {
                 anyhow::bail!("invalid personal-message command: {error:?}")
             }
             Err(CommitError::Repository(error)) => Err(error),
+        }
+    }
+}
+
+fn direct_commit_error(error: DirectCommitError<anyhow::Error>) -> anyhow::Error {
+    match error {
+        DirectCommitError::Invalid(error) => {
+            anyhow::anyhow!("invalid personal-message command: {error:?}")
+        }
+        DirectCommitError::Observation { error, outcome } => {
+            direct_workflow::continuation_error(error.into(), outcome)
+        }
+        DirectCommitError::Repository { error, outcome } => {
+            direct_workflow::continuation_error(error, outcome)
         }
     }
 }

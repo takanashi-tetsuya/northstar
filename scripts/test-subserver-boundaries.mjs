@@ -60,6 +60,9 @@ rejectsMutation('maintenance probes its reserved connection', 'subservers', 'pro
 rejectsMutation('ownership observer stays critical', 'subservers', '.register_observer("maintenance-ownership", WorkerCriticality::Critical)', '.register_observer("maintenance-ownership", WorkerCriticality::Restartable)', /observer must remain critical/);
 rejectsMutation('core cannot acquire embedded retention authority', 'subservers', 'self == Self::Standalone', 'self != Self::Maintenance', /only standalone/);
 rejectsMutation('maintenance cannot load core dotenv', 'main', 'if arguments != ["serve", "maintenance"]', 'if true', /core .env/);
+rejectsMutation('dotenv failures cannot be silently ignored', 'main', 'config::load_dotenv()?;', 'config::load_dotenv().ok();', /dotenv loading errors/);
+rejectsMutation('dotenv precedes migrator configuration', 'main', 'install_crypto_provider()?;', 'let _ = run_migrations().await;\ninstall_crypto_provider()?;', /dotenv loading must precede/);
+rejectsMutation('explicit dotenv disable cannot be bypassed', 'main', 'std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")', 'true', /explicit dotenv disable/);
 rejectsMutation('standalone claims ownership before state', 'main', 'claim_maintenance_on_connection(&mut runtime_control_connection)', 'skip_ownership(&mut runtime_control_connection)', /standalone must claim/);
 rejectsMutation('maintenance worker inventory stays exact', 'subservers', '"archive-retention",', '"unreviewed-worker",', /declared retention worker/);
 rejectsMutation('standalone peer restart keeps core-only role', 'cluster', '"$binary" serve core >"$redis_tmp/cluster-b.log"', '"$binary" serve standalone >"$redis_tmp/cluster-b.log"', /cluster startup\/restart/);

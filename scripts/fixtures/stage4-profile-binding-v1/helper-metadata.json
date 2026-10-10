@@ -1,0 +1,123 @@
+{
+  "actual_authority": false,
+  "authority": {
+    "bytes": 158995,
+    "path": "/constructed-metadata-only/public-fixture/authority/path",
+    "sha256": "df62b3ca5381f64e7ac0400e13f0f72747fd2f01b7e6fcc01e30c43a4f1b0962"
+  },
+  "classification": "HistoricalHelperMetadata_PathSanitizedConstructedControlFixture_NotAuthority",
+  "files": {
+    "scripts/capture-controlled-admission.py": {
+      "bytes": 14141,
+      "mode": 420,
+      "sha256": "1d51989a711d52d71dd64ffda86a5f7766da1559406351149010a85ff4306bc0"
+    },
+    "scripts/lib/controlled_admission.py": {
+      "bytes": 112557,
+      "mode": 420,
+      "sha256": "526922ae45d484626d846eda5b696780ab5ae2418e506b078a4d650809aff12c"
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "bytes": 122899,
+      "mode": 420,
+      "sha256": "ae280d9afeca63ffd2518cefa1c650583dafdb56e62871c6ead9a71fe48f5a64"
+    },
+    "scripts/lib/direct_build_record.py": {
+      "bytes": 19397,
+      "mode": 420,
+      "sha256": "3992877f58e37849ec1e0b73554f434e6bf0d702a204a6470dc686f11e7eaaba"
+    },
+    "scripts/lib/direct_case.py": {
+      "bytes": 234726,
+      "mode": 420,
+      "sha256": "5343078783827b0a65dcb8797f1de5967831d5b0fbd995c1749e4c4447e48a76"
+    },
+    "scripts/lib/experiment_contract.py": {
+      "bytes": 29666,
+      "mode": 420,
+      "sha256": "04ee1bc5f475d027eaf3c3f5a4834746252a5d9f49524478f7e120912eba3eac"
+    },
+    "scripts/lib/stage4_build_record.py": {
+      "bytes": 24012,
+      "mode": 420,
+      "sha256": "97631b9cb9f2c1e351cb8ae62d073201046309fc74acf5ea087d5ba07150dae6"
+    },
+    "scripts/lib/stage4_case.py": {
+      "bytes": 146754,
+      "mode": 420,
+      "sha256": "aa7daefd7265c6804443fcf44c94ffb9c63a7561e6da1577c1e31fe2e94095c0"
+    },
+    "scripts/lib/stage4_compact.py": {
+      "bytes": 27490,
+      "mode": 420,
+      "sha256": "d5005a7e838900f507479ba662de2b36d8fe3887208eb1fc3ea47568db4ccc74"
+    },
+    "scripts/lib/stage4_compact_shapes.json": {
+      "bytes": 122189,
+      "mode": 420,
+      "sha256": "0d28af4728b2a9fb08abf6408d0b5a970442307c69eae93cd225ab436622f7e4"
+    },
+    "scripts/lib/stage4_corpus_join.py": {
+      "bytes": 13961,
+      "mode": 420,
+      "sha256": "54f3826b3ed5b8621973ce940c861523e7e3344e69d841a557d993ea55ff2e72"
+    },
+    "scripts/lib/stage4_saved_case.py": {
+      "bytes": 6331,
+      "mode": 420,
+      "sha256": "d5d36dcd3d5c453261e8212f8d1a63502b25274d416e514debf5a2282c11ca90"
+    },
+    "scripts/lib/stage4_shapes.json": {
+      "bytes": 159956,
+      "mode": 420,
+      "sha256": "fc481c94bbd99e3891235b54f32450ec951c41ab4d56b3b04477ed3c01d30e38"
+    },
+    "scripts/run-controlled-admission.py": {
+      "bytes": 1788,
+      "mode": 420,
+      "sha256": "b4640bff538fad4d93593e32e1b8a0e46d0bc1ed0649c10b572b7127f2bdc84e"
+    },
+    "scripts/test-controlled-admission.py": {
+      "bytes": 121742,
+      "mode": 420,
+      "sha256": "b6d27d486c539402ce85c0b922df1fcba803245855d5620993a0cc0b64670aa6"
+    },
+    "scripts/test-direct-build-record.py": {
+      "bytes": 29253,
+      "mode": 420,
+      "sha256": "128622db47f399a614d0f329659b08b154c7483fd9820b726901b4b9a3402119"
+    },
+    "scripts/test-direct-case.py": {
+      "bytes": 202729,
+      "mode": 420,
+      "sha256": "f8db247677779e13b6b41d9038ee90a3453264bcf97d71969d68c99efbc72a6f"
+    },
+    "scripts/test-experiment-contract.py": {
+      "bytes": 52778,
+      "mode": 420,
+      "sha256": "b5ca4126350e69354bca4173dcfdaffd64c4503d9fa091b99a9f683099b0cd95"
+    },
+    "scripts/test-stage4-case-controls.py": {
+      "bytes": 43493,
+      "mode": 420,
+      "sha256": "38661c3ceb903c10771226d1392490c8eafd7c52064e36d98c58c3e99b244d06"
+    },
+    "scripts/test-stage4-compact-codec.py": {
+      "bytes": 19958,
+      "mode": 420,
+      "sha256": "329d9156b0b44c1237bad7d30b51b294add9548419e1f560631125108407a884"
+    },
+    "scripts/test-stage4-compact-semantic-controls.py": {
+      "bytes": 50229,
+      "mode": 420,
+      "sha256": "dc81c763531cbf178936920830a4751d5ca9abeaa3aee62216f4b80cfe13f968"
+    },
+    "scripts/test-stage4-saved-profile.py": {
+      "bytes": 52987,
+      "mode": 420,
+      "sha256": "ea766e39f1519d7c3c2ad11f873e3bb1919dc55336346c5b55cb525db99e7acd"
+    }
+  },
+  "original_private_fixture_sha256": "5edc0fa4eb014960dc3ed3d8780d89db02470dbac40d2f47876dff4b3ae6d894",
+  "schema": "stage4-binding-control-helper-metadata-v1"
+}

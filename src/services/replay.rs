@@ -213,24 +213,19 @@ pub(crate) trait ReplayRepository: ReplayLeaseRepository {
     fn acknowledge_socket_write(
         &self,
         delivery: crate::outbound::DurableDelivery,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn renew_bosh_fences(
         &self,
-        session_id: Uuid,
-        expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn acknowledge_bosh_responses(
         &self,
-        session_id: Uuid,
-        acknowledged_rid: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn bind_bosh_response_sources(
         &self,
-        session_id: Uuid,
-        rid: u64,
-        sources: &[crate::outbound::TransportOwnershipSource],
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
     ) -> impl std::future::Future<Output = Result<crate::outbound::BoshResponseOwnership>> + Send;
     fn release_bosh_fences(
         &self,
@@ -384,40 +379,45 @@ impl<R: ReplayRepository> ReplayService<R> {
         &self,
         delivery: crate::outbound::DurableDelivery,
     ) -> Result<()> {
-        self.repository.acknowledge_socket_write(delivery).await
+        self.repository
+            .acknowledge_socket_write(delivery, None)
+            .await
+    }
+
+    pub(crate) async fn acknowledge_socket_write_observed(
+        &self,
+        delivery: crate::outbound::DurableDelivery,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+    ) -> Result<()> {
+        match observation {
+            Some(observation) => {
+                self.repository
+                    .acknowledge_socket_write(delivery, Some(observation))
+                    .await
+            }
+            None => self.acknowledge_socket_write(delivery).await,
+        }
     }
 
     pub(crate) async fn renew_bosh_fences(
         &self,
-        session_id: Uuid,
-        expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
     ) -> Result<()> {
-        self.repository
-            .renew_bosh_fences(session_id, expected_response, ttl_seconds)
-            .await
+        self.repository.renew_bosh_fences(request).await
     }
 
     pub(crate) async fn acknowledge_bosh_responses(
         &self,
-        session_id: Uuid,
-        acknowledged_rid: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
     ) -> Result<()> {
-        self.repository
-            .acknowledge_bosh_responses(session_id, acknowledged_rid)
-            .await
+        self.repository.acknowledge_bosh_responses(request).await
     }
 
     pub(crate) async fn bind_bosh_response_sources(
         &self,
-        session_id: Uuid,
-        rid: u64,
-        sources: &[crate::outbound::TransportOwnershipSource],
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
     ) -> Result<crate::outbound::BoshResponseOwnership> {
-        self.repository
-            .bind_bosh_response_sources(session_id, rid, sources, ttl_seconds)
-            .await
+        self.repository.bind_bosh_response_sources(request).await
     }
 
     pub(crate) async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {

@@ -1,0 +1,294 @@
+{
+  "schema": "northstar-stage3-owner-bridge-component-result-v1",
+  "status": "LimitedComponentAndOracleHelperScopePassed_ProfileIncomplete",
+  "base_commit": "ca0a35da8cf6a64ca3223bc759a72d5b7ac7809c",
+  "base_tree": "7bb19bed8b88fe231adab86e67179179680ed407",
+  "scope": "Connected Rust saved-entry owner variants plus isolated component tests, and partial independent SM/replacement Python input/DTO/ledger helpers. No complete saved case or profile was executed.",
+  "changed_sources": {
+    "src/direct_replay.rs": {
+      "bytes": 70073,
+      "sha256": "1487d7d21b1ea778cd235ba72299ae391222d0e63ad5bf446fd69b741d9e5ff1"
+    },
+    "src/bosh.rs": {
+      "bytes": 108845,
+      "sha256": "6ea589091b7877e19db10fe3819c91f1daff510546461aa9818b77807b89cd6e"
+    },
+    "src/bosh/saved_case.rs": {
+      "bytes": 55760,
+      "sha256": "7dd2d84893ce36acfff16db1c37a79014503fac6dedc1994dacb236b2574ca74"
+    },
+    "src/xmpp/protocol/messaging/saved_case.rs": {
+      "bytes": 79198,
+      "sha256": "d19526a0a5f1725ad17ff13cd853fba2970925c98d0daf8045bbdaa7fd364323"
+    },
+    "src/xmpp/protocol/messaging/saved_case/sm.rs": {
+      "bytes": 25496,
+      "sha256": "70f40e852cec2dc2e7fcbbcf5655999c9a28764d4d6b65df6abfa3065131fbab"
+    },
+    "scripts/lib/direct_case.py": {
+      "bytes": 116084,
+      "sha256": "2a85cb58930767346499a4eadf420b455a686da45c21aaf0ce64e7e32377cd9b"
+    },
+    "scripts/test-direct-case.py": {
+      "bytes": 107886,
+      "sha256": "8a3d4af50aedce51eb9fd1a097abac881b7b41abbede87674fdc6d7077b91be5"
+    }
+  },
+  "rust_source_scope": {
+    "files": 235,
+    "bytes": 8871323,
+    "manifest_sha256": "93169c42307e785a515af4be500440920542536eb4903126114a6426ecbf3b17",
+    "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+    "base_recipe_result": "stage3-sm-replacement-ordinary-results.json",
+    "recipe": "Use that result source_scope recipe, add src/bosh/saved_case.rs, and substitute the five changed Rust sources on this base_commit. Python paths remain excluded.",
+    "claim": "Scoped ordinary-check stability, not complete saved-profile build provenance."
+  },
+  "rust_checks": {
+    "execution_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.495104523",
+      "log_bytes": 40,
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339",
+      "source_unchanged": true
+    },
+    "clippy": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "170.450464734",
+      "log_bytes": 149,
+      "log_sha256": "3032f5778645607de838f869be70de5ca666cf993f062e727187832755b68594",
+      "source_unchanged": true
+    },
+    "architecture_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "1.577468835",
+      "log_bytes": 183,
+      "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36",
+      "source_unchanged": true
+    },
+    "inventory_core": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.156811735",
+      "log_bytes": 3895,
+      "log_sha256": "2cc769c5a63f9fb50738b9c974a0cb92ce19167a82820569134cfb577ea24a49",
+      "source_unchanged": true
+    },
+    "compile": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "88.261329247",
+      "log_bytes": 149,
+      "log_sha256": "25832e67fdafde1fa1379157d896d45f28645574090da9221fc5ea8cdaa71c47",
+      "source_unchanged": true
+    },
+    "format_check": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.099709261",
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_unchanged": true
+    },
+    "gates": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "7.518052602",
+      "log_bytes": 17854,
+      "log_sha256": "f6ab313479a7a1eb7b0030c908914f470a2c98740d6d47a22c26c06eca6917af",
+      "source_unchanged": true
+    },
+    "inventory_server": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "159.130605908",
+      "log_bytes": 172295,
+      "log_sha256": "673b6589cc92172c6ae1c69cdac29244ed08a00fa3b1f501fe962d2c51d207af",
+      "source_unchanged": true
+    },
+    "graphs": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.464871703",
+      "log_bytes": 229,
+      "log_sha256": "98531953498d151c17dc8ce2da2481e595005efc41a110f420e10f1a3456eef6",
+      "source_unchanged": true
+    },
+    "admission_gate": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.186344188",
+      "log_bytes": 207,
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1",
+      "source_unchanged": true
+    }
+  },
+  "rust_tests": {
+    "inventories": {
+      "core": 38,
+      "server": 1861
+    },
+    "selected": 33,
+    "ran": 33,
+    "passed": 33,
+    "failed": 0,
+    "ignored": 0,
+    "base_selection_result": "stage3-sm-replacement-ordinary-results.json",
+    "base_selection_count": 29,
+    "additional_selection": [
+      {
+        "target": "server",
+        "name": "bosh::saved_case::tests::request_roles_and_all_four_shared_governor_limits_are_checked"
+      },
+      {
+        "target": "server",
+        "name": "bosh::saved_case::tests::plain_response_uses_empty_bind_and_surviving_receiver_indices"
+      },
+      {
+        "target": "server",
+        "name": "bosh::saved_case::tests::cancelled_bind_retains_entry_and_selected_item_drop_before_terminal"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::protocol::messaging::saved_case::sm::tests::shared_governor_keeps_existing_live_charge_during_response_reservation"
+      }
+    ],
+    "selection_recipe": "The base result rust_tests.selection followed by additional_selection; all33 were rerun at these current source bytes.",
+    "unit_log_map_sha256": "1770a051657d094a691a2a6bf877e3dd0b89fd14fa3fa0a93f8da97996fa2ec5",
+    "unit_log_map_encoding": "UTF-8 sorted compact JSON mapping each exact full name to log SHA256, no trailing newline",
+    "scope": "The four additions use parsed request/governor comparisons, real in-memory response/receiver helpers, one fake pending COMMIT through the real owner, and shared-governor charge retention. None invokes run_case, run_saved_case, an ignored entry, SQL, sockets, services or external processes."
+  },
+  "node_tests": {
+    "passed": 269,
+    "failed": 0,
+    "skipped": 0
+  },
+  "python_source_scope": {
+    "source_files": {
+      "scripts/lib/controlled_admission_supervision.py": {
+        "bytes": 109638,
+        "sha256": "0db2a1f77f844cc3d7f5782738e44caf3bed784ada100ecd0087b86508de77c8"
+      },
+      "scripts/lib/direct_case.py": {
+        "bytes": 116084,
+        "sha256": "2a85cb58930767346499a4eadf420b455a686da45c21aaf0ce64e7e32377cd9b"
+      },
+      "scripts/test-direct-case.py": {
+        "bytes": 107886,
+        "sha256": "8a3d4af50aedce51eb9fd1a097abac881b7b41abbede87674fdc6d7077b91be5"
+      },
+      "scripts/capture-controlled-admission.py": {
+        "bytes": 13712,
+        "sha256": "b2803ae1e2ba7fb704a05ca79e8f312a75e258a478a8d6725ea1ba0e613e7853"
+      },
+      "scripts/run-controlled-admission.py": {
+        "bytes": 1709,
+        "sha256": "bd6ac59916ee2507ab11f6845a2d92185cba6fa530235313a904545dce9f8e31"
+      }
+    },
+    "files": 5,
+    "bytes": 349029,
+    "manifest_sha256": "026c0bdce89e705f78444bab37a3ed1553ecc99ce4f4c6d0361ddb04d474a283",
+    "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline"
+  },
+  "python_checks": {
+    "python_ast": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.107285729",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "direct_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.642493631",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 13150,
+      "log_sha256": "f3925c8edc12abb0aa5b0e78a0b52ac420d53217c90f007e674c29e71c04fb00"
+    }
+  },
+  "python_tests": {
+    "ran": 74,
+    "passed": 74,
+    "failed": 0,
+    "new_methods_since_saved64": 10,
+    "unittest_seconds": "0.486",
+    "guard_sha256": "03a3e01886955c4371cf7dc122ee761ae584f3d79ef8c99cae0f6f6f4248e9e2",
+    "boundary_result": {
+      "audit_hook_ready": true,
+      "blocked_attempts": {},
+      "schema": "northstar-unit-tripwire-v1",
+      "syscall_sandbox": false,
+      "unit_exit_status": 0
+    },
+    "name_list_sha256": "bf4691b8b292f3974e675dabb6b152f23019478d56a25d7443994044a201fc0a",
+    "name_list_encoding": "UTF-8 compact JSON [method, full parenthesized unittest identifier] pairs in actual log order, no trailing newline",
+    "scope": "Synthetic supplied input/DTO/ledger and unsafe-observation checks, with existing mocked effect boundaries. No actual Rust saved-case output is used as an expected result.",
+    "legacy113_rerun": false
+  },
+  "test_binaries": {
+    "core": {
+      "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+      "bytes": 4150968,
+      "sha256": "0d2736022141f41e72784db7846f841c9c3e6fb3ca6eabd064004a4d4636ec66"
+    },
+    "server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 204301528,
+      "sha256": "73ac92cee036c7fe7dd4a48fb5af3e57bdeea227e2a50f7e57ea6342214030b0"
+    }
+  },
+  "generated_graphs": {
+    "files": 10,
+    "unchanged": true,
+    "manifest_sha256": "a22687f44421bff82ca3e20d99f6148ee3c2c1893e701b1cca6fac93c1316fde"
+  },
+  "source_behavior": [
+    "The single ignored Rust entry now connects Native/None, SM, NativeReplacement and BOSH owner variants. This is source connectivity, not whole-case execution evidence.",
+    "BOSH uses separate real Outbound/Request runners, actual parsed/item associations captured first inside the timed child, initial/replay/fresh renewals, actual bind/exposure/cache/ACK/eviction helpers and typed surviving receivers. Dropped receivers produce no fictional receive result; refused-send facts remain in the owner.",
+    "C12 shares one actual memory-governor Arc across the SM resident state and BOSH response/cache reservations after comparing all four input limits before effects. The FIFO helper itself does not take that governor; this does not establish FIFO allocation, aggregate RSS or metadata accounting.",
+    "Python adds closed C08/C09/C13 literal inputs, recursive owner DTOs and independent ownership ledgers. Drive operators bind exact owner/frame; a Pending SM checkpoint requires the declared cut and excludes later pending replies or ACK after cancellation. Replacement requires its one declared gate.",
+    "The existing Native matcher and client-namespace correction remain; SM/replacement outcome chronology and full fixture matching, plus BOSH oracle work, are still incomplete."
+  ],
+  "retained_failure": {
+    "first_iteration": "compile and Node checks passed; Clippy exited101 before inventory or Rust units",
+    "log_sha256": "06090f841345736b1c93966f1f3c8c5410ae8b595be7b2d38711b0ebec57dc1e",
+    "diagnostic": "type_complexity on the private BOSH responder return tuple",
+    "correction": "Two private sender/receiver aliases replace type spelling only. Ownership, indexes, bodies and assertions are unchanged."
+  },
+  "bounds": {
+    "rust_command_timeout_seconds": 600,
+    "python_mock_timeout_seconds": 120,
+    "kill_after_seconds": 5,
+    "per_log_bytes": 4194304,
+    "first_iteration_completed_commands": 7,
+    "corrected_rust_completed_commands": 43,
+    "python_completed_commands": 2,
+    "all_scoped_sources_unchanged_during_each_command": true
+  },
+  "parent_ci": {
+    "commit": "ca0a35da8cf6a64ca3223bc759a72d5b7ac7809c",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37245028078",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "Prior saved Native matcher checkpoint; separate from these unpublished changes."
+  },
+  "remaining": [
+    "All public v3 fixture/evaluate/shrink/provenance entry points still unconditionally raise DirectCaseIncomplete. No fixed16/fixed4 record/replay/mutation/shrink or ignored saved-entry invocation occurred.",
+    "Full independent SM/replacement chronology/fixture matchers, BOSH oracle/literals, complete16/4 inventory and deterministic observation/frame/evaluation/contract-size preflight remain pending.",
+    "Complete final project-local membership, trusted build/derivation record and measured <=128MiB runnable artifact remain pending. The ordinary binary is not a qualified saved-profile artifact.",
+    "No live SQL/clock/crypto/wire, HTTP dispatch/auth publication or general OS/resource/fault qualification follows from these pure/fake helpers. C13 replacement is controlled authority, and its post-receipt committed-view deletion is not SQL DELETE ordering.",
+    "Full Stage3 acceptance, unresolved TLS response/EOF diagnosis and later retention/resource work remain open."
+  ]
+}

@@ -2058,6 +2058,8 @@ dependencies = [
 name = "northstar-message-application"
 version = "0.1.0"
 dependencies = [
+ "northstar-abuse-policy",
+ "northstar-delivery-core",
  "northstar-message-core",
  "tokio",
  "uuid",
@@ -2176,12 +2178,16 @@ name = "northstar-test-harness"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "libc",
+ "northstar-abuse-policy",
  "serde",
  "serde_json",
+ "sha2",
  "socket2 0.5.10",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

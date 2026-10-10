@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "record_kind": "integration_fixture_source_regression",
+  "date_utc": "2026-10-03",
+  "base_commit": "d9eb2e2dfa948f6a9d3e16b4ce0c08eca4f9c671",
+  "result": "ControlsJoinMatcherRegressionPassed",
+  "original_ci_failure": {
+    "run_id": 37130305484,
+    "job_id": 111223924173,
+    "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37130305484/job/111223924173",
+    "location_at_base_commit": "scripts/integration-wsl.py:5266-5269",
+    "assertion": "MUC controls room was not created with owner affiliation",
+    "root_cause": "Unconfirmed",
+    "triage_record": "docs/evidence/experimental-rebuild/stage0-ci-muc-controls-triage.json",
+    "limitation": "The actual controls_created frame was not logged. The recorded server Some(owner) observation and later database moderator/owner row do not establish which frame the fixture selected or the original failure's cause."
+  },
+  "source_finding": {
+    "old_selection_at_base_commit": "scripts/integration-wsl.py:5265 calls receive_until(\"code='110'\"); receive_until at 2447-2464 accepts any frame containing that substring.",
+    "demonstrated_problem": "A constructed in-memory queue containing another room's self-presence before the controls-room response causes the old selector to return the unrelated frame. This demonstrates source-level selection imprecision, not the order or contents of the original CI trace.",
+    "success_correlation": "src/xmpp/protocol/muc.rs:4758-4766 passes root.attribute(\"id\").or(cluster_event_id.as_deref()) to the joining occupant's self-presence, preserving a provided request id. src/xmpp/xml_util.rs:417-460 emits jabber:client presence with exact room/nickname from, that id, self-presence code 110, and creation code 201 when created.",
+    "error_correlation": "src/xmpp/xml_util.rs:550-575 builds a presence error whose from is the request to and whose id is the request id.",
+    "import_review": "integration-wsl.py performs environment reads and defines functions/classes at import; run() and the endpoint self-test are inside the __main__ guard. The regression imports it without executing either entry point."
+  },
+  "change": {
+    "scope": "Only the controls-room join path in the ordinary integration fixture uses the new helper. This exact fixture-change file list does not modify CI, Rust or SQL. Concurrent Stage1 work separately adds pure-test CI wiring; it is excluded from this small commit.",
+    "selection": "Send the fixture-unique muc-controls-owner-join id, then require a jabber:client presence root with that exact id and from equal to integration-controls@conference.<domain>/Alice.",
+    "validation": "Require available self-presence, code 110, code 201 and a MUC-user item with owner affiliation. A correlated error or invalid creation reply fails immediately even when a valid-looking reply follows.",
+    "diagnostics": "Preserve the original assertion text and include expected full from/id plus all observed frames. Timeout, EOF and connection errors retain frames and chained causes. The receive budget remains ten seconds and decreases across ignored frames.",
+    "rollback": "Revert this fixture-only change and its regression test; there is no schema or operations change.",
+    "diagnostic_scope": "These existing-style observed frame diagnostics are not claimed to be sanitized causal evidence; they remain local synthetic integration diagnostics."
+  },
+  "tested_sha256": {
+    "scripts/integration-wsl.py": "720864b7577f4007b1e189aa5d34264f9fbec5dd10291be1f6aea249c9400ba5",
+    "scripts/test-integration-muc-matching.py": "763ee304be6b7ceac15d5a36e7b2cb5f6d82f716522728bbd35548e40fe85bf4"
+  },
+  "checks": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-integration-muc-matching.py -v",
+      "exit_code": 0,
+      "tests": 9,
+      "result": "PASS",
+      "coverage": [
+        "Old substring selection accepts the unrelated room's code 110; corrected selection waits for the actual controls reply",
+        "Exact root stanza kind/namespace, full room/nickname from, and root request id",
+        "Valid XML with double quotes and namespace prefixes",
+        "Same-room correlated error, wrong owner, missing/wrong code 201, missing code 110, unavailable presence and wrong MUC namespace fail immediately",
+        "Timeout, EOF and connection-error diagnostics preserve all observed frames",
+        "Ignored frames consume one fixed ten-second receive deadline"
+      ]
+    },
+    {
+      "check": "Python ast.parse syntax checks for integration-wsl.py and test-integration-muc-matching.py",
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS"
+    }
+  ],
+  "execution_limits": {
+    "transport": "XmppWebSocket allocated through object.__new__ with send/receive mocks; fake monotonic clock; no constructor or real transport.",
+    "real_sockets_listeners_processes_signals_services_or_database_used": false,
+    "live_reproduction_performed": false,
+    "ci_rerun_requested": false,
+    "production_rust_or_sql_tests_run": false,
+    "conclusion": "This record qualifies only the fixture matcher regression. It does not establish the failed CI job's cause, prove a product defect was fixed, or provide live integration evidence."
+  }
+}

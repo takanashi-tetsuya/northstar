@@ -60,6 +60,8 @@ MIGRATIONS = {
     "0154": ROOT / "migrations/0154_admin_panic_disconnect_command_capability.sql",
     "0155": ROOT / "migrations/0155_direct_spool_revision_wakes.sql",
     "0156": ROOT / "migrations/0156_admin_registration_command_capability.sql",
+    "0157": ROOT / "migrations/0157_sm_recovery_retention.sql",
+    "0158": ROOT / "migrations/0158_sm_cleanup_claim_alias.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -97,6 +99,18 @@ RESECURED_BY_MIGRATION = {
     "0143": {"northstar_upload_queue_snapshot()"},
     "0146": {"northstar_upload_capability_catalog_healthy(text)"},
     "0147": {"northstar_upload_capability_catalog_healthy(text)"},
+    "0157": {
+        "northstar_session_delete_expired_live_leases()",
+        "northstar_session_cleanup_live(int8)",
+        "northstar_sm_claim(bytea,uuid,inet,uuid,text,bool,uuid,int8)",
+        "northstar_sm_take_teardown(text,uuid,uuid,int8,text,uuid,int8)",
+        "northstar_sm_activate(uuid,uuid,uuid,int8,inet,uuid,int8,int8)",
+        "northstar_sm_release_claim(uuid,uuid)",
+        "northstar_sm_claim_authority(uuid,uuid)",
+        "northstar_session_transfer_sm(uuid,uuid,uuid,uuid,uuid,text,int8)",
+        "northstar_session_capability_catalog_healthy(text)",
+    },
+    "0158": {"northstar_session_cleanup_live(int8)"},
 }
 
 # A replacement migration may preserve a callable identity while changing its
@@ -112,7 +126,7 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|storage|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156|0157)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -692,6 +706,44 @@ def repository_migration_ledger() -> list[tuple[int, str, str]]:
     return rows
 
 
+SM_CLEANUP_CLAIM_QUERY = """    DELETE FROM deployment_session_binding_claims claim
+     WHERE claim.connection_id IN (
+         SELECT candidate.connection_id
+           FROM deployment_session_binding_claims candidate
+          WHERE candidate.expires_at<=clock_timestamp()
+          ORDER BY candidate.expires_at,candidate.connection_id
+          LIMIT LEAST(GREATEST(requested_limit,1),10000)
+          FOR UPDATE SKIP LOCKED
+     );"""
+
+
+def sm_cleanup_definition(migration: Path, text: str) -> str:
+    definitions = re.findall(
+        r"^CREATE OR REPLACE FUNCTION northstar_session_cleanup_live\(requested_limit BIGINT\)\n"
+        r"[\s\S]*?^\$\$;",
+        text,
+        re.MULTILINE,
+    )
+    if len(definitions) != 1:
+        fail(f"{migration.name} must contain exactly one complete SM cleanup replacement")
+    return definitions[0]
+
+
+def assert_sm_cleanup_alias_forward_fix(original: str, replacement: str) -> None:
+    # Compare the complete CREATE statement, not just selected predicates. The
+    # only permitted delta is one table alias and its four qualifiers within
+    # this first subquery; the later candidate loop record must be unchanged.
+    if original.count(SM_CLEANUP_CLAIM_QUERY) != 1:
+        fail("migration 0157 SM cleanup binding-claims subquery drifted")
+    expected = original.replace(
+        SM_CLEANUP_CLAIM_QUERY,
+        SM_CLEANUP_CLAIM_QUERY.replace("candidate", "expired_claim"),
+        1,
+    )
+    if replacement != expected:
+        fail("migration 0158 SM cleanup must differ from 0157 only by the expired_claim alias")
+
+
 def static_parser_regressions() -> None:
     from contextlib import redirect_stderr
     from io import StringIO
@@ -703,6 +755,29 @@ def static_parser_regressions() -> None:
         except SystemExit as error:
             return error.code == 1
         return False
+
+    cleanup_original = (
+        "DECLARE candidate deployment_session_leases%ROWTYPE;\n"
+        + SM_CLEANUP_CLAIM_QUERY
+        + "\nFOR candidate IN SELECT lease.* FROM deployment_session_leases lease LOOP\n"
+        + "PERFORM candidate.connection_id; END LOOP;\n"
+    )
+    cleanup_replacement = cleanup_original.replace(
+        SM_CLEANUP_CLAIM_QUERY,
+        SM_CLEANUP_CLAIM_QUERY.replace("candidate", "expired_claim"),
+        1,
+    )
+    assert_sm_cleanup_alias_forward_fix(cleanup_original, cleanup_replacement)
+    for drift in (
+        cleanup_original,
+        cleanup_replacement.replace("SELECT expired_claim.connection_id", "SELECT candidate.connection_id"),
+        cleanup_replacement.replace("binding_claims expired_claim", "binding_claims candidate"),
+        cleanup_replacement.replace("candidate", "expired_claim"),
+        cleanup_replacement.replace("10000", "10001"),
+        cleanup_replacement.replace("FOR UPDATE SKIP LOCKED", "FOR UPDATE"),
+    ):
+        if not rejects(assert_sm_cleanup_alias_forward_fix, cleanup_original, drift):
+            fail("SM cleanup alias/record collision or non-alias body drift was not detected")
 
     fixture = ROOT / "scripts/check-database-capability-manifest.py"
     sample = """
@@ -848,7 +923,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -862,8 +937,21 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156", "0157")
 }
+require_exact(
+    "SM retention helper introduction",
+    by_origin["0157"],
+    {"northstar_session_recovery_retention(uuid,timestamptz)"},
+)
+if "northstar_session_recovery_retention(uuid,timestamptz)" not in by_workload["runtime"]:
+    fail("SM retention classifier must remain in the runtime capability partition")
+
+if "northstar_session_cleanup_live(int8)" not in by_origin["0114"]:
+    fail("SM cleanup callable identity must retain its 0114 introduction origin")
+if "northstar_session_cleanup_live(int8)" not in by_workload["runtime"]:
+    fail("SM cleanup must remain in the runtime capability partition")
+
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows
 }
@@ -877,6 +965,29 @@ migration_documents = [
     (migration, read(migration))
     for migration in sorted((ROOT / "migrations").glob("*.sql"))
 ]
+# 0158 is a surgical forward replacement, not a new capability or a broader
+# cleanup redesign. Keep historical 0157 immutable and compare every byte of
+# the CREATE statement after the one explicitly reviewed alias substitution.
+sm_cleanup_previous = read(MIGRATIONS["0157"])
+sm_cleanup_replacement = read(MIGRATIONS["0158"])
+require_exact(
+    "migration 0158 replacement identities",
+    [signature for signature, _, _, _ in normalized_routine_definitions(sm_cleanup_replacement)],
+    {"northstar_session_cleanup_live(int8)"},
+)
+assert_sm_cleanup_alias_forward_fix(
+    sm_cleanup_definition(MIGRATIONS["0157"], sm_cleanup_previous),
+    sm_cleanup_definition(MIGRATIONS["0158"], sm_cleanup_replacement),
+)
+sm_cleanup_definition_paths = [
+    migration
+    for migration, text in migration_documents
+    for signature, _, _, _ in normalized_routine_definitions(text)
+    if signature == "northstar_session_cleanup_live(int8)"
+]
+if sm_cleanup_definition_paths[-1] != MIGRATIONS["0158"]:
+    fail("final SM cleanup definition must retain the reviewed 0158 alias fix")
+
 migration_versions = {migration.name.split("_", 1)[0] for migration, _ in migration_documents}
 for (replacement_version, signature), hardening_version in (
     REPLACEMENT_HARDENING_SUCCESSORS.items()

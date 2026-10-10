@@ -1,0 +1,322 @@
+{
+  "schema": "northstar-stage3-direct-continuation-result-v1",
+  "status": "LimitedSharedContinuationScopePassed",
+  "stage3": "Open",
+  "base_commit": "4dbb42bf446a9f4e2e7ca12a74b0c6d4848f7497",
+  "base_tree": "1a9f58517ba7ba26fd63bf68c2ffdecdd99d3936",
+  "scope": "Production-shared direct application-result continuation, exact lease finalization, mode/health/recovery decisions and original late route position, exercised by finite pure/fake tests.",
+  "source_manifest": {
+    "src/services/message_admission.rs": {
+      "bytes": 37017,
+      "sha256": "9c2626630dc1bab6b365d41d3615bea4f5e79e33c7042684997f271dfc804886"
+    },
+    "src/services/messaging.rs": {
+      "bytes": 27031,
+      "sha256": "41436c36a75efef6fa0e06175f33e1a8882a81fb1ed18359d1063ef9e110e7ee"
+    },
+    "src/services/messaging/direct_workflow.rs": {
+      "bytes": 87895,
+      "sha256": "229e00cc5ba3334873db089a7ae4404ae1301cc7a62178e7ca15df0a3273c0a9"
+    },
+    "src/xmpp/protocol/messaging.rs": {
+      "bytes": 127365,
+      "sha256": "b5532b009b199b4ef4f11e797d0854a17b6f6a5d523a19ed6ff3512512ea1d5e"
+    },
+    "scripts/check-admission-execution.mjs": {
+      "bytes": 23687,
+      "sha256": "bf97875948173cfa303f855717675e3d3eabb636856c500d17d6da09c23dc51e"
+    },
+    "scripts/test-admission-execution.mjs": {
+      "bytes": 11247,
+      "sha256": "04f8617e0e4921e9367a206f49fbf31ceb8269552fde6f356f42f5280db59343"
+    },
+    "src/services/message_admission/witness.rs": {
+      "bytes": 14294,
+      "sha256": "8d869704dea42645b87da53bc18c71d24dcc54495fcf7c58b6d1e455c368c9e0"
+    },
+    "src/xmpp/frame_execution.rs": {
+      "bytes": 51554,
+      "sha256": "ca7dccee8511d63d69fa707ba597eed8c7ab8bcd21e3772705daff681632b1dd"
+    },
+    "src/services/messaging/direct_route.rs": {
+      "bytes": 20950,
+      "sha256": "038c0a6a95aeb90f4ab1f5c4a068047dc2adb4390e6fbb1c3f0ef70585043584"
+    },
+    "src/outbound.rs": {
+      "bytes": 28992,
+      "sha256": "77579b1a6026911d1fa280dc2ead03c8f233727353eca423a3a55af4780b4577"
+    },
+    "crates/northstar-message-application/src/lib.rs": {
+      "bytes": 8245,
+      "sha256": "af92a1ce900db48dcc38ed4532417d8a0bac74ec86688bc1cb9e7c3f86561cd2"
+    },
+    "crates/northstar-message-application/src/direct_commit.rs": {
+      "bytes": 26733,
+      "sha256": "7d757125780b6858c5efb164d035fe5f41f42547f3c64cda1b23c4c00a56f52c"
+    },
+    "crates/northstar-message-application/src/direct_lifecycle.rs": {
+      "bytes": 54349,
+      "sha256": "5f232a83f6a9dfc80fda075077597393c755ba42b3c551820ba91e3d0f4786d9"
+    },
+    "crates/northstar-message-application/src/direct_handoff.rs": {
+      "bytes": 19880,
+      "sha256": "d14610f099aab9eafbc8a28fab0803b0da707ff239752aa70388ec7084999b8c"
+    }
+  },
+  "source_manifest_sha256": "82ecafe1a958dc8a667e4bc645dfcec4479eae1d07bb699b0db0833374c98c5b",
+  "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+  "changed_source_paths": [
+    "scripts/check-admission-execution.mjs",
+    "scripts/test-admission-execution.mjs",
+    "src/services/message_admission.rs",
+    "src/services/messaging.rs",
+    "src/services/messaging/direct_workflow.rs",
+    "src/xmpp/protocol/messaging.rs"
+  ],
+  "checks": {
+    "complete_batch": {
+      "source_manifest_sha256": "9084b0bda0d71068971f0cb9cdb3d325f94925bdc7ce3488b079254b21123e2f",
+      "commands": {
+        "admission_gate": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.250422102",
+          "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+        },
+        "architecture_gate": {
+          "exit_code": 0,
+          "elapsed_seconds": "1.681902742",
+          "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36"
+        },
+        "clippy": {
+          "exit_code": 0,
+          "elapsed_seconds": "183.738177416",
+          "log_sha256": "9ff7217d0f912baccac31054c52b1e69bb4c015cfaa2c29492b7a7acf3ecb51c"
+        },
+        "compile": {
+          "exit_code": 0,
+          "elapsed_seconds": "152.882695426",
+          "log_sha256": "fe51d037dcdf4221c7eedfa545b3f0a21d64eac99a92de796654244d20d03b08"
+        },
+        "execution_gate": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.507717892",
+          "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+        },
+        "format_check": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.080106930",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "gates": {
+          "exit_code": 0,
+          "elapsed_seconds": "8.921754679",
+          "log_sha256": "d42cb6aeb4ffeded9a33f10bb12bd3de0e7f3ea1a0355e734f48a63fee852133"
+        },
+        "graphs": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.439919038",
+          "log_sha256": "e38a265a5bd35a61e776fb027cd8494eb98955b13e9dabb9c1169c472dd8a008"
+        },
+        "inventory_server": {
+          "exit_code": 0,
+          "elapsed_seconds": "170.991709139",
+          "log_sha256": "54876dfee158acfa023e2b8d104752494ae5ddbe87e43b7f98efe8630bc04681"
+        }
+      }
+    },
+    "test_premise_refresh": {
+      "source_manifest_sha256": "82ecafe1a958dc8a667e4bc645dfcec4479eae1d07bb699b0db0833374c98c5b",
+      "commands": {
+        "admission_gate": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.203979272",
+          "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+        },
+        "architecture_gate": {
+          "exit_code": 0,
+          "elapsed_seconds": "1.614919547",
+          "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36"
+        },
+        "clippy": {
+          "exit_code": 0,
+          "elapsed_seconds": "178.620838272",
+          "log_sha256": "2c5e93e9131ac1e7051f88980e41c4787c1f41d5f9f7ecd0c10f9a56a2b2b660"
+        },
+        "execution_gate": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.531107427",
+          "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+        },
+        "format_check": {
+          "exit_code": 0,
+          "elapsed_seconds": "0.071797101",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "gates": {
+          "exit_code": 0,
+          "elapsed_seconds": "10.413017251",
+          "log_sha256": "7bebf71cac1a3c35edea62d1f6e763c73a220e33e5e37a39a8a90bc1dd22e571"
+        },
+        "inventory_server": {
+          "exit_code": 0,
+          "elapsed_seconds": "167.073865918",
+          "log_sha256": "7a397d015ff4847ddf31f8c3cf270e2fac3773e11e4693b2ab89e39a4b37737a"
+        }
+      },
+      "scope": "Formatted test-only rating fixture, fresh target compilation/inventory, ten affected exact cases, static gates and server all-target Clippy. The 26 unchanged controls retain the first complete-batch evidence."
+    }
+  },
+  "rust_tests": {
+    "selected": 36,
+    "passed": 36,
+    "failed": 0,
+    "ignored": 0,
+    "groups": {
+      "new_shared_continuation": 10,
+      "existing_admission_service": 8,
+      "existing_direct_workflow": 12,
+      "existing_actual_XML_preparation": 6
+    },
+    "inventory_counts": {
+      "server": 1846
+    },
+    "names": [
+      "services::messaging::direct_workflow::continuation_tests::stored_live_finalizes_before_returning_one_use_route",
+      "services::messaging::direct_workflow::continuation_tests::spooled_and_degraded_modes_keep_distinct_health_and_rearm_short_circuits",
+      "services::messaging::direct_workflow::continuation_tests::returned_finalize_error_continues_but_pending_finalize_blocks",
+      "services::messaging::direct_workflow::continuation_tests::replay_results_finalize_without_live_authority",
+      "services::messaging::direct_workflow::continuation_tests::unavailable_results_leave_finalization_and_route_untouched",
+      "services::messaging::direct_workflow::continuation_tests::stored_receipt_without_returned_mode_recovers_without_health",
+      "services::messaging::direct_workflow::continuation_tests::unconfirmed_errors_keep_precommit_and_commit_unknown_separate",
+      "services::messaging::direct_workflow::continuation_tests::finalization_orders_missing_invalid_and_unretained_leases",
+      "services::messaging::direct_workflow::continuation_tests::continuation_rejection_never_turns_known_storage_into_live_route",
+      "services::messaging::direct_workflow::continuation_tests::defensive_stored_shape_retains_existing_internal_error",
+      "services::message_admission::tests::admission_request_limits_are_checked_before_ownership_conversion",
+      "services::message_admission::tests::admission_service_consumes_shared_outcome_and_requires_reservation_receipt",
+      "services::message_admission::tests::admission_service_preserves_busy_and_redacts_unknown_backend_error",
+      "services::message_admission::tests::reconciliation_service_returns_the_repository_sample_and_request",
+      "services::message_admission::tests::retained_begin_survives_unpolled_and_each_commit_cut_without_inventing_grant",
+      "services::message_admission::tests::retained_finalize_cancellation_keeps_begin_receipt_and_exact_fence",
+      "services::message_admission::tests::retained_service_preserves_stage2_results_and_exact_finalization_grant",
+      "services::message_admission::tests::retained_service_rejects_changed_input_and_duplicate_effect_before_repository_io",
+      "services::messaging::direct_workflow::tests::actual_full_and_closed_refusals_preserve_item_channels_and_disconnect_order",
+      "services::messaging::direct_workflow::tests::actual_prepared_router_binding_rejects_changed_live_authority_before_consumption",
+      "services::messaging::direct_workflow::tests::held_enqueue_permit_cannot_start_after_frame_retirement",
+      "services::messaging::direct_workflow::tests::known_transaction_outcome_survives_mapping_error_without_fabricating_mode_or_delivery",
+      "services::messaging::direct_workflow::tests::live_preparation_comparison_rejects_substituted_projection_before_direct_effect",
+      "services::messaging::direct_workflow::tests::prepared_command_is_immutable_at_the_actual_application_observer_entry",
+      "services::messaging::direct_workflow::tests::real_commit_wrapper_preserves_every_cancellation_cut_in_outer_owner",
+      "services::messaging::direct_workflow::tests::real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_sending",
+      "services::messaging::direct_workflow::tests::real_router_rearm_entry_survives_cancellation_without_claiming_release",
+      "services::messaging::direct_workflow::tests::real_router_sender_queue_fact_survives_a_later_outer_continuation_cancel",
+      "services::messaging::direct_workflow::tests::refused_item_is_rechecked_against_the_original_live_projection_before_retry",
+      "services::messaging::direct_workflow::tests::retained_continuation_keeps_the_actual_mode_read_short_circuit",
+      "xmpp::protocol::messaging::direct_preparation_tests::actual_original_to_router_preserves_live_payload_after_delayed_command_drops",
+      "xmpp::protocol::messaging::direct_preparation_tests::changed_prepared_identity_payload_or_stored_projection_is_rejected_before_effect_issue",
+      "xmpp::protocol::messaging::direct_preparation_tests::exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_changed_views",
+      "xmpp::protocol::messaging::direct_preparation_tests::independently_changed_actor_origin_full_target_or_source_payload_cannot_reuse_admission",
+      "xmpp::protocol::messaging::direct_preparation_tests::preparation_preserves_full_bare_delayed_live_self_and_unrated_controls",
+      "xmpp::protocol::messaging::direct_preparation_tests::valid_unrated_frame_does_not_acquire_the_rated_normalized_payload_limit"
+    ],
+    "log_digest": "b6e431ed0730ea2f0e639fa3e2502892819f115088356e48898dec7b7c5950f3",
+    "log_digest_encoding": "SHA256 of UTF-8 sorted compact JSON mapping exact_00 through exact_35 to actual log SHA256 values.",
+    "selection": "Each full name appeared exactly once in the actual --list inventory and each --exact invocation reported exactly one named pass with zero ignored.",
+    "actual_invocations": 46,
+    "distinct_tests": 36,
+    "evidence_by_group": {
+      "new_shared_continuation": {
+        "count": 10,
+        "source_manifest_sha256": "82ecafe1a958dc8a667e4bc645dfcec4479eae1d07bb699b0db0833374c98c5b",
+        "log_digest": "e777003065b613c48cba7806ce8a904ad38137c61b1cbd6ab1877d41f51b79e9"
+      },
+      "unchanged_controls": {
+        "count": 26,
+        "source_manifest_sha256": "9084b0bda0d71068971f0cb9cdb3d325f94925bdc7ce3488b079254b21123e2f",
+        "source_identity": "The only subsequent Rust change is within continuation_tests; production and the 26 control bodies/helpers are unchanged."
+      }
+    }
+  },
+  "node_tests": {
+    "tests": 263,
+    "passed": 263,
+    "failed": 0,
+    "skipped": 0
+  },
+  "graphs": {
+    "checked": 10,
+    "byte_identical": true
+  },
+  "test_binaries": {
+    "complete_batch": {
+      "target/debug/deps/rust_xmpp_server-d3ab12afc6293141": {
+        "bytes": 198819656,
+        "sha256": "ea8b981d86faaad8e86d6e15b92df47293e40a3105bf0d7cff75d4382dbc7aa0"
+      }
+    },
+    "test_premise_refresh": {
+      "target/debug/deps/rust_xmpp_server-d3ab12afc6293141": {
+        "bytes": 198898856,
+        "sha256": "35739ce6ba77c6309a7f2938cea0c7a1f760e453af7c9529fb432c14fe5f93dc"
+      }
+    }
+  },
+  "binary_identity_limit": "The actual log-selected binary was verified on the stated Git base plus the frozen source changes. A later commit or rebuild may change embedded Git metadata and executable bytes.",
+  "portable_recipe": {
+    "unit": "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server FULL_TEST_NAME -- --exact --test-threads=1",
+    "gates": "node --test scripts/test-execution-boundaries.mjs scripts/test-admission-execution.mjs",
+    "compile": "cargo check --locked --offline -p northstar-delivery-core -p northstar-message-application -p rust-xmpp-server --all-targets",
+    "lint": "cargo clippy --locked --offline -p northstar-delivery-core -p northstar-message-application -p rust-xmpp-server --all-targets -- -D warnings"
+  },
+  "ordinary_bounds": {
+    "per_command_seconds": 600,
+    "kill_grace_seconds": 5,
+    "per_command_log_bytes": 4194304,
+    "serial": true,
+    "all_source_checks_unchanged": true
+  },
+  "qualified_observations": [
+    "The consuming application bridge seals its actual mapped result and same-preparation continuation in one private non-Clone value, then the shared continuation consumes it.",
+    "Stored, Replay, AccountUnavailable, receipt-preserved and unconfirmed results retain distinct finalization, recovery and route authority.",
+    "The lazy finalizer prepares an exact retained handle before lease take, records the existing followup stage before the service poll and preserves the no-owner compatibility path. Returned finalization errors continue under the existing policy; pending finalization blocks.",
+    "SpoolOnly and unknown returned mode avoid an invented health read. Returned Live obtains one-use routing authority consumed at the existing MessageRouting position.",
+    "The actual frame runner retains admission/direct knowledge when the child is dropped. Constructor evaluation and first child polling remain separate boundaries."
+  ],
+  "preserved_failure": {
+    "iteration": 1,
+    "format_exit": 0,
+    "node_exit": 1,
+    "node_tests": {
+      "tests": 263,
+      "pass": 261,
+      "fail": 2,
+      "skipped": 0
+    },
+    "log_sha256": "e2212035a584b4f5677f4b8efe3fb1788718489699b6d5153b3b872f3b2dd3f9",
+    "source_manifest_sha256": "69844351a729a63fca643f213b2de1a8b03690ed069d0035769ff8d237f9c762",
+    "later_checks": "No compile, Clippy, inventory, Rust unit or graph command started in this failed iteration.",
+    "correction": "The new source matcher omitted rustfmt braces around the unchanged retained-finalization await arm. Adding only those braces preserved the exact call, two awaits, failure branch and no-owner branch; the full corrected gate batch then passed."
+  },
+  "prior_ci": {
+    "commit": "4dbb42bf446a9f4e2e7ca12a74b0c6d4848f7497",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37224570454",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0
+  },
+  "limitations": [
+    "The ten continuation tests construct LocalPreparation directly and now assert the actual rating predicate for their selected XML. They prove the shared bridge and lease behavior for those fixtures; full XML normalization is covered only by the six separately named preparation controls.",
+    "The module-private malformed pair is a defensive synthetic fixture. Source gates protect selected code shapes and are not general reachability or runtime proofs.",
+    "Test-only admission helpers supply independent witness facts; they do not execute a live PostgreSQL Transaction COMMIT. Controlled repositories and futures do not establish SQL, wire, peer or process-fault behavior.",
+    "The private returned-Live handoff uses one Box allocation and no additional payload clone. This is not a full heap or RSS qualification.",
+    "Full Stage3 saved composition record/replay, effective mutation/shrink and old-owner lineage evidence remain pending. Real SQL/wire, the unresolved TLS response/EOF problem and SM retention policy remain later obligations."
+  ],
+  "test_premise_refinement": "NotRated selects bodyless storage-hint XML, while Reserved and GuardOnly retain their original rated literal. The real XML rating predicate is asserted before using the same selected stanza in both preparation bindings and exact queued-item equality.",
+  "preserved_format_driver_failure": {
+    "exit_code": 1,
+    "collector_exit": 0,
+    "source_unchanged": true,
+    "log_sha256": "ff4d4f6fe753fcbc5e86a231ea2e8eb2ab546a884d5aa7c3b545dfae4f45d6fd",
+    "reason": "Formatting driver omitted the already established task-local Rustup environment. Rustup failed while trying its default read-only home, before formatting. The replacement explicitly uses the existing task-local toolchain."
+  }
+}

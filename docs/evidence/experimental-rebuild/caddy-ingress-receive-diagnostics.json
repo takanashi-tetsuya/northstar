@@ -1,0 +1,48 @@
+{
+  "base_commit": "0963edae88b1b3d41abbf50b882e7c5cc0532129",
+  "change": "On synthetic early-rejection receive OSError only, emit the case/status, fixed declared/sent body lengths and up to512 response bytes; diagnostic write failure is ignored and the original receive exception is re-raised.",
+  "claim_limit": "This improves observations on a future failure; it does not fix or establish the cause of the existing CI timeout.",
+  "comparison": {
+    "limitation": "A prior pass with unchanged source does not prove flakiness or a fixture cause.",
+    "parent_job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37175092497/job/111355960973",
+    "parent_result": "success",
+    "same_test_Caddyfile_workflow_and_Caddy_image": true
+  },
+  "failure": {
+    "commit": "0963edae88b1b3d41abbf50b882e7c5cc0532129",
+    "error": "SSL recv TimeoutError in early-body-rejection read_to_close",
+    "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37179140576/job/111367947048",
+    "observability_gap": "Exact loop status and partial reply were not logged; no-response and response-without-EOF remain distinguishable hypotheses, not conclusions.",
+    "root_cause": "Unknown"
+  },
+  "schema": "northstar-fixture-diagnostic-source-v1",
+  "source": {
+    "bytes": 12837,
+    "path": "scripts/test-caddy-ingress.py",
+    "sha256": "c3e85d9bc27ad96362c85961df8545c54b3b6be2f8a1592a49277e95e456fbba"
+  },
+  "status": "DiagnosticSourceOnlyRootCauseUnknown",
+  "unchanged": [
+    "3-second socket timeout",
+    "Existing assertions",
+    "Full successful reply bytes",
+    "Other read_to_close callers",
+    "Caddy configuration and product policies"
+  ],
+  "verification": {
+    "ci_rerun": false,
+    "exit_code": 0,
+    "operation": "ast.parse then compile to code object; no import/exec/eval",
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "reproduce_argv": [
+      "python3",
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      "import ast,pathlib; p=\"scripts/test-caddy-ingress.py\"; compile(ast.parse(pathlib.Path(p).read_bytes(),filename=p),p,\"exec\",dont_inherit=True)"
+    ],
+    "source_unchanged": true,
+    "tests_or_network_or_services_executed": false
+  }
+}

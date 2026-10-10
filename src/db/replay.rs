@@ -1240,13 +1240,31 @@ pub async fn acknowledge_durable_delivery(
 }
 
 /// Atomically acknowledge a complete transport boundary. Every claimed/live
-/// ownership fence is validated before any row is deleted, so failure on a
-/// later stanza cannot partially consume the prefix while the caller retains
-/// its old XEP-0198 `h` and in-memory queue.
+/// ownership fence is validated before any row is deleted; the batch commits
+/// atomically. A lost COMMIT response leaves the entire outcome unknown, and
+/// a returned error alone does not prove that the prefix was retained.
 pub async fn acknowledge_durable_deliveries(
     pool: &PgPool,
     deliveries: &[crate::outbound::DurableDelivery],
 ) -> Result<()> {
+    acknowledge_durable_deliveries_observed(pool, deliveries, None).await
+}
+
+pub(crate) async fn acknowledge_durable_deliveries_observed(
+    pool: &PgPool,
+    deliveries: &[crate::outbound::DurableDelivery],
+    observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+) -> Result<()> {
+    use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
+    if let Some(observation) = observation {
+        anyhow::ensure!(
+            deliveries.len() == 1,
+            "native ACK observation requires its one exact source"
+        );
+        observation.validate_source(crate::outbound::TransportOwnershipSource::C2s(
+            deliveries[0],
+        ))?;
+    }
     if deliveries.is_empty() {
         return Ok(());
     }
@@ -1276,7 +1294,10 @@ pub async fn acknowledge_durable_deliveries(
             }
             (Some(row), Some(expected_claim)) => {
                 anyhow::ensure!(
-                    row.try_get::<Option<Uuid>, _>("delivery_claim_id")? == Some(expected_claim),
+                    northstar_delivery_core::native_write::claimed_c2s_ack_matches(
+                        expected_claim,
+                        row.try_get::<Option<Uuid>, _>("delivery_claim_id")?,
+                    ),
                     "offline delivery claim was lost before acknowledgement"
                 );
                 present.push(true);
@@ -1305,6 +1326,13 @@ pub async fn acknowledge_durable_deliveries(
             }
         }
     }
+    let observed_disposition = observation.map(|_| {
+        if present[0] {
+            AckDisposition::Deleted
+        } else {
+            AckDisposition::AbsentUnclaimed
+        }
+    });
     for (delivery, present) in deliveries.iter().zip(present) {
         if !present {
             continue;
@@ -1324,7 +1352,11 @@ pub async fn acknowledge_durable_deliveries(
             "durable delivery disappeared during acknowledgement"
         );
     }
-    transaction.commit().await?;
+    if let Some((observation, disposition)) = observation.zip(observed_disposition) {
+        commit_observed(transaction.commit(), observation, disposition).await?;
+    } else {
+        transaction.commit().await?;
+    }
     tracing::debug!(
         deliveries = deliveries.len(),
         "atomically acknowledged durable C2S delivery batch"
@@ -1425,12 +1457,43 @@ pub async fn fence_durable_socket_write(
 /// MIX sources were transferred to a pending BOSH fence before entering the
 /// actor FIFO. Binding both source families atomically means an HTTP response
 /// is either recoverably owned in full or not exposed at all.
+// Compatibility fixture for existing database tests. Production carries
+// the actual closed request through the observed entry below.
+#[cfg(test)]
 pub async fn bind_bosh_transport_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
     sources: &[crate::outbound::TransportOwnershipSource],
     ttl_seconds: u64,
+) -> Result<crate::outbound::BoshResponseOwnership> {
+    bind_bosh_transport_response_inner(pool, session_id, response_rid, sources, ttl_seconds, None)
+        .await
+}
+
+pub(crate) async fn bind_bosh_transport_response_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
+) -> Result<crate::outbound::BoshResponseOwnership> {
+    request.validate_for_io()?;
+    bind_bosh_transport_response_inner(
+        pool,
+        request.session_id(),
+        request.rid(),
+        request.sources(),
+        request.ttl_seconds(),
+        Some(request),
+    )
+    .await
+}
+
+async fn bind_bosh_transport_response_inner(
+    pool: &PgPool,
+    session_id: Uuid,
+    response_rid: u64,
+    sources: &[crate::outbound::TransportOwnershipSource],
+    ttl_seconds: u64,
+    observation: Option<&northstar_delivery_core::bosh_ownership::response::BindRequest>,
 ) -> Result<crate::outbound::BoshResponseOwnership> {
     let response_rid = i64::try_from(response_rid).context("BOSH RID exceeds bigint")?;
     let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, BOSH_FENCE_MAX_AGE_SECONDS as u64))
@@ -1664,11 +1727,24 @@ pub async fn bind_bosh_transport_response(
         .rows_affected();
         anyhow::ensure!(bound == 1, "MIX BOSH response fence lost ownership");
     }
-    transaction.commit().await?;
-    Ok(crate::outbound::BoshResponseOwnership {
+    let ownership = crate::outbound::BoshResponseOwnership {
         c2s_message_ids: c2s.into_keys().collect(),
         mix_delivery_ids: mix.into_keys().collect(),
-    })
+    };
+    if let Some(request) = observation {
+        // Both value copies are prepared before COMMIT. The callback stores
+        // the transaction-derived receipt before returning this membership.
+        let receipt = ownership.clone();
+        northstar_delivery_core::bosh_ownership::response::bind_commit_observed(
+            transaction.commit(),
+            request,
+            receipt,
+        )
+        .await?;
+    } else {
+        transaction.commit().await?;
+    }
+    Ok(ownership)
 }
 
 /// Transfer durable C2S rows to the exact BOSH response which will carry
@@ -1998,10 +2074,12 @@ pub async fn release_bosh_delivery_fences(pool: &PgPool, session_id: Uuid) -> Re
 /// a mismatched or partially lost response fails closed before bytes repeat.
 pub async fn renew_bosh_transport_fences(
     pool: &PgPool,
-    session_id: Uuid,
-    expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
-    ttl_seconds: u64,
+    request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
 ) -> Result<()> {
+    request.validate_for_io()?;
+    let session_id = request.session_id();
+    let expected_response = request.expected();
+    let ttl_seconds = request.ttl_seconds();
     let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, BOSH_FENCE_MAX_AGE_SECONDS as u64))
         .context("BOSH delivery-fence TTL is too large")?;
     let mut transaction = pool.begin().await?;
@@ -2111,7 +2189,11 @@ pub async fn renew_bosh_transport_fences(
         renewed_c2s as usize == c2s.len() && renewed_mix as usize == mix.len(),
         "BOSH acknowledgement-age fence was lost during renewal"
     );
-    transaction.commit().await?;
+    northstar_delivery_core::bosh_ownership::response::renew_commit_observed(
+        transaction.commit(),
+        request,
+    )
+    .await?;
     Ok(())
 }
 
@@ -2120,12 +2202,15 @@ pub async fn renew_bosh_transport_fences(
 /// an acknowledgement can never remove a newly reclaimed recipient row.
 pub async fn acknowledge_bosh_transport_responses(
     pool: &PgPool,
-    session_id: Uuid,
-    acknowledged_rid: u64,
+    request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
 ) -> Result<usize> {
+    request.validate_for_io()?;
+    let session_id = request.session_id();
+    let acknowledged_rid = request.rid();
     let acknowledged_rid =
         i64::try_from(acknowledged_rid).context("BOSH acknowledgement exceeds bigint")?;
     let mut transaction = pool.begin().await?;
+    let mut deleted_sources = Vec::new();
     let c2s = sqlx::query(
         "SELECT recipient_id,message_id FROM bosh_delivery_fences
           WHERE session_id=$1 AND response_rid<=$2
@@ -2167,6 +2252,12 @@ pub async fn acknowledge_bosh_transport_responses(
             .await?
             .rows_affected();
         anyhow::ensure!(deleted == 1, "BOSH-owned durable delivery disappeared");
+        deleted_sources.push(
+            northstar_delivery_core::bosh_ownership::response::DeletedSource::C2s {
+                recipient_id,
+                message_id,
+            },
+        );
     }
     let mix = sqlx::query(
         "SELECT delivery_id,lease_token FROM mix_bosh_delivery_fences
@@ -2215,9 +2306,23 @@ pub async fn acknowledge_bosh_transport_responses(
         .await?
         .rows_affected();
         anyhow::ensure!(deleted == 1, "MIX BOSH-owned delivery disappeared");
+        deleted_sources.push(
+            northstar_delivery_core::bosh_ownership::response::DeletedSource::Mix(
+                crate::outbound::MixDelivery {
+                    delivery_id,
+                    lease_token,
+                },
+            ),
+        );
     }
-    transaction.commit().await?;
-    Ok(c2s.len().saturating_add(mix.len()))
+    let acknowledged = deleted_sources.len();
+    northstar_delivery_core::bosh_ownership::response::ack_commit_observed(
+        transaction.commit(),
+        request,
+        deleted_sources,
+    )
+    .await?;
+    Ok(acknowledged)
 }
 
 /// Release an actor's unacknowledged BOSH transport sources without consuming

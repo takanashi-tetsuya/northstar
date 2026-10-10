@@ -6,10 +6,13 @@
 //! or banned items without going through the MIX authorization model.
 
 mod forms;
+#[cfg(test)]
+pub(crate) mod stage4_saved;
 mod worker;
 
 use super::{Action, ProtocolSession};
 use crate::jid::{prepare_domainpart, CanonicalJid};
+use crate::services::mix::outbox::{self, core as mix_worker};
 use crate::services::mix::{
     ArchiveBoundary, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult,
     CreateChannelOutcome, FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome,
@@ -27,6 +30,7 @@ use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
 use crate::state::mix_outbox::MixOutboxContext;
 use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
 use crate::state::{AppState, MixIqRelayStage, PendingMixIqRelay};
+use crate::xmpp::frame_execution::{SessionExecutions, Stage};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{
     add_stanza_id, iq_error_to, iq_result_to, is_encrypted, mam_extended_form, stanza_error,
@@ -138,6 +142,7 @@ enum MixLocalTransportFailure {
     QueueFull,
     QueueClosed,
     HandoffClosed,
+    Observation(mix_worker::Rejected),
 }
 
 impl std::fmt::Display for MixLocalTransportFailure {
@@ -146,6 +151,12 @@ impl std::fmt::Display for MixLocalTransportFailure {
             Self::QueueFull => "local session queue is full",
             Self::QueueClosed => "local session queue is closed",
             Self::HandoffClosed => "local transport closed before durable hand-off",
+            Self::Observation(error) => {
+                return write!(
+                    formatter,
+                    "MIX attempt rejected a local hand-off observation: {error}"
+                )
+            }
         };
         formatter.write_str(detail)
     }
@@ -202,24 +213,93 @@ async fn try_send_local_durable_mix(
     stanza: String,
     source: crate::outbound::MixDelivery,
 ) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    try_send_local_durable_mix_inner(sender, disconnect, stanza, source, None).await
+}
+
+async fn try_send_local_durable_mix_observed(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &tokio_util::sync::CancellationToken,
+    request: &mix_worker::LocalRequest,
+) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    try_send_local_durable_mix_inner(
+        sender,
+        disconnect,
+        request.stanza().to_owned(),
+        request.source(),
+        Some(request),
+    )
+    .await
+}
+
+async fn try_send_local_durable_mix_inner(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &tokio_util::sync::CancellationToken,
+    stanza: String,
+    source: crate::outbound::MixDelivery,
+    observation: Option<&mix_worker::LocalRequest>,
+) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    if let Some(request) = observation {
+        request
+            .start()
+            .map_err(MixLocalTransportFailure::Observation)?;
+    }
     let receiver = match sender.try_send_durable_mix(stanza, source) {
         Ok(receiver) => receiver,
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             sender.disconnect_backpressured_transport();
             disconnect.cancel();
+            if let Some(request) = observation {
+                request
+                    .returned(mix_worker::LocalResult::QueueFull)
+                    .map_err(MixLocalTransportFailure::Observation)?;
+            }
             return Err(MixLocalTransportFailure::QueueFull);
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             sender.disconnect_backpressured_transport();
             disconnect.cancel();
+            if let Some(request) = observation {
+                request
+                    .returned(mix_worker::LocalResult::QueueClosed)
+                    .map_err(MixLocalTransportFailure::Observation)?;
+            }
             return Err(MixLocalTransportFailure::QueueClosed);
         }
     };
     let mut pending = PendingMixLocalHandoff::new(sender.clone(), disconnect.clone());
-    let completion = receiver
-        .await
-        .map_err(|_| MixLocalTransportFailure::HandoffClosed)?;
+    if let Some(request) = observation {
+        request
+            .enqueued()
+            .map_err(MixLocalTransportFailure::Observation)?;
+    }
+    let completion = match receiver.await {
+        Ok(completion) => completion,
+        Err(_) => {
+            if let Some(request) = observation {
+                request
+                    .returned(mix_worker::LocalResult::HandoffClosed)
+                    .map_err(MixLocalTransportFailure::Observation)?;
+            }
+            return Err(MixLocalTransportFailure::HandoffClosed);
+        }
+    };
     pending.mark_completed();
+    if let Some(request) = observation {
+        let boundary = match completion {
+            crate::outbound::MixTransportCompletion::SocketFenced { connection_id } => {
+                mix_worker::TransferBoundary::SocketFenced(connection_id)
+            }
+            crate::outbound::MixTransportCompletion::SmPersisted { session_id } => {
+                mix_worker::TransferBoundary::SmPersisted(session_id)
+            }
+            crate::outbound::MixTransportCompletion::BoshPersisted { session_id } => {
+                mix_worker::TransferBoundary::BoshPersisted(session_id)
+            }
+        };
+        request
+            .returned(mix_worker::LocalResult::Transferred(boundary))
+            .map_err(MixLocalTransportFailure::Observation)?;
+    }
     Ok(completion)
 }
 
@@ -1894,18 +1974,114 @@ struct ChannelStanzaDelivery<'a> {
 }
 
 /// The outcome that determines who may consume a claimed MIX recipient row.
-/// A direct socket write and a federated outbox admission leave the claiming
-/// worker responsible for the final deletion. XEP-0198 or BOSH persistence
-/// transfers that responsibility to a typed durable owner.
+/// Socket fencing, XEP-0198 and BOSH persistence transfer responsibility to a
+/// typed transport owner. Federation outbox admission leaves final deletion
+/// with the claiming worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChannelStanzaDeliveryOutcome {
     CompletedByClaimingWorker,
     TransferredToRecoverableTransport,
 }
 
+/// The successful route result selects the only remaining settlement owner.
+/// Construct an acknowledgement future only while the worker still owns the
+/// source. After a socket/SM/BOSH hand-off its old token must never be used for
+/// acknowledgement, retry or dead-letter settlement.
+#[allow(dead_code)] // Compatibility selector retained for the existing typed-owner controls.
+async fn finish_mix_delivery_owner<Acknowledge, Completion>(
+    outcome: ChannelStanzaDeliveryOutcome,
+    acknowledge: Acknowledge,
+) -> Result<bool>
+where
+    Acknowledge: FnOnce() -> Completion,
+    Completion: std::future::Future<Output = Result<bool>>,
+{
+    match outcome {
+        ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker => acknowledge().await,
+        ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport => Ok(true),
+    }
+}
+
 async fn deliver_channel_stanza(
     context: &MixOutboxContext,
     delivery: ChannelStanzaDelivery<'_>,
+) -> Result<ChannelStanzaDeliveryOutcome> {
+    deliver_channel_stanza_inner(context, delivery, None).await
+}
+
+async fn deliver_claimed_channel_stanza(
+    context: &MixOutboxContext,
+    request: &mix_worker::RouteRequest,
+) -> Result<ChannelStanzaDeliveryOutcome> {
+    request.start()?;
+    let row = request.row();
+    let recipient = MixParticipant {
+        participant_id: row.participant_id,
+        jid: row.recipient_jid.clone(),
+        nick: row.recipient_nick.clone(),
+    };
+    deliver_channel_stanza_inner(
+        context,
+        ChannelStanzaDelivery {
+            delivery_id: Some(row.source.delivery_id),
+            mix_source: Some(row.source),
+            channel_jid: &row.channel_jid,
+            recipient: &recipient,
+            stanza: request.stanza().to_owned(),
+            authoritative_stanza_id: row.authoritative_stanza_id,
+            archive: row.archive,
+            encrypted: row.encrypted,
+            durable: true,
+            database_lane: ChannelStanzaDatabaseLane::DurableOutbox,
+        },
+        Some(request),
+    )
+    .await
+}
+
+async fn send_claimed_cluster_mix(
+    context: &MixOutboxContext,
+    request: &mix_worker::ClusterRequest,
+) -> Result<crate::cluster::NodeDeliveryReceipt> {
+    request.start()?;
+    let result = context
+        .send_cluster_mix(
+            request.node(),
+            request.recipient(),
+            request.stanza(),
+            Some(request.source()),
+        )
+        .await;
+    record_claimed_cluster_result(request, &result)?;
+    result
+}
+
+fn record_claimed_cluster_result(
+    request: &mix_worker::ClusterRequest,
+    result: &Result<crate::cluster::NodeDeliveryReceipt>,
+) -> Result<()> {
+    let handoff = match result {
+        Ok(receipt) if receipt.acknowledged => receipt.mix_handoff.map(|handoff| match handoff {
+            crate::cluster::ClusterMixHandoff::SocketFenced => {
+                mix_worker::TransferBoundary::ClusterSocketFenced
+            }
+            crate::cluster::ClusterMixHandoff::SmPersisted => {
+                mix_worker::TransferBoundary::ClusterSmPersisted
+            }
+            crate::cluster::ClusterMixHandoff::BoshPersisted => {
+                mix_worker::TransferBoundary::ClusterBoshPersisted
+            }
+        }),
+        _ => None,
+    };
+    request.returned(handoff)?;
+    Ok(())
+}
+
+async fn deliver_channel_stanza_inner(
+    context: &MixOutboxContext,
+    delivery: ChannelStanzaDelivery<'_>,
+    observation: Option<&mix_worker::RouteRequest>,
 ) -> Result<ChannelStanzaDeliveryOutcome> {
     let ChannelStanzaDelivery {
         delivery_id,
@@ -2048,34 +2224,47 @@ async fn deliver_channel_stanza(
                 .context("archived MIX delivery requires an authoritative stanza id")?;
             let archive_id = Uuid::new_v4();
             let client_stanza_id = authoritative_stanza_id.to_string();
-            let admission = match database_lane {
-                ChannelStanzaDatabaseLane::LiveIngress => {
-                    context
-                        .service()
-                        .archive_mix_message_once(
-                            archive_id,
-                            user.id,
-                            channel_jid,
-                            authoritative_stanza_id,
-                            &stanza,
-                            encrypted,
-                            Some(&client_stanza_id),
-                        )
-                        .await
-                }
-                ChannelStanzaDatabaseLane::DurableOutbox => {
-                    context
-                        .service()
-                        .outbox_archive_mix_message_once(
-                            archive_id,
-                            user.id,
-                            channel_jid,
-                            authoritative_stanza_id,
-                            &stanza,
-                            encrypted,
-                            Some(&client_stanza_id),
-                        )
-                        .await
+            let admission = if let Some(owner) = observation {
+                let request =
+                    owner.archive_request(user.id, archive_id, Some(client_stanza_id.clone()))?;
+                context
+                    .service()
+                    .outbox_archive_mix_message_once_observed(&request)
+                    .await
+                    .map(|result| match result {
+                        mix_worker::ArchiveResult::Stored(id) => SourceArchiveAdmission::Stored(id),
+                        mix_worker::ArchiveResult::Replay(id) => SourceArchiveAdmission::Replay(id),
+                    })
+            } else {
+                match database_lane {
+                    ChannelStanzaDatabaseLane::LiveIngress => {
+                        context
+                            .service()
+                            .archive_mix_message_once(
+                                archive_id,
+                                user.id,
+                                channel_jid,
+                                authoritative_stanza_id,
+                                &stanza,
+                                encrypted,
+                                Some(&client_stanza_id),
+                            )
+                            .await
+                    }
+                    ChannelStanzaDatabaseLane::DurableOutbox => {
+                        context
+                            .service()
+                            .outbox_archive_mix_message_once(
+                                archive_id,
+                                user.id,
+                                channel_jid,
+                                authoritative_stanza_id,
+                                &stanza,
+                                encrypted,
+                                Some(&client_stanza_id),
+                            )
+                            .await
+                    }
                 }
             };
             match admission {
@@ -2121,14 +2310,24 @@ async fn deliver_channel_stanza(
                     had_deliverable_target = true;
                     if durable {
                         let source = durable_source.expect("durable source was validated above");
-                        match try_send_local_durable_mix(
-                            &session.sender,
-                            &session.disconnect,
-                            stanza.clone(),
-                            source,
-                        )
-                        .await
-                        {
+                        let result = if let Some(owner) = observation {
+                            let request = owner.local_request(jid.clone())?;
+                            try_send_local_durable_mix_observed(
+                                &session.sender,
+                                &session.disconnect,
+                                &request,
+                            )
+                            .await
+                        } else {
+                            try_send_local_durable_mix(
+                                &session.sender,
+                                &session.disconnect,
+                                stanza.clone(),
+                                source,
+                            )
+                            .await
+                        };
+                        match result {
                             Ok(
                                 crate::outbound::MixTransportCompletion::SocketFenced { .. }
                                 | crate::outbound::MixTransportCompletion::SmPersisted { .. }
@@ -2195,10 +2394,15 @@ async fn deliver_channel_stanza(
         };
         for node_id in nodes {
             had_route_target = true;
-            match context
-                .send_cluster_mix(&node_id, &recipient.jid, &stanza, durable_source)
-                .await
-            {
+            let result = if let Some(owner) = observation {
+                let request = owner.cluster_request(node_id.clone())?;
+                send_claimed_cluster_mix(context, &request).await
+            } else {
+                context
+                    .send_cluster_mix(&node_id, &recipient.jid, &stanza, durable_source)
+                    .await
+            };
+            match result {
                 Ok(receipt) => {
                     if receipt.acknowledged {
                         // A v13 peer returns a typed hand-off only after
@@ -2317,172 +2521,219 @@ fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
     Ok(stanza)
 }
 
+/// Only the route and observed durable turns vary between worker environments.
+/// The shared policy owns deadlines, renewal scope, and settlement selection.
+trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static {
+    fn route(
+        &self,
+        request: &mix_worker::RouteRequest,
+    ) -> impl std::future::Future<Output = Result<ChannelStanzaDeliveryOutcome>> + Send;
+
+    fn renew(
+        &self,
+        request: &mix_worker::RenewalRequest,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+
+    fn settle(
+        &self,
+        request: &mix_worker::SettlementRequest,
+    ) -> impl std::future::Future<Output = Result<mix_worker::SettlementResult>> + Send;
+}
+
+#[derive(Clone)]
+struct MixOutboxDeliveryPort {
+    context: Arc<MixOutboxContext>,
+}
+
+impl ClaimedMixDeliveryPort for MixOutboxDeliveryPort {
+    async fn route(
+        &self,
+        request: &mix_worker::RouteRequest,
+    ) -> Result<ChannelStanzaDeliveryOutcome> {
+        deliver_claimed_channel_stanza(&self.context, request).await
+    }
+
+    async fn renew(&self, request: &mix_worker::RenewalRequest) -> Result<bool> {
+        self.context
+            .service()
+            .renew_mix_delivery_lease_observed(request)
+            .await
+    }
+
+    async fn settle(
+        &self,
+        request: &mix_worker::SettlementRequest,
+    ) -> Result<mix_worker::SettlementResult> {
+        self.context
+            .service()
+            .settle_mix_delivery_observed(request)
+            .await
+    }
+}
+
 async fn process_claimed_mix_delivery(
     context: Arc<MixOutboxContext>,
-    delivery: crate::services::mix::ClaimedMixDelivery,
+    attempt: mix_worker::Attempt,
+    handle: outbox::AttemptHandle,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    process_claimed_mix_delivery_with_port(
+        MixOutboxDeliveryPort { context },
+        attempt,
+        handle,
+        cancel,
+    )
+    .await
+}
+
+async fn process_claimed_mix_delivery_with_port<P: ClaimedMixDeliveryPort>(
+    port: P,
+    attempt: mix_worker::Attempt,
+    handle: outbox::AttemptHandle,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let attempt_deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
-    let stanza = match addressed_mix_delivery(&delivery.stanza, &delivery.recipient.jid) {
+    let source = attempt.row().source;
+    let event_id = attempt.row().event_id;
+    let channel_id = attempt.row().channel_id;
+    let stanza = match addressed_mix_delivery(&attempt.row().stanza, &attempt.row().recipient_jid) {
         Ok(stanza) => stanza,
         Err(error) => {
+            let request = attempt.invalid_template(error.to_string())?;
             let moved = match bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                context.service().dead_letter_mix_delivery(
-                    delivery.delivery_id,
-                    delivery.lease_token,
-                    "invalid-template",
-                    &error.to_string(),
-                ),
+                port.settle(&request),
             )
             .await
             {
-                Ok(moved) => moved,
-                Err(wait) if mix_outbox_is_shutting_down(&wait) => return Ok(()),
+                Ok(mix_worker::SettlementResult::DeadLetter(moved)) => moved,
+                Ok(_) => anyhow::bail!("invalid-template settlement result kind mismatch"),
+                Err(wait) if mix_outbox_is_shutting_down(&wait) => {
+                    handle.finish_as(mix_worker::TerminalReason::Cancelled);
+                    return Ok(());
+                }
                 Err(wait) if mix_outbox_deadline_elapsed(&wait) => {
-                    tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX invalid-template handling exceeded its claimed delivery deadline; retaining fenced row for lease recovery");
+                    handle.finish_as(mix_worker::TerminalReason::TimedOut);
+                    tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX invalid-template handling exceeded its claimed delivery deadline; retaining fenced row for lease recovery");
                     return Ok(());
                 }
                 Err(wait) => return Err(wait),
             };
             if !moved {
-                tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while dead-lettering an invalid template");
+                tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX invalid-template dead-letter result was NotMoved");
             }
             return Ok(());
         }
     };
-
-    let renewal_context = Arc::clone(&context);
-    let result = match run_claimed_mix_effect_with_lease(
+    let request = attempt.route(stanza)?;
+    let renewal_port = port.clone();
+    let renewal_owner = handle.observation.clone();
+    let result = run_claimed_mix_effect_with_lease(
         cancel.clone(),
         attempt_deadline,
         MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
-        async {
-            Ok(deliver_channel_stanza(
-                &context,
-                ChannelStanzaDelivery {
-                    delivery_id: Some(delivery.delivery_id),
-                    mix_source: Some(crate::outbound::MixDelivery {
-                        delivery_id: delivery.delivery_id,
-                        lease_token: delivery.lease_token,
-                    }),
-                    channel_jid: &delivery.channel_jid,
-                    recipient: &delivery.recipient,
-                    stanza,
-                    authoritative_stanza_id: delivery.authoritative_stanza_id,
-                    archive: delivery.archive,
-                    encrypted: delivery.encrypted,
-                    durable: true,
-                    database_lane: ChannelStanzaDatabaseLane::DurableOutbox,
-                },
-            )
-            .await)
-        },
+        async { Ok(port.route(&request).await) },
         move || -> BoxFuture<'static, Result<bool>> {
-            let context = Arc::clone(&renewal_context);
-            let delivery_id = delivery.delivery_id;
-            let lease_token = delivery.lease_token;
+            let port = renewal_port.clone();
+            let owner = renewal_owner.clone();
             Box::pin(async move {
-                context
-                    .service()
-                    .renew_mix_delivery_lease(delivery_id, lease_token)
-                    .await
+                let renewal = owner.renewal_request()?;
+                port.renew(&renewal).await
             })
         },
     )
-    .await
-    {
+    .await;
+    // The existing helper has returned and destroyed its routing/renewal
+    // children. This token records that boundary without inventing a result
+    // for an in-flight renewal dropped because routing completed.
+    let closed = handle.observation.close_renewal_scope()?;
+    let result = match result {
         Ok(Some(result)) => result,
         Ok(None) => {
-            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while an external side effect was in flight");
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX renewal no longer matched the active exact source while an external side effect was in flight");
             return Ok(());
         }
-        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+        Err(error) if mix_outbox_is_shutting_down(&error) => {
+            handle.finish_as(mix_worker::TerminalReason::Cancelled);
+            return Ok(());
+        }
         Err(error) if mix_outbox_deadline_elapsed(&error) => {
-            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery attempt exceeded its claimed deadline; retaining fenced row for lease recovery");
+            handle.finish_as(mix_worker::TerminalReason::TimedOut);
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery attempt exceeded its claimed deadline; retaining fenced row for lease recovery");
             return Ok(());
         }
         Err(error) => return Err(error),
     };
-
-    let completion = match result {
-        Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker) => {
-            bounded_mix_outbox_turn(
-                &cancel,
-                attempt_deadline,
-                context
-                    .service()
-                    .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
-            )
-            .await
-        }
+    let (outcome, command) = match result {
         Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport) => {
-            // XEP-0198 or BOSH rotated and persisted the exact source in its
-            // own authoritative queue. The old worker token is intentionally
-            // no longer valid, so this worker must not attempt a second
-            // acknowledgement, retry, or dead-letter transition.
-            Ok(true)
+            request
+                .returned(mix_worker::RouteResult::Transferred)?
+                .transferred(closed)?;
+            return Ok(());
         }
+        Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker) => (
+            mix_worker::RouteResult::CompletedByWorker,
+            mix_worker::SettlementCommand::Ack,
+        ),
         Err(error) => {
             if mix_outbox_is_shutting_down(&error) {
-                // A cancellation-aware database turn must not turn orderly
-                // shutdown into an unbounded wait.  The claimed row remains
-                // fenced and its lease expiry is the authoritative recovery
-                // path; a possibly accepted transport side effect is safe
-                // under stanza-id replay semantics.
+                handle.finish_as(mix_worker::TerminalReason::Cancelled);
                 return Ok(());
             } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some() {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context.service().defer_mix_delivery(
-                        delivery.delivery_id,
-                        delivery.lease_token,
-                        delivery.route_wake_generation,
-                        MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS,
-                    ),
+                (
+                    mix_worker::RouteResult::Pending,
+                    mix_worker::SettlementCommand::Defer {
+                        delay_seconds: MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS,
+                    },
                 )
-                .await
             } else if let Some(permanent) = error.downcast_ref::<PermanentMixDeliveryError>() {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context.service().dead_letter_mix_delivery(
-                        delivery.delivery_id,
-                        delivery.lease_token,
-                        permanent.reason,
-                        &permanent.detail,
-                    ),
+                (
+                    mix_worker::RouteResult::Permanent,
+                    mix_worker::SettlementCommand::DeadLetter {
+                        reason: permanent.reason.to_owned(),
+                        error: permanent.detail.clone(),
+                    },
                 )
-                .await
             } else {
-                bounded_mix_outbox_turn(
-                    &cancel,
-                    attempt_deadline,
-                    context.service().retry_mix_delivery(
-                        delivery.delivery_id,
-                        delivery.lease_token,
-                        delivery.attempt_count,
-                        delivery.route_wake_generation,
-                        &error.to_string(),
-                    ),
+                (
+                    mix_worker::RouteResult::Retry,
+                    mix_worker::SettlementCommand::Retry {
+                        error: error.to_string(),
+                    },
                 )
-                .await
             }
         }
     };
-    let completed = match completion {
-        Ok(completed) => completed,
-        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+    let completion = request.returned(outcome)?;
+    let settlement = completion
+        .settlement(command, closed)?
+        .context("worker-owned route requires its exclusive settlement")?;
+    let completion =
+        bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&settlement)).await;
+    let result = match completion {
+        Ok(result) => result,
+        Err(error) if mix_outbox_is_shutting_down(&error) => {
+            handle.finish_as(mix_worker::TerminalReason::Cancelled);
+            return Ok(());
+        }
         Err(error) if mix_outbox_deadline_elapsed(&error) => {
-            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery finalization exceeded its claimed deadline; retaining fenced row for lease recovery");
+            handle.finish_as(mix_worker::TerminalReason::TimedOut);
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery finalization exceeded its claimed deadline; retaining fenced row for lease recovery");
             return Ok(());
         }
         Err(error) => return Err(error),
     };
-    if !completed {
-        tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery completion lost its lease fence");
+    match result {
+        mix_worker::SettlementResult::DeadLetter(false) => {
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery dead-letter result was NotMoved");
+        }
+        mix_worker::SettlementResult::Ack(false)
+        | mix_worker::SettlementResult::Defer(false)
+        | mix_worker::SettlementResult::Retry(mix_worker::RetryResult::LeaseLost) => {
+            tracing::warn!(delivery_id=%source.delivery_id, event_id=%event_id, channel_id=%channel_id, "MIX delivery completion did not match its exact source fence");
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -3294,6 +3545,7 @@ impl ProtocolSession {
         if !CanonicalJid::parse(to).is_ok_and(|target| target.domainpart() == self.mix_domain()) {
             return Ok(None);
         }
+        self.enter_frame_stage(Stage::MixPolicy);
         let Some(user) = self.authenticated.as_ref() else {
             return Ok(Some(Action::Send(stanza_error(
                 root,
@@ -3309,7 +3561,14 @@ impl ProtocolSession {
             ))));
         };
         let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
-        let result = process_channel_message(&self.state, &actor_bare, full_jid, raw).await?;
+        let result = process_channel_message(
+            &self.state,
+            &actor_bare,
+            full_jid,
+            raw,
+            Some(&self.frame_executions),
+        )
+        .await?;
         Ok(Some(result.map_or(Action::None, Action::Send)))
     }
 
@@ -5585,7 +5844,11 @@ async fn process_channel_message(
     actor_bare: &str,
     actor_full: &str,
     raw: &str,
+    observation: Option<&SessionExecutions>,
 ) -> Result<Option<String>> {
+    if let Some(observation) = observation {
+        observation.enter(Stage::MixPolicy);
+    }
     let document = Document::parse(raw).context("malformed MIX message")?;
     let root = document.root_element();
     let to = root.attribute("to").unwrap_or_default().to_owned();
@@ -5660,6 +5923,29 @@ async fn process_channel_message(
         } else {
             (None, false, None)
         };
+    // Only the ordinary frame-owned foreground path gains this owner. A
+    // genuinely absent frame retains the explicit compatibility behavior.
+    let foreground = if retraction_target.is_none() {
+        if let Some(frames) = observation {
+            frames.mix_foreground(|| {
+                state.mix_service().prepare_mix_foreground(
+                    crate::services::mix::foreground::Ingress {
+                        channel_id: channel.id,
+                        channel_jid: channel.jid(),
+                        actor_bare: actor_bare.to_owned(),
+                        actor_full: actor_full.to_owned(),
+                        children: message_children.as_deref().unwrap_or_default().to_owned(),
+                        encrypted: message_encrypted,
+                        identity: message_replay_identity.clone(),
+                    },
+                )
+            })?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     if let (Some(target_id), Some(identity)) = (retraction_target, retraction_identity.as_ref()) {
         match state
             .mix_service()
@@ -5680,11 +5966,21 @@ async fn process_channel_message(
         }
     }
     if let Some(identity) = message_replay_identity.as_ref() {
-        match state
-            .mix_service()
-            .lookup_mix_message_replay(channel.id, actor_bare, identity)
-            .await?
-        {
+        let replay = if let Some(owner) = &foreground {
+            let request = owner
+                .replay_request()?
+                .ok_or(crate::services::mix::foreground::Rejected::Input)?;
+            state
+                .mix_service()
+                .lookup_mix_message_replay_observed(&request)
+                .await?
+        } else {
+            state
+                .mix_service()
+                .lookup_mix_message_replay(channel.id, actor_bare, identity)
+                .await?
+        };
+        match replay {
             MixBusinessReplay::Replay(_) => return Ok(None),
             MixBusinessReplay::Conflict => {
                 return Ok(Some(message_error(
@@ -5750,6 +6046,9 @@ async fn process_channel_message(
             participant.nick.as_deref(),
             archived_jid,
         );
+        if let Some(observation) = observation {
+            observation.enter(Stage::MixAdmission);
+        }
         let admission = state
             .mix_service()
             .retract_mix_message(RetractMixMessageRequest {
@@ -5813,19 +6112,41 @@ async fn process_channel_message(
     // transaction. This prevents delivery to a participant who concurrently
     // left and prevents a post-join subscriber from missing an archive that
     // linearized after their subscription.
-    let admission = state
-        .mix_service()
-        .store_mix_message(StoreMixMessageRequest {
+    if let Some(observation) = observation {
+        observation.enter(Stage::MixAdmission);
+    }
+    let admission = if let Some(owner) = &foreground {
+        let request = owner.store_request(crate::services::mix::foreground::StoreCommand {
             channel_id: channel.id,
-            actor: actor_bare,
-            item_id: &archive_id.to_string(),
-            payload: &archive,
+            actor: actor_bare.to_owned(),
+            item_id: archive_id,
+            payload: archive,
             identity: message_replay_identity,
-            delivery_payload: &children,
-            visible_jid: live_jid,
+            delivery_payload: children,
+            visible_jid: live_jid.map(str::to_owned),
             encrypted: message_encrypted,
-        })
-        .await?;
+        })?;
+        state
+            .mix_service()
+            .store_mix_message_observed(&request)
+            .await?
+    } else {
+        Arc::new(
+            state
+                .mix_service()
+                .store_mix_message(StoreMixMessageRequest {
+                    channel_id: channel.id,
+                    actor: actor_bare,
+                    item_id: &archive_id.to_string(),
+                    payload: &archive,
+                    identity: message_replay_identity,
+                    delivery_payload: &children,
+                    visible_jid: live_jid,
+                    encrypted: message_encrypted,
+                })
+                .await?,
+        )
+    };
     match admission.outcome {
         StoreEventOutcome::Stored(_) => {}
         StoreEventOutcome::Replay(_) => return Ok(None),
@@ -6662,7 +6983,8 @@ pub(crate) async fn federated_mix_message(
     if to_jid.domainpart() == local_mix {
         let actor_full = authenticated_full_actor(&from, authenticated_domain)?;
         let actor_bare = crate::jid::CanonicalJid::parse(&actor_full)?.bare();
-        if let Some(error) = process_channel_message(&state, &actor_bare, &actor_full, &raw).await?
+        if let Some(error) =
+            process_channel_message(&state, &actor_bare, &actor_full, &raw, None).await?
         {
             let _ = state
                 .federation_outbox()
@@ -6870,3 +7192,456 @@ pub(crate) async fn federated_mix_presence(
 #[cfg(test)]
 #[path = "mix_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod shared_claimed_delivery_policy_tests {
+    use super::*;
+    use crate::services::mix::outbox::core;
+    use std::sync::Mutex;
+
+    // These ordinary policy controls supply route and repository facts. They
+    // do not provide transport-handoff or database execution evidence.
+    #[derive(Clone, Copy)]
+    enum RouteFact {
+        Completed,
+        Pending,
+        Permanent,
+        Retry,
+        Shutdown,
+        DeadlineError,
+    }
+
+    #[derive(Clone, Copy)]
+    enum RenewalFact {
+        Pending,
+        Lost,
+        Error,
+    }
+
+    #[derive(Clone)]
+    struct SuppliedPort {
+        owner: core::Observation,
+        route: RouteFact,
+        renewal: RenewalFact,
+        wait_route: bool,
+        release_route: Arc<tokio::sync::Notify>,
+        settlement_result: Option<core::SettlementResult>,
+        commands: Arc<Mutex<Vec<core::SettlementCommand>>>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct ChildDrop {
+        port: SuppliedPort,
+        event: &'static str,
+    }
+
+    impl Drop for ChildDrop {
+        fn drop(&mut self) {
+            assert!(!self.port.owner.snapshot().renewal_scope_closed);
+            assert_eq!(self.port.owner.snapshot().terminal, None);
+            self.port.events.lock().unwrap().push(self.event);
+        }
+    }
+
+    impl ClaimedMixDeliveryPort for SuppliedPort {
+        async fn route(
+            &self,
+            request: &core::RouteRequest,
+        ) -> Result<ChannelStanzaDeliveryOutcome> {
+            assert!(std::ptr::eq(request.row(), self.owner.row()));
+            assert_eq!(
+                request.stanza(),
+                addressed_mix_delivery(&self.owner.row().stanza, &self.owner.row().recipient_jid)?
+            );
+            request.start()?;
+            let _child = ChildDrop {
+                port: self.clone(),
+                event: "route dropped",
+            };
+            self.events.lock().unwrap().push("route started");
+            if self.wait_route {
+                self.release_route.notified().await;
+            }
+            match self.route {
+                RouteFact::Completed => Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker),
+                RouteFact::Pending => Err(MixDeliveryRoutePending.into()),
+                RouteFact::Permanent => Err(permanent_mix_delivery_error("policy", "detail")),
+                RouteFact::Retry => Err(anyhow::anyhow!("route failed")),
+                RouteFact::Shutdown => Err(MixOutboxShutdown.into()),
+                RouteFact::DeadlineError => Err(MixOutboxDeadlineElapsed.into()),
+            }
+        }
+
+        async fn renew(&self, request: &core::RenewalRequest) -> Result<bool> {
+            assert_eq!(request.source(), self.owner.row().source);
+            request.start()?;
+            let _child = ChildDrop {
+                port: self.clone(),
+                event: "renewal dropped",
+            };
+            self.events.lock().unwrap().push("renewal started");
+            match self.renewal {
+                RenewalFact::Pending => std::future::pending().await,
+                RenewalFact::Lost => {
+                    let entered = request.enter_statement()?;
+                    request.received(entered, false)?;
+                    Ok(request.returned(false)?)
+                }
+                RenewalFact::Error => {
+                    request.failed()?;
+                    Err(anyhow::anyhow!("renewal failed"))
+                }
+            }
+        }
+
+        async fn settle(
+            &self,
+            request: &core::SettlementRequest,
+        ) -> Result<core::SettlementResult> {
+            assert_eq!(request.source(), self.owner.row().source);
+            assert_eq!(
+                request.route_wake_generation(),
+                self.owner.row().route_wake_generation
+            );
+            assert!(self.owner.snapshot().renewal_scope_closed);
+            if self.events.lock().unwrap().contains(&"route started") {
+                assert!(self.events.lock().unwrap().contains(&"route dropped"));
+            }
+            if self.events.lock().unwrap().contains(&"renewal started") {
+                assert!(self.events.lock().unwrap().contains(&"renewal dropped"));
+            }
+            self.commands
+                .lock()
+                .unwrap()
+                .push(request.command().clone());
+            request.start()?;
+            let result = self.settlement_result.unwrap_or(match request.command() {
+                core::SettlementCommand::Ack => core::SettlementResult::Ack(true),
+                core::SettlementCommand::Defer { .. } => core::SettlementResult::Defer(true),
+                core::SettlementCommand::Retry { .. } => {
+                    core::SettlementResult::Retry(core::RetryResult::Retried)
+                }
+                core::SettlementCommand::DeadLetter { .. } => {
+                    core::SettlementResult::DeadLetter(true)
+                }
+            });
+            if matches!(result, core::SettlementResult::Defer(_)) {
+                let entered = request.enter_statement()?;
+                request.received(entered, result)?;
+            } else {
+                core::settlement_commit_observed(
+                    async { Ok::<_, anyhow::Error>(()) },
+                    request,
+                    result,
+                )
+                .await
+                .map_err(outbox::commit_error)?;
+            }
+            Ok(request.returned(result)?)
+        }
+    }
+
+    fn supplied_attempt(
+        stanza: Option<&str>,
+        route: RouteFact,
+    ) -> (outbox::OwnedAttempt, SuppliedPort) {
+        let mut row = (*outbox::fixture::claimed_rows(false)[0]).clone();
+        if let Some(stanza) = stanza {
+            row.stanza = stanza.to_owned();
+        }
+        let claim = core::ClaimObservation::new(core::ClaimCommand {
+            limit: 1,
+            max_bytes: 8 * 1024 * 1024,
+        });
+        let request = claim.request().unwrap();
+        request.start().unwrap();
+        let entered = request.enter_statement().unwrap();
+        let rows: core::Rows = vec![Arc::new(row)].into();
+        request.received(entered, rows.clone()).unwrap();
+        let attempt = outbox::OwnedAttempt::new(request.returned(rows).unwrap().pop().unwrap());
+        let port = SuppliedPort {
+            owner: attempt.observation(),
+            route,
+            renewal: RenewalFact::Pending,
+            wait_route: false,
+            release_route: Arc::new(tokio::sync::Notify::new()),
+            settlement_result: None,
+            commands: Arc::new(Mutex::new(Vec::new())),
+            events: Arc::new(Mutex::new(Vec::new())),
+        };
+        (attempt, port)
+    }
+
+    fn run_policy(
+        attempt: outbox::OwnedAttempt,
+        port: SuppliedPort,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> outbox::AttemptRun {
+        attempt.run(move |attempt, handle| {
+            process_claimed_mix_delivery_with_port(port, attempt, handle, cancel)
+        })
+    }
+
+    #[tokio::test]
+    async fn shared_policy_ordinary_route_facts_select_exact_lazy_settlement() {
+        for (fact, command) in [
+            (RouteFact::Completed, core::SettlementCommand::Ack),
+            (
+                RouteFact::Pending,
+                core::SettlementCommand::Defer {
+                    delay_seconds: MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS,
+                },
+            ),
+            (
+                RouteFact::Permanent,
+                core::SettlementCommand::DeadLetter {
+                    reason: "policy".into(),
+                    error: "detail".into(),
+                },
+            ),
+            (
+                RouteFact::Retry,
+                core::SettlementCommand::Retry {
+                    error: "route failed".into(),
+                },
+            ),
+            (
+                RouteFact::DeadlineError,
+                core::SettlementCommand::Retry {
+                    error: MixOutboxDeadlineElapsed.to_string(),
+                },
+            ),
+        ] {
+            let (attempt, port) = supplied_attempt(None, fact);
+            run_policy(
+                attempt,
+                port.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(*port.commands.lock().unwrap(), vec![command]);
+            assert_eq!(
+                *port.events.lock().unwrap(),
+                vec!["route started", "route dropped"]
+            );
+            assert_eq!(port.owner.snapshot().renewal.issued, 0);
+            assert_eq!(
+                port.owner.snapshot().terminal,
+                Some(core::TerminalReason::Completed)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_policy_ordinary_false_and_lease_lost_settlements_remain_exact() {
+        for (fact, result) in [
+            (RouteFact::Completed, core::SettlementResult::Ack(false)),
+            (RouteFact::Pending, core::SettlementResult::Defer(false)),
+            (
+                RouteFact::Retry,
+                core::SettlementResult::Retry(core::RetryResult::LeaseLost),
+            ),
+            (
+                RouteFact::Permanent,
+                core::SettlementResult::DeadLetter(false),
+            ),
+        ] {
+            let (attempt, mut port) = supplied_attempt(None, fact);
+            port.settlement_result = Some(result);
+            run_policy(
+                attempt,
+                port.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            let snapshot = port.owner.snapshot();
+            let settlement = snapshot.settlement.unwrap();
+            assert_eq!(
+                settlement.knowledge,
+                core::SettlementKnowledge::ReceiptKnown(result)
+            );
+            assert_eq!(
+                settlement.returned,
+                Some(core::SettlementReturned::Outcome(result))
+            );
+            assert_eq!(port.commands.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_policy_ordinary_invalid_template_never_routes_or_renews() {
+        let (attempt, mut port) = supplied_attempt(Some("<message>"), RouteFact::Completed);
+        port.settlement_result = Some(core::SettlementResult::DeadLetter(false));
+        run_policy(
+            attempt,
+            port.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let commands = port.commands.lock().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert!(
+            matches!(&commands[0], core::SettlementCommand::DeadLetter { reason, error }
+            if reason == "invalid-template" && error == "invalid durable MIX stanza template")
+        );
+        assert!(port.events.lock().unwrap().is_empty());
+        assert_eq!(port.owner.snapshot().renewal.issued, 0);
+    }
+
+    #[tokio::test]
+    async fn shared_policy_ordinary_route_shutdown_never_settles() {
+        let (attempt, port) = supplied_attempt(None, RouteFact::Shutdown);
+        run_policy(
+            attempt,
+            port.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(port.commands.lock().unwrap().is_empty());
+        assert!(port.owner.snapshot().renewal_scope_closed);
+        assert_eq!(
+            port.owner.snapshot().terminal,
+            Some(core::TerminalReason::Cancelled)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_policy_ordinary_pending_renewal_drops_before_close_and_settlement() {
+        let (attempt, mut port) = supplied_attempt(None, RouteFact::Completed);
+        port.wait_route = true;
+        let mut run = Box::pin(run_policy(
+            attempt,
+            port.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        assert!(futures::poll!(&mut run).is_pending());
+        tokio::time::advance(MIX_OUTBOX_LEASE_RENEWAL_INTERVAL).await;
+        assert!(futures::poll!(&mut run).is_pending());
+        assert_eq!(
+            *port.events.lock().unwrap(),
+            vec!["route started", "renewal started"]
+        );
+        port.release_route.notify_one();
+        run.await.unwrap();
+        assert_eq!(
+            *port.events.lock().unwrap(),
+            vec![
+                "route started",
+                "renewal started",
+                "route dropped",
+                "renewal dropped"
+            ]
+        );
+        assert_eq!(
+            *port.commands.lock().unwrap(),
+            vec![core::SettlementCommand::Ack]
+        );
+        let snapshot = port.owner.snapshot();
+        assert!(snapshot.renewal_scope_closed);
+        assert!(snapshot.renewal.pending);
+        assert_eq!(
+            snapshot.renewal.knowledge,
+            core::RenewalKnowledge::NotEntered
+        );
+        assert_eq!(snapshot.renewal.returned, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_policy_ordinary_renewal_loss_and_error_do_not_become_route_retry() {
+        for fact in [RenewalFact::Lost, RenewalFact::Error] {
+            let (attempt, mut port) = supplied_attempt(None, RouteFact::Completed);
+            port.wait_route = true;
+            port.renewal = fact;
+            let mut run = Box::pin(run_policy(
+                attempt,
+                port.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            ));
+            assert!(futures::poll!(&mut run).is_pending());
+            tokio::time::advance(MIX_OUTBOX_LEASE_RENEWAL_INTERVAL).await;
+            let result = run.await;
+            assert!(port.commands.lock().unwrap().is_empty());
+            assert!(port.owner.snapshot().renewal_scope_closed);
+            match fact {
+                RenewalFact::Lost => {
+                    result.unwrap();
+                    assert!(port.owner.snapshot().lease_lost);
+                    assert_eq!(
+                        port.owner.snapshot().renewal.returned,
+                        Some(core::RenewalReturned::Outcome(false))
+                    );
+                }
+                RenewalFact::Error => {
+                    assert_eq!(result.unwrap_err().to_string(), "renewal failed");
+                    assert_eq!(
+                        port.owner.snapshot().terminal,
+                        Some(core::TerminalReason::BackendFailure)
+                    );
+                }
+                RenewalFact::Pending => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_policy_ordinary_outer_drop_keeps_pending_knowledge_without_compensation() {
+        let (attempt, mut port) = supplied_attempt(None, RouteFact::Completed);
+        port.wait_route = true;
+        let mut run = Box::pin(run_policy(
+            attempt,
+            port.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        assert!(futures::poll!(&mut run).is_pending());
+        tokio::time::advance(MIX_OUTBOX_LEASE_RENEWAL_INTERVAL).await;
+        assert!(futures::poll!(&mut run).is_pending());
+        drop(run);
+        assert!(port.commands.lock().unwrap().is_empty());
+        assert!(port.events.lock().unwrap().contains(&"route dropped"));
+        assert!(port.events.lock().unwrap().contains(&"renewal dropped"));
+        let snapshot = port.owner.snapshot();
+        assert!(!snapshot.renewal_scope_closed);
+        assert!(snapshot.renewal.pending);
+        assert_eq!(snapshot.renewal.returned, None);
+        assert_eq!(snapshot.terminal, Some(core::TerminalReason::Cancelled));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_policy_ordinary_cancellation_and_deadline_destroy_children_without_settlement()
+    {
+        for deadline in [false, true] {
+            let (attempt, mut port) = supplied_attempt(None, RouteFact::Completed);
+            port.wait_route = true;
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let mut run = Box::pin(run_policy(attempt, port.clone(), cancel.clone()));
+            assert!(futures::poll!(&mut run).is_pending());
+            tokio::time::advance(MIX_OUTBOX_LEASE_RENEWAL_INTERVAL).await;
+            assert!(futures::poll!(&mut run).is_pending());
+            if deadline {
+                tokio::time::advance(
+                    MIX_OUTBOX_ATTEMPT_DEADLINE - MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
+                )
+                .await;
+            } else {
+                cancel.cancel();
+            }
+            run.await.unwrap();
+            assert!(port.commands.lock().unwrap().is_empty());
+            assert!(port.events.lock().unwrap().contains(&"route dropped"));
+            assert!(port.events.lock().unwrap().contains(&"renewal dropped"));
+            assert!(port.owner.snapshot().renewal_scope_closed);
+            assert_eq!(
+                port.owner.snapshot().terminal,
+                Some(if deadline {
+                    core::TerminalReason::TimedOut
+                } else {
+                    core::TerminalReason::Cancelled
+                })
+            );
+        }
+    }
+}

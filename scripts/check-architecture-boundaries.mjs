@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
+import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
+import { verifyNativeAckService } from './check-execution-boundaries.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -560,7 +562,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
       'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
     );
   }
-  const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixClaimWork = structBody(mixProtocolProduction, 'fn claim_mix_outbox_work(');
   const mixClaimArmMarkers = [
     'MixOutboxQueue::Delivery =>',
     'MixOutboxQueue::PamResult =>',
@@ -578,26 +580,28 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     'MIX outbox claim',
   );
   if (
-    !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
+    !/\.claim_mix_deliveries_observed\s*\(/.test(mixDeliveryClaimArm) ||
+    /\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
     /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
     !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
-    /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
+    /\.claim_mix_deliveries(?:_observed)?\s*\(/.test(mixPamClaimArm)
   ) {
     throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
   }
   const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
   if (
-    !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
+    !/MixOutboxWork\s*::\s*Delivery\s*\(delivery\)\s*=>\s*\{\s*let\s+run\s*=\s*delivery\.run\s*\(\s*move\s*\|attempt,\s*handle\|\s*\{\s*process_claimed_mix_delivery\s*\(\s*context\s*,\s*attempt\s*,\s*handle\s*,\s*cancel\s*\)/.test(
       mixProcessWork,
     ) ||
-    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
+    !/Box::pin\s*\(\s*async\s+move\s*\{\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,\s*run\.await\s*,?\s*\)\s*\}/.test(mixProcessWork) ||
+    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*Box::pin\s*\(\s*async\s+move\s*\{\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
       mixProcessWork,
     )
   ) {
     throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
   }
   const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
-  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'fn claim_mix_outbox_work(');
   const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
   const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
   if (
@@ -614,12 +618,12 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
       mixOutboxLaneWorker,
     ) ||
-    !/claim_mix_outbox_work\s*\(\s*&context\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
+    !/claim_mix_outbox_work\s*\(\s*context\s*,\s*stop_claiming\s*,\s*cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
       mixOutboxClaim,
     ) ||
-    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 2 ||
-    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
-    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 2 ||
+    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 1 ||
+    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 1 ||
     !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
     !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
   ) {
@@ -674,6 +678,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     ['MIX_OUTBOX_DRAIN_GRACE', 14],
     ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
     ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
+    ['MIX_OUTBOX_LEASE_RENEWAL_INTERVAL', 10],
   ]) {
     requireMix(compact(mixProtocolProduction).includes(
       'const' + name + ':Duration=Duration::from_secs(' + seconds + ');'),
@@ -736,8 +741,15 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
   'production lanes must share a fresh independent hard token and receive the parent stop separately');
   requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
   'supervisor must enforce the existing 14-second whole-worker drain');
-  for (const name of ['process_claimed_mix_delivery', 'process_claimed_pam_result']) {
-    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + '('));
+  const deliveryWrapper = compact(structBody(mixProtocolProduction, 'async fn process_claimed_mix_delivery('));
+  requireMix(deliveryWrapper ===
+    'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort{context},attempt,handle,cancel).await',
+  'production delivery wrapper must delegate its exact attempt to the shared policy');
+  for (const [name, suffix] of [
+    ['process_claimed_mix_delivery_with_port', '<'],
+    ['process_claimed_pam_result', '('],
+  ]) {
+    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + suffix));
     requireMix(attempt.includes('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;') &&
       attempt.includes('bounded_mix_outbox_turn(&cancel,attempt_deadline,'),
     name + ' must share its original attempt deadline with final durable transitions');
@@ -999,7 +1011,8 @@ const mixProducerMappings = [
   ['leave_mix_channel', 'leave_mix_channel'],
   ['store_mix_presence', 'store_mix_presence_with_policy'],
   ['ensure_mix_presence', 'store_mix_presence_with_policy'],
-  ['store_mix_message', 'store_mix_message'],
+  ['store_mix_message', 'store_mix_message_inner'],
+  ['store_mix_message_observed', 'store_mix_message_inner'],
   ['publish_mix_avatar', 'publish_mix_avatar'],
   ['retract_mix_avatar', 'retract_mix_avatar'],
   ['update_mix_info', 'update_mix_info'],
@@ -1127,6 +1140,7 @@ const mixOutboxDbMethods = new Map([
   ['outbox_find_enabled_user', 'find_enabled_user'],
   ['outbox_is_blocked', 'is_blocked'],
   ['outbox_archive_mix_message_once', 'archive_mix_message_once'],
+  ['outbox_archive_mix_message_once_observed', 'archive_mix_message_once_observed'],
   [
     'outbox_admit_federated_stanza',
     {
@@ -1138,15 +1152,18 @@ const mixOutboxDbMethods = new Map([
     },
   ],
   ['claim_mix_deliveries', 'claim_mix_deliveries'],
+  ['claim_mix_deliveries_observed', 'claim_mix_deliveries_observed'],
   ['maintain_mix_delivery_retention', 'maintain_mix_delivery_retention'],
   ['prune_expired_business_intents', 'prune_expired_business_intents'],
   ['prune_expired_federated_iq_results', 'prune_expired_federated_iq_results'],
-  ['acknowledge_mix_delivery', 'acknowledge_mix_delivery'],
+  ['acknowledge_mix_delivery_inner', 'acknowledge_mix_delivery'],
   ['fence_mix_socket_write', 'fence_mix_socket_write'],
   ['transfer_mix_delivery_to_cluster', 'transfer_mix_delivery_to_cluster'],
   ['release_mix_cluster_delivery', 'release_mix_cluster_delivery'],
   ['transfer_mix_delivery_to_bosh', 'transfer_mix_delivery_to_bosh'],
   ['renew_mix_delivery_lease', 'renew_mix_delivery_lease'],
+  ['renew_mix_delivery_lease_observed', 'renew_mix_delivery_lease_observed'],
+  ['settle_mix_delivery_observed', 'settle_mix_delivery_observed'],
   ['dead_letter_mix_delivery', 'dead_letter_mix_delivery'],
   ['retry_mix_delivery', 'retry_mix_delivery'],
   ['defer_mix_delivery', 'defer_mix_delivery'],
@@ -1180,6 +1197,7 @@ if (permitManifestNegativeFixture.missing.join(',') !== 'required_turn') {
 }
 
 const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'src/services/mix.rs');
+verifyNativeAckService(mixServiceSource);
 const mixOutboxDbPermitOwners = new Map();
 const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
 for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)) !== null; ) {
@@ -1258,7 +1276,7 @@ for (const lane of ['LiveIngress', 'DurableOutbox']) {
     throw new Error(`MIX channel stanza database lanes must retain ${lane}`);
   }
 }
-const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza(');
+const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza_inner(');
 const deliveryDatabaseLaneMatches = [];
 const deliveryDatabaseLanePattern = /\bmatch\s+database_lane\s*\{/g;
 for (let match; (match = deliveryDatabaseLanePattern.exec(deliverChannelStanza)) !== null; ) {
@@ -1313,12 +1331,16 @@ for (const [index, [liveMethod, outboxMethod]] of channelStanzaDurableLaneOperat
 }
 const processClaimedMixDelivery = structBody(
   mixProtocolProduction,
-  'async fn process_claimed_mix_delivery(',
+  'async fn process_claimed_mix_delivery_with_port<',
 );
+const mixDeliveryPort = structBody(mixProtocolProduction, 'impl ClaimedMixDeliveryPort for MixOutboxDeliveryPort');
+const mixDeliveryPortRoute = structBody(mixDeliveryPort, 'async fn route(');
+const deliverClaimedMixStanza = structBody(mixProtocolProduction, 'async fn deliver_claimed_channel_stanza(');
 if (
-  !/deliver_channel_stanza\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(
-    processClaimedMixDelivery,
-  )
+  !/port\.route\s*\(\s*&request\s*\)/.test(processClaimedMixDelivery) ||
+  !/deliver_claimed_channel_stanza\s*\(\s*&self\.context\s*,\s*request\s*\)/.test(mixDeliveryPortRoute) ||
+  !/deliver_channel_stanza_inner\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(deliverClaimedMixStanza) ||
+  !/Some\(request\)\s*,?\s*\)\s*\.await/.test(deliverClaimedMixStanza)
 ) {
   throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
 }
@@ -1375,7 +1397,7 @@ const mixRepositoryTransactionEntries = [
   'set_mix_nick',
   'leave_mix_channel',
   'store_mix_presence_with_policy',
-  'store_mix_message',
+  'store_mix_message_inner',
   'publish_mix_avatar',
   'retract_mix_avatar',
   'update_mix_info',
@@ -1466,7 +1488,7 @@ for (const [serviceMethod, repositoryEntry] of mixProducerMappings) {
 }
 
 for (const entry of mixRepositoryTransactionEntries) {
-  const visibility = entry === 'store_mix_presence_with_policy' ? 'async fn' : 'pub async fn';
+  const visibility = ['store_mix_presence_with_policy', 'store_mix_message_inner'].includes(entry) ? 'async fn' : 'pub async fn';
   const body = structBody(mixRepositorySource, `${visibility} ${entry}(`);
   const admission = body.indexOf('begin_mix_delivery_admission(pool).await?');
   const directBegin = body.indexOf('pool.begin().await?');
@@ -2973,34 +2995,11 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
 
 const abuseSource = read('src/abuse.rs');
 const abuseProductionSource = abuseSource.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0];
-const messageAdmissionServiceSource = read('src/services/message_admission.rs');
-const messageAdmissionRepositorySource = read('src/db/message_admission_repository.rs');
-if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)
-    || !messageAdmissionServiceSource.includes('self.repository.accept(&lease.acceptance()).await')
-    || !messageAdmissionRepositorySource.includes('accept_message_admission(&self.pool, acceptance).await')) {
-  throw new Error('message admission acceptance must use the issued fence and repository transaction');
+if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
+  throw new Error('message admission acceptance must remain behind its issued service/repository fence');
 }
-const admissionAcceptanceStart = messageAdmissionRepositorySource.indexOf('pub(crate) async fn accept_message_admission(');
-const admissionAcceptanceEnd = messageAdmissionRepositorySource.indexOf('\nimpl MessageAdmissionRepository', admissionAcceptanceStart);
-const admissionAcceptanceBody = messageAdmissionRepositorySource.slice(admissionAcceptanceStart, admissionAcceptanceEnd);
-const admissionAcceptanceSteps = [
-  'pool.begin().await?',
-  'pg_advisory_xact_lock',
-  'FOR UPDATE',
-  'ct_eq(acceptance.payload_mac())',
-  'row.get::<String, _>("state") == "accepted"',
-  'row.get::<Uuid, _>("lease_token") == acceptance.lease_token()',
-  "SET state='accepted'",
-  'tx.commit().await?',
-];
-let previousAdmissionStep = -1;
-for (const step of admissionAcceptanceSteps) {
-  const position = admissionAcceptanceBody.indexOf(step, previousAdmissionStep + 1);
-  if (position < 0) {
-    throw new Error(`message admission acceptance lost ordered fence step: ${step}`);
-  }
-  previousAdmissionStep = position;
-}
+// Ordered SQL authority and extracted pure fence decisions are checked together.
+verifyAdmissionBoundaries(readAdmissionSources());
 for (const typeName of [
   'PersonalMessageContentKeyring',
   'PersonalRetractionContentKeyring',
@@ -3286,13 +3285,23 @@ if (/\.take\(128\)/.test(capsProtocolSource + read('src/xmpp/protocol/pep.rs')))
 if (countMatches(capsProtocolSource, /self\.entries\.insert\(\s*full_jid,/g) < 2) {
   throw new Error('local and federated Caps observations must use atomic single-key replacement');
 }
-const commitCapsObservation = structBody(
+const commitCapsObservationWrapper = structBody(
   capsProtocolSource,
   'pub(crate) fn commit_caps_observation(',
 );
+if (
+  commitCapsObservationWrapper.replace(/\s+/g, '').replace(/,\)/g, ')') !==
+    'self.commit_caps_observation_for(presence,full_jid,self.connection_id,&self.presence.mix_presence_gate,&self.presence.caps_observation_generation);'
+) {
+  throw new Error('ordinary Caps observation must forward its exact connection, gate and generation');
+}
+const commitCapsObservation = structBody(
+  capsProtocolSource,
+  'fn commit_caps_observation_for(',
+);
 const localObservationInsert = commitCapsObservation.indexOf('.observe_local(');
 const unavailableLocalRemoval = commitCapsObservation.lastIndexOf(
-  '.remove_local_resource(&full_jid, self.connection_id)',
+  '.remove_local_resource(&full_jid, connection)',
   localObservationInsert,
 );
 const unavailableBranch = commitCapsObservation.indexOf('if presence');
@@ -4025,3 +4034,18 @@ console.log(
     `${protocolPgPoolReferences} PgPool refs; authority: ${largestAuthority}; ` +
     `domain: ${largestDomain}`,
 );
+
+// The experiment index consumes the exact production inventory already checked
+// above, never a second handwritten list of runtime authorities.
+export const verifiedRuntimeInventory = [
+  ...productionRustSources.flatMap(({ relative, source }) =>
+    [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)].map((match) => ({
+      id: `worker:${roleIdentity(relative, match[2])}`, kind: 'worker', owner: relative,
+    }))),
+  ...productionRustSources.flatMap(({ relative, source }) =>
+    [...source.matchAll(/\.register_observer\(\s*"([^"]+)"/g)].map((match) => ({
+      id: `observer:${roleIdentity(relative, match[1])}`, kind: 'observer', owner: relative,
+    }))),
+  ...composedServiceTasks.map((name) => ({ id: `task:${name}`, kind: 'task', owner: 'src/main.rs' })),
+  ...composedServiceAccessors.map((name) => ({ id: `service:${name}`, kind: 'service', owner: 'src/state.rs' })),
+].sort((left, right) => left.id.localeCompare(right.id));

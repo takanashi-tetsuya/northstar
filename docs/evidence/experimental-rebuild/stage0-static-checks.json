@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "stage": 0,
+  "date_utc": "2026-10-03",
+  "base_commit": "4f1b3b9032b98004eec2160172d5af3acbcc16b8",
+  "input_sha256": {
+    "docs/architecture/experimental-rebuild-plan.zh-TW.md": "6ea075be049d0f8b48713df084b99c5741421672f7b65180bee8849f358a100c",
+    "docs/evidence/experimental-rebuild/stage0-baseline.json": "6cdf4214c274657f498b5af6337fa021e4a32f9dc6f66a47f728920ddbd2032a",
+    "docs/handoff/2026-10-03/experimental-authority-audit.md": "2affa5ebfcb236c038ea9601cb4152cb417f32c7e9ce3351c7f954404b1cbe76",
+    "docs/handoff/2026-10-03/experimental-domain-gap-audit.md": "9a7035ded2324b97bf4f5314bbe902d4fb9ffaa18ebb2f308de0103643a7e34d",
+    "docs/evidence/experimental-rebuild/stage0-acceptance.json": "f308234d56aa2c213040a8133527707718e3e47156a447176ef54c9599afb967"
+  },
+  "checks": [
+    {
+      "command": [
+        "node",
+        "scripts/check-documentation-consistency.mjs"
+      ],
+      "exit_code": 0,
+      "stdout": "Documentation consistency checks passed: 92 protocol rows and 110 Markdown documents checked; 45 current known issues validated, 44 trace rows and 60 Core profiles traced; current migration 0156\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "scripts/check-tracked-sensitive-files.mjs",
+        "--include-untracked"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "scope": "Documentation/sensitive-file/static whitespace checks only. No new product build/unit/DB/wire/service/fault execution. This record does not qualify later stages."
+}

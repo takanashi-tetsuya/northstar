@@ -1,8 +1,14 @@
+pub(crate) mod auth_publication;
 pub(crate) mod capabilities;
 mod direct_delivery;
 pub(crate) mod extensions;
+pub(crate) mod frame_execution;
 pub(crate) mod framing;
 pub(crate) mod protocol;
+#[cfg(test)]
+mod stage4_frame_capture;
+#[cfg(test)]
+pub(crate) mod stage4_native;
 pub(crate) mod stanza_validation;
 mod tcp_action;
 mod websocket_action;
@@ -17,6 +23,7 @@ use crate::transport_parsing::{
 };
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
+use frame_execution::FrameFailure;
 use framing::XmlEntityFramer;
 use futures::FutureExt;
 use protocol::{ProtocolSession, SessionTerminationSignals};
@@ -31,10 +38,6 @@ use tokio_rustls::TlsAcceptor;
 pub(crate) const MAX_XMPP_FRAME_BYTES: usize = 1024 * 1024;
 const XMPP_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const C2S_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
-// SASL2 inline Bind 2 / SM performs several serial backend operations before
-// it can return one authentication outcome. Give that negotiation a separate,
-// bounded budget without relaxing the per-frame limit for ordinary traffic.
-const C2S_SASL2_INLINE_AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const WEBSOCKET_TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const C2S_NEGOTIATION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) const C2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -73,36 +76,6 @@ impl PeerIdleTracker {
     fn note_peer_traffic(&mut self, authenticated: bool, now: tokio::time::Instant) {
         self.authenticated = authenticated;
         self.deadline = now + self.limits.idle_timeout(authenticated);
-    }
-}
-
-fn websocket_handler_timeout(frame: &str) -> (Duration, &'static str) {
-    let Some(root_name) = frame
-        .strip_prefix('<')
-        .and_then(|xml| xml.split([' ', '\t', '\r', '\n', '>', '/']).next())
-    else {
-        return (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame");
-    };
-    if root_name != "authenticate" && !root_name.ends_with(":authenticate") {
-        return (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame");
-    }
-    let Ok(document) = roxmltree::Document::parse(frame) else {
-        return (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame");
-    };
-    let root = document.root_element();
-    let is_inline_sasl2 = root.tag_name().name() == "authenticate"
-        && root.tag_name().namespace() == Some(protocol::sasl2::SASL2_NS)
-        && root.children().any(|child| {
-            child.is_element()
-                && matches!(
-                    (child.tag_name().name(), child.tag_name().namespace()),
-                    ("bind", Some("urn:xmpp:bind:0")) | ("resume", Some("urn:xmpp:sm:3"))
-                )
-        });
-    if is_inline_sasl2 {
-        (C2S_SASL2_INLINE_AUTH_TIMEOUT, "sasl2_inline_auth")
-    } else {
-        (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame")
     }
 }
 
@@ -621,12 +594,9 @@ where
                     };
                     let opening = !session.is_stream_open();
                     let stream_was_open = session.is_stream_open();
-                    let action = match tokio::time::timeout(
-                        C2S_BACKEND_OPERATION_TIMEOUT,
-                        session.handle(&frame),
-                    ).await {
-                        Ok(Ok(action)) => action,
-                        Ok(Err(error)) => {
+                    let action = match session.process_frame(&frame).await {
+                        Ok(action) => action,
+                        Err(FrameFailure::Backend(error)) => {
                             tracing::error!(?error, peer_ip = %session.peer_ip, "XMPP protocol/backend failure");
                             session.forbid_sm_resume();
                             tcp_fatal_error(
@@ -638,7 +608,7 @@ where
                             .await?;
                             return Ok(DriveOutcome::Done);
                         }
-                        Err(_) => {
+                        Err(FrameFailure::TimedOut) => {
                             session.forbid_sm_resume();
                             let error = anyhow::anyhow!("XMPP protocol/backend operation timed out");
                             tcp_internal_backend_error(
@@ -743,12 +713,22 @@ async fn websocket_send_live(
     message: Message,
     cancellation: &WebSocketSendCancellation<'_>,
 ) -> bool {
+    bounded_websocket_live_write(socket.send(message), cancellation).await
+}
+
+async fn bounded_websocket_live_write<F, E>(
+    write: F,
+    cancellation: &WebSocketSendCancellation<'_>,
+) -> bool
+where
+    F: Future<Output = std::result::Result<(), E>>,
+{
     tokio::select! {
         biased;
         _ = cancellation.actor_shutdown.cancelled() => false,
         _ = cancellation.signals.revoked() => false,
         _ = cancellation.signals.backpressured() => false,
-        result = tokio::time::timeout(XMPP_WRITE_TIMEOUT, socket.send(message)) => {
+        result = tokio::time::timeout(XMPP_WRITE_TIMEOUT, write) => {
             matches!(result, Ok(Ok(())))
         }
     }
@@ -914,42 +894,66 @@ async fn tcp_record_and_send<S: AsyncWrite + Unpin>(
     Ok(true)
 }
 
+async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
+    io: &mut S,
+    session: &mut ProtocolSession,
+    stanza: String,
+    holder: auth_publication::AuthControlHolder,
+    opening: bool,
+) -> Result<Option<auth_publication::OwnedPublication>> {
+    holder.validate_connection(session.connection_id)?;
+    holder.validate_control(&stanza)?;
+    holder.recording()?;
+    if let Err(error) = session.record_outbound(&stanza).await {
+        tcp_internal_backend_error(io, session, opening, "record outbound stanza", &error).await;
+        return Ok(None);
+    }
+    let owner = holder
+        .write(stanza, |stanza| async move { send(io, &stanza).await })
+        .await?;
+    Ok(Some(owner))
+}
+
 async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     io: &mut S,
     session: &mut ProtocolSession,
     item: &crate::outbound::OutboundItem,
     opening: bool,
 ) -> Result<bool> {
-    let lease = match direct_delivery::DirectWriteLease::prepare(session, item).await {
-        Ok(lease) => lease,
-        Err(error)
-            if error
-                .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
-                .is_some() =>
-        {
-            tracing::debug!(
-                ?error,
-                "superseded durable TCP item skipped before socket write"
-            );
-            return Ok(true);
-        }
-        Err(error) => {
-            tcp_internal_backend_error(
-                io,
-                session,
-                opening,
-                "prepare durable direct write",
-                &error,
-            )
-            .await;
-            return Ok(false);
-        }
-    };
-    send(io, &item.stanza).await?;
-    lease.written(session, item).await;
-    Ok(true)
+    let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
+    direct_delivery::NativeWriteRunner::new(observation.clone(), async move {
+        let lease =
+            match direct_delivery::DirectWriteLease::prepare(session, item, &observation).await {
+                Ok(lease) => lease,
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                        .is_some() =>
+                {
+                    tracing::debug!(
+                        ?error,
+                        "superseded durable TCP item skipped before socket write"
+                    );
+                    return Ok(true);
+                }
+                Err(error) => {
+                    tcp_internal_backend_error(
+                        io,
+                        session,
+                        opening,
+                        "prepare durable direct write",
+                        &error,
+                    )
+                    .await;
+                    return Ok(false);
+                }
+            };
+        let written = lease.write(|stanza| send(io, stanza)).await?;
+        written.settle(session).await;
+        Ok(true)
+    })
+    .await
 }
-
 async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
     io: &mut S,
     session: &mut ProtocolSession,
@@ -1154,21 +1158,10 @@ pub async fn websocket_connection(
                         }
                         let opening = !session.is_stream_open();
                         let stream_was_opened = session.is_stream_open();
-                        let (handler_timeout, operation) = websocket_handler_timeout(&frame);
-                        let handler_started = std::time::Instant::now();
-                        let action = match tokio::time::timeout(
-                            handler_timeout,
-                            session.handle(&frame),
-                        ).await {
-                            Ok(result) => result,
-                            Err(_) => {
-                                tracing::error!(
-                                    %peer_ip,
-                                    operation,
-                                    timeout_ms = handler_timeout.as_millis(),
-                                    elapsed_ms = handler_started.elapsed().as_millis(),
-                                    "XMPP WebSocket protocol/backend operation timed out"
-                                );
+                        let action = match session.process_frame(&frame).await {
+                            Ok(action) => Ok(action),
+                            Err(FrameFailure::Backend(error)) => Err(error),
+                            Err(FrameFailure::TimedOut) => {
                                 Err(anyhow::anyhow!("XMPP protocol/backend operation timed out"))
                             }
                         };
@@ -1242,7 +1235,7 @@ pub async fn websocket_connection(
                     if !websocket_record_and_send_item(
                         &mut socket,
                         &mut session,
-                        outgoing,
+                        &outgoing,
                         opening,
                         &mut terminal_sequence,
                         &send_cancellation,
@@ -1278,50 +1271,64 @@ pub async fn websocket_connection(
 async fn websocket_record_and_send_item(
     socket: &mut WebSocket,
     session: &mut ProtocolSession,
-    item: crate::outbound::OutboundItem,
+    item: &crate::outbound::OutboundItem,
     opening: bool,
     terminal: &mut WebSocketTerminalSequence,
     cancellation: &WebSocketSendCancellation<'_>,
 ) -> bool {
-    let lease = match direct_delivery::DirectWriteLease::prepare(session, &item).await {
-        Ok(lease) => lease,
-        Err(error)
-            if error
-                .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
-                .is_some() =>
+    let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
+    direct_delivery::NativeWriteRunner::new(observation.clone(), async move {
+        let lease =
+            match direct_delivery::DirectWriteLease::prepare(session, item, &observation).await {
+                Ok(lease) => lease,
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                        .is_some() =>
+                {
+                    tracing::debug!(
+                        ?error,
+                        "superseded durable WebSocket item skipped before write"
+                    );
+                    return true;
+                }
+                Err(error) => {
+                    tracing::error!(?error, "failed to prepare durable WebSocket write");
+                    session.forbid_sm_resume();
+                    let domain = session.local_domain().to_owned();
+                    websocket_fatal_error(
+                        socket,
+                        &domain,
+                        opening,
+                        crate::xmpp::xml_util::stream_error("internal-server-error"),
+                        terminal,
+                    )
+                    .await;
+                    return false;
+                }
+            };
+        let written = match lease
+            .write(|stanza| async move {
+                anyhow::ensure!(
+                    websocket_send_live(
+                        socket,
+                        Message::Text(stanza.to_owned().into()),
+                        cancellation
+                    )
+                    .await,
+                    "native WebSocket write did not complete"
+                );
+                Ok(())
+            })
+            .await
         {
-            tracing::debug!(
-                ?error,
-                "superseded durable WebSocket item skipped before write"
-            );
-            return true;
-        }
-        Err(error) => {
-            tracing::error!(?error, "failed to prepare durable WebSocket write");
-            session.forbid_sm_resume();
-            let domain = session.local_domain().to_owned();
-            websocket_fatal_error(
-                socket,
-                &domain,
-                opening,
-                crate::xmpp::xml_util::stream_error("internal-server-error"),
-                terminal,
-            )
-            .await;
-            return false;
-        }
-    };
-    if !websocket_send_live(
-        socket,
-        Message::Text(item.stanza.clone().into()),
-        cancellation,
-    )
+            Ok(written) => written,
+            Err(_) => return false,
+        };
+        written.settle(session).await;
+        true
+    })
     .await
-    {
-        return false;
-    }
-    lease.written(session, &item).await;
-    true
 }
 
 #[cfg(test)]
@@ -1446,32 +1453,6 @@ mod tests {
             assert!(
                 !crate::transport_parsing::websocket_frame_starts_with_markup(invalid),
                 "{invalid:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn websocket_inline_sasl2_has_a_separate_bounded_handler_budget() {
-        for frame in [
-            "<authenticate xmlns='urn:xmpp:sasl:2'><bind xmlns='urn:xmpp:bind:0'/></authenticate>",
-            "<s:authenticate xmlns:s='urn:xmpp:sasl:2'><resume xmlns='urn:xmpp:sm:3'/></s:authenticate>",
-        ] {
-            assert_eq!(
-                websocket_handler_timeout(frame),
-                (C2S_SASL2_INLINE_AUTH_TIMEOUT, "sasl2_inline_auth")
-            );
-        }
-        for frame in [
-            "<message xmlns='jabber:client'><body>authenticate</body></message>",
-            "<authenticate xmlns='urn:xmpp:sasl:2'/>",
-            "<authenticate xmlns='urn:other'><bind xmlns='urn:xmpp:bind:0'/></authenticate>",
-            "<s:authenticate xmlns:s='urn:other'><bind xmlns='urn:xmpp:bind:0'/></s:authenticate>",
-            "<authenticate xmlns='urn:xmpp:sasl:2'><bind xmlns='urn:other'/></authenticate>",
-            "<authenticate xmlns='urn:xmpp:sasl:2'><bind",
-        ] {
-            assert_eq!(
-                websocket_handler_timeout(frame),
-                (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame")
             );
         }
     }

@@ -566,6 +566,127 @@ fn test_byte_limit_overflow_enforcement() {
 }
 
 #[test]
+fn test_coalescing_evicted_front_target_is_not_subtracted_twice() {
+    let mut queue = DeferredQueue::<String>::with_bounds(10, 100);
+    let key = Some(CoalescingKey::presence("alice@example.test/Phone"));
+    let old = "A".repeat(10);
+    let other = "B".repeat(90);
+    let replacement = "a".repeat(20);
+    assert!(queue
+        .enqueue(old.clone(), old.len(), key.clone())
+        .is_enqueued());
+    assert!(queue
+        .enqueue(other.clone(), other.len(), None)
+        .is_enqueued());
+
+    let result = queue.enqueue(replacement.clone(), replacement.len(), key);
+    assert_eq!(
+        result,
+        EnqueueResult::Overflow {
+            decision: OverflowDecision::EvictedOldest {
+                evicted: vec![old, other],
+                replaced_previous: None,
+            }
+        }
+    );
+    assert_eq!(queue.total_bytes(), 20);
+    assert_eq!(
+        queue.total_bytes(),
+        queue
+            .entries()
+            .iter()
+            .map(|entry| entry.byte_size)
+            .sum::<usize>()
+    );
+    assert!(queue.total_bytes() <= queue.config().max_deferred_bytes);
+    assert_eq!(queue.entries().front().unwrap().sequence, 2);
+    assert_eq!(queue.drain_all(), vec![replacement]);
+    assert_eq!(queue.total_bytes(), 0);
+}
+
+#[test]
+fn test_coalescing_evicted_middle_target_is_not_subtracted_twice() {
+    let mut queue = DeferredQueue::<String>::with_bounds(10, 100);
+    let key = Some(CoalescingKey::presence("alice@example.test/Phone"));
+    let first = "A".repeat(5);
+    let old = "B".repeat(10);
+    let last = "C".repeat(85);
+    let replacement = "b".repeat(20);
+    assert!(queue
+        .enqueue(first.clone(), first.len(), None)
+        .is_enqueued());
+    assert!(queue
+        .enqueue(old.clone(), old.len(), key.clone())
+        .is_enqueued());
+    assert!(queue.enqueue(last.clone(), last.len(), None).is_enqueued());
+
+    let result = queue.enqueue(replacement.clone(), replacement.len(), key);
+    assert_eq!(
+        result,
+        EnqueueResult::Overflow {
+            decision: OverflowDecision::EvictedOldest {
+                evicted: vec![first, old, last],
+                replaced_previous: None,
+            }
+        }
+    );
+    assert_eq!(queue.total_bytes(), 20);
+    assert_eq!(
+        queue.total_bytes(),
+        queue
+            .entries()
+            .iter()
+            .map(|entry| entry.byte_size)
+            .sum::<usize>()
+    );
+    assert!(queue.total_bytes() <= queue.config().max_deferred_bytes);
+    assert_eq!(queue.entries().front().unwrap().sequence, 3);
+    assert_eq!(queue.drain_all(), vec![replacement]);
+    assert_eq!(queue.total_bytes(), 0);
+}
+
+#[test]
+fn test_coalescing_target_survives_earlier_eviction_in_place() {
+    let mut queue = DeferredQueue::<String>::with_bounds(10, 100);
+    let key = Some(CoalescingKey::presence("alice@example.test/Phone"));
+    let first = "A".repeat(10);
+    let old = "B".repeat(20);
+    let last = "C".repeat(70);
+    let replacement = "b".repeat(25);
+    assert!(queue
+        .enqueue(first.clone(), first.len(), None)
+        .is_enqueued());
+    assert!(queue
+        .enqueue(old.clone(), old.len(), key.clone())
+        .is_enqueued());
+    assert!(queue.enqueue(last.clone(), last.len(), None).is_enqueued());
+
+    let result = queue.enqueue(replacement.clone(), replacement.len(), key);
+    assert_eq!(
+        result,
+        EnqueueResult::Overflow {
+            decision: OverflowDecision::EvictedOldest {
+                evicted: vec![first],
+                replaced_previous: Some(old),
+            }
+        }
+    );
+    assert_eq!(queue.total_bytes(), 95);
+    assert_eq!(
+        queue.total_bytes(),
+        queue
+            .entries()
+            .iter()
+            .map(|entry| entry.byte_size)
+            .sum::<usize>()
+    );
+    assert!(queue.total_bytes() <= queue.config().max_deferred_bytes);
+    assert_eq!(queue.entries().front().unwrap().sequence, 1);
+    assert_eq!(queue.drain_all(), vec![replacement, last]);
+    assert_eq!(queue.total_bytes(), 0);
+}
+
+#[test]
 fn test_policy_config_validation() {
     let mut valid = CsiPolicyConfig::default();
     assert_eq!(valid.validate(), Ok(()));

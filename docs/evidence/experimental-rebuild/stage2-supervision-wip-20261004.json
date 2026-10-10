@@ -1,0 +1,68 @@
+{
+  "schema": "northstar-supervision-wip-source-v1",
+  "status": "WorkInProgressNotAccepted",
+  "base_commit": "9c64ceca587364007e8cfec8a380414770ad31d0",
+  "base_tree": "deebd0cd3d5de12a9a726aa18c65fd9e9e87fd07",
+  "source": {
+    "path": "scripts/lib/controlled_admission_supervision.py",
+    "sha256": "7ae0ba5d9f879f4eabd314b85d975140585997699d3425edb11d37cfe27936bf",
+    "bytes": 35131
+  },
+  "implemented_source_only": [
+    "Strict external contract and declared finite budgets.",
+    "V2 case/stream/owner-capture records and common bounded validation.",
+    "Quota/reservation persistence, fixed source-derived82-case plan and v2 record references.",
+    "Linux gated-child bootstrap, pidfd transfer and bounded stream collection."
+  ],
+  "unfinished": [
+    "Owner deadline/control/cleanup loop.",
+    "Python worker orchestration and integration of capture with persistence/evaluation.",
+    "Supervised CLI entry point and caller-receipt capture instructions.",
+    "Closing the legacy public execution path within the published checkpoint.",
+    "Mock regression bodies and updated handoff documentation.",
+    "Dedicated execution and real runtime resource/ownership qualification."
+  ],
+  "scope_limits": [
+    "This module is an incomplete unintegrated source checkpoint. No supervised qualification command is delivered or claimed ready.",
+    "The process limits are uncalibrated proposals; address space is not RSS and post-setup CPU allowance does not include all bootstrap CPU.",
+    "No policy, admission constants, SQL, production delivery or cancelled-soak changes. Stage2 remains unaccepted."
+  ],
+  "verification": {
+    "base_commit": "9c64ceca587364007e8cfec8a380414770ad31d0",
+    "base_tree": "deebd0cd3d5de12a9a726aa18c65fd9e9e87fd07",
+    "source": "scripts/lib/controlled_admission_supervision.py",
+    "source_sha256": "7ae0ba5d9f879f4eabd314b85d975140585997699d3425edb11d37cfe27936bf",
+    "bytes": 35131,
+    "operation": "compile(ast.parse(source_bytes), source_path, exec, dont_inherit=True); compile only, never exec/eval/import",
+    "exit_code": 0,
+    "elapsed_seconds": 0.058,
+    "source_unchanged": true,
+    "tracked_file_count": 1674,
+    "scoped_file_count": 1675,
+    "before_map_sha256": "305ce2d1e601e1f2bf30c5776684403e8b48a4b3f56fd41193bdb9e53c08487c",
+    "after_map_sha256": "305ce2d1e601e1f2bf30c5776684403e8b48a4b3f56fd41193bdb9e53c08487c",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scope": "Syntax/ordinary Python compilation only. No project import, tests, resources/limit installation, process bootstrap, runner, corpus, replay, SQL, service or fault execution."
+  },
+  "review": "Final independent exact three-file WIP persistence review passed on2026-10-04. Base9c64 plus the frozen module reproduces all1675 scoped before/after hashes; syntax record and copied parent CI32/1 evidence match. Two pending source concerns and four concurrent excluded paths are explicit. Approval covers partial-source backup only, not supervisor runtime, dedicated execution or Stage2 acceptance.",
+  "excluded_concurrent_source": [
+    "scripts/lib/controlled_admission.py",
+    "scripts/test-controlled-admission.py",
+    "scripts/run-controlled-admission.py",
+    "docs/architecture/controlled-admission-validation-handoff.zh-TW.md"
+  ],
+  "exclusion_note": "The writer subsequently began legacy-entry closure, mocked regression source, a CLI draft and handoff updates in these four owned paths. They are evolving WIP excluded from this exact checkpoint; existing paths retain base9c64 bytes and the new CLI remains absent in the published tree.",
+  "parent_ci": {
+    "commit": "9c64ceca587364007e8cfec8a380414770ad31d0",
+    "run_id": 37173406284,
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "artifact": "docs/evidence/experimental-rebuild/observed-at-ci-terminal.json",
+    "qualification": "Prior exact commit only; does not cover this new source module or dedicated Python/corpus/replay qualification."
+  },
+  "pending_known_source_concerns": [
+    "Control ACK validation currently binds run/reply kind but not the pending case index and role; a stale same-run Registered reply must not release another case.",
+    "Replay input currently requires supervision_complete but must also require prior FixtureMatched and consistency with a complete manifest; clean UnexpectedStop is not a complete qualified record."
+  ]
+}

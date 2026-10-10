@@ -1,0 +1,72 @@
+{
+  "schema": "northstar-stage3-finalization-boundary-summary-v1",
+  "status": "LimitedObservationCorrectionPassed_FreshSavedRecordPending",
+  "base_commit": "066818e736a256c2c905dc3c12717dc17e679780",
+  "changed_sources": [
+    "src/xmpp/protocol/messaging/saved_case.rs",
+    "scripts/lib/direct_case.py",
+    "scripts/test-direct-case.py"
+  ],
+  "change": [
+    "The saved adapter captures actual owner state before PostFinalize health and initial/no-health rearm while routing=false. Production decisions and await ordering are unchanged.",
+    "The oracle preserves both strict finalization-return checks. A pre-rearm CallEntered state is accepted only immediately before the sole matching owner/source call; pre-call CallReturned remains rejected.",
+    "Supplied histories distinguish NotStarted at PostFinalize from Running after grant consumption."
+  ],
+  "ordinary_validation": {
+    "format": "passed",
+    "python_syntax": "passed",
+    "server_compile": "passed",
+    "server_clippy": "passed",
+    "python": {
+      "passed": 152,
+      "failed": 0,
+      "skipped": 0
+    },
+    "node": {
+      "passed": 269,
+      "failed": 0,
+      "skipped": 0
+    },
+    "rust": {
+      "selection": "four full-name --exact isolated callback tests",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "tests": [
+        "xmpp::protocol::messaging::saved_case::route_observation_tests::post_finalize_health_captures_return_and_skips_router_reads",
+        "xmpp::protocol::messaging::saved_case::route_observation_tests::initial_rearm_captures_permit_before_sole_call",
+        "xmpp::protocol::messaging::saved_case::route_observation_tests::unresolved_finalization_snapshot_stays_unreturned",
+        "xmpp::protocol::messaging::saved_case::route_observation_tests::routed_rearm_keeps_existing_post_call_snapshot"
+      ]
+    },
+    "effect_scope": "Finite retained-state/fake-port callbacks and guarded supplied-data checks. The callbacks do not invoke the saved-case runner."
+  },
+  "retained_trace_control": {
+    "result": "The corrected pure oracle still rejects the original C01 missing-boundary trace.",
+    "classification": "ReplayDivergence/DirectFixtureDivergence",
+    "qualified": false,
+    "scope": "A supplied-data negative; it does not accept the old corpus or run another saved case."
+  },
+  "fixed_input_and_static_bounds": {
+    "baseline_inputs": 16,
+    "mutation_inputs": 4,
+    "input_bytes_changed": false,
+    "maximum_facts": 170,
+    "maximum_outer_polls": 7,
+    "maximum_json_bytes": 102756,
+    "caps": {
+      "facts": 256,
+      "outer_polls": 64,
+      "json_bytes": 131072
+    },
+    "basis": "At most one additional bounded owner-state prefix per affected fixed history; C05 and rejections add none.",
+    "limit": "Static evidence-size reasoning does not qualify actual runtime memory, timing or complete frames."
+  },
+  "prior_attempt": "stage3-baseline-first-stop.json",
+  "remaining": [
+    "Bind a newly built original and fresh derivative to the corrected source before a new record candidate.",
+    "The first record stopped after C01. Complete baseline record/replay, mutant record/replay and saved-reader validation remain pending.",
+    "Full Stage3 and later SQL/wire/TLS/retention/resource obligations remain open."
+  ],
+  "validation_data": "Detailed logs, process facts and build provenance remain private."
+}

@@ -20,6 +20,191 @@ impl PostgresAuthenticationRepository {
             fast_token_secret,
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_fast_with_login_epoch_inner(
+        &self,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        plan: &FastCommitPlan,
+        device_id: Option<Uuid>,
+        connection_id: Uuid,
+        observation: Option<&publication::CredentialInvocation<'_>>,
+    ) -> AuthenticationResult<CredentialCommitReceipt> {
+        use publication::{
+            CredentialInvocation, CredentialPreparation, CredentialRollbackSite, PreparationResult,
+        };
+        if let Some(observation) = observation {
+            if observation
+                .enter_fast(
+                    user_id,
+                    expected_auth_generation,
+                    plan,
+                    device_id,
+                    connection_id,
+                )
+                .is_err()
+            {
+                return AuthenticationResult::IntegrityFailure;
+            }
+        }
+        let db_plan = db::FastCommitPlan::from(plan);
+        let mut tx = match db::users::lock_auth_generation_observed(
+            &self.pool,
+            user_id,
+            expected_auth_generation,
+            observation,
+        )
+        .await
+        {
+            Ok(Some(tx)) => tx,
+            Ok(None) => return AuthenticationResult::ExpiredCredentials,
+            Err(error) => return AuthenticationResult::BackendFailure(error),
+        };
+        let staged = match stage_login_epoch_in_transaction_observed(
+            &mut tx,
+            user_id,
+            device_id,
+            expected_auth_generation,
+            connection_id,
+            observation,
+        )
+        .await
+        {
+            Ok(staged) => staged,
+            Err(error) => return AuthenticationResult::BackendFailure(error),
+        };
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Fast);
+        }
+        let fast_result = db::commit_fast_state_in_transaction(
+            &mut tx,
+            self.fast_token_secret.as_slice(),
+            user_id,
+            expected_auth_generation,
+            &db_plan,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Fast,
+                match &fast_result {
+                    Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
+                    Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        let issued = match fast_result {
+            Ok(db::FastCommitOutcome::Committed(issued)) => issued,
+            Ok(db::FastCommitOutcome::CredentialsExpired) => {
+                let _ = CredentialInvocation::rollback(
+                    observation,
+                    CredentialRollbackSite::FastExpired,
+                    tx.rollback(),
+                )
+                .await;
+                return AuthenticationResult::ExpiredCredentials;
+            }
+            Err(error) => return AuthenticationResult::BackendFailure(error),
+        };
+        match CredentialInvocation::commit(observation, tx.commit()).await {
+            Ok(()) => {
+                let receipt =
+                    CredentialCommitReceipt::new(issued.map(IssuedFastToken::from), staged, None);
+                if let Some(observation) = observation {
+                    observation.constructed(&receipt);
+                }
+                AuthenticationResult::Authenticated(receipt)
+            }
+            Err(error) => {
+                AuthenticationResult::BackendFailure(publication::credential_error(error))
+            }
+        }
+    }
+    // The legacy repository entry and observed control publication share the
+    // exact SQL body. Observation changes no predicate or error mapping.
+    async fn publish_credential_commit_inner(
+        &self,
+        receipt: &CredentialCommitReceipt,
+        invocation: Option<&publication::Invocation<'_>>,
+    ) -> AuthenticationResult<Option<i64>> {
+        if receipt.staged_login_epoch().is_none() && receipt.binding_publication().is_none() {
+            if invocation.is_some_and(|invocation| invocation.not_required().is_err()) {
+                return AuthenticationResult::IntegrityFailure;
+            }
+            return AuthenticationResult::Authenticated(None);
+        }
+        let mut tx = match self.pool.begin().await {
+            Ok(tx) => tx,
+            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
+        };
+        // Take the user/generation and operation locks before capacity rows,
+        // matching phase-two finalization. If the binding transfer fails, the
+        // epoch publication and claim consumption roll back with it.
+        let published_epoch = if let Some(stage) = receipt.staged_login_epoch() {
+            match db::publish_user_agent_login_epoch_in_transaction(
+                &mut tx,
+                stage.operation_id,
+                stage.connection_id,
+                stage.user_id,
+                stage.device_id,
+                stage.auth_generation,
+                receipt.binding_publication().is_some(),
+            )
+            .await
+            {
+                Ok(Some(epoch)) => Some(epoch),
+                Ok(None) => {
+                    let _ = match invocation {
+                        Some(invocation) => invocation
+                            .rollback(tx.rollback())
+                            .await
+                            .map_err(anyhow::Error::from),
+                        None => tx.rollback().await.map_err(anyhow::Error::from),
+                    };
+                    return AuthenticationResult::ExpiredCredentials;
+                }
+                Err(error) => return AuthenticationResult::BackendFailure(error),
+            }
+        } else {
+            None
+        };
+        if let Some(binding) = receipt.binding_publication() {
+            match db::publish_binding_live_session_in_transaction(
+                &mut tx,
+                binding.connection_id,
+                binding.user_id,
+                &binding.full_jid,
+                binding.lease_seconds,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = match invocation {
+                        Some(invocation) => invocation
+                            .rollback(tx.rollback())
+                            .await
+                            .map_err(anyhow::Error::from),
+                        None => tx.rollback().await.map_err(anyhow::Error::from),
+                    };
+                    return AuthenticationResult::ExpiredCredentials;
+                }
+                Err(error) => return AuthenticationResult::BackendFailure(error),
+            }
+        }
+        let committed = match invocation {
+            Some(invocation) => invocation
+                .commit(tx.commit(), published_epoch)
+                .await
+                .map_err(anyhow::Error::from),
+            None => tx.commit().await.map_err(anyhow::Error::from),
+        };
+        match committed {
+            Ok(()) => AuthenticationResult::Authenticated(published_epoch),
+            Err(error) => AuthenticationResult::BackendFailure(error),
+        }
+    }
     pub(crate) async fn authenticate_plain_with_hook<F, Fut>(
         &self,
         username: &str,
@@ -510,110 +695,59 @@ impl AuthenticationRepository for PostgresAuthenticationRepository {
         device_id: Option<Uuid>,
         connection_id: Uuid,
     ) -> AuthenticationResult<CredentialCommitReceipt> {
-        let db_plan = db::FastCommitPlan::from(plan);
-        let mut tx =
-            match db::lock_auth_generation(&self.pool, user_id, expected_auth_generation).await {
-                Ok(Some(tx)) => tx,
-                Ok(None) => return AuthenticationResult::ExpiredCredentials,
-                Err(error) => return AuthenticationResult::BackendFailure(error),
-            };
-        let staged = match stage_login_epoch_in_transaction(
-            &mut tx,
+        self.commit_fast_with_login_epoch_inner(
             user_id,
+            expected_auth_generation,
+            plan,
             device_id,
-            expected_auth_generation,
             connection_id,
+            None,
         )
         .await
-        {
-            Ok(staged) => staged,
-            Err(error) => return AuthenticationResult::BackendFailure(error),
-        };
-        let issued = match db::commit_fast_state_in_transaction(
-            &mut tx,
-            self.fast_token_secret.as_slice(),
+    }
+    async fn commit_fast_with_login_epoch_observed(
+        &self,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        plan: &FastCommitPlan,
+        device_id: Option<Uuid>,
+        connection_id: Uuid,
+        invocation: &publication::CredentialInvocation<'_>,
+    ) -> AuthenticationResult<CredentialCommitReceipt> {
+        self.commit_fast_with_login_epoch_inner(
             user_id,
             expected_auth_generation,
-            &db_plan,
+            plan,
+            device_id,
+            connection_id,
+            Some(invocation),
         )
         .await
-        {
-            Ok(db::FastCommitOutcome::Committed(issued)) => issued,
-            Ok(db::FastCommitOutcome::CredentialsExpired) => {
-                let _ = tx.rollback().await;
-                return AuthenticationResult::ExpiredCredentials;
-            }
-            Err(error) => return AuthenticationResult::BackendFailure(error),
-        };
-        match tx.commit().await {
-            Ok(()) => AuthenticationResult::Authenticated(CredentialCommitReceipt::new(
-                issued.map(IssuedFastToken::from),
-                staged,
-                None,
-            )),
-            Err(error) => AuthenticationResult::BackendFailure(error.into()),
-        }
     }
     async fn publish_credential_commit(
         &self,
         receipt: &CredentialCommitReceipt,
     ) -> AuthenticationResult<Option<i64>> {
-        if receipt.staged_login_epoch().is_none() && receipt.binding_publication().is_none() {
-            return AuthenticationResult::Authenticated(None);
+        self.publish_credential_commit_inner(receipt, None).await
+    }
+    async fn publish_credential_commit_observed(
+        &self,
+        invocation: &publication::Invocation<'_>,
+    ) -> AuthenticationResult<Option<i64>> {
+        if invocation.enter_repository().is_err() {
+            return AuthenticationResult::IntegrityFailure;
         }
-        let mut tx = match self.pool.begin().await {
-            Ok(tx) => tx,
-            Err(error) => return AuthenticationResult::BackendFailure(error.into()),
-        };
-        // Take the user/generation and operation locks before capacity rows,
-        // matching phase-two finalization. If the binding transfer fails, the
-        // epoch publication and claim consumption roll back with it.
-        let published_epoch = if let Some(stage) = receipt.staged_login_epoch() {
-            match db::publish_user_agent_login_epoch_in_transaction(
-                &mut tx,
-                stage.operation_id,
-                stage.connection_id,
-                stage.user_id,
-                stage.device_id,
-                stage.auth_generation,
-                receipt.binding_publication().is_some(),
-            )
+        self.publish_credential_commit_inner(invocation.receipt(), Some(invocation))
             .await
-            {
-                Ok(Some(epoch)) => Some(epoch),
-                Ok(None) => {
-                    let _ = tx.rollback().await;
-                    return AuthenticationResult::ExpiredCredentials;
-                }
-                Err(error) => return AuthenticationResult::BackendFailure(error),
-            }
-        } else {
-            None
-        };
-        if let Some(binding) = receipt.binding_publication() {
-            match db::publish_binding_live_session_in_transaction(
-                &mut tx,
-                binding.connection_id,
-                binding.user_id,
-                &binding.full_jid,
-                binding.lease_seconds,
-            )
-            .await
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    let _ = tx.rollback().await;
-                    return AuthenticationResult::ExpiredCredentials;
-                }
-                Err(error) => return AuthenticationResult::BackendFailure(error),
-            }
-        }
-        match tx.commit().await {
-            Ok(()) => AuthenticationResult::Authenticated(published_epoch),
-            Err(error) => AuthenticationResult::BackendFailure(error.into()),
-        }
     }
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Unobserved compatibility helper for existing SQL controls"
+    )
+)]
 pub(crate) async fn stage_login_epoch_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -621,11 +755,38 @@ pub(crate) async fn stage_login_epoch_in_transaction(
     auth_generation: i64,
     connection_id: Uuid,
 ) -> anyhow::Result<Option<StagedLoginEpoch>> {
+    stage_login_epoch_in_transaction_observed(
+        tx,
+        user_id,
+        device_id,
+        auth_generation,
+        connection_id,
+        None,
+    )
+    .await
+}
+pub(crate) async fn stage_login_epoch_in_transaction_observed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    device_id: Option<Uuid>,
+    auth_generation: i64,
+    connection_id: Uuid,
+    observation: Option<&publication::CredentialInvocation<'_>>,
+) -> anyhow::Result<Option<StagedLoginEpoch>> {
+    if let Some(observation) = observation {
+        observation.preparation_entered(publication::CredentialPreparation::Stage);
+    }
     let Some(device_id) = device_id else {
+        if let Some(observation) = observation {
+            observation.stage_returned(&Ok(None));
+        }
         return Ok(None);
     };
     let operation_id = Uuid::new_v4();
-    let Some(epoch) = db::stage_user_agent_login_epoch_in_transaction(
+    if let Some(observation) = observation {
+        observation.stage_id(operation_id);
+    }
+    let result = db::stage_user_agent_login_epoch_in_transaction(
         tx,
         user_id,
         device_id,
@@ -634,18 +795,21 @@ pub(crate) async fn stage_login_epoch_in_transaction(
         operation_id,
         LOGIN_EPOCH_STAGE_TTL_SECONDS,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(StagedLoginEpoch {
-        operation_id,
-        connection_id,
-        user_id,
-        device_id,
-        auth_generation,
-        epoch,
-    }))
+    .await
+    .map(|epoch| {
+        epoch.map(|epoch| StagedLoginEpoch {
+            operation_id,
+            connection_id,
+            user_id,
+            device_id,
+            auth_generation,
+            epoch,
+        })
+    });
+    if let Some(observation) = observation {
+        observation.stage_returned(&result);
+    }
+    result
 }
 async fn load_sanitized_user_by_username(
     pool: &PgPool,

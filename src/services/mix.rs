@@ -12,6 +12,14 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
+pub(crate) mod foreground;
+pub(crate) mod outbox;
+pub(crate) use northstar_room_core::mix::{
+    Admission as StoreMixMessageAdmission, Outcome as StoreEventOutcome,
+    Participant as MixParticipant, Replay as MixBusinessReplay,
+    ReplayIdentity as MixReplayIdentity,
+};
+
 // XEP-0369 node identifiers owned by the application boundary.  The repository
 // keeps identically-valued storage constants; protocol code may only name
 // these.
@@ -86,13 +94,6 @@ impl MixChannel {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixParticipant {
-    pub(crate) participant_id: Uuid,
-    pub(crate) jid: String,
-    pub(crate) nick: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MixParticipantPreference {
     pub(crate) jid_visibility: String,
     pub(crate) private_messages: String,
@@ -152,6 +153,14 @@ pub(crate) struct MixPresenceProbeTarget {
     pub(crate) participant_jid: String,
 }
 
+/// Retained returned-only compatibility DTO; observed workers own core attempts.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "legacy return type; observed workers own attempts"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct ClaimedMixDelivery {
     pub(crate) delivery_id: Uuid,
@@ -352,24 +361,6 @@ pub(crate) enum JoinChannelOutcome {
     NickConflict,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StoreEventOutcome {
-    Stored(Uuid),
-    Replay(Uuid),
-    NotParticipant,
-    Conflict,
-    TooLarge,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StoreMixMessageAdmission {
-    pub(crate) outcome: StoreEventOutcome,
-    /// Audience captured while the channel lock and archive transaction were
-    /// still held. Join/leave/subscription changes use the same lock, so a
-    /// committed message has one linearizable recipient set.
-    pub(crate) recipients: Vec<MixParticipant>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MixMutationAdmission {
     pub(crate) channel: MixChannel,
@@ -439,12 +430,6 @@ pub(crate) enum RetractMixMessageOutcome {
     Forbidden,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct MixReplayIdentity {
-    pub(crate) client_id: String,
-    pub(crate) canonical_semantics: Vec<u8>,
-}
-
 pub(crate) struct StoreMixMessageRequest<'a> {
     pub(crate) channel_id: Uuid,
     pub(crate) actor: &'a str,
@@ -465,13 +450,6 @@ pub(crate) struct RetractMixMessageRequest<'a> {
     pub(crate) retraction_payload: &'a str,
     pub(crate) identity: Option<MixReplayIdentity>,
     pub(crate) visible_jid: Option<&'a str>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixBusinessReplay {
-    Miss,
-    Replay(Uuid),
-    Conflict,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -744,6 +722,8 @@ impl MixDeliveryWakeSubscription {
 #[derive(Clone)]
 pub(crate) struct MixService<R> {
     repository: R,
+    /// Receiving configuration, independent of any per-call claimed domain.
+    configured_mix_domain: String,
     message_identity: MixMessageContentKeyring,
     retraction_identity: MixRetractionContentKeyring,
     /// The bounded durable MIX outbox budget derived once from the configured
@@ -886,6 +866,16 @@ pub(crate) trait MixRepository: Send + Sync {
         request: StoreMixMessageRequest<'_>,
         authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
+    fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+    ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
+    fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+    ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,
@@ -1183,6 +1173,22 @@ pub(crate) trait MixRepository: Send + Sync {
         limit: i64,
         max_bytes: i64,
     ) -> impl std::future::Future<Output = Result<Vec<ClaimedMixDelivery>>> + Send;
+    fn claim_mix_deliveries_observed(
+        &self,
+        request: &outbox::core::ClaimRequest,
+    ) -> impl std::future::Future<Output = Result<outbox::core::Rows>> + Send;
+    fn archive_mix_message_once_observed(
+        &self,
+        request: &outbox::core::ArchiveRequest,
+    ) -> impl std::future::Future<Output = Result<outbox::core::ArchiveResult>> + Send;
+    fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &outbox::core::RenewalRequest,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn settle_mix_delivery_observed(
+        &self,
+        request: &outbox::core::SettlementRequest,
+    ) -> impl std::future::Future<Output = Result<outbox::core::SettlementResult>> + Send;
     fn maintain_mix_delivery_retention(
         &self,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
@@ -1198,6 +1204,7 @@ pub(crate) trait MixRepository: Send + Sync {
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn fence_mix_socket_write(
         &self,
@@ -1218,9 +1225,7 @@ pub(crate) trait MixRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn transfer_mix_delivery_to_bosh(
         &self,
-        source: crate::outbound::MixDelivery,
-        session_id: Uuid,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
     fn renew_mix_delivery_lease(
         &self,
@@ -1277,6 +1282,7 @@ impl<R: MixRepository> MixService<R> {
     ) -> Result<Self> {
         Self::new_with_outbox_database_admission(
             repository,
+            "local.test".to_owned(),
             message_identity,
             retraction_identity,
             crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
@@ -1288,14 +1294,18 @@ impl<R: MixRepository> MixService<R> {
 
     pub(crate) fn new_with_outbox_database_admission(
         repository: R,
+        configured_domain: String,
         message_identity: MixMessageContentKeyring,
         retraction_identity: MixRetractionContentKeyring,
         outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
         schema: String,
     ) -> Result<Self> {
         let outbox_background_budget = outbox_db_admission.capacity();
+        let configured_mix_domain =
+            northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?;
         Ok(Self {
             repository,
+            configured_mix_domain,
             message_identity,
             retraction_identity,
             outbox_background_budget,
@@ -1544,6 +1554,62 @@ impl<R: MixRepository> MixService<R> {
             self.publish_delivery_local_commit();
         }
         Ok(result)
+    }
+
+    pub(crate) fn prepare_mix_foreground(
+        &self,
+        ingress: foreground::Ingress,
+    ) -> std::result::Result<foreground::PreparedIngress, foreground::Rejected> {
+        if !ingress.matches_receiving_domain(&self.configured_mix_domain) {
+            return Err(foreground::Rejected::Input);
+        }
+        Ok(foreground::PreparedIngress::new(ingress))
+    }
+
+    pub(crate) async fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+    ) -> Result<Arc<StoreMixMessageAdmission>> {
+        let authenticators = request.command().identity.as_ref().map(|identity| {
+            self.message_identity
+                .authenticators(&identity.canonical_semantics)
+        });
+        let _admission = self.delivery_admission_guard().await;
+        let completion = northstar_room_application::mix::admit_observed(
+            request,
+            &self.configured_mix_domain,
+            self.repository
+                .store_mix_message_observed(request, authenticators.as_ref()),
+        )
+        .await
+        .map_err(foreground::effect_error)?;
+        let (result, wake) = completion.into_wake(request.observation())?;
+        if let Some(wake) = wake {
+            wake.invoke(|| self.publish_delivery_local_commit())?;
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+    ) -> Result<MixBusinessReplay> {
+        let identity = request
+            .ingress()
+            .identity
+            .as_ref()
+            .ok_or(foreground::Rejected::Input)?;
+        let authenticators = self
+            .message_identity
+            .authenticators(&identity.canonical_semantics);
+        northstar_room_application::mix::read_observed(
+            request,
+            &self.configured_mix_domain,
+            self.repository
+                .lookup_mix_message_replay_observed(request, &authenticators),
+        )
+        .await
+        .map_err(foreground::effect_error)
     }
 
     /// Consult the immutable replay commitment before any mutable participant
@@ -2150,6 +2216,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
+    #[allow(dead_code)] // Explicit returned-only compatibility entry; observed workers use bound requests.
     pub(crate) async fn claim_mix_deliveries(
         &self,
         limit: i64,
@@ -2161,6 +2228,90 @@ impl<R: MixRepository> MixService<R> {
         );
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.claim_mix_deliveries(limit, max_bytes).await
+    }
+
+    pub(crate) async fn claim_mix_deliveries_observed(
+        &self,
+        request: &outbox::core::ClaimRequest,
+    ) -> Result<Vec<outbox::OwnedAttempt>> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        match self.repository.claim_mix_deliveries_observed(request).await {
+            Ok(rows) => Ok(request
+                .returned(rows)?
+                .into_iter()
+                .map(outbox::OwnedAttempt::new)
+                .collect()),
+            Err(error) => {
+                request.failed()?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn outbox_archive_mix_message_once_observed(
+        &self,
+        request: &outbox::core::ArchiveRequest,
+    ) -> Result<outbox::core::ArchiveResult> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        match self
+            .repository
+            .archive_mix_message_once_observed(request)
+            .await
+        {
+            Ok(result) => Ok(request.returned(result)?),
+            Err(error) => {
+                request.failed()?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &outbox::core::RenewalRequest,
+    ) -> Result<bool> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        match self
+            .repository
+            .renew_mix_delivery_lease_observed(request)
+            .await
+        {
+            Ok(result) => Ok(request.returned(result)?),
+            Err(error) => {
+                request.failed()?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn settle_mix_delivery_observed(
+        &self,
+        request: &outbox::core::SettlementRequest,
+    ) -> Result<outbox::core::SettlementResult> {
+        let _admission = self.outbox_db_admission_guard().await;
+        request.start()?;
+        let result = match self.repository.settle_mix_delivery_observed(request).await {
+            Ok(result) => request.returned(result)?,
+            Err(error) => {
+                request.failed()?;
+                return Err(error);
+            }
+        };
+        use outbox::core::{RetryResult, SettlementResult};
+        if matches!(
+            result,
+            SettlementResult::Ack(true)
+                | SettlementResult::DeadLetter(true)
+                | SettlementResult::Retry(
+                    RetryResult::RouteWokenAtAttemptLimit | RetryResult::DeadLettered
+                )
+        ) {
+            self.publish_delivery_local_commit();
+        }
+        Ok(result)
     }
 
     /// Keep MIX retention bounded without putting cleanup ahead of a live
@@ -2183,15 +2334,37 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
+    #[allow(dead_code)] // Compatibility ACK remains distinct from native and observed worker ownership.
     pub(crate) async fn acknowledge_mix_delivery(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
+        self.acknowledge_mix_delivery_inner(delivery_id, lease_token, None)
+            .await
+    }
+
+    pub(crate) async fn acknowledge_mix_socket_write(
+        &self,
+        request: &northstar_delivery_core::native_write::AckRequest,
+    ) -> Result<bool> {
+        let crate::outbound::TransportOwnershipSource::Mix(source) = request.source() else {
+            anyhow::bail!("native MIX acknowledgement source mismatch");
+        };
+        self.acknowledge_mix_delivery_inner(source.delivery_id, source.lease_token, Some(request))
+            .await
+    }
+
+    async fn acknowledge_mix_delivery_inner(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+    ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
         let result = self
             .repository
-            .acknowledge_mix_delivery(delivery_id, lease_token)
+            .acknowledge_mix_delivery(delivery_id, lease_token, observation)
             .await?;
         if result {
             self.publish_delivery_local_commit();
@@ -2249,16 +2422,13 @@ impl<R: MixRepository> MixService<R> {
     /// processing remains responsible for the final exact source deletion.
     pub(crate) async fn transfer_mix_delivery_to_bosh(
         &self,
-        source: crate::outbound::MixDelivery,
-        session_id: Uuid,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> Result<crate::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
-        self.repository
-            .transfer_mix_delivery_to_bosh(source, session_id, ttl_seconds)
-            .await
+        self.repository.transfer_mix_delivery_to_bosh(request).await
     }
 
+    #[allow(dead_code)] // Compatibility source tuple does not construct an observed renewal request.
     pub(crate) async fn renew_mix_delivery_lease(
         &self,
         delivery_id: Uuid,
@@ -2270,6 +2440,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
+    #[allow(dead_code)] // Explicit compatibility result, including NotMoved.
     pub(crate) async fn dead_letter_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -2288,6 +2459,7 @@ impl<R: MixRepository> MixService<R> {
         Ok(result)
     }
 
+    #[allow(dead_code)] // Preserve the historical bool API separately from typed observed retry results.
     pub(crate) async fn retry_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -2318,6 +2490,7 @@ impl<R: MixRepository> MixService<R> {
         }
     }
 
+    #[allow(dead_code)] // Compatibility source tuple does not construct an observed settlement request.
     pub(crate) async fn defer_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -3067,19 +3240,7 @@ pub(crate) trait MixEventPayloadRenderer: Sync {
     ) -> Result<String>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixDeliveryRetryOutcome {
-    /// The exact lease was no longer owned when finalization began.
-    LeaseLost,
-    /// The row was retained with the normal retry backoff (or a newer wake
-    /// advanced a non-terminal retry to now).
-    Retried,
-    /// A newer route wake defeated the terminal boundary and released the
-    /// existing attempt count for one immediate fresh claim.
-    RouteWokenAtAttemptLimit,
-    /// The unchanged route epoch reached the normal terminal attempt limit.
-    DeadLettered,
-}
+pub(crate) use northstar_delivery_core::mix_outbox::RetryResult as MixDeliveryRetryOutcome;
 
 pub(crate) fn valid_stable_participant_id(value: &str) -> bool {
     !value.is_empty()

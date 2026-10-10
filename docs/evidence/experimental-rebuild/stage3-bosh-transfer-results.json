@@ -1,0 +1,330 @@
+{
+  "schema": "northstar.stage3.bosh-transfer-results.v1",
+  "status": "OrdinaryValidationPassedScopeLimited",
+  "base_commit": "09fbf93421d0df5b8066be4747154df1f33cc9eb",
+  "scope": "Pending MIX transfer, actual BOSH item/FIFO continuation and the separately identified SM supersession knowledge guard",
+  "behavior": [
+    "The actor retains an operation around each of its four existing timed children; child destruction precedes terminal facts",
+    "One private preparation owns the actual item while a closed request crosses the existing MixService admission, repository and SQL path",
+    "The actual COMMIT receipt is independent of the returned source; a mismatched return is retained but grants no local continuation",
+    "Matching authority precedes mutation of the same item, the existing BoshPersisted notification attempt and the actual FIFO result",
+    "The shared record/clear/transfer/FIFO helper records first, clears source and handoff only on actual SM ownership, and preserves record-only supersession handling",
+    "Typed SM supersession restores FIFO/h only for an active NoCommitRequested attempt; contradictory errors after COMMIT entry or receipt retain local state and known facts"
+  ],
+  "validation": {
+    "checks": {
+      "format_check": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.153695254",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "gates": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "6.242183893",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 14060,
+        "log_sha256": "3a33e7f1fc9352a426a6483566ce7fd08c87f07d5f1e1ab0a83bf6ec1df18256"
+      },
+      "execution_gate": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.427614465",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 40,
+        "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+      },
+      "architecture_gate": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "1.587632883",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 183,
+        "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36"
+      },
+      "admission_gate": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.145890782",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 207,
+        "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+      },
+      "compile": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "143.831082954",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 413,
+        "log_sha256": "006e7a83521175a3d09e3cdcd3e6785ef05de0e194a2bec77d4717de99b9d505"
+      },
+      "clippy": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "179.167424699",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 413,
+        "log_sha256": "a4eed1a950bee13a57c48d2a2ecd9eafba6b5da1a18369abc8534e4a7802c035"
+      },
+      "graphs": {
+        "exit_code": 0,
+        "collector_exit": 0,
+        "elapsed_seconds": "0.425284978",
+        "timeout_seconds": 600,
+        "kill_after_seconds": 5,
+        "source_unchanged": true,
+        "log_bytes": 229,
+        "log_sha256": "e38a265a5bd35a61e776fb027cd8494eb98955b13e9dabb9c1169c472dd8a008"
+      }
+    },
+    "rust": {
+      "selected": 23,
+      "ran": 23,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0,
+      "new_cases": 21,
+      "existing_sm_controls": 2
+    },
+    "node": {
+      "passed": 215,
+      "failed": 0,
+      "skipped": 0
+    },
+    "exact_tests": [
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::closed_request_preserves_original_scope_and_rejects_retargeting_before_commit_poll"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::commit_drop_error_and_receipt_remain_distinct_without_rollback_inference"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::actual_mismatched_and_bare_returns_never_authorize_local_continuation"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::late_receipt_does_not_retroactively_accept_an_earlier_rejected_return"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::same_source_invocations_and_old_owners_cannot_share_receipt_authority"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::exact_local_continuation_retains_commit_and_notification_on_fifo_refusal"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::terminal_kind_keep_running_and_lazy_metadata_are_separate_facts"
+      },
+      {
+        "package": "northstar-delivery-core",
+        "name": "bosh_ownership::tests::debug_redacts_retained_original_committed_and_mismatched_return_tokens"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::actual_item_token_allocation_and_one_shot_survive_successful_transfer"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::record_precedes_capacity_rejection_and_transfer_is_never_started"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::record_and_transfer_errors_preserve_their_distinct_actor_classification"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::missing_wrong_or_unrelated_receipt_returns_never_mutate_notify_or_enqueue"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::cancelled_transfer_keeps_pending_or_committed_facts_without_handoff"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::returned_failure_keeps_commit_knowledge_and_records_keep_running_false"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::controlled_post_transfer_fifo_refusal_preserves_commit_and_one_shot"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::dropped_receiver_is_only_a_notification_attempt_and_does_not_undo_fifo_acceptance"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::private_preparation_rejects_invalid_shape_and_redacts_owned_payloads"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::owner_drops_unpolled_cancelled_ready_and_panicking_children_before_summary"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "bosh::ownership::tests::expired_test_timer_destroys_pending_child_before_timeout_summary"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::actual_sm_record_clears_bosh_source_before_fifo_and_preserves_prior_sm_ownership_on_refusal"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::mislabeled_typed_supersession_after_commit_keeps_fifo_h_and_original_error"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::record_wraps_h_and_restores_only_typed_supersession"
+      },
+      {
+        "package": "rust-xmpp-server",
+        "name": "xmpp::protocol::sm_owner::tests::record_drop_preserves_append_and_exact_commit_or_rollback_knowledge"
+      }
+    ],
+    "inventory_counts": {
+      "core": 26,
+      "server": 1818
+    },
+    "unit_log_manifest_sha256": "0fb1b1fc728970be6e501ac764bb4747a5faa7eb4cef78178851ba82efb1775e",
+    "test_binaries": {
+      "core": {
+        "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+        "bytes": 3513096,
+        "sha256": "fbb9baf371a83ee61d7c44a59ae383c38e6a2b832e9fea10c2bc4430ad4a85e7"
+      },
+      "server": {
+        "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+        "bytes": 196753296,
+        "sha256": "e94516c0d6ab5211bbdb3278d931bd7fbd9d87ca2d054f71190ba1d343f8c992"
+      }
+    },
+    "graph_count_unchanged": 10,
+    "command_limits": {
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "maximum_log_bytes": 4194304,
+      "cargo_locked": true,
+      "cargo_offline": true,
+      "jobs": 1,
+      "debug_info": 0,
+      "incremental": false
+    },
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "shell_exit_code": 0
+  },
+  "retained_failures": [
+    {
+      "phase": "initial local Node source-mutation checks",
+      "exit_code": 1,
+      "passed": 212,
+      "failed": 3,
+      "rust_tests_executed": 0,
+      "reason": "One formatted method chain and two duplicate test-module matches prevented exact mutation selection",
+      "correction": "Scope mutations to the production prefix and accept formatting whitespace, preserving exact-one/non-no-op assertions and checker conditions",
+      "source_manifest_sha256": "32c12708e28ee9aff0f973327f31e9a619b8e33cbfb8d411b66ba79f2ff23907",
+      "log_sha256": "67f805d47d52e2f075c55f0bbac8c4610e4160928e60cc6212d9a133be92014f",
+      "log_bytes": 16736
+    }
+  ],
+  "limits": [
+    "The shared BOSH helper is tested with finite in-process ports and actual items/channels/FIFO; no full BoshActor or HTTP dispatch qualification is claimed",
+    "Controlled COMMIT futures and returned authority do not prove SQL locking, expiry, atomicity or response-loss fidelity",
+    "The post-transfer FIFO-refusal control supplies an already full FIFO to the private continuation after a controlled transfer; it does not prove a concurrent production FIFO change at that synchronous boundary",
+    "Notification_attempted is separate from actual one-shot delivery, queue acceptance and durable settlement",
+    "The logical transfer-record bound follows the existing actor flow; additional lazy Vec/Arc metadata is outside XML governor accounting, and no numeric capacity/RSS ceiling is claimed",
+    "validate_for_io checks pre-I/O state but does not consume a start permit; the actual private helper makes one port call, and enter_commit admits one COMMIT",
+    "The SM guard hardens inconsistent adapter results; existing SQL emits typed supersession before COMMIT, and no production SQL defect was demonstrated",
+    "BOSH response bind/rebuild/exposure/cache/renewal/ACK, shared direct continuation, composed replay/mutation/shrinking and full Stage3 acceptance remain open",
+    "The approved SM original-live-lease retention policy change remains separate and unimplemented",
+    "Test binaries include metadata for the checked base. Later builds may replace their paths; recorded hashes identify these actual executions, not every rebuild."
+  ],
+  "source": {
+    "base_commit": "09fbf93421d0df5b8066be4747154df1f33cc9eb",
+    "manifest_sha256": "5384eca92b4715484aeff8e976434a38ac8c491e987a446403470e741ee5d8ab",
+    "manifest_encoding": "SHA-256 of UTF-8 JSON with sorted keys, compact comma/colon separators and no trailing newline",
+    "files": {
+      "crates/northstar-delivery-core/src/lib.rs": {
+        "bytes": 7985,
+        "sha256": "1d1dc0d309b3dff5a2b97185944dd8fdc49dea7d7c572668f966988927e6b963"
+      },
+      "crates/northstar-delivery-core/src/bosh_ownership.rs": {
+        "bytes": 24659,
+        "sha256": "27b90ba11670ae85a42f1f071d910c449845a9ba46d093889cb05b4805ea844e"
+      },
+      "src/bosh.rs": {
+        "bytes": 113137,
+        "sha256": "98275b004e854872091a59e9164cc5ca4d113bf8a7f264e493918cd3ba73c814"
+      },
+      "src/bosh/action.rs": {
+        "bytes": 4840,
+        "sha256": "d02a415a9024d9077c9c172aeef8c0363279304cf7bb084b3c2ed3f18a890bd9"
+      },
+      "src/bosh/ownership.rs": {
+        "bytes": 34628,
+        "sha256": "b8824caac75a3842fbf5945bb5f00f041a0933aff918e1e8d8f0245b3d4e855f"
+      },
+      "src/services/mix.rs": {
+        "bytes": 121661,
+        "sha256": "baa03a4ee52396912605ee46e836aea2c660edf4d42d837a2d8120952c7be7fe"
+      },
+      "src/db/mix_repository.rs": {
+        "bytes": 68120,
+        "sha256": "3288bd631e437371eb05c78717787f50a6fe83bcf3a827a8d8eea9bd979d0a5e"
+      },
+      "src/db/mix.rs": {
+        "bytes": 298439,
+        "sha256": "daca3c9631ad00330323698c04625267a58b8a61b6ba4f4c2699d71b64f30314"
+      },
+      "crates/northstar-delivery-core/src/sm_ownership.rs": {
+        "bytes": 30461,
+        "sha256": "6f6e45ce8f301f56e8294a7864610b326144930b5ce9f5a85b5e5c31f23b506d"
+      },
+      "src/xmpp/protocol/sm_owner.rs": {
+        "bytes": 66650,
+        "sha256": "71154ba00b3313fb31d21348bf0d1825c44c20baa2f6fc5c04272b8b0bf60f20"
+      },
+      "scripts/check-execution-boundaries.mjs": {
+        "bytes": 42704,
+        "sha256": "cd36bd4cc95e8ff201572c235e48e6b9b44d4ba99ed1b49e18b407b322e0df9c"
+      },
+      "scripts/test-execution-boundaries.mjs": {
+        "bytes": 37866,
+        "sha256": "2dc793db0236162fb19edf2fe616363f3d8b2f09dab8fdbd7c6f19019fa15599"
+      }
+    },
+    "unchanged_during_all_commands": true
+  },
+  "prior_wip_ci": {
+    "commit": "09fbf93421d0df5b8066be4747154df1f33cc9eb",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37215000491",
+    "conclusion": "success",
+    "jobs": {
+      "success": 32,
+      "skipped": 1
+    },
+    "record_sha256": "876c7db00a1a846ed640b94b4b3758f723e1f6341094a930c1f099281df2bcd0",
+    "qualification": "Prior WIP CI does not qualify these later source refinements or dedicated tests"
+  },
+  "preceding_slice": "stage3-sm-owner-results.json"
+}

@@ -1022,24 +1022,7 @@ impl Drop for DirectCommitTurn {
     }
 }
 
-/// Controls only effects after a durable personal-message admission. Rejected
-/// is a pre-commit decision; a committed message must remain recoverable.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectPostCommitMode {
-    Live,
-    SpoolOnly,
-    Rejected,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectSpoolEligibility {
-    /// Bare normal/chat with an allowed durable projection. Exact DB replays
-    /// remain no-op admissions while PostgreSQL-spooled mode is active.
-    Eligible,
-    /// Retractions, invitations, no-store and other operations requiring live
-    /// control are rejected in degraded mode, including their old retries.
-    LiveOnly,
-}
+pub(crate) use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 fn admit_health(health: &ClusterHealth, operation: ClusterOperation) -> Result<()> {
     let state = health.effective_state();
     if operation_allowed(state, operation) {

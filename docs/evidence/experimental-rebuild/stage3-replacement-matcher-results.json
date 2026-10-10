@@ -1,0 +1,116 @@
+{
+  "schema": "northstar-stage3-replacement-matcher-result-v1",
+  "status": "LimitedReplacementAndNativeOracleHelperScopePassed_ProfileIncomplete",
+  "base_commit": "56de2e78a368a586aba10654aa5fad1ad186bafe",
+  "base_tree": "1a4f927f97384296edd95ea7cfeb690af9bd1a83",
+  "scope": "Independent supplied-evidence old/current owner matcher and corrected common native observation correspondence, with synthetic C13 positives and negatives. No actual Rust saved case was executed.",
+  "source_files": {
+    "scripts/lib/controlled_admission_supervision.py": {
+      "sha256": "0db2a1f77f844cc3d7f5782738e44caf3bed784ada100ecd0087b86508de77c8",
+      "bytes": 109638
+    },
+    "scripts/lib/direct_case.py": {
+      "sha256": "045e1645a2836b6caedea198c5f2bf2fa0287920112e866e3fe64c442e2bcf90",
+      "bytes": 156571
+    },
+    "scripts/test-direct-case.py": {
+      "sha256": "4882e614095fd5a8d996a9dd9d15385cef5094f6fd9c14748ce73d8b5541481b",
+      "bytes": 143722
+    },
+    "scripts/capture-controlled-admission.py": {
+      "sha256": "b2803ae1e2ba7fb704a05ca79e8f312a75e258a478a8d6725ea1ba0e613e7853",
+      "bytes": 13712
+    },
+    "scripts/run-controlled-admission.py": {
+      "sha256": "bd6ac59916ee2507ab11f6845a2d92185cba6fa530235313a904545dce9f8e31",
+      "bytes": 1709
+    }
+  },
+  "source_manifest_sha256": "3adaa7772ad117faefae7121fc51f7aa6d2faf87a1dd2fa54015e6d49b787256",
+  "source_manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+  "source_bytes": 425352,
+  "changed_sources": [
+    "scripts/lib/direct_case.py",
+    "scripts/test-direct-case.py"
+  ],
+  "checks": {
+    "python_ast": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.122762040",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "direct_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "1.218888733",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 18309,
+      "log_sha256": "94e1abe91234a51386a3ae7856cc229ad0be314f07d2665c278d271e71ffb618"
+    }
+  },
+  "python_tests": {
+    "ran": 103,
+    "passed": 103,
+    "failed": 0,
+    "skipped": 0,
+    "prior_checkpoint_method_count": 90,
+    "additional_methods": 13,
+    "unittest_seconds": "1.039",
+    "guard_sha256": "03a3e01886955c4371cf7dc122ee761ae584f3d79ef8c99cae0f6f6f4248e9e2",
+    "boundary_result": {
+      "audit_hook_ready": true,
+      "blocked_attempts": {},
+      "schema": "northstar-unit-tripwire-v1",
+      "syscall_sandbox": false,
+      "unit_exit_status": 0
+    },
+    "scope": "Supplied dictionaries, XML, strict evidence decoding and mocked boundaries. Actual helper outputs are compared with independent obligations; positive transcript dictionaries remain synthetic.",
+    "name_list_sha256": "9cade2f70d6b05617e95dc3283f321071c129e7fb7c1517a36795581147c7801",
+    "name_list_encoding": "UTF-8 compact JSON array of [method, full parenthesized unittest identifier including __main__.Class.method] pairs in actual log order, no trailing newline"
+  },
+  "source_behavior": [
+    "Ordinary and replacement native starts follow the actual dequeue, including the first Recording and FenceCallEntered prefixes. Completed, failed and cancelled branches match actual callbacks rather than inventing failure snapshots.",
+    "Actual accepted write bytes and successful flush precede the sole ACK invocation. Its immediate adjacent pre-authority FullWrite/Written snapshot follows the call and precedes authority reads or COMMIT; later knowledge cannot retroactively authorize dependent effects.",
+    "C13 independently derives the old-token/current-row comparison. The token6 attempt may return false with NoCommitRequested after observing token10; it cannot delete the current row or fabricate a commit receipt.",
+    "The replacement is actually dequeued under its own identity. Its token10 authority read precedes positive COMMIT, retained receipt precedes the synchronous controlled committed-view deletion, and old/new final snapshots retain their separate outcomes. This models the controlled adapter view, not prospective SQL DELETE ordering or lease expiry/reclaim.",
+    "Normative Safety precedes fixture divergence and preserves truthful unsafe facts. The fixed no-flush target and old/current ownership lineage remain distinct from generic matcher agreement."
+  ],
+  "remaining": [
+    "All public fixture/evaluate/shrink/provenance entry points still reject through the unconditional DirectCaseIncomplete gate. This checkpoint does not enable the saved profile.",
+    "The full BOSH outcome matcher, final literal16/4 inventory, build/derivation reader and deterministic material fact/frame/evaluation/contract bounds remain pending.",
+    "No ignored Rust entry, actual saved record/replay, no-flush executable, shrink run, SQL, socket, service or fault workload ran in this batch. Synthetic matcher positives do not establish whole-case conformance.",
+    "The legacy113 suite and Rust component tests were not rerun here; their separately bound prior evidence retains its original scope. The unchanged caller/supervision paths retain their previous bytes.",
+    "Full Stage3 acceptance and later SQL/wire/TLS/retention/resource qualification remain open. The ordinary server artifact is still above the 128 MiB runnable cap; no derivative was created or run."
+  ],
+  "python_runtime": {
+    "version": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "executable_sha256": "fa67443527ed9647f760d807e2a38f26340757123e643c4639cf273ed15d5ea7",
+    "flags": [
+      "-E",
+      "-S",
+      "-B"
+    ]
+  },
+  "parent_ci": {
+    "commit": "56de2e78a368a586aba10654aa5fad1ad186bafe",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37249301859",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "Prior saved SM matcher checkpoint; separate from this common Native/old-current matcher delta."
+  },
+  "resolved_prior_correspondence_gap": {
+    "prior_result": "stage3-native-matcher-results.json",
+    "finding": "Earlier synthetic native positives omitted initial Recording/FenceCallEntered prefixes and placed the pre-authority ACK snapshot before the call. The actual shared Rust port records the call then its immediate snapshot. This revision corrects the independent matcher and supplied positives while retaining observed write/flush-before-call and snapshot-before-read/COMMIT requirements.",
+    "limit": "Prior checkpoint results remain synthetic helper evidence. Public saved-profile gates stayed closed; no prior whole-case execution or conformance is claimed."
+  }
+}

@@ -840,25 +840,31 @@ impl ProtocolSession {
             .state
             .pause_suspended_muc_delivery(claim.session_id)
             .await;
+        let credential_attempt = self.prepare_credential_attempt(
+            crate::services::authentication::publication::CredentialKind::Resume,
+        )?;
         let finalized = self
             .state
-            .finalize_sm_resume(SmResumeFinalizationRequest {
-                session_id: claim.session_id,
-                claim_token: claim.claim_token,
-                connection_id: self.connection_id,
-                user_id: current_user.id,
-                expected_auth_generation: current_user.auth_generation,
-                client_h,
-                acknowledged_count: delta,
-                peer_ip: self.peer_ip,
-                user_agent_id: effective_user_agent,
-                active_privacy_list: claim.active_privacy_list.as_deref(),
-                ttl_seconds: claim.resume_timeout_seconds,
-                live_lease_seconds: self.sm_runtime_policy.session.live_lease_seconds,
-                max_stanzas: self.sm_runtime_policy.buffer.max_unacked_stanzas,
-                max_bytes: self.sm_runtime_policy.buffer.max_unacked_bytes,
-                fast_plan,
-            })
+            .finalize_sm_resume(
+                SmResumeFinalizationRequest {
+                    session_id: claim.session_id,
+                    claim_token: claim.claim_token,
+                    connection_id: self.connection_id,
+                    user_id: current_user.id,
+                    expected_auth_generation: current_user.auth_generation,
+                    client_h,
+                    acknowledged_count: delta,
+                    peer_ip: self.peer_ip,
+                    user_agent_id: effective_user_agent,
+                    active_privacy_list: claim.active_privacy_list.as_deref(),
+                    ttl_seconds: claim.resume_timeout_seconds,
+                    live_lease_seconds: self.sm_runtime_policy.session.live_lease_seconds,
+                    max_stanzas: self.sm_runtime_policy.buffer.max_unacked_stanzas,
+                    max_bytes: self.sm_runtime_policy.buffer.max_unacked_bytes,
+                    fast_plan,
+                },
+                credential_attempt.prepared(),
+            )
             .await;
         let (activated, mut receipt) = match finalized {
             Ok(SmResumeFinalizationOutcome::Committed(committed)) => {
@@ -936,7 +942,7 @@ impl ProtocolSession {
             }
         };
         let issued_fast = receipt.take_issued_fast();
-        self.pending_credential_commit = Some(receipt);
+        self.retain_credential_commit(receipt, credential_attempt)?;
         let remaining: VecDeque<crate::outbound::SmUnackedStanza> = activated.unacked.into();
         let exact_base_bytes = remaining.iter().map(|entry| entry.stanza.len()).sum();
         let muc_resume_ready = self
@@ -1163,7 +1169,7 @@ impl ProtocolSession {
         // lease by another full replay copy per connection.
         let resume_control =
             northstar_xep_0198::build_resumed(previd.as_str(), self.sm.inbound_h, None);
-        let resume_payload = match super::ResumePayload::from_sm_unacked(
+        let mut resume_payload = match super::ResumePayload::from_sm_unacked(
             self.state.sm_memory_governor(),
             resume_control,
             Vec::new(),
@@ -1203,6 +1209,7 @@ impl ProtocolSession {
                 self.sm_runtime_policy.session.live_lease_seconds,
                 self.sm_runtime_policy.buffer.max_unacked_stanzas,
                 self.sm_runtime_policy.buffer.max_unacked_bytes,
+                None,
             )
             .await;
         match checkpointed {
@@ -1351,80 +1358,24 @@ impl ProtocolSession {
                 .await;
             })?;
         }
+        if !defer_visibility {
+            self.seal_resume_authentication(&mut resume_payload)?;
+        }
         Ok((Action::Resume(resume_payload), issued_fast))
     }
 
     pub(crate) async fn acknowledge(&mut self, h: u32) -> Result<bool> {
-        let Some(delta) = acknowledgement_delta(self.sm.acked_h, h, self.sm.unacked.len()) else {
-            return Ok(false);
-        };
-        let acknowledged = self
-            .sm
-            .unacked
-            .iter()
-            .take(delta)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut remaining = self
-            .sm
-            .unacked
-            .iter()
-            .skip(delta)
-            .cloned()
-            .collect::<VecDeque<_>>();
-        if let Some(id) = self.sm.db_id {
-            let clone_bytes = self
-                .sm_resident_bytes()
-                .ok_or_else(|| anyhow::anyhow!("XEP-0198 live resident-size overflow"))?;
-            let _snapshot_clone_capacity = self
-                .state
-                .sm_memory_governor()
-                .try_reserve_live(clone_bytes)?;
-            let mut snapshot = self.sm_snapshot();
-            snapshot.acked_h = h;
-            snapshot.unacked = remaining.iter().cloned().collect();
-            let outcome = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                self.state.sm_service().checkpoint_and_acknowledge(
-                    id,
-                    self.connection_id,
-                    &snapshot,
-                    &acknowledged,
-                    self.sm.resume_timeout_seconds,
-                    self.sm_runtime_policy.session.live_lease_seconds,
-                    self.sm_runtime_policy.buffer.max_unacked_stanzas,
-                    self.sm_runtime_policy.buffer.max_unacked_bytes,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("XEP-0198 acknowledgement database operation timed out")
-            })??;
-            anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
-            Self::apply_sm_ownership_resolution_to_unacked(&mut remaining, &outcome.ownership);
-        } else {
-            let sources = acknowledged
-                .iter()
-                .filter_map(|entry| entry.source)
-                .collect::<Vec<_>>();
-            tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                self.state.sm_service().acknowledge_delivery_batch(&sources),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("delivery acknowledgement database operation timed out")
-            })??;
-        }
-        self.sm.unacked = remaining;
-        self.sm.acked_h = h;
-        let live_bytes = self
-            .sm_resident_bytes()
-            .ok_or_else(|| anyhow::anyhow!("XEP-0198 live resident-size overflow"))?;
-        if let Some(capacity) = &self.sm.capacity {
-            capacity.shrink_to(live_bytes)?;
-        }
-        Ok(true)
+        let mut turn = self.sm_transport_turn();
+        let observation =
+            turn.start(northstar_delivery_core::sm_ownership::Purpose::Acknowledge { h });
+        super::sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.acknowledge(h, &observation).await;
+            if result.is_err() {
+                observation.returned_error();
+            }
+            result
+        })
+        .await
     }
 
     pub(crate) fn reset_sm(&mut self) {

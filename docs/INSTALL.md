@@ -24,14 +24,28 @@ The output must be `xmpp-server 0.2.0`. Linux packages target x86-64 GNU/Linux
 with glibc 2.35 or newer. A native Windows installation requires Windows x64;
 the release workflow verifies the archive on Windows Server 2022.
 
-For a local evaluation, install PostgreSQL 15 or newer, create a local database
-and owner, and copy `.env.development.example` to `.env`. Replace both database
-URL placeholders with that local database. Configure a localhost TLS certificate
+For a local evaluation, install PostgreSQL 15 or newer and follow the explicit
+[local database bootstrap](DATABASE_ROLES.md#localhost-owner-only-development-mode).
+The dedicated local login must directly own both the database and `public`
+schema: PostgreSQL 15+ normally gives `public` to `pg_database_owner`, so creating
+a database with `OWNER` alone does not satisfy the migration contract.
+Copy `.env.development.example` to `.env` and replace both database URL
+placeholders with that local owner/database. Configure a localhost TLS certificate
 and matching private key through `TLS_CERT_PATH` and `TLS_KEY_PATH`. Never use
 the development profile or its ephemeral secrets for a public deployment.
 Run `xmpp-server migrate` with the migrator configuration, then `xmpp-server` in
 the foreground. On Linux prefix those commands with `./`; on Windows use
 `.\xmpp-server.exe`. The local Web client is at `http://127.0.0.1:8080`.
+
+The foreground server and migration command look for an optional `.env` in the
+working directory, then its parents. Existing process environment variables take
+precedence. Quote values containing spaces, such as
+`SERVER_NAME="Northstar Development"`. A malformed or unreadable file stops
+startup with a `.env` configuration error before database configuration is used;
+diagnostics omit setting values. A missing file is allowed when configuration
+comes from the process environment. Set `NORTHSTAR_DISABLE_DOTENV=true` in that
+environment to disable this lookup. The isolated maintenance process never
+loads `.env`.
 
 For production, configure independent PostgreSQL roles, mounted secrets and a
 publicly trusted TLS certificate using `.env.example` and the matching version

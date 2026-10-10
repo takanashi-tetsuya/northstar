@@ -1,0 +1,30 @@
+{
+  "schema": "northstar-stage1-acceptance-v1",
+  "date": "2026-10-03",
+  "verdict": "Accepted",
+  "source_head": "5519ff7e497e71a72224ee72af66f14cb60ab128",
+  "source_tree": "a3da3c5c8584d8eabf031d21eaaec28e07062b6e",
+  "scoped_source_sha256": "c6d4c8ed879dc5bd29abb18a6b3632b4d0a3a2fe0bede58f3e1f659ae4484e62",
+  "scope": [
+    "Executable synthetic admission specification",
+    "Fixed concrete corpus and independent observation oracle",
+    "Conservative per-actor retention preflight for the existing mixed workload",
+    "Actual mixed fixture classification entry points exercised by pure mocks"
+  ],
+  "independent_review": [
+    "Exact ten-file before/after/current/runner maps match",
+    "All fourteen final artifacts and thirty-nine archive members match bytes and SHA256",
+    "Original changed/missing actual false-success probes now reject",
+    "Operator cancellation, ordinary EINTR, setup failure, typed invariant and source gap remain distinct",
+    "Current production Rust/SQL/migrations have no delta"
+  ],
+  "evidence": "stage1-verification.json",
+  "limitations": [
+    "Not production-shared Rust execution",
+    "Not SQL/wire or Stage 6 live/resource qualification",
+    "Manual synthetic reduction only; automatic shared-core minimization remains open",
+    "Late-finalize 4097 remains a conditional source/model candidate, not a live product bug"
+  ],
+  "next_condition": "Verify the exact remote commit/tree/filelist before Stage 2 source changes",
+  "review_execution": "Read-only source/artifact inspection and targeted pure in-memory checks; no services, DB, wire or full-suite execution"
+}

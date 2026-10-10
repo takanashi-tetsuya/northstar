@@ -1,0 +1,55 @@
+{
+  "schema": "northstar-stage4-bosh-auth-control-results-v1",
+  "status": "LimitedSelectedControlGatePassed_Stage4Open",
+  "base_commit": "d288ea444201df3d0fa9b11c1d77760bd668d45b",
+  "change": "BOSH authentication publication now follows the exact auth-control item selected into the exposed response, replacing the actor-wide pending flag.",
+  "behavior": [
+    "Only a selected auth control with an actual accepted responder invokes the existing lazy publication callback.",
+    "For a selected auth control, a consuming non-Clone continuation permits bookkeeping/cache only after publication succeeds; failure or a dropped pending callback preserves exposure facts without claiming publication success.",
+    "The marker follows exact selection/restoration and successful atomic resume-batch admission. Empty terminal/pause responses and cached replay cannot publish an unrelated control.",
+    "Original bind/expose/publication/cache order, native behavior, existing time budgets and remote-stream-error selection are retained."
+  ],
+  "validation": {
+    "rust_exact_passed": 24,
+    "rust_ignored": 0,
+    "rust_selection": "10 new component cases,4 constructor-only fixture adaptations and10 unchanged affected controls.",
+    "node_passed": 295,
+    "node_failed": 0,
+    "format": "Passed",
+    "server_all_target_check": "Passed",
+    "clippy_warnings_denied": "Passed",
+    "source_gates": "Execution, admission, architecture and outbound XML checks passed.",
+    "saved_workload_starts": 0,
+    "live_sql_or_network_fixture_starts": 0
+  },
+  "witness_scope": "The same-input old-gate comparison evaluates the retained historical predicate against the actual new selector/exposure facts. It is a source-bound witness, not execution of an old compiled implementation.",
+  "limits": [
+    "Copied item membership is not a global exactly-once publication capability. The response continuation is consumed once.",
+    "This slice does not establish a new control-to-credential/frame correlation, SQL publication knowledge, native write conformance or full Stage4 authentication acceptance.",
+    "The accepted Stage3 saved family remains bound to its historical source and evidence; it was not rerun by this component batch.",
+    "MUC/MIX, full auth publication and business-worker ownership remain Stage4 work. SQL/wire/TLS, retention and aggregate resources retain their later-stage assignments."
+  ],
+  "prior_ci": {
+    "commit": "d288ea444201df3d0fa9b11c1d77760bd668d45b",
+    "successful": 30,
+    "failed": 2,
+    "skipped": 1,
+    "failure": "Synthetic429 returned the complete body, then the TLS reader timed out awaiting EOF; the other failure was the required aggregate. Cause remains unknown, with no manual rerun or assertion change."
+  },
+  "related": [
+    "stage3-controlled-acceptance.json",
+    "stage3-bosh-response-results.json"
+  ],
+  "detailed_evidence": "Fresh recovery-validation evidence is saved privately; the initial local raw artifacts remain unavailable.",
+  "evidence_recovery": {
+    "original_status": "Original local raw logs, snapshots and tested binary were lost when the workspace reverted. The historical pass is preserved, not relabeled as recovered files.",
+    "fresh_revalidation_source": "27053ce2f7183177aa9a416105cb2b04bee9a3af",
+    "fresh_rust_exact_passed": 24,
+    "fresh_rust_ignored": 0,
+    "fresh_node_passed": 295,
+    "fresh_compile_and_clippy": "Passed",
+    "independent_review": "Accepted within the same ordinary component scope",
+    "fresh_evidence": "Saved privately and downloaded bytes verified; this is new execution, not restoration of the original raw artifacts.",
+    "saved_workload_starts": 0
+  }
+}

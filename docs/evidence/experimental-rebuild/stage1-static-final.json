@@ -1,0 +1,32 @@
+{
+  "scope": "Supplemental static checks after final evidence/document/acceptance packaging; executable ten-file source map unchanged",
+  "checks": [
+    {
+      "argv": [
+        "node",
+        "scripts/check-documentation-consistency.mjs"
+      ],
+      "exit_code": 0,
+      "output": "Documentation consistency checks passed: 92 protocol rows and 111 Markdown documents checked; 45 current known issues validated, 44 trace rows and 60 Core profiles traced; current migration 0156\n"
+    },
+    {
+      "argv": [
+        "node",
+        "scripts/check-tracked-sensitive-files.mjs",
+        "--include-untracked"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": ""
+    }
+  ],
+  "all_passed": true
+}

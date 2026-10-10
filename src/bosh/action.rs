@@ -4,7 +4,11 @@ use super::{queue_bosh_resume_payload, BoshActor};
 use crate::xmpp::protocol::{Action, ResumeTransportParts};
 
 impl BoshActor {
-    pub(super) async fn apply_action(&mut self, action: Action) -> bool {
+    pub(super) async fn apply_action(
+        &mut self,
+        action: Action,
+        operation: &northstar_delivery_core::bosh_ownership::Operation,
+    ) -> bool {
         match action {
             Action::Send(reply) => {
                 let accepted = self.record_and_push(reply).await;
@@ -24,7 +28,7 @@ impl BoshActor {
             }
             Action::SendManyItems(items) => {
                 for item in items {
-                    if !self.record_and_push_item(item).await {
+                    if !self.record_and_push_item(item, operation).await {
                         return false;
                     }
                 }
@@ -32,12 +36,35 @@ impl BoshActor {
                 true
             }
             Action::SendManyThenActivate(replies) => {
+                let (replies, holder) = replies.into_parts();
+                let mut holder = Some(holder);
                 for (index, reply) in replies.into_iter().enumerate() {
-                    if !self.record_and_push(reply).await {
+                    if index == 0 {
+                        let holder = holder.as_ref().expect("first auth control");
+                        if holder
+                            .validate_connection(self.protocol.connection_id)
+                            .and_then(|_| holder.validate_control(&reply))
+                            .and_then(|_| holder.recording())
+                            .is_err()
+                        {
+                            return false;
+                        }
+                    }
+                    if self.protocol.record_outbound(&reply).await.is_err() {
                         return false;
                     }
-                    if index == 0 {
-                        self.auth_publication_pending = true;
+                    let item = crate::outbound::OutboundItem::plain(reply);
+                    let item = if index == 0 {
+                        match item.with_auth_publication(holder.take().expect("first auth control"))
+                        {
+                            Ok(item) => item,
+                            Err(_) => return false,
+                        }
+                    } else {
+                        item
+                    };
+                    if !self.push_output_item(item) {
+                        return false;
                     }
                 }
                 self.protocol.start_post_action_tasks();
@@ -58,13 +85,24 @@ impl BoshActor {
                     post_control,
                     replay,
                     activate_route,
+                    auth_publication,
                     transient_capacity,
                 } = payload.into_transport_parts();
-                if self.protocol.record_outbound(&control).await.is_err() {
+                if activate_route != auth_publication.is_some() {
                     return false;
                 }
-                if activate_route {
-                    self.auth_publication_pending = true;
+                if let Some(holder) = &auth_publication {
+                    if holder
+                        .validate_connection(self.protocol.connection_id)
+                        .and_then(|_| holder.validate_control(&control))
+                        .and_then(|_| holder.recording())
+                        .is_err()
+                    {
+                        return false;
+                    }
+                }
+                if self.protocol.record_outbound(&control).await.is_err() {
+                    return false;
                 }
                 for nonza in &post_control {
                     if self.protocol.record_outbound(nonza).await.is_err() {
@@ -82,6 +120,7 @@ impl BoshActor {
                         post_control,
                         replay,
                         activate_route,
+                        auth_publication,
                         transient_capacity,
                     },
                 ) {

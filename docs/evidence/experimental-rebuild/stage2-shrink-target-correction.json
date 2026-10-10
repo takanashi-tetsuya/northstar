@@ -1,0 +1,66 @@
+{
+  "schema": "northstar-shrink-target-source-correction-v1",
+  "status": "ImplementedAndSyntaxCheckedNotStage2Accepted",
+  "base_commit": "cca8f120b4d137d193e0623ccc4e961e8d966d1e",
+  "base_tree": "aefe7ccf131ac97eaa39755256c9ab29eb09ea90",
+  "source_delta": [
+    {
+      "path": "scripts/lib/controlled_admission.py",
+      "before_sha256": "e8c9f1d3f8d0cf1d8807224acbd4b858df25370b2757405cd2e33210c448c330",
+      "after_sha256": "204acef20b974a0fc1e589fdcf955eae64b9063f7058082402d955f9bcf9005e",
+      "bytes": 96416
+    },
+    {
+      "path": "scripts/test-controlled-admission.py",
+      "before_sha256": "5b3f5e74ecd1263e51378a980d9ba750ac459f486447cc0275388928e101ab33",
+      "after_sha256": "24e44b414ac63ef0704ec81a92a006a46d9ce6d18cf5b60ae361a90d6ea733a8",
+      "bytes": 34144
+    }
+  ],
+  "targeted_correction": "shrink-exact-target",
+  "declared_scope": "Fixed canonical late_candidate with op-1 reserve, op-2 pending finalize and unrelated trailing op-7. Existing one-command deletion plus unused-binding pruning only: 3-to-2, not a general minimizer or global minimality claim.",
+  "contract": [
+    "Anchor the original to the independent canonical source fixture and preserve exact op-1/op-2 command, clock, fault, authority and retained-pending cleanup-survival premises.",
+    "Reconstruct the ordered original/deletion candidates/positive-control/final-reduced history using recomputed decisions; validate exact roles and membership instead of accepting arbitrary subset histories.",
+    "For every candidate, validate saved execution shape, externally supplied trusted provenance and input/stdout/output identity, then require actual reexecution output and evaluation to match its independent oracle. This code path was not executed in this checkpoint.",
+    "Compare a contract-derived target across candidates: same invariant ID/class/semantic operation/cut, causal reserve Proceed at4096 then exact finalize Accepted at4097 and authority/commit facts. Do not require cross-candidate positional index or unrelated actor/proof/aggregate diagnostics to be byte-identical.",
+    "Positive control must remove the exact declared first accepted actor-a initial row from the selected reduced candidate, then apply existing pruning; require complete replay-matched Pass with target active4096.",
+    "Producer and reader share the declared operators/target-preservation contract; expected outcomes still come from the independent domain oracle, never saved verdict labels."
+  ],
+  "regression_source": "Ten mocked reader-contract methods cover self-consistent reduced Pass, changed target/authority/cut/material, missing/malformed/orphaned roles, bad metadata, unrelated control and legitimate index/diagnostic changes. None were executed locally.",
+  "verification": {
+    "base_commit": "cca8f120b4d137d193e0623ccc4e961e8d966d1e",
+    "tracked_source_file_count": 1665,
+    "before_map_sha256": "890714b6a614b9cff85506fc9e2c53d9e7bee1df3a2f04782863446b6167e8db",
+    "after_map_sha256": "890714b6a614b9cff85506fc9e2c53d9e7bee1df3a2f04782863446b6167e8db",
+    "source_unchanged": true,
+    "source_patch_sha256": "dcce685152c4b617efff52ced057a526b64c5dcf9b77d42eea6bac5b6ecd8edc",
+    "command": [
+      "python3",
+      "-B",
+      "-c",
+      "import ast,pathlib,sys; [ast.parse(pathlib.Path(p).read_text(),filename=p) for p in sys.argv[1:]]",
+      "scripts/lib/controlled_admission.py",
+      "scripts/test-controlled-admission.py"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 0.099,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scope": "Python AST parsing only; project modules and regression methods were not imported or executed. No runner, replay, corpus, shrinker, SQL, service or fault execution."
+  },
+  "remaining_stage2_blockers": [
+    "multi-unresolved-knowledge"
+  ],
+  "additional_open_limits": [
+    "Current caller intervals remain unqualified across multiple Unknown operations.",
+    "Actor-policy clock, SQL observed_at, production outer cancellation/Unknown ownership and later durable-message/SQL/wire stages remain open.",
+    "The late-finalize4097 fixture remains a conditional controlled candidate requiring expired pending-row survival; it is not proof of live production reachability or a changed retention policy.",
+    "Output-v2 and prior PreparedCommit/actual-coordinator corrections are preserved."
+  ],
+  "unexecuted": [
+    "Regression methods and project-module imports",
+    "Actual shrinker, controlled runner, saved corpus and replay",
+    "SQL, services, fault injection, soak and old standalone probe"
+  ],
+  "review": "Final independent read-only four-file artifact review passed on 2026-10-04. Exact two-file source patch, 1,665 stable source hashes, AST result/log and limited ledger claims were verified. Ten regression methods remain mocked, unexecuted source. This is source and syntax qualification only; Stage2 remains unaccepted."
+}

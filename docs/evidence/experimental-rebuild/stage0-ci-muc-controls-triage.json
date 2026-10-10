@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "record_kind": "existing_ci_failure_readonly_triage",
+  "observation_date_utc": "2026-10-03",
+  "verdict": "RootCauseUnresolved",
+  "not_classified_as_flaky": true,
+  "failed_case": {
+    "commit": "d9eb2e2dfa948f6a9d3e16b4ce0c08eca4f9c671",
+    "run_id": 37130305484,
+    "job_id": 111223924173,
+    "job_name": "PostgreSQL protocol integration",
+    "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37130305484/job/111223924173",
+    "job_conclusion": "failure",
+    "command": "bash scripts/github-ci-run.sh \"Protocol integration\" bash scripts/integration-wsl.sh",
+    "failure_time_utc": "2026-10-03T14:43:12.5683660Z",
+    "location": "scripts/integration-wsl.py:5266-5269",
+    "assertion": "MUC controls room was not created with owner affiliation",
+    "failed_predicate": "controls_created contains both code=201 and affiliation=owner",
+    "selected_frame_value": null,
+    "missing_peer_response": "The assertion message does not serialize controls_created or received frames. Neither the actual selected frame nor a complete ordered peer trace is present in the inspected job log."
+  },
+  "exact_source_preconditions": [
+    "The same Alice WebSocket session first exercises the integration-room joins, destruction and recreation, then leaves that recreated room.",
+    "Alice creates integration-locked with id=locked-owner-join; tests owner/outsider disco and second-join denial.",
+    "Alice submits locked-cancel and waits for a frame containing locked-cancel, asserting type=result.",
+    "Bob sends post-cancel-create, asserts code=201 and affiliation=owner, submits post-cancel-instant, then leaves and waits for code=110.",
+    "Alice sends an untagged join presence to integration-controls@conference.localhost/Alice.",
+    "Alice calls receive_until(\"code=110\") in the source spelling with single-quoted XML attributes; that helper returns the first WebSocket frame containing the marker, without checking room, stanza id, or stanza type.",
+    "The returned frame is then required to contain both creation code=201 and affiliation=owner. The assertion fails; available evidence does not reveal which required field was absent or the selected frame origin."
+  ],
+  "source_anchors": {
+    "prior_room_destroy_recreate_leave": "scripts/integration-wsl.py:5150-5196",
+    "locked_room_cancel_recreate": "scripts/integration-wsl.py:5197-5253",
+    "controls_join_and_assertion": "scripts/integration-wsl.py:5259-5269",
+    "receive_until": "scripts/integration-wsl.py:2447-2464",
+    "ci_job_command_chain": ".github/workflows/ci.yml:732-776",
+    "server_affiliation_observation": "src/xmpp/protocol/muc.rs:4306-4315",
+    "server_role_and_occupant": "src/xmpp/protocol/muc.rs:4496-4533",
+    "presence_status_serialization": "src/xmpp/xml_util.rs:430-454"
+  },
+  "available_synthetic_observations": [
+    {
+      "time_utc": "2026-10-03T14:43:12.474129Z",
+      "source": "failed job integration-server.log excerpt",
+      "projection": {
+        "event": "MUC join: affiliation check",
+        "room": "integration-controls@conference.localhost",
+        "fixture_user": "alice_it",
+        "affiliation": "Some(owner)"
+      },
+      "limit": "Server-side observation is not proof of the exact frame selected by the peer."
+    },
+    {
+      "source": "failed job isolated MUC authority/outbox diagnostics",
+      "projection": {
+        "fixture_nick": "Alice",
+        "matching_controls_room_row": true,
+        "role": "moderator",
+        "affiliation": "owner",
+        "state": "left",
+        "lease_live": false
+      },
+      "limit": "This is a later diagnostic snapshot after failure/cleanup activity, not an at-assertion wire or ownership snapshot. Random row IDs and instance IDs are omitted."
+    },
+    {
+      "time_utc": "2026-10-03T14:43:13.8817703Z",
+      "source": "failed job cleanup line",
+      "projection": {
+        "listeners": 0,
+        "isolated_schema_cleanup_reported": true
+      },
+      "limit": "This records the cleanup line reported by the fixture; no independent post-run database inspection was performed."
+    },
+    {
+      "source": "workflow run artifacts endpoint read at approximately 2026-10-03T14:46Z",
+      "projection": {
+        "total_count": 0
+      },
+      "limit": "The overall run was still active. This snapshot does not rule out artifacts produced later by other jobs."
+    }
+  ],
+  "comparison_to_prior_success": {
+    "baseline_commit": "4f1b3b9032b98004eec2160172d5af3acbcc16b8",
+    "baseline_run_id": 37107644451,
+    "baseline_job_id": 111159208862,
+    "baseline_job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37107644451/job/111159208862",
+    "baseline_job_conclusion": "success",
+    "baseline_protocol_command": {
+      "started_at_utc": "2026-10-03T07:51:17Z",
+      "completed_at_utc": "2026-10-03T08:01:22Z",
+      "duration_seconds": 605,
+      "result": "phase=command_completed; protocol summary includes MUC passed"
+    },
+    "failed_protocol_command": {
+      "started_at_utc": "2026-10-03T14:40:27Z",
+      "completed_at_utc": "2026-10-03T14:43:13Z",
+      "duration_seconds": 166,
+      "exit_status": 1
+    },
+    "source_delta": "Exactly six documentation/JSON additions; no existing tracked blob changed. This fact does not establish the cause of the runtime failure.",
+    "identical_relevant_blob_ids": {
+      "scripts/integration-wsl.py": "c7bcb8dfde609213ed6d36530530675c88162bab",
+      "scripts/integration-wsl.sh": "fe3a8da686f663e3b34abbbe398af36113398209",
+      ".github/workflows/ci.yml": "6f3fdfacfee9c9207cfeebce274f4fe7cd712739",
+      "src/xmpp/protocol/muc.rs": "b9aa0cfd0161de9ff2b311baaf4dad89d317ab67",
+      "src/xmpp/protocol/muc/presence.rs": "5589a585a7ba63bf18f5888939eb5241dee1fe2d",
+      "src/xmpp/xml_util.rs": "986ba87bc0807612ec4c69d65014f304c44bb55d",
+      "src/db/muc.rs": "0103d74f9d37f524da810fba4976d5d3132d1b90"
+    },
+    "same_logged_environment_labels": {
+      "runner_version": "2.337.0",
+      "runner_image": "ubuntu-24.04",
+      "image_version": "20260927.320.1",
+      "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+      "cargo_cache_profile": "debug",
+      "cache_report": "Both logs report a restored shared cache with the same cache key."
+    },
+    "observed_differences": [
+      "Different workflow/job/VM execution and generated isolated schema/instance identities",
+      "Different timings: baseline dev build 1m58s; failed run dev build 1m42s",
+      "Failure stops the first protocol command; subsequent Message PoW, Profile storage, OMEMO and Moderation commands in that job do not execute"
+    ],
+    "comparison_limits": "Matching source/image/toolchain/cache labels do not prove identical runtime state or scheduling. The two runs do not include directly comparable selected controls-room peer frames. The timing difference is not a performance comparison because the failing run stops early."
+  },
+  "unresolved_alternatives": [
+    "The broad code=110 receive predicate could select another room or earlier presence; no selected frame exists to establish that this occurred.",
+    "A controls-room response or its delivery/serialization could lack one of the asserted fields; server owner observations do not rule out a wire-level problem.",
+    "The available evidence cannot distinguish these or exclude other causes."
+  ],
+  "next_evidence_needed": "Preserve the original predicate and assertion while capturing a bounded payload-free projection of the selected frame and preceding ordered receive frames (from, id, type, MUC status codes, affiliation), tied to the exact fixture room/join. Do not weaken the assertion, relabel the failure, or claim the broad matcher is the root cause without that observation.",
+  "actions_taken": {
+    "read_only_source_and_existing_ci_logs": true,
+    "project_code_executed_locally": false,
+    "rerun_requested": false,
+    "assertions_modified": false,
+    "product_files_modified": false
+  },
+  "publication_sanitization": "Only repository source identities, public run links, test assertion text and explicitly synthetic fixture projections are included. Credentials, full raw logs, random database/user/connection IDs and host paths are omitted."
+}

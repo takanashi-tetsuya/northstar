@@ -24,6 +24,7 @@ pub(crate) mod retractions;
 pub(crate) mod roster;
 pub(crate) mod sasl2;
 pub(crate) mod sm;
+mod sm_owner;
 pub(crate) mod upload;
 pub(crate) mod vcard;
 
@@ -280,7 +281,7 @@ pub enum Action {
     /// The first frame is the terminal authentication success. Publish the
     /// staged login epoch and already-committed route only after that frame
     /// reaches the transport.
-    SendManyThenActivate(Vec<String>),
+    SendManyThenActivate(super::auth_publication::AuthReplies),
     /// Send each terminal payload in order and then close the XML stream.
     /// Unlike ordinary outbound stanzas these frames are not added to an SM
     /// resume queue: the operation producing them has already revoked the
@@ -305,6 +306,7 @@ pub struct ResumePayload {
     post_control: Vec<String>,
     replay: Vec<String>,
     activate_route: bool,
+    auth_publication: Option<super::auth_publication::AuthControlHolder>,
     transient_capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
 }
 
@@ -313,6 +315,7 @@ pub(crate) struct ResumeTransportParts {
     pub(crate) post_control: Vec<String>,
     pub(crate) replay: Vec<String>,
     pub(crate) activate_route: bool,
+    pub(crate) auth_publication: Option<super::auth_publication::AuthControlHolder>,
     pub(crate) transient_capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
 }
 
@@ -355,6 +358,7 @@ impl ResumePayload {
             post_control,
             replay,
             activate_route,
+            auth_publication: None,
             transient_capacity,
         })
     }
@@ -370,6 +374,10 @@ impl ResumePayload {
         reserved_bytes: usize,
         mut capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
     ) -> Result<()> {
+        anyhow::ensure!(
+            self.auth_publication.is_none(),
+            "cannot replace a sealed authentication envelope"
+        );
         let actual = control
             .capacity()
             .checked_add(
@@ -400,6 +408,7 @@ impl ResumePayload {
             post_control: self.post_control,
             replay: self.replay,
             activate_route: self.activate_route,
+            auth_publication: self.auth_publication,
             transient_capacity: self.transient_capacity,
         }
     }
@@ -527,6 +536,8 @@ struct SmSubstate {
     unacked: VecDeque<crate::outbound::SmUnackedStanza>,
     /// Process-local bytes retained for a resumable XEP-0198 epoch.
     capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
+    /// One replaceable observation; retained old handles keep their own facts.
+    current_operation: Option<northstar_delivery_core::sm_ownership::Observation>,
 }
 
 /// Presence epochs stay with the protocol session across transport changes.
@@ -574,6 +585,17 @@ impl SmRuntimePolicy {
 }
 
 impl SessionTerminationSignals {
+    #[cfg(test)]
+    pub(super) fn from_test_tokens(
+        policy_revoke: tokio_util::sync::CancellationToken,
+        backpressure: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            policy_revoke,
+            backpressure,
+        }
+    }
+
     pub(crate) async fn revoked(&self) {
         self.policy_revoke.cancelled().await;
     }
@@ -600,6 +622,7 @@ pub struct ProtocolSession {
     /// never used as an authentication bypass.
     secure_transport: bool,
     transport: ClientTransport,
+    frame_executions: super::frame_execution::SessionExecutions,
     stream_limits: Option<StreamLimits>,
     pub(crate) peer_ip: IpAddr,
     connected_at: std::time::Instant,
@@ -655,8 +678,7 @@ pub struct ProtocolSession {
     /// until the transport confirms the first terminal success/resumed frame;
     /// failure paths must close rather than manufacture a contradictory SASL
     /// failure or execute the commit a second time.
-    pub(crate) pending_credential_commit:
-        Option<crate::services::authentication::CredentialCommitReceipt>,
+    pub(crate) pending_credential_commit: Option<super::auth_publication::KnownCredentialOwner>,
     channel_bindings: Option<crate::auth::ChannelBindings>,
     /// Bare JIDs authenticated by the optional C2S client-certificate PKIX
     /// verifier and id-on-xmppAddr SAN parser for this exact TLS connection.
@@ -694,7 +716,155 @@ pub struct ProtocolSession {
     post_actions: PostActionHandle,
 }
 
+struct SessionAuthPublication<'a> {
+    session: &'a mut ProtocolSession,
+}
+impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
+    fn connection(&self) -> uuid::Uuid {
+        self.session.connection_id
+    }
+    async fn publish(
+        &mut self,
+        invocation: &crate::services::authentication::publication::Invocation<'_>,
+    ) -> crate::services::authentication::AuthenticationResult<Option<i64>> {
+        self.session
+            .state
+            .authentication_service()
+            .publish_credential_commit_observed(invocation)
+            .await
+    }
+    fn epoch_and_mapping(
+        &mut self,
+        route: &super::auth_publication::BoundRoute,
+        epoch: Option<i64>,
+    ) -> bool {
+        if self.session.registered_key.as_deref() != Some(route.key.as_str())
+            || self.session.authenticated.as_ref().is_none_or(|user| {
+                user.id != route.user || user.auth_generation != route.generation
+            })
+            || !Arc::ptr_eq(&self.session.route_lifecycle, &route.lifecycle)
+        {
+            return false;
+        }
+        let current = self.session.state.publish_user_agent_epoch_if_current(
+            &route.key,
+            route.connection,
+            route.user,
+            route.generation,
+            &route.lifecycle,
+            epoch,
+        );
+        if current {
+            self.session.user_agent_epoch = epoch;
+        }
+        current
+    }
+    fn activate(&mut self, route: &super::auth_publication::BoundRoute) -> bool {
+        self.session.state.activate_session_if_current(
+            &route.key,
+            route.connection,
+            route.user,
+            route.generation,
+            &route.lifecycle,
+            &route.disconnect,
+        )
+    }
+    async fn caps(&mut self, intent: Option<super::auth_publication::CapsIntent>) {
+        self.session.rebind_captured_caps_observation(intent).await;
+    }
+    fn notify_local(&mut self, intent: &super::auth_publication::NotificationIntent, epoch: i64) {
+        for (other_key, session) in self.session.state.session_entries_for(&intent.account) {
+            if other_key != intent.excluded_key
+                && session.user_id == intent.user
+                && session.user_agent_id == Some(intent.device)
+                && session.user_agent_epoch.is_some_and(|value| value < epoch)
+            {
+                session.disconnect.cancel();
+            }
+        }
+    }
+    async fn notify_remote(
+        &mut self,
+        intent: &super::auth_publication::NotificationIntent,
+        epoch: i64,
+    ) -> Result<()> {
+        self.session
+            .state
+            .notify_remote_user_agent_replacement(
+                &intent.account,
+                intent.user,
+                intent.device,
+                epoch,
+            )
+            .await
+    }
+    fn rejected(
+        &mut self,
+        result: super::frame_execution::PublicationResult,
+        error: Option<&anyhow::Error>,
+    ) {
+        use super::frame_execution::PublicationResult;
+        match result {
+            PublicationResult::BackendFailure => {
+                self.session
+                    .state
+                    .c2s_authentication_telemetry()
+                    .backend_failed();
+                tracing::error!(?error, connection_id = %self.session.connection_id, "could not publish transport-confirmed authentication epoch");
+            }
+            PublicationResult::IntegrityRejected => {
+                self.session
+                    .state
+                    .c2s_authentication_telemetry()
+                    .integrity_failed();
+                tracing::error!(connection_id = %self.session.connection_id, "authentication publication integrity failure");
+            }
+            PublicationResult::CredentialRejected => {
+                tracing::warn!(connection_id = %self.session.connection_id, "transport-confirmed authentication publication fence was lost");
+            }
+            _ => {}
+        }
+        self.session.sm.resume_allowed = false;
+    }
+    fn notification_deferred(&mut self, error: &anyhow::Error) {
+        tracing::warn!(
+            ?error,
+            "cross-node user-agent replacement was not acknowledged; maintenance will retry"
+        );
+    }
+}
+
 impl ProtocolSession {
+    /// The production entry point shared by TCP, WebSocket and BOSH. Tests
+    /// can still exercise `handle` directly without a transport budget.
+    pub(crate) async fn process_frame(
+        &mut self,
+        frame: &str,
+    ) -> std::result::Result<Action, super::frame_execution::FrameFailure> {
+        let execution = self.frame_executions.begin(self.transport, frame);
+        execution.run(self.handle(frame)).await
+    }
+
+    pub(super) fn enter_frame_stage(&self, stage: super::frame_execution::Stage) {
+        self.frame_executions.enter(stage);
+    }
+
+    pub(super) fn message_operation(
+        &self,
+    ) -> Option<crate::services::message_admission::witness::DirectOperationHandle> {
+        self.frame_executions.direct_operation()
+    }
+
+    pub(super) fn muc_discussion_operation(
+        &self,
+        prepared: &crate::services::muc::discussion::PreparedDiscussion,
+    ) -> Result<
+        Option<crate::services::muc::discussion::Observation>,
+        crate::services::muc::discussion::Rejected,
+    > {
+        self.frame_executions.muc_discussion(prepared)
+    }
+
     pub(crate) fn local_domain(&self) -> &str {
         self.state.local_domain()
     }
@@ -729,21 +899,24 @@ impl ProtocolSession {
 
     pub(super) async fn acknowledge_c2s_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
+        request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<()> {
+        let crate::outbound::TransportOwnershipSource::C2s(delivery) = request.source() else {
+            anyhow::bail!("native C2S acknowledgement source mismatch");
+        };
         self.state
             .replay_service()
-            .acknowledge_socket_write(delivery)
+            .acknowledge_socket_write_observed(delivery, Some(request))
             .await
     }
 
     pub(super) async fn acknowledge_mix_socket_write(
         &self,
-        delivery: crate::outbound::MixDelivery,
+        request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<bool> {
         self.state
             .mix_service()
-            .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token)
+            .acknowledge_mix_socket_write(request)
             .await
     }
 
@@ -808,6 +981,7 @@ impl ProtocolSession {
             outbound,
             secure_transport,
             transport,
+            frame_executions: super::frame_execution::SessionExecutions::default(),
             stream_limits,
             peer_ip,
             connected_at: std::time::Instant::now(),
@@ -870,123 +1044,128 @@ impl ProtocolSession {
             .start(&self.state.c2s_post_action_telemetry());
     }
 
-    pub(crate) fn activate_committed_route(&self) -> bool {
-        let (Some(key), Some(user)) = (self.registered_key.as_deref(), self.authenticated.as_ref())
-        else {
-            return false;
-        };
-        self.state.activate_session_if_current(
-            key,
+    pub(super) fn prepare_credential_attempt(
+        &self,
+        kind: crate::services::authentication::publication::CredentialKind,
+    ) -> Result<super::auth_publication::CredentialAttempt> {
+        super::auth_publication::CredentialAttempt::new(
+            self.frame_executions.auth_origin(),
             self.connection_id,
-            user.id,
-            user.auth_generation,
-            &self.route_lifecycle,
-            &self.disconnect,
+            kind,
         )
     }
 
-    /// Transport-success continuation for SASL2, Bind2 and SM resumption.
-    /// Credential state may already be committed because an issued FAST token
-    /// is part of the success frame. Only the replacement epoch is staged; it
-    /// becomes visible through an exact operation/connection fence here.
-    pub(crate) async fn publish_committed_authentication_and_route(&mut self) -> bool {
-        let published_epoch = if let Some(receipt) = self.pending_credential_commit.take() {
-            match self
-                .state
-                .authentication_service()
-                .publish_credential_commit(&receipt)
-                .await
-            {
-                crate::services::authentication::AuthenticationResult::Authenticated(epoch) => {
-                    epoch
-                }
-                crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
-                    self.state.c2s_authentication_telemetry().backend_failed();
-                    tracing::error!(
-                        ?error,
-                        connection_id = %self.connection_id,
-                        "could not publish transport-confirmed authentication epoch"
-                    );
-                    self.sm.resume_allowed = false;
-                    return false;
-                }
-                crate::services::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.state.c2s_authentication_telemetry().integrity_failed();
-                    tracing::error!(
-                        connection_id = %self.connection_id,
-                        "authentication publication integrity failure"
-                    );
-                    self.sm.resume_allowed = false;
-                    return false;
-                }
-                _ => {
-                    tracing::warn!(
-                        connection_id = %self.connection_id,
-                        "transport-confirmed authentication publication fence was lost"
-                    );
-                    self.sm.resume_allowed = false;
-                    return false;
-                }
-            }
-        } else {
-            None
-        };
-        self.user_agent_epoch = published_epoch;
-
-        let Some(key) = self.registered_key.as_deref() else {
-            return true;
-        };
-        let Some(user) = self.authenticated.clone() else {
-            return false;
-        };
-        let route_is_current = self.state.publish_user_agent_epoch_if_current(
-            key,
-            self.connection_id,
-            user.id,
-            user.auth_generation,
-            &self.route_lifecycle,
-            published_epoch,
+    pub(super) fn retain_credential_commit(
+        &mut self,
+        receipt: crate::services::authentication::CredentialCommitReceipt,
+        attempt: super::auth_publication::CredentialAttempt,
+    ) -> Result<()> {
+        let owner = attempt.into_owner(receipt)?;
+        anyhow::ensure!(
+            self.pending_credential_commit.is_none(),
+            "unsealed credential receipt already pending"
         );
-        if !route_is_current || !self.activate_committed_route() {
-            self.sm.resume_allowed = false;
-            return false;
+        if let Some(origin) = owner.origin() {
+            origin.retain_auth_receipt(owner.observation().clone())?;
         }
+        self.pending_credential_commit = Some(owner);
+        Ok(())
+    }
 
-        // A capability observation belongs to a connection incarnation, not
-        // merely to a full JID. The old route's exact mapping/pending/jobs were
-        // retired by compare-and-remove. Rebuild the observation under the
-        // transferred resource gate now that the replacement is routable, so
-        // live and durable resumes do not depend on the client repeating its
-        // unchanged initial presence.
-        self.rebind_resumed_caps_observation().await;
+    fn seal_auth_control(
+        &mut self,
+        control: &str,
+        resumed: bool,
+    ) -> Result<super::auth_publication::AuthControlHolder> {
+        use super::auth_publication::{
+            BoundRoute, CapsIntent, CapturedEffects, NotificationIntent, RouteIntent,
+        };
+        let (route, caps, notification) = if let Some(key) = self.registered_key.clone() {
+            let user = self
+                .authenticated
+                .as_ref()
+                .context("bound auth control has no principal")?;
+            let route = RouteIntent::Bound(BoundRoute {
+                key: key.clone(),
+                user: user.id,
+                generation: user.auth_generation,
+                connection: self.connection_id,
+                lifecycle: self.route_lifecycle.clone(),
+                disconnect: self.disconnect.clone(),
+            });
+            let caps = if resumed {
+                self.presence
+                    .resumed_caps_presence
+                    .take()
+                    .map(|presence| CapsIntent {
+                        presence,
+                        key: key.clone(),
+                        connection: self.connection_id,
+                        gate: self.presence.mix_presence_gate.clone(),
+                        generation: self.presence.caps_observation_generation.clone(),
+                    })
+            } else {
+                None
+            };
+            let notification = self.user_agent_id.map(|device| NotificationIntent {
+                account: format!("{}@{}", user.username, self.state.local_domain()),
+                user: user.id,
+                device,
+                excluded_key: key,
+            });
+            (route, caps, notification)
+        } else {
+            (RouteIntent::Unbound, None, None)
+        };
+        let owner = self
+            .pending_credential_commit
+            .take()
+            .context("auth control has no returned credential receipt")?;
+        owner.seal(
+            control,
+            CapturedEffects {
+                route,
+                caps,
+                notification,
+            },
+        )
+    }
 
-        if let (Some(device_id), Some(epoch)) = (self.user_agent_id, published_epoch) {
-            let account = format!("{}@{}", user.username, self.state.local_domain());
-            let current = self.registered_key.as_deref();
-            for (other_key, session) in self.state.session_entries_for(&account) {
-                if Some(other_key.as_str()) != current
-                    && session.user_id == user.id
-                    && session.user_agent_id == Some(device_id)
-                    && session.user_agent_epoch.is_some_and(|value| value < epoch)
-                {
-                    session.disconnect.cancel();
-                }
-            }
-            if let Err(error) = self
-                .state
-                .notify_remote_user_agent_replacement(&account, user.id, device_id, epoch)
-                .await
-            {
-                tracing::warn!(
-                    ?error,
-                    user_id = %user.id,
-                    %device_id,
-                    epoch,
-                    "cross-node user-agent replacement was not acknowledged; maintenance will retry"
-                );
-            }
+    pub(super) fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
+        let control = replies
+            .first()
+            .context("auth action has no terminal control")?;
+        let holder = self.seal_auth_control(control, false)?;
+        Ok(Action::SendManyThenActivate(
+            super::auth_publication::AuthReplies { replies, holder },
+        ))
+    }
+
+    pub(super) fn seal_resume_authentication(&mut self, payload: &mut ResumePayload) -> Result<()> {
+        anyhow::ensure!(
+            payload.activate_route && payload.auth_publication.is_none(),
+            "resume authentication seal is not pending"
+        );
+        payload.auth_publication = Some(self.seal_auth_control(&payload.control, true)?);
+        Ok(())
+    }
+
+    /// The transport supplies the exact consumed control owner; no latest
+    /// session receipt/frame slot is consulted after successful transport.
+    pub(crate) async fn publish_committed_authentication_and_route(
+        &mut self,
+        owner: super::auth_publication::OwnedPublication,
+    ) -> bool {
+        let origin = owner.origin();
+        let mut port = SessionAuthPublication { session: self };
+        let future = owner.publish(&mut port);
+        if let Some(execution) = origin {
+            execution.observe_publication(future).await
+        } else {
+            // Explicit compatibility for handle()-only callers: its missing
+            // frame origin was captured at receipt return, never guessed now.
+            future.await.transport_succeeded()
         }
-        true
     }
 
     pub(crate) fn resource_bind_deadline(&self) -> Option<std::time::Instant> {
@@ -1041,31 +1220,16 @@ impl ProtocolSession {
         &mut self,
         item: &crate::outbound::OutboundItem,
     ) -> Result<bool> {
-        anyhow::ensure!(
-            item.validate_durable_source_shape(),
-            "outbound item has an invalid durable source/hand-off shape"
-        );
-        let managed_by_sm = durable_delivery_managed_by_sm(
-            self.sm.enabled && self.sm.db_id.is_some(),
-            &item.stanza,
-            item.durable_source.is_some(),
-        );
-        self.record_outbound_with_source(&item.stanza, item.durable_source)
-            .await?;
-        if managed_by_sm {
-            if item.mix_delivery().is_some() {
-                let session_id = self
-                    .sm
-                    .db_id
-                    .context("XEP-0198 MIX ownership was not persisted")?;
-                item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SmPersisted {
-                    session_id,
-                });
-            } else {
-                item.confirm_transport_ownership();
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
+        sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.record_item(item, &observation).await;
+            if result.is_err() {
+                observation.returned_error();
             }
-        }
-        Ok(managed_by_sm)
+            result
+        })
+        .await
     }
 
     async fn record_outbound_with_source(
@@ -1073,78 +1237,70 @@ impl ProtocolSession {
         stanza: &str,
         durable_source: Option<crate::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
-        self.state.outbound_stanza_telemetry().recorded();
-        if self.sm.enabled && is_counted_stanza(stanza) {
-            let next_bytes = self
-                .sm
-                .unacked
-                .iter()
-                .map(|entry| entry.stanza.len())
-                .sum::<usize>()
-                .saturating_add(stanza.len());
-            if self.sm.unacked.len() >= self.sm_runtime_policy.buffer.max_unacked_stanzas
-                || next_bytes > self.sm_runtime_policy.buffer.max_unacked_bytes
-            {
-                self.sm.resume_allowed = false;
-                anyhow::bail!("XEP-0198 unacknowledged queue capacity reached");
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
+        sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn
+                .record_source(stanza, durable_source, &observation)
+                .await;
+            if result.is_err() {
+                observation.returned_error();
             }
-            let projected = self
-                .sm_resident_bytes()
-                .and_then(|bytes| {
-                    bytes
-                        .checked_add(std::mem::size_of::<crate::outbound::SmUnackedStanza>())
-                        .and_then(|bytes| bytes.checked_add(stanza.len()))
-                })
-                .context("XEP-0198 projected resident-size overflow")?;
-            if projected > self.sm_runtime_policy.buffer.max_snapshot_bytes
-                || self
-                    .sm
-                    .capacity
-                    .as_ref()
-                    .is_none_or(|lease| lease.try_grow_to(projected).is_err())
-            {
-                self.sm.resume_allowed = false;
-                anyhow::bail!("XEP-0198 process memory capacity reached");
-            }
-            self.sm.outbound_h = self.sm.outbound_h.wrapping_add(1);
-            self.sm
-                .unacked
-                .push_back(crate::outbound::SmUnackedStanza::with_source(
-                    stanza.to_owned(),
-                    durable_source,
-                ));
-            if let Err(error) = self.checkpoint_sm().await {
-                if error
-                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
-                    .is_some()
-                {
-                    // The database checkpoint rolled back its entire source
-                    // transfer. Do not let a stale queued item advance h or
-                    // remain in the process replay queue before it is sent.
-                    self.sm.unacked.pop_back();
-                    self.sm.outbound_h = self.sm.outbound_h.wrapping_sub(1);
-                    if let (Some(bytes), Some(capacity)) =
-                        (self.sm_resident_bytes(), self.sm.capacity.as_ref())
-                    {
-                        capacity
-                            .shrink_to(bytes)
-                            .context("restore SM capacity after superseded delivery")?;
-                    }
-                }
-                return Err(error);
-            }
-        } else if durable_source.is_some() {
-            // With SM disabled, counted RFC 6120 stanzas are legitimately
-            // completed at the transport write boundary. Non-counted control
-            // elements always use that path as well. Only an active SM session
-            // can take ownership of a counted stanza's durable fence.
-            debug_assert!(!self.sm.enabled || !is_counted_stanza(stanza));
-        }
-        Ok(())
+            result
+        })
+        .await
     }
 
     pub fn record_replayed(&self) {
         self.state.outbound_stanza_telemetry().recorded();
+    }
+
+    fn sm_snapshot_view(&self) -> sm_owner::SmSnapshotView<'_> {
+        sm_owner::SmSnapshotView {
+            available: &self.available,
+            carbons: &self.carbons,
+            priority: &self.priority,
+            blocklist_requested: &self.blocklist_requested,
+            roster_requested: &self.roster_requested,
+            privacy_active: &self.privacy_active,
+            privacy_requested: &self.privacy_requested,
+            peer_ip: &self.peer_ip,
+            user_agent_id: &self.user_agent_id,
+            joined_rooms: &self.joined_rooms,
+            directed_presence: &self.directed_presence,
+            last_presence: &self.last_presence,
+        }
+    }
+
+    fn sm_transport_turn(
+        &mut self,
+    ) -> sm_owner::SmTransportTurn<'_, impl sm_owner::SmOwnerPort + '_> {
+        // Constructing the borrowed view performs no atomic reads or cloning.
+        // Snapshot/accounting sampling remains at its original call sites.
+        sm_owner::SmTransportTurn {
+            sm: &mut self.sm,
+            view: sm_owner::SmSnapshotView {
+                available: &self.available,
+                carbons: &self.carbons,
+                priority: &self.priority,
+                blocklist_requested: &self.blocklist_requested,
+                roster_requested: &self.roster_requested,
+                privacy_active: &self.privacy_active,
+                privacy_requested: &self.privacy_requested,
+                peer_ip: &self.peer_ip,
+                user_agent_id: &self.user_agent_id,
+                joined_rooms: &self.joined_rooms,
+                directed_presence: &self.directed_presence,
+                last_presence: &self.last_presence,
+            },
+            policy: &self.sm_runtime_policy,
+            connection_id: self.connection_id,
+            port: sm_owner::RealSmPort {
+                service: self.state.sm_service(),
+                governor: self.state.sm_memory_governor(),
+                telemetry: self.state.outbound_stanza_telemetry(),
+            },
+        }
     }
 
     pub(crate) fn sm_snapshot(&self) -> crate::services::sm::SmSessionSnapshot {
@@ -1155,46 +1311,7 @@ impl ProtocolSession {
         &self,
         unacked: Vec<crate::outbound::SmUnackedStanza>,
     ) -> crate::services::sm::SmSessionSnapshot {
-        crate::services::sm::SmSessionSnapshot {
-            inbound_h: self.sm.inbound_h,
-            outbound_h: self.sm.outbound_h,
-            acked_h: self.sm.acked_h,
-            available: self
-                .available
-                .as_ref()
-                .is_some_and(|available| available.load(Ordering::Relaxed)),
-            carbons: self.carbons.load(Ordering::Acquire),
-            priority: self.priority.load(Ordering::Relaxed),
-            blocklist_requested: self.blocklist_requested.load(Ordering::Relaxed),
-            roster_requested: self.roster_requested.load(Ordering::Relaxed),
-            active_privacy_list: self
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone(),
-            privacy_requested: self.privacy_requested.load(Ordering::Relaxed),
-            peer_ip: self.peer_ip,
-            user_agent_id: self.user_agent_id,
-            joined_rooms: self
-                .joined_rooms
-                .iter()
-                .map(|membership| crate::services::sm::SmMucMembership {
-                    room_jid: membership.key().clone(),
-                    nick: membership.nick.clone(),
-                })
-                .collect(),
-            directed_presence: self
-                .directed_presence
-                .iter()
-                .map(|jid| jid.key().clone())
-                .collect(),
-            last_presence: self
-                .last_presence
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone(),
-            unacked,
-        }
+        self.sm_snapshot_view().snapshot(&self.sm, unacked)
     }
 
     /// Transfer the large replay FIFO into cleanup ownership. Finalization
@@ -1209,100 +1326,20 @@ impl ProtocolSession {
     /// This mirrors `SmSessionSnapshot::resident_bytes` and is used to reserve
     /// both retained growth and short-lived snapshot clones before allocation.
     pub(crate) fn sm_resident_bytes(&self) -> Option<usize> {
-        let mut bytes = std::mem::size_of::<crate::services::sm::SmSessionSnapshot>();
-        let mut add = |value: usize| {
-            bytes = bytes.checked_add(value)?;
-            Some(())
-        };
-        if let Some(value) = self
-            .privacy_active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-        {
-            add(value.len())?;
-        }
-        if let Some(value) = self
-            .last_presence
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-        {
-            add(value.len())?;
-        }
-        add(self
-            .joined_rooms
-            .len()
-            .checked_mul(std::mem::size_of::<crate::services::sm::SmMucMembership>())?)?;
-        for membership in self.joined_rooms.iter() {
-            add(membership.key().len())?;
-            add(membership.nick.len())?;
-        }
-        add(self
-            .directed_presence
-            .len()
-            .checked_mul(std::mem::size_of::<String>())?)?;
-        for jid in self.directed_presence.iter() {
-            add(jid.key().len())?;
-        }
-        add(self
-            .sm
-            .unacked
-            .len()
-            .checked_mul(std::mem::size_of::<crate::outbound::SmUnackedStanza>())?)?;
-        for stanza in &self.sm.unacked {
-            add(stanza.stanza.len())?;
-        }
-        Some(bytes)
+        self.sm_snapshot_view().resident_bytes(&self.sm)
     }
 
     pub(crate) async fn checkpoint_sm(&mut self) -> Result<()> {
-        let Some(id) = self.sm.db_id else {
-            return Ok(());
-        };
-        let live_bytes = self
-            .sm_resident_bytes()
-            .context("XEP-0198 live resident-size overflow")?;
-        let _snapshot_clone_capacity = self
-            .state
-            .sm_memory_governor()
-            .try_reserve_live(live_bytes)
-            .context("XEP-0198 transient snapshot capacity reached")?;
-        let snapshot = self.sm_snapshot();
-        let snapshot_bytes = snapshot
-            .resident_bytes()
-            .context("XEP-0198 snapshot resident-size overflow")?;
-        if snapshot_bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes
-            || self
-                .sm
-                .capacity
-                .as_ref()
-                .is_none_or(|lease| lease.try_grow_to(snapshot_bytes).is_err())
-        {
-            self.sm.resume_allowed = false;
-            anyhow::bail!("XEP-0198 process memory capacity reached");
-        }
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.state.sm_service().checkpoint_session(
-                id,
-                self.connection_id,
-                &snapshot,
-                self.sm.resume_timeout_seconds,
-                self.sm_runtime_policy.session.live_lease_seconds,
-                self.sm_runtime_policy.buffer.max_unacked_stanzas,
-                self.sm_runtime_policy.buffer.max_unacked_bytes,
-            ),
-        )
+        let mut turn = self.sm_transport_turn();
+        let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Checkpoint);
+        sm_owner::SmTurnRunner::new(observation.clone(), async move {
+            let result = turn.checkpoint_in_turn(&observation).await;
+            if result.is_err() {
+                observation.returned_error();
+            }
+            result
+        })
         .await
-        .context("XEP-0198 checkpoint database operation timed out")??;
-        anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
-        // A checkpoint can rotate a MIX lease while atomically transferring
-        // the stanza into the SM queue.  Keep the process-resident replay
-        // queue on that exact new lease: a later acknowledgement must never
-        // consume the old worker lease.
-        self.apply_sm_ownership_resolution(&outcome.ownership);
-        Ok(())
     }
 
     pub(crate) fn apply_sm_ownership_resolution(

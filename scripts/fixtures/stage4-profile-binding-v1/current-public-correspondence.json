@@ -1,0 +1,146 @@
+{
+  "actual_authority": false,
+  "compiled": {
+    "actual_artifact_metadata_only": {
+      "bytes": 242684744,
+      "mode": 493,
+      "path": "/constructed-metadata-only/public-fixture/compiled/actual_artifact_metadata_only/path",
+      "sha256": "5d3194ad962f85272c7942e5dbac1f3c1c639126ac5bf27bf442564800a4273b"
+    },
+    "actual_benchmark_count_listed": 0,
+    "actual_cargo_argv": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "rust-xmpp-server",
+      "--bin",
+      "rust-xmpp-server",
+      "--",
+      "--list"
+    ],
+    "actual_inventory_count": 2182,
+    "actual_test_count_listed": 2182,
+    "cleanup": "Complete",
+    "files": 1810,
+    "postcheck_sha256": "260da1ea7640672cc4d875816fcb02aafe01a4ea049176d0c0190c5d04614eab",
+    "runtime_qualification": false,
+    "rust_tests_run": 0,
+    "semantic_qualification": false,
+    "source_bytes": 41939271,
+    "source_root": "/constructed-metadata-only/public-fixture/compiled/source_root"
+  },
+  "data_preparation_actions": {
+    "binary_reads_or_copies": 0,
+    "git_or_network_actions": 0,
+    "project_imports_tests_builds_strip_saved_starts": 0,
+    "source_modifications": 0
+  },
+  "excluded_from_this_correspondence": {
+    "artifact_execution_or_derivation": true,
+    "consumer_source_hash_or_future_consumer_pin": true,
+    "future_record_or_contract_hash": true,
+    "private963_helper_overlay": true,
+    "saved_record_replay_or_mutant_coverage": true
+  },
+  "fixed_compilation_projection": {
+    "bytes": 18606272,
+    "files": 941,
+    "key_authority": "Exact941 historical audited keys only; historical values are not current authority",
+    "public_and_actual_compiled_projection_equal": true,
+    "sha256": "23f4e5fb67e85a7154a2472799b671b691e0c3b604da3acda88f75143a2d0b98"
+  },
+  "full_source_comparison": {
+    "canonical_path_hash_size_mode_map_sha256": "a0d917571c1fbbea2315ab6314c173da5201cfadf6ae2daf80e30601b57b4976",
+    "current_and_compiled_known_leaves_freshly_rehashed": true,
+    "fresh_source_readback_scope": "Finite known-key source readback in a cooperative namespace; full membership comes from accepted recovery/build preparation receipts, not a new generic whole-tree enumeration",
+    "identical_path_set": true,
+    "public_and_compiled_sha256_bytes_modes_equal_for_all1810": true,
+    "raw_json_before_after_byte_identity_claimed": false,
+    "source_before_after_parsed_maps_equal": true
+  },
+  "original_receipt_sha256": "7a94f05d2af5e2193d4ca25ad2847ee466897961e7a1c9383058cc5c2ad3a12c",
+  "public": {
+    "checkout_eol": {
+      "path": "scripts/dev/start.bat",
+      "raw_blob_oid_verified": true,
+      "raw_bytes": 1067,
+      "rule": "*.bat text eol=crlf",
+      "worktree_bytes": 1099
+    },
+    "commit": "f1e4f834fc929f99502ebad97249dcce4a52f8fb",
+    "eol_worktree_identity": {
+      "bytes": 1099,
+      "mode": 420,
+      "sha256": "cb4ede1c28bff19b0d49a49baedaaac80e0e2c9c0850eb0c87581a600bdd0e49"
+    },
+    "files": 1810,
+    "raw_git_blob_bytes": 41939239,
+    "source_git_binding": "Accepted full path/hash/size/mode recovery and raw object provenance; no new Git execution",
+    "source_root": "/constructed-metadata-only/public-fixture/public/source_root",
+    "tree": "6433e11f552e7fc466b97608c65d61357ad3520f",
+    "worktree_bytes": 41939271
+  },
+  "qualification": "Unqualified",
+  "references": {
+    "actual_build_postcheck": {
+      "bytes": 15285,
+      "path": "/constructed-metadata-only/public-fixture/references/actual_build_postcheck/path",
+      "sha256": "260da1ea7640672cc4d875816fcb02aafe01a4ea049176d0c0190c5d04614eab"
+    },
+    "compiled_source_after": {
+      "bytes": 272041,
+      "path": "/constructed-metadata-only/public-fixture/references/compiled_source_after/path",
+      "sha256": "69a7a21f6402067f791164ef0a4d2abe1bd9fe77d393b9338231380c161a9e64"
+    },
+    "compiled_source_before": {
+      "bytes": 272041,
+      "path": "/constructed-metadata-only/public-fixture/references/compiled_source_before/path",
+      "sha256": "aeed96457c3be42d0d4b31adfbd1d9e3462ecf8ee3e61bfcd6fe2d30c22dfc47"
+    },
+    "compiled_source_copy_manifest": {
+      "bytes": 527319,
+      "path": "/constructed-metadata-only/public-fixture/references/compiled_source_copy_manifest/path",
+      "sha256": "0897bc354e28c0c8265deb96f416d7c01c09925191e41f075c730d4bb97c0d83"
+    },
+    "fresh_both_root_readback": {
+      "bytes": 2292,
+      "path": "/constructed-metadata-only/public-fixture/references/fresh_both_root_readback/path",
+      "sha256": "8a473841d62a3054f8bef87f7a8e7eb526ad4b8aaa725d49fb5fd5d3064373f5"
+    },
+    "git_object_readback_map": {
+      "bytes": 338969,
+      "path": "/constructed-metadata-only/public-fixture/references/git_object_readback_map/path",
+      "sha256": "5052e2aecb25a2fd6b25fef742d188cae9cb70fbf385b6ff0b84aa7077c43f7c"
+    },
+    "historical_fixed_key_authority": {
+      "bytes": 166075,
+      "path": "/constructed-metadata-only/public-fixture/references/historical_fixed_key_authority/path",
+      "sha256": "181a5430b95ae385e8954ef08ad0a51eed2fe6a5c54f6eff25315ec1fe4b55bb"
+    },
+    "public_recovery": {
+      "bytes": 2594,
+      "path": "/constructed-metadata-only/public-fixture/references/public_recovery/path",
+      "sha256": "59aee5629075f1bee7ff973214c846a9c1d1abd78b47b53d2395f34f9e313a1b"
+    },
+    "public_worktree_map": {
+      "bytes": 257560,
+      "path": "/constructed-metadata-only/public-fixture/references/public_worktree_map/path",
+      "sha256": "846c49756e03de11ef33cfa2295c34710825cdf61ea0ffb7bcd501bb78dcfc21"
+    },
+    "remote_public_recovery_manifest": {
+      "bytes": 94569,
+      "path": "/constructed-metadata-only/public-fixture/references/remote_public_recovery_manifest/path",
+      "sha256": "56925a9b82742a5eb07736a4644387849df4f11dc23dd37610132404daee88fc"
+    },
+    "verified_source_blob_provenance": {
+      "bytes": 646910,
+      "path": "/constructed-metadata-only/public-fixture/references/verified_source_blob_provenance/path",
+      "sha256": "1e51d70b7251afcc4a161ee34cd87980762d1fc3aaf0a3b610afb16417a29339"
+    }
+  },
+  "schema": "northstar-current-public-correspondence-control-fixture-v1",
+  "scope": "Copied historical metadata for constructed pure control inputs only. Every former private location is a synthetic nonexistent fixture name. This file is not the accepted correspondence receipt and cannot replace its external authentication.",
+  "status": "ConstructedPathSanitizedControlFixture_NotAuthority"
+}

@@ -3,6 +3,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod mix;
+
 use northstar_xmpp_types::{prepare_domainpart, CanonicalJid};
 use uuid::Uuid;
 

@@ -1,0 +1,68 @@
+{
+  "schema": "northstar.stage3.bosh-transfer-wip.v1",
+  "status": "WorkInProgressNotAccepted",
+  "base_commit": "4d4a6c6fc768f675800ac36e4ea82fd4e0cff6da",
+  "scope": "First wired BOSH pending MIX transfer and actual item/FIFO continuation",
+  "implemented_source": [
+    "Outer actor observation surrounds the four existing timed child operations",
+    "Private preparation owns the actual OutboundItem and supplies one closed transport-independent request through MixService, repository and SQL",
+    "The actual rotated source and successful COMMIT receipt are retained independently of the returned continuation",
+    "Matching returned authority precedes mutation of the same item, BoshPersisted notification attempt and the existing bounded FIFO push"
+  ],
+  "checks": {
+    "file_scoped_rustfmt": {
+      "exit_code": 0
+    },
+    "compile": "NotRun",
+    "lint": "NotRun",
+    "tests": "NotRun"
+  },
+  "pending": [
+    "Independent semantic source review and any required corrections",
+    "Finite pure/fake regression source, exact selection and source-wiring gates",
+    "Ordinary compile, lint and unit validation",
+    "BOSH response bind/rebuild/exposure/cache and renewal/ACK",
+    "Composed saved-case replay, mutation and shrinking; full Stage3 acceptance"
+  ],
+  "limits": [
+    "This saves incomplete source, with no runtime acceptance claim",
+    "Setup before existing timers is constant-size; additional bounded transfer metadata is allocated inside the timed child and is outside existing XML governor accounting",
+    "Notification attempt, FIFO acceptance and transaction commitment are distinct facts",
+    "No live SQL, product socket, wire, process-loss or recovery qualification is supplied",
+    "The approved SM retention policy change is separate"
+  ],
+  "source_files": {
+    "crates/northstar-delivery-core/src/lib.rs": {
+      "sha256": "1d1dc0d309b3dff5a2b97185944dd8fdc49dea7d7c572668f966988927e6b963",
+      "bytes": 7985
+    },
+    "crates/northstar-delivery-core/src/bosh_ownership.rs": {
+      "sha256": "2ddd43d07e9b2bf6f812ef6b530f85910ca0531bc16389dd1b38b279ef0fd5b0",
+      "bytes": 13059
+    },
+    "src/bosh.rs": {
+      "sha256": "331e04711b3a729b11ca627ff244a59d40575dd9aa5b997cac21b10f0b3edd44",
+      "bytes": 113367
+    },
+    "src/bosh/action.rs": {
+      "sha256": "d02a415a9024d9077c9c172aeef8c0363279304cf7bb084b3c2ed3f18a890bd9",
+      "bytes": 4840
+    },
+    "src/bosh/ownership.rs": {
+      "sha256": "82a22f5e2d0a3557becdc01d9db8e434ea08466c0f0efd5ed8cc78c88f87a14d",
+      "bytes": 6578
+    },
+    "src/services/mix.rs": {
+      "sha256": "baa03a4ee52396912605ee46e836aea2c660edf4d42d837a2d8120952c7be7fe",
+      "bytes": 121661
+    },
+    "src/db/mix_repository.rs": {
+      "sha256": "3288bd631e437371eb05c78717787f50a6fe83bcf3a827a8d8eea9bd979d0a5e",
+      "bytes": 68120
+    },
+    "src/db/mix.rs": {
+      "sha256": "daca3c9631ad00330323698c04625267a58b8a61b6ba4f4c2699d71b64f30314",
+      "bytes": 298439
+    }
+  }
+}

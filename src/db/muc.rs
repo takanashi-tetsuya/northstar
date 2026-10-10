@@ -1622,6 +1622,58 @@ pub async fn admit_muc_discussion(
     pool: &PgPool,
     message: MucDiscussion<'_>,
 ) -> Result<MucDiscussionAdmission> {
+    admit_muc_discussion_inner(pool, message, None).await
+}
+
+/// Project only this bound request into the unchanged SQL transaction. No
+/// independent borrowed command can be paired with its COMMIT observation.
+pub(crate) async fn admit_muc_discussion_observed(
+    pool: &PgPool,
+    request: &northstar_room_application::discussion::Request,
+) -> Result<MucDiscussionAdmission> {
+    admit_muc_discussion_inner(
+        pool,
+        super::room::discussion_to_db(request.command()),
+        Some(request),
+    )
+    .await
+}
+
+async fn commit_muc_discussion(
+    transaction: Transaction<'_, Postgres>,
+    request: Option<&northstar_room_application::discussion::Request>,
+    outcome: MucDiscussionAdmission,
+) -> Result<MucDiscussionAdmission> {
+    if let Some(request) = request {
+        use northstar_room_application::discussion::{commit_observed, CommitError};
+        let observed = match outcome {
+            MucDiscussionAdmission::Stored(id) => {
+                northstar_room_core::MucDiscussionAdmission::Stored(id)
+            }
+            MucDiscussionAdmission::Replay(id) => {
+                northstar_room_core::MucDiscussionAdmission::Replay(id)
+            }
+            MucDiscussionAdmission::Unauthorized | MucDiscussionAdmission::Stale => {
+                anyhow::bail!("MUC refusal cannot become a COMMIT receipt");
+            }
+        };
+        commit_observed(transaction.commit(), request, observed)
+            .await
+            .map_err(|error| match error {
+                CommitError::Observation(error) => anyhow::Error::from(error),
+                CommitError::Commit(error) => anyhow::Error::from(error),
+            })?;
+    } else {
+        transaction.commit().await?;
+    }
+    Ok(outcome)
+}
+
+async fn admit_muc_discussion_inner(
+    pool: &PgPool,
+    message: MucDiscussion<'_>,
+    request: Option<&northstar_room_application::discussion::Request>,
+) -> Result<MucDiscussionAdmission> {
     let actor_scope = canonical_history_actor(message.actor_scope)?;
     let sender_jid = canonical_history_sender(message.sender_jid)?;
     validate_history_payload(message.nick, message.stanza)?;
@@ -1664,8 +1716,12 @@ pub async fn admit_muc_discussion(
             .execute(&mut *transaction)
             .await?;
         }
-        transaction.commit().await?;
-        return Ok(MucDiscussionAdmission::Stored(message.id));
+        return commit_muc_discussion(
+            transaction,
+            request,
+            MucDiscussionAdmission::Stored(message.id),
+        )
+        .await;
     };
     validate_origin_id(origin_id)?;
     let digest = muc_origin_digest(&actor_scope, origin_id);
@@ -1723,8 +1779,12 @@ pub async fn admit_muc_discussion(
             .execute(&mut *transaction)
             .await?;
         }
-        transaction.commit().await?;
-        return Ok(MucDiscussionAdmission::Stored(message.id));
+        return commit_muc_discussion(
+            transaction,
+            request,
+            MucDiscussionAdmission::Stored(message.id),
+        )
+        .await;
     }
 
     let existing = sqlx::query(
@@ -1747,8 +1807,12 @@ pub async fn admit_muc_discussion(
         "MUC origin-id digest collision"
     );
     let existing_id: Uuid = existing.get("stanza_id");
-    transaction.commit().await?;
-    Ok(MucDiscussionAdmission::Replay(existing_id))
+    commit_muc_discussion(
+        transaction,
+        request,
+        MucDiscussionAdmission::Replay(existing_id),
+    )
+    .await
 }
 
 /// Change a single-node room subject under the same database authority fence

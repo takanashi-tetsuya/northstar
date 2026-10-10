@@ -1,0 +1,388 @@
+{
+  "schema": "northstar-stage3-saved-entry-ordinary-result-v1",
+  "status": "LimitedParserAndMockScopePassed_ProfileIncomplete",
+  "check_base_commit": "fb1250eca2feaede98b7ef1958da19fc444cd479",
+  "save_base_commit": "8a8a11e7fdafc691dc0e1e13ab0350c4a1d9ed1c",
+  "scope": "Ordinary validation of the initial test-only direct saved-entry plumbing, strict input parser and closed Python profile scaffolding. The ignored entry and fixed profiles were not executed.",
+  "changed_sources": {
+    "scripts/check-admission-execution.mjs": {
+      "sha256": "27d54bc07c1d2fd7e15a55f941468e40a055e36aeb3110fdc80f4db25742c1c1",
+      "bytes": 24626
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "sha256": "037369cd56db53aee2cc03e965112a859eb5edb48008438cddc6700e05132012",
+      "bytes": 109014
+    },
+    "scripts/test-admission-execution.mjs": {
+      "sha256": "2d21ad8fb3664b22b9ad3ed35ce6340ce0d183db5d0e316d1d7cf06df0e6bdb7",
+      "bytes": 12286
+    },
+    "scripts/test-direct-case.py": {
+      "sha256": "694e40095a2b3aa9f192cc50eb9bfb6c7fa94821f2f1ff1ee507b22b3094551a",
+      "bytes": 35043
+    },
+    "src/direct_replay.rs": {
+      "sha256": "c0a7eed7612ba5cb43352f33a57d691f27e00415a5725bd5659bbf0a21c15695",
+      "bytes": 48234
+    },
+    "src/xmpp/frame_execution.rs": {
+      "sha256": "b395403362bf5682937709e775c2eac4f9e9712da12416ec881d601d044c76bd",
+      "bytes": 53958
+    },
+    "src/xmpp/protocol/messaging/saved_case.rs": {
+      "sha256": "74c0b0aa32d3e70711052cb25b013a66876bbf4fd37dc84fefb3871404d9909f",
+      "bytes": 56319
+    }
+  },
+  "source_scope": {
+    "files": 62,
+    "bytes": 2083596,
+    "manifest_sha256": "9a38683b8b543ffd3930af46e25efda1ad274ace4c20707f6ad4918d2b3bf6a0",
+    "manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+    "paths": [
+      ".github/workflows/ci.yml",
+      "Cargo.lock",
+      "Cargo.toml",
+      "catalog/runtime-experiments.json",
+      "catalog/runtime-experiments.schema.json",
+      "crates/northstar-abuse-policy/Cargo.toml",
+      "crates/northstar-abuse-policy/src/admission.rs",
+      "crates/northstar-abuse-policy/src/admission_execution.rs",
+      "crates/northstar-abuse-policy/src/admission_transaction.rs",
+      "crates/northstar-abuse-policy/src/config.rs",
+      "crates/northstar-abuse-policy/src/cooldown.rs",
+      "crates/northstar-abuse-policy/src/escalation.rs",
+      "crates/northstar-abuse-policy/src/lib.rs",
+      "crates/northstar-abuse-policy/src/model.rs",
+      "crates/northstar-abuse-policy/src/pow.rs",
+      "crates/northstar-delivery-core/Cargo.toml",
+      "crates/northstar-delivery-core/src/native_write.rs",
+      "crates/northstar-message-application/src/direct_commit.rs",
+      "crates/northstar-message-application/src/direct_handoff.rs",
+      "crates/northstar-message-application/src/direct_lifecycle.rs",
+      "crates/northstar-message-application/src/lib.rs",
+      "crates/northstar-test-harness/Cargo.toml",
+      "crates/northstar-test-harness/src/activation.rs",
+      "crates/northstar-test-harness/src/bin/northstar-admission-replay.rs",
+      "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "crates/northstar-test-harness/src/controlled_admission/input.rs",
+      "crates/northstar-test-harness/src/controlled_admission/mod.rs",
+      "crates/northstar-test-harness/src/controlled_admission/stage1.rs",
+      "crates/northstar-test-harness/src/database.rs",
+      "crates/northstar-test-harness/src/diagnostics.rs",
+      "crates/northstar-test-harness/src/lib.rs",
+      "crates/northstar-test-harness/src/listener.rs",
+      "crates/northstar-test-harness/src/process.rs",
+      "crates/northstar-test-harness/src/readiness.rs",
+      "rust-toolchain.toml",
+      "scripts/capture-controlled-admission.py",
+      "scripts/check-admission-execution.mjs",
+      "scripts/check-runtime-experiments.mjs",
+      "scripts/lib/controlled_admission.py",
+      "scripts/lib/controlled_admission_supervision.py",
+      "scripts/lib/direct_case.py",
+      "scripts/lib/experiment_contract.py",
+      "scripts/mixed-traffic-soak.py",
+      "scripts/run-controlled-admission.py",
+      "scripts/test-admission-execution.mjs",
+      "scripts/test-controlled-admission.py",
+      "scripts/test-direct-case.py",
+      "scripts/test-experiment-contract.py",
+      "scripts/test-runtime-experiments.mjs",
+      "src/db/message_admission_repository.rs",
+      "src/db/replay.rs",
+      "src/direct_replay.rs",
+      "src/main.rs",
+      "src/outbound.rs",
+      "src/services/message_admission.rs",
+      "src/services/message_admission/witness.rs",
+      "src/services/messaging.rs",
+      "src/services/messaging/direct_route.rs",
+      "src/services/messaging/direct_workflow.rs",
+      "src/xmpp/frame_execution.rs",
+      "src/xmpp/protocol/messaging.rs",
+      "src/xmpp/protocol/messaging/saved_case.rs"
+    ],
+    "binding": "Reconstruct from save_base_commit plus the seven changed_sources. Stage2 parser sources were already the same tested bytes before their separate save; local fast-forward changed no scoped file. This is a scoped ordinary-check map, not complete saved-profile build provenance."
+  },
+  "checks": {
+    "python_ast": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.126016449",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_bytes": 0
+    },
+    "gates": {
+      "exit_code": 0,
+      "elapsed_seconds": "9.646294631",
+      "log_sha256": "ea7466e9aa91623aabcc949ce2dc8652a76f6927814ebf96e6b6182e9495474e",
+      "log_bytes": 17880
+    },
+    "execution_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.539793784",
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339",
+      "log_bytes": 40
+    },
+    "admission_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.202598597",
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1",
+      "log_bytes": 207
+    },
+    "architecture_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "1.586422027",
+      "log_sha256": "7c2f7de2652307e6d67ccefc64f0a46c3d4129c434d36764b0ed74f2e8bc2b36",
+      "log_bytes": 183
+    },
+    "legacy_mock": {
+      "exit_code": 0,
+      "elapsed_seconds": "225.372376507",
+      "log_sha256": "28e0325a2310b119c50b45c7a10cef822f2a83a3cd3d23092f31118fc5a03c63",
+      "log_bytes": 20320
+    },
+    "direct_mock": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.169688972",
+      "log_sha256": "449854506406a44b66e63920013bbddc9ea77b783d96ebf1935af63c0e338fbb",
+      "log_bytes": 4552
+    },
+    "format_check": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.110101409",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_bytes": 0
+    },
+    "compile": {
+      "exit_code": 0,
+      "elapsed_seconds": "85.039077478",
+      "log_sha256": "1a5afe4d78edffbdfc22262a2d9185b066ad9b28c8d04f1b2d783bd636284df2",
+      "log_bytes": 149
+    },
+    "clippy": {
+      "exit_code": 0,
+      "elapsed_seconds": "100.316119982",
+      "log_sha256": "a7c2f46850cb1b667e51ed4bb487ae49b55eac178b26cf7376e958393f7059f2",
+      "log_bytes": 275
+    },
+    "inventory_core": {
+      "exit_code": 0,
+      "elapsed_seconds": "1.078357207",
+      "log_sha256": "2c846f2b8ded0e75062a877725949641c379b349bf0b714500af9df71348e704",
+      "log_bytes": 4021
+    },
+    "inventory_server": {
+      "exit_code": 0,
+      "elapsed_seconds": "158.676826340",
+      "log_sha256": "af284c5b0b46dfcfbefea34e565df8d0e401cc01af88909b12f4d586fa5fff8e",
+      "log_bytes": 171621
+    },
+    "graphs": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.429997695",
+      "log_sha256": "98531953498d151c17dc8ce2da2481e595005efc41a110f420e10f1a3456eef6",
+      "log_bytes": 229
+    }
+  },
+  "rust_tests": {
+    "inventories": {
+      "core": 38,
+      "server": 1853
+    },
+    "selected": 25,
+    "ran": 25,
+    "passed": 25,
+    "failed": 0,
+    "ignored": 0,
+    "selection": [
+      {
+        "target": "core",
+        "name": "native_write::claimed_token_tests::old_claim_is_rejected_after_replacement_while_current_claim_still_matches"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::supplied_frame_identity_preserves_initial_policy_and_actual_runner_retirement"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::empty_tagged_variants_reject_unknown_and_duplicate_keys"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::named_objects_reject_root_and_nested_positional_arrays"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::required_nullable_keeps_null_distinct_from_missing_and_preserves_nested_errors"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::canonical_primitives_reject_uuid_aliases_nonintegers_and_bad_hex"
+      },
+      {
+        "target": "server",
+        "name": "direct_replay::tests::simple_enums_reject_object_forms_at_nested_boundaries"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::abnormal_terminal_remains_visible_under_existing_crate_info_filter"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_publication_cancel_and_panic_keep_exact_last_stage"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_publication_trace_classifies_transport_results_without_payload"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_room_stage_traces_retain_failure_and_cancel_without_payload"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_trace_pairs_deferred_bosh_publication_with_its_origin"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::actual_trace_terminal_cardinality_and_privacy_cover_every_exit"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::completed_frame_leaves_convenience_calls_without_a_retired_owner"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::deferred_publication_retains_origin_after_later_bosh_frame"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::enclosing_cancellation_observes_last_stage_once"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::outer_owner_retires_after_child_drop_at_every_runner_boundary"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::pending_frame_times_out_at_its_policy_budget"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::pending_publication_outlives_frame_budget_until_owner_cancels"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::policy_preserves_transport_specific_inline_auth_budget"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::publication_is_observed_without_introducing_a_deadline"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::replacing_current_frame_preserves_the_old_retained_owner_and_terminal"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::single_child_destructor_panic_keeps_order_and_original_payload"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::successful_and_failed_frames_keep_typed_outcomes_and_stage"
+      },
+      {
+        "target": "server",
+        "name": "xmpp::frame_execution::tests::websocket_inline_sasl2_has_a_separate_bounded_handler_budget"
+      }
+    ],
+    "unit_log_map_sha256": "4944b91dd9ac7de0013a099b594ac2b2423f726d609adfa67673879e6efde3d2",
+    "unit_log_map_encoding": "UTF-8 sorted compact JSON mapping exact full name to log SHA256, no trailing newline",
+    "semantics": "Seven new pure parser/identity/claimed-token controls plus eighteen unchanged frame controls. Every invocation used one full name with --exact; no ignored entry or SQL/socket/process fixture ran."
+  },
+  "python_tests": {
+    "legacy": {
+      "tests": 113,
+      "unittest_seconds": "225.197",
+      "shell_seconds": "225.372376507",
+      "timeout_seconds": 300,
+      "guard_sha256": "355da1290badff138776b49c07bc42fe1c293f6980ea1299f03d38acf1ff87e2",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      }
+    },
+    "direct": {
+      "tests": 27,
+      "unittest_seconds": "0.046",
+      "shell_seconds": "0.169688972",
+      "timeout_seconds": 120,
+      "guard_sha256": "03a3e01886955c4371cf7dc122ee761ae584f3d79ef8c99cae0f6f6f4248e9e2",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      }
+    },
+    "guard_scope": "Audit tripwire installed before project imports, retaining blocked-event counts and forcing failure even if caught; os._exit separately guarded. This is not a syscall sandbox.",
+    "reuse": "The second iteration changes only Rust Box representation and equivalent Rust idioms. Every Python input and JavaScript gate source is byte-identical, so their passed first-iteration checks are retained."
+  },
+  "node_tests": {
+    "passed": 269,
+    "failed": 0,
+    "skipped": 0
+  },
+  "test_binaries": {
+    "core": {
+      "path": "target/debug/deps/northstar_delivery_core-14bb486cb21730c2",
+      "bytes": 4150968,
+      "sha256": "0d2736022141f41e72784db7846f841c9c3e6fb3ca6eabd064004a4d4636ec66"
+    },
+    "server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 202757216,
+      "sha256": "d4a714b93175ad23615a4acd2c54e86ace4ec9ae2a96c049d4fa94ad7065402b"
+    }
+  },
+  "generated_graphs": {
+    "files": 10,
+    "unchanged": true,
+    "manifest_sha256": "a22687f44421bff82ca3e20d99f6148ee3c2c1893e701b1cca6fac93c1316fde"
+  },
+  "retained_failure": {
+    "iteration": 1,
+    "exit_code": 101,
+    "log_sha256": "8c8f9890c13183b6c36cd6bd096d6f8f488781480de221aa37cdd8186ef38088",
+    "observed": "Clippy rejected two large enum variants, manual modulo parity and write! with a final newline. The batch stopped before Rust inventories/tests.",
+    "correction": "Box BoshRecording and NativeEvidence with the matching constructor; use is_multiple_of(2) and writeln! preserving one LF. Strict wire fields, parser assertions and permission flow are unchanged."
+  },
+  "prior_ci": {
+    "commit": "fb1250eca2feaede98b7ef1958da19fc444cd479",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37234386583",
+    "conclusion": "failure",
+    "success": 19,
+    "failure": 12,
+    "skipped": 2,
+    "observed": "Ten jobs shared the two nonexistent AdmissionSnapshot.effect test-target field accesses; Web used an obsolete constructor matcher; the required aggregate failed. No additional distinct runtime failure was identified.",
+    "correction": "Use the actual retained witness.effect().correlation and pin the shared initializer, production UUID construction and test-only supplied identity."
+  },
+  "bounds": {
+    "ordinary_command_timeout_seconds": 600,
+    "kill_after_seconds": 5,
+    "per_log_bytes": 4194304,
+    "source_unchanged_for_each_completed_check": true
+  },
+  "remaining": [
+    "The v3 caller and worker still fail closed with DirectCaseIncomplete before caller collection or worker storage/Hello. No fixed16/fixed4 record, replay, mutation or shrink was run.",
+    "SM, BOSH and replacement-owner output variants, actual poll/ordering observations, complete literal corpus, independent semantic oracle and build/derivation record remain unfinished. Native/None source connectivity is not accepted whole-chain evidence.",
+    "The 202,757,216-byte ordinary server test binary exceeds the saved profile128MiB runnable cap. No stripped artifact or address-space/budget qualification is provided here.",
+    "The scoped source map and ordinary binaries do not establish complete project-local saved-build input membership or external supply-chain reproducibility.",
+    "Full Stage3, real SQL/clock/crypto/wire, unresolved TLS response/EOF diagnosis and later resource/retention obligations remain open."
+  ]
+}

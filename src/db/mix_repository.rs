@@ -346,6 +346,86 @@ impl MixRepository for PostgresMixRepository {
             recipients: admission.recipients,
         })
     }
+    async fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+    ) -> Result<StoreMixMessageAdmission> {
+        let identity = request.command().identity.as_ref().zip(authenticators).map(
+            |(identity, authenticators)| {
+                let primary = authenticators.primary();
+                db::MixBusinessIdentity {
+                    client_id: &identity.client_id,
+                    semantic_key_id: primary.key_id(),
+                    semantic_mac: primary.mac(),
+                }
+            },
+        );
+        let admission =
+            db::store_mix_message_observed(&self.pool, request, identity, &MixPayloads).await?;
+        let outcome = match admission.outcome {
+            db::StoreEventOutcome::Existing(existing) => {
+                let raw = db::mix::foreground_existing(&existing);
+                let exact = authenticators.is_some_and(|authenticators| {
+                    existing.target_id.is_none()
+                        && authenticators
+                            .verifies(&existing.semantic_key_id, &existing.semantic_mac)
+                });
+                let classified = if exact {
+                    MixBusinessReplay::Replay(existing.authoritative_id)
+                } else {
+                    MixBusinessReplay::Conflict
+                };
+                request.authenticated(&raw, classified)?;
+                if exact {
+                    StoreEventOutcome::Replay(existing.authoritative_id)
+                } else {
+                    StoreEventOutcome::Conflict
+                }
+            }
+            outcome => store_event_outcome(outcome),
+        };
+        Ok(StoreMixMessageAdmission {
+            outcome,
+            recipients: admission.recipients,
+        })
+    }
+
+    async fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+    ) -> Result<MixBusinessReplay> {
+        let ingress = request.ingress();
+        let identity = ingress
+            .identity
+            .as_ref()
+            .ok_or(foreground::Rejected::Input)?;
+        let existing = db::lookup_mix_business_intent(
+            &self.pool,
+            ingress.channel_id,
+            &ingress.actor_bare,
+            "message",
+            &identity.client_id,
+        )
+        .await?;
+        let Some(existing) = existing else {
+            request.observed_miss()?;
+            return Ok(MixBusinessReplay::Miss);
+        };
+        let raw = db::mix::foreground_existing(&existing);
+        request.observed_existing(raw.clone())?;
+        let result = if existing.target_id.is_none()
+            && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac)
+        {
+            MixBusinessReplay::Replay(existing.authoritative_id)
+        } else {
+            MixBusinessReplay::Conflict
+        };
+        request.authenticated(&raw, result)?;
+        Ok(result)
+    }
+
     async fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,
@@ -1185,6 +1265,49 @@ impl MixRepository for PostgresMixRepository {
             })
             .collect())
     }
+    async fn claim_mix_deliveries_observed(
+        &self,
+        request: &outbox::core::ClaimRequest,
+    ) -> Result<outbox::core::Rows> {
+        db::claim_mix_deliveries_observed(&self.pool, request).await
+    }
+    async fn archive_mix_message_once_observed(
+        &self,
+        request: &outbox::core::ArchiveRequest,
+    ) -> Result<outbox::core::ArchiveResult> {
+        Ok(
+            match db::archive_mix_message_once_observed(&self.pool, request).await? {
+                db::SourceArchiveAdmission::Stored(id) => outbox::core::ArchiveResult::Stored(id),
+                db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id),
+            },
+        )
+    }
+    async fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &outbox::core::RenewalRequest,
+    ) -> Result<bool> {
+        db::renew_mix_delivery_lease_observed(&self.pool, request).await
+    }
+    async fn settle_mix_delivery_observed(
+        &self,
+        request: &outbox::core::SettlementRequest,
+    ) -> Result<outbox::core::SettlementResult> {
+        use outbox::core::{SettlementCommand, SettlementResult};
+        Ok(match request.command() {
+            SettlementCommand::Ack => SettlementResult::Ack(
+                db::acknowledge_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+            SettlementCommand::Defer { .. } => SettlementResult::Defer(
+                db::defer_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+            SettlementCommand::Retry { .. } => SettlementResult::Retry(
+                db::retry_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+            SettlementCommand::DeadLetter { .. } => SettlementResult::DeadLetter(
+                db::dead_letter_mix_delivery_worker_observed(&self.pool, request).await?,
+            ),
+        })
+    }
     async fn maintain_mix_delivery_retention(&self) -> Result<()> {
         db::maintain_mix_delivery_retention(&self.pool).await
     }
@@ -1194,11 +1317,24 @@ impl MixRepository for PostgresMixRepository {
     async fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64> {
         db::prune_expired_federated_mix_iq_results(&self.pool, limit).await
     }
-    async fn acknowledge_mix_delivery(&self, delivery_id: Uuid, lease_token: Uuid) -> Result<bool> {
-        let acknowledged =
-            db::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await?;
-
-        Ok(acknowledged)
+    async fn acknowledge_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
+    ) -> Result<bool> {
+        match observation {
+            Some(observation) => {
+                db::mix::acknowledge_mix_delivery_observed(
+                    &self.pool,
+                    delivery_id,
+                    lease_token,
+                    Some(observation),
+                )
+                .await
+            }
+            None => db::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await,
+        }
     }
     async fn fence_mix_socket_write(
         &self,
@@ -1235,12 +1371,11 @@ impl MixRepository for PostgresMixRepository {
     }
     async fn transfer_mix_delivery_to_bosh(
         &self,
-        source: crate::outbound::MixDelivery,
-        session_id: Uuid,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> Result<crate::outbound::MixDelivery> {
-        db::mix::transfer_mix_delivery_to_bosh(&self.pool, source, session_id, ttl_seconds).await
+        db::mix::transfer_mix_delivery_to_bosh(&self.pool, request).await
     }
+
     async fn renew_mix_delivery_lease(&self, delivery_id: Uuid, lease_token: Uuid) -> Result<bool> {
         db::renew_mix_delivery_lease(&self.pool, delivery_id, lease_token).await
     }

@@ -1,3 +1,7 @@
+mod environment;
+
+pub(crate) use environment::load_dotenv;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

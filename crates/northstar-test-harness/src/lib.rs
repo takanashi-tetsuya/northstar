@@ -1,4 +1,5 @@
 pub mod activation;
+pub mod controlled_admission;
 pub mod database;
 pub mod diagnostics;
 pub mod listener;

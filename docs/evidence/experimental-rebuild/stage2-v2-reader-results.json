@@ -1,0 +1,393 @@
+{
+  "base_commit": "1a9d7cbdfa6eaf90febec839f189282d2e1218fa",
+  "contract_sha256": "6e67a8e2527caf4ccb003a882a2e0fb5bda0852a4ed699c6cf1cffa3cf741713",
+  "execution": {
+    "actual_exec_tool_exit_status": 0,
+    "bound_41_sources_unchanged": true,
+    "collector_exit_status": 0,
+    "log_bytes": 7938,
+    "log_overflow": false,
+    "log_sha256": "615f83bd910b85f23445f0e0a883ccb0af1447f63bad91977749a9fe321fcf45",
+    "original_582_files_unchanged": true,
+    "script_unchanged": true,
+    "shell_elapsed_seconds": "83.220093",
+    "timeout_reader_exit_status": 0,
+    "trusted_contract_unchanged": true
+  },
+  "limits": [
+    "The22 negatives establish saved authenticity/reference rejection at the recorded phases, not execution of every deeper semantic branch.",
+    "Both82-case positives execute the actual reader and independent oracle; the separate113-case suite and native Rust/CI evidence retain their own scope.",
+    "Audit tripwire is not an OS syscall sandbox; any observed boundary attempt would fail overall.",
+    "A resource limit, timeout or unrelated exception is not accepted as a tamper rejection.",
+    "Real SQL/wire and production outer responsibility remain later-stage obligations; this reader result is part of the accepted Stage2 reservation/finalization sub-exit."
+  ],
+  "reader_report": {
+    "active_phase": "complete",
+    "active_scenario": null,
+    "allocated_byte_limit": 67108864,
+    "bound_sources_unchanged": true,
+    "copy_byte_limit": 50331648,
+    "expected_scenarios": 24,
+    "external_authority_unchanged": true,
+    "external_contract_sha256": "6e67a8e2527caf4ccb003a882a2e0fb5bda0852a4ed699c6cf1cffa3cf741713",
+    "guard": {
+      "blocked_attempts": {},
+      "ready": true
+    },
+    "observed_ms": 83159,
+    "original_evidence_map_sha256": "b59560d6b95ef9f59bd50b1d1c0edde58d1d0d79e3c25b6a383d9a7bf57d1dd7",
+    "original_evidence_unchanged": true,
+    "private_copy_restored": true,
+    "report_byte_limit": 65536,
+    "restoration_status": "Verified",
+    "scenarios": [
+      {
+        "cases": 82,
+        "name": "clean_before",
+        "outcome": "Accepted",
+        "shrink_relations": true
+      },
+      {
+        "changed_files": [
+          "record/000.input.json"
+        ],
+        "deleted_files": [
+          "record/000.input.json"
+        ],
+        "evidence_scope": "authenticity_chain",
+        "name": "missing_input",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "reference_regular_file"
+      },
+      {
+        "changed_files": [
+          "record/000.input.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "changed_input",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/000.stdout.bin"
+        ],
+        "deleted_files": [
+          "record/000.stdout.bin"
+        ],
+        "evidence_scope": "authenticity_chain",
+        "name": "missing_output",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "reference_regular_file"
+      },
+      {
+        "changed_files": [
+          "record/000.stdout.bin"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "changed_output",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/000.stdout.bin"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "truncated_output",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/000.evaluation.json"
+        ],
+        "deleted_files": [
+          "record/000.evaluation.json"
+        ],
+        "evidence_scope": "authenticity_chain",
+        "name": "missing_evaluation",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "reference_regular_file"
+      },
+      {
+        "changed_files": [
+          "record/000.evaluation.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "changed_evaluation",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/000.observation.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "legacy_observation_schema",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/000.observation.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "observation_run_correlation",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/000.result.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "result_index_correlation",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/044.stdout.bin"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "rejection_reason",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/081.stdout.bin"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "shrink_target",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/contract.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "saved_provenance",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "saved_contract_differs_from_external_authority"
+      },
+      {
+        "changed_files": [
+          "record/081.observation.json"
+        ],
+        "deleted_files": [
+          "record/081.observation.json"
+        ],
+        "evidence_scope": "authenticity_chain",
+        "name": "missing_tail_observation",
+        "outcome": "Rejected",
+        "phase": "verify_prior_case",
+        "reason": "reference_regular_file"
+      },
+      {
+        "changed_files": [
+          "record/corpus.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "shortened_manifest_tail",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record/prefix-082.json"
+        ],
+        "deleted_files": [
+          "record/prefix-082.json"
+        ],
+        "evidence_scope": "authenticity_chain",
+        "name": "missing_final_prefix",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "reference_regular_file"
+      },
+      {
+        "changed_files": [
+          "record/corpus.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "legacy_corpus_schema",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "saved_reference_changed"
+      },
+      {
+        "changed_files": [
+          "record.caller/caller-capture.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "name": "caller_capture_run",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "prior_owner_capture_incomplete"
+      },
+      {
+        "changed_files": [
+          "record.caller/caller-capture.json",
+          "record.caller/caller-evidence.json",
+          "record.caller/caller-result.json",
+          "record.caller/owner.stdout.bin",
+          "record/011.evaluation.json",
+          "record/011.input.json",
+          "record/011.observation.json",
+          "record/011.result.json",
+          "record/011.stdout.bin",
+          "record/corpus.json",
+          "record/prefix-082.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "local_hash_chain_consistent": true,
+        "local_hash_chain_scope": "corpus/final-prefix/caller-receipt reachable graph; historical prefixes unchanged",
+        "name": "rehashed_input_output_evaluation",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "prior_owner_capture_incomplete",
+        "replacement_evaluation_recomputed": true,
+        "semantic_qualification_claimed": false
+      },
+      {
+        "changed_files": [
+          "record.caller/caller-capture.json",
+          "record.caller/caller-evidence.json",
+          "record.caller/caller-result.json",
+          "record.caller/owner.stdout.bin",
+          "record/000.evaluation.json",
+          "record/000.observation.json",
+          "record/000.result.json",
+          "record/000.stdout.bin",
+          "record/corpus.json",
+          "record/prefix-082.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "local_hash_chain_consistent": true,
+        "local_hash_chain_scope": "corpus/final-prefix/caller-receipt reachable graph; historical prefixes unchanged",
+        "name": "rehashed_output_evaluation",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "prior_owner_capture_incomplete",
+        "replacement_evaluation_recomputed": true,
+        "semantic_qualification_claimed": false
+      },
+      {
+        "changed_files": [
+          "record.caller/caller-capture.json",
+          "record.caller/caller-evidence.json",
+          "record.caller/caller-result.json",
+          "record.caller/owner.stdout.bin",
+          "record/081.evaluation.json",
+          "record/081.observation.json",
+          "record/081.result.json",
+          "record/081.stdout.bin",
+          "record/corpus.json",
+          "record/prefix-082.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "local_hash_chain_consistent": true,
+        "local_hash_chain_scope": "corpus/final-prefix/caller-receipt reachable graph; historical prefixes unchanged",
+        "name": "rehashed_shrink_target_evaluation",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "prior_owner_capture_incomplete",
+        "replacement_evaluation_recomputed": true,
+        "semantic_qualification_claimed": false
+      },
+      {
+        "changed_files": [
+          "record.caller/caller-capture.json",
+          "record.caller/caller-evidence.json",
+          "record.caller/caller-result.json",
+          "record.caller/owner.stdout.bin",
+          "record/corpus.json",
+          "record/prefix-082.json"
+        ],
+        "deleted_files": [],
+        "evidence_scope": "authenticity_chain",
+        "local_hash_chain_consistent": true,
+        "local_hash_chain_scope": "corpus/final-prefix/caller-receipt reachable graph; historical prefixes unchanged",
+        "name": "rehashed_short_tail",
+        "outcome": "Rejected",
+        "phase": "replay_source",
+        "reason": "prior_owner_capture_incomplete",
+        "replacement_evaluation_recomputed": false,
+        "semantic_qualification_claimed": false
+      },
+      {
+        "cases": 82,
+        "name": "clean_after",
+        "outcome": "Accepted",
+        "shrink_relations": true
+      }
+    ],
+    "schema": "northstar-controlled-v2-reader-tamper-v1",
+    "scope": "saved authenticity chain; no Rust reexecution or new supervised qualification",
+    "script_sha256": "9fef7bca868459f1b7e477677f78a83fd14a424cd73f7ca348339fd9ec1c70c7",
+    "source_manifest_sha256": "f12cc2906006ccbb5c5a59697c9df03a9c422c667e22c49866807a279a83d138",
+    "status": "Passed",
+    "syscall_sandbox": false,
+    "time_budget_s": 300
+  },
+  "repeat_recipe": {
+    "arguments": [
+      "--replay-contract <trusted prior replay contract>",
+      "--contract-sha256 6e67a8e2527caf4ccb003a882a2e0fb5bda0852a4ed699c6cf1cffa3cf741713",
+      "--work-dir <new private directory outside checkout>"
+    ],
+    "external_kill_after_seconds": 5,
+    "external_timeout_seconds": 300,
+    "log_retained_bytes_max_plus_sentinel": 4194305,
+    "python_flags": [
+      "-I",
+      "-S",
+      "-B"
+    ],
+    "required_inputs": "Previously bound record/caller bytes and external replay contract, source41 and9fef script. Never derive external authority from a tampered copy.",
+    "script": "scripts/test-controlled-admission-v2-readers.py"
+  },
+  "review_corrections_before_execution": [
+    "The self-consistent output mutation sets active2/retained2 so it passes shape validation and reaches the intended reader boundary; no scenario was removed.",
+    "Failed mutation diagnostics retain scenario/phase, touched/deleted relative filenames and explicit restoration status.",
+    "Rehash consistency is limited to the terminal-reachable graph; historical immutable prefixes remain unchanged."
+  ],
+  "schema": "northstar-stage2-v2-reader-results-v1",
+  "source_path": "scripts/test-controlled-admission-v2-readers.py",
+  "source_sha256": "9fef7bca868459f1b7e477677f78a83fd14a424cd73f7ca348339fd9ec1c70c7",
+  "status": "PassedReviewedWithinAcceptedStage2SubExit",
+  "verification_scope": "Actual v2 replay_source/verify_prior_case reader paths over one private byte copy, fixed trusted external prior. No Rust reexecution; standard outer timeout and bounded log collector only."
+}

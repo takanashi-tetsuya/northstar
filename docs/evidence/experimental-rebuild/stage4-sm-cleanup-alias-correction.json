@@ -1,0 +1,69 @@
+{
+  "schema": "northstar-stage4-sm-cleanup-alias-correction-v1",
+  "status": "StaticPurePassed_RealAdapterCIPending",
+  "source_base_commit": "f154f4cecfaa91513c0308e8a0883dcf231b6732",
+  "diagnosis": {
+    "failure": "PostgreSQL rejects candidate.connection_id as ambiguous between a PL/pgSQL variable and a table column in northstar_session_cleanup_live(bigint).",
+    "location": "The first expired binding-claims DELETE subquery in migration 0157 reused the candidate name already declared for the later lease loop record.",
+    "direct_evidence": [
+      "The private-PostgreSQL maintenance fixture reports the exact statement and function context.",
+      "The existing auth-identity lease-lock/expiry-cleanup test independently returns the same error."
+    ],
+    "limits": "Other readiness failures show repeated reaper restarts; their own logs do not include the inner SQL error. Associating those failures with this collision is a cross-job inference, not a permission or advisory-election diagnosis."
+  },
+  "correction": {
+    "migration": "0158_sm_cleanup_claim_alias.sql",
+    "scope": "Replace only the cleanup function. Rename the first binding-claim subquery table alias to expired_claim and its four qualifiers; the complete remaining function definition is unchanged from 0157.",
+    "preserved": [
+      "Published migration 0157 and every older migration remain byte-identical.",
+      "Retention eligibility, existing lease/allocation identity, Read Committed requirement, limits, lock ordering and exact tuple revalidation remain unchanged.",
+      "The replacement retains the exact SECURITY DEFINER, installation-schema ownership, pinned search_path and PUBLIC-revocation requirements.",
+      "No grants, callable signatures, workload partitions or privilege expansion are introduced. Cleanup introduction origin remains 0114 and classifier introduction remains 0157."
+    ],
+    "metadata": "The new migration is registered as a resecured replacement; the exact generated ledger and Rust latest-version/count checks advance to version 158 with 157 rows."
+  },
+  "documentation": {
+    "change": "Four operational documents now link the exact current migration and describe the stopped-writer/legacy-claim boundary. The documentation gate requires that SQL link rather than accepting a bare version number that could name an unrelated XEP.",
+    "controls": "The actual checker passed before and after four single-link-removal cases, one for each document. Each negative retained the other document text and returned its exact missing-current-link error; each private copy was restored."
+  },
+  "validation": {
+    "scope": "Local static and pure checks only.",
+    "serial_commands_passed": 13,
+    "fixed_static_pure_commands": 7,
+    "node_tests_passed": 541,
+    "documentation_positive_controls": 2,
+    "documentation_exact_negative_controls": 4,
+    "sql_alias_guard": "Complete replacement-definition comparison plus one positive and six deliberately invalid alias/body cases.",
+    "checks": [
+      "Exact generated migration ledger",
+      "Capability manifest and parser/source regressions",
+      "Historical and final migration source contracts",
+      "Documentation consistency",
+      "Runtime migration source boundary",
+      "Database role source boundary",
+      "Existing execution/admission/MIX Node suites"
+    ],
+    "main_and_checked_source_preserved": true,
+    "local_rust_build_or_tests": "Not run for this correction.",
+    "manual_sql_or_services": "Not run."
+  },
+  "retained_ci": {
+    "commit": "f154f4cecfaa91513c0308e8a0883dcf231b6732",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37422861004",
+    "status": "failure",
+    "successful": 17,
+    "failed": 13,
+    "skipped": 2,
+    "scope": "The failed f154f4ce checkpoint remains a failure. Its existing ordinary-only component evidence retains its original limits; this static correction does not retroactively qualify that CI run."
+  },
+  "remaining": [
+    "Actual corrected PostgreSQL cleanup, auth/runtime readiness and related integration outcomes await the new checkpoint CI.",
+    "Retention eligibility/MVCC/clock, stopped-writer rollout, restart/resume/ACK, saved cross-domain composition and full Stage4 remain open.",
+    "The earlier TLS response-EOF cause and prior unqualified attempts retain their documented scope."
+  ],
+  "related": [
+    "stage4-sm-retention-results.json",
+    "stage4-auth-pre-receipt-results.json"
+  ],
+  "detailed_evidence": "Detailed source, retained failures and bounded validation records are held separately; raw execution and private artifact identities are not published here."
+}

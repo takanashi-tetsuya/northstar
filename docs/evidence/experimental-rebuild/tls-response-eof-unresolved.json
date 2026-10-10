@@ -1,0 +1,195 @@
+{
+  "schema": "northstar-unresolved-tls-response-eof-v1",
+  "problem_id": "TLS_RESPONSE_EOF_UNRESOLVED",
+  "status": "Open_Stage5DiagnosisRequired",
+  "as_of_commit": "16a7dc01082d5d6ebec6608b7a3e2ce4f12cd24c",
+  "observed_at": "2026-10-04T17:16:24Z",
+  "summary": "Three distinct existing CI observations timed out while TLS readers awaited completion through EOF. Missing partial-byte and connection-state evidence prevents identifying the failed response state or a common cause.",
+  "root_cause": "Unknown for each observation; a shared cause has not been established",
+  "observations": [
+    {
+      "id": "synthetic_early_rejection",
+      "commit": "0963edae88b1b3d41abbf50b882e7c5cc0532129",
+      "run_id": 37179140576,
+      "job_id": 111367947048,
+      "job_name": "Pinned non-root container build",
+      "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37179140576/job/111367947048",
+      "job_conclusion": "failure",
+      "source": {
+        "path": "scripts/test-caddy-ingress.py",
+        "blob": "6447ebf26e09d908f72df29cabe3416885590239",
+        "sha256": "a445f32471c03b85c0a198421908284d82886038c629e49329f567f1ef9df085",
+        "url": "https://github.com/takanashi-tetsuya/northstar/blob/0963edae88b1b3d41abbf50b882e7c5cc0532129/scripts/test-caddy-ingress.py#L155",
+        "anchors": {
+          "synthetic_response": 29,
+          "reader": 78,
+          "timeout_default": 83,
+          "request": 154,
+          "failure": 155,
+          "cleanup": 204
+        }
+      },
+      "request": "Synthetic upstream: POST /api/reject/{status}, declared 128 bytes, one opening-brace byte sent. Loop values are 408, 413 and 429; the failing value is not logged.",
+      "timeout": {
+        "socket_seconds": 3,
+        "source_basis": "tls_socket default timeout=3; this call supplies no override"
+      },
+      "expected": "EOF followed by matching HTTP status and fixture_{status} body.",
+      "actual": {
+        "error": "TimeoutError: The read operation timed out",
+        "log_lines": [
+          335,
+          338,
+          341,
+          350
+        ],
+        "response_status": "Unknown",
+        "partial_bytes": "Not captured",
+        "eof": "Not observed before receive timeout",
+        "failing_loop_value": "Unknown"
+      },
+      "available_context": "Synthetic backend source rejects from headers, writes Content-Length/Connection: close/body and sets close_connection=True. Its request logging is suppressed. The printed proxy log reports configuration/startup, without per-request response or closure evidence.",
+      "cleanup": "Source finally paths terminate/wait for the proxy and shut down/close/join the synthetic backend. Existing job output shows generic post-job cleanup. No fixture-specific listener count or independent process/socket audit is available in the inspected evidence.",
+      "prior_success": {
+        "commit": "0f385711feaca15ea483feaa8934483278cebb2d",
+        "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37175092497/job/111355960973",
+        "same_fixture_blob": true
+      }
+    },
+    {
+      "id": "real_application_expected_429",
+      "commit": "ce2da7456cf793b0c43ac36cdcd014d5ab1c2560",
+      "run_id": 37207813100,
+      "job_id": 111452589481,
+      "job_name": "PostgreSQL protocol integration",
+      "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37207813100/job/111452589481",
+      "job_conclusion": "failure",
+      "source": {
+        "path": "scripts/rest-body-wire.py",
+        "blob": "19a794f8f35fe833c24d81919782856067a10976",
+        "sha256": "5132b5f1d5a4e6716eaeb2e8a8fe32747eab221d86ed962800befcb1dc529d88",
+        "url": "https://github.com/takanashi-tetsuya/northstar/blob/ce2da7456cf793b0c43ac36cdcd014d5ab1c2560/scripts/rest-body-wire.py#L71",
+        "anchors": {
+          "connect": 20,
+          "reader": 29,
+          "held_requests": 60,
+          "timeout_override": 70,
+          "failure": 71,
+          "cleanup": 79
+        }
+      },
+      "request": "Public TLS POST /api/v1/login expecting 429, declared 128 bytes with one byte sent, after eight held incomplete-body requests and a 0.3s pause. Only the public iteration uses TLS.",
+      "timeout": {
+        "socket_seconds": 3,
+        "source_basis": "This denied socket is created by connect, then explicitly settimeout(3) before read_closed(denied,429)."
+      },
+      "expected": "EOF followed by HTTP 429, x-request-id and retry-after: 1.",
+      "actual": {
+        "error": "TimeoutError: The read operation timed out",
+        "log_lines": [
+          705,
+          708,
+          709,
+          711,
+          712,
+          720
+        ],
+        "response_status": "Unknown",
+        "partial_bytes": "Not captured",
+        "eof": "Not observed before receive timeout"
+      },
+      "available_context": "The direct non-proxy fixture had passed in 15.01s. Caddy logged eight 502 connection-reset errors matching the held 4/2/2 route mix around 3.31\u20133.33s; the fixture closes held sockets on failure. There is no per-socket correlation proving those errors caused the denied-request timeout. The server tail does not capture that response or permit count.",
+      "cleanup": "Existing integration output reports listeners=0 (log line 955); PostgreSQL stop was invoked. This is recorded cleanup evidence, not a fresh independent audit.",
+      "prior_success": {
+        "commit": "2ab71b8541493566468a773fb0237acad043cc7e",
+        "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37203778768/job/111440716177",
+        "same_fixture_blobs": true
+      }
+    },
+    {
+      "id": "real_application_held_expected_408",
+      "commit": "16a7dc01082d5d6ebec6608b7a3e2ce4f12cd24c",
+      "run_id": 37218634592,
+      "job_id": 111484242933,
+      "job_name": "PostgreSQL protocol integration",
+      "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37218634592/job/111484242933",
+      "job_conclusion": "failure",
+      "source": {
+        "path": "scripts/rest-body-wire.py",
+        "blob": "607e5d22b163c4f00824b1edce7125d6ac6fac77",
+        "sha256": "e226b1b9b462dcc9e4e23810bf08168ab9fd2abb4f5e0b770a76fb2ee9668f20",
+        "url": "https://github.com/takanashi-tetsuya/northstar/blob/16a7dc01082d5d6ebec6608b7a3e2ce4f12cd24c/scripts/rest-body-wire.py#L95",
+        "anchors": {
+          "socket_creation": 15,
+          "connect_timeout": 22,
+          "reader": 31,
+          "diagnostic_opt_in": 34,
+          "held_socket_append": 82,
+          "separate_denied_timeout": 87,
+          "separate_denied_read": 92,
+          "failure": 95,
+          "cleanup": 100
+        }
+      },
+      "request": "One of eight held public-TLS incomplete requests expecting 408: four POST login, two POST passkey-login-start and two DELETE session, each declaring 128 bytes and sending one byte. The failing held index/route is not logged.",
+      "timeout": {
+        "socket_seconds": 23,
+        "source_basis": "pending.append(connect(...)) at line 82 calls open_socket(port,23) at line 22; socket.create_connection receives that timeout at line 15. The held sockets have no later settimeout override.",
+        "separate_denied_socket_seconds": 3,
+        "distinction": "settimeout(3) at line 87 applies to each newly created denied socket, not the sockets in pending. No runtime gettimeout value was logged.",
+        "total_elapsed_assertion": "14 <= elapsed < 23 is a separate later total-duration assertion; it was not reached."
+      },
+      "expected": "EOF followed by HTTP 408, x-request-id, request_timeout body and connection: close.",
+      "actual": {
+        "error": "TimeoutError: The read operation timed out",
+        "log_lines": [
+          705,
+          708,
+          709,
+          711,
+          712,
+          720
+        ],
+        "response_status": "Unknown",
+        "partial_bytes": "Not captured; only the expected-429 path opted into diagnostics",
+        "eof": "Not observed before receive timeout",
+        "held_request_index": "Unknown"
+      },
+      "available_context": "The direct fixture passed in 15.01s. Reaching line 95 implies both preceding public/admin expected-429 reads returned and passed their assertions; this is source control-flow inference. The printed Caddy section has startup/configuration/storage-maintenance messages and no per-request error/closure record. Server-tail evidence does not reveal the held socket response.",
+      "cleanup": "Existing integration output reports listeners=0 (log line 947); PostgreSQL stop was invoked. This is recorded cleanup evidence, not a fresh independent audit.",
+      "prior_success": {
+        "commit": "09fbf93421d0df5b8066be4747154df1f33cc9eb",
+        "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37215000491/job/111473601984",
+        "same_fixture_blobs": true,
+        "tls_helper_pass_log_line": 698,
+        "caddy_summary_pass_log_line": 699
+      }
+    }
+  ],
+  "shared_real_application_driver": {
+    "path": "scripts/test-caddy-ingress.py",
+    "blob": "c5ad5d97d2d942ba1317b52ccb6d493344a54efd",
+    "sha256": "c3e85d9bc27ad96362c85961df8545c54b3b6be2f8a1592a49277e95e456fbba",
+    "applies_to": [
+      "ce2da7456cf793b0c43ac36cdcd014d5ab1c2560",
+      "16a7dc01082d5d6ebec6608b7a3e2ce4f12cd24c"
+    ],
+    "anchors": {
+      "real_tls_helper": 216,
+      "proxy_log_on_error": 218,
+      "proxy_cleanup": 222
+    }
+  },
+  "evidence_limits": [
+    "These readers assert status/body only after EOF, so a receive timeout alone cannot distinguish no response, a partial response, or a complete response lacking timely EOF.",
+    "Prior or later green runs with unchanged fixture bytes do not establish flakiness, a fixture-only defect, a shared cause or resolution.",
+    "No ignored DB test, unit count or helper acceptance substitutes for diagnosing these wire-level failures."
+  ],
+  "required_stage5_diagnosis": [
+    "Obtain bounded partial status/header/body-prefix and per-case identity evidence when an authorized existing fixture fails, preserving original errors, timeouts and assertions.",
+    "Correlate application response generation, proxy forwarding and TLS/connection closure for the same request; current logs do not provide that correlation.",
+    "Distinguish synthetic-upstream behavior from real-application admission and held-body expiration. Evaluate each observation independently before testing a shared cause.",
+    "Preserve failed evidence and verify relevant cleanup; a green run alone does not close this problem."
+  ],
+  "verification_scope": "Review of existing CI logs and exact source only; no manual fixture rerun. The three causes and any relationship among them remain unknown."
+}

@@ -40,6 +40,20 @@ older contracts, and invalid or removed current modules fail the check.
 of their names: inspect whether they invoke Docker, WSL, a database, a network
 peer or an external toolchain.
 
+`test-http-response-diagnostics.py` exercises only supplied byte strings; it
+does not open sockets or start Caddy or Northstar. The existing Caddy and
+REST-body probes use its shared helper only when a receive operation fails.
+It records status, framing, declared/received body lengths and receive phase,
+with a 64 KiB header-capture limit and the existing 512-byte reply preview.
+Only unambiguous Content-Length framing is classified as HTTP-complete;
+chunked, duplicate/conflicting lengths and other unsupported framing remain
+unknown. Complete HTTP bytes and `Connection: close` do not satisfy the
+unchanged recv-EOF requirement, prove clean TLS shutdown, or identify why a
+receive timed out. Diagnostic failures preserve the original receive error;
+assertions, protocol timeouts and production behavior are unchanged. These
+pure controls do not reproduce or resolve the historical synthetic 429/TLS
+EOF timeout, and a later green CI run does not establish its root cause.
+
 `maintenance-subserver-wsl.py --server /absolute/path/to/rust-xmpp-server`
 tests an existing Linux binary using its own temporary Unix-socket PostgreSQL
 cluster and real runtime grants. It starts core and maintenance against the

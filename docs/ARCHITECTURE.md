@@ -20,6 +20,13 @@ PAM results have no dedicated commit notification and retain their fixed 250 ms
 scan. Database-turn deadlines, lease fences and worker health requirements are
 unchanged; an idle timer alone never marks a worker healthy.
 
+The executable C2S ownership path, phase diagnostics and deterministic failure
+experiments are documented in [Message execution and fault localization](architecture/message-execution.md).
+That map distinguishes queue acceptance, transport completion and durable acknowledgement,
+and records explicit C2S/S2S routing policies and room attempt ownership.
+The [runtime experiment map](architecture/runtime-experiments.md) accounts for
+all checked runtime identities and separates declared tests from execution evidence.
+
 ## Module map
 
 ```mermaid

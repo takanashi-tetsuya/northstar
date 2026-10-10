@@ -2223,6 +2223,14 @@
       ],
       [
         "northstar-message-application",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-message-application",
+        "northstar-delivery-core"
+      ],
+      [
+        "northstar-message-application",
         "northstar-message-core"
       ],
       [
@@ -2407,7 +2415,15 @@
       ],
       [
         "northstar-test-harness",
+        "chrono"
+      ],
+      [
+        "northstar-test-harness",
         "libc"
+      ],
+      [
+        "northstar-test-harness",
+        "northstar-abuse-policy"
       ],
       [
         "northstar-test-harness",
@@ -2416,6 +2432,10 @@
       [
         "northstar-test-harness",
         "serde_json"
+      ],
+      [
+        "northstar-test-harness",
+        "sha2"
       ],
       [
         "northstar-test-harness",
@@ -2428,6 +2448,10 @@
       [
         "northstar-test-harness",
         "tracing"
+      ],
+      [
+        "northstar-test-harness",
+        "uuid"
       ],
       [
         "northstar-upload-application",

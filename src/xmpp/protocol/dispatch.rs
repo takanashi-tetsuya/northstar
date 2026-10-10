@@ -1,5 +1,6 @@
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::state::bare_jid;
+use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
@@ -26,6 +27,7 @@ fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action
 impl ProtocolSession {
     pub async fn handle(&mut self, xml: &str) -> Result<Action> {
         self.state.inbound_stanza_telemetry().received();
+        self.enter_frame_stage(Stage::Validation);
         // External recovery wakes share this supervisor. Keep their replay
         // task pending until the current stanza's transport action completes.
         self.post_actions.begin_action();
@@ -148,6 +150,7 @@ impl ProtocolSession {
             ) {
                 return Ok(Action::CloseWith(stream_error("unsupported-stanza-type")));
             }
+            self.enter_frame_stage(Stage::Handler);
             return self.stream_management(root).await;
         }
         if root.tag_name().namespace() == Some(northstar_xep_0352::NAMESPACE) {
@@ -246,6 +249,7 @@ impl ProtocolSession {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::time::Instant::now();
         }
+        self.enter_frame_stage(Stage::Handler);
         let action = match root.tag_name().name() {
             "authenticate"
                 if root.tag_name().namespace() == Some(crate::xmpp::protocol::sasl2::SASL2_NS) =>
@@ -314,6 +318,7 @@ impl ProtocolSession {
         };
         if counted && self.sm.enabled {
             self.sm.inbound_h = self.sm.inbound_h.wrapping_add(1);
+            self.enter_frame_stage(Stage::SmCheckpoint);
             self.checkpoint_sm().await?;
         }
         Ok(action)

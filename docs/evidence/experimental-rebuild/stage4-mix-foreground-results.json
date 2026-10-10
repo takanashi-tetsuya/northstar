@@ -1,0 +1,58 @@
+{
+  "schema": "northstar-stage4-mix-foreground-results-v1",
+  "status": "LimitedMixForegroundComponentPassed_Stage4Open",
+  "base_commit": "ed9536e9a969e2ce68c273617c3d6a7fc1adac06",
+  "change": "MIX foreground admission now retains authenticated replay-read evidence, fresh message COMMIT knowledge, returned results and a consuming local wake through the existing frame owner.",
+  "behavior": [
+    "A private invocation binds immutable ingress and the prepared store command. Receiving MIX authority comes from application configuration; equal public IDs cannot pair different invocations.",
+    "Existing-message lookup keeps its original ordering before mutable membership. Raw Existing knowledge survives a pending rollback, while only the repository's authenticated classification supplies Replay and its original item ID.",
+    "Authenticated replay-read evidence is separate from fresh message COMMIT evidence. Conflict, TooLarge and NotParticipant retain their receipt-free refusal meanings.",
+    "Fresh storage retains the actual archive identity and nonempty outbox projection while preserving SQL text, binds, authority checks and ordering. The separately committed capacity-reconciliation prelude remains separate from message admission.",
+    "COMMIT entry is recorded only when the real future is polled; successful receipt precedes returned completion. Contradictory returned data remains diagnosable without erasing positive receipt knowledge or granting a wake.",
+    "Only a matching nonempty Stored completion grants one consuming synchronous local wake. Empty-audience Stored and Replay grant no wake. Valid Stored retains the audience once; contradictory returns preserve their raw data.",
+    "Lazy frame registration skips preparation for legitimate absence and rejects retirement or conflict without compatibility fallback. The existing frame runner drops its child before retiring the MIX owner."
+  ],
+  "validation": {
+    "corrected_ordinary_commands_passed": 41,
+    "rust_exact_passed": 31,
+    "rust_failed": 0,
+    "rust_ignored": 0,
+    "rust_selection": "17 new pure/fake component cases and 14 unchanged affected controls; each inventory-verified full name ran once with --exact.",
+    "node_passed": 367,
+    "node_failed": 0,
+    "format": "Passed",
+    "room_core_room_application_and_server_all_target_check": "Passed",
+    "clippy_warnings_denied": "Passed",
+    "source_gates": "Execution, admission, architecture and outbound XML checks passed.",
+    "saved_workload_starts": 0,
+    "live_sql_or_network_fixture_starts": 0
+  },
+  "retained_first_stop": {
+    "completed_commands": 2,
+    "node_passed": 366,
+    "node_failed": 1,
+    "reason": "An existing native-MIX ACK negative probe matched both its original COMMIT call and the new foreground call. Its exactly-one setup assertion stopped the batch before Cargo or Rust tests.",
+    "correction": "The probe now matches the original native-ACK call arguments exactly. Its exactly-one assertion and verifier remain intact; no Rust change was needed. The fresh corrected batch passed all 41 commands."
+  },
+  "limits": [
+    "The five new protocol-module tests compose real owners, wrappers and frame helpers with supplied fake read, classification, projection, rollback and wake facts. They do not execute the complete protocol-to-MixService-to-PostgreSQL path.",
+    "Actual cryptographic classification, SQL rollback, generated outbox identities and broker publication remain source/gate correspondence claims until real-adapter evidence is collected.",
+    "No message COMMIT does not mean no database mutation: the existing capacity-reconciliation prelude is separately committed.",
+    "This checkpoint does not accept the MIX outbox worker lifecycle, full auth correlation, saved cross-domain composition or full Stage4.",
+    "Historical Stage3 results and retained failures remain bound to their original sources. Live SQL, wire and aggregate resource qualification remain later-stage work.",
+    "The earlier TLS response-EOF failure remains RootCauseUnknown; later green CI does not establish its resolution."
+  ],
+  "base_ci": {
+    "commit": "ed9536e9a969e2ce68c273617c3d6a7fc1adac06",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37319697602",
+    "successful": 32,
+    "failed": 0,
+    "skipped": 1
+  },
+  "related": [
+    "stage4-muc-discussion-results.json",
+    "stage4-bosh-auth-control-results.json",
+    "stage3-controlled-acceptance.json"
+  ],
+  "detailed_evidence": "Exact source snapshots, the original stop, corrected ordinary command records and tested artifacts are retained privately; this public summary omits raw execution metadata."
+}

@@ -1,0 +1,89 @@
+{
+  "authority": false,
+  "control_count": 75,
+  "current_consumer_not_selected": true,
+  "file_count": 11,
+  "files": [
+    {
+      "bytes": 122899,
+      "destination_in_fresh_historical_root": "scripts/lib/controlled_admission_supervision.py",
+      "mode": "0644",
+      "public_source": "scripts/lib/controlled_admission_supervision.py",
+      "sha256": "ae280d9afeca63ffd2518cefa1c650583dafdb56e62871c6ead9a71fe48f5a64"
+    },
+    {
+      "bytes": 19397,
+      "destination_in_fresh_historical_root": "scripts/lib/direct_build_record.py",
+      "mode": "0644",
+      "public_source": "scripts/lib/direct_build_record.py",
+      "sha256": "3992877f58e37849ec1e0b73554f434e6bf0d702a204a6470dc686f11e7eaaba"
+    },
+    {
+      "bytes": 24012,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_build_record.py",
+      "mode": "0644",
+      "public_source": "scripts/fixtures/stage4-profile-binding-v1/historical/scripts/lib/stage4_build_record.py",
+      "sha256": "97631b9cb9f2c1e351cb8ae62d073201046309fc74acf5ea087d5ba07150dae6"
+    },
+    {
+      "bytes": 146754,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_case.py",
+      "mode": "0644",
+      "public_source": "scripts/lib/stage4_case.py",
+      "sha256": "aa7daefd7265c6804443fcf44c94ffb9c63a7561e6da1577c1e31fe2e94095c0"
+    },
+    {
+      "bytes": 27490,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_compact.py",
+      "mode": "0644",
+      "public_source": "scripts/lib/stage4_compact.py",
+      "sha256": "d5005a7e838900f507479ba662de2b36d8fe3887208eb1fc3ea47568db4ccc74"
+    },
+    {
+      "bytes": 122189,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_compact_shapes.json",
+      "mode": "0644",
+      "public_source": "scripts/lib/stage4_compact_shapes.json",
+      "sha256": "0d28af4728b2a9fb08abf6408d0b5a970442307c69eae93cd225ab436622f7e4"
+    },
+    {
+      "bytes": 13961,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_corpus_join.py",
+      "mode": "0644",
+      "public_source": "scripts/lib/stage4_corpus_join.py",
+      "sha256": "54f3826b3ed5b8621973ce940c861523e7e3344e69d841a557d993ea55ff2e72"
+    },
+    {
+      "bytes": 6331,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_saved_case.py",
+      "mode": "0644",
+      "public_source": "scripts/lib/stage4_saved_case.py",
+      "sha256": "d5d36dcd3d5c453261e8212f8d1a63502b25274d416e514debf5a2282c11ca90"
+    },
+    {
+      "bytes": 159956,
+      "destination_in_fresh_historical_root": "scripts/lib/stage4_shapes.json",
+      "mode": "0644",
+      "public_source": "scripts/lib/stage4_shapes.json",
+      "sha256": "fc481c94bbd99e3891235b54f32450ec951c41ab4d56b3b04477ed3c01d30e38"
+    },
+    {
+      "bytes": 52987,
+      "destination_in_fresh_historical_root": "scripts/test-stage4-saved-profile.py",
+      "mode": "0644",
+      "public_source": "scripts/test-stage4-saved-profile.py",
+      "sha256": "ea766e39f1519d7c3c2ad11f873e3bb1919dc55336346c5b55cb525db99e7acd"
+    },
+    {
+      "bytes": 115084,
+      "destination_in_fresh_historical_root": "src/bosh/response_owner.rs",
+      "mode": "0644",
+      "public_source": "src/bosh/response_owner.rs",
+      "sha256": "6c346f097c60ea3cc6e50a4e931becb1f03ea2b587d32894995da692bba6fccb"
+    }
+  ],
+  "historical_consumer_sha256": "97631b9cb9f2c1e351cb8ae62d073201046309fc74acf5ea087d5ba07150dae6",
+  "schema": "stage4-historical75-fixed-input-layout-v1",
+  "source_bytes": 811060,
+  "source_copy_is_separate_preparation": true
+}

@@ -1,0 +1,422 @@
+{
+  "schema": "northstar-stage3-handoff-results-v1",
+  "status": "PassedLimitedPreparedRouteAndQueueHandoffSlice",
+  "scope": [
+    "The actual private XML preparation, mode-aware continuation, existing DirectMessageRouter and real OutboundSender share an operation-bound, single-use handoff. A local queue acceptance is recorded synchronously at the real sender result.",
+    "Routing requires actual Stored with known returned Live mode and the existing finalization-attempt boundary. Replay, unknown returned mode and SpoolOnly do not acquire live routing authority.",
+    "Prepared source, canonical full/bare target and fallback, health enforcement, live payload and exact durable item are validated before enqueue. A refused item remains intact across primary/fallback; durable Full still latches disconnect.",
+    "Remote no-positive-receipt history survives later acceptance. Rearm records entered/returned attempts only; it does not claim a SQL release receipt. First route terminal facts are monotone.",
+    "Queue acceptance survives a synthetic later pending continuation drop. This does not assert that the production router suspends after its local-success short-circuit."
+  ],
+  "tested_source": {
+    "base_commit": "5ce0e609abb1ed13893d169fa206196dd92bad70",
+    "base_tree": "a8a99074332a2c8f5dd983eef268a9284670fb26",
+    "changed_files": {
+      "Cargo.lock": {
+        "sha256": "b7e57003538ba9a493b4c9f12008a355437d55ba88ceb4c5c6a6c1d8aa559c35",
+        "bytes": 124410
+      },
+      "crates/northstar-message-application/Cargo.toml": {
+        "sha256": "23b61365dff07f43c86362fe60dc4943f2c50ee02070f50ae7e0dc7615aa4c8e",
+        "bytes": 537
+      },
+      "crates/northstar-message-application/src/direct_handoff.rs": {
+        "sha256": "d14610f099aab9eafbc8a28fab0803b0da707ff239752aa70388ec7084999b8c",
+        "bytes": 19880
+      },
+      "crates/northstar-message-application/src/direct_lifecycle.rs": {
+        "sha256": "5f232a83f6a9dfc80fda075077597393c755ba42b3c551820ba91e3d0f4786d9",
+        "bytes": 54349
+      },
+      "crates/northstar-message-application/src/lib.rs": {
+        "sha256": "af92a1ce900db48dcc38ed4532417d8a0bac74ec86688bc1cb9e7c3f86561cd2",
+        "bytes": 8245
+      },
+      "src/outbound.rs": {
+        "sha256": "5ace5180441c4ff385526e056225ad071e9b86bf63f969275c82e2143083c4d5",
+        "bytes": 29520
+      },
+      "src/s2s/inbound/direct_route.rs": {
+        "sha256": "f2383e384b57cb980a512461e767e5f3c78bc6d4db1aedadd1c382f93397d42a",
+        "bytes": 2857
+      },
+      "src/services/message_admission/witness.rs": {
+        "sha256": "8d869704dea42645b87da53bc18c71d24dcc54495fcf7c58b6d1e455c368c9e0",
+        "bytes": 14294
+      },
+      "src/services/messaging.rs": {
+        "sha256": "5ef6954346caced7a07406e66764ff6888e444023fff00bb87d3a876e2e59832",
+        "bytes": 27087
+      },
+      "src/services/messaging/direct_route.rs": {
+        "sha256": "038c0a6a95aeb90f4ab1f5c4a068047dc2adb4390e6fbb1c3f0ef70585043584",
+        "bytes": 20950
+      },
+      "src/services/messaging/direct_route_tests.rs": {
+        "sha256": "0178580ca27e1a392f3738858b242f5ed9b5bfddc4f4d2b9cbd54862499f82c2",
+        "bytes": 49905
+      },
+      "src/services/messaging/direct_workflow.rs": {
+        "sha256": "2a8f1e390384952cfb2694b47c17bb345b0744aea8bb583f7702908ebc3dd0ac",
+        "bytes": 36833
+      },
+      "src/services/messaging_tests.rs": {
+        "sha256": "cf910fd852a0d5a513048703720d677aa55a655e48fef69c87ea47880597ecfb",
+        "bytes": 16787
+      },
+      "src/state/message_cluster_routing.rs": {
+        "sha256": "1168ca4e4a3ba8271e4dbded9c1fcbec828824e4cb8e64bd28f1cbe55c4f9ae1",
+        "bytes": 12614
+      },
+      "src/xmpp/frame_execution.rs": {
+        "sha256": "ca7dccee8511d63d69fa707ba597eed8c7ab8bcd21e3772705daff681632b1dd",
+        "bytes": 51554
+      },
+      "src/xmpp/protocol/messaging.rs": {
+        "sha256": "9b60faf90f08ee4b8d90520d8146ccacaadd7c6ee7f98e3e4545c1c23f1b9dc3",
+        "bytes": 128484
+      }
+    },
+    "manifest_sha256": "eb75bb0c1fd54dc43e8763e159e6424e3715c69e93172bf9c24936702f6e4422",
+    "manifest_encoding": "UTF-8 JSON of changed_files with sorted keys, compact comma/colon separators and no trailing newline.",
+    "patch_sha256": "09220345c77533f76e09a97168615c2323eebd6b51b037a9bfd8a28926b1461c",
+    "unchanged_during_checks": true
+  },
+  "ordinary_checks_before_literal_refinement": {
+    "execution_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.241189650",
+      "log_bytes": 40,
+      "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339"
+    },
+    "clippy": {
+      "exit_code": 0,
+      "elapsed_seconds": "176.052194954",
+      "log_bytes": 287,
+      "log_sha256": "e91140e4b4b68c056f37f102bf66832233d902bb6433d1e514e7a129bd2659d0"
+    },
+    "post_commit": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.326264870",
+      "log_bytes": 1828,
+      "log_sha256": "97b44d715d04abe4ffe2eca6a6ecdc05cd39e4c9637c59fb30f890ae3ac7afb0"
+    },
+    "admission": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.335520840",
+      "log_bytes": 1218,
+      "log_sha256": "83fc0037872019079c783be55728a3a9f08b4a1b75f8d757fd51848d8a8addc6"
+    },
+    "witness": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.282702597",
+      "log_bytes": 499,
+      "log_sha256": "e484f7ac6a626876bceb2d8e395e2c6961f8cad3e13fe1213917ead626167a7c"
+    },
+    "direct_wrapper": {
+      "exit_code": 0,
+      "elapsed_seconds": "158.467398698",
+      "log_bytes": 2064,
+      "log_sha256": "3f110bf61d2553b6e31c9c866be5b65cdfa4da9f1199f1e0a57e7f807077d4d3"
+    },
+    "compile": {
+      "exit_code": 0,
+      "elapsed_seconds": "145.316371806",
+      "log_bytes": 149,
+      "log_sha256": "e28c8293b7cc3c01b1273f815c30f9165feb4681776b63828090832f6ad37d49"
+    },
+    "application": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.873566014",
+      "log_bytes": 3630,
+      "log_sha256": "87b05f19c7e66397baf455fe79710446871a856256cb113f9a14ddf101958365"
+    },
+    "gates": {
+      "exit_code": 0,
+      "elapsed_seconds": "3.562616178",
+      "log_bytes": 7543,
+      "log_sha256": "c7629fb854d1b5960a046583e77f736eb740aaaf09e5c87d6603329e357810f9"
+    },
+    "graphs": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.439297077",
+      "log_bytes": 229,
+      "log_sha256": "e38a265a5bd35a61e776fb027cd8494eb98955b13e9dabb9c1169c472dd8a008"
+    },
+    "protocol": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.277447328",
+      "log_bytes": 1531,
+      "log_sha256": "fc7d15541adb01313631615cec5d841510684188281743a17185107916272362"
+    },
+    "router": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.415499489",
+      "log_bytes": 3979,
+      "log_sha256": "3560a38ee95b366fd7608c2e2f73ad05d6117a95022d800a3a7e5f0d4067bc17"
+    },
+    "admission_gate": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.139774305",
+      "log_bytes": 207,
+      "log_sha256": "1fc91bded0874248cb3fc736806b17d2d820adb0a6df0ec5ae4215d6fb84c1e1"
+    },
+    "frame": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.300129710",
+      "log_bytes": 2114,
+      "log_sha256": "50505d12436c159aa83692ded4fc38516126b2e87337488df473a32879376078"
+    }
+  },
+  "final_exact_checks": {
+    "exact_06": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.291706746",
+      "log_bytes": 407,
+      "log_sha256": "4c7170cdb6002664fcf4474b903672a59b13b018bc3577d15c639090f80f2942",
+      "test_name": "xmpp::protocol::messaging::direct_preparation_tests::actual_original_to_router_preserves_live_payload_after_delayed_command_drops"
+    },
+    "exact_09": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.295793436",
+      "log_bytes": 418,
+      "log_sha256": "e3540e34e3fb8ffcff24a81a75d7a1cb928ab26b17dcb095899806f14da5b744",
+      "test_name": "xmpp::protocol::messaging::direct_preparation_tests::independently_changed_actor_origin_full_target_or_source_payload_cannot_reuse_admission"
+    },
+    "exact_04": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.289984640",
+      "log_bytes": 336,
+      "log_sha256": "ee677afa1a3d639d021c4f7633823fadc1bdc0d1bcf8cd9034f42d53b7379759",
+      "test_name": "outbound::tests::rejects_ambiguous_or_unrelated_identities"
+    },
+    "exact_05": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.257855321",
+      "log_bytes": 356,
+      "log_sha256": "02fac1cef93d546bfbfa16aff5e7e883fcee249793616006500c7176f5aa2254",
+      "test_name": "outbound::tests::volatile_queue_saturation_does_not_latch_the_transport_closed"
+    },
+    "inventory": {
+      "exit_code": 0,
+      "elapsed_seconds": "157.943766442",
+      "log_bytes": 163803,
+      "log_sha256": "16cba01854e3b5d85e4091bc9015287699d099209dcfddcf85b29b3f3531b546"
+    },
+    "exact_11": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.681008872",
+      "log_bytes": 402,
+      "log_sha256": "b90639de3e53cbb5254944b3ebe983f7f62b8499cfcf7fabcd57d2142b3b6736",
+      "test_name": "xmpp::protocol::messaging::direct_preparation_tests::valid_unrated_frame_does_not_acquire_the_rated_normalized_payload_limit"
+    },
+    "exact_10": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.253570587",
+      "log_bytes": 401,
+      "log_sha256": "73d052a55aff906264a914a9e00b8e068217c77f55740e2018be3f0fa4b3519e",
+      "test_name": "xmpp::protocol::messaging::direct_preparation_tests::preparation_preserves_full_bare_delayed_live_self_and_unrated_controls"
+    },
+    "exact_03": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.272111877",
+      "log_bytes": 345,
+      "log_sha256": "0c8fb3f94dee09b33729dd1078def70c32936c450bf4e4fda29c4fee90b680d4",
+      "test_name": "outbound::tests::recovers_only_the_recipient_authoritative_identity"
+    },
+    "exact_02": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.279102046",
+      "log_bytes": 348,
+      "log_sha256": "ab82b512777c00c9bcdd6af620faba2e57811a568b1297bbaeecf3d25f18cd0c",
+      "test_name": "outbound::tests::receipt_queue_saturation_latches_the_transport_closed"
+    },
+    "exact_08": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.270442234",
+      "log_bytes": 413,
+      "log_sha256": "9d8161a5430c8f91f85e90a482b97984e25c1e8f64513713072d256e19e0fa84",
+      "test_name": "xmpp::protocol::messaging::direct_preparation_tests::exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_changed_views"
+    },
+    "exact_00": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.443795159",
+      "log_bytes": 348,
+      "log_sha256": "078d4080f6a3ab816b3a4d23f09de4b99405ec8ae99854a462de25e1baa43953",
+      "test_name": "outbound::tests::durable_queue_saturation_latches_the_transport_closed"
+    },
+    "exact_07": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.272231851",
+      "log_bytes": 417,
+      "log_sha256": "218a1f5c8dc0c822485c738cda527bb7843fed29ff28e832f37a446170b8801c",
+      "test_name": "xmpp::protocol::messaging::direct_preparation_tests::changed_prepared_identity_payload_or_stored_projection_is_rejected_before_effect_issue"
+    },
+    "exact_01": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.266777902",
+      "log_bytes": 351,
+      "log_sha256": "0667e7d812d9c830d4d424aedfda46024c2d3931fe9d825cb039dc5d2fcbf7e3",
+      "test_name": "outbound::tests::guarded_durable_send_rechecks_after_waiting_for_capacity"
+    },
+    "format": {
+      "exit_code": 0,
+      "elapsed_seconds": "0.057520161",
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "source_relation": {
+    "prior_manifest_sha256": "a2861b3e9d40b7ca18c07dc026383aa5d4bb9589633d3d5864cc40177153effe",
+    "only_final_delta": "Three matching root.to XML literals in one preparation test; assertions and production code unchanged.",
+    "prior_messaging_sha256": "1dfdb60e067d4bd8cf2b91c9e968f98525659bdb27c727755ce2b9f9d29d4e79",
+    "literal_patch_sha256": "de68a2175a85ca80eb83b7822f6f0cee30413d0c82dc3601672974de89e27089",
+    "reuse_limit": "Prior compile/Clippy and unaffected named unit/gate results apply to the unchanged production/test bodies. Final test compilation, format and all six affected preparation tests use the refined source. These helper tests do not execute upstream target parsing."
+  },
+  "tests": {
+    "rust_qualified_unique": 139,
+    "retained_unchanged_groups": {
+      "application": {
+        "passed": 31,
+        "ignored": 0
+      },
+      "direct_wrapper": {
+        "passed": 12,
+        "ignored": 0
+      },
+      "router": {
+        "passed": 30,
+        "ignored": 0
+      },
+      "post_commit": {
+        "passed": 14,
+        "ignored": 0
+      },
+      "protocol": {
+        "passed": 12,
+        "ignored": 0
+      },
+      "admission": {
+        "passed": 8,
+        "ignored": 0
+      },
+      "witness": {
+        "passed": 2,
+        "ignored": 0
+      },
+      "frame": {
+        "passed": 18,
+        "ignored": 0
+      }
+    },
+    "corrected_exact_outbound": 6,
+    "refined_exact_preparation": 6,
+    "final_selected": 12,
+    "final_ran": 12,
+    "final_ignored": 0,
+    "node_passed": 115,
+    "node_failed": 0,
+    "inventory_count": 1782,
+    "exact_command_template": "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server FULL_TEST_NAME -- --exact --test-threads=1",
+    "future_selection": "List and verify full selected names before execution; substring filters are not namespace boundaries."
+  },
+  "test_binaries": {
+    "prior_application": {
+      "path": "target/debug/deps/northstar_message_application-bd70d9b4fa42eba5",
+      "bytes": 2279760,
+      "sha256": "78341d20f6b1edebfc5034078c87d04ecba9ee6365df4671a82834b415deaf51"
+    },
+    "prior_server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 194915160,
+      "sha256": "e56d5d17dd6ede01954a33be01e445cfbe16c330045e661a3f05827b006a8981",
+      "availability": "Hash recorded after the prior checks, before the literal-only rebuild. That executable path was overwritten by the final build; the historical bytes were not separately retained."
+    },
+    "final_exact_server": {
+      "path": "target/debug/deps/rust_xmpp_server-d3ab12afc6293141",
+      "bytes": 194915160,
+      "sha256": "5b759273beef3b4389f415df760ef1d7f6b60addbf9e11c0a255eebbab425c34"
+    },
+    "identity_limit": "These are tested local binaries. Git metadata embedded by build scripts can change the binary at a later commit even with unchanged product source."
+  },
+  "preserved_failures": [
+    {
+      "phase": "initial Clippy",
+      "exit_code": 101,
+      "reason": "Unused FullJidFallback.stanza after owned RoutePayload extraction. Removed the unused duplicate field/shim. No units ran in that attempt.",
+      "log_sha256": "89a45eff56a8c6c6732551688fa7fd5bc15753b3b2de9d2d43e128485fff1519"
+    },
+    {
+      "phase": "cleanup compile",
+      "exit_code": 101,
+      "reason": "Missing RoutePayload test import. Fixed import and reused one generated delivery per request/payload; assertions unchanged. No units ran in that attempt.",
+      "log_sha256": "96b0ecfa30df6cfa7690b7c8c8b95b677b6d479d5e46158105371c099ce388b5"
+    },
+    {
+      "phase": "test selection",
+      "status": "SelectionScopeMismatch",
+      "filter": "outbound::tests",
+      "intended_passed": 6,
+      "additional_passed": 11,
+      "ignored_not_run": 1,
+      "mixed_total_not_qualified": 150,
+      "exit_code": 0,
+      "log_sha256": "774b45a624f3a595a1a2051585008786e5a69094acdb6a3730399dd256b2b312",
+      "unexpected_live_case": "s2s::outbound::tests::happy_eyeballs_live_fallback_reaches_ipv4_after_ipv6_failure",
+      "observation": "A loopback IPv4 listener and IPv4/IPv6 connect futures ran unintentionally due substring matching. The successful test and executable exited; lexical owners drop sockets/futures. No independent post-run socket audit and no retry of that case. No DNS, TLS, application exchange, DB or OS child in that live case.",
+      "correction": "Eleven extra cases excluded from qualified pure results. Six intended outbound cases separately listed and rerun by full exact name; the ignored DB case was never enabled."
+    }
+  ],
+  "graphs": {
+    "changed": [
+      "docs/architecture/generated/compile-time.dot",
+      "docs/architecture/generated/compile-time.json",
+      "docs/architecture/generated/compile-time.mmd",
+      "docs/architecture/generated/graphs.json"
+    ],
+    "change": "Only the existing message-application to delivery-core dependency edge was added; no new graph nodes or runtime/data-access changes.",
+    "changed_files": {
+      "docs/architecture/generated/compile-time.dot": {
+        "sha256": "2a99bf6ce6b8ed01b9cd03f5146560f1891f4fa1184cd1bee9f92a4554411114",
+        "bytes": 70479
+      },
+      "docs/architecture/generated/compile-time.json": {
+        "sha256": "1935672afea7acddbfd84aed360ee5628c2ddee79bffb9e0fd0042c8113e44c2",
+        "bytes": 106511
+      },
+      "docs/architecture/generated/compile-time.mmd": {
+        "sha256": "e220f0e5e74948a85e7faf7c7f2b44bcad1eac734b22c66e310f8125df719a9b",
+        "bytes": 154654
+      },
+      "docs/architecture/generated/graphs.json": {
+        "sha256": "f8e85492d34fd5fe49d0d639526ffa1d1872f0cb3357a65426abc0ba85c32b75",
+        "bytes": 131936
+      }
+    },
+    "unchanged_graphs": 6
+  },
+  "prior_ci": {
+    "commit": "5ce0e609abb1ed13893d169fa206196dd92bad70",
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37197447052",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "scope": "Prior saved commit only, not CI qualification of this new source."
+  },
+  "remaining": [
+    "This is a limited handoff slice, not full Stage3 acceptance. Native full-write/settlement, SM h and BOSH RID/ownership controlled composition remain open.",
+    "The actual preparation/router/channel helpers are exercised in process. Database commits and transport writes/peer ACKs are not established by these tests.",
+    "Stage3 saved-input corpus/replay, independent oracle/mutations and same-target shrinking still require integration and qualification.",
+    "Reconciliation has no new runtime consumer or response-critical await. Recoverable durable storage is not an assertion of scheduled retry.",
+    "Real SQL/wire/fault fidelity and finite resource qualification remain Stage5/6; the cancelled 72-hour soak is not restored."
+  ],
+  "check_envelope": {
+    "timeout_seconds": 600,
+    "kill_after_seconds": 5,
+    "maximum_log_bytes": 4194304,
+    "all_recorded_source_maps_unchanged": true,
+    "all_collectors_exit_zero": true,
+    "final_exact_selected_equals_ran": 12,
+    "final_exact_ignored": 0
+  }
+}

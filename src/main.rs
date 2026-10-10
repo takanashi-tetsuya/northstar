@@ -13,6 +13,8 @@ mod config;
 mod connection_actors;
 mod crl;
 mod db;
+#[cfg(test)]
+mod direct_replay;
 mod error;
 mod identity_audit;
 mod jid;
@@ -27,6 +29,8 @@ mod pie;
 mod retention;
 mod s2s;
 mod services;
+#[cfg(test)]
+mod stage4_replay;
 mod state;
 mod storage;
 mod subscription_cleanup;
@@ -264,7 +268,7 @@ async fn run() -> Result<()> {
     if arguments != ["serve", "maintenance"]
         && std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")
     {
-        dotenvy::dotenv().ok();
+        config::load_dotenv()?;
     }
     if let Some(outcome) = identity_audit::maybe_run(&arguments).await? {
         return match outcome {

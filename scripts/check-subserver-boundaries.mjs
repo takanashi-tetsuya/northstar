@@ -136,10 +136,18 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   requireBoundary(dispatch.includes('return subservers::run_maintenance().await') &&
     main.indexOf('if process_role == subservers::ProcessRole::Maintenance') < main.indexOf('Config::from_env()?'),
   'maintenance must exit the composition path before general Config and AppState assembly');
-  const dotenv = main.indexOf('dotenvy::dotenv()');
+  const dotenv = main.indexOf('config::load_dotenv()?;');
+  requireBoundary(dotenv >= 0, 'dotenv loading errors must propagate before mode-specific configuration');
+  const startup = body(main, 'async fn run()');
+  const startupDotenv = startup.indexOf('config::load_dotenv()?;');
+  requireBoundary(startupDotenv >= 0 && ['identity_audit::maybe_run(', 'run_migrations().await', 'Config::from_env()?']
+    .every((consumer) => startup.indexOf(consumer) > startupDotenv),
+  'dotenv loading must precede every mode-specific configuration consumer');
   const dotenvGuard = main.slice(main.lastIndexOf('if arguments', dotenv), dotenv);
   requireBoundary(/if arguments\s*!=\s*\[\s*"serve",\s*"maintenance"\s*\]/.test(dotenvGuard),
     'maintenance must never import a core .env file');
+  requireBoundary(dotenvGuard.includes('std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")'),
+    'explicit dotenv disable must prevent importing a developer .env file');
   requireBoundary(body(subservers, 'fn embeds_retention(').trim() === 'self == Self::Standalone',
     'only standalone may embed retention in the core composition');
   const ownership = body(main, 'if process_role.embeds_retention()');

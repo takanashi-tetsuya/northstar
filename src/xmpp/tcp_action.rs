@@ -1,6 +1,8 @@
 //! Execute protocol actions on the ordered TCP stream shared by plain and TLS C2S.
 
-use super::{send, tcp_fatal_error, tcp_record_and_send, tcp_record_and_send_item};
+use super::{
+    send, tcp_fatal_error, tcp_record_and_send, tcp_record_and_send_auth, tcp_record_and_send_item,
+};
 use crate::xmpp::protocol::{Action, ProtocolSession, ResumeTransportParts};
 use anyhow::Result;
 use tokio::io::AsyncWrite;
@@ -38,11 +40,22 @@ pub(super) async fn apply<S: AsyncWrite + Unpin>(
             }
         }
         Action::SendManyThenActivate(replies) => {
-            for (index, reply) in replies.into_iter().enumerate() {
-                if !tcp_record_and_send(io, session, &reply, opening).await? {
-                    return Ok(TcpActionDisposition::Close);
-                }
-                if index == 0 && !session.publish_committed_authentication_and_route().await {
+            let (replies, holder) = replies.into_parts();
+            let mut holder = Some(holder);
+            for reply in replies {
+                if let Some(holder) = holder.take() {
+                    let Some(owner) =
+                        tcp_record_and_send_auth(io, session, reply, holder, opening).await?
+                    else {
+                        return Ok(TcpActionDisposition::Close);
+                    };
+                    if !session
+                        .publish_committed_authentication_and_route(owner)
+                        .await
+                    {
+                        return Ok(TcpActionDisposition::Close);
+                    }
+                } else if !tcp_record_and_send(io, session, &reply, opening).await? {
                     return Ok(TcpActionDisposition::Close);
                 }
             }
@@ -61,12 +74,29 @@ pub(super) async fn apply<S: AsyncWrite + Unpin>(
                 post_control,
                 replay,
                 activate_route,
+                auth_publication,
                 transient_capacity: _resume_transport_capacity,
             } = payload.into_transport_parts();
-            if !tcp_record_and_send(io, session, &control, opening).await? {
-                return Ok(TcpActionDisposition::Close);
-            }
-            if activate_route && !session.publish_committed_authentication_and_route().await {
+            anyhow::ensure!(
+                activate_route == auth_publication.is_some(),
+                "resume activation and auth owner disagree"
+            );
+            if activate_route {
+                let holder = auth_publication.ok_or_else(|| {
+                    anyhow::anyhow!("activating resume has no sealed auth control")
+                })?;
+                let Some(owner) =
+                    tcp_record_and_send_auth(io, session, control, holder, opening).await?
+                else {
+                    return Ok(TcpActionDisposition::Close);
+                };
+                if !session
+                    .publish_committed_authentication_and_route(owner)
+                    .await
+                {
+                    return Ok(TcpActionDisposition::Close);
+                }
+            } else if !tcp_record_and_send(io, session, &control, opening).await? {
                 return Ok(TcpActionDisposition::Close);
             }
             for nonza in post_control {

@@ -1,4 +1,8 @@
 //! Atomic SM ownership, transport acknowledgements and binding persistence.
+use crate::services::authentication::publication::{
+    credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
+    PreparationResult,
+};
 use crate::{db, services::sm::*};
 use anyhow::Result;
 use sqlx::PgPool;
@@ -17,6 +21,314 @@ impl PostgresSmRepository {
             pool,
             fast_token_secret,
         }
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_binding_inner(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        observation: Option<&CredentialInvocation<'_>>,
+    ) -> Result<BindingFinalizationOutcome> {
+        if let Some(observation) = observation {
+            observation.enter_binding(
+                connection_id,
+                user_id,
+                expected_auth_generation,
+                full_jid,
+                lease_seconds,
+                device_id,
+                fast_plan,
+            )?;
+        }
+        let Some(mut tx) = db::users::lock_auth_generation_observed(
+            &self.pool,
+            user_id,
+            expected_auth_generation,
+            observation,
+        )
+        .await?
+        else {
+            return Ok(BindingFinalizationOutcome::CredentialsExpired);
+        };
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Binding);
+        }
+        let binding_result = db::finalize_binding_live_session_in_transaction(
+            &mut tx,
+            connection_id,
+            user_id,
+            full_jid,
+            lease_seconds,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Binding,
+                match &binding_result {
+                    Ok(true) => PreparationResult::Present,
+                    Ok(false) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        if !binding_result? {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::BindingReservationLost,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(BindingFinalizationOutcome::ReservationLost);
+        }
+        let staged_login_epoch =
+            crate::db::authentication::stage_login_epoch_in_transaction_observed(
+                &mut tx,
+                user_id,
+                device_id,
+                expected_auth_generation,
+                connection_id,
+                observation,
+            )
+            .await?;
+        if device_id.is_some() && staged_login_epoch.is_none() {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::BindingStageMissing,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(BindingFinalizationOutcome::CredentialsExpired);
+        }
+        let issued_fast = if let Some(plan) = fast_plan {
+            let db_plan = db::FastCommitPlan::from(plan);
+            if let Some(observation) = observation {
+                observation.preparation_entered(CredentialPreparation::Fast);
+            }
+            let fast_result = db::commit_fast_state_in_transaction(
+                &mut tx,
+                self.fast_token_secret.as_slice(),
+                user_id,
+                expected_auth_generation,
+                &db_plan,
+            )
+            .await;
+            if let Some(observation) = observation {
+                observation.preparation_returned(
+                    CredentialPreparation::Fast,
+                    match &fast_result {
+                        Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
+                        Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                        Err(_) => PreparationResult::Err,
+                    },
+                );
+            }
+            match fast_result? {
+                db::FastCommitOutcome::Committed(issued) => {
+                    issued.map(crate::services::authentication::IssuedFastToken::from)
+                }
+                db::FastCommitOutcome::CredentialsExpired => {
+                    CredentialInvocation::rollback(
+                        observation,
+                        CredentialRollbackSite::BindingFastExpired,
+                        tx.rollback(),
+                    )
+                    .await
+                    .map_err(credential_error)?;
+                    return Ok(BindingFinalizationOutcome::CredentialsExpired);
+                }
+            }
+        } else {
+            None
+        };
+        CredentialInvocation::commit(observation, tx.commit())
+            .await
+            .map_err(credential_error)?;
+        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+            issued_fast,
+            staged_login_epoch,
+            Some(crate::services::authentication::BindingPublication {
+                connection_id,
+                user_id,
+                full_jid: full_jid.to_owned(),
+                lease_seconds,
+            }),
+        );
+        if let Some(observation) = observation {
+            observation.constructed(&receipt);
+        }
+        Ok(BindingFinalizationOutcome::Committed { receipt })
+    }
+    async fn finalize_resume_inner(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+        observation: Option<&CredentialInvocation<'_>>,
+    ) -> Result<SmResumeFinalizationOutcome> {
+        if let Some(observation) = observation {
+            observation.enter_resume(&request)?;
+        }
+        let Some(mut tx) = db::users::lock_auth_generation_observed(
+            &self.pool,
+            request.user_id,
+            request.expected_auth_generation,
+            observation,
+        )
+        .await?
+        else {
+            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
+        };
+        let staged_login_epoch =
+            crate::db::authentication::stage_login_epoch_in_transaction_observed(
+                &mut tx,
+                request.user_id,
+                request.user_agent_id,
+                request.expected_auth_generation,
+                request.connection_id,
+                observation,
+            )
+            .await?;
+        if request.user_agent_id.is_some() && staged_login_epoch.is_none() {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::ResumeStageMissing,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
+        }
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Activation);
+        }
+        let activation_result = db::activate_claimed_sm_session_in_transaction(
+            &mut tx,
+            request.session_id,
+            request.claim_token,
+            request.connection_id,
+            request.client_h,
+            request.acknowledged_count,
+            request.peer_ip,
+            request.user_agent_id,
+            request.ttl_seconds,
+            request.live_lease_seconds,
+            request.max_stanzas,
+            request.max_bytes,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Activation,
+                match &activation_result {
+                    Ok(Some(_)) => PreparationResult::Present,
+                    Ok(None) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        let Some(activated) = activation_result? else {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::ResumeClaimLost,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(SmResumeFinalizationOutcome::ClaimLost);
+        };
+        let issued_fast = if let Some(plan) = request.fast_plan {
+            let db_plan = db::FastCommitPlan::from(plan);
+            if let Some(observation) = observation {
+                observation.preparation_entered(CredentialPreparation::Fast);
+            }
+            let fast_result = db::commit_fast_state_in_transaction(
+                &mut tx,
+                self.fast_token_secret.as_slice(),
+                request.user_id,
+                request.expected_auth_generation,
+                &db_plan,
+            )
+            .await;
+            if let Some(observation) = observation {
+                observation.preparation_returned(
+                    CredentialPreparation::Fast,
+                    match &fast_result {
+                        Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
+                        Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                        Err(_) => PreparationResult::Err,
+                    },
+                );
+            }
+            match fast_result? {
+                db::FastCommitOutcome::Committed(issued) => {
+                    issued.map(crate::services::authentication::IssuedFastToken::from)
+                }
+                db::FastCommitOutcome::CredentialsExpired => {
+                    CredentialInvocation::rollback(
+                        observation,
+                        CredentialRollbackSite::ResumeFastExpired,
+                        tx.rollback(),
+                    )
+                    .await
+                    .map_err(credential_error)?;
+                    return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(observation) = observation {
+            observation.preparation_entered(CredentialPreparation::Privacy);
+        }
+        let privacy_result = db::set_active_privacy_list_in_transaction(
+            &mut tx,
+            request.user_id,
+            request.connection_id,
+            request.active_privacy_list,
+        )
+        .await;
+        if let Some(observation) = observation {
+            observation.preparation_returned(
+                CredentialPreparation::Privacy,
+                match &privacy_result {
+                    Ok(true) => PreparationResult::Present,
+                    Ok(false) => PreparationResult::Absent,
+                    Err(_) => PreparationResult::Err,
+                },
+            );
+        }
+        if !privacy_result? {
+            CredentialInvocation::rollback(
+                observation,
+                CredentialRollbackSite::ResumePrivacyMissing,
+                tx.rollback(),
+            )
+            .await
+            .map_err(credential_error)?;
+            return Ok(SmResumeFinalizationOutcome::PrivacySelectionMissing);
+        }
+        CredentialInvocation::commit(observation, tx.commit())
+            .await
+            .map_err(credential_error)?;
+        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+            issued_fast,
+            staged_login_epoch,
+            None,
+        );
+        if let Some(observation) = observation {
+            observation.constructed(&receipt);
+        }
+        Ok(SmResumeFinalizationOutcome::Committed(Box::new(
+            SmResumeFinalizationCommit {
+                activated: activated.into(),
+                receipt,
+            },
+        )))
     }
 }
 impl SmRepository for PostgresSmRepository {
@@ -94,17 +406,48 @@ impl SmRepository for PostgresSmRepository {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
-        Ok(db::checkpoint_sm_session_with_ownership_resolution(
+        if let Some(prepared) = observation {
+            prepared.validate_projection(
+                session_id,
+                connection_id,
+                database_projection(&snapshot),
+                &[],
+                ownership::CheckpointPolicy {
+                    ttl_seconds,
+                    live_lease_seconds,
+                    max_stanzas,
+                    max_bytes,
+                },
+            )?;
+        }
+        if observation.is_none() {
+            return Ok(db::checkpoint_sm_session_with_ownership_resolution(
+                &self.pool,
+                session_id,
+                connection_id,
+                &snapshot,
+                ttl_seconds,
+                live_lease_seconds,
+                max_stanzas,
+                max_bytes,
+            )
+            .await?
+            .into());
+        }
+        Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
             &self.pool,
             session_id,
             connection_id,
             &snapshot,
+            &[],
             ttl_seconds,
             live_lease_seconds,
             max_stanzas,
             max_bytes,
+            observation.map(|prepared| prepared.request()),
         )
         .await?
         .into())
@@ -128,29 +471,57 @@ impl SmRepository for PostgresSmRepository {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
-        Ok(
-            db::checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
-                &self.pool,
+        if let Some(prepared) = observation {
+            prepared.validate_projection(
                 session_id,
                 connection_id,
-                &snapshot,
+                database_projection(&snapshot),
                 acknowledged,
-                ttl_seconds,
-                live_lease_seconds,
-                max_stanzas,
-                max_bytes,
-            )
-            .await?
-            .into(),
+                ownership::CheckpointPolicy {
+                    ttl_seconds,
+                    live_lease_seconds,
+                    max_stanzas,
+                    max_bytes,
+                },
+            )?;
+        }
+        Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
+            &self.pool,
+            session_id,
+            connection_id,
+            &snapshot,
+            acknowledged,
+            ttl_seconds,
+            live_lease_seconds,
+            max_stanzas,
+            max_bytes,
+            observation.map(|prepared| prepared.request()),
         )
+        .await?
+        .into())
     }
     async fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
+        observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
-        db::acknowledge_transport_sources(&self.pool, sources).await
+        if let Some(prepared) = observation {
+            prepared.validate_sources(sources)?;
+        }
+        match observation {
+            Some(prepared) => {
+                db::sm::acknowledge_transport_sources_observed(
+                    &self.pool,
+                    sources,
+                    Some(prepared.request()),
+                )
+                .await
+            }
+            None => db::acknowledge_transport_sources(&self.pool, sources).await,
+        }
     }
     async fn reserve_binding(
         &self,
@@ -201,159 +572,54 @@ impl SmRepository for PostgresSmRepository {
         device_id: Option<Uuid>,
         fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
-        let Some(mut tx) =
-            db::lock_auth_generation(&self.pool, user_id, expected_auth_generation).await?
-        else {
-            return Ok(BindingFinalizationOutcome::CredentialsExpired);
-        };
-        if !db::finalize_binding_live_session_in_transaction(
-            &mut tx,
+        self.finalize_binding_inner(
             connection_id,
             user_id,
+            expected_auth_generation,
             full_jid,
             lease_seconds,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            return Ok(BindingFinalizationOutcome::ReservationLost);
-        }
-        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
-            &mut tx,
-            user_id,
             device_id,
-            expected_auth_generation,
-            connection_id,
+            fast_plan,
+            None,
         )
-        .await?;
-        if device_id.is_some() && staged_login_epoch.is_none() {
-            tx.rollback().await?;
-            return Ok(BindingFinalizationOutcome::CredentialsExpired);
-        }
-        let issued_fast = if let Some(plan) = fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
-            match db::commit_fast_state_in_transaction(
-                &mut tx,
-                self.fast_token_secret.as_slice(),
-                user_id,
-                expected_auth_generation,
-                &db_plan,
-            )
-            .await?
-            {
-                db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
-                }
-                db::FastCommitOutcome::CredentialsExpired => {
-                    tx.rollback().await?;
-                    return Ok(BindingFinalizationOutcome::CredentialsExpired);
-                }
-            }
-        } else {
-            None
-        };
-        tx.commit().await?;
-        Ok(BindingFinalizationOutcome::Committed {
-            receipt: crate::services::authentication::CredentialCommitReceipt::new(
-                issued_fast,
-                staged_login_epoch,
-                Some(crate::services::authentication::BindingPublication {
-                    connection_id,
-                    user_id,
-                    full_jid: full_jid.to_owned(),
-                    lease_seconds,
-                }),
-            ),
-        })
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_binding_observed(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        invocation: &CredentialInvocation<'_>,
+    ) -> Result<BindingFinalizationOutcome> {
+        self.finalize_binding_inner(
+            connection_id,
+            user_id,
+            expected_auth_generation,
+            full_jid,
+            lease_seconds,
+            device_id,
+            fast_plan,
+            Some(invocation),
+        )
+        .await
     }
     async fn finalize_resume(
         &self,
         request: SmResumeFinalizationRequest<'_>,
     ) -> Result<SmResumeFinalizationOutcome> {
-        let Some(mut tx) = db::lock_auth_generation(
-            &self.pool,
-            request.user_id,
-            request.expected_auth_generation,
-        )
-        .await?
-        else {
-            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-        };
-        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.user_agent_id,
-            request.expected_auth_generation,
-            request.connection_id,
-        )
-        .await?;
-        if request.user_agent_id.is_some() && staged_login_epoch.is_none() {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-        }
-        let Some(activated) = db::activate_claimed_sm_session_in_transaction(
-            &mut tx,
-            request.session_id,
-            request.claim_token,
-            request.connection_id,
-            request.client_h,
-            request.acknowledged_count,
-            request.peer_ip,
-            request.user_agent_id,
-            request.ttl_seconds,
-            request.live_lease_seconds,
-            request.max_stanzas,
-            request.max_bytes,
-        )
-        .await?
-        else {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::ClaimLost);
-        };
-        let issued_fast = if let Some(plan) = request.fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
-            match db::commit_fast_state_in_transaction(
-                &mut tx,
-                self.fast_token_secret.as_slice(),
-                request.user_id,
-                request.expected_auth_generation,
-                &db_plan,
-            )
-            .await?
-            {
-                db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
-                }
-                db::FastCommitOutcome::CredentialsExpired => {
-                    tx.rollback().await?;
-                    return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-                }
-            }
-        } else {
-            None
-        };
-        if !db::set_active_privacy_list_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.connection_id,
-            request.active_privacy_list,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::PrivacySelectionMissing);
-        }
-        tx.commit().await?;
-        Ok(SmResumeFinalizationOutcome::Committed(Box::new(
-            SmResumeFinalizationCommit {
-                activated: activated.into(),
-                receipt: crate::services::authentication::CredentialCommitReceipt::new(
-                    issued_fast,
-                    staged_login_epoch,
-                    None,
-                ),
-            },
-        )))
+        self.finalize_resume_inner(request, None).await
+    }
+    async fn finalize_resume_observed(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+        invocation: &CredentialInvocation<'_>,
+    ) -> Result<SmResumeFinalizationOutcome> {
+        self.finalize_resume_inner(request, Some(invocation)).await
     }
     async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
         crate::db::release_sm_claim(&self.pool, session_id, claim_token).await
@@ -522,5 +788,148 @@ impl From<db::SmResumePending> for SmResumePending {
             reason: value.reason.into(),
             retry_at: value.retry_at,
         }
+    }
+}
+
+fn database_projection(snapshot: &db::SmSessionSnapshot) -> ownership::SnapshotProjection<'_> {
+    let db::SmSessionSnapshot {
+        inbound_h,
+        outbound_h,
+        acked_h,
+        available,
+        carbons,
+        priority,
+        blocklist_requested,
+        roster_requested,
+        active_privacy_list,
+        privacy_requested,
+        peer_ip,
+        user_agent_id,
+        joined_rooms,
+        directed_presence,
+        last_presence,
+        unacked,
+    } = snapshot;
+    ownership::SnapshotProjection {
+        inbound_h: *inbound_h,
+        outbound_h: *outbound_h,
+        acked_h: *acked_h,
+        available: *available,
+        carbons: *carbons,
+        priority: *priority,
+        blocklist_requested: *blocklist_requested,
+        roster_requested: *roster_requested,
+        active_privacy_list,
+        privacy_requested: *privacy_requested,
+        peer_ip: *peer_ip,
+        user_agent_id: *user_agent_id,
+        joined_rooms,
+        directed_presence,
+        last_presence,
+        unacked,
+    }
+}
+
+#[cfg(test)]
+mod sm_owner_tests {
+    use super::*;
+    use crate::outbound::SmUnackedStanza;
+    use northstar_delivery_core::sm_ownership::{Observation, Purpose, Scope};
+    #[test]
+    fn converted_checkpoint_projection_binds_all_snapshot_fields_without_io() {
+        let session_id = Uuid::from_u128(801);
+        let connection_id = Uuid::from_u128(802);
+        let snapshot = SmSessionSnapshot {
+            inbound_h: 1,
+            outbound_h: 3,
+            acked_h: 2,
+            available: true,
+            carbons: true,
+            priority: 7,
+            blocklist_requested: true,
+            roster_requested: true,
+            active_privacy_list: Some("private-list".to_owned()),
+            privacy_requested: true,
+            peer_ip: "192.0.2.1".parse().unwrap(),
+            user_agent_id: Some(Uuid::from_u128(803)),
+            joined_rooms: vec![SmMucMembership {
+                room_jid: "room@example.test".to_owned(),
+                nick: "nick".to_owned(),
+            }],
+            directed_presence: vec!["peer@example.test".to_owned()],
+            last_presence: Some("<presence/>".to_owned()),
+            unacked: vec![SmUnackedStanza::plain(
+                "<message>private-body</message>".to_owned(),
+            )],
+        };
+        let whole = snapshot.unacked.clone().into();
+        let observation = Observation::new(Scope {
+            purpose: Purpose::Checkpoint,
+            session_id: Some(session_id),
+            connection_id,
+            inbound_h: 1,
+            outbound_h: 3,
+            acked_h: 2,
+            queued: 1,
+        });
+        let policy = ownership::CheckpointPolicy {
+            ttl_seconds: 60,
+            live_lease_seconds: 30,
+            max_stanzas: 10,
+            max_bytes: 1000,
+        };
+        let prepared = ownership::PreparedCheckpoint::bind(
+            &observation,
+            session_id,
+            connection_id,
+            &whole,
+            &snapshot,
+            &[],
+            policy,
+        )
+        .unwrap();
+        let converted = db::SmSessionSnapshot::from(&snapshot);
+        prepared
+            .validate_projection(
+                session_id,
+                connection_id,
+                database_projection(&converted),
+                &[],
+                policy,
+            )
+            .unwrap();
+        let before = observation.snapshot();
+        for field in 0..16 {
+            let mut changed = db::SmSessionSnapshot::from(&snapshot);
+            match field {
+                0 => changed.inbound_h += 1,
+                1 => changed.outbound_h += 1,
+                2 => changed.acked_h += 1,
+                3 => changed.available = false,
+                4 => changed.carbons = false,
+                5 => changed.priority = 0,
+                6 => changed.blocklist_requested = false,
+                7 => changed.roster_requested = false,
+                8 => changed.active_privacy_list = None,
+                9 => changed.privacy_requested = false,
+                10 => changed.peer_ip = "192.0.2.2".parse().unwrap(),
+                11 => changed.user_agent_id = None,
+                12 => changed.joined_rooms.clear(),
+                13 => changed.directed_presence.clear(),
+                14 => changed.last_presence = None,
+                _ => changed.unacked[0].stanza.push_str("changed"),
+            }
+            assert!(prepared
+                .validate_projection(
+                    session_id,
+                    connection_id,
+                    database_projection(&changed),
+                    &[],
+                    policy
+                )
+                .is_err());
+            assert_eq!(observation.snapshot(), before);
+        }
+        assert!(!format!("{prepared:?} {:?}", observation.snapshot()).contains("private-body"));
     }
 }

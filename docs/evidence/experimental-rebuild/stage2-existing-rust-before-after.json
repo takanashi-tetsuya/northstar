@@ -1,0 +1,161 @@
+{
+  "schema": "northstar-stage2-existing-rust-before-after-v1",
+  "before": {
+    "commit": "2bdfed95c4516ce34296c5fa57a3eb3be49d158d",
+    "run_id": 37135039680,
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37135039680",
+    "rust_job_id": 111237748170,
+    "rust_job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37135039680/job/111237748170",
+    "conclusion": "success"
+  },
+  "after": {
+    "commit": "1a9d7cbdfa6eaf90febec839f189282d2e1218fa",
+    "run_id": 37182739788,
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37182739788",
+    "rust_job_id": 111378407905,
+    "rust_job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37182739788/job/111378407905",
+    "conclusion": "success"
+  },
+  "method": "Read existing exact-commit logs and Git source only. Five same-name tests have one exact '.. ok' line in each job. Function-body bytes from declaration through closing brace were hashed and compared. No project execution, rerun, remote write or source edit.",
+  "cases": [
+    {
+      "test": "admission::tests::snapshot_state_transitions_and_merging",
+      "assertions": "Snapshot starts sequence/penalty at zero; success advances sequence/events; failure advances sequence/penalty; rotating merge preserves sequence 2, penalty 1 and two events.",
+      "limits": "In-memory actor-snapshot example only; no persistent transaction, multiple Unknown or concurrent merge.",
+      "test_body_unchanged": true,
+      "test_body_sha256": "312be171f6a0b3ab42d491e7edd74c191641170dba4c6eb146b87eb3aa93297c",
+      "defining_file_unchanged": true,
+      "before": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/2bdfed95c4516ce34296c5fa57a3eb3be49d158d/crates/northstar-abuse-policy/src/admission.rs#L469",
+        "file_blob": "437473fa391d5b7327fd48d50e1e5b2ad5bdbb2d",
+        "decoded_log_line": 462,
+        "exact_ci_line": "2026-10-03T16:00:08.3423329Z test admission::tests::snapshot_state_transitions_and_merging ... ok"
+      },
+      "after": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-abuse-policy/src/admission.rs#L469",
+        "file_blob": "437473fa391d5b7327fd48d50e1e5b2ad5bdbb2d",
+        "decoded_log_line": 463,
+        "exact_ci_line": "2026-10-04T06:29:34.6333652Z test admission::tests::snapshot_state_transitions_and_merging ... ok"
+      }
+    },
+    {
+      "test": "admission::tests::message_admission_material_and_shard_distribution",
+      "assertions": "Admission key, payload MAC and identity digest have length 32; computed shard is in [0,64); lock ID is nonzero.",
+      "limits": "One deterministic material example; despite the name this does not statistically prove shard distribution or exercise storage admission.",
+      "test_body_unchanged": true,
+      "test_body_sha256": "da6e83f663bb4be6c6c2cbf24d291ca290942811bf76ad8fd8a37fd93d839b63",
+      "defining_file_unchanged": true,
+      "before": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/2bdfed95c4516ce34296c5fa57a3eb3be49d158d/crates/northstar-abuse-policy/src/admission.rs#L440",
+        "file_blob": "437473fa391d5b7327fd48d50e1e5b2ad5bdbb2d",
+        "decoded_log_line": 464,
+        "exact_ci_line": "2026-10-03T16:00:08.3425151Z test admission::tests::message_admission_material_and_shard_distribution ... ok"
+      },
+      "after": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-abuse-policy/src/admission.rs#L440",
+        "file_blob": "437473fa391d5b7327fd48d50e1e5b2ad5bdbb2d",
+        "decoded_log_line": 469,
+        "exact_ci_line": "2026-10-04T06:29:34.6456331Z test admission::tests::message_admission_material_and_shard_distribution ... ok"
+      }
+    },
+    {
+      "test": "tests::property_replay_and_expiry_rejections",
+      "assertions": "Three finite proof cases reject missing/already-used challenge context, expired challenge and an unfinished hard cooldown.",
+      "limits": "A finite pure evaluator test, not an exhaustive property sweep or database rollback/restart proof.",
+      "test_body_unchanged": true,
+      "test_body_sha256": "d34a2ca4564e32c57da63b40fad003d96f47f6afd7c014067c9dda741b9b86c0",
+      "defining_file_unchanged": false,
+      "before": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/2bdfed95c4516ce34296c5fa57a3eb3be49d158d/crates/northstar-abuse-policy/src/lib.rs#L358",
+        "file_blob": "cacbe4a8a2d9cbd483ce2c7e493a9be16a176ca6",
+        "decoded_log_line": 484,
+        "exact_ci_line": "2026-10-03T16:00:08.3456179Z test tests::property_replay_and_expiry_rejections ... ok"
+      },
+      "after": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/crates/northstar-abuse-policy/src/lib.rs#L360",
+        "file_blob": "00bad3f7a18ed68b2f41adf88bf5c6f38b378b18",
+        "decoded_log_line": 504,
+        "exact_ci_line": "2026-10-04T06:29:34.6637184Z test tests::property_replay_and_expiry_rejections ... ok"
+      }
+    },
+    {
+      "test": "abuse::tests::prefetched_pow_is_accepted_once_and_replay_is_rejected",
+      "assertions": "A solved memory challenge verifies once; replay returns an error containing already used.",
+      "limits": "In-memory one-use path only; no durability, multi-process race or new coordinator correctness.",
+      "test_body_unchanged": true,
+      "test_body_sha256": "60e875f3d89ecd27efb98c9d1d469136b25368c965dde37788b165209800bf4b",
+      "defining_file_unchanged": true,
+      "before": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/2bdfed95c4516ce34296c5fa57a3eb3be49d158d/src/abuse_tests.rs#L598",
+        "file_blob": "029dcb7b51437baaa73cdb2b2faab379be5181d2",
+        "decoded_log_line": 1647,
+        "exact_ci_line": "2026-10-03T16:00:23.6067012Z test abuse::tests::prefetched_pow_is_accepted_once_and_replay_is_rejected ... ok"
+      },
+      "after": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/src/abuse_tests.rs#L598",
+        "file_blob": "029dcb7b51437baaa73cdb2b2faab379be5181d2",
+        "decoded_log_line": 1702,
+        "exact_ci_line": "2026-10-04T06:29:42.5646756Z test abuse::tests::prefetched_pow_is_accepted_once_and_replay_is_rejected ... ok"
+      }
+    },
+    {
+      "test": "abuse::tests::closed_persistent_backend_is_never_treated_as_an_allow",
+      "assertions": "A lazily constructed pool is explicitly closed; verify_or_allow returns an error within a one-second Tokio timeout instead of allowing.",
+      "limits": "No live database connection/SQL is exercised. This proves the closed-pool fail-closed regression, not real SQL failure/commit behavior.",
+      "test_body_unchanged": true,
+      "test_body_sha256": "a23daf062733a4622a62406d783c5d80a78672b629afe30f1a56da3368818aa4",
+      "defining_file_unchanged": true,
+      "before": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/2bdfed95c4516ce34296c5fa57a3eb3be49d158d/src/abuse_tests.rs#L911",
+        "file_blob": "029dcb7b51437baaa73cdb2b2faab379be5181d2",
+        "decoded_log_line": 1631,
+        "exact_ci_line": "2026-10-03T16:00:23.5928944Z test abuse::tests::closed_persistent_backend_is_never_treated_as_an_allow ... ok"
+      },
+      "after": {
+        "source_url": "https://github.com/takanashi-tetsuya/northstar/blob/1a9d7cbdfa6eaf90febec839f189282d2e1218fa/src/abuse_tests.rs#L911",
+        "file_blob": "029dcb7b51437baaa73cdb2b2faab379be5181d2",
+        "decoded_log_line": 1684,
+        "exact_ci_line": "2026-10-04T06:29:42.5522784Z test abuse::tests::closed_persistent_backend_is_never_treated_as_an_allow ... ok"
+      }
+    }
+  ],
+  "source_change_boundary": {
+    "unchanged_defining_files": [
+      "crates/northstar-abuse-policy/src/admission.rs",
+      "src/abuse_tests.rs"
+    ],
+    "changed_defining_file": "crates/northstar-abuse-policy/src/lib.rs",
+    "exact_change": "Only adds pub mod admission_execution; and pub mod admission_transaction;. The selected property test body is byte-identical and shifts from line358 to360.",
+    "important_limit": "The production src/abuse.rs implementation changed between commits. Same defining test-file/body bytes are not a claim that all dependencies or product source are identical. Dual passes establish only the selected regression assertions."
+  },
+  "new_test_boundary": {
+    "new_matrix_named_tests": 51,
+    "those_names_present_in_stage1_job": 0,
+    "before_absent_paths": [
+      "crates/northstar-abuse-policy/src/admission_execution.rs",
+      "crates/northstar-abuse-policy/src/admission_transaction.rs",
+      "crates/northstar-test-harness/src/controlled_admission/",
+      "src/services/message_admission/witness.rs"
+    ],
+    "service_note": "src/services/message_admission.rs already existed at Stage1, but the six current service/witness test names were not present in that earlier job.",
+    "claim": "The 51 current coordinator/harness/service tests are after-only evidence; none is labelled before passed. The five older regressions here are a separate compatibility sample."
+  },
+  "separate_evidence_tracks": [
+    {
+      "track": "Same-name existing Rust regression before/after",
+      "established_here": "Five selected unchanged test bodies passed at both exact commits; assertions and limits above."
+    },
+    {
+      "track": "Stage1 eleven-model cases versus current Rust",
+      "established_here": false,
+      "limit": "This is a separate model-to-implementation comparison. Earlier model11 records cannot be equated with the new Rust coordinator tests by name, job success or count; use separately bound input/expectation/source evidence."
+    },
+    {
+      "track": "Saved record to replay and independent reader",
+      "established_here": false,
+      "limit": "Exact saved input/output, source identity, independent verification and replay equality need their own record. Neither these five tests nor a successful Rust test job establish fixed82 record/replay or v2-reader tamper rejection."
+    }
+  ],
+  "excluded": "Ignored database tests, unrelated namespaces and historical summary counts are not counted as passes. No whole-Stage2 acceptance or live SQL/wire/outer-ownership conclusion is drawn.",
+  "privacy": "Ten selected public CI test-status lines and source hashes/links only; no full raw log or credentials."
+}

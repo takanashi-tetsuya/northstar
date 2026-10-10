@@ -2361,7 +2361,7 @@ class XmppWebSocket:
             data.extend(chunk)
         return bytes(data)
 
-    def send(self, text: str, opcode: int = 1) -> None:
+    def send(self, text: str, opcode: int = 1, *, deadline: float | None = None) -> None:
         payload = text.encode()
         mask = os.urandom(4)
         first = 0x80 | opcode
@@ -2375,9 +2375,13 @@ class XmppWebSocket:
         if self._construction_deadline is None:
             # A preceding bounded receive must not leave a stale short socket
             # timeout behind for normal post-authentication protocol traffic.
-            self.sock.settimeout(10)
+            timeout = 10
         else:
-            self.sock.settimeout(self._construction_timeout())
+            timeout = self._construction_timeout()
+        if deadline is not None:
+            # An observer ACK must share its enclosing receive/barrier budget.
+            timeout = min(timeout, _remaining_deadline_timeout(deadline, "WebSocket send"))
+        self.sock.settimeout(timeout)
         self.sock.sendall(header + mask + masked)
 
     def send_with_pow(self, text: str, token: str) -> dict[str, str]:
@@ -2574,6 +2578,67 @@ class XmppWebSocket:
         except OSError:
             pass
         self.sock.close()
+
+
+def create_muc_controls_room(
+    client: XmppWebSocket, room: str, timeout: float = 10
+) -> None:
+    """Correlate this join before asserting creation and owner affiliation.
+
+    A cancelled room can leave an unrelated self-presence in the receive
+    queue. The server preserves the join id on its success and error replies
+    and sets their from attribute to the requested room/nickname.
+    """
+    check(timeout > 0, "MUC controls join timeout must be greater than zero")
+    occupant = f"{room}/Alice"
+    join_id = "muc-controls-owner-join"
+    client.send(
+        f"<presence xmlns='jabber:client' id='{join_id}' to='{occupant}'>"
+        "<x xmlns='http://jabber.org/protocol/muc'/></presence>"
+    )
+    expected = f"MUC controls join from={occupant!r} id={join_id!r}"
+    deadline = time.monotonic() + timeout
+    frames = []
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            frame = client.receive(remaining)
+        except TimeoutError as error:
+            raise TimeoutError(
+                f"timed out waiting for {expected}; frames={frames!r}"
+            ) from error
+        except (EOFError, ConnectionError) as error:
+            raise EOFError(
+                f"WebSocket closed while waiting for {expected}; frames={frames!r}"
+            ) from error
+        frames.append(frame)
+        try:
+            presence = ET.fromstring(frame)
+        except ET.ParseError:
+            continue
+        if (
+            presence.tag != "{jabber:client}presence"
+            or presence.get("from") != occupant
+            or presence.get("id") != join_id
+        ):
+            continue
+        # Correlated errors or invalid creation replies must fail immediately,
+        # rather than being skipped until a later successful-looking presence.
+        muc_user = "{http://jabber.org/protocol/muc#user}"
+        item = presence.find(f"{muc_user}x/{muc_user}item")
+        statuses = {
+            status.get("code")
+            for status in presence.findall(f"{muc_user}x/{muc_user}status")
+        }
+        check(
+            presence.get("type") is None
+            and {"110", "201"} <= statuses
+            and item is not None
+            and item.get("affiliation") == "owner",
+            "MUC controls room was not created with owner affiliation; "
+            f"expected {expected}; frames={frames!r}",
+        )
+        return
+    raise TimeoutError(f"timed out waiting for {expected}; frames={frames!r}")
 
 
 def expect_orderly_websocket_close(
@@ -5254,15 +5319,7 @@ def run() -> None:
     # nicknames, moderated voice requests, nickname changes, bounded join
     # history ordering, self-ping, kick, ban, and destruction.
     controls_room = f"integration-controls@conference.{DOMAIN}"
-    alice.send(
-        f"<presence xmlns='jabber:client' to='{controls_room}/Alice'>"
-        "<x xmlns='http://jabber.org/protocol/muc'/></presence>"
-    )
-    controls_created, _ = alice.receive_until("code='110'")
-    check(
-        "code='201'" in controls_created and "affiliation='owner'" in controls_created,
-        "MUC controls room was not created with owner affiliation",
-    )
+    create_muc_controls_room(alice, controls_room)
     alice.send(
         f"<iq xmlns='jabber:client' type='set' id='muc-controls-config' to='{controls_room}'>"
         "<query xmlns='http://jabber.org/protocol/muc#owner'>"

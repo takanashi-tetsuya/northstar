@@ -102,3 +102,7 @@ Every listed suite has a 8- or 10-minute command budget, and the shard has a
 diagnostic transcript and fails the shard. Adding a database suite requires
 adding it to this manifest rather than appending an unbounded command to a
 workflow step.
+
+The [bounded mixed-traffic fixture](bounded-mixed-traffic.md) separates protocol
+assertions, owned child lifecycle, and failure-only observation. Workload success
+alone cannot qualify it: forced termination or incomplete cleanup is a failure.

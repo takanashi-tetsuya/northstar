@@ -14,7 +14,7 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','storage','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
@@ -167,6 +167,7 @@ VALUES
   ('northstar_session_release_live(uuid)','runtime','0114'),
   ('northstar_session_refresh_live(uuid[],int8)','runtime','0114'),
   ('northstar_session_cleanup_live(int8)','runtime','0114'),
+  ('northstar_session_recovery_retention(uuid,timestamptz)','runtime','0157'),
   ('northstar_session_extend_live(uuid,int8)','runtime','0114'),
   ('northstar_sm_create(uuid,bytea,uuid,int8,text,text,text,uuid,int8,int8,int8,int8,bool,bool,int2,bool,bool,text,bool,inet,uuid,jsonb,jsonb,text,int8,int8)','runtime','0114'),
   ('northstar_sm_update_snapshot(uuid,uuid,int8,int8,int8,bool,bool,int2,bool,bool,text,bool,inet,uuid,jsonb,jsonb,text,bool,int8,int8)','runtime','0114'),

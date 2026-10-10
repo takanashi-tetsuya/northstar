@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "record_kind": "rebuild_stage0_baseline",
+  "captured_date_utc": "2026-10-03",
+  "repository": "https://github.com/takanashi-tetsuya/northstar",
+  "branch": "recovery/experimental-architecture-20261003",
+  "source_commit": "4f1b3b9032b98004eec2160172d5af3acbcc16b8",
+  "source_tree": "5f9d26383daa2b6bc467966a84df74c756f94e37",
+  "initial_checkout_clean": true,
+  "initial_tracked_files": 1622,
+  "scope": "Recovered older A1-A10 source baseline. Lost later architecture implementations/evidence are not restored. This is source/config identity, not new runtime validation.",
+  "read_verification": [
+    "GitHub git-ref GET",
+    "git ls-remote",
+    "local git rev-parse HEAD and HEAD^{tree}",
+    "initial git status --short empty"
+  ],
+  "toolchain": {
+    "required": "1.97.1",
+    "observed_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "observed_cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "local_install_scope": "official rustup bootstrap checksum verified; task-local homes; no profile modification"
+  },
+  "config_scope": "Example configuration file hashes only; no running fixture, secret config, credentials, DB, listener or new stock binary",
+  "file_sha256": {
+    "Cargo.lock": "b9df608440ac7d222d1d9170e2886303588471618af2c274c94c95db4cdc5541",
+    "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
+    ".env.example": "06c0bf1412544e769a3190b74a108f3e234f6f80557fcb673737b0d28894eaa7",
+    ".env.development.example": "bdd157ef59f832918e40751ee52b7cee98a6f7239ce376395f438b291530aee1",
+    ".github/workflows/ci.yml": "bb9a15fe97bbb4747f1988a7128188be0c0db7d9934f0a7457fdef2408cd481d",
+    "crates/northstar-abuse-policy/src/model.rs": "1240e731508932e6196c1a76958247c055fe01b19c9b7028abfeff27501a4fa7"
+  },
+  "baseline_ci": {
+    "run_id": 37107644451,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37107644451",
+    "head_sha": "4f1b3b9032b98004eec2160172d5af3acbcc16b8",
+    "status": "completed",
+    "conclusion": "success",
+    "scope": "pre-existing baseline CI only; not rebuilt-stage validation"
+  },
+  "new_product_semantics_changed": false,
+  "new_engineering_tests_executed": false,
+  "live_services_started": false,
+  "historical_lost_acceptance_applies_to_current_source": false,
+  "policy": {
+    "admission_cap": 4096,
+    "accepted_ttl_seconds": 21600,
+    "pending_ttl_seconds": 1800,
+    "admission_lease_seconds": 60,
+    "sm_retention_change": "approved, not yet implemented",
+    "soak72h": "cancelled"
+  }
+}

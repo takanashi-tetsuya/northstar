@@ -1,0 +1,64 @@
+{
+  "schema": "northstar-stage3-profile-integration-wip-v1",
+  "status": "WorkInProgressNotAccepted",
+  "base_commit": "9cde8f632df63f72a5f9d3f6921f67c98369eadb",
+  "base_tree": "5031ee55b11c890b44588492e451fc4fe923c3df",
+  "scope": "Preserved partial source integration of the existing fixed Stage3 profiles. No new case family or process topology is introduced.",
+  "source_files": {
+    "scripts/lib/controlled_admission_supervision.py": {
+      "sha256": "d3d8363954b13ad08445e304e54a56a712f9d89a55f4b3a47d1bb84bbd4d57f1",
+      "bytes": 111870
+    },
+    "scripts/lib/direct_case.py": {
+      "sha256": "2914a8b196bd7458341f7e9ac2075153498a1524c920ecdcb5e16744c9bd952b",
+      "bytes": 225462
+    }
+  },
+  "source_manifest_sha256": "b0d5b31a8e8ee88f86d876f39d14bfb4158df1f99946dea3989f48042b4b7dc0",
+  "source_manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline",
+  "source_bytes": 337332,
+  "implemented_source": [
+    "Adds the saved pure build helper and its test to the v3 helper membership and import-shadow/cache checks.",
+    "Retains the measured source summary and current mutation-file bytes; introduces bounded record and descriptor comparison call sites in the existing preflight/worker flow.",
+    "Imports the saved pure helper and records the previously materialized 20 exact input identities."
+  ],
+  "incomplete_source": [
+    "The caller now supplies record/source-summary keyword arguments, but direct_case.check_current_provenance still has its old single-argument stub. The validate_runnable forwarding function is also absent. These partial interfaces are not ready to execute.",
+    "The public require_implemented gate remains unconditional. Fixture planning, evaluation dispatch and shrink-relation entry points still stop at that gate; their complete private orchestration and integration regressions remain pending.",
+    "The old evaluator docstring needs to clarify that deterministic DTO seq remains in semantic replay. Only unrelated runtime diagnostics already outside the DTO are excluded."
+  ],
+  "validation": {
+    "current_source_ast_or_imports_run": false,
+    "current_source_tests_run": false,
+    "current_source_profile_runs": 0,
+    "scope": "No syntax, import, runtime or qualification pass is claimed for these partial integration bytes."
+  },
+  "prior_evidence": {
+    "bosh_matcher": "stage3-bosh-matcher-results.json",
+    "bosh_pure_tests": 126,
+    "build_helper": "stage3-build-record-helper-results.json",
+    "build_helper_pure_tests": 33,
+    "literal_inputs": {
+      "baseline": 16,
+      "mutation": 4,
+      "max_bytes": 4517,
+      "total_bytes": 69624
+    },
+    "limit": "Prior saved helper and literal results retain their original source identities. They do not qualify the changed integration source."
+  },
+  "remaining": [
+    "Complete the existing adapter signatures, runnable forwarding, finite fixture/evaluation/shrink assembly and mock regressions while keeping the public gate closed for source review.",
+    "Final source/contract/artifact preparation, measured runnable size at or below 128 MiB, separately reviewed execution release, actual 16/16/4/4 passes and saved-reader negatives remain pending.",
+    "Full Stage3 and later SQL/wire/TLS/retention/resource obligations remain open."
+  ],
+  "base_ci": {
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37256303412",
+    "commit": "9cde8f632df63f72a5f9d3f6921f67c98369eadb",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "The saved base commit only; this WIP delta is excluded."
+  }
+}

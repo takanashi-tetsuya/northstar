@@ -1,0 +1,92 @@
+{
+  "schema": "northstar-stage4-auth-pre-receipt-results-v1",
+  "status": "OrdinaryAccepted_Stage4Open",
+  "change": "FAST, binding and resume now retain credential transaction knowledge before a receipt exists, and require an independent same-attempt COMMIT witness for the exact receipt handoff.",
+  "behavior": [
+    "A private credential attempt binds its kind, immutable request, original frame and connection before repository I/O. Borrowed adapters reject duplicate or late starts before polling another operation; first observed facts remain intact and integrity diagnostics stay separate.",
+    "The generation helper records actual begin, eligibility-query and refusal-rollback outcomes, keeping no row distinct from an ineligible row. Cancellation or a dropped future does not establish rollback success. Compatibility calls retain their original error and return behavior.",
+    "The original stage identifier is retained before its SQL call and reused in the result. The prospective receipt projection is frozen when COMMIT begins; acknowledgement, receipt construction and raw repository return remain independent facts. Unstaged FAST remains valid where the existing path permits it.",
+    "An observed successful receipt can transfer publication ownership only with the exact private attempt, independently acknowledged matching COMMIT projection and receipt instance. Missing or contradictory handoff evidence retains the raw success without granting a publication owner.",
+    "The existing inline Close branch handles an internal handoff-integrity failure following contradictory returned success. Genuine repository errors and COMMIT Unknown keep the existing separate fallback attempt; the first attempt is not erased or retrospectively changed.",
+    "Original-frame history retains the bounded distinct attempts, including Unknown resume followed by successful fallback. Registration is closed and retirement handles are captured under the same lock. Children are destroyed before retirement, including timeout, cancellation and unwind cuts; Drop adds no SQL, retry or compensation.",
+    "Credential-attempt retirement and transport-bound publication lifetime stay separate. The exact returned receipt still feeds its own queued control; a selected unbound control cannot consume a later queued binding owner. Finite trace fields exclude private request, receipt and error contents."
+  ],
+  "compatibility": [
+    "Existing SQL text, binds, predicates, lock order, stage identifiers and ignored-versus-propagated rollback policy are preserved. Repository errors are unwrapped from the observation adapter at the boundaries so original repository error identity and causal chains remain available.",
+    "Returned-only compatibility remains explicit and creates no pre-receipt facts. The existing protocol refusal/fallback policy, deadlines, native/BOSH publication behavior and captured effects remain in force.",
+    "No dependency, migration, session-wide latest-receipt flag, general executor or scenario language is introduced."
+  ],
+  "validation": {
+    "status": "All 80 ordinary commands passed; independently accepted within the finite ordinary component scope.",
+    "new_control_scope": {
+      "fast_service": 2,
+      "credential_facts": 9,
+      "sm_service": 1,
+      "original_frame_fallback_owner": 1,
+      "frame_lifecycle_and_trace": 3
+    },
+    "effect_scope": "Finite fake repositories and supplied outcomes, real in-memory owners/runners, Tokio timers, locks and memory tracing. The previous 54 auth component methods provide two changed and 52 reused regressions.",
+    "live_sql_wire_or_saved_workload_validation": "Outside this component batch.",
+    "commands_passed": 80,
+    "rust_exact_passed": 70,
+    "rust_added_passed": 16,
+    "rust_changed_passed": 2,
+    "rust_reused_passed": 52,
+    "node_passed": 541,
+    "rust_failed": 0,
+    "rust_ignored": 0,
+    "inventory_names": 1941,
+    "compile": "Passed",
+    "clippy": "Passed",
+    "source_gates": "Passed"
+  },
+  "limits": [
+    "Rollback-site tables and the Unknown/fallback composition are supplied-data and owner controls. Actual SQL and SASL2 handler correspondence remain source/gate claims; those controls do not execute a complete handler-to-PostgreSQL transaction.",
+    "This batch does not qualify live PostgreSQL locking, COMMIT-loss, rollback behavior, clock fidelity, network transport or process-restart recovery.",
+    "Source observation and finite component evidence do not complete saved cross-domain compositions, SM retention, real-adapter qualification or full Stage4. Historical accepted results retain their original scope.",
+    "The earlier TLS response-EOF cause, parent CI cancellation cause and historical interruption cleanup uncertainties remain unresolved."
+  ],
+  "related": [
+    "stage4-auth-returned-receipt-results.json",
+    "stage4-bosh-auth-control-results.json",
+    "stage4-muc-discussion-results.json",
+    "stage4-mix-foreground-results.json",
+    "stage4-mix-worker-results.json"
+  ],
+  "parent_ci": {
+    "commit": "2989733479bc09ae7c5daae02bdba673fbf96078",
+    "run": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37390052257",
+    "status": "success",
+    "successful": 32,
+    "skipped": 1,
+    "failed": 0,
+    "cancelled": 0,
+    "scope": "This is the saved returned-receipt checkpoint. It does not qualify the new pre-receipt source or resolve the earlier cancellation/TLS causes."
+  },
+  "detailed_evidence": "Detailed source snapshots, retained failures and execution records are held separately. This summary contains no raw execution metadata.",
+  "retained_stops": [
+    {
+      "status": "Unqualified",
+      "phase": "Node source checks, before Cargo",
+      "node_tests": 541,
+      "node_passed": 463,
+      "node_failed": 78,
+      "finding": "The new guard counted an unchanged SQL literal across the whole users module and also found the legitimate existing multi-user helper. That early positive-guard failure masked several negative-control reasons.",
+      "correction": "The identical SQL literal and exactly-one requirement are now scoped to the observed generation helper body using the existing source extractor. SQL, wrapper forwarding, parser, probe purpose and case counts are unchanged.",
+      "limit": "The original failure remains retained and unqualified. The later complete third attempt supplies separate corrected evidence."
+    },
+    {
+      "status": "Unqualified",
+      "phase": "Clippy after successful static checks and compile",
+      "commands_passed": 8,
+      "node_tests": 541,
+      "node_passed": 541,
+      "node_failed": 0,
+      "inventory": "Not observed",
+      "rust_exact_tests": "Not observed",
+      "finding": "The rollback-table test checked is_ok before unwrap_err, which Clippy rejects as an unnecessary unwrap.",
+      "correction": "A test-only match preserves the original error for propagated rollback failures and keeps the existing ignored-error mapping for FastExpired. Production behavior, assertions and selected test names are unchanged.",
+      "limit": "The second attempt remains retained and unqualified. The third attempt passed the same bounded ordinary scope after the test-only correction."
+    }
+  ]
+}

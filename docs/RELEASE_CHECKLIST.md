@@ -199,9 +199,19 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   Verify only the command role can execute the three registration functions;
   a successful request commits `registration_closed`, one audit entry and an
   encrypted 200 replay together.
+- [ ] Apply [migration `0157`](../migrations/0157_sm_recovery_retention.sql) only
+  with claim writers and old startup binaries stopped. Resolve all legacy claim
+  pairs through their existing owners before the authority gate; do not clear
+  or relabel expired claims to bypass it. Verify exact retained lease/allocation
+  identity, Resume versus Teardown purpose and matching grants before restart.
+- [ ] Apply [migration `0158`](../migrations/0158_sm_cleanup_claim_alias.sql) as
+  the forward cleanup-alias correction, preserving the `0157` checksum. Verify
+  cleanup through the final runtime role, the existing auth lease-lock case,
+  independent maintenance readiness and protocol/federation startup; source
+  checks alone do not establish those PostgreSQL outcomes.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 155 migrations from `0001` through the current
-  repository maximum `0156`, with `0021` as the sole intentional gap.
+  identity and verify all 157 migrations from `0001` through the current
+  repository maximum `0158`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

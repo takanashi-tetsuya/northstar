@@ -355,9 +355,71 @@ pub(crate) async fn admit_personal_history_with_direct_fence(
         writes,
         outbox,
         delivery,
-        Some((cluster, eligibility)),
+        Some(DirectCommitContext {
+            cluster: Some((cluster, eligibility)),
+            observer: None,
+        }),
     )
     .await
+}
+
+struct DirectCommitContext<'a> {
+    cluster: Option<(
+        &'a crate::cluster::ClusterAdmission,
+        crate::cluster::DirectSpoolEligibility,
+    )>,
+    observer: Option<&'a dyn northstar_message_application::direct_commit::DirectCommitObserver>,
+}
+
+pub(crate) async fn admit_personal_history_observed_direct(
+    pool: &PgPool,
+    identity: Option<&PersonalHistoryIdentity<'_>>,
+    writes: &[PersonalArchiveWrite<'_>],
+    delivery: &PersonalC2sDeliveryAdmission<'_>,
+    cluster: Option<&crate::cluster::ClusterAdmission>,
+    eligibility: crate::cluster::DirectSpoolEligibility,
+    observer: &dyn northstar_message_application::direct_commit::DirectCommitObserver,
+) -> Result<(
+    PersonalHistoryAdmission,
+    crate::cluster::DirectPostCommitMode,
+    Option<Uuid>,
+)> {
+    admit_personal_history_inner(
+        pool,
+        identity,
+        writes,
+        None,
+        Some(delivery),
+        Some(DirectCommitContext {
+            cluster: cluster.map(|cluster| (cluster, eligibility)),
+            observer: Some(observer),
+        }),
+    )
+    .await
+}
+
+fn direct_transaction_outcome(
+    outcome: &PersonalHistoryAdmission,
+    delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
+    live_claim_id: Option<Uuid>,
+) -> Result<northstar_message_application::direct_commit::TransactionOutcome> {
+    use northstar_message_application::direct_commit::TransactionOutcome;
+    Ok(match outcome {
+        PersonalHistoryAdmission::Stored(ids) => {
+            let delivery = delivery
+                .ok_or_else(|| anyhow::anyhow!("observed local transaction lacked delivery"))?;
+            TransactionOutcome::Stored {
+                recipient_id: delivery.recipient_id,
+                delivery_id: delivery.id,
+                archive_ids: ids.clone(),
+                live_claim_id,
+            }
+        }
+        PersonalHistoryAdmission::Replay(ids) => TransactionOutcome::Replay {
+            archive_ids: ids.clone(),
+        },
+        PersonalHistoryAdmission::AccountUnavailable => TransactionOutcome::AccountUnavailable,
+    })
 }
 
 async fn admit_personal_history_inner(
@@ -366,15 +428,14 @@ async fn admit_personal_history_inner(
     writes: &[PersonalArchiveWrite<'_>],
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
-    cluster: Option<(
-        &crate::cluster::ClusterAdmission,
-        crate::cluster::DirectSpoolEligibility,
-    )>,
+    context: Option<DirectCommitContext<'_>>,
 ) -> Result<(
     PersonalHistoryAdmission,
     crate::cluster::DirectPostCommitMode,
     Option<Uuid>,
 )> {
+    let (cluster, observer) =
+        context.map_or((None, None), |context| (context.cluster, context.observer));
     let mut transaction = pool.begin().await?;
     if let Some((cluster, eligibility)) = cluster {
         super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
@@ -427,7 +488,18 @@ async fn admit_personal_history_inner(
                 .await?;
             }
         }
-        transaction.commit().await?;
+        if let Some(observer) = observer {
+            let fact = direct_transaction_outcome(&outcome, c2s_delivery, live_claim_id)?;
+            crate::services::messaging::direct_workflow::commit_observed(
+                transaction.commit(),
+                observer,
+                fact,
+                turn.admitted_mode(),
+            )
+            .await?;
+        } else {
+            transaction.commit().await?;
+        }
         let admitted_mode = turn.finish();
         if admitted_mode == crate::cluster::DirectPostCommitMode::Live
             && cluster.direct_mode() != crate::cluster::DirectPostCommitMode::Live
@@ -437,7 +509,18 @@ async fn admit_personal_history_inner(
             admitted_mode
         }
     } else {
-        transaction.commit().await?;
+        if let Some(observer) = observer {
+            let fact = direct_transaction_outcome(&outcome, c2s_delivery, None)?;
+            crate::services::messaging::direct_workflow::commit_observed(
+                transaction.commit(),
+                observer,
+                fact,
+                crate::cluster::DirectPostCommitMode::Live,
+            )
+            .await?;
+        } else {
+            transaction.commit().await?;
+        }
         crate::cluster::DirectPostCommitMode::Live
     };
     Ok((outcome, mode, live_claim_id))
@@ -986,6 +1069,51 @@ pub async fn archive_mix_message_once(
     encrypted: bool,
     client_stanza_id: Option<&str>,
 ) -> Result<SourceArchiveAdmission> {
+    archive_mix_message_once_inner(
+        pool,
+        personal_archive_id,
+        owner_id,
+        channel_jid,
+        authoritative_stanza_id,
+        stanza,
+        encrypted,
+        client_stanza_id,
+        None,
+    )
+    .await
+}
+
+pub async fn archive_mix_message_once_observed(
+    pool: &PgPool,
+    request: &northstar_delivery_core::mix_outbox::ArchiveRequest,
+) -> Result<SourceArchiveAdmission> {
+    let command = request.command();
+    archive_mix_message_once_inner(
+        pool,
+        command.personal_archive_id,
+        command.owner_id,
+        &command.channel_jid,
+        command.authoritative_stanza_id,
+        &command.stanza,
+        command.encrypted,
+        command.client_stanza_id.as_deref(),
+        Some(request),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn archive_mix_message_once_inner(
+    pool: &PgPool,
+    personal_archive_id: Uuid,
+    owner_id: Uuid,
+    channel_jid: &str,
+    authoritative_stanza_id: Uuid,
+    stanza: &str,
+    encrypted: bool,
+    client_stanza_id: Option<&str>,
+    observation: Option<&northstar_delivery_core::mix_outbox::ArchiveRequest>,
+) -> Result<SourceArchiveAdmission> {
     anyhow::ensure!(
         !stanza.is_empty() && stanza.len() <= 1_048_576,
         "MIX archive stanza must contain 1 to 1048576 bytes"
@@ -1039,7 +1167,12 @@ pub async fn archive_mix_message_once(
     .rows_affected()
         == 1;
     if inserted {
-        transaction.commit().await?;
+        commit_mix_archive(
+            transaction,
+            observation,
+            SourceArchiveAdmission::Stored(personal_archive_id),
+        )
+        .await?;
         return Ok(SourceArchiveAdmission::Stored(personal_archive_id));
     }
 
@@ -1071,8 +1204,39 @@ pub async fn archive_mix_message_once(
             == Some(payload_digest.as_slice());
     anyhow::ensure!(exact_replay, "conflicting MIX source stanza identity");
     let existing_id: Uuid = row.get("id");
-    transaction.commit().await?;
+    commit_mix_archive(
+        transaction,
+        observation,
+        SourceArchiveAdmission::Replay(existing_id),
+    )
+    .await?;
     Ok(SourceArchiveAdmission::Replay(existing_id))
+}
+
+async fn commit_mix_archive(
+    transaction: Transaction<'_, Postgres>,
+    observation: Option<&northstar_delivery_core::mix_outbox::ArchiveRequest>,
+    outcome: SourceArchiveAdmission,
+) -> Result<()> {
+    if let Some(request) = observation {
+        let result = match outcome {
+            SourceArchiveAdmission::Stored(id) => {
+                northstar_delivery_core::mix_outbox::ArchiveResult::Stored(id)
+            }
+            SourceArchiveAdmission::Replay(id) => {
+                northstar_delivery_core::mix_outbox::ArchiveResult::Replay(id)
+            }
+        };
+        northstar_delivery_core::mix_outbox::archive_commit_observed(
+            transaction.commit(),
+            request,
+            result,
+        )
+        .await
+        .map_err(crate::services::mix::outbox::commit_error)
+    } else {
+        transaction.commit().await.map_err(Into::into)
+    }
 }
 
 #[derive(Clone, Copy)]

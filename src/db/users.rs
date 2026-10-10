@@ -795,15 +795,42 @@ pub async fn lock_auth_generation<'a>(
     user_id: Uuid,
     expected_generation: i64,
 ) -> Result<Option<sqlx::Transaction<'a, sqlx::Postgres>>> {
-    let mut tx = pool.begin().await?;
-    let eligible = sqlx::query_scalar::<_, bool>("SELECT northstar_lock_auth_generation($1,$2)")
-        .bind(user_id)
-        .bind(expected_generation)
-        .fetch_optional(&mut *tx)
-        .await?;
+    lock_auth_generation_observed(pool, user_id, expected_generation, None).await
+}
+
+pub(crate) async fn lock_auth_generation_observed<'a>(
+    pool: &'a PgPool,
+    user_id: Uuid,
+    expected_generation: i64,
+    observation: Option<&crate::services::authentication::publication::CredentialInvocation<'_>>,
+) -> Result<Option<sqlx::Transaction<'a, sqlx::Postgres>>> {
+    use crate::services::authentication::publication::{
+        credential_error, CredentialInvocation, CredentialRollbackSite,
+    };
+    let mut tx = CredentialInvocation::begin(observation, pool.begin())
+        .await
+        .map_err(credential_error)?;
+    let eligible = CredentialInvocation::eligibility(
+        observation,
+        sqlx::query_scalar::<_, bool>("SELECT northstar_lock_auth_generation($1,$2)")
+            .bind(user_id)
+            .bind(expected_generation)
+            .fetch_optional(&mut *tx),
+    )
+    .await
+    .map_err(credential_error)?;
     if eligible != Some(true) {
-        tx.rollback().await?;
+        CredentialInvocation::rollback(
+            observation,
+            CredentialRollbackSite::GenerationRefused,
+            tx.rollback(),
+        )
+        .await
+        .map_err(credential_error)?;
         return Ok(None);
+    }
+    if let Some(observation) = observation {
+        observation.transaction_returned();
     }
     Ok(Some(tx))
 }

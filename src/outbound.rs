@@ -37,6 +37,12 @@ impl std::error::Error for DurableDeliverySuperseded {}
 #[derive(Clone, Debug)]
 pub struct OutboundItem {
     pub stanza: String,
+    /// Selection membership for the exact BOSH authentication control. Clone
+    /// copies membership and aliases the same one-use holder below; this bit
+    /// alone grants no publication authority. Neither field is persisted in SM
+    /// or the BOSH response cache.
+    bosh_auth_control: bool,
+    auth_publication: Option<crate::xmpp::auth_publication::AuthControlHolder>,
     /// The one authoritative durable source, if this stanza is recoverable.
     /// C2S offline messages and MIX recipient leases are deliberately a tagged
     /// union: a transport can transfer or acknowledge exactly one source.
@@ -61,10 +67,87 @@ pub struct OutboundItem {
         Option<std::sync::Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
 }
 
+/// The pre-enqueue gate owns the actual item and its one-use receipt permit.
+/// Neither can be replaced after binding. Rejection is not queue backpressure.
+pub(crate) struct RouteEnqueue {
+    item: OutboundItem,
+    permit: Option<northstar_message_application::direct_handoff::LocalEnqueuePermit>,
+}
+pub(crate) struct RouteBindingRejected(pub(crate) OutboundItem);
+impl std::fmt::Debug for RouteBindingRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RouteBindingRejected { item: [redacted] }")
+    }
+}
+impl std::fmt::Debug for RouteEnqueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RouteEnqueue { item: [redacted], permit: [redacted] }")
+    }
+}
+pub(crate) enum RouteSendError {
+    Binding(RouteBindingRejected),
+    Full(OutboundItem),
+    Closed(OutboundItem),
+}
+impl std::fmt::Debug for RouteSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Binding(_) => "RouteSendError::Binding { item: [redacted] }",
+            Self::Full(_) => "RouteSendError::Full { item: [redacted] }",
+            Self::Closed(_) => "RouteSendError::Closed { item: [redacted] }",
+        })
+    }
+}
+impl RouteEnqueue {
+    pub(crate) fn bind(
+        item: OutboundItem,
+        permit: Option<northstar_message_application::direct_handoff::LocalEnqueuePermit>,
+        expected_stanza: &str,
+    ) -> Result<Self, RouteBindingRejected> {
+        if item.stanza != expected_stanza
+            || permit.as_ref().is_some_and(|permit| {
+                item.c2s_delivery() != Some(permit.source())
+                    || !item.validate_durable_source_shape()
+            })
+        {
+            return Err(RouteBindingRejected(item));
+        }
+        Ok(Self { item, permit })
+    }
+    fn unobserved(item: OutboundItem) -> Self {
+        Self { item, permit: None }
+    }
+    #[cfg(test)]
+    pub(crate) fn item(&self) -> &OutboundItem {
+        &self.item
+    }
+    #[cfg(test)]
+    pub(crate) fn complete_for_fake(self, accepted: bool) -> Result<(), RouteSendError> {
+        use northstar_message_application::direct_handoff::Refusal;
+        let permit = match self.permit.map(|permit| permit.enter()).transpose() {
+            Ok(permit) => permit,
+            Err(_) => return Err(RouteSendError::Binding(RouteBindingRejected(self.item))),
+        };
+        if accepted {
+            if let Some(permit) = permit {
+                permit.accepted();
+            }
+            Ok(())
+        } else {
+            if let Some(permit) = permit {
+                permit.refused(Refusal::Closed);
+            }
+            Err(RouteSendError::Closed(self.item))
+        }
+    }
+}
+
 impl OutboundItem {
     pub fn plain(stanza: String) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
+            auth_publication: None,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
@@ -76,6 +159,8 @@ impl OutboundItem {
     pub fn durable(stanza: String, delivery: DurableDelivery) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
+            auth_publication: None,
             durable_source: Some(TransportOwnershipSource::C2s(delivery)),
             mix_handoff: None,
             transport_receipt: None,
@@ -92,6 +177,8 @@ impl OutboundItem {
         (
             Self {
                 stanza,
+                bosh_auth_control: false,
+                auth_publication: None,
                 durable_source: Some(TransportOwnershipSource::Mix(delivery)),
                 mix_handoff: Some(handoff),
                 transport_receipt: None,
@@ -130,6 +217,8 @@ impl OutboundItem {
     pub fn with_transport_receipt(stanza: String, receipt: mpsc::UnboundedSender<()>) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
+            auth_publication: None,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: Some(receipt),
@@ -154,12 +243,34 @@ impl OutboundItem {
     ) -> Self {
         Self {
             stanza,
+            bosh_auth_control: false,
+            auth_publication: None,
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
             transport_write_receipt: None,
             transient_sm_capacity: Some(capacity),
         }
+    }
+
+    pub(crate) fn is_bosh_auth_control(&self) -> bool {
+        self.bosh_auth_control
+    }
+
+    pub(crate) fn with_auth_publication(
+        mut self,
+        holder: crate::xmpp::auth_publication::AuthControlHolder,
+    ) -> anyhow::Result<Self> {
+        holder.validate_control(&self.stanza)?;
+        self.bosh_auth_control = true;
+        self.auth_publication = Some(holder);
+        Ok(self)
+    }
+
+    pub(crate) fn auth_publication(
+        &self,
+    ) -> Option<&crate::xmpp::auth_publication::AuthControlHolder> {
+        self.auth_publication.as_ref()
     }
 
     pub fn confirm_transport_ownership(&self) {
@@ -190,21 +301,7 @@ pub enum MixTransportCompletion {
     BoshPersisted { session_id: uuid::Uuid },
 }
 
-/// The durable sources carried by one cached BOSH response. Source tokens are
-/// deliberately absent: the BOSH coordinator verifies tokens while binding
-/// its private fence, while cache replay only needs immutable identities to
-/// prove that the same response still owns the same rows.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct BoshResponseOwnership {
-    pub c2s_message_ids: Vec<Uuid>,
-    pub mix_delivery_ids: Vec<Uuid>,
-}
-
-impl BoshResponseOwnership {
-    pub fn is_empty(&self) -> bool {
-        self.c2s_message_ids.is_empty() && self.mix_delivery_ids.is_empty()
-    }
-}
+pub use northstar_delivery_core::bosh_ownership::BoshResponseOwnership;
 
 /// Clone-safe, exactly-once completion capability for one MIX outbound item.
 /// Multiple queue stages may clone an item, but only the stage that durably
@@ -305,14 +402,47 @@ impl OutboundSender {
         stanza: String,
         delivery: DurableDelivery,
     ) -> Result<(), mpsc::error::TrySendError<String>> {
-        match self.try_send_item(OutboundItem::durable(stanza, delivery)) {
-            Ok(()) => Ok(()),
+        self.try_send_route_item(RouteEnqueue::unobserved(OutboundItem::durable(
+            stanza, delivery,
+        )))
+        .map_err(|error| match error {
+            RouteSendError::Full(item) => mpsc::error::TrySendError::Full(item.stanza),
+            RouteSendError::Closed(item) => mpsc::error::TrySendError::Closed(item.stanza),
+            RouteSendError::Binding(_) => unreachable!("unobserved enqueue has no binding permit"),
+        })
+    }
+
+    /// Preserve the exact refused item, including its source and completion
+    /// channels. A positive receipt is retained at the actual queue boundary.
+    pub(crate) fn try_send_route_item(&self, enqueue: RouteEnqueue) -> Result<(), RouteSendError> {
+        use northstar_message_application::direct_handoff::Refusal;
+        let RouteEnqueue { item, permit } = enqueue;
+        let durable = item.c2s_delivery().is_some();
+        let permit = match permit.map(|permit| permit.enter()).transpose() {
+            Ok(permit) => permit,
+            Err(_) => return Err(RouteSendError::Binding(RouteBindingRejected(item))),
+        };
+        match self.try_send_item(item) {
+            Ok(()) => {
+                if let Some(permit) = permit {
+                    permit.accepted();
+                }
+                Ok(())
+            }
             Err(mpsc::error::TrySendError::Full(item)) => {
-                self.backpressure_disconnect.cancel();
-                Err(mpsc::error::TrySendError::Full(item.stanza))
+                if durable {
+                    self.backpressure_disconnect.cancel();
+                }
+                if let Some(permit) = permit {
+                    permit.refused(Refusal::Full);
+                }
+                Err(RouteSendError::Full(item))
             }
             Err(mpsc::error::TrySendError::Closed(item)) => {
-                Err(mpsc::error::TrySendError::Closed(item.stanza))
+                if let Some(permit) = permit {
+                    permit.refused(Refusal::Closed);
+                }
+                Err(RouteSendError::Closed(item))
             }
         }
     }
@@ -415,6 +545,10 @@ impl OutboundSender {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Rejected queue admission returns the same item and ownership by value for recovery"
+    )]
     fn try_send_item(
         &self,
         item: OutboundItem,

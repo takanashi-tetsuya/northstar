@@ -196,54 +196,43 @@ impl ReplayRepository for PostgresReplayRepository {
     async fn acknowledge_socket_write(
         &self,
         delivery: crate::outbound::DurableDelivery,
+        observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> Result<()> {
-        db::replay::acknowledge_durable_delivery(&self.pool, delivery).await
+        match observation {
+            Some(observation) => {
+                db::replay::acknowledge_durable_deliveries_observed(
+                    &self.pool,
+                    std::slice::from_ref(&delivery),
+                    Some(observation),
+                )
+                .await
+            }
+            None => db::replay::acknowledge_durable_delivery(&self.pool, delivery).await,
+        }
     }
 
     async fn renew_bosh_fences(
         &self,
-        session_id: Uuid,
-        expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
     ) -> Result<()> {
-        db::replay::renew_bosh_transport_fences(
-            &self.pool,
-            session_id,
-            expected_response,
-            ttl_seconds,
-        )
-        .await
+        db::replay::renew_bosh_transport_fences(&self.pool, request).await
     }
 
     async fn acknowledge_bosh_responses(
         &self,
-        session_id: Uuid,
-        acknowledged_rid: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
     ) -> Result<()> {
-        let acknowledged = db::replay::acknowledge_bosh_transport_responses(
-            &self.pool,
-            session_id,
-            acknowledged_rid,
-        )
-        .await?;
-        tracing::debug!(
-            %session_id,
-            acknowledged_rid,
-            acknowledged,
-            "acknowledged durable BOSH transport sources"
-        );
+        let acknowledged =
+            db::replay::acknowledge_bosh_transport_responses(&self.pool, request).await?;
+        tracing::debug!(session_id = %request.session_id(), acknowledged_rid = request.rid(), acknowledged, "acknowledged durable BOSH transport sources");
         Ok(())
     }
 
     async fn bind_bosh_response_sources(
         &self,
-        session_id: Uuid,
-        rid: u64,
-        sources: &[crate::outbound::TransportOwnershipSource],
-        ttl_seconds: u64,
+        request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
     ) -> Result<crate::outbound::BoshResponseOwnership> {
-        db::replay::bind_bosh_transport_response(&self.pool, session_id, rid, sources, ttl_seconds)
-            .await
+        db::replay::bind_bosh_transport_response_observed(&self.pool, request).await
     }
 
     async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {

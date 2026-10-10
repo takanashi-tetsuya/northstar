@@ -1,5 +1,8 @@
 //! Application boundary for durable resource binding and XEP-0198 ownership.
 
+pub(crate) mod ownership;
+
+use crate::services::authentication::publication::{CredentialInvocation, PreparedCredential};
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
 use std::{
@@ -567,6 +570,10 @@ pub(crate) enum BindingReservationOutcome {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Finalization returns the actual credential receipt by value without another allocation"
+)]
 pub(crate) enum BindingFinalizationOutcome {
     Committed {
         receipt: crate::services::authentication::CredentialCommitReceipt,
@@ -637,6 +644,7 @@ pub(crate) trait SmRepository: Send + Sync {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
     fn remove_live_muc_memberships(
         &self,
@@ -655,10 +663,12 @@ pub(crate) trait SmRepository: Send + Sync {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
     fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
+        observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn reserve_binding(
         &self,
@@ -682,6 +692,23 @@ pub(crate) trait SmRepository: Send + Sync {
     fn finalize_resume(
         &self,
         request: SmResumeFinalizationRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<SmResumeFinalizationOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_binding_observed(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        invocation: &CredentialInvocation<'_>,
+    ) -> impl std::future::Future<Output = Result<BindingFinalizationOutcome>> + Send;
+    fn finalize_resume_observed(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+        invocation: &CredentialInvocation<'_>,
     ) -> impl std::future::Future<Output = Result<SmResumeFinalizationOutcome>> + Send;
     fn release_claim(
         &self,
@@ -762,6 +789,7 @@ impl<R: SmRepository> SmService<R> {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         self.repository
             .checkpoint_session(
@@ -772,6 +800,7 @@ impl<R: SmRepository> SmService<R> {
                 live_lease_seconds,
                 max_stanzas,
                 max_bytes,
+                observation,
             )
             .await
     }
@@ -796,6 +825,7 @@ impl<R: SmRepository> SmService<R> {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
+        observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
         self.repository
             .checkpoint_and_acknowledge(
@@ -807,14 +837,18 @@ impl<R: SmRepository> SmService<R> {
                 live_lease_seconds,
                 max_stanzas,
                 max_bytes,
+                observation,
             )
             .await
     }
     pub(crate) async fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
+        observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
-        self.repository.acknowledge_delivery_batch(sources).await
+        self.repository
+            .acknowledge_delivery_batch(sources, observation)
+            .await
     }
     pub(crate) async fn reserve_binding(
         &self,
@@ -863,6 +897,72 @@ impl<R: SmRepository> SmService<R> {
     ) -> Result<SmResumeFinalizationOutcome> {
         self.repository.finalize_resume(request).await
     }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn finalize_binding_observed(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        prepared: Option<&PreparedCredential>,
+    ) -> Result<BindingFinalizationOutcome> {
+        let Some(prepared) = prepared else {
+            return self
+                .finalize_binding(
+                    connection_id,
+                    user_id,
+                    expected_auth_generation,
+                    full_jid,
+                    lease_seconds,
+                    device_id,
+                    fast_plan,
+                )
+                .await;
+        };
+        let invocation = prepared.binding(
+            connection_id,
+            user_id,
+            expected_auth_generation,
+            full_jid,
+            lease_seconds,
+            device_id,
+            fast_plan,
+        )?;
+        let result = self
+            .repository
+            .finalize_binding_observed(
+                connection_id,
+                user_id,
+                expected_auth_generation,
+                full_jid,
+                lease_seconds,
+                device_id,
+                fast_plan,
+                &invocation,
+            )
+            .await;
+        invocation.binding_returned(&result);
+        result
+    }
+    pub(crate) async fn finalize_resume_observed(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+        prepared: Option<&PreparedCredential>,
+    ) -> Result<SmResumeFinalizationOutcome> {
+        let Some(prepared) = prepared else {
+            return self.finalize_resume(request).await;
+        };
+        let invocation = prepared.resume(&request)?;
+        let result = self
+            .repository
+            .finalize_resume_observed(request, &invocation)
+            .await;
+        invocation.resume_returned(&result);
+        result
+    }
     pub(crate) async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
         self.repository.release_claim(session_id, claim_token).await
     }
@@ -900,8 +1000,8 @@ impl<R: SmRepository> SmService<R> {
 mod tests {
     use super::{
         same_device_binding_matches, BindingFinalizationOutcome, BindingReservationOutcome,
-        SmAuthorityBroker, SmAuthorityNotification, SmResumeFinalizationOutcome,
-        SmResumeFinalizationRequest, SmService,
+        CredentialInvocation, SmAuthorityBroker, SmAuthorityNotification,
+        SmResumeFinalizationOutcome, SmResumeFinalizationRequest, SmService,
     };
     use crate::db::{self, DeploymentCapacityConfiguration, SmClaimStatus, SmSessionSnapshot};
     use anyhow::Result;
@@ -1079,7 +1179,15 @@ mod tests {
         assert!(same_device_binding_matches(None, Some(device), false));
     }
 
+    #[derive(Clone, Copy)]
+    enum CredentialCut {
+        PreCommitError,
+        Pending,
+        Error,
+        Matching,
+    }
     struct ResumeRepository {
+        credential_cut: Option<CredentialCut>,
         device: Uuid,
         session: Uuid,
         token: Uuid,
@@ -1146,6 +1254,7 @@ mod tests {
             _live_lease_seconds: u64,
             _max_stanzas: usize,
             _max_bytes: usize,
+            _observation: Option<&super::ownership::PreparedCheckpoint<'_>>,
         ) -> Result<super::SmCheckpointOutcome> {
             panic!("unexpected persistence operation")
         }
@@ -1168,12 +1277,14 @@ mod tests {
             _live_lease_seconds: u64,
             _max_stanzas: usize,
             _max_bytes: usize,
+            _observation: Option<&super::ownership::PreparedCheckpoint<'_>>,
         ) -> Result<super::SmCheckpointOutcome> {
             panic!("unexpected persistence operation")
         }
         async fn acknowledge_delivery_batch(
             &self,
             _sources: &[crate::outbound::TransportOwnershipSource],
+            _observation: Option<&super::ownership::PreparedBatch<'_>>,
         ) -> Result<()> {
             panic!("unexpected persistence operation")
         }
@@ -1206,6 +1317,139 @@ mod tests {
         ) -> Result<SmResumeFinalizationOutcome> {
             panic!("unexpected persistence operation")
         }
+        #[allow(clippy::too_many_arguments)]
+        async fn finalize_binding_observed(
+            &self,
+            connection_id: Uuid,
+            user_id: Uuid,
+            expected_auth_generation: i64,
+            full_jid: &str,
+            lease_seconds: u64,
+            device_id: Option<Uuid>,
+            fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+            invocation: &CredentialInvocation<'_>,
+        ) -> Result<BindingFinalizationOutcome> {
+            use crate::services::authentication::publication::{
+                CredentialPreparation, PreparationResult,
+            };
+            invocation.enter_binding(
+                connection_id,
+                user_id,
+                expected_auth_generation,
+                full_jid,
+                lease_seconds,
+                device_id,
+                fast_plan,
+            )?;
+            assert_eq!(device_id, Some(self.device));
+            assert_eq!(
+                (
+                    connection_id,
+                    user_id,
+                    expected_auth_generation,
+                    full_jid,
+                    lease_seconds
+                ),
+                (
+                    Uuid::from_u128(3),
+                    Uuid::from_u128(2),
+                    7,
+                    "private@example.test/resource",
+                    43
+                )
+            );
+            self.begin_credential(invocation).await;
+            invocation.preparation_entered(CredentialPreparation::Binding);
+            invocation
+                .preparation_returned(CredentialPreparation::Binding, PreparationResult::Present);
+            let stage =
+                self.stage_credential(invocation, connection_id, user_id, expected_auth_generation);
+            if fast_plan.is_some() {
+                invocation.preparation_entered(CredentialPreparation::Fast);
+                invocation
+                    .preparation_returned(CredentialPreparation::Fast, PreparationResult::Present);
+            }
+            self.commit_credential(invocation).await?;
+            let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+                None,
+                Some(stage),
+                Some(crate::services::authentication::BindingPublication {
+                    connection_id,
+                    user_id,
+                    full_jid: full_jid.to_owned(),
+                    lease_seconds,
+                }),
+            );
+            invocation.constructed(&receipt);
+            Ok(BindingFinalizationOutcome::Committed { receipt })
+        }
+        async fn finalize_resume_observed(
+            &self,
+            request: SmResumeFinalizationRequest<'_>,
+            invocation: &CredentialInvocation<'_>,
+        ) -> Result<SmResumeFinalizationOutcome> {
+            use crate::services::authentication::publication::{
+                CredentialPreparation, PreparationResult,
+            };
+            invocation.enter_resume(&request)?;
+            assert_eq!(
+                (
+                    request.session_id,
+                    request.claim_token,
+                    request.user_agent_id
+                ),
+                (self.session, self.token, Some(self.device))
+            );
+            assert_eq!(
+                (
+                    request.client_h,
+                    request.acknowledged_count,
+                    request.ttl_seconds,
+                    request.live_lease_seconds,
+                    request.max_stanzas,
+                    request.max_bytes
+                ),
+                (11, 2, 90, 43, 17, 801)
+            );
+            assert_eq!(request.peer_ip, "192.0.2.7".parse::<IpAddr>().unwrap());
+            assert_eq!(request.active_privacy_list, Some("private-list"));
+            self.begin_credential(invocation).await;
+            let stage = self.stage_credential(
+                invocation,
+                request.connection_id,
+                request.user_id,
+                request.expected_auth_generation,
+            );
+            invocation.preparation_entered(CredentialPreparation::Activation);
+            invocation.preparation_returned(
+                CredentialPreparation::Activation,
+                PreparationResult::Present,
+            );
+            if request.fast_plan.is_some() {
+                invocation.preparation_entered(CredentialPreparation::Fast);
+                invocation
+                    .preparation_returned(CredentialPreparation::Fast, PreparationResult::Present);
+            }
+            invocation.preparation_entered(CredentialPreparation::Privacy);
+            invocation
+                .preparation_returned(CredentialPreparation::Privacy, PreparationResult::Present);
+            self.commit_credential(invocation).await?;
+            let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+                None,
+                Some(stage),
+                None,
+            );
+            invocation.constructed(&receipt);
+            Ok(SmResumeFinalizationOutcome::Committed(Box::new(
+                super::SmResumeFinalizationCommit {
+                    activated: super::ActivatedSmSession {
+                        outbound_h: 13,
+                        unacked: Vec::new(),
+                    },
+                    receipt,
+                },
+            )))
+        }
         async fn release_live_session(&self, _connection_id: Uuid) -> Result<bool> {
             panic!("unexpected persistence operation")
         }
@@ -1225,6 +1469,198 @@ mod tests {
         }
     }
 
+    impl ResumeRepository {
+        async fn begin_credential(&self, invocation: &CredentialInvocation<'_>) {
+            CredentialInvocation::begin(Some(invocation), std::future::ready(Ok::<(), ()>(())))
+                .await
+                .unwrap();
+            CredentialInvocation::eligibility(
+                Some(invocation),
+                std::future::ready(Ok::<_, ()>(Some(true))),
+            )
+            .await
+            .unwrap();
+            invocation.transaction_returned();
+        }
+        fn stage_credential(
+            &self,
+            invocation: &CredentialInvocation<'_>,
+            connection_id: Uuid,
+            user_id: Uuid,
+            auth_generation: i64,
+        ) -> crate::services::authentication::StagedLoginEpoch {
+            invocation.preparation_entered(
+                crate::services::authentication::publication::CredentialPreparation::Stage,
+            );
+            let stage = crate::services::authentication::StagedLoginEpoch {
+                operation_id: Uuid::from_u128(5),
+                connection_id,
+                user_id,
+                auth_generation,
+                device_id: self.device,
+                epoch: 19,
+            };
+            invocation.stage_id(stage.operation_id);
+            invocation.stage_returned(&Ok(Some(stage)));
+            stage
+        }
+        async fn commit_credential(&self, invocation: &CredentialInvocation<'_>) -> Result<()> {
+            let cut = self
+                .credential_cut
+                .expect("credential fake requires explicit finite cut");
+            if matches!(cut, CredentialCut::PreCommitError) {
+                anyhow::bail!("synthetic preparation error");
+            }
+            CredentialInvocation::commit(Some(invocation), async {
+                if matches!(cut, CredentialCut::Pending) {
+                    std::future::pending::<()>().await;
+                }
+                if matches!(cut, CredentialCut::Error) {
+                    Err(std::io::Error::other("synthetic COMMIT error"))
+                } else {
+                    Ok(())
+                }
+            })
+            .await
+            .map_err(crate::services::authentication::publication::credential_error)
+        }
+    }
+    #[tokio::test]
+    async fn observed_sm_services_preserve_exact_requests_and_commit_cuts() {
+        use crate::services::authentication::{
+            publication::{
+                CredentialCall, CredentialKind, CredentialReturned, CredentialTerminal,
+                PreparedCredential,
+            },
+            FastCommitPlan,
+        };
+        for kind in [CredentialKind::Binding, CredentialKind::Resume] {
+            for cut in [
+                CredentialCut::PreCommitError,
+                CredentialCut::Pending,
+                CredentialCut::Error,
+                CredentialCut::Matching,
+            ] {
+                let service = SmService::new(
+                    ResumeRepository {
+                        credential_cut: Some(cut),
+                        device: Uuid::from_u128(4),
+                        session: Uuid::from_u128(6),
+                        token: Uuid::from_u128(8),
+                        fail_release: false,
+                        calls: std::sync::Mutex::new(Vec::new()),
+                    },
+                    "public".into(),
+                )
+                .unwrap();
+                let prepared =
+                    PreparedCredential::new(Uuid::from_u128(1), Uuid::from_u128(3), 0, kind);
+                let plan = FastCommitPlan {
+                    token_id: Some(Uuid::from_u128(10)),
+                    token_was_new: true,
+                    invalidate: true,
+                    issue: None,
+                };
+                let mut call = Box::pin(async {
+                    match kind {
+                        CredentialKind::Binding => service
+                            .finalize_binding_observed(
+                                Uuid::from_u128(3),
+                                Uuid::from_u128(2),
+                                7,
+                                "private@example.test/resource",
+                                43,
+                                Some(Uuid::from_u128(4)),
+                                Some(&plan),
+                                Some(&prepared),
+                            )
+                            .await
+                            .map(|result| match result {
+                                BindingFinalizationOutcome::Committed { receipt } => receipt,
+                                _ => panic!("unexpected fake refusal"),
+                            }),
+                        CredentialKind::Resume => service
+                            .finalize_resume_observed(
+                                SmResumeFinalizationRequest {
+                                    session_id: Uuid::from_u128(6),
+                                    claim_token: Uuid::from_u128(8),
+                                    connection_id: Uuid::from_u128(3),
+                                    user_id: Uuid::from_u128(2),
+                                    expected_auth_generation: 7,
+                                    client_h: 11,
+                                    acknowledged_count: 2,
+                                    peer_ip: "192.0.2.7".parse().unwrap(),
+                                    user_agent_id: Some(Uuid::from_u128(4)),
+                                    active_privacy_list: Some("private-list"),
+                                    ttl_seconds: 90,
+                                    live_lease_seconds: 43,
+                                    max_stanzas: 17,
+                                    max_bytes: 801,
+                                    fast_plan: Some(&plan),
+                                },
+                                Some(&prepared),
+                            )
+                            .await
+                            .map(|result| match result {
+                                SmResumeFinalizationOutcome::Committed(commit) => {
+                                    assert_eq!(commit.activated.outbound_h, 13);
+                                    commit.receipt
+                                }
+                                _ => panic!("unexpected fake refusal"),
+                            }),
+                        CredentialKind::UnboundFast => unreachable!(),
+                    }
+                });
+                let result = futures::poll!(&mut call);
+                if matches!(cut, CredentialCut::Pending) {
+                    assert!(result.is_pending());
+                    drop(call);
+                    let snapshot = prepared.observation().snapshot();
+                    assert_eq!(snapshot.commit, CredentialCall::Entered);
+                    assert_eq!(snapshot.returned, None);
+                    assert_eq!(snapshot.call_terminal, Some(CredentialTerminal::Cancelled));
+                } else {
+                    let std::task::Poll::Ready(result) = result else {
+                        panic!("finite fake unexpectedly pending")
+                    };
+                    drop(call);
+                    let snapshot = prepared.observation().snapshot();
+                    match result {
+                        Ok(receipt) => {
+                            assert_eq!(
+                                snapshot.returned,
+                                Some(if kind == CredentialKind::Binding {
+                                    CredentialReturned::BindingCommitted
+                                } else {
+                                    CredentialReturned::ResumeCommitted
+                                })
+                            );
+                            assert_eq!(
+                                receipt.staged_login_epoch().unwrap().operation_id,
+                                Uuid::from_u128(5)
+                            );
+                            assert!(prepared
+                                .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+                                .is_ok());
+                        }
+                        Err(_) => {
+                            assert_eq!(snapshot.returned, Some(CredentialReturned::Error));
+                            assert_eq!(
+                                snapshot.commit,
+                                if matches!(cut, CredentialCut::PreCommitError) {
+                                    CredentialCall::NotEntered
+                                } else {
+                                    CredentialCall::Err
+                                }
+                            );
+                        }
+                    }
+                    assert_eq!(snapshot.call_terminal, Some(CredentialTerminal::Returned));
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn resume_policy_releases_only_the_exact_mismatched_claim() {
         let device = Uuid::new_v4();
@@ -1232,6 +1668,7 @@ mod tests {
         for fail_release in [false, true] {
             let service = SmService::new(
                 ResumeRepository {
+                    credential_cut: None,
                     device,
                     session: Uuid::new_v4(),
                     token: Uuid::new_v4(),

@@ -1,7 +1,7 @@
 use super::{
     admit_offline_then_push, committed_live_delivery_has_fence, FullJidFallback,
     FullJidFallbackPort, FullJidFallbackResult, OfflineAdmissionOutcome, OnlineMessageRouter,
-    OnlineRoutePort, OnlineRouteResult,
+    OnlineRoutePort, OnlineRouteResult, RoutePayload,
 };
 use crate::outbound::DurableDelivery;
 use std::sync::{
@@ -69,12 +69,16 @@ impl RoutePort {
 impl OnlineRoutePort for RoutePort {
     type Session = Target;
 
-    fn try_local(&self, session: &Self::Session, _: String, _: Option<DurableDelivery>) -> bool {
+    fn try_local(
+        &self,
+        session: &Self::Session,
+        enqueue: crate::outbound::RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError> {
         self.events
             .lock()
             .unwrap()
             .push(format!("local:{}", session.name));
-        session.accepts
+        enqueue.complete_for_fake(session.accepts)
     }
 
     fn record_local_accept(&self, durable: bool) {
@@ -321,7 +325,7 @@ async fn full_jid_chat_fallback_checks_privacy_before_priority_ordered_enqueue()
         ],
         ..RoutePort::new(true, false)
     };
-    let outcome = OnlineMessageRouter::full_jid_fallback(
+    let outcome = OnlineMessageRouter::full_jid_fallback_owned(
         &port,
         FullJidFallback {
             message_type: "chat",
@@ -329,9 +333,9 @@ async fn full_jid_chat_fallback_checks_privacy_before_priority_ordered_enqueue()
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message/>",
             delivery: None,
         },
+        &mut RoutePayload::new("<message/>", None),
     )
     .await
     .unwrap();
@@ -362,7 +366,8 @@ async fn committed_full_jid_chat_privacy_error_fails_closed_without_rejecting() 
         ],
         ..RoutePort::new(false, false)
     };
-    let outcome = OnlineMessageRouter::full_jid_fallback(
+    let delivery = durable_delivery();
+    let outcome = OnlineMessageRouter::full_jid_fallback_owned(
         &port,
         FullJidFallback {
             message_type: "chat",
@@ -370,9 +375,9 @@ async fn committed_full_jid_chat_privacy_error_fails_closed_without_rejecting() 
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message/>",
-            delivery: Some(durable_delivery()),
+            delivery: Some(delivery),
         },
+        &mut RoutePayload::new("<message/>", Some(delivery)),
     )
     .await
     .unwrap();
@@ -402,7 +407,7 @@ async fn volatile_full_jid_chat_privacy_error_prevents_any_fallback_enqueue() {
         ],
         ..RoutePort::new(true, false)
     };
-    assert!(OnlineMessageRouter::full_jid_fallback(
+    assert!(OnlineMessageRouter::full_jid_fallback_owned(
         &port,
         FullJidFallback {
             message_type: "chat",
@@ -410,9 +415,9 @@ async fn volatile_full_jid_chat_privacy_error_prevents_any_fallback_enqueue() {
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message/>",
             delivery: None,
         },
+        &mut RoutePayload::new("<message/>", None),
     )
     .await
     .is_err());
@@ -429,7 +434,8 @@ async fn volatile_full_jid_chat_privacy_error_prevents_any_fallback_enqueue() {
 #[tokio::test]
 async fn full_jid_mismatch_preserves_durable_recovery_and_volatile_rejection() {
     let durable = RoutePort::new(true, false);
-    let outcome = OnlineMessageRouter::full_jid_fallback(
+    let delivery = durable_delivery();
+    let outcome = OnlineMessageRouter::full_jid_fallback_owned(
         &durable,
         FullJidFallback {
             message_type: "normal",
@@ -437,9 +443,9 @@ async fn full_jid_mismatch_preserves_durable_recovery_and_volatile_rejection() {
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message/>",
-            delivery: Some(durable_delivery()),
+            delivery: Some(delivery),
         },
+        &mut RoutePayload::new("<message/>", Some(delivery)),
     )
     .await
     .unwrap();
@@ -447,7 +453,7 @@ async fn full_jid_mismatch_preserves_durable_recovery_and_volatile_rejection() {
     assert_eq!(durable.events(), ["postacceptfailed"]);
 
     let volatile = RoutePort::new(true, false);
-    let outcome = OnlineMessageRouter::full_jid_fallback(
+    let outcome = OnlineMessageRouter::full_jid_fallback_owned(
         &volatile,
         FullJidFallback {
             message_type: "normal",
@@ -455,9 +461,9 @@ async fn full_jid_mismatch_preserves_durable_recovery_and_volatile_rejection() {
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message/>",
             delivery: None,
         },
+        &mut RoutePayload::new("<message/>", None),
     )
     .await
     .unwrap();
@@ -468,7 +474,7 @@ async fn full_jid_mismatch_preserves_durable_recovery_and_volatile_rejection() {
 #[tokio::test]
 async fn full_jid_error_stanza_is_dropped_without_fallback_effects() {
     let port = RoutePort::new(true, true);
-    let outcome = OnlineMessageRouter::full_jid_fallback(
+    let outcome = OnlineMessageRouter::full_jid_fallback_owned(
         &port,
         FullJidFallback {
             message_type: "error",
@@ -476,9 +482,9 @@ async fn full_jid_error_stanza_is_dropped_without_fallback_effects() {
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message type='error'/>",
             delivery: None,
         },
+        &mut RoutePayload::new("<message type='error'/>", None),
     )
     .await
     .unwrap();
@@ -498,7 +504,7 @@ async fn full_jid_chat_queue_failure_tries_bare_remote_primary() {
         )],
         ..RoutePort::new(true, false)
     };
-    let outcome = OnlineMessageRouter::full_jid_fallback(
+    let outcome = OnlineMessageRouter::full_jid_fallback_owned(
         &port,
         FullJidFallback {
             message_type: "chat",
@@ -506,9 +512,9 @@ async fn full_jid_chat_queue_failure_tries_bare_remote_primary() {
             bare_target: "alice@example.test",
             sender: "bob@example.test/phone",
             recipient_id: uuid::Uuid::nil(),
-            stanza: "<message/>",
             delivery: None,
         },
+        &mut RoutePayload::new("<message/>", None),
     )
     .await
     .unwrap();

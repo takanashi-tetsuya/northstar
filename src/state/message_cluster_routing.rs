@@ -2,7 +2,9 @@
 
 use super::{AppState, OnlineSession};
 use crate::outbound::DurableDelivery;
-use crate::services::messaging::{FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult};
+use crate::services::messaging::{
+    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
+};
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
@@ -18,14 +20,9 @@ impl OnlineRoutePort for AppState {
     fn try_local(
         &self,
         session: &Self::Session,
-        stanza: String,
-        delivery: Option<DurableDelivery>,
-    ) -> bool {
-        if let Some(delivery) = delivery {
-            session.sender.try_send_durable(stanza, delivery).is_ok()
-        } else {
-            session.sender.try_send(stanza).is_ok()
-        }
+        enqueue: crate::outbound::RouteEnqueue,
+    ) -> Result<(), crate::outbound::RouteSendError> {
+        session.sender.try_send_route_item(enqueue)
     }
 
     fn record_local_accept(&self, durable: bool) {
@@ -78,6 +75,23 @@ impl FullJidFallbackPort for AppState {
 
     fn post_accept_failed(&self) {
         self.personal_message_telemetry().post_accept_failed();
+    }
+}
+
+impl DirectMessageRoutePort for AppState {
+    fn direct_route_mode(&self) -> crate::cluster::DirectPostCommitMode {
+        self.message_service().direct_mode()
+    }
+
+    fn clustered_direct_routes(&self) -> bool {
+        self.message_service().clustered_direct_admission_enabled()
+    }
+
+    async fn rearm_direct_route(&self, delivery: DurableDelivery) {
+        let mut claim_id = delivery.claim_id;
+        self.message_service()
+            .rearm_unrouted_live_direct(delivery.recipient_id, delivery.message_id, &mut claim_id)
+            .await;
     }
 }
 

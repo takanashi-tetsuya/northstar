@@ -438,6 +438,13 @@ jobs:
           node scripts/check-tracked-sensitive-files.mjs --include-untracked
           node scripts/check-runtime-migration-boundary.mjs
           node scripts/check-architecture-boundaries.mjs
+          node --test scripts/test-admission-execution.mjs
+          node scripts/check-runtime-experiments.mjs
+          node --test scripts/test-runtime-experiments.mjs
+          node scripts/check-execution-boundaries.mjs
+          node --test scripts/test-execution-boundaries.mjs
+          node scripts/check-federated-route-boundaries.mjs
+          node --test scripts/test-federated-route-boundaries.mjs
           node --test scripts/test-mix-outbox-boundaries.mjs
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
@@ -477,6 +484,11 @@ jobs:
           python3 scripts/local-vm-lab-muc-mam.py --self-test
           python3 scripts/local-vm-lab-soak.py --self-test
           python3 scripts/test-finalize-soak.py
+          python3 scripts/test-experiment-contract.py
+          python3 scripts/test-integration-muc-matching.py
+          python3 scripts/test-mixed-traffic-soak.py
+          python3 scripts/test-frame-trace.py
+          python3 scripts/test-room-db-experiments.py
           python3 scripts/test-local-vm-lab-upload.py
           python3 scripts/local-vm-lab-active-presence.py --self-test
           python3 scripts/local-vm-lab-active-load.py --self-test
@@ -497,6 +509,7 @@ jobs:
           bash scripts/test-listener-stress-worker.sh
           python3 scripts/test-listener-stress-phases.py
           python3 scripts/test-upload-retry.py
+          python3 scripts/test-http-response-diagnostics.py
           python3 scripts/test-listener-startup-scheduler.py
           python3 scripts/test-mix-federation-coordination.py
           python3 scripts/check-runtime-test-profile.py --manifest Cargo.toml
@@ -504,6 +517,128 @@ jobs:
           bash scripts/test-stateful-database-ci.sh
           bash scripts/check-database-role-boundaries.sh
           bash scripts/test-postgres-client-wrapper.sh
+          # Fixed pure-control lanes use fresh inputs, never checkout import caches.
+          (
+            set -euo pipefail
+            umask 077
+            stage4_pure="$(mktemp -d "${RUNNER_TEMP:?}/northstar-stage4-pure.XXXXXX")"
+            stage4_pure="$(realpath -- "$stage4_pure")"
+            stage4_inputs="$stage4_pure/inputs"
+            mkdir -p "$stage4_inputs"
+            for relative in \
+              current-compilation-map.json \
+              current-public-correspondence.json \
+              current/scripts/lib/direct_build_record.py \
+              current/scripts/lib/stage4_build_record.py \
+              helper-metadata.json \
+              historical-compilation-map.json \
+              historical/scripts/lib/direct_build_record.py \
+              historical/scripts/lib/stage4_build_record.py \
+              prior-current-consumer.py.txt \
+              test-current-profile-binding.py; do
+              install -D -m 0644 "scripts/fixtures/stage4-profile-binding-v1/$relative" \
+                "$stage4_inputs/current9/$relative"
+            done
+            for relative in \
+              scripts/lib/controlled_admission_supervision.py \
+              scripts/lib/direct_build_record.py \
+              scripts/lib/stage4_case.py \
+              scripts/lib/stage4_compact.py \
+              scripts/lib/stage4_compact_shapes.json \
+              scripts/lib/stage4_corpus_join.py \
+              scripts/lib/stage4_saved_case.py \
+              scripts/lib/stage4_shapes.json \
+              scripts/test-stage4-saved-profile.py \
+              src/bosh/response_owner.rs; do
+              install -D -m 0644 "$relative" "$stage4_inputs/historical75/$relative"
+            done
+            install -D -m 0644 "scripts/fixtures/stage4-profile-binding-v1/historical/scripts/lib/stage4_build_record.py" \
+              "$stage4_inputs/historical75/scripts/lib/stage4_build_record.py"
+            install -D -m 0644 scripts/test-stage4-saved-profile-historical.py \
+              "$stage4_inputs/historical-entry/test-stage4-saved-profile-historical.py"
+            for relative in \
+              scripts/capture-controlled-admission.py \
+              scripts/lib/controlled_admission.py \
+              scripts/lib/controlled_admission_supervision.py \
+              scripts/lib/direct_build_record.py \
+              scripts/lib/direct_case.py \
+              scripts/lib/experiment_contract.py \
+              scripts/lib/stage4_case.py \
+              scripts/lib/stage4_compact.py \
+              scripts/lib/stage4_compact_shapes.json \
+              scripts/lib/stage4_shapes.json \
+              scripts/test-controlled-admission.py \
+              scripts/test-direct-build-record.py \
+              scripts/test-direct-case.py \
+              scripts/test-experiment-contract.py \
+              scripts/test-stage4-compact-codec.py \
+              scripts/test-stage4-public-regressions.py; do
+              install -D -m 0644 "$relative" "$stage4_inputs/public100/$relative"
+            done
+            test "$(find "$stage4_inputs/current9" -type f | wc -l)" -eq 10
+            test "$(find "$stage4_inputs/historical75" -type f | wc -l)" -eq 11
+            test "$(find "$stage4_inputs/historical-entry" -type f | wc -l)" -eq 1
+            test "$(find "$stage4_inputs/public100" -type f | wc -l)" -eq 16
+            find "$stage4_inputs" -printf '%y %D %i %m %n %s %T@ %C@ %P\n' | LC_ALL=C sort > "$stage4_pure/before.namespace"
+            (cd "$stage4_inputs"; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$stage4_pure/before.sha256"
+            stage4_verify_inputs() {
+              find "$stage4_inputs" -printf '%y %D %i %m %n %s %T@ %C@ %P\n' | LC_ALL=C sort > "$stage4_pure/after.namespace"
+              cmp -- "$stage4_pure/before.namespace" "$stage4_pure/after.namespace"
+              (cd "$stage4_inputs"; sha256sum --check --strict --quiet "$stage4_pure/before.sha256")
+            }
+            echo "Stage4 current9: explicit current and historical compilation bindings"
+            stage4_status=0
+            (
+              ulimit -f 128 || exit 1
+              ulimit -v 524288 || exit 1
+              ulimit -t 60 || exit 1
+              set -o noclobber || exit 1
+              timeout --signal=TERM --kill-after=5s 60s \
+                python3 -I -S -B "$stage4_inputs/current9/test-current-profile-binding.py" -v \
+                CurrentCompilationBindingControls.test_current_consumer_accepts_real_current_map_and_bytes \
+                CurrentCompilationBindingControls.test_historical_consumer_accepts_real_historical_map_and_bytes \
+                CurrentCompilationBindingControls.test_current_consumer_rejects_real_historical_map \
+                CurrentCompilationBindingControls.test_current_consumer_rejects_self_consistent_wrong_map \
+                CurrentCompilationBindingControls.test_current_consumer_rejects_old_and_off_by_one_byte_counts \
+                CurrentCompilationBindingControls.test_historical_consumer_rejects_current_map_without_rebinding \
+                CurrentCompilationBindingControls.test_consumer_lineage_has_only_two_then_one_constant_changes \
+                CurrentCompilationBindingControls.test_current_consumer_rejects_historical_public_pin \
+                CurrentCompilationBindingControls.test_current_consumer_rejects_wrong_public_pin \
+                > "$stage4_pure/current9.log" 2>&1
+            ) || stage4_status=$?
+            cat "$stage4_pure/current9.log"
+            stage4_verify_inputs
+            test "$stage4_status" -eq 0
+            echo "Stage4 historical75: frozen historical consumer, all 75 assertions"
+            stage4_status=0
+            (
+              ulimit -f 256 || exit 1
+              ulimit -v 524288 || exit 1
+              ulimit -t 300 || exit 1
+              set -o noclobber || exit 1
+              timeout --signal=TERM --kill-after=5s 300s \
+                python3 -I -S -B "$stage4_inputs/historical-entry/test-stage4-saved-profile-historical.py" \
+                "$stage4_inputs/historical75" > "$stage4_pure/historical75.log" 2>&1
+            ) || stage4_status=$?
+            cat "$stage4_pure/historical75.log"
+            stage4_verify_inputs
+            test "$stage4_status" -eq 0
+            echo "Stage4 public100: fixed 47 earlier-stage methods, then 53 constructed codec controls"
+            stage4_status=0
+            (
+              ulimit -f 256 || exit 1
+              ulimit -v 524288 || exit 1
+              ulimit -t 300 || exit 1
+              set -o noclobber || exit 1
+              timeout --signal=TERM --kill-after=5s 300s \
+                python3 -I -S -B "$stage4_inputs/public100/scripts/test-stage4-public-regressions.py" \
+                > "$stage4_pure/public100.log" 2>&1
+            ) || stage4_status=$?
+            cat "$stage4_pure/public100.log"
+            stage4_verify_inputs
+            test "$stage4_status" -eq 0
+            rm -rf -- "$stage4_inputs"
+          )
 
       - name: Test certificate and secret handling
         run: |
@@ -700,6 +835,25 @@ jobs:
         run: >-
           python3 scripts/maintenance-subserver-wsl.py
           --server "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+
+      - name: Verify migration bootstrap before any schema changes
+        env:
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "300"
+        run: >-
+          bash scripts/github-ci-run.sh 'migration bootstrap admission'
+          python3 scripts/test-migration-preflight.py
+          --binary "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --evidence "$RUNNER_TEMP/migration-preflight-evidence.json"
+
+      - name: Verify mixed traffic and owned fixture shutdown
+        env:
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "300"
+        run: >-
+          bash scripts/github-ci-run.sh 'mixed traffic smoke and shutdown'
+          python3 scripts/mixed-traffic-soak.py
+          --binary "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --duration-seconds 90
+          --output-dir "$RUNNER_TEMP/northstar-mixed-traffic-smoke"
 
   protocol-integration:
     name: PostgreSQL protocol integration

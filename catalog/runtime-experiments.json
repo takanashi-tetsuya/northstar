@@ -1,0 +1,1676 @@
+{
+  "schema": "northstar-runtime-experiments-v2",
+  "purpose": "Supported in-process runtime ownership and reproducible experiment index; declarations are not execution evidence.",
+  "required_families": [
+    "startup",
+    "c2s",
+    "direct",
+    "session",
+    "federation",
+    "muc",
+    "mix",
+    "visibility",
+    "pubsub",
+    "upload",
+    "administration",
+    "cluster",
+    "workers",
+    "diagnostics",
+    "recovery",
+    "client"
+  ],
+  "families": [
+    {
+      "id": "startup",
+      "title": "Startup, configuration and role composition",
+      "production_owner": {
+        "path": "src/main.rs",
+        "anchor": "async fn run() -> Result<()> {"
+      },
+      "runtime_identities": [],
+      "invariants": [
+        "Runtime startup cannot borrow migrator authority or ignore invalid configuration."
+      ],
+      "boundaries": {
+        "commit": "SQLx migration owner is separate from runtime composition.",
+        "handoff": "Listeners become ready only after startup attestation.",
+        "completion": "Process shutdown joins owned tasks; listener readiness alone is not a successful request."
+      },
+      "faults": [
+        "invalid configuration",
+        "migration lock/checksum mismatch",
+        "listener failure"
+      ],
+      "budgets": {
+        "contract": "Existing startup and listener readiness budgets; no new global startup deadline.",
+        "source": {
+          "path": "src/main.rs",
+          "anchor": "const SERVICE_TASK_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);"
+        }
+      },
+      "experiments": [
+        {
+          "id": "startup-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server migration_environment_is_minimal_and_requires_an_exclusive_url",
+          "test": {
+            "path": "src/main.rs",
+            "anchor": "fn migration_environment_is_minimal_and_requires_an_exclusive_url() {"
+          },
+          "assertions": [
+            "Migration command environment requires its exclusive URL and excludes unrelated runtime credentials/configuration."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "A local development-role fixture does not prove production PostgreSQL ACL deployment."
+      ]
+    },
+    {
+      "id": "c2s",
+      "title": "C2S frames and authentication publication",
+      "production_owner": {
+        "path": "src/xmpp/protocol.rs",
+        "anchor": "pub(crate) async fn process_frame("
+      },
+      "runtime_identities": [
+        {
+          "id": "service:authentication_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:sasl_login_abuse_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:XMPP",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:XMPPS",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Frame and post-write publication retain separate ownership, budgets, cancellation and outcomes."
+      ],
+      "boundaries": {
+        "commit": "Authentication repository commits credential/fence authority.",
+        "handoff": "Native write or BOSH response exposure precedes publication.",
+        "completion": "Frame completion is not route publication or application processing."
+      },
+      "faults": [
+        "backend failure",
+        "timeout",
+        "cancel",
+        "panic",
+        "stale publication fence"
+      ],
+      "budgets": {
+        "contract": "TCP/BOSH frame 5s; WS inline auth 8s; native publication has no added deadline; BOSH outer budget still applies.",
+        "source": {
+          "path": "src/xmpp/frame_execution.rs",
+          "anchor": "const FRAME_BUDGET: Duration = Duration::from_secs(5);"
+        }
+      },
+      "experiments": [
+        {
+          "id": "c2s-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server frame_execution::tests",
+          "test": {
+            "path": "src/xmpp/frame_execution.rs",
+            "anchor": "mod tests {"
+          },
+          "assertions": [
+            "Real observation runner tests typed frame/publication results, terminal cardinality and sanitized fields under supplied futures; source gates separately check adapter wiring."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "S2S application handling has different budgets; no claim that native publication has an end-to-end five-second bound."
+      ]
+    },
+    {
+      "id": "direct",
+      "title": "Direct message admission and live routing",
+      "production_owner": {
+        "path": "src/services/messaging/direct_route.rs",
+        "anchor": "pub(crate) struct DirectMessageRouter;"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:message_admission_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:message_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:push_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:retraction_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "A committed message and an accepted queue never become a retry-inducing pre-admission error."
+      ],
+      "boundaries": {
+        "commit": "Message application/repository owns identity, archives, spool/outbox transaction.",
+        "handoff": "Router transfers exact recipient/message/claim tuple and payload to a queue.",
+        "completion": "Direct-write, SM or BOSH transport owns completion, never router acceptance."
+      },
+      "faults": [
+        "health change before/after queue",
+        "fallback policy error",
+        "missing route",
+        "claim rearm cancellation"
+      ],
+      "budgets": {
+        "contract": "Ingress frame budget belongs to C2S; route and transport preserve existing service bounds.",
+        "source": {
+          "path": "src/xmpp/frame_execution.rs",
+          "anchor": "const FRAME_BUDGET: Duration = Duration::from_secs(5);"
+        }
+      },
+      "experiments": [
+        {
+          "id": "direct-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server messaging::direct_route::tests",
+          "test": {
+            "path": "src/services/messaging/direct_route_tests.rs",
+            "anchor": "async fn exact_normal_route_failure_rejects_volatile_but_preserves_committed_admission() {"
+          },
+          "assertions": [
+            "Injected production route tests assert checkpoint order, exact envelopes/claims, fallback policy and no rearm after queue acceptance."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "admission-fixture-contract",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-experiment-contract.py",
+          "test": {
+            "path": "scripts/test-experiment-contract.py",
+            "anchor": "class ContractCases(unittest.TestCase):"
+          },
+          "assertions": [
+            "Exact synthetic inputs and independent golden projections cover shared actor capacity, replay/conflict, SQL expiry and pending lease/finalization semantics",
+            "Normal over-cap offered workload is rejected before output, process, listener or tool startup",
+            "Unknown reservation knowledge, first mismatch, complete bounded evidence and independent cleanup are classified without manufacturing observations"
+          ],
+          "artifacts": [
+            "synthetic-cases.json",
+            "ordinary-tests.log",
+            "ordinary-result.json"
+          ],
+          "cleanup": "Pure stdlib model tests only; temporary input-parser files use TemporaryDirectory; no server, DB, child, listener or signal"
+        },
+        {
+          "id": "admission-controlled-oracle",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-controlled-admission.py",
+          "test": {
+            "path": "scripts/test-controlled-admission.py",
+            "anchor": "    def test_native_4097_counterexample_and_4096_positive_are_exact(self):"
+          },
+          "assertions": [
+            "Independent oracle, strict concrete inputs, exact4097 counterexample and4096 positive control; pure tests are distinct from externally built Rust corpus recording/replay"
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json",
+            "controlled-corpus/corpus.json"
+          ],
+          "cleanup": "Pure oracle tests use owned temporary files only; controlled record/replay runs only the externally supplied pure Rust binary on saved concrete inputs, with no service, listener or database"
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Queue and mock-route tests cannot establish socket delivery or multi-node Redis qualification."
+      ]
+    },
+    {
+      "id": "session",
+      "title": "Session, stream management and recovery",
+      "production_owner": {
+        "path": "src/services/sm.rs",
+        "anchor": "pub(crate) struct SmService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:replay_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:sm_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Stale resume/teardown cannot release or acknowledge a newer exact owner."
+      ],
+      "boundaries": {
+        "commit": "SM repository owns persisted sequence and leased claim.",
+        "handoff": "Session transfers its exact fence into transport-owned state.",
+        "completion": "SM h or authenticated BOSH ack completes; lease expiry releases for recovery."
+      },
+      "faults": [
+        "stale claim",
+        "interruption",
+        "resume mismatch",
+        "slow client"
+      ],
+      "budgets": {
+        "contract": "Session-specific lease and admission limits; exact transport deadlines remain adapter-owned.",
+        "source": {
+          "path": "src/services/sm.rs",
+          "anchor": "pub(crate) struct SmResumeClaimRequest<"
+        }
+      },
+      "experiments": [
+        {
+          "id": "session-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server resume_policy_releases_only_the_exact_mismatched_claim",
+          "test": {
+            "path": "src/services/sm.rs",
+            "anchor": "async fn resume_policy_releases_only_the_exact_mismatched_claim() {"
+          },
+          "assertions": [
+            "Resume request binding is validated; matching claims pass through and only exact mismatched device claims are released, including release failures."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "wire-sm-mixed",
+          "level": "wire",
+          "status": "declared",
+          "command": "python3 scripts/mixed-traffic-soak.py --binary target/debug/rust-xmpp-server --duration-seconds 600 --trace-frames --stream-management --output-dir /tmp/northstar-sm-experiment",
+          "test": {
+            "path": "scripts/mixed-traffic-soak.py",
+            "anchor": "    def new_peer(self, username, generation):"
+          },
+          "assertions": [
+            "At least 600 seconds/200 rounds; exact direct/MUC deliveries, MAM, no-store, fresh reconnects and clean owned shutdown. Every stream enables SM before presence; all received top-level stanzas are counted and ACKed. Server ACKs are syntactically checked, not outbound-count proof."
+          ],
+          "artifacts": [
+            "result.json",
+            "server.log",
+            "resources.jsonl",
+            "trace-summary.json"
+          ],
+          "cleanup": "Owned isolated loopback DB and copied server binary only; workload and owned shutdown/listener cleanup must both pass."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "SM mixed traffic checks received-stanza/client-ACK accounting with syntactically valid ordered server responses; fresh reconnects do not validate server outbound-handled counts or crash/cross-transport resume."
+      ]
+    },
+    {
+      "id": "federation",
+      "title": "S2S, components and federation outbox",
+      "production_owner": {
+        "path": "src/s2s/inbound.rs",
+        "anchor": "pub(crate) async fn route_inbound_message("
+      },
+      "runtime_identities": [
+        {
+          "id": "service:extdisco_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:s2s_outbox_dispatch_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:s2s_roster_authorization_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:s2s_sm_outbox_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:external component",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:S2S",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:S2S TLS",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Federated history commitment, delivery commitment and per-checkpoint route acceptance remain distinct."
+      ],
+      "boundaries": {
+        "commit": "Shared message transaction plus S2S/component outbox repository.",
+        "handoff": "Authenticated domain adapter routes to local/cluster queue or outbox transport.",
+        "completion": "Remote peer transport acknowledgement is not application processing."
+      },
+      "faults": [
+        "checkpoint degradation",
+        "history-only acceptance",
+        "domain spoof",
+        "remote unavailable"
+      ],
+      "budgets": {
+        "contract": "15s S2S I/O; idle/SM budgets are separate; application-handler await has no enclosing C2S frame timeout.",
+        "source": {
+          "path": "src/s2s/util.rs",
+          "anchor": "pub(crate) const S2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);"
+        }
+      },
+      "experiments": [
+        {
+          "id": "federation-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server messaging::direct_route::tests::federation_",
+          "test": {
+            "path": "src/services/messaging/direct_route_tests.rs",
+            "anchor": "async fn federation_every_preaccept_health_checkpoint_stops_later_effects() {"
+          },
+          "assertions": [
+            "Production federated route owner tests its five preaccept checkpoints, history-only initial acceptance, exact envelopes and postaccept recovery."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "federation-protocol-policy",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server s2s::inbound",
+          "test": {
+            "path": "src/s2s/inbound_tests.rs",
+            "anchor": "fn degraded_inbound_postcommit_is_accepted_without_live_effects() {"
+          },
+          "assertions": [
+            "Postcommit S2S policy remains accepted without live effects."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Public DNSSEC/DANE, certificate deployment and independent federation peers remain operator-only qualification."
+      ]
+    },
+    {
+      "id": "muc",
+      "title": "MUC room authority and fan-out",
+      "production_owner": {
+        "path": "src/services/muc.rs",
+        "anchor": "pub(crate) struct MucService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:muc_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Room mutation/admission and ordered fan-out preserve exact occupancy authority; replay cannot fan out a second time."
+      ],
+      "boundaries": {
+        "commit": "MucService/room application and repository own locked authorization and history commit.",
+        "handoff": "Ordinary room discussion fan-out is distinct from policy-event durable outbox receipt.",
+        "completion": "Local attempt report is not recipient acknowledgement; policy-event ordinal and final exact claim settlement are distinct."
+      },
+      "faults": [
+        "admission failure/replay",
+        "stale occupant",
+        "cluster send failure",
+        "blocklist failure",
+        "queue closed",
+        "cancellation"
+      ],
+      "budgets": {
+        "contract": "Existing C2S frame budget applies to ingress; standalone room mutex intentionally spans admission/fan-out; clustered policy delivery has its own 5s attempt.",
+        "source": {
+          "path": "src/services/muc.rs",
+          "anchor": "pub(crate) async fn lock_local_room_mutation("
+        }
+      },
+      "experiments": [
+        {
+          "id": "muc-regression",
+          "level": "isolated_db",
+          "status": "declared",
+          "command": "bash scripts/muc-db-wsl.sh",
+          "test": {
+            "path": "src/db/muc_tests.rs",
+            "anchor": "async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {"
+          },
+          "assertions": [
+            "MUC DB suite tests locked configuration, atomic invitation/history and clustered outbox/admin/rebind transaction/replay cases."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "muc-fanout-owner",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server services::muc::fanout::tests",
+          "test": {
+            "path": "src/services/muc/fanout.rs",
+            "anchor": "async fn accepted_fanout_preserves_snapshot_privacy_and_endpoint_order() {"
+          },
+          "assertions": [
+            "Cluster attempt, snapshot, privacy and endpoint order remain unchanged; replay has no effects."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "wire-non-sm-mixed",
+          "level": "wire",
+          "status": "declared",
+          "command": "python3 scripts/mixed-traffic-soak.py --binary target/debug/rust-xmpp-server --duration-seconds 600 --trace-frames --output-dir /tmp/northstar-non-sm-experiment",
+          "test": {
+            "path": "scripts/mixed-traffic-soak.py",
+            "anchor": "    def message(self, sender, recipients, to, typ, mid, encrypted=True, store=True):"
+          },
+          "assertions": [
+            "At least 600 seconds/200 rounds; exact direct/MUC deliveries, MAM, no-store, fresh reconnects and clean owned shutdown. SM remains disabled, preserving the historical workload class."
+          ],
+          "artifacts": [
+            "result.json",
+            "server.log",
+            "resources.jsonl",
+            "trace-summary.json"
+          ],
+          "cleanup": "Owned isolated loopback DB and copied server binary only; workload and owned shutdown/listener cleanup must both pass."
+        },
+        {
+          "id": "room-auth-owned-database",
+          "level": "isolated_db",
+          "status": "declared",
+          "command": "python3 scripts/room-db-experiments.py --output-dir /tmp/northstar-room-auth-db-experiment",
+          "test": {
+            "path": "scripts/room-db-experiments.py",
+            "anchor": "def validate_suite_log(name, path):"
+          },
+          "assertions": [
+            "Execute exactly the declared six MUC, eleven MIX and ten authentication ignored tests on an independently owned loopback PostgreSQL; zero-test success or incomplete cleanup fails."
+          ],
+          "artifacts": [
+            "result.json",
+            "suite-muc.json",
+            "suite-mix.json",
+            "suite-authentication.json"
+          ],
+          "cleanup": "Owned direct PostgreSQL child and command groups, exact PID/data_directory verification; do not remove runtime if shutdown ownership is uncertain."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Historical non-SM round-73 timeout remains unlocalized; Redis receipt and hard-crash qualification require separate fixtures."
+      ]
+    },
+    {
+      "id": "mix",
+      "title": "MIX channel admission and durable delivery",
+      "production_owner": {
+        "path": "src/services/mix.rs",
+        "anchor": "pub(crate) struct MixService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:mix_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Worker completion and handoff to a recoverable transport must not double-acknowledge an old claim."
+      ],
+      "boundaries": {
+        "commit": "Channel service/repository commits audience snapshot and outbox.",
+        "handoff": "Bounded claimed attempt transfers to live or durable transport ownership.",
+        "completion": "Only worker-completed disposition settles old claim; transferred ownership is separate."
+      },
+      "faults": [
+        "lease renewal failure",
+        "route pending",
+        "stale wake epoch",
+        "cancellation",
+        "DB lane saturation"
+      ],
+      "budgets": {
+        "contract": "Existing attempt/renewal/worker watchdog and bounded DB lane limits, not a new common timeout.",
+        "source": {
+          "path": "src/xmpp/protocol/mix/worker.rs",
+          "anchor": "pub(super) const fn mix_outbox_lane_budgets("
+        }
+      },
+      "experiments": [
+        {
+          "id": "mix-regression",
+          "level": "isolated_db",
+          "status": "declared",
+          "command": "bash scripts/mix-family-db-wsl.sh",
+          "test": {
+            "path": "scripts/mix-family-db-wsl.sh",
+            "anchor": "  db::mix::delivery_sequence_retention_integration_tests::empty_delivery_claim_preserves_database_authority_errors"
+          },
+          "assertions": [
+            "MIX DB suite tests PAM authority, sequence/event GC races, delivery capacity and exact route-wake claim/requeue behavior."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        },
+        {
+          "id": "mix-settlement-owner",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server transferred_mix_source_never_constructs_old_worker_acknowledgement",
+          "test": {
+            "path": "src/xmpp/protocol/mix_tests.rs",
+            "anchor": "async fn transferred_mix_source_never_constructs_old_worker_acknowledgement() {"
+          },
+          "assertions": [
+            "Transferred transport ownership never constructs old worker acknowledgement."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Mixed direct/MUC soak does not exercise MIX wire interoperability; MIX DB and deterministic ownership tests are separate."
+      ]
+    },
+    {
+      "id": "visibility",
+      "title": "Roster, presence, privacy and blocking",
+      "production_owner": {
+        "path": "src/services/roster.rs",
+        "anchor": "pub(crate) struct RosterService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:blocking_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:presence_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:privacy_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:roster_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Snapshot/version gate preserves visibility and cannot silently drop overflowed authoritative pushes."
+      ],
+      "boundaries": {
+        "commit": "Roster and privacy service/repository own mutation and immutable authorization snapshot.",
+        "handoff": "Per-resource version gate orders pushes after transport publication.",
+        "completion": "Queue ownership is distinct from client receipt."
+      },
+      "faults": [
+        "mutation/snapshot race",
+        "overflow",
+        "stale gate",
+        "denial/backend error"
+      ],
+      "budgets": {
+        "contract": "Existing bounded gate capacity and transport limits.",
+        "source": {
+          "path": "src/services/roster.rs",
+          "anchor": "pub(crate) struct RosterService<R> {"
+        }
+      },
+      "experiments": [
+        {
+          "id": "visibility-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server services::roster",
+          "test": {
+            "path": "src/services/roster.rs",
+            "anchor": "fn represented_versions_are_not_replayed_and_overflow_fails_closed() {"
+          },
+          "assertions": [
+            "Roster service tests snapshot/version gates, overflow, repository policy outcomes and per-resource rendering."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "No claim of every real-client presence/privacy combination."
+      ]
+    },
+    {
+      "id": "pubsub",
+      "title": "PubSub, PEP, profile and archive",
+      "production_owner": {
+        "path": "src/services/pubsub.rs",
+        "anchor": "pub(crate) struct PubSubService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:mam_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:private_storage_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:profile_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:pubsub_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Queries cannot acquire mutation authority; recipient snapshots and durable effects remain transaction-owned."
+      ],
+      "boundaries": {
+        "commit": "PubSub/PEP repository commits immutable audience and event; archive port owns visibility.",
+        "handoff": "Outbox workers project committed events; wake failure does not undo commit.",
+        "completion": "Transport acknowledgement is distinct from worker wake and provider acceptance."
+      },
+      "faults": [
+        "query/mutation capability confusion",
+        "policy denial",
+        "wake failure",
+        "stale recipient"
+      ],
+      "budgets": {
+        "contract": "Existing bounded outbox batch, retries and watchdog contracts.",
+        "source": {
+          "path": "src/services/pubsub.rs",
+          "anchor": "pub(crate) struct PubSubService<R> {"
+        }
+      },
+      "experiments": [
+        {
+          "id": "pubsub-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server services::pubsub",
+          "test": {
+            "path": "src/services/pubsub_tests.rs",
+            "anchor": "async fn remote_subscription_options_fail_before_mutation_admission() {"
+          },
+          "assertions": [
+            "PubSub service tests query/mutation capability, subscription rejection and access-policy precedence."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Root workspace units do not run every ignored PubSub/archive DB and real-provider fixture."
+      ]
+    },
+    {
+      "id": "upload",
+      "title": "Upload, object storage and reconciliation",
+      "production_owner": {
+        "path": "src/services/upload.rs",
+        "anchor": "pub(crate) struct UploadService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "service:upload_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Cleanup/promotion must act only on the exact authorized stage/object identity."
+      ],
+      "boundaries": {
+        "commit": "Repository owns slot/object lifecycle metadata and fencing.",
+        "handoff": "UploadStore owns byte I/O; post-commit compensation stays identity-bound.",
+        "completion": "HTTP success does not substitute for object/metadata reconciliation."
+      },
+      "faults": [
+        "failed promotion",
+        "changed digest",
+        "stale stage",
+        "provider unavailable"
+      ],
+      "budgets": {
+        "contract": "Existing bounded body/slot/object policies and reconciliation watchdog; provider operations retain their own timeout.",
+        "source": {
+          "path": "src/upload_worker.rs",
+          "anchor": "const STORAGE_OPERATION_TIMEOUT: Duration = Duration::from_secs(180);"
+        }
+      },
+      "experiments": [
+        {
+          "id": "upload-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server services::upload",
+          "test": {
+            "path": "src/services/upload.rs",
+            "anchor": "async fn finalization_cleanup_tracks_authority_and_stage_identity() {"
+          },
+          "assertions": [
+            "Upload service tests exact stage retirement, replay digests, cleanup and reservation token ownership."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Real S3 credentials, object versioning and external storage failure qualification are not covered by local units."
+      ]
+    },
+    {
+      "id": "administration",
+      "title": "REST, admin, authentication and operation journal",
+      "production_owner": {
+        "path": "src/operation_runtime.rs",
+        "anchor": "pub(crate) async fn serve("
+      },
+      "runtime_identities": [
+        {
+          "id": "service:account_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:admin_command_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:api_query_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:api_session_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:challenge_issue_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:omemo_recovery_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:report_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:durable operation worker",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:HTTP",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "task:Web administration",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Cancellation cannot detach renewal or convert indeterminate committed effects into successful operations."
+      ],
+      "boundaries": {
+        "commit": "Service/repository owns command, idempotency and durable operation journal.",
+        "handoff": "Operation runtime owns external effect and retry/compensation decision.",
+        "completion": "HTTP request completion and durable operation completion are different facts."
+      },
+      "faults": [
+        "effect error",
+        "renewal failure",
+        "cancel",
+        "indeterminate result",
+        "idempotent replay"
+      ],
+      "budgets": {
+        "contract": "Existing operation/HTTP/cleanup budgets; durable operation worker repeated in-loop errors lack WorkerRegistry heartbeat.",
+        "source": {
+          "path": "src/api/mod.rs",
+          "anchor": "const API_BODY_LIMIT_BYTES: usize = 256 * 1024;"
+        }
+      },
+      "experiments": [
+        {
+          "id": "administration-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server operation_runtime::tests",
+          "test": {
+            "path": "src/operation_runtime.rs",
+            "anchor": "async fn cleanup_attempt_cancellation_cannot_detach_renewal() {"
+          },
+          "assertions": [
+            "Operation runtime tests effect/renewal cancellation and snapshot/target behavior; not every HTTP/journal flow."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Existing HTTP spans may contain URI paths and are not equivalent to the payload-free C2S trace."
+      ]
+    },
+    {
+      "id": "cluster",
+      "title": "Cluster authority, control and recovery",
+      "production_owner": {
+        "path": "src/cluster_security.rs",
+        "anchor": "//! Application-layer authentication for the experimental Redis cluster bus."
+      },
+      "runtime_identities": [
+        {
+          "id": "service:cluster_authority_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:cluster_instance_release_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "service:cluster_muc_occupancy_maintenance_service",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Redis coordination is not durable authority; signed envelopes and PostgreSQL exact leases remain mandatory."
+      ],
+      "boundaries": {
+        "commit": "PostgreSQL owns process/occupancy/message lease truth.",
+        "handoff": "Redis commands and ACKs carry fenced transport coordination.",
+        "completion": "Cluster receipt is not client application delivery."
+      },
+      "faults": [
+        "bad signature",
+        "expired lease",
+        "stale generation",
+        "Redis loss"
+      ],
+      "budgets": {
+        "contract": "Existing signed-envelope bounds, readiness fail-closed policy and worker-specific watchdogs.",
+        "source": {
+          "path": "src/cluster_security.rs",
+          "anchor": "const ENVELOPE_LIFETIME_SECONDS: i64 = 10;"
+        }
+      },
+      "experiments": [
+        {
+          "id": "cluster-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-cluster-signing-envelope.py",
+          "test": {
+            "path": "scripts/test-cluster-signing-envelope.py",
+            "anchor": "        assert verify() != 0, \"a modified envelope kept its original signature valid\""
+          },
+          "assertions": [
+            "Actual fixture Ed25519 envelope verifies with OpenSSL and altered bytes fail verification; PostgreSQL leases are not exercised."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Local static/unit tests cannot qualify a deployed Redis TLS topology, failover or shared S3."
+      ]
+    },
+    {
+      "id": "workers",
+      "title": "Worker supervision, maintenance and shutdown",
+      "production_owner": {
+        "path": "src/workers.rs",
+        "anchor": "pub struct WorkerRegistry {"
+      },
+      "runtime_identities": [
+        {
+          "id": "observer:maintenance/maintenance-ownership",
+          "owner": "src/subservers.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "observer:session-cleanup",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:abuse-key-deployment-authority",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:account-deletion-recovery",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:account-revocations",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:admin-session-cleanup",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:archive-retention",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:background-maintenance",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:caps-side-effects",
+          "owner": "src/xmpp/protocol/caps.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:cluster-failure-policy",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:cluster-maintenance",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:cluster-muc-outbox",
+          "owner": "src/cluster.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:deployment-capacity-lease-reaper",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:deployment-capacity-session-leases",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:locked-muc-expiry",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:maintenance/archive-retention",
+          "owner": "src/subservers.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:maintenance/pubsub-subscription-cleanup",
+          "owner": "src/subservers.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:mix-delivery-outbox",
+          "owner": "src/xmpp/protocol/mix/worker.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:mix-iq-relay-expiry",
+          "owner": "src/xmpp/protocol/mix.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:mix-presence-recovery",
+          "owner": "src/xmpp/protocol/mix.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:pubsub-digest-delivery",
+          "owner": "src/xmpp/protocol/pubsub.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:pubsub-event-outbox-delivery",
+          "owner": "src/xmpp/protocol/pubsub.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:pubsub-subscription-cleanup",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:redis-pubsub",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:runtime-control-refresh",
+          "owner": "src/state.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:sm-authority-listener",
+          "owner": "src/db/authority_listener.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:sm-suspension-recovery",
+          "owner": "src/services/session_cleanup.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:standalone-muc-occupancy",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        },
+        {
+          "id": "worker:upload-storage-reconciliation",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Every declared supervised worker has exact registration, generation-fenced health and explicit shutdown disposition."
+      ],
+      "boundaries": {
+        "commit": "Business repository remains authoritative; heartbeat never commits work.",
+        "handoff": "Supervisor owns attempt/restart/cancel/join; maintenance has no live-session capability.",
+        "completion": "A tick without DB observation is not recovered DB health."
+      },
+      "faults": [
+        "sync/async panic",
+        "silence",
+        "stale heartbeat",
+        "restart backoff",
+        "noncooperative shutdown"
+      ],
+      "budgets": {
+        "contract": "Per-worker source contracts are checked by existing architecture gate; no blanket end-to-end worker budget.",
+        "source": {
+          "path": "src/workers.rs",
+          "anchor": "const ABORT_DRAIN_GRACE: Duration = Duration::from_secs(1);"
+        }
+      },
+      "experiments": [
+        {
+          "id": "workers-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "cargo test --locked --bin rust-xmpp-server workers::tests",
+          "test": {
+            "path": "src/workers.rs",
+            "anchor": "async fn shutdown_joins_every_supervisor_and_drops_inflight_attempts() {"
+          },
+          "assertions": [
+            "Worker registry tests panic, watchdog, restart, stale heartbeat and owned supervisor shutdown semantics."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "Generic supervision proof does not prove each worker business operation; its catalog mapping is static boundary coverage."
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "title": "Readiness, metrics and failure evidence",
+      "production_owner": {
+        "path": "src/services/readiness.rs",
+        "anchor": "pub(crate) struct ReadinessService<R> {"
+      },
+      "runtime_identities": [
+        {
+          "id": "task:metrics",
+          "owner": "src/main.rs",
+          "coverage": "static_boundary",
+          "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
+        }
+      ],
+      "invariants": [
+        "Observation is bounded, read-only and cannot replace a failed workload result."
+      ],
+      "boundaries": {
+        "commit": "No observation mutation authority.",
+        "handoff": "Failure observer samples before owned teardown.",
+        "completion": "Missing evidence is unavailable, never success or a proven deadlock."
+      },
+      "faults": [
+        "blocked DB diagnostics",
+        "oversized input",
+        "observer timeout",
+        "cleanup failure"
+      ],
+      "budgets": {
+        "contract": "Failure observer total 8s with bounded subprocess and DB statement deadlines; fixture receive10s/shutdown20s.",
+        "source": {
+          "path": "scripts/mixed-traffic-soak.py",
+          "anchor": "SHUTDOWN_SECONDS = 20"
+        }
+      },
+      "experiments": [
+        {
+          "id": "diagnostics-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-mixed-traffic-soak.py",
+          "test": {
+            "path": "scripts/test-mixed-traffic-soak.py",
+            "anchor": "    def test_failure_is_recorded_then_observed_before_closing_peers_and_server(self):"
+          },
+          "assertions": [
+            "Script tests verify observer-before-cleanup, bounded diagnostics/result policy and fixture/SM accounting without real DB."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "A lost logger event or hard process kill can leave incomplete traces."
+      ]
+    },
+    {
+      "id": "recovery",
+      "title": "Migration, database roles, backup and restore",
+      "production_owner": {
+        "path": "scripts/check-runtime-migration-boundary.mjs",
+        "anchor": "import fs from 'node:fs';"
+      },
+      "runtime_identities": [],
+      "invariants": [
+        "Migration/restore authority is separate; recovery requires explicit owned targets and verified commit evidence."
+      ],
+      "boundaries": {
+        "commit": "Migrator and restore journal own cutover state.",
+        "handoff": "Child process exit does not prove committed cutover.",
+        "completion": "Backup/restore validity requires recorded complete publication and verified consistency."
+      },
+      "faults": [
+        "checksum mismatch",
+        "partial restore",
+        "ambiguous child completion",
+        "compensation failure"
+      ],
+      "budgets": {
+        "contract": "Existing isolated process and recovery deadlines; no changes to schema or file format.",
+        "source": {
+          "path": "scripts/check-runtime-migration-boundary.mjs",
+          "anchor": "import fs from 'node:fs';"
+        }
+      },
+      "experiments": [
+        {
+          "id": "recovery-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "python3 scripts/test-restore-recovery.py",
+          "test": {
+            "path": "scripts/test-restore-recovery.py",
+            "anchor": "    def test_tampered_object_manifest_blocks_replay(self) -> None:"
+          },
+          "assertions": [
+            "Local restore tests reject tampered object/identity/journal evidence and preserve exact replay/compensation decisions; no real DB cutover."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "This phase does not perform a production disaster-recovery drill or grant/restore real data."
+      ]
+    },
+    {
+      "id": "client",
+      "title": "Browser and client cryptographic boundary",
+      "production_owner": {
+        "path": "web/omemo.js",
+        "anchor": "  curvePubKeyToEd25519PubKey,"
+      },
+      "runtime_identities": [],
+      "invariants": [
+        "Synthetic server-side OMEMO envelope delivery must not be reported as client cryptographic interoperability."
+      ],
+      "boundaries": {
+        "commit": "Browser owns private crypto keys; server owns only authorized metadata/ciphertext persistence.",
+        "handoff": "Protocol transports opaque envelopes without recovering client keys.",
+        "completion": "Real decryption and user-visible delivery require independent client evidence."
+      },
+      "faults": [
+        "malformed security data",
+        "identity mismatch",
+        "missing device trust"
+      ],
+      "budgets": {
+        "contract": "Existing browser/protocol resource bounds; this catalog adds no client timer.",
+        "source": {
+          "path": "scripts/omemo-security-tests.mjs",
+          "anchor": "import assert from 'node:assert/strict';"
+        }
+      },
+      "experiments": [
+        {
+          "id": "client-regression",
+          "level": "deterministic_unit",
+          "status": "declared",
+          "command": "node scripts/omemo-security-tests.mjs",
+          "test": {
+            "path": "scripts/omemo-security-tests.mjs",
+            "anchor": "  const identity = await KeyHelper.generateIdentityKeyPair();"
+          },
+          "assertions": [
+            "Dynamic production OMEMO JS/WASM tests generate crypto state and exercise security validation, not real multi-device interoperability."
+          ],
+          "artifacts": [
+            "command.log",
+            "command.result.json"
+          ],
+          "cleanup": "No external state for unit/static checks; DB/wire fixtures must own isolated paths, schemas and children and report cleanup separately."
+        }
+      ],
+      "privacy": "No raw payload, credential, JID, IP or private DB snapshot in shared execution summaries. Dedicated C2S trace uses fixed vocabulary and ephemeral operation identity; unrelated legacy logs are not declared sanitized.",
+      "gaps": [
+        "No live browser/multi-device cryptographic qualification is claimed in this phase."
+      ]
+    }
+  ],
+  "executable_contract": {
+    "schema": "northstar-admission-scenario-v1",
+    "model": "admission-fixture-v1",
+    "scope": "Stage 1 model/fixture contract only; not production-shared Rust or real adapter evidence",
+    "implementation": {
+      "path": "scripts/lib/experiment_contract.py",
+      "anchor": "def parse_scenario(value):"
+    },
+    "fixtures": {
+      "path": "scripts/test-experiment-contract.py",
+      "anchor": "def synthetic_cases():"
+    },
+    "input_schema": "#/$defs/admissionScenario",
+    "identity": "Precomputed synthetic admission keys, payload tags and leases; no production MAC compatibility claim",
+    "policy": {
+      "actor_capacity": 4096,
+      "accepted_ttl_us": 21600000000,
+      "pending_ttl_us": 1800000000,
+      "lease_us": 60000000
+    },
+    "policy_source": {
+      "path": "crates/northstar-abuse-policy/src/model.rs",
+      "anchor": "pub const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 = 4_096;"
+    },
+    "clock": {
+      "domain": "sql_model",
+      "unit": "microsecond",
+      "active": "expires_at > now",
+      "expired": "expires_at <= now"
+    },
+    "normal_preflight": "Hold all initial pending and new unobserved identities through the run; only initial accepted rows may free capacity at exact expiry",
+    "semantic_cuts": [
+      "none",
+      "before_effect_cancel",
+      "reservation_commit_unknown"
+    ],
+    "verdicts": [
+      "Pass",
+      "InvariantViolation",
+      "InvalidScenario",
+      "EnvironmentInterrupted",
+      "Inconclusive",
+      "Cancelled"
+    ],
+    "budgets": [
+      "domain_us",
+      "wall_ms",
+      "steps",
+      "events",
+      "evidence_bytes",
+      "memory_bytes",
+      "files"
+    ],
+    "termination": "Concrete ordered commands, required terminal and complete bounded evidence; known first mismatch survives interruption",
+    "provenance": "Exact listed source hashes and base commit in scoped synthetic corpus; predicted projection remains distinct from separately supplied actual evidence",
+    "cleanup": "Independent owned/remaining resource evidence; semantic Pass alone cannot qualify incomplete cleanup",
+    "limitations": [
+      "Proof consumption, rate-limit state, cryptography, shard capacity and SQL concurrency are not modeled",
+      "Unknown covers reservation transaction knowledge only, never durable-message commit",
+      "No PostgreSQL, stock wire, process loss, elapsed retention or endurance proof",
+      "Physical retained counts omit bounded shard/background cleanup; late-finalize 4097 assumes the expired pending row survives cleanup",
+      "Normal fixture preflight covers fresh two-actor actor-retention only, not all guard, queue, archive or shard limits"
+    ],
+    "scenarios": [
+      "normal-mixed",
+      "capacity-4095-4096-4097",
+      "replay-payload-actor-conflict",
+      "ttl-before",
+      "ttl-at",
+      "ttl-after",
+      "pending-lease-reclaim",
+      "late-finalize-source-semantics",
+      "late-finalize-4097-candidate",
+      "reservation-unknown",
+      "cancel-before-reservation"
+    ]
+  },
+  "controlled_contract": {
+    "schema": "northstar-admission-controlled-input-v1",
+    "model": "admission-controlled-v1",
+    "adapter": "controlled_rust",
+    "binding_version": "synthetic-material-v1",
+    "scope": "Shared Rust admission reservation/finalization only; controlled adapter is not SQL, wire or durable-message evidence",
+    "implementation": {
+      "path": "scripts/lib/controlled_admission.py",
+      "anchor": "def evaluate(value, output, *, expected_failure=None):"
+    },
+    "runner": {
+      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "anchor": "pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {"
+    },
+    "fixtures": {
+      "path": "scripts/lib/controlled_admission.py",
+      "anchor": "def controlled_cases():"
+    },
+    "input_schema": "#/$defs/controlledAdmissionInput",
+    "output_schema": "#/$defs/controlledAdmissionOutput",
+    "scenarios": [
+      "normal-mixed",
+      "capacity-4095-4096-4097",
+      "replay-payload-actor-conflict",
+      "ttl-before",
+      "ttl-at",
+      "ttl-after",
+      "pending-lease-reclaim",
+      "late-finalize-source-semantics",
+      "late-finalize-4097-candidate",
+      "reservation-unknown",
+      "cancel-before-reservation",
+      "native-guard-allowed",
+      "native-guard-denial",
+      "native-capacity-rollback-proof",
+      "native-guard_memory-allowed",
+      "native-guard_memory-denied",
+      "native-guard_persistent-allowed",
+      "native-guard_persistent-denied",
+      "native-reservation-unknown-false",
+      "native-guard-unknown-false",
+      "native-reservation-unknown-true",
+      "native-guard-unknown-true",
+      "native-before-effect-cancel",
+      "native-precommit-error",
+      "native-commit-cancel",
+      "native-receipt-before-cancel",
+      "native-finalize-unknown",
+      "native-finalize-lost-fence",
+      "native-finalize-wrong-payload",
+      "native-finalize-receipt-cancel",
+      "native-reconcile-missing",
+      "native-reconcile-pending",
+      "native-reconcile-accepted-before",
+      "native-reconcile-accepted-at",
+      "native-reconcile-accepted-after",
+      "native-independent-authority-clocks",
+      "native-malformed-stale-duplicate-completions",
+      "native-no-valid-completion",
+      "native-finalize-fence-and-accepted-idempotency",
+      "native-bounded-cleanup-charge-release",
+      "native-late-finalize-4097",
+      "native-late-finalize-positive",
+      "native-evidence-event-gap",
+      "native-physical-shard-capacity"
+    ],
+    "rejection_scenarios": [
+      "wrong-schema",
+      "wrong-model",
+      "wrong-adapter",
+      "wrong-binding-version",
+      "unknown-root",
+      "unknown-initial",
+      "unknown-binding",
+      "unknown-command",
+      "unknown-times",
+      "unknown-guard",
+      "unknown-schedule",
+      "unknown-completion",
+      "unknown-budget",
+      "boolean-time",
+      "negative-time",
+      "invalid-key-hex",
+      "duplicate-key-binding",
+      "unknown-actor",
+      "forward-causal",
+      "empty-commands",
+      "budget-zero",
+      "unknown-cut",
+      "native-exact-only-cleanup",
+      "missing-completions",
+      "missing-stage1",
+      "missing-command-causal_id",
+      "missing-command-reconcile_of",
+      "missing-guard-origin_id",
+      "missing-guard-proof",
+      "missing-completion-reconcile",
+      "missing-completion-proof",
+      "duplicate-field",
+      "malformed-json",
+      "nonfinite-json"
+    ],
+    "provenance": "Trusted external driver source manifest, binary SHA256, Cargo.lock and Rust1.97.1 identity; exact input/source/binary checks before and after every saved-input execution",
+    "limitations": [
+      "Controlled in-memory storage and scripted guard outcomes; shared Rust coordinator and locked-row decisions execute",
+      "No SQL, locks, cryptographic verification, real clocks, wire, services or process-loss conformance",
+      "World commit is injected adapter state; CommitCallEntered is caller knowledge, not proof COMMIT bytes were sent",
+      "Exact-key-only cleanup is limited to the unchanged Stage1 bridge; native bounded cleanup uses declared skip-locked keys",
+      "Late-finalize active4097 is a conditional model/source candidate with cleanup-survival premise, not a proven live product bug",
+      "Reservation and finalization only; outer cancellation ownership, durable-message write, route, ACK and recovery remain Stage3",
+      "Caller knowledge uses bounded concrete storage alternatives; its modeled copy and serialized-byte limits are not process RSS limits",
+      "Actor-policy clock inputs and guard outcomes remain scripted; controlled reconciliation timestamps are scripted, not PostgreSQL clock conformance"
+    ]
+  }
+}

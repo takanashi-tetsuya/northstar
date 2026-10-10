@@ -1,5 +1,8 @@
 //! Room authorization, local ordering and committed-operation notifications.
 
+pub(crate) mod discussion;
+pub(crate) mod fanout;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 pub(crate) use northstar_room_application::{
@@ -1096,6 +1099,27 @@ impl<R: MucRepository> MucService<R> {
         self.admit_local_discussion(command.clone()).await
     }
 
+    pub(crate) fn prepare_muc_discussion(
+        &self,
+        command: MucDiscussion,
+    ) -> northstar_room_application::discussion::PreparedDiscussion {
+        self.discussion_application.prepare_discussion(command)
+    }
+
+    pub(crate) async fn execute_muc_discussion_observed(
+        &self,
+        request: &northstar_room_application::discussion::Request,
+    ) -> Result<northstar_room_application::discussion::Completion> {
+        use northstar_room_application::discussion::AdmissionError;
+        self.discussion_application
+            .admit_discussion_observed(request)
+            .await
+            .map_err(|error| match error {
+                AdmissionError::Observation(error) => anyhow::Error::from(error),
+                AdmissionError::Repository(error) => error,
+            })
+    }
+
     pub(crate) async fn execute_muc_subject(
         &self,
         command: MucSubjectCommand<'_>,
@@ -2090,7 +2114,7 @@ mod tests {
         assert_eq!(wake.failures.load(Ordering::SeqCst), 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn local_room_mutation_gate_serializes_one_room_without_a_growing_registry() {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://northstar@localhost/northstar")
@@ -2114,7 +2138,7 @@ mod tests {
         assert_eq!(service.local_join_gates.len(), LOCAL_JOIN_GATE_SHARDS);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn local_room_mutation_gate_does_not_serialize_different_fixed_shards() {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://northstar@localhost/northstar")

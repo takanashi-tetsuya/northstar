@@ -1,0 +1,224 @@
+{
+  "schema": "northstar-stage3-profile-integration-result-v1",
+  "status": "LimitedClosedProfileIntegrationPassed_RuntimeGateClosed",
+  "base_commit": "84b61690f26619680ef8fc4391090d1267efab9f",
+  "base_tree": "2256426494d0f1b56c0e6a05e24e661547b4e06a",
+  "scope": "Source/build-record/runnable metadata adapters, private fixed-profile planning/evaluation/shrink orchestration and caller verification. Pure/mocked validation only; no whole saved workload or artifact derivation ran.",
+  "source_files": {
+    "scripts/capture-controlled-admission.py": {
+      "sha256": "9a4584c68ac4821e6e48e533e66d7a5f475922dfbbd0c33d6ed81f42a5267d8c",
+      "bytes": 14081
+    },
+    "scripts/lib/controlled_admission.py": {
+      "sha256": "526922ae45d484626d846eda5b696780ab5ae2418e506b078a4d650809aff12c",
+      "bytes": 112557
+    },
+    "scripts/lib/controlled_admission_supervision.py": {
+      "sha256": "28e1d1e7a0e186baa26a1efe575681e42277ff4402b5e28fc0d75d9fc0edd748",
+      "bytes": 112019
+    },
+    "scripts/lib/direct_build_record.py": {
+      "sha256": "02b7705c27ae1401ca5be22db402996e9ee2306ebdbcb1154818c7632700e34c",
+      "bytes": 19405
+    },
+    "scripts/lib/direct_case.py": {
+      "sha256": "c8b547ffe1a82371c6a0b03af4706146fdb35514f422b540a9a808206928b42c",
+      "bytes": 233625
+    },
+    "scripts/lib/experiment_contract.py": {
+      "sha256": "04ee1bc5f475d027eaf3c3f5a4834746252a5d9f49524478f7e120912eba3eac",
+      "bytes": 29666
+    },
+    "scripts/mixed-traffic-soak.py": {
+      "sha256": "6d5347b1e69b3c4f5eac0bd89e31f47be6982609a82fe6582f87a96e6bf1515f",
+      "bytes": 53514
+    },
+    "scripts/run-controlled-admission.py": {
+      "sha256": "bd6ac59916ee2507ab11f6845a2d92185cba6fa530235313a904545dce9f8e31",
+      "bytes": 1709
+    },
+    "scripts/test-controlled-admission.py": {
+      "sha256": "b6d27d486c539402ce85c0b922df1fcba803245855d5620993a0cc0b64670aa6",
+      "bytes": 121742
+    },
+    "scripts/test-direct-build-record.py": {
+      "sha256": "fad9b07df1e6f3d22d141a10bb2e3d61158cda714e766af985c378f67dcff7eb",
+      "bytes": 28640
+    },
+    "scripts/test-direct-case.py": {
+      "sha256": "2407dd08c9531e8c39ef1faf8b8090f966067d31d0f17d3c9151ec1b81ccad38",
+      "bytes": 195550
+    },
+    "scripts/test-experiment-contract.py": {
+      "sha256": "b5ca4126350e69354bca4173dcfdaffd64c4503d9fa091b99a9f683099b0cd95",
+      "bytes": 52778
+    }
+  },
+  "source_manifest_sha256": "7052af909364ba4aad1fd9a858d753d52f47975be32a678c1c5dcf7d32d18864",
+  "source_manifest_encoding": "UTF-8 sorted compact JSON, no trailing newline; this is the twelve-file ordinary Python scope, not the final whole-project build manifest",
+  "source_bytes": 975286,
+  "changed_sources": [
+    "scripts/capture-controlled-admission.py",
+    "scripts/lib/controlled_admission_supervision.py",
+    "scripts/lib/direct_case.py",
+    "scripts/test-direct-case.py"
+  ],
+  "checks": {
+    "python_ast": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.320583107",
+      "timeout_seconds": 600,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "direct_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "2.891011264",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 26264,
+      "log_sha256": "ea2692a0f14ea6e6dd17536d9a121d908dadd14f3eb480663ae76dc7f2afbead"
+    },
+    "build_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "0.158591206",
+      "timeout_seconds": 120,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 4780,
+      "log_sha256": "020503c0c414827e3e6cbd93a52485f3fb9e013b86ce2f3a70ec4a514c40419a"
+    },
+    "legacy_mock": {
+      "exit_code": 0,
+      "collector_exit": 0,
+      "elapsed_seconds": "221.447662521",
+      "timeout_seconds": 300,
+      "kill_after_seconds": 5,
+      "source_unchanged": true,
+      "log_bytes": 20320,
+      "log_sha256": "b2964def4b51b697359db90d7498d7b5a58d10a79938c98790d2d6d59051d912"
+    }
+  },
+  "test_suites": {
+    "direct_mock": {
+      "entry": "scripts/test-direct-case.py",
+      "ran": 148,
+      "passed": 148,
+      "failed": 0,
+      "skipped": 0,
+      "unittest_seconds": "2.665",
+      "guard_sha256": "03a3e01886955c4371cf7dc122ee761ae584f3d79ef8c99cae0f6f6f4248e9e2",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      },
+      "name_list_sha256": "2539cc99d1a46c28fdbb7e4978ff6ed57b256e2be070ae21dd8ded21e42c94a8"
+    },
+    "build_mock": {
+      "entry": "scripts/test-direct-build-record.py",
+      "ran": 33,
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0,
+      "unittest_seconds": "0.052",
+      "guard_sha256": "e1e4c6dd94caf7dd484becbb87e37a31c6ba8cffd8b1222549576384ecd89d83",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      },
+      "name_list_sha256": "d47b266fdc5c9f1d7909019d3d8d3808ab7e1f4011a17cf6dec994acdba2b128"
+    },
+    "legacy_mock": {
+      "entry": "scripts/test-controlled-admission.py",
+      "ran": 113,
+      "passed": 113,
+      "failed": 0,
+      "skipped": 0,
+      "unittest_seconds": "221.275",
+      "guard_sha256": "355da1290badff138776b49c07bc42fe1c293f6980ea1299f03d38acf1ff87e2",
+      "boundary_result": {
+        "audit_hook_ready": true,
+        "blocked_attempts": {},
+        "schema": "northstar-unit-tripwire-v1",
+        "syscall_sandbox": false,
+        "unit_exit_status": 0
+      },
+      "name_list_sha256": "ebc003b4e5bb4ebd59c0322043ea7a1a0503b3d6217a0f86bbe103dfc18cf5a0",
+      "multiline_log_case": {
+        "identifier": "__main__.DriverTests.test_regression_cli_cannot_select_dedicated_record_or_replay",
+        "segment_sha256": "349b5095b48f2652370fc2c6aacc8700c77766ae6c97971837acb94f99207a85",
+        "terminal": "ok",
+        "interleaved_expected_cli_errors": 2
+      }
+    }
+  },
+  "name_list_encoding": "Per-entry UTF-8 compact JSON array of [method, full parenthesized unittest identifier including __main__.Class.method] pairs in actual log order, no trailing newline",
+  "test_counts": {
+    "direct": 148,
+    "direct_prior": 126,
+    "direct_added": 22,
+    "build_helper": 33,
+    "legacy_compatibility": 113,
+    "total_method_invocations": 294
+  },
+  "source_behavior": [
+    "Measured source identity/count/bytes and retained mutation source flow into the authenticated build record before runnable verification. Record fields do not substitute for observed source or descriptor facts.",
+    "Existing preflight and post-capture checks use temporary verified descriptors closed in finally; per-case comparison uses the descriptor retained through the existing child registration/release/capture path. Tests mock these descriptor and process seams; real OS lifetime qualification is not claimed.",
+    "The v3 binary path adds the existing ancestor metadata/regular-file check before open. V2 retains its previous branch. This is a path/metadata check, not a race-proof filesystem claim.",
+    "Private plans assemble exactly the previously materialized sixteen baseline and four mutation inputs. Input-only obligations are prepared and rebound before output inspection; existing reviewed matcher bodies and literal factories remain unchanged.",
+    "Private evaluation retains the complete validated DTO, including deterministic observation seq, for semantic replay. Only unrelated runtime diagnostics already outside that DTO are excluded.",
+    "Private shrink checking independently reevaluates every supplied semantic history, enforces the exact deletion/control/equality relations and the same sole ACK Safety target. Its synthetic Complete marker is only an oracle reevaluation precondition: caller tuples must already come from complete matched observations, and the marker does not prove process completeness."
+  ],
+  "literal_authority": {
+    "result": "stage3-bosh-matcher-results.json",
+    "baseline_inputs": 16,
+    "mutation_inputs": 4,
+    "max_input_bytes": 4517,
+    "total_input_bytes": 69624,
+    "preserved_all_input_hashes": true,
+    "scope": "Input identities and expected classifications are fixed; no actual Rust verdict is inferred from them."
+  },
+  "evidence_assembly": {
+    "note": "The unchanged legacy CLI rejection test emits two expected argparse errors between its unittest header and standalone ok. The initial single-line metadata matcher rejected that layout; binding the exact header/terminal span recovers the 113 named successes without rerunning tests or weakening assertions.",
+    "scope": "Log parsing only; all original command statuses, logs, guards and source maps remain unchanged."
+  },
+  "remaining": [
+    "Public execution, fixture/evaluation and shrink entry points still stop at unconditional DirectCaseIncomplete. This checkpoint does not enable a runtime profile.",
+    "The complete source/artifact candidate still needs final project-local membership, measured canonical contracts, actual runnable derivation at or below 128 MiB, and the separately reviewed gate/execution release.",
+    "No actual 16/16/4/4 record/replay/mutation passes or saved-reader artifact negatives ran. Synthetic DTO/mocked process controls do not establish complete process, frame or resource qualification.",
+    "Rust bytes, ordinary component identities and the saved pure build helper remain unchanged. No Rust build/test, strip operation, SQL, socket or service execution was performed in this local batch.",
+    "Full Stage3 and later SQL/wire/TLS/retention/resource obligations remain open."
+  ],
+  "prior_wip": "stage3-profile-integration-wip.json",
+  "python_runtime": {
+    "version": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "executable_sha256": "fa67443527ed9647f760d807e2a38f26340757123e643c4639cf273ed15d5ea7",
+    "flags": [
+      "-E",
+      "-S",
+      "-B"
+    ]
+  },
+  "base_ci": {
+    "commit": "84b61690f26619680ef8fc4391090d1267efab9f",
+    "run_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37260179249",
+    "conclusion": "success",
+    "success": 32,
+    "skipped": 1,
+    "failure": 0,
+    "cancelled": 0,
+    "scope": "The preceding unaccepted WIP checkpoint; separate from this source delta."
+  }
+}

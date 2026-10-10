@@ -67,6 +67,99 @@ a deployment shortcut. Production must provision separate migrator, runtime,
 storage, command and backup identities and run the exact post-migration grant
 reconciliation described below before starting the long-lived server.
 
+### Explicit fresh local bootstrap
+
+Use a **new, disposable database and dedicated non-superuser login**. The
+commands below assume PostgreSQL listens only on loopback and that its local
+administrator login is `postgres`; substitute your existing administrator if
+necessary. They do not modify a production installation or migrate an existing
+database to the development role model.
+
+Connect as that administrator (`psql -X -h 127.0.0.1 -U postgres -d postgres`)
+and run:
+
+```sql
+\set ON_ERROR_STOP on
+CREATE ROLE northstar_dev LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOINHERIT NOREPLICATION NOBYPASSRLS;
+\password northstar_dev
+CREATE DATABASE northstar_dev OWNER northstar_dev TEMPLATE template0 ENCODING 'UTF8';
+\quit
+```
+
+`\password` prompts for a local password rather than recording it in the SQL
+text. Connect to the **new database as its owner**
+(`psql -X -h 127.0.0.1 -U northstar_dev -d northstar_dev`) and run:
+
+```sql
+\set ON_ERROR_STOP on
+BEGIN;
+ALTER SCHEMA public OWNER TO CURRENT_USER;
+REVOKE ALL ON DATABASE northstar_dev FROM PUBLIC;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON TYPES FROM PUBLIC;
+COMMIT;
+
+SELECT current_user, current_database(),
+       pg_get_userbyid(nspowner) AS schema_owner,
+       nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+           AS directly_owned_by_current_user
+  FROM pg_namespace WHERE nspname = 'public';
+\quit
+```
+
+The final column must be `t`. PostgreSQL 15+ normally creates `public` with
+`pg_database_owner` as its owner. Database ownership confers effective schema
+privileges, but Northstar's owner-held capabilities intentionally require the
+schema's owner OID to match the migration login itself. The explicit
+`ALTER SCHEMA` above establishes that contract before any migrations run.
+The revocations preserve the fresh database's owner-only development shape;
+do not run production grant reconciliation for this local database.
+
+Copy `.env.development.example` to `.env` and set **both** `DATABASE_URL` and
+`MIGRATOR_DATABASE_URL` to this same local owner/database. Percent-encode any
+special characters in the URL's password. Keep the loopback host and reserved
+development domain. Then run `xmpp-server migrate` before starting the server
+(or `cargo run --release --locked -- migrate` from a source checkout).
+
+The migrator performs a read-only schema ownership preflight under the
+database policy lock, on the same connection that SQLx will use, before SQLx
+creates its migration ledger or applies DDL. It rejects missing/system schemas and indirect or foreign ownership with a
+bootstrap diagnostic; it never takes ownership automatically. This check does
+not replace migration checks, runtime catalog/ACL attestation, or production
+role attestation. Named isolated development schemas are supported when the
+same login directly owns the schema selected by `search_path`.
+
+If an older quickstart already stopped at migration 0114, do not delete or edit
+the SQLx ledger or migration files. For that disposable local database, first
+verify the existing objects belong to the intended local owner, explicitly
+correct `public` ownership while connected as that owner, and rerun `migrate`.
+Foreign-owned objects or third-party grants require deliberate administrator
+review; changing only the schema owner cannot repair those conditions.
+
+### Migration admission regression
+
+With a freshly built binary and PostgreSQL 15+ tools installed, run (the
+release-equivalent validation uses PostgreSQL 17):
+
+```sh
+python3 scripts/test-migration-preflight.py \
+  --binary target/debug/rust-xmpp-server \
+  --pg-bin /path/to/postgresql/17/bin \
+  --evidence /tmp/northstar-migration-preflight.json
+```
+
+This creates and stops its own private, TCP-only loopback PostgreSQL cluster.
+It uses a non-superuser database owner and checks default `pg_database_owner`,
+foreign, missing and system-schema rejection before any ledger or DDL change;
+explicit bootstrap; a quoted owner-held schema; exact source checksums and
+idempotent reruns; and recovery from the actual pre-0114 migration chain
+without changing already-applied ledger rows. It never connects to an existing
+application database. Run it as an ordinary OS user because `initdb` rejects
+root. Omit `--pg-bin` to use `pg_config --bindir`. The JSON evidence and
+adjacent logs identify each checked case.
+
 ## Secret files
 
 The deployment uses six password files and five URL files:
@@ -218,7 +311,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-155 migrations from `0001` through `0156`; `0021` is the sole intentional gap.
+157 migrations from `0001` through `0158`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -227,7 +320,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0156` manifest, not merely the
+requires the complete checked-in `0001`-`0158` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -393,8 +486,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 155 checked-in migrations from `0001`
-through `0156` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 157 checked-in migrations from `0001`
+through `0158` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -490,7 +583,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0156` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0158` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -540,3 +633,17 @@ Its three fixed functions fence the current administrator bearer and generation,
 then commit the setting, audit and encrypted 200 replay in one transaction.
 Runtime cannot execute them and the command role still cannot write tables
 directly.
+
+[Migration `0157`](../migrations/0157_sm_recovery_retention.sql) adds the runtime
+retention classifier and resecures the existing session/SM capabilities. It
+requires stopped claim writers and old startup binaries, with every legacy
+claim pair resolved by its existing owner before the authority gate. The new
+claim-purpose fact distinguishes Resume from Teardown without granting runtime
+direct access to protected SM columns or capacity tables.
+[Migration `0158`](../migrations/0158_sm_cleanup_claim_alias.sql) replaces only
+`northstar_session_cleanup_live(int8)` to give its expired binding-claim subquery
+a distinct alias. The function's introduction origin remains `0114`; the
+classifier's remains `0157`. Workload grants, owner requirements, pinned
+search_path, PUBLIC revocation and the original retention/lock policy are
+unchanged. Exact reconciliation requires the forward migration's ledger row;
+never rewrite the applied `0157` checksum to perform this correction.

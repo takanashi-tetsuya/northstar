@@ -118,6 +118,33 @@ pub enum MessageCommit {
     AccountUnavailable,
 }
 
+/// Eligibility for effects after a durable transaction. Rejected is a
+/// pre-commit health result, never evidence that an existing commit rolled back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectPostCommitMode {
+    Live,
+    SpoolOnly,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectSpoolEligibility {
+    /// Bare normal/chat with allowed durable projection; exact replays remain
+    /// no-op admissions during PostgreSQL-spooled mode.
+    Eligible,
+    /// Retractions, invitations, no-store and other live-control operations
+    /// retain their degraded-mode rejection, including old retries.
+    LiveOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectPersonalMessageAdmission {
+    pub commit: MessageCommit,
+    pub mode: DirectPostCommitMode,
+    /// Only the initial exact reservation, never a later transport receipt.
+    pub live_claim_id: Option<Uuid>,
+}
+
 /// RFC 6121 routing behavior for a message addressed to a bare local JID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BareMessageRoute {

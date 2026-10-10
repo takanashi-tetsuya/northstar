@@ -1,0 +1,93 @@
+{
+  "schema": "northstar-stage4-saved-composition-codec-results-v1",
+  "date_utc": "2026-10-07",
+  "status": "FocusedCodecAndBaselineReaderAccepted_SavedQualificationOpen",
+  "base_commit": "6acc56ef767742020b905d41037e9223dd939158",
+  "change": "Add test-only finite composition adapters, closed inputs and factual capture, plus bounded compact V2 output for the existing native, BOSH, authentication, MUC and MIX owners.",
+  "source_scope": {
+    "source_and_test_paths": 47,
+    "modified": 10,
+    "added": 37,
+    "components": [
+      "Closed case and evidence types with 16 fixed input fixtures",
+      "Finite one-poll capture helpers and real in-memory owner adapters",
+      "Test-only frame and authentication-success-builder accessors",
+      "Compact V2 codec and bounded malformed-input/roundtrip controls",
+      "Exact outbound-XML parser-literal anchor and focused negative controls"
+    ],
+    "boundaries": "New Rust capture and adapter entry points are test-gated. This delta changes no migrations, dependencies or production SQL. Captured facts and independent semantic evaluation remain separate."
+  },
+  "current_validation": {
+    "independent_review": "Accepted within the selected scope",
+    "build": {
+      "server_test_binary": "Built",
+      "inventory_names": 2175,
+      "inventory_is_not_execution_count": true
+    },
+    "focused_rust": {
+      "exact_passed": 15,
+      "constructed_compact_controls": 14,
+      "sixteen_input_in_process_measurement": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "measured_output": {
+      "wire_version": "V2",
+      "input_cases": 16,
+      "accepted_inputs": 13,
+      "rejected_inputs": 3,
+      "encoded_frames": 16,
+      "whole_frame_limit_bytes": 131072,
+      "total_frame_bytes": 275262,
+      "maximum_frame_case": "S06",
+      "maximum_frame_bytes": 94897,
+      "all_frames_within_limit": true,
+      "scope": "Every actual frame completed the selected structural roundtrip checks. Input acceptance and wire roundtrip do not by themselves establish a semantic verdict."
+    },
+    "independent_python_reader": {
+      "selected_commands_passed": 4,
+      "selected_checks_passed": 209,
+      "constructed_codec_checks": 53,
+      "actual_frame_controls": 124,
+      "positive_sweep_checks": 16,
+      "pristine_after_checks": 16,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_categories_per_sweep": {
+        "Pass": 9,
+        "Cancelled": 4,
+        "InvalidScenario": 3
+      },
+      "comparison_scope": "The before/after sweeps read preserved copies of one current in-process execution per input. They are not separate saved record and replay executions."
+    },
+    "historical_ordinary": "The earlier 352 ordinary passes retain their original source and scope. They were not rerun by the current focused batch; no current full-ordinary pass is claimed."
+  },
+  "retained_history": [
+    "Earlier V1 framing exceeded the fixed output bound for S06. The compact V2 result is separate and does not turn the earlier stop into a pass.",
+    "A prior reader sweep rejected S06 because its ACK-specific renewal was treated as batch-scoped. The corrected reader requires the actual null scope and adds an opposite-scope rejection control; product source, codec and fixtures were unchanged for that correction.",
+    "Earlier incomplete or unqualified attempts retain their original status."
+  ],
+  "limits": [
+    "Final saved-profile record/replay, mutant and four-role validation remain open. Selected baseline-reader checks do not complete Stage4.",
+    "The in-process measurement uses bounded fixtures and supplied repository/transport outcomes with actual in-memory owners. It does not establish live PostgreSQL, real transport, clock or restart fidelity.",
+    "The observed 128 KiB frame bound is output evidence for these 16 inputs, not whole-process resource or production capacity qualification.",
+    "No current full-ordinary, full-CI or production-readiness claim. Stage5 and Stage6 remain open; the 72-hour soak is cancelled.",
+    "Separate reader and saved-profile implementation sources are outside this public source delta."
+  ],
+  "parent_ci": {
+    "commit": "6acc56ef767742020b905d41037e9223dd939158",
+    "run_id": 37453422396,
+    "url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37453422396",
+    "conclusion": "success",
+    "successful": 32,
+    "skipped": 1,
+    "failed": 0,
+    "cancelled": 0,
+    "scope": "This is the preceding composition-foundation checkpoint. Its disaster-recovery pass does not establish the cause of the earlier missing S3 results failure, and it does not qualify this new source delta."
+  },
+  "related": [
+    "stage4-composition-foundation-results.json"
+  ],
+  "detailed_evidence": "Detailed evidence and retained stops are held separately; this public summary contains the source scope, minimized results and remaining qualification boundaries."
+}

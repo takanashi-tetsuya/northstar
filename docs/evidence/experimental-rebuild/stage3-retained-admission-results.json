@@ -1,0 +1,204 @@
+{
+  "execution_gate": {
+    "checks": {
+      "check": {
+        "log_bytes": 40,
+        "log_sha256": "473ef6927c3bde6151bf37ad0425ffeea799960b6cf7239976b61d388c08e339",
+        "status": {
+          "check_exit": 0,
+          "collector_exit": 0,
+          "timeout_seconds": 600
+        }
+      },
+      "tests": {
+        "log_bytes": 5081,
+        "log_sha256": "43f4ffbda80672a0b7c9e55ef1c83e57b5caa654ccc6a1aeecac0eb46a809a7b",
+        "status": {
+          "check_exit": 0,
+          "collector_exit": 0,
+          "timeout_seconds": 600
+        }
+      }
+    },
+    "correction": "Check the actual constructor, first-poll policy timer, typed poll results, child-drop and panic marker. Keep all authentication, native, BOSH and room checks.",
+    "exact_ci_error": "execution boundary: expected one production body: async\\s+fn\\s+run\\b",
+    "input_files": 12,
+    "input_hashes_unchanged": true,
+    "observed_failure": "Old source-shape checker requested async fn run after production changed to a synchronous constructor and FrameRunner.",
+    "source_files": {
+      "scripts/check-execution-boundaries.mjs": {
+        "bytes": 19365,
+        "sha256": "2fb715e69da21a338a687c6f382dba0203b775aca50442ad54560e72a51fae73"
+      },
+      "scripts/test-execution-boundaries.mjs": {
+        "bytes": 16846,
+        "sha256": "afd815938b3c200776a184d54261678aef8bc3489ed7f952f6caae237e63a3a5"
+      }
+    },
+    "tests_passed": 70,
+    "trigger_ci": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37192909410/job/111408687861"
+  },
+  "limits": [
+    "This is not fullStage3 acceptance: mode-aware durable-message transaction, actual router/queue/native/SM/BOSH lifecycle and saved direct corpus remain open.",
+    "There is no persistent operation registry or automatic reconciliation consumer; TerminalUnresolved is not rollback or scheduled recovery.",
+    "Tests use pure/fake repositories and in-process future/timer/trace cases; no ignoredDB tests were enabled.",
+    "SQL/wire/clock/crypto and OS resource/process-fault qualification remain later-stage obligations.",
+    "Counts belong to distinct checks and do not represent an exhaustive domain proof."
+  ],
+  "ordinary": {
+    "application": {
+      "collector_exit": 0,
+      "elapsed_seconds": "0.176368",
+      "exit_code": 0,
+      "log_bytes": 1545,
+      "log_sha256": "079d0128f5fea338297318ed8253abaa9327f20450107f9de80934ff4b8ae9dd",
+      "passed_tests": 14,
+      "timeout_seconds": 600
+    },
+    "clippy": {
+      "collector_exit": 0,
+      "elapsed_seconds": "159.407664",
+      "exit_code": 0,
+      "log_bytes": 149,
+      "log_sha256": "c49285fa01c5ae38dbc11ca74221603f8b11ef5a36a5025cae2bd7617bf74838",
+      "passed_tests": null,
+      "timeout_seconds": 600
+    },
+    "compile": {
+      "collector_exit": 0,
+      "elapsed_seconds": "128.125942",
+      "exit_code": 0,
+      "log_bytes": 149,
+      "log_sha256": "1af148fdb5032c8c9357cde3f872b750984fbdb3914192439deed2a94150fbdd",
+      "passed_tests": null,
+      "timeout_seconds": 600
+    },
+    "frame": {
+      "collector_exit": 0,
+      "elapsed_seconds": "0.318857",
+      "exit_code": 0,
+      "log_bytes": 2114,
+      "log_sha256": "cd65636e1755ce96599b64cb282d76caa94f71e32c2b2306965b05aa3dac4607",
+      "passed_tests": 18,
+      "timeout_seconds": 600
+    },
+    "gate": {
+      "collector_exit": 0,
+      "elapsed_seconds": "1.450054",
+      "exit_code": 0,
+      "log_bytes": 2553,
+      "log_sha256": "c6f8e1a802016d90396e6de5ae2d766726ffda061fbd3376e4afe487982193e4",
+      "passed_tests": 45,
+      "timeout_seconds": 600
+    },
+    "service": {
+      "collector_exit": 0,
+      "elapsed_seconds": "149.261793",
+      "exit_code": 0,
+      "log_bytes": 1307,
+      "log_sha256": "ef6fdaf7f6c0f741ef38b84a4edd40c366facee859dfb332b02f27fc391bd2ca",
+      "passed_tests": 8,
+      "timeout_seconds": 600
+    },
+    "witness": {
+      "collector_exit": 0,
+      "elapsed_seconds": "0.463925",
+      "exit_code": 0,
+      "log_bytes": 499,
+      "log_sha256": "fbc4fd84550aeeb667a8fa49cb96b5d49d550baa4fb56c9e52ad386d67dd8be7",
+      "passed_tests": 2,
+      "timeout_seconds": 600
+    }
+  },
+  "reproduce": {
+    "cargo": "--locked --offline; jobs1; dev/test debug0; incremental0; SQLX_OFFLINE=true; default features",
+    "commands": [
+      "cargo check --locked --offline -p northstar-message-application -p rust-xmpp-server --all-targets",
+      "cargo clippy --locked --offline -p northstar-message-application -p rust-xmpp-server --all-targets -- -D warnings",
+      "cargo test --locked --offline -p northstar-message-application --lib",
+      "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server services::message_admission::tests -- --test-threads=1",
+      "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server services::message_admission::witness::tests -- --test-threads=1",
+      "cargo test --locked --offline -p rust-xmpp-server --bin rust-xmpp-server xmpp::frame_execution::tests -- --test-threads=1",
+      "node --test scripts/test-admission-execution.mjs",
+      "node --test scripts/test-execution-boundaries.mjs",
+      "node scripts/check-execution-boundaries.mjs"
+    ],
+    "kill_after_s": 5,
+    "per_command_timeout_s": 600,
+    "retained_log_max_bytes_plus_sentinel": 4194305,
+    "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "retained_failures": "The earlier large-enum Clippy failure and16-pass/1-fail panic trace run remain recorded separately in stage3-retained-admission-wip.json. The original panic/privacy assertion now passes without weakening its expectation.",
+  "review": "Independent source and existing ordinary-evidence review accepted the limited retained owner/witness/grant/drop slice. The separate execution-gate correction and its70-test/direct-command evidence were also read-only reviewed. No fullStage3 acceptance is claimed.",
+  "schema": "northstar-stage3-retained-admission-results-v1",
+  "scope": [
+    "An outer per-frame owner retains exact admission and finalization authority across child cancellation; old frame handles are independent.",
+    "Real retained service paths consume the existing Coordinator result before issuing closed Reserved/GuardOnly grants; duplicate or changed effects cannot reach repository I/O.",
+    "COMMIT entry/receipt cannot alter a Finished effect; still-Waiting positive facts survive child cancellation.",
+    "Child destruction precedes terminal retirement; body and single Ready-child destructor panic keep the original payload and Panicked classification.",
+    "Terminal logging uses a payload-free summary; bounded private request material remains in the owner until its final handle drops."
+  ],
+  "source_commit": "464f9f7a1a7f785b2518a397383308bc5faa1db1",
+  "source_files": {
+    "Cargo.lock": {
+      "bytes": 124382,
+      "sha256": "e0643f62c211698be0afcd0f2d467f0673f86b6f1adb842f51116e2d1221a53e"
+    },
+    "crates/northstar-message-application/Cargo.toml": {
+      "bytes": 471,
+      "sha256": "7bb936d3124a8c53995d9f8f25e65306074b3e82416c8c97851f0f30421e3d8f"
+    },
+    "crates/northstar-message-application/src/direct_lifecycle.rs": {
+      "bytes": 30282,
+      "sha256": "4ae1dc688b93b40b69ebad0a8ff8d9d9652ba2c7b664c0014631e186fa206491"
+    },
+    "crates/northstar-message-application/src/lib.rs": {
+      "bytes": 8126,
+      "sha256": "abe0cc605e488c5764cce3a9e48df411d1b056effd5fe04e581ca7465c77d8a1"
+    },
+    "scripts/check-admission-execution.mjs": {
+      "bytes": 16256,
+      "sha256": "d8cea0ef6cd3006cf9f981adaebc7180ca59ea4d819f2b7c553f85a9c6bbff69"
+    },
+    "scripts/test-admission-execution.mjs": {
+      "bytes": 6978,
+      "sha256": "88c6c1384f05c78263d763daba4118376d2154fa8dee03aea30d4e0a371877d3"
+    },
+    "src/services/message_admission.rs": {
+      "bytes": 30158,
+      "sha256": "c7dad616f71a55745472694b8bd38b76c59d9a03a80a942d69e33fcc0bab5851"
+    },
+    "src/services/message_admission/witness.rs": {
+      "bytes": 11228,
+      "sha256": "e6e0b90a31931849f1abb11823721f0483d8297a3bcecb268c73752d4caafbe9"
+    },
+    "src/xmpp/frame_execution.rs": {
+      "bytes": 51323,
+      "sha256": "12eb6a1b28a7685f17a22127e5833616070ae557652d77b536fd060322680f03"
+    },
+    "src/xmpp/protocol.rs": {
+      "bytes": 110998,
+      "sha256": "91b5296c0b290cdd2482919785f9859a9a481ed9566fb2084ebbe8c1fc902a7f"
+    },
+    "src/xmpp/protocol/messaging.rs": {
+      "bytes": 90288,
+      "sha256": "65d8b47eb5d44e3e758bd4689ddf8430c02d96c7f7200ccc87a4c192fbfa72b2"
+    }
+  },
+  "source_tree": "d8dd48afe1bb7cf815c4d1cf4ce24b49d02fd6c4",
+  "source_unchanged_during_checks": true,
+  "status": "PassedLimitedRetainedAdmissionSlice",
+  "test_binaries": {
+    "application": {
+      "bytes": 1980504,
+      "path": "target/debug/deps/northstar_message_application-353f82d886c5605f",
+      "sha256": "38ef671014f12065c72ec22022332e87caa389d551d1b9aa3fb0b8ae3a235490"
+    },
+    "server": {
+      "bytes": 194200360,
+      "path": "target/debug/deps/rust_xmpp_server-0f7e189afe720819",
+      "sha256": "7c00ea6aedb6064cfc3c8bf8e83531275522b25f0bbaad6b9ffaf78e37a7a843"
+    }
+  },
+  "tested_basis": "Local tests used59c76989 plus the exact frozen source delta now saved in464f9f7. Source bytes match; this does not claim identical binaries across differently embedded Git metadata."
+}

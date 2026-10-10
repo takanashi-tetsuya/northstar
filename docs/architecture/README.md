@@ -33,3 +33,16 @@ and JSON formats. These artifacts are committed and CI rejects drift. The
 compile-time graph is derived from Cargo metadata, the runtime graph from
 route ownership, and the data-access graph from the ownership catalog. A graph
 is evidence of a boundary; it is not a substitute for an integration test.
+
+For the supported runtime's diagnostic ownership and reproducible experiments,
+start with [Runtime experiment map](runtime-experiments.md) and the separate
+`catalog/runtime-experiments.json`. It consumes the production identity inventory
+already checked by the architecture gate; declared experiments are never
+reported as executed results. The [execution plan](experimental-clarity-plan.zh-TW.md)
+records this phase's original acceptance criteria.
+
+The [resource ownership and bounds review](resource-bounds.zh-TW.md) summarizes
+admission limits, backpressure, release paths, verified test scope and remaining
+gaps across connections, input, outbound queues, stream management and workers.
+It distinguishes the 16 selected local BOSH checks from full actor, SQL and
+wire-protocol acceptance, and tracks the new checkpoint's publication separately.

@@ -992,7 +992,7 @@
           "status": "declared",
           "command": "cargo test --locked --bin rust-xmpp-server operation_runtime::tests",
           "test": {
-            "path": "src/operation_runtime.rs",
+            "path": "src/operation_runtime/tests.rs",
             "anchor": "async fn cleanup_attempt_cancellation_cannot_detach_renewal() {"
           },
           "assertions": [

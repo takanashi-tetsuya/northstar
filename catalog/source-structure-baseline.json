@@ -68,7 +68,6 @@
     "src/xmpp/protocol/caps.rs": 1681,
     "src/xmpp/protocol/commands.rs": 2495,
     "src/xmpp/protocol/dispatch.rs": 1527,
-    "src/xmpp/protocol/federated_muc.rs": 7326,
     "src/xmpp/protocol/messaging.rs": 2926,
     "src/xmpp/protocol/messaging/saved_case.rs": 2339,
     "src/xmpp/protocol/misc.rs": 1584,

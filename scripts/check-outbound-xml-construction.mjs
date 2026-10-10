@@ -1,13 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { productionModuleFiles } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// This is a monotonic per-file baseline. Every tracked outbound producer has
-// moved behind XmlElement/validated-fragment boundaries and therefore has a
-// zero raw-literal budget. Static parser literals still require the exact
-// allowlist below.
+// This is a monotonic per-module baseline. Keys are module entry files
+// and budgets apply to the whole production module. Every tracked
+// outbound producer has moved behind XmlElement/validated-fragment
+// boundaries and therefore has a zero raw-literal budget. Static parser
+// literals still require the exact allowlist below.
 const BASELINE = new Map([
   ['src/xmpp/xml_util.rs', 0],
   ['src/xmpp/protocol.rs', 0],
@@ -30,11 +32,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/vcard.rs', 0],
   ['src/xmpp/protocol/messaging.rs', 0],
   ['src/xmpp/protocol/muc.rs', 0],
-  ['src/xmpp/protocol/muc/message.rs', 0],
-  ['src/xmpp/protocol/muc/presence.rs', 0],
   ['src/xmpp/protocol/mix.rs', 0],
-  ['src/xmpp/protocol/mix/forms.rs', 0],
-  ['src/xmpp/protocol/mix/worker.rs', 0],
   ['src/xmpp/protocol/pubsub.rs', 0],
   ['src/xmpp/protocol/pep.rs', 0],
   ['src/xmpp/protocol/federated_muc.rs', 0],
@@ -44,12 +42,18 @@ const BASELINE = new Map([
   ['src/db/mix.rs', 0],
   ['src/components.rs', 0],
   ['src/cluster.rs', 0],
-  ['src/cluster/listener.rs', 0],
   ['src/s2s/inbound.rs', 0],
   ['src/s2s/outbound.rs', 0],
   ['src/s2s/sm.rs', 0],
   ['src/xmpp/protocol/ibr.rs', 0],
 ]);
+
+// These entries' descendant directories hold independently owned modules
+// (protocol/dispatch.rs, protocol/replay.rs, services/mix/foreground.rs,
+// services/mix/outbox.rs) that are not yet migrated off raw XML, so these
+// two entries check only their own file until those modules get their own
+// entries. File-scoped entries check only the key file.
+const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs', 'src/services/mix.rs']);
 
 // Static protocol constants may be exempted only by an exact file, line and
 // literal match plus a reason. Exemptions must be parser input, never outbound
@@ -427,18 +431,60 @@ if (
   throw new Error('outbound XML detector exempted a different literal at the parser-only anchor');
 }
 
+const mixModuleFiles = productionModuleFiles('src/xmpp/protocol/mix.rs', { root });
+if (!mixModuleFiles.includes('src/xmpp/protocol/mix/worker.rs') || mixModuleFiles.some(p => p.includes('/stage4_saved'))) {
+  throw new Error('outbound XML gate lost module expansion');
+}
+
+const fileToEntry = new Map();
+const entryFiles = new Map();
+
+for (const [entryKey] of BASELINE) {
+  const entryAbsPath = path.join(root, entryKey);
+  if (!fs.existsSync(entryAbsPath)) {
+    throw new Error(`outbound XML baseline entry key file does not exist: ${entryKey}`);
+  }
+  
+  let filesToCheck = [];
+  if (FILE_SCOPED_ENTRIES.has(entryKey)) {
+    filesToCheck = [entryKey];
+  } else {
+    filesToCheck = productionModuleFiles(entryKey, { root });
+  }
+  
+  entryFiles.set(entryKey, filesToCheck);
+  
+  for (const file of filesToCheck) {
+    if (fileToEntry.has(file)) {
+      throw new Error(`outbound XML baseline entries overlap: ${file} is covered by ${fileToEntry.get(file)} and ${entryKey}`);
+    }
+    fileToEntry.set(file, entryKey);
+  }
+}
+
 let failed = false;
 const verbose = process.env.NORTHSTAR_XML_GATE_VERBOSE === '1';
 console.log('Raw outbound XML construction baseline:');
-for (const [relativePath, maximum] of BASELINE) {
-  const source = fs.readFileSync(path.join(root, relativePath), 'utf8');
-  const current = findings(relativePath, source);
-  console.log(`  ${relativePath}: current=${current.length}, baseline=${maximum}`);
-  if (verbose || current.length > maximum) {
-    if (current.length > maximum) failed = true;
+for (const [entryKey, maximum] of BASELINE) {
+  const files = entryFiles.get(entryKey);
+  let currentCount = 0;
+  const allFindings = [];
+  
+  for (const relativePath of files) {
+    const source = fs.readFileSync(path.join(root, relativePath), 'utf8');
+    const current = findings(relativePath, source);
+    currentCount += current.length;
     for (const finding of current) {
+      allFindings.push({ relativePath, ...finding });
+    }
+  }
+  
+  console.log(`  ${entryKey}: current=${currentCount}, baseline=${maximum}, files=${files.length}`);
+  if (verbose || currentCount > maximum) {
+    if (currentCount > maximum) failed = true;
+    for (const finding of allFindings) {
       const preview = finding.value.replace(/\s+/g, ' ').slice(0, 120);
-      console.error(`    line ${finding.line}: ${JSON.stringify(preview)}`);
+      console.error(`    ${finding.relativePath}:${finding.line}: ${JSON.stringify(preview)}`);
     }
   }
 }

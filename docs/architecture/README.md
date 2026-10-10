@@ -1,5 +1,9 @@
 # Architecture assets
 
+Structural work (file placement, module boundaries, line budgets, gate source
+lookup and the structural work-package ledger) is governed by the
+[engineering structure blueprint](engineering-structure.zh-TW.md).
+
 The architecture is described by three machine-readable catalogs:
 
 - `catalog/services.yaml` — service identity, execution mode, deployment unit,

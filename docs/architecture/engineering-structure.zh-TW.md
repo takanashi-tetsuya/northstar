@@ -102,10 +102,16 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    `--dangerously-skip-permissions`。規格須明寫「不得執行任何 shell 指令，只用檔案檢視與編輯
    工具」，否則新對話會先嘗試指令、被 headless 模式拒絕後不做任何修改。
 3. 架構負責人執行驗證：`cargo fmt --check`、受影響套件的 `cargo check`／`clippy -D warnings`
-   （all-targets）、相關單元測試、受影響門禁，以及 R3 的只移動檢查——拆分前後的程式行多重集合
-   （忽略空白、`use`、`mod`、可見性修飾）必須相同。
-4. 失敗輸出回饋到同一個 agy 對話（`--conversation`）修正，最多三輪；仍失敗則縮小 WP 範圍。
-5. 審閱通過後以 `[WP-xx]` 提交到 `dev`；推送後以該提交的完整 CI 為準，不沿用舊綠燈。
+   （all-targets）、相關單元測試、受影響門禁，以及 R3 的只移動檢查。只移動檢查以「項目」為單位：
+   拆分前後的頂層項目多重集合必須相同；比較時忽略 `use`、無本體的 `mod x;`、可見性修飾、
+   字面值以外的空白與 rustfmt 重排產生的尾逗號，並把子檔中的 `super::super::` 視為原本的
+   `super::`；字串與字元字面值逐位元組比較，因此縮排變動不能改到多行字串內容。拆檔時 agy
+   逐字複製、不重排；`cargo fmt` 由架構負責人執行（確定性格式化，不屬撰寫程式）。
+4. agy 的檔案工具不受 worktree 限制（曾把修改寫進主 checkout）。規格一律寫明 worktree 的絕對
+   路徑；每次 agy 執行後，架構負責人檢查主 checkout 與其他 worktree 的 `git status`，把越界修改
+   移回 worktree 並還原原處。
+5. 失敗輸出回饋到同一個 agy 對話（`--conversation`）修正，最多三輪；仍失敗則縮小 WP 範圍。
+6. 審閱通過後以 `[WP-xx]` 提交到 `dev`；推送後以該提交的完整 CI 為準，不沿用舊綠燈。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -127,6 +133,7 @@ Stage 證據仍綁定其原提交。
 | WP | 狀態 | 提交 |
 | --- | --- | --- |
 | WP-01 | 完成（三輪回饋，測試夾具另以縮小範圍的 WP-01c 修正） | 見 `git log --grep '\[WP-01\]'` |
-| WP-02 | 驗收中 | — |
-| WP-11 | 規格中 | — |
-| WP-12 | 規格中 | — |
+| WP-02 | 完成（三輪回饋） | 見 `git log --grep '\[WP-02\]'` |
+| WP-11 | 完成（覆蓋由 40 檔增為 42 檔，無遺漏） | 見 `git log --grep '\[WP-11\]'` |
+| WP-12 | 完成（三個失效的禁止／要求規則恢復作用） | 見 `git log --grep '\[WP-12\]'` |
+| WP-21 | 進行中：拆分 `federated_muc.rs` 為 presence／message／iq／owner／admin／moderate／tests | — |

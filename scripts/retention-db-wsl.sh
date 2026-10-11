@@ -26,5 +26,5 @@ TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
-  subscription_cleanup::tests::postgres_cleanup_preserves_live_subscriptions_and_event_snapshots_and_is_bounded \
+  runtime::subscription_cleanup::tests::postgres_cleanup_preserves_live_subscriptions_and_event_snapshots_and_is_bounded \
   -- --ignored --exact --nocapture

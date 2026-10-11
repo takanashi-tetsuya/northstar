@@ -2316,13 +2316,13 @@ for (const [name, source] of [
   ['MixService', mixServiceSource],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
-  ['RetentionContext', read('src/retention.rs')],
-  ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
-  ['UploadMaintenanceContext', read('src/upload_worker.rs')],
+  ['RetentionContext', read('src/runtime/retention.rs')],
+  ['SubscriptionCleanupContext', read('src/runtime/subscription_cleanup.rs')],
+  ['UploadMaintenanceContext', read('src/runtime/upload_worker.rs')],
   ['UploadMaintenanceRepository', read('src/services/upload_maintenance.rs')],
   ['CapacityMaintenanceService', read('src/services/capacity_maintenance.rs')],
   ['CapacityMaintenanceContexts', read('src/state/capacity_maintenance.rs')],
-  ['CapacityMaintenanceWorkers', read('src/capacity_maintenance.rs')],
+  ['CapacityMaintenanceWorkers', read('src/runtime/capacity_maintenance.rs')],
   ['SmSuspensionContext', read('src/state/suspension.rs')],
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
   ['ApiQueryService', read('src/services/api_queries.rs')],
@@ -2532,7 +2532,7 @@ if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('
 }
 const operationWorkerControl = read('src/state/operation_worker_control.rs');
 const operationWorkerFields = structBody(operationWorkerControl, 'pub(crate) struct OperationWorkerControl');
-const operationRuntime = read('src/operation_runtime.rs');
+const operationRuntime = read('src/runtime/operation_runtime.rs');
 const operationRuntimeFields = structBody(operationRuntime, 'pub(crate) struct OperationWorkerRuntime');
 const ordinaryRun = structBody(operationRuntime, 'async fn run_one(');
 const ordinaryHeartbeat = structBody(operationRuntime, 'async fn lease_heartbeat(');
@@ -2619,7 +2619,7 @@ if (!/pub\(crate\) async fn wake_committed_muc_operation\s*\([\s\S]*?\.muc_servi
   throw new Error('AppState committed MUC wake must delegate to MucService with cluster authority');
 }
 const operationRuntimeSource = productionWithoutCfgTestModules(
-  read('src/operation_runtime.rs'),
+  read('src/runtime/operation_runtime.rs'),
   'operation_runtime.rs production',
 );
 if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation_in_tx|enqueue_operation_target_in_tx)\s*\(/.test(operationRuntimeSource)
@@ -3449,7 +3449,7 @@ while (pendingResponsibilitySources.length > 0) {
 // The companion gate proves the explicit standalone guard, early maintenance
 // return and exact maintenance capability/worker inventory before this allow.
 verifySubserverBoundaries(readSubserverSources());
-const roleIdentity = (relative, name) => relative === 'src/subservers.rs' ? `maintenance/${name}` : name;
+const roleIdentity = (relative, name) => relative === 'src/runtime/subservers.rs' ? `maintenance/${name}` : name;
 const composedWorkers = productionRustSources.flatMap(({ relative, source }) =>
   [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]
     .map((match) => roleIdentity(relative, match[2])),
@@ -3622,7 +3622,7 @@ if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
     || !clusterMucOutboxSettlementRepository.includes('db::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
 }
-const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
+const operationRuntimeOwnershipSource = read('src/runtime/operation_runtime.rs');
 const mucDestroyServiceSource = read('src/services/operation_muc_destroy.rs');
 const mucDestroyEffect = structBody(mucDestroyServiceSource, 'pub(crate) struct MucDestroyEffect');
 if (/\blocal_domain\b/.test(mucDestroyEffect)
@@ -3938,7 +3938,7 @@ for (const protocol of ['pep.rs', 'pubsub.rs']) {
     throw new Error(`${protocol} must use a narrow telemetry capability`);
   }
 }
-const retentionContext = structBody(read('src/retention.rs'), 'pub(crate) struct RetentionContext');
+const retentionContext = structBody(read('src/runtime/retention.rs'), 'pub(crate) struct RetentionContext');
 if (!retentionContext.includes('counters: RetentionCounters')
     || retentionContext.includes('Arc<Metrics>')) {
   throw new Error('archive retention must carry only its operation counters');

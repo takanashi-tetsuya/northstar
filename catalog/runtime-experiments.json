@@ -865,7 +865,7 @@
       "budgets": {
         "contract": "Existing bounded body/slot/object policies and reconciliation watchdog; provider operations retain their own timeout.",
         "source": {
-          "path": "src/upload_worker.rs",
+          "path": "src/runtime/upload_worker.rs",
           "anchor": "const STORAGE_OPERATION_TIMEOUT: Duration = Duration::from_secs(180);"
         }
       },
@@ -898,7 +898,7 @@
       "id": "administration",
       "title": "REST, admin, authentication and operation journal",
       "production_owner": {
-        "path": "src/operation_runtime.rs",
+        "path": "src/runtime/operation_runtime.rs",
         "anchor": "pub(crate) async fn serve("
       },
       "runtime_identities": [
@@ -992,7 +992,7 @@
           "status": "declared",
           "command": "cargo test --locked --bin rust-xmpp-server operation_runtime::tests",
           "test": {
-            "path": "src/operation_runtime/tests.rs",
+            "path": "src/runtime/operation_runtime/tests.rs",
             "anchor": "async fn cleanup_attempt_cancellation_cannot_detach_renewal() {"
           },
           "assertions": [
@@ -1087,13 +1087,13 @@
       "id": "workers",
       "title": "Worker supervision, maintenance and shutdown",
       "production_owner": {
-        "path": "src/workers.rs",
+        "path": "src/runtime/workers.rs",
         "anchor": "pub struct WorkerRegistry {"
       },
       "runtime_identities": [
         {
           "id": "observer:maintenance/maintenance-ownership",
-          "owner": "src/subservers.rs",
+          "owner": "src/runtime/subservers.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
@@ -1183,13 +1183,13 @@
         },
         {
           "id": "worker:maintenance/archive-retention",
-          "owner": "src/subservers.rs",
+          "owner": "src/runtime/subservers.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:maintenance/pubsub-subscription-cleanup",
-          "owner": "src/subservers.rs",
+          "owner": "src/runtime/subservers.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
@@ -1284,7 +1284,7 @@
       "budgets": {
         "contract": "Per-worker source contracts are checked by existing architecture gate; no blanket end-to-end worker budget.",
         "source": {
-          "path": "src/workers.rs",
+          "path": "src/runtime/workers.rs",
           "anchor": "const ABORT_DRAIN_GRACE: Duration = Duration::from_secs(1);"
         }
       },
@@ -1295,7 +1295,7 @@
           "status": "declared",
           "command": "cargo test --locked --bin rust-xmpp-server workers::tests",
           "test": {
-            "path": "src/workers.rs",
+            "path": "src/runtime/workers.rs",
             "anchor": "async fn shutdown_joins_every_supervisor_and_drops_inflight_attempts() {"
           },
           "assertions": [

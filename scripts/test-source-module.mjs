@@ -156,7 +156,7 @@ test('Real repository checks', () => {
   assert.equal(files[0], 'src/xmpp/protocol/mix.rs');
   assert.ok(files.includes('src/xmpp/protocol/mix/worker.rs'));
   
-  const body = rustItemBody(readModule('src/operation_runtime.rs'), 'async fn run_one(');
+  const body = rustItemBody(readModule('src/runtime/operation_runtime.rs'), 'async fn run_one(');
   assert.ok(body.includes('lease_heartbeat('));
   
   const prodFiles = productionModuleFiles('src/xmpp/protocol/mix.rs');
@@ -169,7 +169,7 @@ test('Real repository checks', () => {
 
 test('CLI tests', () => {
   // item output
-  let res = spawnSync(process.execPath, [libraryPath, 'item', 'src/operation_runtime.rs', 'async fn run_one('], { encoding: 'utf8' });
+  let res = spawnSync(process.execPath, [libraryPath, 'item', 'src/runtime/operation_runtime.rs', 'async fn run_one('], { encoding: 'utf8' });
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes('lease_heartbeat('));
   assert.ok(res.stdout.endsWith('}\n'));
@@ -193,7 +193,7 @@ test('CLI tests', () => {
   assert.ok(res.stderr.includes('Unknown subcommand: unknown'));
   
   // missing declaration error
-  res = spawnSync(process.execPath, [libraryPath, 'item', 'src/operation_runtime.rs', 'fn missing_fn('], { encoding: 'utf8' });
+  res = spawnSync(process.execPath, [libraryPath, 'item', 'src/runtime/operation_runtime.rs', 'fn missing_fn('], { encoding: 'utf8' });
   assert.equal(res.status, 1);
   assert.ok(res.stderr.includes('missing'));
 });

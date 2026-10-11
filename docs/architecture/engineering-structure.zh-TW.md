@@ -86,7 +86,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | | WP-12 | `check-architecture-boundaries.mjs` 對 `federated_muc.rs` 改用 `readProductionModule`；修正 2148／2259／2262 行在 template literal 中被吞掉的 `\b`、`\s`、`\.` 跳脫 | 修正後的禁止規則對注入的 `db::` 呼叫會失敗；現行原始碼仍通過 |
 | S2 拆大檔 | WP-2x | 一次拆一個大檔（順序：`federated_muc.rs` → `db/pubsub.rs`、`db/cluster_muc.rs`（後者先做 WP-13）→ `xmpp/protocol/muc.rs` → `db/archive.rs` → `xmpp/protocol/mix.rs` → `db/mix.rs` → `state.rs` → `cluster.rs` → `config.rs`） | 只移動差異檢查通過；fmt、受影響套件 check／clippy `-D warnings`、單元測試與相關門禁通過；基線下修 |
 | S3 測試歸位 | WP-3x | 7 個根目錄測試檔移入受測模組（WP-32 搬 cluster 四個與 abuse 一個；`shutdown_notification_tests.rs` 測的是 `main.rs` 的關機監督，`test_activation.rs` 是只因檔名被歸為測試的正式模組，兩者改在 S4 隨 `main.rs` 的程式碼搬入 `src/runtime/` 時歸位） | 測試數量與名稱集合不變 |
-| S4 根目錄分層 | WP-4x | 依 3.1 分組搬動，最後移除舊路徑轉出 | `src/` 根目錄只剩 `main.rs` 與各層目錄宣告 |
+| S4 根目錄分層 | WP-4x | 依 3.1 分組搬動，最後移除舊路徑轉出（分組、規則與綁定見 5.2） | `src/` 根目錄只剩 `main.rs` 與各層目錄宣告；5.2 列出的保留檔除外 |
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
 | S6 文件收斂 | WP-6x | 修正 KNOWN_ISSUES 的 migration 數、README 的發佈敘述、HANDOFF 現況；`docs/README.md` 建立狀態地圖 | 文件一致性門禁通過 |
 
@@ -108,6 +108,42 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | `state.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-session-lifecycle-boundary.mjs`、`check-subserver-boundaries.mjs`、`check-omemo.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh`（七者 WP-18 起以模組讀取：架構門禁的項目擷取要求宣告唯一，AppState 服務存取器只從各 `impl AppState` 區塊收集）、`.github/CODEOWNERS`（WP-18 起另列 `src/state/**`）、架構門禁的工作者註冊表與 `catalog/runtime-experiments.json` 的 `owner`（綁定 `.supervise(`／`.register_observer(` 註冊所在的檔案：WP-28 拆分時兩個 `.supervise(` 註冊 `start_locked_muc_expiry`、`start_runtime_control_refresh` 留在父檔，session-cleanup observer 的註冊隨 `AppState::new` 搬入 `construction.rs`，其 `owner` 同步改為 `src/state/construction.rs`）。`AppState` 結構也留在父檔：架構門禁要求其欄位全為私有，搬出後 R3 會改為 `pub(super)`。除該結構外就地套用 R3 可見性（159 行）後，七個門禁與執行、子伺服器、MIX outbox 三組自測都照常通過；WP-28 拆分時門禁與自測都不需修改 |
 | `cluster.rs` | `check-architecture-boundaries.mjs`、`check-migration-versions.sh`（兩者 WP-19 起以模組讀取：架構門禁的 13 處擷取要求宣告唯一）、`check-outbound-xml-construction.mjs`（WP-11 起以模組讀取）、`muc-cluster-wsl.sh`（WP-13 起以模組讀取）、`cluster-wsl.py`（以 `^const NODE_PROTOCOL_VERSION` 讀父檔，CI 的 `test-cluster-*.py` 在匯入時即讀取；套用 R3 後會直接失敗，因此該常數留在父檔）、架構門禁的工作者註冊表與 `catalog/runtime-experiments.json` 的 `owner`（`cluster-muc-outbox` 綁定 `start_muc_outbox_delivery` 中的註冊，拆分時留在父檔）。就地套用 R3 可見性（490 行）後，架構、對外 XML、遷移門禁與 MUC 叢集靜態契約都照常通過；WP-29 拆分時兩者都留在父檔，門禁、自測與目錄都不需修改 |
 | `config.rs` | `check-architecture-boundaries.mjs`、`check-abuse.mjs`（兩者 WP-20 起以模組讀取：架構門禁的 3 處擷取要求宣告唯一）。正式模組只排除測試子檔，檔案內嵌的 `#[cfg(test)] mod tests` 仍在讀取範圍內，必要片段只出現在測試中時仍會通過；拆分時把該模組移為獨立測試檔即可補上。`listener-readiness-stress-wsl.sh` 只在註解中提到該檔，實際讀取執行檔 `--runtime-connection-budget` 的輸出；`config/environment.rs` 的 `include_str!` 以自身位置為基準。就地套用 R3 可見性（189 行）後，兩個門禁照常通過；WP-30 把內嵌測試模組移為 `config/tests.rs`，上述缺口隨之補上（必要片段只出現在測試檔時改為失敗），門禁與自測都不需修改 |
+
+### 5.2 S4 盤點：根目錄檔案的路徑綁定（`1761f49`）
+
+盤點範圍同 5.1：`scripts/`、`catalog/`、`.github/`、`fuzz/`，以及 `src/`、`crates/` 中的 `include_str!`、
+`#[path]` 與以字串組出的原始碼路徑。`recovery/*.json` 是歷史快照的雜湊清單、`scripts/fixtures/**`
+與 `docs/evidence/**` 屬 R5 證據，都沒有程式拿來比對現行原始碼，不隨搬移修改。`docs/` 其餘文件與
+`crates/*/MIGRATION.md` 中的舊路徑留到 S6 一併修正。
+
+搬移規則：
+
+1. 架構負責人以 `git mv` 整棵搬移（`x.rs` 連同 `x/`）；分層目錄以 `mod.rs` 宣告，與既有的
+   `api`、`db`、`s2s`、`services`、`xmpp` 一致。`main.rs` 改為 `mod <層>;`，並以私有的
+   `use <層>::<模組>;` 暫時保留舊路徑，因此搬移 WP 不改任何呼叫端；WP-48 改寫呼叫端並刪除轉出。
+2. 子樹內的 `super::` 與 `pub(super)` 都相對於子樹，搬移後不變。被搬模組頂層檔案中的
+   `pub(super)` 原本是全 crate 可見，依 R3 改為 `pub(crate)`；頂層檔案的 `super::` 原指 crate
+   根，改為 `crate::`。
+3. 超標檔隨 `git mv` 改名時，基線條目同步改名、行數不變，並以 `git diff -M` 證明是同一檔案；這不
+   放寬 R1，內容一有變更就照常適用。
+4. 門禁、目錄、fuzz 與 `include_str!` 綁定的路徑在同一 WP 改寫，並以反例確認新路徑仍受檢查。
+
+| WP | 目標 | 搬入的檔案 | 以檔案路徑綁定的門禁與資料 |
+| --- | --- | --- | --- |
+| WP-41 | `src/tools/` | `pie.rs`（2,779 行，超標）、`identity_audit.rs`（2,168 行，超標） | `check-database-role-boundaries.sh` 的 `pie_source`；`db/upload_tests.rs` 的 `include_str!("../pie.rs")` |
+| WP-42 | `src/security/` | `tls.rs`（2,190 行，超標）、`crl.rs`、`ocsp.rs`、`password_work.rs`、`abuse.rs`（2,622 行，超標）連同 `abuse/`、`account_recovery.rs` | `check-abuse.mjs` 與架構門禁讀 `abuse.rs`、`account_recovery.rs`，架構門禁另讀 `tls.rs`；`abuse/tests.rs` 的 migration `include_str!` 多一層 `../` |
+| WP-43 | `src/platform/` | `config.rs` 連同 `config/`、`error.rs`、`logging.rs`、`metrics.rs` | `check-abuse.mjs`（`config`、`error`）、架構門禁（`config` 以模組讀取）、`check-omemo.mjs`（`metrics`）；`config/environment.rs` 的 `.env.development.example` `include_str!` 多一層 `../` |
+| WP-44 | `src/runtime/` | `workers.rs`（1,717 行，超標）、`operation_runtime.rs` 連同目錄、`capacity_maintenance.rs`、`upload_worker.rs`（1,990 行，超標）、`retention.rs`、`subscription_cleanup.rs`、`connection_actors.rs`、`subservers.rs` 連同目錄、`test_activation.rs` | `catalog/runtime-experiments.json` 的 `owner`（workers、operation_runtime、upload_worker、subservers）與架構門禁的工作者註冊表、`check-subserver-boundaries.mjs`（retention、subscription_cleanup、subservers）、`test-source-module.mjs`（以 operation_runtime 為夾具）、`db/upload_tests.rs` 的 `include_str!("../upload_worker.rs")` |
+| WP-45 | `src/runtime/` | `main.rs` 的服務任務監督與關機通知（`ServiceTaskExit`、`await_shutdown_notifications`、`drain_service_tasks` 等）連同 `shutdown_notification_tests.rs` | 只移動拆分，依 R3 與只移動檢查；先盤點門禁對 `main.rs` 的讀取 |
+| WP-46 | `src/cluster/` | `cluster_security.rs` 併為 `cluster/security.rs` | `catalog/runtime-experiments.json` 兩處 |
+| WP-47 | `src/xmpp/`、`src/s2s/` | `components.rs`（2,638 行，超標）、`outbound.rs`、`transport_parsing.rs`、`mam_pubsub_parsing.rs`，依實際呼叫方歸入 | 架構、對外 XML 與執行門禁；`fuzz/fuzz_targets/bosh_ws_framing.rs` 的 `#[path = "../../src/transport_parsing.rs"]`、`check-parser-fuzz-coverage.mjs`、`test-parser-fuzz-coverage.mjs`、`fuzz/Cargo.toml` |
+| WP-48 | — | 改寫呼叫端（`crate::<模組>` 改為 `crate::<層>::<模組>`）並刪除 `main.rs` 的暫時轉出，可依層再分 | 只改路徑，不改語義 |
+
+S4 後根目錄保留的檔案：`main.rs`；同名目錄的模組檔 `state.rs`、`cluster.rs`、`bosh.rs`、`storage.rs`
+（`bosh/response_owner.rs` 由 CI 的 Stage 4 綁定測試與 `stage4_build_record.py` 以路徑讀取）；只在
+`#[cfg(test)]` 編譯的 `stage4_replay.rs`（`controlled_admission_supervision.py` 綁定它與
+`stage4_replay/compact.rs`）與 `direct_replay.rs`；相容 facade `auth.rs`、`jid.rs`（分別有 38、170 個
+使用檔），在 S5 呼叫方改用 crate 後移除。
 
 ## 6. 委派與驗收協議
 

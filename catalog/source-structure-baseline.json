@@ -20,7 +20,6 @@
     "src/db/cluster_keys.rs": 1512,
     "src/db/data_lifecycle.rs": 1919,
     "src/db/messaging.rs": 1733,
-    "src/db/mix.rs": 8619,
     "src/db/mix_repository.rs": 2049,
     "src/db/muc.rs": 3149,
     "src/db/profile.rs": 1797,

@@ -62,7 +62,7 @@ const files = {
 
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
-const productionModules = new Set(['muc']);
+const productionModules = new Set(['muc', 'mixArchive']);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);

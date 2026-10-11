@@ -2176,7 +2176,9 @@ if (!genericMamMetadataRepository.includes('MamQueryScope::FederatedRoom { .. } 
   throw new Error('generic federated MAM metadata or page scope no longer fails closed');
 }
 const federatedMetadataSnapshot = structBody(
-  read('src/db/archive.rs'), 'pub async fn mam_federated_room_archive_boundaries_authorized(',
+  // whole production module (the file and its non-test child files)
+  readProductionModule('src/db/archive.rs', { root }),
+  'pub async fn mam_federated_room_archive_boundaries_authorized(',
 );
 let previousFederatedMetadataStep = -1;
 for (const invariant of [
@@ -2206,7 +2208,8 @@ for (const invariant of [
 if (!/if matches!\(outcome, FederatedMamAdmissionOutcome::Queued\)\s*\{[\s\S]*?self\.outbox_wake\.try_send\(\(\)\)/.test(mamServiceSource)) {
   throw new Error('MamService must wake delivery only after a successful outbox commit');
 }
-const archiveSource = read('src/db/archive.rs');
+// whole production module (the file and its non-test child files)
+const archiveSource = readProductionModule('src/db/archive.rs', { root });
 const roomGuardAcquire = structBody(archiveSource, 'pub(crate) async fn acquire(');
 const lockSteps = [
   'pool.acquire().await?',
@@ -2977,7 +2980,8 @@ for (const upgradeEvidence of [
     throw new Error(`0056 historical fixture lost its 0104 upgrade proof: ${upgradeEvidence}`);
   }
 }
-const archiveRepositorySource = read('src/db/archive.rs');
+// reads the whole module including test-only child files
+const archiveRepositorySource = readModule('src/db/archive.rs', { root });
 if (/\bpayload_value\b/.test(archiveRepositorySource)) {
   throw new Error('archive repository must not read, bind, or persist plaintext admission payload_value');
 }

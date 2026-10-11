@@ -102,7 +102,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | 目標 | 以檔案路徑綁定的門禁與資料 |
 | --- | --- |
 | `xmpp/protocol/muc.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`（兩者 WP-14 起以模組讀取）、`check-outbound-xml-construction.mjs`（WP-11 起以模組讀取）、`check-database-role-boundaries.sh`（只要求父檔保留 `#[path = "muc_tests.rs"]`） |
-| `db/archive.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、自身測試的 `include_str!("archive.rs")` |
+| `db/archive.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`（兩者 WP-15 起以模組讀取）、自身測試的 `include_str!("archive.rs")` |
 | `xmpp/protocol/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`test-mix-outbox-boundaries.mjs`、`test-source-module.mjs`、`catalog/runtime-experiments.json` |
 | `db/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh` |
 | `state.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-session-lifecycle-boundary.mjs`、`check-subserver-boundaries.mjs`、`check-omemo.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh`、`catalog/runtime-experiments.json`、`.github/CODEOWNERS` |
@@ -116,7 +116,9 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 1. 由 `dev` HEAD 建立獨立 git worktree（只含受追蹤檔案，不含 `.env` 等本機秘密）。
 2. 以 `agy -p --mode accept-edits` 交付 WP 規格。agy 只能改檔，不執行 shell；不授予
    `--dangerously-skip-permissions`。規格須明寫「不得執行任何 shell 指令，只用檔案檢視與編輯
-   工具」，否則新對話會先嘗試指令、被 headless 模式拒絕後不做任何修改。
+   工具」，否則新對話會先嘗試指令、被 headless 模式拒絕後不做任何修改。規格若留有詮釋空間，
+   agy 會反覆推敲並改讀 `.git`、`package.json` 等檔案，越出 worktree 的讀取被拒後同樣不做修改
+   （WP-15 初版只寫「在讀取上方加註解」即如此）；小範圍修改一律給逐字的原文與新文。
 3. 架構負責人執行驗證：`cargo fmt --check`、受影響套件的 `cargo check`／`clippy -D warnings`
    （all-targets）、相關單元測試、CI 離線步驟，以及 R3 的只移動檢查。
    CI 離線步驟由 `node scripts/run-ci-offline.mjs` 執行：`ci.yml` 中不需外部服務的全部步驟
@@ -180,3 +182,4 @@ Stage 證據仍綁定其原提交。
 | WP-14 | 完成：架構與執行門禁對 `xmpp/protocol/muc.rs` 改以模組讀取（遙測檢查讀含測試子檔的全模組）。反例顯示舊的單檔讀取漏看既有子檔 `muc/presence.rs` 中的 `state.cluster`；`saved_stage4.rs` 的 `state.metrics` 與 `muc/message.rs` 的重複 `muc_message` 本體均如預期失敗 | 見 `git log --grep '\[WP-14\]'` |
 | WP-04 | 完成：只移動檢查把固有 impl 區塊展開為成員比對，trait impl 維持整體；impl 標頭註解與只含註解的結尾也納入比較。12 個新測試；以 `--after-rev` 重驗 WP-21／22／23 結果不變；兩輪回饋修正重構時被加倍的反斜線跳脫 | 見 `git log --grep '\[WP-04\]'` |
 | WP-24 | 完成：`xmpp/protocol/muc.rs` 6,165 行拆為 admin／admin_batch／discussion／owner／moderate／register／groupchat／join，父檔 973 行，最大子檔 `join.rs` 1,438 行；兩個 `impl ProtocolSession` 區塊的方法分到各子檔自己的 impl 區塊，182 個項目不變、0 輪回饋。32 項可見性變更全部是維持原範圍的寫法；2,186 個測試名稱不變；6 個反例（`state.cluster`、`state.metrics`、`state.pool`、移除 MUC 階段、改動討論封套、原始 XML 字面值）放入新子檔均被門禁抓到。後續：`muc_presence`（1,384 行）、`muc_admin_set`（998 行）、`muc_owner_set`（645 行）、`muc_message`（614 行）是單一函式過長，屬邏輯重構，不在只移動範圍 | 見 `git log --grep '\[WP-24\]'` |
+| WP-15 | 完成：架構與執行門禁對 `db/archive.rs` 改以模組讀取（`payload_value` 禁止檢查與個人 admission insert 計數讀含測試子檔的全模組）。5 個反例：測試子檔中的 `payload_value`、搬入子檔後改壞的 `impl Drop for FederatedMamRoomGuard`、搬入測試子檔的 `commit_mix_archive` 均以對應規則失敗；原樣搬入正式子檔的兩者仍通過。初版規格措辭含糊致 agy 未做修改，改為逐字原文／新文後一次完成 | 見 `git log --grep '\[WP-15\]'` |

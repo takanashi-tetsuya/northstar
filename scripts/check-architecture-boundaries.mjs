@@ -254,6 +254,9 @@ function classifyDbDependencies(source, moduleName) {
 // whole production module (the file and its non-test child files); items are
 // read by their unique declaration, so they keep being found after a split
 const state = readProductionModule('src/state.rs', { root });
+// src/cluster.rs is read as its whole production module too (listener.rs,
+// pool.rs and the files a split adds), with items read by unique declaration
+const cluster = readProductionModule('src/cluster.rs', { root });
 const configSource = read('src/config.rs');
 const mainSource = read('src/main.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
@@ -295,7 +298,7 @@ if (
       `responsibility model instead of swapping fields under the count budget: ${actualPublicCapabilities.join(', ')}`,
   );
 }
-if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + read('src/cluster.rs'))
+if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + cluster)
     || !appState.includes('pool: PgPool,')) {
   throw new Error('process and cluster workers must use narrow state-owned database capabilities');
 }
@@ -303,7 +306,7 @@ if (!state.includes('fn local_domain(&self) -> &str')
     || /\bstate\.config\.domain\b/.test(read('src/s2s/inbound.rs'))) {
   throw new Error('S2S ingress must receive only the validated local domain');
 }
-const clusterMessageResolver = structBody(read('src/cluster.rs'), 'async fn resolve_node_message_delivery<');
+const clusterMessageResolver = rustItemBody(cluster, 'async fn resolve_node_message_delivery<');
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
     || !read('src/cluster/listener.rs').includes('message_policy.verifier()')
@@ -1828,7 +1831,7 @@ for (const invariant of [
     throw new Error(`RosterService lost safety invariant: ${invariant}`);
   }
 }
-const clusterRosterSource = read('src/cluster.rs');
+const clusterRosterSource = cluster;
 for (const invariant of ['expected_user_id', 'roster_version', 'roster_annotated_stanza']) {
   if (!clusterRosterSource.includes(invariant)) {
     throw new Error(`cluster roster delivery lost identity/ordering field: ${invariant}`);
@@ -3528,18 +3531,18 @@ if (
 }
 if (
   countMatches(state, /crate::cluster::start_muc_outbox_delivery\(/g) !== 1 ||
-  !read('src/cluster.rs').includes('also runs in supported single-node')
+  !cluster.includes('also runs in supported single-node')
 ) {
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
-const clusterMucOutboxWorker = structBody(read('src/cluster.rs'), 'async fn run_muc_outbox_delivery(');
+const clusterMucOutboxWorker = rustItemBody(cluster, 'async fn run_muc_outbox_delivery(');
 const clusterMucOutboxContextSource = read('src/state/cluster_muc_outbox_worker.rs');
 const clusterMucOutboxContext = structBody(
   clusterMucOutboxContextSource,
   'pub(crate) struct ClusterMucOutboxWorkerContext',
 );
 if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;')
-    || !read('src/cluster.rs').includes('state.cluster_muc_outbox_worker_context()')
+    || !cluster.includes('state.cluster_muc_outbox_worker_context()')
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(clusterMucOutboxContext)
     || /crate::db::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
@@ -3567,7 +3570,7 @@ if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mu
   throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
 }
 const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
-const clusterMucDelivery = structBody(read('src/cluster.rs'), 'async fn deliver_cluster_muc_event(');
+const clusterMucDelivery = rustItemBody(cluster, 'async fn deliver_cluster_muc_event(');
 const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;');
 const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);
 const mucCacheBranch = clusterMucDelivery.search(/let (?:mut )?recipient = if exact_cached/);
@@ -3745,17 +3748,17 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
     || countMatches(read('src/api/mod.rs'), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
-const clusterSource = read('src/cluster.rs');
-const clusterMaintenance = structBody(clusterSource, 'async fn maintenance_once(');
-const clusterRedisMaintenance = structBody(clusterSource, 'struct ClusterMaintenanceRedis');
+const clusterSource = cluster;
+const clusterMaintenance = rustItemBody(clusterSource, 'async fn maintenance_once(');
+const clusterRedisMaintenance = rustItemBody(clusterSource, 'struct ClusterMaintenanceRedis');
 const sessionRouteMaintenanceSource = read('src/services/session_route_maintenance.rs');
 const sessionRoutePort = structBody(sessionRouteMaintenanceSource, 'pub(crate) trait SessionRouteRenewalPort');
 const sessionRouteService = structBody(sessionRouteMaintenanceSource, 'impl<P: SessionRouteRenewalPort> SessionRouteRenewalService<P>');
-const sessionRouteRedisAdapter = structBody(clusterSource, 'impl crate::services::session_route_maintenance::SessionRouteRenewalPort');
-const sessionRouteRelease = structBody(clusterSource, 'async fn release_session_authority(');
+const sessionRouteRedisAdapter = rustItemBody(clusterSource, 'impl crate::services::session_route_maintenance::SessionRouteRenewalPort');
+const sessionRouteRelease = rustItemBody(clusterSource, 'async fn release_session_authority(');
 const mucSoftStatePort = structBody(mucServiceSource, 'pub(crate) trait MucSoftStateProjectionPort');
 const mucSoftStateService = structBody(mucServiceSource, 'impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P>');
-const mucRedisAdapter = structBody(clusterSource, 'impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
+const mucRedisAdapter = rustItemBody(clusterSource, 'impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
 if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || /\b(?:signer|pubsub|publisher|delivery_route)\s*:/.test(clusterRedisMaintenance)
     || !sessionRoutePort.includes('fn renew_authority(')
@@ -3792,8 +3795,8 @@ if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occup
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
 const clusterListener = structBody(read('src/cluster/listener.rs'), 'async fn listen_once(');
-const clusterListenerTransport = structBody(read('src/cluster.rs'), 'pub(crate) struct ClusterPubsubListenerTransport');
-const clusterListenerSupervisor = structBody(read('src/cluster.rs'), 'pub(crate) async fn run_pubsub_listener(');
+const clusterListenerTransport = rustItemBody(cluster, 'pub(crate) struct ClusterPubsubListenerTransport');
+const clusterListenerSupervisor = rustItemBody(cluster, 'pub(crate) async fn run_pubsub_listener(');
 if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
     || /\bstate\.cluster\b/.test(clusterListenerSupervisor)
     || !clusterListener.includes('transport.confirm_generation(')
@@ -3830,16 +3833,16 @@ for (const invariant of [
 if (!/renewal\s*\.await/.test(structuredCleanupRenewal)) {
   throw new Error('administrator cleanup must await its cancelled lease renewal');
 }
-const clusterFailureSupervisor = structBody(
-  read('src/cluster.rs'),
+const clusterFailureSupervisor = rustItemBody(
+  cluster,
   'pub async fn run_failure_supervisor(',
 );
 const clusterFailureContext = structBody(
   read('src/state/cluster_failure_supervisor.rs'),
   'pub(crate) struct ClusterFailureSupervisorContext',
 );
-const clusterFailureAuthority = structBody(
-  read('src/cluster.rs'),
+const clusterFailureAuthority = rustItemBody(
+  cluster,
   'pub(crate) struct ClusterFailureSupervisorAuthority',
 );
 if (!clusterFailureSupervisor.includes('context.replay_maintenance')
@@ -3868,8 +3871,8 @@ for (const invariant of ['authority.require_shutdown()', 'anyhow::bail!']) {
     throw new Error(`cluster failure policy lost fail-closed transition: ${invariant}`);
   }
 }
-const accountRevocationWorker = structBody(
-  read('src/cluster.rs'),
+const accountRevocationWorker = rustItemBody(
+  cluster,
   'pub(crate) async fn run_account_revocations<',
 );
 if (!mainSource.includes('state.account_revocation_worker_context()')

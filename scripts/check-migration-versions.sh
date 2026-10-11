@@ -1422,6 +1422,8 @@ if grep -Eq 'SECURITY DEFINER|public\.' "$mix_cluster_handoff_migration"; then
     echo "migration 0137 must not use public schema or a broad database capability" >&2
     exit 1
 fi
+# src/cluster.rs may be split into child module files: read its production module.
+cluster_production_source=$(module_source --production src/cluster.rs) || exit 1
 for required_source_fragment in \
     'NodeDeliveryContract::DurableMix' \
     'ClusterMixHandoff' \
@@ -1430,8 +1432,8 @@ for required_source_fragment in \
     'consume_mix_cluster_delivery_fence_tx' \
     'SocketFenced'
 do
-    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" | grep -Fq "$required_source_fragment" \
-       && ! grep -Fq "$required_source_fragment" src/cluster.rs src/db/sm.rs src/services/mix.rs src/xmpp/mod.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" "$cluster_production_source" | grep -Fq "$required_source_fragment" \
+       && ! grep -Fq "$required_source_fragment" src/db/sm.rs src/services/mix.rs src/xmpp/mod.rs; then
         echo "MIX cluster ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi

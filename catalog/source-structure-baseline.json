@@ -10,7 +10,6 @@
     "src/api/system.rs": 1813,
     "src/bosh.rs": 3229,
     "src/bosh/response_owner.rs": 2884,
-    "src/cluster.rs": 8553,
     "src/cluster/listener.rs": 1637,
     "src/components.rs": 2638,
     "src/config.rs": 4279,

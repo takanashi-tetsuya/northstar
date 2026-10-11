@@ -257,7 +257,8 @@ const state = readProductionModule('src/state.rs', { root });
 // src/cluster.rs is read as its whole production module too (listener.rs,
 // pool.rs and the files a split adds), with items read by unique declaration
 const cluster = readProductionModule('src/cluster.rs', { root });
-const configSource = read('src/config.rs');
+// src/config.rs and its non-test child files (the whole production module)
+const configSource = readProductionModule('src/config.rs', { root });
 const mainSource = read('src/main.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
 const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
@@ -800,14 +801,14 @@ if (
 ) {
   throw new Error('production command mode must keep its separately attested command-role pool');
 }
-const adminCommandPoolMode = structBody(configSource, 'pub(crate) enum AdminCommandPoolMode');
+const adminCommandPoolMode = rustItemBody(configSource, 'pub(crate) enum AdminCommandPoolMode');
 if (
   !/^\s*DedicatedProductionRole\s*,?\s*$/m.test(adminCommandPoolMode) ||
   !/^\s*SharedUnsafeDevelopment\s*,?\s*$/m.test(adminCommandPoolMode)
 ) {
   throw new Error('command-pool modes must distinguish dedicated production from shared unsafe development');
 }
-const resolveAdminCommandPoolMode = structBody(
+const resolveAdminCommandPoolMode = rustItemBody(
   configSource,
   'fn resolve_admin_command_pool_mode(',
 );
@@ -821,7 +822,7 @@ if (
 ) {
   throw new Error('unsafe command mode must reject a separate command URL and select primary-pool sharing');
 }
-const runtimePoolBudget = structBody(configSource, 'fn validate_runtime_pool_budget(');
+const runtimePoolBudget = rustItemBody(configSource, 'fn validate_runtime_pool_budget(');
 if (
   !/pub\(crate\)\s+const\s+DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*:\s*u32\s*=\s*2\s*;/.test(
     configSource,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { readProductionModule } from './lib/source-module.mjs';
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
@@ -18,7 +19,8 @@ const [abuse, abuseTransaction, abuseVerification, config, envExample, apiRouter
   ]).then(parts => parts.join('\n')),
   read('src/db/abuse_transaction_repository.rs'),
   read('src/db/abuse_verification_repository.rs'),
-  read('src/config.rs'), read('.env.example'),
+  // src/config.rs and its non-test child files (the whole production module)
+  readProductionModule('src/config.rs'), read('.env.example'),
   read('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), read('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
   read('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/db/account_repository.rs'), read('src/account_recovery.rs'), read('src/db/users.rs'), read('src/db/api_control.rs'), read('src/error.rs'), read('src/xmpp/xml_util.rs'),

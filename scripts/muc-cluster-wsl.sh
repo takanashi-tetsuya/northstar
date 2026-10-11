@@ -11,6 +11,27 @@ require_literal() {
   fi
 }
 
+# Production source of a Rust module (repository-relative path, resolved by the
+# module reader against this checkout): the file plus its non-test child module
+# files, so a contract keeps holding after the module is split.
+module_source() {
+  local module_file="$1" text
+  if ! text="$(node "$project_dir/scripts/lib/source-module.mjs" cat --production "$module_file")"; then
+    echo "MUC cluster static contract cannot read module source: $module_file" >&2
+    exit 1
+  fi
+  printf '%s\n' "$text"
+}
+
+require_module_literal() {
+  local module_file="$1" literal="$2" contract="$3" text
+  text="$(module_source "$module_file")" || exit 1
+  if ! grep -Fq -- "$literal" <<<"$text"; then
+    echo "MUC cluster static contract is missing: $contract ($module_file module: $literal)" >&2
+    exit 1
+  fi
+}
+
 # Fail before starting any runtime when the authoritative schema/source shape
 # was accidentally weakened. These checks complement, but never replace, the
 # disposable PostgreSQL and two-node fault scenarios below.
@@ -36,15 +57,16 @@ require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql"
   "cluster MUC handoff has no exact authoritative history" "handoff history authority fence"
 require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
   "REVOKE ALL ON FUNCTION northstar_transfer_cluster_muc_outbox" "outbox mutation privilege revocation"
+cluster_muc_module_source="$(module_source "src/db/cluster_muc.rs")" || exit 1
 if grep -Fq -- "northstar.cluster_muc_resume_handoff" \
   "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
-  "$project_dir/src/db/cluster_muc.rs"; then
+  || grep -Fq -- "northstar.cluster_muc_resume_handoff" <<<"$cluster_muc_module_source"; then
   echo "cluster MUC handoff must not trust a caller-controlled GUC" >&2
   exit 1
 fi
-require_literal "$project_dir/src/db/cluster_muc.rs" \
+require_module_literal "src/db/cluster_muc.rs" \
   'parent.claim_token=$4' "parent claim-token fence"
-require_literal "$project_dir/src/db/cluster_muc.rs" \
+require_module_literal "src/db/cluster_muc.rs" \
   'lease_until>clock_timestamp()' "lease ownership predicate"
 require_literal "$project_dir/migrations/0096_bosh_ack_ownership_bounds.sql" \
   "first_owned_at+INTERVAL '5 minutes'" "bounded first-owner interval"
@@ -56,17 +78,17 @@ require_literal "$project_dir/src/db/muc.rs" \
   "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency"
 require_literal "$project_dir/src/cluster/listener.rs" \
   "executable MUC control rejected" "untrusted executable MUC control rejection"
-require_literal "$project_dir/src/cluster.rs" \
+require_module_literal "src/cluster.rs" \
   "worker.delivery_read.recipient_snapshot(delivery).await" "recipient snapshot service boundary"
 require_literal "$project_dir/src/services/cluster_muc_delivery_read.rs" \
   "self.repository.recipient_snapshot(delivery).await" "recipient snapshot repository delegation"
 require_literal "$project_dir/src/db/cluster_muc_delivery_read_repository.rs" \
   "db::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await" "recipient snapshot authority"
-require_literal "$project_dir/src/db/cluster_muc.rs" \
+require_module_literal "src/db/cluster_muc.rs" \
   "mutate_cluster_muc_registration" "membership mutation authority"
-require_literal "$project_dir/src/db/cluster_muc.rs" \
+require_module_literal "src/db/cluster_muc.rs" \
   "grant_cluster_muc_invitation_in_tx" "invitation mutation authority"
-require_literal "$project_dir/src/cluster.rs" \
+require_module_literal "src/cluster.rs" \
   '"offline_affiliation"' "offline affiliation projection"
 
 redis_dir="$(mktemp -d -t northstar-muc-redis-XXXXXX)"

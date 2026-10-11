@@ -16,7 +16,6 @@ mod db;
 #[cfg(test)]
 mod direct_replay;
 mod error;
-mod identity_audit;
 mod jid;
 mod logging;
 mod mam_pubsub_parsing;
@@ -25,7 +24,6 @@ mod ocsp;
 mod operation_runtime;
 mod outbound;
 mod password_work;
-mod pie;
 mod retention;
 mod s2s;
 mod services;
@@ -37,10 +35,14 @@ mod subscription_cleanup;
 mod subservers;
 mod test_activation;
 mod tls;
+mod tools;
 mod transport_parsing;
 mod upload_worker;
 mod workers;
 mod xmpp;
+
+// Old paths of modules moved into layer directories (S4); WP-48 rewrites the callers and removes them.
+use tools::{identity_audit, pie};
 
 use anyhow::{Context, Result};
 use config::Config;

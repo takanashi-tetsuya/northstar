@@ -113,8 +113,14 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 
 盤點範圍同 5.1：`scripts/`、`catalog/`、`.github/`、`fuzz/`，以及 `src/`、`crates/` 中的 `include_str!`、
 `#[path]` 與以字串組出的原始碼路徑。`recovery/*.json` 是歷史快照的雜湊清單、`scripts/fixtures/**`
-與 `docs/evidence/**` 屬 R5 證據，都沒有程式拿來比對現行原始碼，不隨搬移修改。`docs/` 其餘文件與
-`crates/*/MIGRATION.md` 中的舊路徑留到 S6 一併修正。
+與 `docs/evidence/**` 屬 R5 證據，都沒有程式拿來比對現行原始碼，不隨搬移修改。
+`check-documentation-consistency.mjs` 要求 `README.md`、`docs/**` 等文件中的本地 Markdown 連結都存在，
+因此指向被搬檔案的連結（`docs/TRACEABILITY.md` 18 處、`docs/architecture/resource-bounds.zh-TW.md`
+6 處）也是路徑綁定，在同一 WP 改寫。這項綁定在 WP-41 的完整 CI 才發現，之後改以掃描全部連結的
+腳本盤點，結果列入下表。只在內文提到的舊路徑（`docs/` 與 `crates/*/MIGRATION.md`），以及
+`resource-bounds` 連結上已過時的行號錨點，留到 S6 一併修正。tracing 事件的預設 target 是模組路徑，
+搬移後會改變（例如 `rust_xmpp_server::tools::pie`）；`RUST_LOG` 設定、WSL 腳本與文件只篩選不搬移
+的模組（`cluster`、`s2s::inbound`、`xmpp::…`），因此不受影響。
 
 搬移規則：
 
@@ -126,17 +132,18 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    根，改為 `crate::`。
 3. 超標檔隨 `git mv` 改名時，基線條目同步改名、行數不變，並以 `git diff -M` 證明是同一檔案；這不
    放寬 R1，內容一有變更就照常適用。
-4. 門禁、目錄、fuzz 與 `include_str!` 綁定的路徑在同一 WP 改寫，並以反例確認新路徑仍受檢查。
+4. 門禁、目錄、fuzz、`include_str!` 與文件連結綁定的路徑在同一 WP 改寫，並以反例確認新路徑仍受
+   檢查。
 
 | WP | 目標 | 搬入的檔案 | 以檔案路徑綁定的門禁與資料 |
 | --- | --- | --- | --- |
-| WP-41 | `src/tools/` | `pie.rs`（2,779 行，超標）、`identity_audit.rs`（2,168 行，超標） | `check-database-role-boundaries.sh` 的 `pie_source`；`db/upload_tests.rs` 的 `include_str!("../pie.rs")` |
-| WP-42 | `src/security/` | `tls.rs`（2,190 行，超標）、`crl.rs`、`ocsp.rs`、`password_work.rs`、`abuse.rs`（2,622 行，超標）連同 `abuse/`、`account_recovery.rs` | `check-abuse.mjs` 與架構門禁讀 `abuse.rs`、`account_recovery.rs`，架構門禁另讀 `tls.rs`；`abuse/tests.rs` 的 migration `include_str!` 多一層 `../` |
-| WP-43 | `src/platform/` | `config.rs` 連同 `config/`、`error.rs`、`logging.rs`、`metrics.rs` | `check-abuse.mjs`（`config`、`error`）、架構門禁（`config` 以模組讀取）、`check-omemo.mjs`（`metrics`）；`config/environment.rs` 的 `.env.development.example` `include_str!` 多一層 `../` |
-| WP-44 | `src/runtime/` | `workers.rs`（1,717 行，超標）、`operation_runtime.rs` 連同目錄、`capacity_maintenance.rs`、`upload_worker.rs`（1,990 行，超標）、`retention.rs`、`subscription_cleanup.rs`、`connection_actors.rs`、`subservers.rs` 連同目錄、`test_activation.rs` | `catalog/runtime-experiments.json` 的 `owner`（workers、operation_runtime、upload_worker、subservers）與架構門禁的工作者註冊表、`check-subserver-boundaries.mjs`（retention、subscription_cleanup、subservers）、`test-source-module.mjs`（以 operation_runtime 為夾具）、`db/upload_tests.rs` 的 `include_str!("../upload_worker.rs")` |
+| WP-41 | `src/tools/` | `pie.rs`（2,779 行，超標）、`identity_audit.rs`（2,168 行，超標） | `check-database-role-boundaries.sh` 的 `pie_source`；`db/upload_tests.rs` 的 `include_str!("../pie.rs")`；`TRACEABILITY.md` 連結 1 處 |
+| WP-42 | `src/security/` | `tls.rs`（2,190 行，超標）、`crl.rs`、`ocsp.rs`、`password_work.rs`、`abuse.rs`（2,622 行，超標）連同 `abuse/`、`account_recovery.rs` | `check-abuse.mjs` 與架構門禁讀 `abuse.rs`、`account_recovery.rs`，架構門禁另讀 `tls.rs`；`abuse/tests.rs` 的 migration `include_str!` 多一層 `../`；`TRACEABILITY.md` 連結 6 處（abuse、crl、ocsp、tls） |
+| WP-43 | `src/platform/` | `config.rs` 連同 `config/`、`error.rs`、`logging.rs`、`metrics.rs` | `check-abuse.mjs`（`config`、`error`）、架構門禁（`config` 以模組讀取）、`check-omemo.mjs`（`metrics`）；`config/environment.rs` 的 `.env.development.example` `include_str!` 多一層 `../`；連結 7 處（`TRACEABILITY.md` 的 config 3、metrics 2，`resource-bounds` 的 config 2） |
+| WP-44 | `src/runtime/` | `workers.rs`（1,717 行，超標）、`operation_runtime.rs` 連同目錄、`capacity_maintenance.rs`、`upload_worker.rs`（1,990 行，超標）、`retention.rs`、`subscription_cleanup.rs`、`connection_actors.rs`、`subservers.rs` 連同目錄、`test_activation.rs` | `catalog/runtime-experiments.json` 的 `owner`（workers、operation_runtime、upload_worker、subservers）與架構門禁的工作者註冊表、`check-subserver-boundaries.mjs`（retention、subscription_cleanup、subservers）、`test-source-module.mjs`（以 operation_runtime 為夾具）、`db/upload_tests.rs` 的 `include_str!("../upload_worker.rs")`；連結 6 處（`TRACEABILITY.md` 的 operation_runtime、retention、upload_worker，`resource-bounds` 的 connection_actors 1、workers 2） |
 | WP-45 | `src/runtime/` | `main.rs` 的服務任務監督與關機通知（`ServiceTaskExit`、`await_shutdown_notifications`、`drain_service_tasks` 等）連同 `shutdown_notification_tests.rs` | 只移動拆分，依 R3 與只移動檢查；先盤點門禁對 `main.rs` 的讀取 |
-| WP-46 | `src/cluster/` | `cluster_security.rs` 併為 `cluster/security.rs` | `catalog/runtime-experiments.json` 兩處 |
-| WP-47 | `src/xmpp/`、`src/s2s/` | `components.rs`（2,638 行，超標）、`outbound.rs`、`transport_parsing.rs`、`mam_pubsub_parsing.rs`，依實際呼叫方歸入 | 架構、對外 XML 與執行門禁；`fuzz/fuzz_targets/bosh_ws_framing.rs` 的 `#[path = "../../src/transport_parsing.rs"]`、`check-parser-fuzz-coverage.mjs`、`test-parser-fuzz-coverage.mjs`、`fuzz/Cargo.toml` |
+| WP-46 | `src/cluster/` | `cluster_security.rs` 併為 `cluster/security.rs` | `catalog/runtime-experiments.json` 兩處；`TRACEABILITY.md` 連結 1 處 |
+| WP-47 | `src/xmpp/`、`src/s2s/` | `components.rs`（2,638 行，超標）、`outbound.rs`、`transport_parsing.rs`、`mam_pubsub_parsing.rs`，依實際呼叫方歸入 | 架構、對外 XML 與執行門禁；`fuzz/fuzz_targets/bosh_ws_framing.rs` 的 `#[path = "../../src/transport_parsing.rs"]`、`check-parser-fuzz-coverage.mjs`、`test-parser-fuzz-coverage.mjs`、`fuzz/Cargo.toml`；連結 3 處（`TRACEABILITY.md` 的 components、outbound，`resource-bounds` 的 outbound） |
 | WP-48 | — | 改寫呼叫端（`crate::<模組>` 改為 `crate::<層>::<模組>`）並刪除 `main.rs` 的暫時轉出，可依層再分 | 只改路徑，不改語義 |
 
 S4 後根目錄保留的檔案：`main.rs`；同名目錄的模組檔 `state.rs`、`cluster.rs`、`bosh.rs`、`storage.rs`
@@ -250,3 +257,4 @@ Stage 證據仍綁定其原提交。
 | WP-29 | 完成：`cluster.rs` 8,553 行拆出 delivery_contract／node_delivery／health／publisher／authority／worker_capabilities／teardown／maintenance_redis／recovery_replay／routing／muc_occupancy／muc_fanout／workers／muc_outbox 十四個子模組，既有子檔 listener、pool 與四個測試檔不動；父檔 571 行（保留常數含 `NODE_PROTOCOL_VERSION`、`ClusterManager` 結構、建構與能力存取器、`start_muc_outbox_delivery`），最大新子檔 `muc_outbox.rs` 787 行。431 個項目不變；219 處可見性變更全部是私有項目、欄位或方法改為 `pub(super)`；2,191 個測試名稱不變。routing、muc_fanout 只含 `impl ClusterManager` 區塊，不設 glob。拆分後 clippy 一次通過，門禁、自測與 `catalog/runtime-experiments.json` 都不需修改。authority 一步的方法範圍在 `ClusterMaintenanceRedis` 也有同名方法，提示產生器改以所屬 impl 區塊篩選，事後確認只搬走 `ClusterManager` 的方法。途中兩次中斷：以 SIGSTOP 暫停驅動程式使背景包裝視為結束而終止進行中的 agy，以只移動檢查確認 node_delivery 一步未留下改動；重開機清掉暫存區與第一個 worktree，工具由對話記錄重建，worktree 改放 `/home/liu/XMPP-worktrees/` 後自 dev 重跑全部 14 步。13 個反例均被抓到：`delivery_contract.rs` 的入站訊息契約驗證埠、`muc_outbox.rs` 的 outbox 窄清理介面、MUC 事件與受眾的獨立讀取、收件人快照邊界與離線從屬投影、`workers.rs` 的 Redis 租約維護權限、MUC 佔用協調窄埠與未登記的工作者、`maintenance_redis.rs` 的 Redis 維護配接器與釋放權杖、`worker_capabilities.rs` 的 pubsub listener 傳輸能力新增簽章者、`delivery_contract.rs` 與 `node_delivery.rs` 中改名的 `NodeDeliveryContract::DurableMix`、`routing.rs` 新增的原始對外 XML | 見 `git log --grep '\[WP-29\]'` |
 | WP-30 | 完成：`config.rs` 4,279 行拆出 raw／defaults／runtime_validation／domain_policy／components／web_origin／listeners／loading／parsing／secret_files 十個子模組，內嵌測試模組移為 `config/tests.rs`，既有子檔 environment 不動；父檔 292 行（保留連線預算常數與清單、命令池與儲存池模式解析、`Config` 結構、註冊／聯邦／外部路由／元件存取器與 `Deref`），最大正式子檔 `loading.rs`（`Config::from_env`）1,151 行。257 個項目不變；166 處可見性變更全部是私有項目、欄位或方法改為 `pub(super)`；2,191 個測試名稱不變。loading 只含 `impl Config` 區塊，不設 glob；`RawConfig` 的 serde `default = "…"` 經 `raw.rs` 的 `use super::*;` 與父檔私有的 defaults glob 解析。拆分後 clippy 一次通過，門禁與自測都不需修改。一輪回饋：搬移測試模組時 agy 漏掉 `host_meta_v2_advertises_only_bounded_public_literal_addresses` 一行斷言中的 `.is_err()`，由只移動檢查抓到，修正後測試主體與原檔逐位元組相同。7 個反例均被抓到：`raw.rs` 的 `RawConfig` 加上 `Clone`、`loading.rs` 刪去執行期連線預算檢查（含只在測試檔留下該呼叫）、`runtime_validation.rs` 放寬主連線池下限、`defaults.rs` 改動預設訊息突發量（含只在測試檔留下原值）、`loading.rs` 放寬訊息突發量的驗證範圍；兩個「只在測試檔」反例在 WP-20 時不會失敗，本 WP 補上。S2 的拆檔順序至此完成 | 見 `git log --grep '\[WP-30\]'` |
 | WP-32 | 完成：`cluster_listener_continuation_tests.rs`、`cluster_muc_routing_tests.rs`、`cluster_tests.rs`、`cluster_direct_admission_tests.rs` 移入 `src/cluster/`（去掉 `cluster_` 前綴，與 `mod` 名稱一致），`abuse_tests.rs` 移為 `src/abuse/tests.rs`；架構負責人以 `git mv` 搬檔，agy 刪去五行 `#[path]`，並把 `abuse/tests.rs` 中離線去重 migration 的 `include_str!` 路徑多加一層 `../`。cluster 四檔為純改名，模組路徑不變，2,191 個測試名稱不變。門禁以正式模組讀取 `cluster.rs`，依 `#[cfg(test)] mod` 排除這些子檔，門禁與自測都不需修改；基線移除五個根目錄測試檔。4 個反例均被抓到：必要片段只留在 `cluster/tests.rs`（入站訊息契約驗證埠，架構門禁）、`cluster/direct_admission_tests.rs`（`NodeDeliveryContract::DurableMix`，遷移檢查）、`cluster/muc_routing_tests.rs`（離線從屬投影，MUC 叢集靜態契約），以及在 `src/` 重新放入測試檔（結構門禁） | 見 `git log --grep '\[WP-32\]'` |
+| WP-41 | 完成：S4 第一包。`pie.rs`、`identity_audit.rs` 以 `git mv` 移入新的 `src/tools/`（純改名），`tools/mod.rs` 以 `pub(crate) mod` 宣告；`main.rs` 改為 `mod tools;`，以私有的 `use tools::{identity_audit, pie};` 保留舊路徑，呼叫端不變。agy 改寫資料庫角色門禁的 `pie_source`、`db/upload_tests.rs` 的 `include_str!`、基線的兩個超標條目（行數不變）與根目錄清單。2,191 個測試名稱只有 18 個 PIE／身分稽核測試多了 `tools::` 前綴。完整 CI 抓到盤點遺漏的文件連結（`TRACEABILITY.md` 指向舊的 `identity_audit.rs`），一輪回饋修正後，5.2 改以掃描全部連結補盤點其餘 S4 WP。4 個反例均被抓到：`tools/pie.rs` 改掉 migrator 連線字串的防護訊息、移除 PIE 連線池的 schema 固定（資料庫角色門禁）、在 `tools/pie.rs` 加一行（改名後的超標條目照常限制）、在 `src/` 放回 `pie.rs`（結構門禁） | 見 `git log --grep '\[WP-41\]'` |

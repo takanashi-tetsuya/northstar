@@ -22,7 +22,7 @@ if [[ "$test_database" != "xmpp_test" ]]; then
   exit 2
 fi
 
-for required in cargo psql sha256sum sha384sum; do
+for required in cargo psql sha256sum sha384sum node; do
   if ! command -v "$required" >/dev/null 2>&1; then
     echo "migration upgrade validation requires $required" >&2
     exit 2

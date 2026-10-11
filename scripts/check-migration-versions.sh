@@ -4,6 +4,25 @@ set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 
+# Text of a Rust module (repository-relative path): the file plus its child
+# module files, read with the module reader so a source contract keeps holding
+# after the module is split. `--production` leaves out test-only child files.
+module_source() {
+    node scripts/lib/source-module.mjs cat "$@" || {
+        echo "cannot read Rust module source: $*" >&2
+        exit 1
+    }
+}
+
+# One item of a Rust module's production files, found by its declaration text,
+# which must occur exactly once in the module.
+module_item() {
+    node scripts/lib/source-module.mjs item --production "$1" "$2" || {
+        echo "cannot read Rust item from module $1: $2" >&2
+        exit 1
+    }
+}
+
 invalid=$(find migrations -maxdepth 1 -type f -name '*.sql' -print \
     | grep -Ev '^migrations/[0-9]{4}_[a-z0-9_]+\.sql$' || true)
 if [ -n "$invalid" ]; then
@@ -767,7 +786,15 @@ if grep -Fq 'pg_try_advisory_xact_lock' "$mix_delivery_release_migration"; then
     echo "migration 0126 delete triggers must not acquire the producer capacity fence" >&2
     exit 1
 fi
-mix_ack_source=$(sed -n '/^async fn remove_mix_delivery_tx(/,/^async fn move_mix_delivery_to_dead_letter_tx(/p' src/db/mix.rs)
+# The MIX repository and protocol modules may be split into child module files,
+# so their source contracts read whole modules: required fragments must occur in
+# the production files, forbidden fragments must not occur in any file of the
+# module (tests included), and single functions are read by their own
+# declaration rather than up to whichever declaration follows them.
+mix_db_production_source=$(module_source --production src/db/mix.rs) || exit 1
+mix_db_module_source=$(module_source src/db/mix.rs) || exit 1
+mix_protocol_production_source=$(module_source --production src/xmpp/protocol/mix.rs) || exit 1
+mix_ack_source=$(module_item src/db/mix.rs 'async fn remove_mix_delivery_tx(') || exit 1
 for forbidden_fragment in \
     'mix_delivery_events' \
     'mix_delivery_capacity' \
@@ -790,12 +817,22 @@ for required_source_fragment in \
     'RETURNING event_id' \
     'SELECT jid,2 FROM input ORDER BY jid'
 do
-    if ! grep -Fq "$required_source_fragment" src/db/mix.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" | grep -Fq "$required_source_fragment"; then
         echo "MIX capacity implementation is missing concurrency invariant: $required_source_fragment" >&2
         exit 1
     fi
 done
-mix_capacity_fence_source=$(sed -n '/^async fn acquire_mix_delivery_admission_fence_tx(/,/^fn mix_delivery_capacity_bucket(/p' src/db/mix.rs)
+mix_capacity_fence_source=
+for mix_capacity_fence_function in \
+    acquire_mix_delivery_admission_fence_tx \
+    begin_mix_delivery_fenced_transaction \
+    reconcile_mix_delivery_capacity_committed \
+    begin_mix_delivery_admission
+do
+    mix_capacity_fence_item=$(module_item src/db/mix.rs "async fn $mix_capacity_fence_function(") || exit 1
+    mix_capacity_fence_source="$mix_capacity_fence_source
+$mix_capacity_fence_item"
+done
 if printf '%s\n' "$mix_capacity_fence_source" | grep -Fq 'pg_try_advisory_xact_lock'; then
     echo "MIX producer authority must block at transaction start, not reject ordinary contention" >&2
     exit 1
@@ -979,7 +1016,7 @@ do
     fi
 done
 if grep -Fq 'pg_try_advisory_xact_lock' "$mix_capacity_authority_migration" \
-   || grep -Fq 'mix-pam-operation-capacity-v1' src/db/mix.rs; then
+   || printf '%s\n' "$mix_db_module_source" | grep -Fq 'mix-pam-operation-capacity-v1'; then
     echo "MIX-PAM capacity must wait behind exact authority, not reject ordinary contention" >&2
     exit 1
 fi
@@ -1230,12 +1267,13 @@ for required_source_fragment in \
     'route_wake_generation: delivery.route_wake_generation' \
     'delivery.route_wake_generation,'
 do
-    if ! grep -Fq "$required_source_fragment" src/db/mix.rs src/db/mix_repository.rs src/services/mix.rs src/xmpp/protocol/mix.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" | grep -Fq "$required_source_fragment" \
+       && ! grep -Fq "$required_source_fragment" src/db/mix_repository.rs src/services/mix.rs; then
         echo "MIX route-wake epoch source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi
 done
-mix_delivery_retry_source=$(sed -n '/^async fn retry_mix_delivery_inner(/,/^pub async fn defer_mix_delivery(/p' src/db/mix.rs)
+mix_delivery_retry_source=$(module_item src/db/mix.rs 'async fn retry_mix_delivery_inner(') || exit 1
 for required_retry_fragment in \
     'let mut transaction = pool.begin().await?;' \
     'SELECT attempt_count,route_wake_generation' \
@@ -1260,7 +1298,7 @@ if printf '%s\n' "$mix_delivery_retry_source" | grep -Fq 'dead_letter_mix_delive
     echo "MIX retry terminal completion must stay in the locked retry transaction" >&2
     exit 1
 fi
-mix_delivery_retry_service_source=$(sed -n '/^    pub(crate) async fn retry_mix_delivery(/,/^    pub(crate) async fn defer_mix_delivery(/p' src/services/mix.rs)
+mix_delivery_retry_service_source=$(module_item src/services/mix.rs 'pub(crate) async fn retry_mix_delivery(') || exit 1
 for required_service_fragment in \
     'MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
     'MixDeliveryRetryOutcome::DeadLettered' \
@@ -1271,9 +1309,9 @@ do
         exit 1
     fi
 done
-if ! grep -Fq 'Re-admit one terminal projection at the recipient'\''s current queue tail.' src/db/mix.rs \
-   || ! grep -Fq 'SET next_sequence=mix_delivery_recipient_sequences.next_sequence+1' src/db/mix.rs \
-   || ! grep -Fq 'RETURNING next_sequence-1' src/db/mix.rs; then
+if ! printf '%s\n' "$mix_db_production_source" | grep -Fq 'Re-admit one terminal projection at the recipient'\''s current queue tail.' \
+   || ! printf '%s\n' "$mix_db_production_source" | grep -Fq 'SET next_sequence=mix_delivery_recipient_sequences.next_sequence+1' \
+   || ! printf '%s\n' "$mix_db_production_source" | grep -Fq 'RETURNING next_sequence-1'; then
     echo "MIX dead-letter requeue must allocate a fresh recipient tail sequence" >&2
     exit 1
 fi
@@ -1316,7 +1354,8 @@ for required_source_fragment in \
     'TransportOwnershipSource::Mix' \
     'BoshResponseOwnership'
 do
-    if ! grep -Fq "$required_source_fragment" src/db/mix.rs src/db/replay.rs src/db/sm.rs src/services/mix.rs src/services/replay.rs src/services/sm.rs src/bosh.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" | grep -Fq "$required_source_fragment" \
+       && ! grep -Fq "$required_source_fragment" src/db/replay.rs src/db/sm.rs src/services/mix.rs src/services/replay.rs src/services/sm.rs src/bosh.rs; then
         echo "MIX transport ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi
@@ -1391,7 +1430,8 @@ for required_source_fragment in \
     'consume_mix_cluster_delivery_fence_tx' \
     'SocketFenced'
 do
-    if ! grep -Fq "$required_source_fragment" src/cluster.rs src/db/mix.rs src/db/sm.rs src/services/mix.rs src/xmpp/mod.rs src/xmpp/protocol/mix.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" | grep -Fq "$required_source_fragment" \
+       && ! grep -Fq "$required_source_fragment" src/cluster.rs src/db/sm.rs src/services/mix.rs src/xmpp/mod.rs; then
         echo "MIX cluster ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi

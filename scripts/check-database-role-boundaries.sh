@@ -70,6 +70,19 @@ require_literal() {
   grep -Fq -- "$literal" "$file" || fail "$description"
 }
 
+# Like require_literal, for the production files of a Rust module given by its
+# repository-relative path (the file plus its non-test child module files), so
+# the contract keeps holding after the module is split.
+require_module_literal() {
+  local module_file=$1
+  local literal=$2
+  local description=$3
+  local text
+  text="$(node "$project_dir/scripts/lib/source-module.mjs" cat --production "$module_file")" \
+    || fail "cannot read Rust module source: $module_file"
+  grep -Fq -- "$literal" <<<"$text" || fail "$description"
+}
+
 service_block() {
   local service=$1
   awk -v target="$service" '
@@ -740,7 +753,7 @@ require_literal "$admin_commands_source" 'SELECT northstar_admin_command_user_li
   'XEP-0133 lifecycle mutation does not consume an execution claim'
 require_literal "$roster_source" 'SELECT northstar_user_bump_roster_version($1)' \
   'roster mutation still writes users directly'
-require_literal "$mix_source" 'SELECT northstar_user_bump_roster_version($1)' \
+require_module_literal src/db/mix.rs 'SELECT northstar_user_bump_roster_version($1)' \
   'MIX roster mutation still writes users directly'
 require_literal "$omemo_recovery_source" 'SELECT northstar_user_consume_recovery_generation($1,$2,$3)' \
   'OMEMO recovery does not use the exact bearer/generation capability'

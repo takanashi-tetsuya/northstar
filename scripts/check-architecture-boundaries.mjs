@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
 import { verifyNativeAckService } from './check-execution-boundaries.mjs';
-import { readProductionModule, readModule, rustItemBody } from './lib/source-module.mjs';
+import { moduleFiles, readProductionModule, readModule, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1363,6 +1363,11 @@ for (const [serviceMethod] of mixProducerMappings) {
   }
 }
 
+// Every file of the MIX repository module (src/db/mix.rs and its child module
+// files) is exempt from the src-wide repository-caller scans below, as the
+// single file was before the module was split.
+const mixRepositoryModuleFiles = new Set(moduleFiles('src/db/mix.rs', { root }));
+
 const mixDeliveryProducerBypassPattern = new RegExp(
   `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
 );
@@ -1378,7 +1383,7 @@ while (pendingMixDeliveryBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/db/mix_repository.rs' || relative === 'src/db/mix.rs') continue;
+    if (relative === 'src/db/mix_repository.rs' || mixRepositoryModuleFiles.has(relative)) continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixDeliveryProducerBypassPattern.test(production)) {
       mixDeliveryProducerBypasses.push(relative);
@@ -1410,7 +1415,8 @@ const mixRepositoryTransactionEntries = [
   'update_mix_participant_preference',
   'retract_mix_message',
 ];
-const mixRepositorySource = read('src/db/mix.rs');
+// whole production module (the file and its non-test child files)
+const mixRepositorySource = readProductionModule('src/db/mix.rs', { root });
 const mixRepositoryProduction = productionWithoutCfgTestModules(
   mixRepositorySource,
   'src/db/mix.rs',
@@ -1608,7 +1614,7 @@ while (pendingPamBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/db/mix_repository.rs' || relative === 'src/db/mix.rs') continue;
+    if (relative === 'src/db/mix_repository.rs' || mixRepositoryModuleFiles.has(relative)) continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixPamCapacityCallPattern.test(production)) mixPamCapacityBypasses.push(relative);
   }
@@ -1634,7 +1640,7 @@ while (pendingMixBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/db/mix_repository.rs' || relative === 'src/db/mix.rs') continue;
+    if (relative === 'src/db/mix_repository.rs' || mixRepositoryModuleFiles.has(relative)) continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixProducerCallPattern.test(production)) mixProducerBypasses.push(relative);
   }

@@ -140,12 +140,25 @@ fn affiliation_subject_does_not_forge_invitee_domain_authority() {
 
 #[test]
 fn registration_and_invitation_share_the_immutable_affiliation_journal() {
-    let source = include_str!("cluster_muc.rs");
+    let source = module_source();
     assert!(source.contains("self_register"));
     assert!(source.contains("self_unregister"));
     assert!(source.contains("ClusterMucAffiliationMutation::Invitation"));
     assert!(source.contains("offline_affiliation"));
     assert!(source.contains("MAX_OPERATION_AUDIENCE + 1"));
+}
+
+#[test]
+fn module_source_lists_every_child_module() {
+    let (_, parent) = MODULE_SOURCE[0];
+    let declared: std::collections::BTreeSet<&str> = parent
+        .lines()
+        .filter_map(|line| line.strip_prefix("mod ")?.strip_suffix(';'))
+        .filter(|name| *name != "tests")
+        .collect();
+    let listed: std::collections::BTreeSet<&str> =
+        MODULE_SOURCE[1..].iter().map(|(name, _)| *name).collect();
+    assert_eq!(declared, listed);
 }
 
 #[test]

@@ -19,7 +19,6 @@
     "src/db/archive.rs": 5256,
     "src/db/capacity.rs": 2195,
     "src/db/cluster_keys.rs": 1512,
-    "src/db/cluster_muc.rs": 5964,
     "src/db/data_lifecycle.rs": 1919,
     "src/db/messaging.rs": 1733,
     "src/db/mix.rs": 8619,

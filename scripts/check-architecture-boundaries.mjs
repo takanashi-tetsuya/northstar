@@ -2339,7 +2339,7 @@ for (const [name, source] of [
   ['GovernanceContext', read('src/state/governance.rs')],
   ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
   ['FederationOutboxService', read('src/services/federation_outbox.rs')],
-  ['TlsContext', read('src/tls.rs')],
+  ['TlsContext', read('src/security/tls.rs')],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],
@@ -3022,7 +3022,7 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
   throw new Error('new personal admission writes must never use legacy/plaintext evidence columns');
 }
 
-const abuseSource = read('src/abuse.rs');
+const abuseSource = read('src/security/abuse.rs');
 const abuseProductionSource = abuseSource.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0];
 if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
   throw new Error('message admission acceptance must remain behind its issued service/repository fence');
@@ -3716,7 +3716,7 @@ if (/\bstate\s*\.metrics\b/.test(mixProtocol)
     || !/self\s*\.\s*cluster_delivery\s*\.\s*send_mix\s*\(/.test(mixOutboxContext)) {
   throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
 }
-const accountRecoverySource = read('src/account_recovery.rs');
+const accountRecoverySource = read('src/security/account_recovery.rs');
 const accountRecoveryTelemetry = structBody(accountRecoverySource, 'pub(crate) struct AccountDeletionRecoveryTelemetry');
 if (/\.metrics\b/.test(accountRecoverySource)
     || /Arc<(?:crate::metrics::)?Metrics>/.test(accountRecoveryTelemetry)

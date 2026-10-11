@@ -5,7 +5,6 @@
     "test": 3000
   },
   "oversize": {
-    "src/abuse.rs": 2622,
     "src/api/mod.rs": 1913,
     "src/api/system.rs": 1813,
     "src/bosh.rs": 3229,
@@ -37,6 +36,8 @@
     "src/s2s/dns.rs": 1619,
     "src/s2s/inbound.rs": 3822,
     "src/s2s/outbound.rs": 2352,
+    "src/security/abuse.rs": 2622,
+    "src/security/tls.rs": 2190,
     "src/services/authentication.rs": 1980,
     "src/services/authentication/publication.rs": 2775,
     "src/services/messaging/direct_workflow.rs": 2247,
@@ -49,7 +50,6 @@
     "src/stage4_replay/compact.rs": 3431,
     "src/storage.rs": 1506,
     "src/storage/s3.rs": 1751,
-    "src/tls.rs": 2190,
     "src/tools/identity_audit.rs": 2168,
     "src/tools/pie.rs": 2779,
     "src/upload_worker.rs": 1990,
@@ -74,8 +74,6 @@
     "src/xmpp/xml_util.rs": 2697
   },
   "root_rust_files": [
-    "src/abuse.rs",
-    "src/account_recovery.rs",
     "src/auth.rs",
     "src/bosh.rs",
     "src/capacity_maintenance.rs",
@@ -84,7 +82,6 @@
     "src/components.rs",
     "src/config.rs",
     "src/connection_actors.rs",
-    "src/crl.rs",
     "src/direct_replay.rs",
     "src/error.rs",
     "src/jid.rs",
@@ -92,10 +89,8 @@
     "src/main.rs",
     "src/mam_pubsub_parsing.rs",
     "src/metrics.rs",
-    "src/ocsp.rs",
     "src/operation_runtime.rs",
     "src/outbound.rs",
-    "src/password_work.rs",
     "src/retention.rs",
     "src/shutdown_notification_tests.rs",
     "src/stage4_replay.rs",
@@ -104,7 +99,6 @@
     "src/subscription_cleanup.rs",
     "src/subservers.rs",
     "src/test_activation.rs",
-    "src/tls.rs",
     "src/transport_parsing.rs",
     "src/upload_worker.rs",
     "src/workers.rs"

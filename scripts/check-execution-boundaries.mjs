@@ -62,7 +62,7 @@ const files = {
 
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
-const productionModules = new Set(['muc', 'mixArchive']);
+const productionModules = new Set(['muc', 'mixArchive', 'mix']);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);
@@ -135,6 +135,30 @@ function productionModule(source) {
   const markers = [...codeOnly(source).matchAll(/\n#\[cfg\(test\)\]\s*\nmod\s+tests\b/g)];
   requireBoundary(markers.length <= 1, 'expected at most one test-module boundary');
   return markers.length ? source.slice(0, markers[0].index) : source;
+}
+
+// Remove every `#[cfg(test)]` module, inline block or `mod name;` declaration,
+// wherever it occurs. A production module read appends the child files after
+// the parent, so cutting at the first test module would also drop the children.
+function withoutTestModules(source) {
+  const code = codeOnly(source);
+  let output = '';
+  let cursor = 0;
+  for (const match of code.matchAll(/\n#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)?mod\s+\w+\s*([;{])/g)) {
+    if (match.index < cursor) continue;
+    let end = match.index + match[0].length;
+    if (match[1] === '{') {
+      let depth = 1;
+      for (; end < code.length && depth > 0; end++) {
+        if (code[end] === '{') depth++;
+        else if (code[end] === '}') depth--;
+      }
+      requireBoundary(depth === 0, 'unterminated test module');
+    }
+    output += source.slice(cursor, match.index);
+    cursor = end;
+  }
+  return output + source.slice(cursor);
 }
 
 function compact(source) { return source.replace(/\s+/g, ''); }
@@ -1546,8 +1570,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   const method = (source, name) => dense(body(source, `fn\\s+${name}\\b`));
   const implementation = (source, name) => body(source, `impl\\s+${name}\\b`);
   const core = productionModule(mixWorkerCore);
-  const mixTestBoundary = codeOnly(mix).search(/\n#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)?mod\s+\w+\b/);
-  const mixProduction = mixTestBoundary < 0 ? mix : mix.slice(0, mixTestBoundary);
+  const mixProduction = withoutTestModules(mix);
   const coreCode = dense(codeOnly(core));
   requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(core)),
     'MIX worker core must remain free of ambient effects');

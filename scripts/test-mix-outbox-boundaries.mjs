@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import test from 'node:test';
 import { verifyMixOutboxLifecycle } from './check-architecture-boundaries.mjs';
+import { readProductionModule } from './lib/source-module.mjs';
 
-const baseline = [
-  '../src/xmpp/protocol/mix.rs',
-  '../src/xmpp/protocol/mix/worker.rs',
-].map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8'))
-  .join('\n')
+// The whole production MIX protocol module (the file and its non-test child
+// files), so each mutation keeps finding its body after a module split.
+const baseline = readProductionModule('src/xmpp/protocol/mix.rs')
   .replace(/\r\n/g, '\n');
 
 // Mutate one real production body in memory. No Rust fixture is compiled or

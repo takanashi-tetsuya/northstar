@@ -529,8 +529,8 @@ if (!/service_control_applies\(\s*self\.process_started_at,\s*&control\s*,?\s*\)
 if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
-const mixProtocol = read('src/xmpp/protocol/mix.rs') + '\n' +
-  read('src/xmpp/protocol/mix/worker.rs');
+// whole production module (the file and its non-test child files)
+const mixProtocol = readProductionModule('src/xmpp/protocol/mix.rs', { root });
 const mixProtocolProduction = productionWithoutCfgTestModules(
   mixProtocol,
   'src/xmpp/protocol/mix.rs',
@@ -962,7 +962,9 @@ let protocolSqlxReferences = 0;
 let protocolPgPoolReferences = 0;
 const perFile = [];
 for (const name of protocolFiles) {
-  const source = fs.readFileSync(path.join(protocolDirectory, name), 'utf8');
+  // Each top-level protocol module is read with its non-test child files, so
+  // code moved into `protocol/<name>/` keeps being counted.
+  const source = readProductionModule(`src/xmpp/protocol/${name}`, { root });
   const productionSource = productionWithoutCfgTestModules(source, `${name} production`);
   const { authorityReferences, domainReferences } = classifyDbDependencies(
     productionSource,
@@ -1764,17 +1766,17 @@ if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
 // but not sufficient. Raw SQL or a locally wrapped PgPool would bypass the
 // `db::function` classifier, so reject every persistence-capability spelling
 // from these protocol modules. Alias and glob escapes are rejected above by
-// classifyDbDependencies.
+// classifyDbDependencies. Each module is read with its non-test child files.
 for (const [name, serviceAccessor, source] of [
-  ['pubsub.rs', 'pubsub_service', read('src/xmpp/protocol/pubsub.rs')],
-  ['pep.rs', 'pubsub_service', read('src/xmpp/protocol/pep.rs')],
-  ['mix.rs', 'mix_service', read('src/xmpp/protocol/mix.rs')],
-  ['mam.rs', 'mam_service', read('src/xmpp/protocol/mam.rs')],
-  ['privacy.rs', 'privacy_service', read('src/xmpp/protocol/privacy.rs')],
-  ['private.rs', 'private_storage_service', read('src/xmpp/protocol/private.rs')],
-  ['replay.rs', 'replay_service', read('src/xmpp/protocol/replay.rs')],
-  ['roster.rs', 'roster_service', read('src/xmpp/protocol/roster.rs')],
-  ['vcard.rs', 'profile_service', read('src/xmpp/protocol/vcard.rs')],
+  ['pubsub.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pubsub.rs', { root })],
+  ['pep.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pep.rs', { root })],
+  ['mix.rs', 'mix_service', readProductionModule('src/xmpp/protocol/mix.rs', { root })],
+  ['mam.rs', 'mam_service', readProductionModule('src/xmpp/protocol/mam.rs', { root })],
+  ['privacy.rs', 'privacy_service', readProductionModule('src/xmpp/protocol/privacy.rs', { root })],
+  ['private.rs', 'private_storage_service', readProductionModule('src/xmpp/protocol/private.rs', { root })],
+  ['replay.rs', 'replay_service', readProductionModule('src/xmpp/protocol/replay.rs', { root })],
+  ['roster.rs', 'roster_service', readProductionModule('src/xmpp/protocol/roster.rs', { root })],
+  ['vcard.rs', 'profile_service', readProductionModule('src/xmpp/protocol/vcard.rs', { root })],
 ]) {
   const dependency = classifyDbDependencies(source, name);
   if (dependency.authorityReferences !== 0) {
@@ -3942,9 +3944,9 @@ if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
     || /db::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
   throw new Error('locked MUC expiry worker must commit through its repository service');
 }
-const mixPresenceRecovery = structBody(read('src/xmpp/protocol/mix.rs'), 'pub(crate) fn start_mix_presence_recovery(');
+const mixPresenceRecovery = structBody(readProductionModule('src/xmpp/protocol/mix.rs', { root }), 'pub(crate) fn start_mix_presence_recovery(');
 const mixPresenceContext = read('src/state/mix_presence_recovery.rs');
-const verifiedMixPresence = structBody(read('src/xmpp/protocol/mix.rs'), 'async fn publish_verified_mix_presence_with(');
+const verifiedMixPresence = structBody(readProductionModule('src/xmpp/protocol/mix.rs', { root }), 'async fn publish_verified_mix_presence_with(');
 if (!state.includes('Arc::new(state.mix_presence_recovery_context())')
     || /\b(?:AppState|PgPool|ClusterManager)\b/.test(mixPresenceRecovery)
     || /\b(?:Arc<AppState>|PgPool|ClusterManager)\b/.test(mixPresenceContext)

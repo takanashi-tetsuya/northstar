@@ -26,7 +26,6 @@
     "src/db/mix_repository.rs": 2049,
     "src/db/muc.rs": 3149,
     "src/db/profile.rs": 1797,
-    "src/db/pubsub.rs": 4565,
     "src/db/pubsub_integration_tests.rs": 6108,
     "src/db/pubsub_repository.rs": 3531,
     "src/db/replay.rs": 2414,

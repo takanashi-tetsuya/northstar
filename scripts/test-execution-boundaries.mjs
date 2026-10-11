@@ -1003,14 +1003,14 @@ rejectsMixWorker('MIX shared worker port cannot grow a generic executor operatio
   "trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static { fn execute(&self);", /port must contain only/);
 test('MIX production port cannot retain an extra field', () => {
   assert.throws(() => verifyMixWorkerBoundaries(changed('mix',
-    'struct MixOutboxDeliveryPort {\n    context: Arc<MixOutboxContext>,\n}',
-    'struct MixOutboxDeliveryPort {\n    context: Arc<MixOutboxContext>,\n    retained: bool,\n}')),
+    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<MixOutboxContext>,\n}',
+    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<MixOutboxContext>,\n    retained: bool,\n}')),
   { message: 'execution boundary: MIX production port must retain only its existing context' });
 });
 test('MIX production port cannot substitute its context type', () => {
   assert.throws(() => verifyMixWorkerBoundaries(changed('mix',
-    'struct MixOutboxDeliveryPort {\n    context: Arc<MixOutboxContext>,\n}',
-    'struct MixOutboxDeliveryPort {\n    context: Arc<()>,\n}')),
+    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<MixOutboxContext>,\n}',
+    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<()>,\n}')),
   { message: 'execution boundary: MIX production port must retain only its existing context' });
 });
 rejectsMixWorker('MIX production route port cannot substitute its request', 'mix',

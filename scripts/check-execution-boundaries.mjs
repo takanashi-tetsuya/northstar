@@ -1095,7 +1095,7 @@ export function verifyRouteHelperBoundaries({ state, mixOutboxState, mix }) {
     "session_mix_capability_in(&self.sessions,&self.caps_by_jid,&self.pending_caps,full_jid)",
     "route helper session_mix_capability must preserve all exact capability map/index/key arguments");
   const route = item(mixCode, 'deliver_channel_stanza_inner',
-    "async fn deliver_channel_stanza_inner(context: &MixOutboxContext, delivery: ChannelStanzaDelivery<'_>, observation: Option<&mix_worker::RouteRequest>) -> Result<ChannelStanzaDeliveryOutcome>");
+    "pub(super) async fn deliver_channel_stanza_inner(context: &MixOutboxContext, delivery: ChannelStanzaDelivery<'_>, observation: Option<&mix_worker::RouteRequest>) -> Result<ChannelStanzaDeliveryOutcome>");
   const targets = 'letmutlocal_targets=context.session_entries_for(&recipient.jid);local_targets.sort_unstable_by(|(left,_),(right,_)|left.cmp(right));ifletSome(delivery_id)=durable_delivery_id{tracing::debug!(delivery_id=%delivery_id,target_count=local_targets.len());}letmuthad_deliverable_target=false;letmuthad_unknown_target=false;letmuthad_route_target=!local_targets.is_empty();letmutcluster_delivery_failed=false;letmutaccepted=false;letmuttransferred_to_recoverable_transport=false;for(jid,session)in&local_targets{matchcontext.session_mix_capability(jid){';
   const archive = route.indexOf('ifarchive{');
   requireBoundary(count(route, 'ifarchive{') === 1 && route.includes(targets) &&
@@ -1758,7 +1758,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
     'fnrenew(&self,request:&mix_worker::RenewalRequest)->implstd::future::Future<Output=Result<bool>>+Send;' +
     'fnsettle(&self,request:&mix_worker::SettlementRequest)->implstd::future::Future<Output=Result<mix_worker::SettlementResult>>+Send;',
     'MIX shared policy port must contain only route and observed renewal/settlement turns');
-  requireBoundary(dense(body(mixProduction, 'struct\\s+MixOutboxDeliveryPort\\b')) === 'context:Arc<MixOutboxContext>,',
+  requireBoundary(dense(body(mixProduction, 'struct\\s+MixOutboxDeliveryPort\\b')) === 'pub(super)context:Arc<MixOutboxContext>,',
     'MIX production port must retain only its existing context');
   const port = body(mixProduction, 'impl\\s+ClaimedMixDeliveryPort\\s+for\\s+MixOutboxDeliveryPort\\b');
   requireBoundary(method(port, 'route') === 'deliver_claimed_channel_stanza(&self.context,request).await' &&

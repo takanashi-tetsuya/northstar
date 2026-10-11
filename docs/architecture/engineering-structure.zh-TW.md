@@ -103,7 +103,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | --- | --- |
 | `xmpp/protocol/muc.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`（兩者 WP-14 起以模組讀取）、`check-outbound-xml-construction.mjs`（WP-11 起以模組讀取）、`check-database-role-boundaries.sh`（只要求父檔保留 `#[path = "muc_tests.rs"]`） |
 | `db/archive.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`（兩者 WP-15 起以模組讀取）、自身測試的 `include_str!("archive.rs")`（WP-25 起改讀 `MODULE_SOURCE`） |
-| `xmpp/protocol/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`test-mix-outbox-boundaries.mjs`（三者 WP-16 起以模組讀取）、`check-outbound-xml-construction.mjs`（WP-11 起以模組讀取）、`check-migration-versions.sh`（所列片段在 `mix.rs` 以外都另有出處，拆分不影響；改為模組讀取留待 `db/mix.rs` 的 S1）、`test-source-module.mjs`（只要求子檔含 `worker.rs`、不含 `stage4_saved`）、架構門禁的工作者註冊表與 `catalog/runtime-experiments.json` 的 `owner`（`mix-iq-relay-expiry`、`mix-presence-recovery` 綁定註冊所在的檔案，註冊搬進子檔時兩處同步修改，否則門禁直接失敗） |
+| `xmpp/protocol/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`test-mix-outbox-boundaries.mjs`（三者 WP-16 起以模組讀取）、`check-outbound-xml-construction.mjs`（WP-11 起以模組讀取）、`check-migration-versions.sh`（所列片段在 `mix.rs` 以外都另有出處，拆分不影響；改為模組讀取留待 `db/mix.rs` 的 S1）、`test-source-module.mjs`（只要求子檔含 `worker.rs`、不含 `stage4_saved`）、架構門禁的工作者註冊表與 `catalog/runtime-experiments.json` 的 `owner`（`mix-iq-relay-expiry`、`mix-presence-recovery` 綁定註冊所在的檔案，註冊搬進子檔時兩處同步修改，否則門禁直接失敗；WP-26 把兩個註冊留在父檔）。執行門禁逐字比對 `deliver_channel_stanza_inner` 的簽名與 `MixOutboxDeliveryPort` 的結構本體，兩者依 R3 改為 `pub(super)` 後，門禁的期望與自測的變異原文在 WP-26 同步更新 |
 | `db/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh` |
 | `state.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-session-lifecycle-boundary.mjs`、`check-subserver-boundaries.mjs`、`check-omemo.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh`、`catalog/runtime-experiments.json`、`.github/CODEOWNERS` |
 | `cluster.rs` | `check-architecture-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`muc-cluster-wsl.sh`（WP-13 起以模組讀取）、`cluster-wsl.py`（`NODE_PROTOCOL_VERSION`；CI 的 `test-cluster-*.py` 在匯入時即讀取）、`catalog/runtime-experiments.json` |
@@ -139,7 +139,10 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    模組深度不變，路徑原樣保留即判為相同。字串與字元字面值逐位元組比較，因此縮排變動不能改到多行
    字串內容；`include_str!` 路徑相對於所在檔案，檔案搬進子目錄時須改寫，會列為差異逐項審閱。被忽略的可見性
    修飾另以 `VISIBILITY:` 行列出供審閱，不影響結果。拆檔時 agy 逐字複製、不重排；`cargo fmt`
-   由架構負責人執行（確定性格式化，不屬撰寫程式）。
+   由架構負責人執行（確定性格式化，不屬撰寫程式）。內嵌測試模組搬成獨立檔案、少一層縮排後，
+   `cargo fmt` 可能改變寫法（WP-26 把 match 分支的 `=> { X }` 改成 `=> X,`），只移動檢查不正規化
+   這類差異而判為不同；此時以 rustfmt 格式化逐字複製的原模組本體，與新檔逐位元組比對，相同即證明
+   差異只來自格式化。
 4. agy 的檔案工具不受 worktree 限制（曾把修改寫進主 checkout）。規格一律寫明 worktree 的絕對
    路徑；每次 agy 執行前後，架構負責人以 `bash scripts/checkout-fingerprint.sh --exclude <該 worktree>`
    比對 `git worktree list` 列出的其他每個 checkout 的內容指紋（相對 HEAD 的 diff 與未追蹤檔內容
@@ -152,6 +155,11 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    相對於 repository 的路徑（它拒絕絕對路徑；WP-13 初版因此每項檢查都失敗，由反例抓到）。
    agy 逐字複製時會在多行 SQL 字串的續行多加一格空白（WP-22 一次、WP-25 兩次），都由逐位元組的
    字面值比較抓到；規格須明寫字串內的行首空白一律照原樣，即使數目是奇數或看似沒對齊。
+   agy 也會順手做語義相同的「改善」（WP-26 把 `stanza.clone()` 改成 `&stanza`），由只移動檢查
+   抓到；規格須明寫不得做任何改善，即使原寫法看似多餘。
+   門禁中逐字比對簽名或結構本體的期望，會因 R3 的可見性改寫而失敗（WP-26 的執行門禁兩處）。
+   S1 盤點以反例模擬搬移時，須依 R3 加上可見性，才能事先找出這類期望，列入拆分 WP 的規格，連同
+   自測中以原文作變異錨點的測試一起更新。
 6. 失敗輸出回饋到同一個 agy 對話（`--conversation`）修正，最多三輪；仍失敗則縮小 WP 範圍。
 7. 審閱通過後以 `[WP-xx]` 提交到 `dev`；推送後以該提交的完整 CI 為準，不沿用舊綠燈。
 
@@ -192,3 +200,4 @@ Stage 證據仍綁定其原提交。
 | WP-05 | 完成：只移動檢查依實際模組深度（子目錄＋內嵌模組層數）換算開頭的 `super::`，整個內嵌模組搬成獨立檔案時不再誤判；深度 0 與 1 的結果與舊規則相同。6 個新測試；以 `--after-rev` 重驗 WP-21／22／23／24／31 結果不變；以 `db/archive.rs` 的 `history_identity_pg_tests` 試搬，新規則判為相同、舊規則判為不同 | 見 `git log --grep '\[WP-05\]'` |
 | WP-25 | 完成：`db/archive.rs` 5,256 行拆為 personal_history／mix_archive／mam_query／mam_room／offline，三個內嵌測試模組改為獨立檔案（模組路徑與深度不變，依 WP-05 規則比對），父檔 306 行，最大正式子檔 `personal_history.rs` 843 行、測試檔 `history_identity_pg_tests.rs` 1,925 行。101 個項目不變；唯一的非搬移修改是自讀測試改讀 `MODULE_SOURCE`、migration 路徑多一層 `../`，另加守衛測試。35 項可見性變更全部是維持原範圍的寫法；測試名稱除新增守衛測試外不變。兩輪回饋修正 agy 在 SQL 字串內多加的空白；`MODULE_SOURCE` 依字母排列使順序相依的契約取錯片段，改為原檔順序。5 個反例（測試檔中的 `payload_value`、改壞房間鎖的釋放、改壞 MIX 封存提交、改壞精確重播比對、自清單移除子檔）均被抓到 | 見 `git log --grep '\[WP-25\]'` |
 | WP-16 | 完成：架構門禁、執行門禁與 `test-mix-outbox-boundaries.mjs` 對 `xmpp/protocol/mix.rs` 改以模組讀取；執行門禁原本在第一個測試模組處截斷原始碼，模組讀取後子檔接在父檔之後會被一併截掉，改為逐一移除 `#[cfg(test)]` 模組。盤點時發現架構門禁對協議層 `state.pool`／`sqlx::`／`PgPool`／db 依賴的計數只讀 `src/xmpp/protocol/` 頂層檔案，`mix/`、`federated_muc/` 等子目錄的正式程式碼不在內（`muc/` 另有 WP-14 的模組檢查）；改為逐一讀取各頂層模組。門禁輸出與測試數不變。反例：`mix/forms.rs`、`federated_muc/owner.rs` 加入 `sqlx::` 修改前通過、修改後失敗；三個受檢函式搬入新子檔後通過，在子檔中改壞則失敗；宣告為 `#[cfg(test)]` 的子檔不算正式程式碼；子檔內的測試模組被移除 | 見 `git log --grep '\[WP-16\]'` |
+| WP-26 | 完成：`xmpp/protocol/mix.rs` 7,647 行拆為 session／message／presence／channel_iq／channel_pubsub／channel_mam／iq_parse／payloads／federation／relay／local_delivery／channel_delivery／claimed，內嵌測試模組 `shared_claimed_delivery_policy_tests` 改為獨立檔案；父檔 296 行，保留命名空間常數、共用的網域輔助函式與兩個工作者註冊（`catalog/runtime-experiments.json` 的 `owner` 不變），最大子檔 `federation.rs` 997 行。361 個項目不變，118 項可見性變更全部是私有改為 `pub(super)`；2,187 個測試名稱不變。一輪回饋撤回 agy 把 `stanza.clone()` 改成 `&stanza` 的「改善」；`cargo fmt` 對搬出的測試檔重排 match 分支，以 rustfmt 格式化原模組本體逐位元組相同證明。執行門禁兩處逐字期望與兩個自測依 R3 可見性更新。6 個反例（`channel_delivery.rs` 的認領路由形狀、`message.rs` 的前景槽與 `sqlx::`、`presence.rs` 的路由 fence、`claimed.rs` 的認領 admission、`federation.rs` 的原始 XML）均被抓到。後續：只移動檢查正規化 rustfmt 的 match 分支寫法；`session.rs` 中 `push_mix_roster_update` 上方的文件註解描述的是投遞工作者（原檔即如此，屬內容修正） | 見 `git log --grep '\[WP-26\]'` |

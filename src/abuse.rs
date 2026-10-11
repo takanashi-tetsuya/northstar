@@ -2619,5 +2619,4 @@ fn max_penalty_decay_horizon(cooldown_step: Duration) -> Duration {
 }
 
 #[cfg(test)]
-#[path = "abuse_tests.rs"]
 mod tests;

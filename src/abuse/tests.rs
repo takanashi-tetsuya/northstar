@@ -1034,7 +1034,7 @@ fn offline_replay_grace_matches_the_database_trigger() {
         Duration::from_secs(30 * 24 * 60 * 60)
     );
     assert!(
-        include_str!("../migrations/0079_offline_message_dedupe.sql")
+        include_str!("../../migrations/0079_offline_message_dedupe.sql")
             .contains("INTERVAL '30 days'")
     );
 }

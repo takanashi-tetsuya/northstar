@@ -5,7 +5,7 @@
     "test": 3000
   },
   "oversize": {
-    "src/abuse.rs": 2623,
+    "src/abuse.rs": 2622,
     "src/api/mod.rs": 1913,
     "src/api/system.rs": 1813,
     "src/bosh.rs": 3229,
@@ -75,17 +75,12 @@
   },
   "root_rust_files": [
     "src/abuse.rs",
-    "src/abuse_tests.rs",
     "src/account_recovery.rs",
     "src/auth.rs",
     "src/bosh.rs",
     "src/capacity_maintenance.rs",
     "src/cluster.rs",
-    "src/cluster_direct_admission_tests.rs",
-    "src/cluster_listener_continuation_tests.rs",
-    "src/cluster_muc_routing_tests.rs",
     "src/cluster_security.rs",
-    "src/cluster_tests.rs",
     "src/components.rs",
     "src/config.rs",
     "src/connection_actors.rs",

@@ -555,17 +555,13 @@ pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken
 }
 
 #[cfg(test)]
-#[path = "cluster_listener_continuation_tests.rs"]
 mod listener_continuation_tests;
 
 #[cfg(test)]
-#[path = "cluster_muc_routing_tests.rs"]
 mod muc_routing_tests;
 
 #[cfg(test)]
-#[path = "cluster_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "cluster_direct_admission_tests.rs"]
 mod direct_admission_tests;

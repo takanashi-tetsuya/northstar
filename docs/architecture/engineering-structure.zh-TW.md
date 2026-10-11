@@ -85,7 +85,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | | WP-11 | `check-outbound-xml-construction.mjs` 的基線項目加上 `module`／`file` 範圍：`module` 以 `productionModuleFiles` 展開（拆出的子檔自動繼承預算）；子樹內已有既存發現的 `protocol.rs`、`services/mix.rs` 維持 `file` | 展開後的檔案集合包含原清單；在 `federated_muc/` 下放入原始 XML 字面值時失敗 |
 | | WP-12 | `check-architecture-boundaries.mjs` 對 `federated_muc.rs` 改用 `readProductionModule`；修正 2148／2259／2262 行在 template literal 中被吞掉的 `\b`、`\s`、`\.` 跳脫 | 修正後的禁止規則對注入的 `db::` 呼叫會失敗；現行原始碼仍通過 |
 | S2 拆大檔 | WP-2x | 一次拆一個大檔（順序：`federated_muc.rs` → `db/pubsub.rs`、`db/cluster_muc.rs`（後者先做 WP-13）→ `xmpp/protocol/muc.rs` → `db/archive.rs` → `xmpp/protocol/mix.rs` → `db/mix.rs` → `state.rs` → `cluster.rs` → `config.rs`） | 只移動差異檢查通過；fmt、受影響套件 check／clippy `-D warnings`、單元測試與相關門禁通過；基線下修 |
-| S3 測試歸位 | WP-3x | 7 個根目錄測試檔移入受測模組 | 測試數量與名稱集合不變 |
+| S3 測試歸位 | WP-3x | 7 個根目錄測試檔移入受測模組（WP-32 搬 cluster 四個與 abuse 一個；`shutdown_notification_tests.rs` 測的是 `main.rs` 的關機監督，`test_activation.rs` 是只因檔名被歸為測試的正式模組，兩者改在 S4 隨 `main.rs` 的程式碼搬入 `src/runtime/` 時歸位） | 測試數量與名稱集合不變 |
 | S4 根目錄分層 | WP-4x | 依 3.1 分組搬動，最後移除舊路徑轉出 | `src/` 根目錄只剩 `main.rs` 與各層目錄宣告 |
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
 | S6 文件收斂 | WP-6x | 修正 KNOWN_ISSUES 的 migration 數、README 的發佈敘述、HANDOFF 現況；`docs/README.md` 建立狀態地圖 | 文件一致性門禁通過 |
@@ -143,6 +143,9 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    `cargo fmt` 可能改變寫法（WP-26 把 match 分支的 `=> { X }` 改成 `=> X,`），只移動檢查不正規化
    這類差異而判為不同；此時以 rustfmt 格式化逐字複製的原模組本體，與新檔逐位元組比對，相同即證明
    差異只來自格式化。
+   內容不變的整檔搬移由架構負責人以 `git mv` 執行（檔案系統操作，與 `cargo fmt` 同樣不屬撰寫
+   程式；agy 不執行 shell，重新輸出數千行檔案只會增加逐字複製的風險）；檔內須隨之修改的部分
+   （`#[path]` 屬性、`include_str!` 相對路徑）仍交由 agy，再以 `git diff -M` 確認其餘內容不變（WP-32）。
 4. agy 的檔案工具不受 worktree 限制（曾把修改寫進主 checkout）。規格一律寫明 worktree 的絕對
    路徑；每次 agy 執行前後，架構負責人以 `bash scripts/checkout-fingerprint.sh --exclude <該 worktree>`
    比對 `git worktree list` 列出的其他每個 checkout 的內容指紋（相對 HEAD 的 diff 與未追蹤檔內容
@@ -156,7 +159,8 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    agy 逐字複製時會在多行 SQL 字串的續行多加一格空白（WP-22 一次、WP-25 兩次），都由逐位元組的
    字面值比較抓到；規格須明寫字串內的行首空白一律照原樣，即使數目是奇數或看似沒對齊。
    agy 也會順手做語義相同的「改善」（WP-26 把 `stanza.clone()` 改成 `&stanza`），由只移動檢查
-   抓到；規格須明寫不得做任何改善，即使原寫法看似多餘。
+   抓到；規格須明寫不得做任何改善，即使原寫法看似多餘。agy 也會漏抄片段（WP-30 搬移測試模組時
+   漏掉一個斷言中的 `.is_err()`），同樣由只移動檢查抓到並以一輪回饋修正。
    門禁中逐字比對簽名或結構本體的期望，會因 R3 的可見性改寫而失敗（WP-26 的執行門禁兩處）。
    S1 盤點以反例模擬搬移時，須依 R3 加上可見性，才能事先找出這類期望，列入拆分 WP 的規格，連同
    自測中以原文作變異錨點的測試一起更新。
@@ -209,3 +213,4 @@ Stage 證據仍綁定其原提交。
 | WP-28 | 完成：`state.rs` 7,744 行拆出 runtime_control／omemo_poll_admission／upload_runtime／suspended_muc／muc_resume／local_muc／federation_policy／local_session／runtime_config／telemetry_accessors／runtime_contexts／service_accessors／construction／admission_guards／jid_text 十五個子模組，兩個內嵌測試模組 muc_membership_snapshot_tests、route_helper_tests 移為獨立測試檔；父檔 656 行（保留 `AppState` 結構與兩個 `.supervise(` 註冊），最大正式子檔 `construction.rs` 1,363 行。1,262 個項目不變；106 處可見性變更全部維持原範圍（1 項 `pub(super)` 改為 `pub(crate)`，其餘是私有項目、欄位或方法改為 `pub(super)`）；2,191 個測試名稱不變。session-cleanup observer 的註冊隨 `AppState::new` 搬入 `construction.rs`，`catalog/runtime-experiments.json` 的 `owner` 同步修改，門禁與自測不需修改。拆分後一輪回饋：`jid_text.rs` 未用到的 `use super::*;` 刪除，`construction` 的 glob 只有測試使用而改加 `#[cfg(test)]`。途中兩次中斷：agy 用量額度耗盡使 `local_muc` 一步只複製未移除，還原後重跑；驅動程式的旁寫檢查在 worktree 目錄為空時誤報，改用 `nullglob` 並以只移動檢查確認該步後續接。13 個反例均被抓到：`runtime_control.rs` 的控制健康錯誤保留與新增的 runtime control refresh 工作者、`local_session.rs` 的 SM resume Pending 路由精確擁有權與憑證轉發、`construction.rs` 的 XEP-0133 命令池角色驗證、OMEMO 恢復輪詢專用池與未登記的工作者、`omemo_poll_admission.rs` 的准入上限與輪詢視窗重複計數、`suspended_muc.rs` 的 MUC SM 關聯快照、`service_accessors.rs` 新增的 AppState 服務存取器、`local_muc.rs` 的第二個 MUC outbox 啟動、目錄中過期的 observer `owner` | 見 `git log --grep '\[WP-28\]'` |
 | WP-29 | 完成：`cluster.rs` 8,553 行拆出 delivery_contract／node_delivery／health／publisher／authority／worker_capabilities／teardown／maintenance_redis／recovery_replay／routing／muc_occupancy／muc_fanout／workers／muc_outbox 十四個子模組，既有子檔 listener、pool 與四個測試檔不動；父檔 571 行（保留常數含 `NODE_PROTOCOL_VERSION`、`ClusterManager` 結構、建構與能力存取器、`start_muc_outbox_delivery`），最大新子檔 `muc_outbox.rs` 787 行。431 個項目不變；219 處可見性變更全部是私有項目、欄位或方法改為 `pub(super)`；2,191 個測試名稱不變。routing、muc_fanout 只含 `impl ClusterManager` 區塊，不設 glob。拆分後 clippy 一次通過，門禁、自測與 `catalog/runtime-experiments.json` 都不需修改。authority 一步的方法範圍在 `ClusterMaintenanceRedis` 也有同名方法，提示產生器改以所屬 impl 區塊篩選，事後確認只搬走 `ClusterManager` 的方法。途中兩次中斷：以 SIGSTOP 暫停驅動程式使背景包裝視為結束而終止進行中的 agy，以只移動檢查確認 node_delivery 一步未留下改動；重開機清掉暫存區與第一個 worktree，工具由對話記錄重建，worktree 改放 `/home/liu/XMPP-worktrees/` 後自 dev 重跑全部 14 步。13 個反例均被抓到：`delivery_contract.rs` 的入站訊息契約驗證埠、`muc_outbox.rs` 的 outbox 窄清理介面、MUC 事件與受眾的獨立讀取、收件人快照邊界與離線從屬投影、`workers.rs` 的 Redis 租約維護權限、MUC 佔用協調窄埠與未登記的工作者、`maintenance_redis.rs` 的 Redis 維護配接器與釋放權杖、`worker_capabilities.rs` 的 pubsub listener 傳輸能力新增簽章者、`delivery_contract.rs` 與 `node_delivery.rs` 中改名的 `NodeDeliveryContract::DurableMix`、`routing.rs` 新增的原始對外 XML | 見 `git log --grep '\[WP-29\]'` |
 | WP-30 | 完成：`config.rs` 4,279 行拆出 raw／defaults／runtime_validation／domain_policy／components／web_origin／listeners／loading／parsing／secret_files 十個子模組，內嵌測試模組移為 `config/tests.rs`，既有子檔 environment 不動；父檔 292 行（保留連線預算常數與清單、命令池與儲存池模式解析、`Config` 結構、註冊／聯邦／外部路由／元件存取器與 `Deref`），最大正式子檔 `loading.rs`（`Config::from_env`）1,151 行。257 個項目不變；166 處可見性變更全部是私有項目、欄位或方法改為 `pub(super)`；2,191 個測試名稱不變。loading 只含 `impl Config` 區塊，不設 glob；`RawConfig` 的 serde `default = "…"` 經 `raw.rs` 的 `use super::*;` 與父檔私有的 defaults glob 解析。拆分後 clippy 一次通過，門禁與自測都不需修改。一輪回饋：搬移測試模組時 agy 漏掉 `host_meta_v2_advertises_only_bounded_public_literal_addresses` 一行斷言中的 `.is_err()`，由只移動檢查抓到，修正後測試主體與原檔逐位元組相同。7 個反例均被抓到：`raw.rs` 的 `RawConfig` 加上 `Clone`、`loading.rs` 刪去執行期連線預算檢查（含只在測試檔留下該呼叫）、`runtime_validation.rs` 放寬主連線池下限、`defaults.rs` 改動預設訊息突發量（含只在測試檔留下原值）、`loading.rs` 放寬訊息突發量的驗證範圍；兩個「只在測試檔」反例在 WP-20 時不會失敗，本 WP 補上。S2 的拆檔順序至此完成 | 見 `git log --grep '\[WP-30\]'` |
+| WP-32 | 完成：`cluster_listener_continuation_tests.rs`、`cluster_muc_routing_tests.rs`、`cluster_tests.rs`、`cluster_direct_admission_tests.rs` 移入 `src/cluster/`（去掉 `cluster_` 前綴，與 `mod` 名稱一致），`abuse_tests.rs` 移為 `src/abuse/tests.rs`；架構負責人以 `git mv` 搬檔，agy 刪去五行 `#[path]`，並把 `abuse/tests.rs` 中離線去重 migration 的 `include_str!` 路徑多加一層 `../`。cluster 四檔為純改名，模組路徑不變，2,191 個測試名稱不變。門禁以正式模組讀取 `cluster.rs`，依 `#[cfg(test)] mod` 排除這些子檔，門禁與自測都不需修改；基線移除五個根目錄測試檔。4 個反例均被抓到：必要片段只留在 `cluster/tests.rs`（入站訊息契約驗證埠，架構門禁）、`cluster/direct_admission_tests.rs`（`NodeDeliveryContract::DurableMix`，遷移檢查）、`cluster/muc_routing_tests.rs`（離線從屬投影，MUC 叢集靜態契約），以及在 `src/` 重新放入測試檔（結構門禁） | 見 `git log --grep '\[WP-32\]'` |

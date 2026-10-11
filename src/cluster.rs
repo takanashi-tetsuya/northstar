@@ -34,6 +34,7 @@ mod pool;
 mod publisher;
 mod recovery_replay;
 mod routing;
+pub(crate) mod security;
 mod teardown;
 mod worker_capabilities;
 mod workers;

@@ -4,7 +4,6 @@ mod api;
 mod auth;
 mod bosh;
 mod cluster;
-mod cluster_security;
 mod components;
 mod db;
 #[cfg(test)]
@@ -26,6 +25,7 @@ mod transport_parsing;
 mod xmpp;
 
 // Old paths of modules moved into layer directories (S4); WP-48 rewrites the callers and removes them.
+use cluster::security as cluster_security;
 use platform::{config, error, logging, metrics};
 use runtime::{
     capacity_maintenance, connection_actors, operation_runtime, retention, subscription_cleanup,

@@ -1014,7 +1014,7 @@
       "id": "cluster",
       "title": "Cluster authority, control and recovery",
       "production_owner": {
-        "path": "src/cluster_security.rs",
+        "path": "src/cluster/security.rs",
         "anchor": "//! Application-layer authentication for the experimental Redis cluster bus."
       },
       "runtime_identities": [
@@ -1054,7 +1054,7 @@
       "budgets": {
         "contract": "Existing signed-envelope bounds, readiness fail-closed policy and worker-specific watchdogs.",
         "source": {
-          "path": "src/cluster_security.rs",
+          "path": "src/cluster/security.rs",
           "anchor": "const ENVELOPE_LIFETIME_SECONDS: i64 = 10;"
         }
       },

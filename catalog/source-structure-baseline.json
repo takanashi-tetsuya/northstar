@@ -77,7 +77,6 @@
     "src/auth.rs",
     "src/bosh.rs",
     "src/cluster.rs",
-    "src/cluster_security.rs",
     "src/components.rs",
     "src/direct_replay.rs",
     "src/jid.rs",

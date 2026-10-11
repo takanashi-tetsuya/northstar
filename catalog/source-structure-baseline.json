@@ -16,7 +16,6 @@
     "src/config.rs": 4279,
     "src/db/admin_commands.rs": 2877,
     "src/db/api_operations.rs": 3464,
-    "src/db/archive.rs": 5256,
     "src/db/capacity.rs": 2195,
     "src/db/cluster_keys.rs": 1512,
     "src/db/data_lifecycle.rs": 1919,

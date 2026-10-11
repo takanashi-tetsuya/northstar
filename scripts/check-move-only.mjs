@@ -7,6 +7,9 @@
 // .rs file under its child directory at <base-rev> with the working tree.
 //   * `use` items and bodyless `mod x;` items are dropped;
 //   * inline `mod x { ... }` items are expanded into their inner items;
+//   * inherent impl blocks (like `impl S { ... }`) are expanded into their members,
+//     keyed by the normalized impl header; trait impls stay whole; impl header
+//     comments are compared as their own item;
 //   * visibility qualifiers are removed;
 //   * in files under the child directory `super::super::` maps to `super::`
 //     and `super::` maps to `self::` (code moved one level down must reach
@@ -15,6 +18,8 @@
 //     closing delimiter is dropped (rustfmt reflow); string and char literal
 //     contents are compared byte for byte;
 //   * --allow-doc drops `//!` inner doc comments (new child-module headers).
+//   * comment-only remainders (e.g. trailing comments after the last item in a
+//     file or impl body) are compared as their own item.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -89,6 +94,7 @@ function splitItems(tokens) {
     } else if (t.text === ';' && depth === 0) { items.push(cur); cur = []; }
   }
   if (cur.some(significant)) items.push(cur);
+  else if (cur.some(t => t.kind === 'comment')) items.push(cur);
   return items;
 }
 
@@ -112,6 +118,54 @@ function stripVis(s) {
 
 export function normalizeItems(source, { isChild = false, allowDoc = false } = {}) {
   const result = [];
+
+  const normalizeTokenList = (item) => {
+    let visibility = [];
+    let parts = [];
+    for (let k = 0; k < item.length; k++) {
+      const t = item[k];
+      if (t.kind === 'ws') continue;
+      if (t.kind === 'comment') {
+        if (allowDoc && t.text.startsWith('//!')) continue;
+        parts.push(t.text.replace(/\s+/g, ' ').trim() + '\n');
+        continue;
+      }
+      if (t.kind === 'word' && t.text === 'pub') {
+        let j = k + 1; while (item[j]?.kind === 'ws') j++;
+        let visTokens = [t.text];
+        if (item[j]?.text === '(') {
+          let d = 0; 
+          for (; j < item.length; j++) { 
+            if (item[j].kind !== 'ws' && item[j].kind !== 'comment') {
+              visTokens.push(item[j].text);
+            }
+            if (item[j].text === '(') d++; 
+            else if (item[j].text === ')' && --d === 0) break; 
+          }
+          k = j;
+        }
+        let visStr = '';
+        for (let v of visTokens) {
+          if (v === 'in') visStr += v + ' ';
+          else visStr += v;
+        }
+        visibility.push(visStr.trim());
+        continue;
+      }
+      parts.push(t.text);
+    }
+    let s = parts.join('\u0001');
+    if (isChild) {
+      s = s.replace(/(^|\u0001)super\u0001:\u0001:\u0001super\u0001:\u0001:/g, '$1\u0002');
+      s = s.replace(/(^|\u0001)super\u0001:\u0001:/g, '$1self\u0001:\u0001:');
+      s = s.replace(/\u0002/g, 'super\u0001:\u0001:');
+    }
+    s = s.replace(/\u0001,\u0001(?=[)\]}])/g, '\u0001');
+    
+    const show = (str) => str.replace(/\u0001/g, ' ').replace(/\n /g, '\n').slice(0, 220);
+    return { key: s, visibility, excerpt: show(s) };
+  };
+
   const visit = (tokens) => {
     for (const item of splitItems(tokens)) {
       const head = stripVis(stripAttrs(item));
@@ -129,50 +183,79 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
         continue;
       }
       
-      let visibility = [];
-      let parts = [];
-      for (let k = 0; k < item.length; k++) {
-        const t = item[k];
-        if (t.kind === 'ws') continue;
-        if (t.kind === 'comment') {
-          if (allowDoc && t.text.startsWith('//!')) continue;
-          parts.push(t.text.replace(/\s+/g, ' ').trim() + '\n');
-          continue;
-        }
-        if (t.kind === 'word' && t.text === 'pub') {
-          let j = k + 1; while (item[j]?.kind === 'ws') j++;
-          let visTokens = [t.text];
-          if (item[j]?.text === '(') {
-            let d = 0; 
-            for (; j < item.length; j++) { 
-              if (item[j].kind !== 'ws' && item[j].kind !== 'comment') {
-                visTokens.push(item[j].text);
-              }
-              if (item[j].text === '(') d++; 
-              else if (item[j].text === ')' && --d === 0) break; 
+      if (head[0]?.text === 'impl') {
+        let bodyOpen = -1;
+        let depth = 0;
+        for (let j = item.length - 1; j >= 0; j--) {
+          if (item[j].kind === 'punct') {
+            if (item[j].text === '}') depth++;
+            else if (item[j].text === '{') {
+              depth--;
+              if (depth === 0) { bodyOpen = j; break; }
             }
-            k = j;
           }
-          let visStr = '';
-          for (let v of visTokens) {
-            if (v === 'in') visStr += v + ' ';
-            else visStr += v;
-          }
-          visibility.push(visStr.trim());
-          continue;
         }
-        parts.push(t.text);
+        
+        if (bodyOpen !== -1) {
+          const headerTokens = item.slice(0, bodyOpen);
+          const bodyTokens = item.slice(bodyOpen + 1, item.length - 1);
+          
+          const sigTokens = headerTokens.filter(t => t.kind !== 'ws' && t.kind !== 'comment');
+          let implIdx = sigTokens.findIndex(t => t.text === 'impl');
+          let angleDepth = 0;
+          let parenDepth = 0;
+          let isTraitImpl = false;
+          let prevSigToken = null;
+          for (let j = implIdx + 1; j < sigTokens.length; j++) {
+            const t = sigTokens[j];
+            if (t.kind === 'punct') {
+              if (t.text === '<') angleDepth++;
+              else if (t.text === '>') {
+                if (prevSigToken?.text !== '-') angleDepth--;
+              } else if (t.text === '(' || t.text === '[') parenDepth++;
+              else if (t.text === ')' || t.text === ']') parenDepth--;
+            } else if (t.kind === 'word') {
+              if (angleDepth === 0 && parenDepth === 0) {
+                if (t.text === 'for') { isTraitImpl = true; break; }
+                if (t.text === 'where') { break; }
+              }
+            }
+            prevSigToken = t;
+          }
+          
+          if (!isTraitImpl) {
+            const headerWithoutComments = headerTokens.filter(t => t.kind !== 'comment');
+            const headerNorm = normalizeTokenList(headerWithoutComments);
+            const headerComments = headerTokens.filter(t => t.kind === 'comment');
+            
+            if (headerComments.length > 0) {
+              const commentNorm = normalizeTokenList(headerComments);
+              if (commentNorm.key) {
+                result.push({
+                  key: headerNorm.key + '\u0003' + commentNorm.key,
+                  visibility: [],
+                  excerpt: commentNorm.excerpt
+                });
+              }
+            }
+            
+            for (const memberItem of splitItems(bodyTokens)) {
+              const memberNorm = normalizeTokenList(memberItem);
+              if (memberNorm.key) {
+                result.push({
+                  key: headerNorm.key + '\u0003' + memberNorm.key,
+                  visibility: memberNorm.visibility,
+                  excerpt: (headerNorm.excerpt + ' :: ' + memberNorm.excerpt).slice(0, 220)
+                });
+              }
+            }
+            continue;
+          }
+        }
       }
-      let s = parts.join('\u0001');
-      if (isChild) {
-        s = s.replace(/(^|\u0001)super\u0001:\u0001:\u0001super\u0001:\u0001:/g, '$1\u0002');
-        s = s.replace(/(^|\u0001)super\u0001:\u0001:/g, '$1self\u0001:\u0001:');
-        s = s.replace(/\u0002/g, 'super\u0001:\u0001:');
-      }
-      s = s.replace(/\u0001,\u0001(?=[)\]}])/g, '\u0001');
       
-      const show = (str) => str.replace(/\u0001/g, ' ').replace(/\n /g, '\n').slice(0, 220);
-      result.push({ key: s, visibility, excerpt: show(s) });
+      const norm = normalizeTokenList(item);
+      if (norm.key) result.push(norm);
     }
   };
   visit(lexRust(source));

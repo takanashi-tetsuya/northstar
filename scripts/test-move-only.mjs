@@ -182,3 +182,150 @@ test('h. CLI end to end in a temporary git repository', () => {
     fs.rmSync(tmpdir, { recursive: true, force: true });
   }
 });
+
+test('i. Parent impl S { fn a() {} fn b() {} } split into parent mod child; impl S { fn a() {} } and child use super::*; impl S { fn b() {} }: no removed, no added.', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} fn b() {} }', isChild: false }];
+  const after = [
+    { path: 'src/foo.rs', source: 'mod child; impl S { fn a() {} }', isChild: false },
+    { path: 'src/foo/child.rs', source: 'use super::*; impl S { fn b() {} }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 0);
+  assert.equal(res.added.length, 0);
+});
+
+test('j. Same split but the body of b changed in the child: DIFFERENT, and the removed and added excerpts both contain impl and b.', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} fn b() {} }', isChild: false }];
+  const after = [
+    { path: 'src/foo.rs', source: 'mod child; impl S { fn a() {} }', isChild: false },
+    { path: 'src/foo/child.rs', source: 'use super::*; impl S { fn b() { "changed" } }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 1);
+  assert.equal(res.added.length, 1);
+  assert.ok(res.removed[0].includes('impl') && res.removed[0].includes('b'));
+  assert.ok(res.added[0].includes('impl') && res.added[0].includes('b'));
+});
+
+test('k. Moving fn b from impl S to impl T (a different self type) in the child: DIFFERENT.', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} fn b() {} }', isChild: false }];
+  const after = [
+    { path: 'src/foo.rs', source: 'mod child; impl S { fn a() {} }', isChild: false },
+    { path: 'src/foo/child.rs', source: 'use super::*; impl T { fn b() {} }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 1);
+  assert.equal(res.added.length, 1);
+});
+
+test('l. impl<T: Clone> W<T> where T: Send { fn a() {} fn b() {} } split into two blocks with the same header: OK; with the where clause changed to T: Sync in the child block: DIFFERENT.', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl<T: Clone> W<T> where T: Send { fn a() {} fn b() {} }', isChild: false }];
+  const afterOk = [
+    { path: 'src/foo.rs', source: 'impl<T: Clone> W<T> where T: Send { fn a() {} }', isChild: false },
+    { path: 'src/foo/child.rs', source: 'impl<T: Clone> W<T> where T: Send { fn b() {} }', isChild: true }
+  ];
+  const resOk = compareItemSets(before, afterOk);
+  assert.equal(resOk.removed.length, 0);
+  assert.equal(resOk.added.length, 0);
+
+  const afterDiff = [
+    { path: 'src/foo.rs', source: 'impl<T: Clone> W<T> where T: Send { fn a() {} }', isChild: false },
+    { path: 'src/foo/child.rs', source: 'impl<T: Clone> W<T> where T: Sync { fn b() {} }', isChild: true }
+  ];
+  const resDiff = compareItemSets(before, afterDiff);
+  assert.equal(resDiff.removed.length, 1);
+  assert.equal(resDiff.added.length, 1);
+});
+
+test('m. Trait impls stay whole: normalizeItems of impl fmt::Display for S { fn fmt(&self) {} } returns exactly one item; normalizeItems of impl<F> S<F> where F: for<\'a> Fn(&\'a str) { fn a() {} fn b() {} } returns two items; normalizeItems of impl S<fn() -> u8> { fn a() {} fn b() {} } returns two items.', () => {
+  assert.equal(normalizeItems('impl fmt::Display for S { fn fmt(&self) {} }').length, 1);
+  assert.equal(normalizeItems('impl<F> S<F> where F: for<\'a> Fn(&\'a str) { fn a() {} fn b() {} }').length, 2);
+  assert.equal(normalizeItems('impl S<fn() -> u8> { fn a() {} fn b() {} }').length, 2);
+});
+
+test('n. A member whose visibility changes from none to pub(super) when moved into the child: no removed, no added, one visibilityChanges entry with before [] and after [\'pub(super)\'].', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} }', isChild: false }];
+  const after = [
+    { path: 'src/foo/child.rs', source: 'impl S { pub(super) fn a() {} }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 0);
+  assert.equal(res.added.length, 0);
+  assert.equal(res.visibilityChanges.length, 1);
+  assert.deepEqual(res.visibilityChanges[0].before, []);
+  assert.deepEqual(res.visibilityChanges[0].after, ['pub(super)']);
+});
+
+test('o. #[cfg(test)] impl S { fn a() {} } before and impl S { fn a() {} } after: DIFFERENT.', () => {
+  const before = [{ path: 'src/foo.rs', source: '#[cfg(test)] impl S { fn a() {} }', isChild: false }];
+  const after = [{ path: 'src/foo/child.rs', source: 'impl S { fn a() {} }', isChild: true }];
+  const res = compareItemSets(before, after);
+  assert.notEqual(res.removed.length, 0);
+  assert.notEqual(res.added.length, 0);
+});
+
+test('p. A trailing comment inside an impl body (impl S { fn a() {} // note\\n }) deleted after the split: DIFFERENT; a trailing comment at the end of a file deleted: DIFFERENT; the same trailing comment kept: OK.', () => {
+  const beforeBody = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} // note\n }', isChild: false }];
+  const afterBodyDiff = [{ path: 'src/foo/child.rs', source: 'impl S { fn a() {} }', isChild: true }];
+  assert.notEqual(compareItemSets(beforeBody, afterBodyDiff).removed.length, 0);
+
+  const beforeFile = [{ path: 'src/foo.rs', source: 'fn a() {}\n// note\n', isChild: false }];
+  const afterFileDiff = [{ path: 'src/foo/child.rs', source: 'fn a() {}', isChild: true }];
+  assert.notEqual(compareItemSets(beforeFile, afterFileDiff).removed.length, 0);
+
+  const afterFileOk = [{ path: 'src/foo/child.rs', source: 'fn a() {}\n// note\n', isChild: true }];
+  assert.equal(compareItemSets(beforeFile, afterFileOk).removed.length, 0);
+});
+
+test('q. In a child file, impl S { fn a() { super::super::x(); } } matches the parent\'s impl S { fn a() { super::x(); } }: OK.', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() { super::x(); } }', isChild: false }];
+  const after = [{ path: 'src/foo/child.rs', source: 'impl S { fn a() { super::super::x(); } }', isChild: true }];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 0);
+  assert.equal(res.added.length, 0);
+});
+
+test('r. A member duplicated into two child files: DIFFERENT with exactly one added.', () => {
+  const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} }', isChild: false }];
+  const after = [
+    { path: 'src/foo/child1.rs', source: 'impl S { fn a() {} }', isChild: true },
+    { path: 'src/foo/child2.rs', source: 'impl S { fn a() {} }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 0);
+  assert.equal(res.added.length, 1);
+});
+
+test('s. A /// doc comment on the impl header removed after the split: DIFFERENT.', () => {
+  const before = [{ path: 'src/foo.rs', source: '/// doc\nimpl S { fn a() {} }', isChild: false }];
+  const after = [{ path: 'src/foo/child.rs', source: 'impl S { fn a() {} }', isChild: true }];
+  const res = compareItemSets(before, after, { allowDoc: true });
+  assert.equal(res.removed.length, 1);
+  assert.equal(res.added.length, 0);
+});
+
+test('t. Extend nothing in test h; instead add a CLI end-to-end test like h in a temporary git repository...', () => {
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-move-only-t-'));
+  try {
+    execFileSync('git', ['init'], { cwd: tmpdir });
+    fs.mkdirSync(path.join(tmpdir, 'src'));
+    fs.writeFileSync(path.join(tmpdir, 'src/foo.rs'), 'impl S { fn a() {} fn b() { "B" } }');
+    execFileSync('git', ['add', '.'], { cwd: tmpdir });
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'init'], { cwd: tmpdir });
+    
+    fs.writeFileSync(path.join(tmpdir, 'src/foo.rs'), 'mod child; impl S { fn a() {} }');
+    fs.mkdirSync(path.join(tmpdir, 'src/foo'));
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/child.rs'), 'use super::*;\nimpl S { fn b() { "B" } }');
+    
+    const resOk = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo.rs'], { encoding: 'utf8' });
+    assert.equal(resOk.status, 0);
+    assert.ok(resOk.stdout.includes('MOVE-ONLY (items): OK'));
+    
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/child.rs'), 'use super::*;\nimpl S { fn b() { "C" } }');
+    const resDiff = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo.rs'], { encoding: 'utf8' });
+    assert.equal(resDiff.status, 1);
+    assert.ok(resDiff.stdout.includes('MOVE-ONLY (items): DIFFERENT'));
+  } finally {
+    fs.rmSync(tmpdir, { recursive: true, force: true });
+  }
+});

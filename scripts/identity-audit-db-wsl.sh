@@ -54,7 +54,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
-test_name="identity_audit::tests::postgres_audit_reports_all_rows_and_leaves_the_database_unchanged"
+test_name="tools::identity_audit::tests::postgres_audit_reports_all_rows_and_leaves_the_database_unchanged"
 if ! output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)"; then
   printf '%s\n' "$output"
   exit 1

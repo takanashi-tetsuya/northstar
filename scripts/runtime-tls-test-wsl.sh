@@ -97,14 +97,26 @@ run_crl_case() {
   local crl="$2"
   local role="$3"
   local expected="$4"
-  TEST_CRL_PATH="$crl_fixture/$crl" \
-  TEST_CRL_ROOT_PATH="$crl_fixture/root.pem" \
-  TEST_CRL_LEAF_PATH="$crl_fixture/$leaf" \
-  TEST_CRL_ROLE="$role" \
-  TEST_CRL_EXPECT_VALID="$expected" \
-    cargo test --locked \
-    crl::tests::validates_generated_server_or_client_revocation_fixture \
-    -- --ignored --exact --nocapture
+  local output
+  output="$(
+    TEST_CRL_PATH="$crl_fixture/$crl" \
+    TEST_CRL_ROOT_PATH="$crl_fixture/root.pem" \
+    TEST_CRL_LEAF_PATH="$crl_fixture/$leaf" \
+    TEST_CRL_ROLE="$role" \
+    TEST_CRL_EXPECT_VALID="$expected" \
+      cargo test --locked \
+      security::crl::tests::validates_generated_server_or_client_revocation_fixture \
+      -- --ignored --exact --nocapture 2>&1
+  )" || {
+    printf '%s\n' "$output"
+    return 1
+  }
+  printf '%s\n' "$output"
+  # An --exact selector that no longer names a test still exits successfully.
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
+    echo "expected exactly one CRL fixture test for $leaf with $crl as $role" >&2
+    return 1
+  fi
 }
 
 run_crl_case valid-server.pem crl.pem server true

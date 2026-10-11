@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import assert from "node:assert/strict";
+import { readProductionModule } from "./lib/source-module.mjs";
 
 function read(path) {
   return fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -39,7 +40,7 @@ const transport = read("src/xmpp/mod.rs");
 const bosh = read("src/bosh.rs");
 const replay = read("src/services/replay.rs");
 const sasl2 = read("src/xmpp/protocol/sasl2.rs");
-const state = read("src/state.rs");
+const state = readProductionModule("src/state.rs"); // whole production module
 
 verifyMucSmAssociationBoundary(state);
 // Keep the production ownership boundary tied to the helper's runtime test.

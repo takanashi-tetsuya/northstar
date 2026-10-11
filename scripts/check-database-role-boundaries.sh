@@ -510,11 +510,11 @@ require_literal "$grant_policy" "northstar-database-role-policy-v1" \
   'ACL reconciliation uses a different database policy lock key'
 require_literal "$main_source" 'db::attest_runtime_role(&pool).await?;' \
   'long-lived server does not attest its runtime database identity'
-require_literal "$state_source" 'crate::db::attest_admin_command_role(&command_pool).await?;' \
+require_module_literal src/state.rs 'crate::db::attest_admin_command_role(&command_pool).await?;' \
   'isolated XEP-0133 command pool does not attest its exact role'
 require_literal "$main_source" 'db::pin_public_application_schema(pool_options)' \
   'production migrator/runtime pools do not override DSN search_path options'
-require_literal "$state_source" \
+require_module_literal src/state.rs \
   'crate::db::pin_public_application_schema(omemo_recovery_pool_options)' \
   'isolated OMEMO recovery pool does not inherit the production schema pin'
 require_literal "$pie_source" 'crate::db::pin_public_application_schema(pool_options)' \

@@ -251,14 +251,16 @@ function classifyDbDependencies(source, moduleName) {
   return { authorityReferences, domainReferences };
 }
 
-const state = read('src/state.rs');
+// whole production module (the file and its non-test child files); items are
+// read by their unique declaration, so they keep being found after a split
+const state = readProductionModule('src/state.rs', { root });
 const configSource = read('src/config.rs');
 const mainSource = read('src/main.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
 const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
 const loopbackPostgresFixture = read('scripts/loopback-postgres-ci.sh');
 const ciWorkflow = read('.github/workflows/ci.yml');
-const appState = structBody(state, 'pub struct AppState');
+const appState = rustItemBody(state, 'pub struct AppState');
 const publicFields = countMatches(appState, /^\s*pub\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const publicFieldNames = [
@@ -377,7 +379,7 @@ const smAdapterBody = structBody(read('src/db/sm_repository.rs'), 'pub(crate) st
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(smAdapterBody)) {
   throw new Error('SM repository FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
 }
-const runtimeControlPoolConstruction = structBody(state, 'fn runtime_control_pool_options(');
+const runtimeControlPoolConstruction = rustItemBody(state, 'fn runtime_control_pool_options(');
 for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
@@ -388,7 +390,7 @@ for (const invariant of [
     throw new Error(`runtime-control pool lost its isolated runtime-pool invariant: ${invariant}`);
   }
 }
-const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
+const runtimeControlRefresh = rustItemBody(state, 'fn start_runtime_control_refresh(');
 const runtimeControlContext = read('src/state/runtime_control_refresh.rs');
 const runtimeControlRun = structBody(runtimeControlContext, 'pub(super) async fn run(');
 const runtimeControlAdapter = read('src/db/runtime_control_repository.rs');
@@ -425,8 +427,8 @@ if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
 if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
-const runtimeControlReservation = structBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
-const runtimeControlConnectOptions = structBody(state, 'fn runtime_control_connect_options(');
+const runtimeControlReservation = rustItemBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
+const runtimeControlConnectOptions = rustItemBody(state, 'fn runtime_control_connect_options(');
 if (runtimeControlConnectOptions.replace(/\s+/g, '') !== 'Ok(database_url.parse::<PgConnectOptions>()?.application_name("northstar-runtime-control"))') {
   throw new Error('runtime-control connection identity must only label the original parsed database URL');
 }
@@ -447,11 +449,11 @@ for (const invariant of [
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
-const runtimeControlConnect = structBody(state, 'async fn runtime_control_startup_connect<');
+const runtimeControlConnect = rustItemBody(state, 'async fn runtime_control_startup_connect<');
 if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
   throw new Error('runtime-control must use bounded startup admission with its handshake limit');
 }
-const runtimeControlAdmission = structBody(state, 'async fn startup_database_connect<');
+const runtimeControlAdmission = rustItemBody(state, 'async fn startup_database_connect<');
 for (const invariant of [
   'tokio::time::timeout_at(deadline,',
   'deadline.saturating_duration_since(tokio::time::Instant::now())',
@@ -470,7 +472,7 @@ if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Dur
     || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
   throw new Error('runtime-control cold handshake remains at most 3 s within one absolute 15 s admission budget');
 }
-const appStateConstruction = structBody(state, 'pub async fn new(');
+const appStateConstruction = rustItemBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
   throw new Error('AppState must receive the already-reserved runtime-control connection');
 }
@@ -511,7 +513,7 @@ if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
 if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
   throw new Error('AppState must transfer the reserved connection to the coordinated runtime-control worker');
 }
-const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
+const serviceControlInstallation = rustItemBody(state, 'pub fn install_service_shutdown(');
 if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {
   throw new Error('XEP-0133 service control must install the shutdown authority before the coordinator polls it');
 }
@@ -760,7 +762,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
 
 verifyMixOutboxLifecycle(mixProtocol);
 
-const commandPoolConstruction = structBody(state, 'pub async fn new(');
+const commandPoolConstruction = rustItemBody(state, 'pub async fn new(');
 for (const invariant of [
   'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',
   'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "XEP-0133 command",',
@@ -898,7 +900,7 @@ if (
 // narrow owner. AppState deliberately keeps Config for non-secret policy, so
 // leaving even an Option/Arc clone behind would make the secret reachable by
 // every protocol handler through `state.config`.
-const appStateNew = structBody(state, 'pub async fn new(');
+const appStateNew = rustItemBody(state, 'pub async fn new(');
 for (const field of [
   'bootstrap_admin_password',
   'turn_shared_secret',
@@ -1104,7 +1106,7 @@ if (
 ) {
   throw new Error('MIX outbox DB admission must acquire an owned permit from the shared capability');
 }
-const stateOutboxAdmission = structBody(state, 'pub struct AppState');
+const stateOutboxAdmission = rustItemBody(state, 'pub struct AppState');
 if (
   !/^\s*durable_outbox_database_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?$/m.test(
     stateOutboxAdmission,
@@ -3737,7 +3739,7 @@ if (!metricsEndpoint.includes('context: MetricsContext')
   throw new Error('private metrics endpoint must use a narrow live, read-only observability context');
 }
 const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
-const readinessContext = structBody(state, 'pub(crate) struct ReadinessContext');
+const readinessContext = rustItemBody(state, 'pub(crate) struct ReadinessContext');
 if (!readinessEndpoint.includes('context: ReadinessContext')
     || /Arc<AppState>|(?:AppState|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
     || countMatches(read('src/api/mod.rs'), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
@@ -3943,7 +3945,7 @@ if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
     || /bg_state\.metrics\b/.test(mainSource)) {
   throw new Error('background housekeeping must not retain the complete metrics registry');
 }
-const lockedMucExpiryWorker = structBody(state, 'fn start_locked_muc_expiry(');
+const lockedMucExpiryWorker = rustItemBody(state, 'fn start_locked_muc_expiry(');
 const lockedMucExpiryContext = read('src/state/locked_muc_expiry.rs');
 if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
     || !lockedMucExpiryContext.includes('.expire_locked_rooms(')
@@ -4023,9 +4025,14 @@ const stateServiceAccessors = [
 if (!state.includes('let upload_service = config.upload_mode.keeps_storage_runtime().then(')) {
   throw new Error('upload service must exist while the drain-read-only GET and DELETE routes are mounted');
 }
-const composedServiceAccessors = [
-  ...state.matchAll(/pub\(crate\)\s+fn\s+([a-z][a-z0-9_]*_service)\s*\(/g),
-].map((match) => match[1]);
+// AppState service accessors are the `pub(crate) fn *_service(` members of the
+// `impl AppState` blocks of the module; context types in child files have
+// their own accessors with the same names, which are not AppState capabilities.
+const composedServiceAccessors = [...state.matchAll(/^impl AppState \{/gm)].flatMap((block) => {
+  const open = block.index + block[0].length - 1;
+  return [...state.slice(open, matchingRustBrace(state, open))
+    .matchAll(/pub\(crate\)\s+fn\s+([a-z][a-z0-9_]*_service)\s*\(/g)].map((match) => match[1]);
+});
 assertExactUniqueInventory('AppState service accessor', composedServiceAccessors, stateServiceAccessors);
 for (const accessor of stateServiceAccessors) {
   if (!state.includes(`fn ${accessor}(`)) {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', subservers: 'src/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'src/retention.rs',
@@ -39,7 +40,9 @@ function exactFields(source, declaration, expected) {
 }
 
 export function readSubserverSources() {
-  return Object.fromEntries(Object.entries(files).map(([name, file]) => [name, fs.readFileSync(path.join(root, file), 'utf8')]));
+  // src/state.rs is read as its whole production module.
+  return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
+    name === 'state' ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, runtimeControl, cluster, responsibility }) {

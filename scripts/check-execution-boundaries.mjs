@@ -62,7 +62,7 @@ const files = {
 
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
-const productionModules = new Set(['muc', 'mixArchive', 'mix', 'mixDb']);
+const productionModules = new Set(['muc', 'mixArchive', 'mix', 'mixDb', 'state']);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);
@@ -880,8 +880,10 @@ export function verifyAuthPublicationBoundaries(sources) {
     ['letSome(prepared)=preparedelse{', `self.finalize_${kind}(`, `prepared.${kind}(`,
       `self.repository.finalize_${kind}_observed(`, ').await;', `invocation.${kind}_returned(&result);`, 'result'],
     `credential ${kind} service must retain the exact raw repository return`);
-  requireBoundary(method(state, 'finalize_resource_binding') === 'self.sm_service.finalize_binding_observed(connection_id,user_id,expected_auth_generation,full_jid,self.config.capacity_session_lease_seconds,device_id,fast_plan,observation).await' &&
-    method(state, 'finalize_sm_resume') === 'self.sm_service.finalize_resume_observed(request,observation).await',
+  // state is a whole module: drop each test module instead of cutting at the first
+  const stateProduction = withoutTestModules(state);
+  requireBoundary(method(stateProduction, 'finalize_resource_binding') === 'self.sm_service.finalize_binding_observed(connection_id,user_id,expected_auth_generation,full_jid,self.config.capacity_session_lease_seconds,device_id,fast_plan,observation).await' &&
+    method(stateProduction, 'finalize_sm_resume') === 'self.sm_service.finalize_resume_observed(request,observation).await',
     'credential state forwarding must preserve the actual lease and exact resume request');
   const registerCredential = method(frame, 'prepare_credential');
   ordered(registerCredential, ['letmutattempts=self.0.credential_attempts.lock().unwrap();', 'anyhow::ensure!(!attempts.closed)',

@@ -101,7 +101,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 
 | 目標 | 以檔案路徑綁定的門禁與資料 |
 | --- | --- |
-| `xmpp/protocol/muc.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-database-role-boundaries.sh` |
+| `xmpp/protocol/muc.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`（兩者 WP-14 起以模組讀取）、`check-outbound-xml-construction.mjs`（WP-11 起以模組讀取）、`check-database-role-boundaries.sh`（只要求父檔保留 `#[path = "muc_tests.rs"]`） |
 | `db/archive.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、自身測試的 `include_str!("archive.rs")` |
 | `xmpp/protocol/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`test-mix-outbox-boundaries.mjs`、`test-source-module.mjs`、`catalog/runtime-experiments.json` |
 | `db/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh` |
@@ -126,7 +126,10 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    略過。這組步驟先在乾淨基準提交上全數通過，之後任何失敗都歸因於該 WP。
    只移動檢查由 `node scripts/check-move-only.mjs [--allow-doc] <base-rev> <module.rs>` 執行
    （`--after-rev <rev>` 可事後稽核已提交的拆分），以「項目」為單位：拆分前後的頂層項目多重集合
-   必須相同；比較時忽略 `use`、無本體的 `mod x;`、可見性修飾、字面值以外的空白與 rustfmt 重排
+   必須相同。固有 impl 區塊（`impl 型別 { ... }`）展開為各成員，以「正規化後的 impl 標頭＋成員」
+   為鍵，因此同一型別的方法可分散到不同子檔各自的 `impl` 區塊，標頭（含屬性與 where 子句）不同
+   則判為不同；trait impl 無法拆開，維持整體比對。impl 標頭上的註解，以及檔尾、區塊尾只含註解的
+   部分，也各自作為項目比較（WP-04）。比較時忽略 `use`、無本體的 `mod x;`、可見性修飾、字面值以外的空白與 rustfmt 重排
    產生的尾逗號；子檔中的 `super::super::` 視為原本的 `super::`，單一的 `super::` 視為原本的
    `self::`；字串與字元字面值逐位元組比較，因此縮排變動不能改到多行字串內容。被忽略的可見性
    修飾另以 `VISIBILITY:` 行列出供審閱，不影響結果。拆檔時 agy 逐字複製、不重排；`cargo fmt`
@@ -174,3 +177,5 @@ Stage 證據仍綁定其原提交。
 | WP-22 | 完成：`db/pubsub.rs` 4,565 行拆為 node／subscription／affiliation／item／collection／disco／digest，父檔 1,161 行；109 個項目不變，以 `pub use self::子模組::*;` 轉出、可見性不動；agy 在 SQL 字面值內多加一個空白，由逐位元組字面值比較抓到並一輪修正 | 見 `git log --grep '\[WP-22\]'` |
 | WP-23 | 完成：`db/cluster_muc.rs` 5,964 行拆為 query／session_route／outbox／room／moderation／admin_batch／affiliation／occupancy，父檔 1,090 行；121 個項目不變，唯一可見性變更為 `grant_cluster_muc_invitation_in_tx` 由 `pub(super)` 改為等價的 `pub(in crate::db)`。兩個 `include_str!` 自讀測試改讀 `MODULE_SOURCE`（其中一個禁止型斷言原本已靜默失效），並以反例確認 | 見 `git log --grep '\[WP-23\]'` |
 | WP-03 | 完成：`scripts/check-move-only.mjs`、`scripts/run-ci-offline.mjs`、`scripts/checkout-fingerprint.sh`，兩組測試接入 CI `web-static`。新規則把子檔的單一 `super::` 視為原本的 `self::`，補上舊工具的盲點；以 `--after-rev` 重驗 WP-21／22／23／31，結果與當時一致。四輪回饋修正了路徑打錯時仍判通過、測試檔語法錯誤與 workflow 不支援寫法未直接失敗等問題 | 見 `git log --grep '\[WP-03\]'` |
+| WP-14 | 完成：架構與執行門禁對 `xmpp/protocol/muc.rs` 改以模組讀取（遙測檢查讀含測試子檔的全模組）。反例顯示舊的單檔讀取漏看既有子檔 `muc/presence.rs` 中的 `state.cluster`；`saved_stage4.rs` 的 `state.metrics` 與 `muc/message.rs` 的重複 `muc_message` 本體均如預期失敗 | 見 `git log --grep '\[WP-14\]'` |
+| WP-04 | 完成：只移動檢查把固有 impl 區塊展開為成員比對，trait impl 維持整體；impl 標頭註解與只含註解的結尾也納入比較。12 個新測試；以 `--after-rev` 重驗 WP-21／22／23 結果不變；兩輪回饋修正重構時被加倍的反斜線跳脫 | 見 `git log --grep '\[WP-04\]'` |

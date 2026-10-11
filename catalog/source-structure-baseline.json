@@ -70,7 +70,6 @@
     "src/xmpp/protocol/messaging/saved_case.rs": 2339,
     "src/xmpp/protocol/misc.rs": 1584,
     "src/xmpp/protocol/mix.rs": 7647,
-    "src/xmpp/protocol/muc.rs": 6165,
     "src/xmpp/protocol/muc/saved_stage4.rs": 2511,
     "src/xmpp/protocol/pep.rs": 3884,
     "src/xmpp/protocol/presence.rs": 1827,

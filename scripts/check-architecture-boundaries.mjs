@@ -257,8 +257,8 @@ const state = readProductionModule('src/state.rs', { root });
 // src/cluster.rs is read as its whole production module too (listener.rs,
 // pool.rs and the files a split adds), with items read by unique declaration
 const cluster = readProductionModule('src/cluster.rs', { root });
-// src/config.rs and its non-test child files (the whole production module)
-const configSource = readProductionModule('src/config.rs', { root });
+// src/platform/config.rs and its non-test child files (the whole production module)
+const configSource = readProductionModule('src/platform/config.rs', { root });
 const mainSource = read('src/main.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
 const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');

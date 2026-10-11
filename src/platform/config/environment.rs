@@ -40,7 +40,7 @@ mod tests {
     use super::{check_dotenv_result, load_dotenv};
     use std::{collections::HashMap, fs, io, path::PathBuf, process::Command};
 
-    const DEVELOPMENT_ENV: &str = include_str!("../../.env.development.example");
+    const DEVELOPMENT_ENV: &str = include_str!("../../../.env.development.example");
     const PROBE_ENV: &str = "NORTHSTAR_DOTENV_TEST_PROBE";
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             command
                 .args([
                     "--exact",
-                    "config::environment::tests::dotenv_subprocess_probe",
+                    "platform::config::environment::tests::dotenv_subprocess_probe",
                     "--nocapture",
                 ])
                 .env_clear()

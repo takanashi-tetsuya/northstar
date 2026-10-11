@@ -508,7 +508,7 @@ mod tests {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "logging::tests::stalled_stdio_child",
+                "platform::logging::tests::stalled_stdio_child",
                 "--nocapture",
             ])
             .env("NORTHSTAR_LOGGING_STALL_CHILD", "1")

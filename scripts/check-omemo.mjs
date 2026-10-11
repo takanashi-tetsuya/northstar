@@ -13,7 +13,7 @@ const recoveryRepository = fs.readFileSync(new URL('../src/db/omemo_recovery_rep
 const recoveryPoll = fs.readFileSync(new URL('../src/state/omemo_poll.rs', import.meta.url), 'utf8');
 const api = fs.readFileSync(new URL('../src/api/mod.rs', import.meta.url), 'utf8');
 const serverState = readProductionModule('src/state.rs'); // whole production module
-const metrics = fs.readFileSync(new URL('../src/metrics.rs', import.meta.url), 'utf8');
+const metrics = fs.readFileSync(new URL('../src/platform/metrics.rs', import.meta.url), 'utf8');
 
 function requirePattern(source, pattern, message) {
   if (!pattern.test(source)) throw new Error(message);

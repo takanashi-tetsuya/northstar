@@ -7,18 +7,15 @@ mod capacity_maintenance;
 mod cluster;
 mod cluster_security;
 mod components;
-mod config;
 mod connection_actors;
 mod db;
 #[cfg(test)]
 mod direct_replay;
-mod error;
 mod jid;
-mod logging;
 mod mam_pubsub_parsing;
-mod metrics;
 mod operation_runtime;
 mod outbound;
+mod platform;
 mod retention;
 mod s2s;
 mod security;
@@ -37,6 +34,7 @@ mod workers;
 mod xmpp;
 
 // Old paths of modules moved into layer directories (S4); WP-48 rewrites the callers and removes them.
+use platform::{config, error, logging, metrics};
 use security::{abuse, account_recovery, crl, ocsp, password_work, tls};
 use tools::{identity_audit, pie};
 

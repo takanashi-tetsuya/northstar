@@ -1738,7 +1738,7 @@ resolve_current_build_binary() {
 }
 
 load_runtime_connection_budget() {
-  # The binary emits these facts directly from src/config.rs.  Parsing the
+  # The binary emits these facts directly from src/platform/config.rs.  Parsing the
   # small, versioned document here makes an auxiliary-pool change fail the
   # fixture capacity gate rather than silently undercounting PostgreSQL use.
   local manifest parsed schema_version primary_min primary_max auxiliary

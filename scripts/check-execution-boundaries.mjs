@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
@@ -58,6 +59,10 @@ const files = {
   replayService: 'src/services/replay.rs',
   replayRepository: 'src/db/replay_repository.rs',
 };
+
+// Sources read as whole production modules (the file plus its non-test
+// child module files), so items keep being found after a module split.
+const productionModules = new Set(['muc']);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);
@@ -145,7 +150,7 @@ function ordered(source, steps, message) {
 
 export function readExecutionSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    fs.readFileSync(path.join(root, file), 'utf8')]));
+    productionModules.has(name) ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 // Drift detection for the existing native/compatibility MIX service boundary.

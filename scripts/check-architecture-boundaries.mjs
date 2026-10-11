@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
 import { verifyNativeAckService } from './check-execution-boundaries.mjs';
-import { readProductionModule, rustItemBody } from './lib/source-module.mjs';
+import { readProductionModule, readModule, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2559,8 +2559,10 @@ for (const handler of ['prepare_omemo_recovery', 'seal_omemo_recovery', 'get_ome
 // ARCH-SVC local XEP-0045 boundary: protocol code owns XML/session routing,
 // while all PostgreSQL reads, mutations and committed-outbox wake authority
 // pass through MucService. Inline DB fixtures are structurally masked rather
-// than hiding every item after the first cfg(test) marker.
-const mucProtocolSource = read('src/xmpp/protocol/muc.rs');
+// than hiding every item after the first cfg(test) marker. These checks apply
+// to the whole production module (the file and its non-test child files), so
+// code moved into a child file stays covered.
+const mucProtocolSource = readProductionModule('src/xmpp/protocol/muc.rs', { root });
 const mucProductionSource = productionWithoutCfgTestModules(
   mucProtocolSource,
   'muc.rs production',
@@ -3678,7 +3680,8 @@ if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
     || countMatches(presenceClusterRouting, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
-const mucProtocol = read('src/xmpp/protocol/muc.rs');
+// reads the whole module including test-only child files
+const mucProtocol = readModule('src/xmpp/protocol/muc.rs', { root });
 if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
     || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');

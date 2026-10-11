@@ -51,7 +51,6 @@
     "src/services/sm.rs": 2403,
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431,
-    "src/state.rs": 7744,
     "src/storage.rs": 1506,
     "src/storage/s3.rs": 1751,
     "src/tls.rs": 2190,

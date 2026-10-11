@@ -1099,7 +1099,7 @@
         },
         {
           "id": "observer:session-cleanup",
-          "owner": "src/state.rs",
+          "owner": "src/state/construction.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

@@ -36,13 +36,13 @@ use tools::{identity_audit, pie};
 
 use anyhow::{Context, Result};
 use config::Config;
-use futures::FutureExt;
+use runtime::service_tasks::{
+    await_shutdown_notifications, drain_service_tasks, spawn_service_task,
+    unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use state::AppState;
-use std::{
-    any::Any, collections::BTreeMap, future::Future, net::SocketAddr, panic::AssertUnwindSafe,
-    path::PathBuf, sync::Arc,
-};
+use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -51,44 +51,9 @@ use zeroize::Zeroizing;
 
 const ABUSE_KEY_AUTHORITY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-const SERVICE_TASK_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-const SERVICE_TASK_ABORT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 const fn version_line() -> &'static str {
     concat!("xmpp-server ", env!("CARGO_PKG_VERSION"))
-}
-
-enum ServiceTaskExit {
-    Finished {
-        name: &'static str,
-        result: Result<()>,
-    },
-    Panicked {
-        name: &'static str,
-        message: String,
-    },
-}
-
-#[derive(Debug, Default)]
-struct ServiceTaskDrainReport {
-    joined: usize,
-    aborted: usize,
-    failures: Vec<String>,
-}
-
-fn spawn_service_task<F>(tasks: &mut JoinSet<ServiceTaskExit>, name: &'static str, future: F)
-where
-    F: Future<Output = Result<()>> + Send + 'static,
-{
-    tasks.spawn(async move {
-        match AssertUnwindSafe(future).catch_unwind().await {
-            Ok(result) => ServiceTaskExit::Finished { name, result },
-            Err(panic) => ServiceTaskExit::Panicked {
-                name,
-                message: panic_payload(panic),
-            },
-        }
-    });
 }
 
 struct MigrationEnvironment {
@@ -969,136 +934,6 @@ fn runtime_listener_addresses(
     Ok(addresses)
 }
 
-fn unexpected_service_task_exit(
-    result: Option<std::result::Result<ServiceTaskExit, tokio::task::JoinError>>,
-) -> anyhow::Error {
-    match result {
-        Some(Ok(ServiceTaskExit::Finished {
-            name,
-            result: Ok(()),
-        })) => anyhow::anyhow!("{name} task exited unexpectedly before service shutdown"),
-        Some(Ok(ServiceTaskExit::Finished {
-            name,
-            result: Err(error),
-        })) => error.context(format!("{name} task failed")),
-        Some(Ok(ServiceTaskExit::Panicked { name, message })) => {
-            anyhow::anyhow!("{name} task panicked: {message}")
-        }
-        Some(Err(error)) => anyhow::Error::from(error).context("unnamed service task failed"),
-        None => anyhow::anyhow!("every service task exited unexpectedly"),
-    }
-}
-
-async fn await_shutdown_notifications<F>(
-    cancel: &CancellationToken,
-    tasks: &mut JoinSet<ServiceTaskExit>,
-    notifications: F,
-    deadline: tokio::time::Instant,
-) -> anyhow::Result<Option<usize>>
-where
-    F: std::future::Future<Output = usize>,
-{
-    tokio::select! {
-        biased;
-        _ = cancel.cancelled() => Ok(None),
-        result = tasks.join_next() => Err(unexpected_service_task_exit(result)),
-        result = tokio::time::timeout_at(deadline, notifications) => {
-            match result {
-                Ok(confirmed) => Ok(Some(confirmed)),
-                Err(_) => {
-                    tracing::warn!("MUC shutdown notification window expired; unconfirmed endpoints will close without a write guarantee");
-                    Ok(None)
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "shutdown_notification_tests.rs"]
-mod shutdown_notification_tests;
-
-async fn drain_service_tasks(
-    tasks: &mut JoinSet<ServiceTaskExit>,
-    grace: std::time::Duration,
-) -> ServiceTaskDrainReport {
-    let mut report = ServiceTaskDrainReport::default();
-    let deadline = tokio::time::Instant::now() + grace;
-    while !tasks.is_empty() {
-        match tokio::time::timeout_at(deadline, tasks.join_next()).await {
-            Ok(Some(Ok(ServiceTaskExit::Finished { result: Ok(()), .. }))) => report.joined += 1,
-            Ok(Some(Ok(ServiceTaskExit::Finished {
-                name,
-                result: Err(error),
-            }))) => {
-                report.joined += 1;
-                report
-                    .failures
-                    .push(format!("{name} task failed during shutdown: {error:#}"));
-            }
-            Ok(Some(Ok(ServiceTaskExit::Panicked { name, message }))) => {
-                report.joined += 1;
-                report
-                    .failures
-                    .push(format!("{name} task panicked during shutdown: {message}"));
-            }
-            Ok(Some(Err(error))) => report
-                .failures
-                .push(format!("service task join failed during shutdown: {error}")),
-            Ok(None) => break,
-            Err(_) => {
-                report.aborted = tasks.len();
-                tasks.abort_all();
-                break;
-            }
-        }
-    }
-    if !tasks.is_empty() {
-        let deadline = tokio::time::Instant::now() + SERVICE_TASK_ABORT_DRAIN_TIMEOUT;
-        while !tasks.is_empty() {
-            match tokio::time::timeout_at(deadline, tasks.join_next()).await {
-                Ok(Some(Ok(_))) => {}
-                Ok(Some(Err(error))) if error.is_cancelled() => {}
-                Ok(Some(Err(error))) => report
-                    .failures
-                    .push(format!("service task failed after abort: {error}")),
-                Ok(None) => break,
-                Err(_) => {
-                    report.failures.push(format!(
-                        "{} service tasks did not terminate after abort",
-                        tasks.len()
-                    ));
-                    tasks.abort_all();
-                    break;
-                }
-            }
-        }
-    }
-    report
-}
-
-fn panic_payload(payload: Box<dyn Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "non-string panic payload".to_owned()
-    }
-}
-
-#[cfg(test)]
-async fn unexpected_task_exit(
-    name: &'static str,
-    task: tokio::task::JoinHandle<Result<()>>,
-) -> Result<()> {
-    match task.await {
-        Ok(Ok(())) => anyhow::bail!("{name} task exited unexpectedly before service shutdown"),
-        Ok(Err(error)) => Err(error).with_context(|| format!("{name} task failed")),
-        Err(error) => Err(error).with_context(|| format!("{name} task panicked")),
-    }
-}
-
 async fn container_healthcheck(address: &str) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1200,10 +1035,7 @@ fn init_logging(config: &Config) -> Result<logging::LogGuards> {
 
 #[cfg(test)]
 mod container_healthcheck_tests {
-    use super::{
-        container_healthcheck, drain_service_tasks, migration_environment_from_values,
-        spawn_service_task, unexpected_task_exit, version_line,
-    };
+    use super::{container_healthcheck, migration_environment_from_values, version_line};
     use std::path::PathBuf;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1274,76 +1106,6 @@ mod container_healthcheck_tests {
     async fn container_probe_rejects_hostnames_and_malformed_addresses() {
         assert!(container_healthcheck("localhost:8080").await.is_err());
         assert!(container_healthcheck("127.0.0.1").await.is_err());
-    }
-
-    #[tokio::test]
-    async fn successful_service_task_exit_is_an_error_with_its_name() {
-        let error = unexpected_task_exit("test listener", tokio::spawn(async { Ok(()) }))
-            .await
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("test listener task exited unexpectedly"),
-            "unexpected error: {error:#}"
-        );
-    }
-
-    #[tokio::test]
-    async fn failed_service_task_preserves_its_error_and_context() {
-        let error = unexpected_task_exit(
-            "test listener",
-            tokio::spawn(async { anyhow::bail!("injected listener failure") }),
-        )
-        .await
-        .unwrap_err();
-        let rendered = format!("{error:#}");
-        assert!(rendered.contains("test listener task failed"), "{rendered}");
-        assert!(rendered.contains("injected listener failure"), "{rendered}");
-    }
-
-    #[tokio::test]
-    async fn panicked_service_task_preserves_join_error_and_context() {
-        let error = unexpected_task_exit(
-            "test listener",
-            tokio::spawn(async { panic!("injected listener panic") }),
-        )
-        .await
-        .unwrap_err();
-        let rendered = format!("{error:#}");
-        assert!(
-            rendered.contains("test listener task panicked"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("injected listener panic"), "{rendered}");
-    }
-
-    #[tokio::test]
-    async fn service_task_drain_joins_completed_tasks_without_leaking_handles() {
-        let mut tasks = tokio::task::JoinSet::new();
-        spawn_service_task(&mut tasks, "test listener", async { Ok(()) });
-
-        let report = drain_service_tasks(&mut tasks, std::time::Duration::from_secs(1)).await;
-
-        assert_eq!(report.joined, 1);
-        assert_eq!(report.aborted, 0);
-        assert!(report.failures.is_empty(), "{report:?}");
-        assert!(tasks.is_empty());
-    }
-
-    #[tokio::test]
-    async fn service_task_drain_aborts_and_reaps_a_non_cooperative_task() {
-        let mut tasks = tokio::task::JoinSet::new();
-        spawn_service_task(&mut tasks, "stuck listener", async {
-            std::future::pending::<anyhow::Result<()>>().await
-        });
-
-        let report = drain_service_tasks(&mut tasks, std::time::Duration::from_millis(10)).await;
-
-        assert_eq!(report.joined, 0);
-        assert_eq!(report.aborted, 1);
-        assert!(report.failures.is_empty(), "{report:?}");
-        assert!(tasks.is_empty());
     }
 
     #[test]

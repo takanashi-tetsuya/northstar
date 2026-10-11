@@ -84,7 +84,6 @@
     "src/main.rs",
     "src/mam_pubsub_parsing.rs",
     "src/outbound.rs",
-    "src/shutdown_notification_tests.rs",
     "src/stage4_replay.rs",
     "src/state.rs",
     "src/storage.rs",

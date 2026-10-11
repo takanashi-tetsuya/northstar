@@ -44,8 +44,8 @@
       "budgets": {
         "contract": "Existing startup and listener readiness budgets; no new global startup deadline.",
         "source": {
-          "path": "src/main.rs",
-          "anchor": "const SERVICE_TASK_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);"
+          "path": "src/runtime/service_tasks.rs",
+          "anchor": "pub(crate) const SERVICE_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);"
         }
       },
       "experiments": [

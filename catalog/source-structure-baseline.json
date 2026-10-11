@@ -12,7 +12,6 @@
     "src/bosh/response_owner.rs": 2884,
     "src/cluster/listener.rs": 1637,
     "src/components.rs": 2638,
-    "src/config.rs": 4279,
     "src/db/admin_commands.rs": 2877,
     "src/db/api_operations.rs": 3464,
     "src/db/capacity.rs": 2195,

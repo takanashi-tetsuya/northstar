@@ -11,9 +11,11 @@
 //     keyed by the normalized impl header; trait impls stay whole; impl header
 //     comments are compared as their own item;
 //   * visibility qualifiers are removed;
-//   * in files under the child directory `super::super::` maps to `super::`
-//     and `super::` maps to `self::` (code moved one level down must reach
-//     one level further up, and `self::x` in the parent becomes `super::x`);
+//   * module depth is 0 outside the child directory, 1 under the child directory,
+//     plus 1 for each enclosing inline `mod x { ... }` block; a maximal run of
+//     k leading `super::` pairs is mapped to level L = depth - k: L < 0 maps to
+//     `super::` repeated -L times, L = 0 maps to `self::`, and L > 0 maps to
+//     `self::__depth_L::`;
 //   * whitespace outside literals is removed and a trailing comma before a
 //     closing delimiter is dropped (rustfmt reflow); string and char literal
 //     contents are compared byte for byte;
@@ -119,7 +121,7 @@ function stripVis(s) {
 export function normalizeItems(source, { isChild = false, allowDoc = false } = {}) {
   const result = [];
 
-  const normalizeTokenList = (item) => {
+  const normalizeTokenList = (item, depth) => {
     let visibility = [];
     let parts = [];
     for (let k = 0; k < item.length; k++) {
@@ -155,18 +157,26 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
       parts.push(t.text);
     }
     let s = parts.join('\u0001');
-    if (isChild) {
-      s = s.replace(/(^|\u0001)super\u0001:\u0001:\u0001super\u0001:\u0001:/g, '$1\u0002');
-      s = s.replace(/(^|\u0001)super\u0001:\u0001:/g, '$1self\u0001:\u0001:');
-      s = s.replace(/\u0002/g, 'super\u0001:\u0001:');
-    }
+    s = s.replace(/(^|\u0001)(super\u0001:\u0001:(?:\u0001super\u0001:\u0001:)*)/g, (match, prefix, run) => {
+      const k = (run.match(/super\u0001:\u0001:/g) || []).length;
+      const L = depth - k;
+      let rep;
+      if (L < 0) {
+        rep = Array(-L).fill('super\u0001:\u0001:').join('\u0001');
+      } else if (L === 0) {
+        rep = 'self\u0001:\u0001:';
+      } else {
+        rep = `self\u0001:\u0001:\u0001__depth_${L}\u0001:\u0001:`;
+      }
+      return prefix + rep;
+    });
     s = s.replace(/\u0001,\u0001(?=[)\]}])/g, '\u0001');
     
     const show = (str) => str.replace(/\u0001/g, ' ').replace(/\n /g, '\n').slice(0, 220);
     return { key: s, visibility, excerpt: show(s) };
   };
 
-  const visit = (tokens) => {
+  const visit = (tokens, depth = (isChild ? 1 : 0)) => {
     for (const item of splitItems(tokens)) {
       const head = stripVis(stripAttrs(item));
       if (head[0]?.text === 'use') continue;
@@ -179,19 +189,19 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
           if ('([{'.includes(item[j].text)) d++;
           else if (')]}'.includes(item[j].text) && --d === 0) { close = j; break; }
         }
-        visit(item.slice(open + 1, close));
+        visit(item.slice(open + 1, close), depth + 1);
         continue;
       }
       
       if (head[0]?.text === 'impl') {
         let bodyOpen = -1;
-        let depth = 0;
+        let braceDepth = 0;
         for (let j = item.length - 1; j >= 0; j--) {
           if (item[j].kind === 'punct') {
-            if (item[j].text === '}') depth++;
+            if (item[j].text === '}') braceDepth++;
             else if (item[j].text === '{') {
-              depth--;
-              if (depth === 0) { bodyOpen = j; break; }
+              braceDepth--;
+              if (braceDepth === 0) { bodyOpen = j; break; }
             }
           }
         }
@@ -225,11 +235,11 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
           
           if (!isTraitImpl) {
             const headerWithoutComments = headerTokens.filter(t => t.kind !== 'comment');
-            const headerNorm = normalizeTokenList(headerWithoutComments);
+            const headerNorm = normalizeTokenList(headerWithoutComments, depth);
             const headerComments = headerTokens.filter(t => t.kind === 'comment');
             
             if (headerComments.length > 0) {
-              const commentNorm = normalizeTokenList(headerComments);
+              const commentNorm = normalizeTokenList(headerComments, depth);
               if (commentNorm.key) {
                 result.push({
                   key: headerNorm.key + '\u0003' + commentNorm.key,
@@ -240,7 +250,7 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
             }
             
             for (const memberItem of splitItems(bodyTokens)) {
-              const memberNorm = normalizeTokenList(memberItem);
+              const memberNorm = normalizeTokenList(memberItem, depth);
               if (memberNorm.key) {
                 result.push({
                   key: headerNorm.key + '\u0003' + memberNorm.key,
@@ -254,11 +264,11 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
         }
       }
       
-      const norm = normalizeTokenList(item);
+      const norm = normalizeTokenList(item, depth);
       if (norm.key) result.push(norm);
     }
   };
-  visit(lexRust(source));
+  visit(lexRust(source), isChild ? 1 : 0);
   return result;
 }
 

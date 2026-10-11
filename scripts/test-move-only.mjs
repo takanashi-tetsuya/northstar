@@ -329,3 +329,108 @@ test('t. Extend nothing in test h; instead add a CLI end-to-end test like h in a
     fs.rmSync(tmpdir, { recursive: true, force: true });
   }
 });
+
+test('u. Before: parent #[cfg(test)] mod tests { use super::*; #[test] fn t() { super::super::X::new(); super::helper(); } }. After: parent #[cfg(test)] mod tests; and child file src/foo/tests.rs use super::*;\\n#[test] fn t() { super::super::X::new(); super::helper(); }: no removed, no added.', () => {
+  const before = [
+    { path: 'src/foo.rs', source: '#[cfg(test)] mod tests { use super::*; #[test] fn t() { super::super::X::new(); super::helper(); } }', isChild: false }
+  ];
+  const after = [
+    { path: 'src/foo.rs', source: '#[cfg(test)] mod tests;', isChild: false },
+    { path: 'src/foo/tests.rs', source: 'use super::*;\n#[test] fn t() { super::super::X::new(); super::helper(); }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 0);
+  assert.equal(res.added.length, 0);
+});
+
+test('v. Same before, but in the child file super::super::X::new() written as super::X::new(): DIFFERENT (one removed, one added).', () => {
+  const before = [
+    { path: 'src/foo.rs', source: '#[cfg(test)] mod tests { use super::*; #[test] fn t() { super::super::X::new(); super::helper(); } }', isChild: false }
+  ];
+  const after = [
+    { path: 'src/foo.rs', source: '#[cfg(test)] mod tests;', isChild: false },
+    { path: 'src/foo/tests.rs', source: 'use super::*;\n#[test] fn t() { super::X::new(); super::helper(); }', isChild: true }
+  ];
+  const res = compareItemSets(before, after);
+  assert.equal(res.removed.length, 1);
+  assert.equal(res.added.length, 1);
+});
+
+test('w. An inline module moved one level deeper: before parent mod inner { fn f() { super::g(); } }, after child file src/foo/child.rs mod inner { fn f() { super::super::g(); } }: no removed, no added; with super::g() kept unchanged in the child file: DIFFERENT.', () => {
+  const before = [
+    { path: 'src/foo.rs', source: 'mod inner { fn f() { super::g(); } }', isChild: false }
+  ];
+  const afterOk = [
+    { path: 'src/foo/child.rs', source: 'mod inner { fn f() { super::super::g(); } }', isChild: true }
+  ];
+  const resOk = compareItemSets(before, afterOk);
+  assert.equal(resOk.removed.length, 0);
+  assert.equal(resOk.added.length, 0);
+
+  const afterDiff = [
+    { path: 'src/foo/child.rs', source: 'mod inner { fn f() { super::g(); } }', isChild: true }
+  ];
+  const resDiff = compareItemSets(before, afterDiff);
+  assert.notEqual(resDiff.removed.length, 0);
+  assert.notEqual(resDiff.added.length, 0);
+});
+
+test('x. At depth 2 with k = 1 (a path to the child module itself): child file src/foo/child.rs mod inner { fn f() { super::h(); } } compared with itself: no removed, no added; and normalizeItems of that source with isChild true returns one item whose key contains the word __depth_1 and not the word super.', () => {
+  const child = [
+    { path: 'src/foo/child.rs', source: 'mod inner { fn f() { super::h(); } }', isChild: true }
+  ];
+  const res = compareItemSets(child, child);
+  assert.equal(res.removed.length, 0);
+  assert.equal(res.added.length, 0);
+
+  const items = normalizeItems('mod inner { fn f() { super::h(); } }', { isChild: true });
+  assert.equal(items.length, 1);
+  assert.ok(items[0].key.includes('__depth_1'));
+  assert.ok(!items[0].key.includes('super'));
+});
+
+test('y. Paths inside comments and string literals are never rewritten: parent mod m { fn f() { "super::x"; } } versus child file mod m { fn f() { "super::x"; } } under the child directory: no removed, no added (the literal is compared byte for byte, so both sides keep super::x inside the string), and parent mod m { fn f() { "super::x"; } } versus parent mod m { fn f() { "self::x"; } }: DIFFERENT.', () => {
+  const parent = [
+    { path: 'src/foo.rs', source: 'mod m { fn f() { "super::x"; } }', isChild: false }
+  ];
+  const child = [
+    { path: 'src/foo/child.rs', source: 'mod m { fn f() { "super::x"; } }', isChild: true }
+  ];
+  const resNoDiff = compareItemSets(parent, child);
+  assert.equal(resNoDiff.removed.length, 0);
+  assert.equal(resNoDiff.added.length, 0);
+
+  const parentSelf = [
+    { path: 'src/foo.rs', source: 'mod m { fn f() { "self::x"; } }', isChild: false }
+  ];
+  const resDiff = compareItemSets(parent, parentSelf);
+  assert.notEqual(resDiff.removed.length, 0);
+  assert.notEqual(resDiff.added.length, 0);
+});
+
+test('z. Extend nothing in test h or t; instead add a CLI end-to-end test like t in a temporary git repository: commit src/foo.rs with fn a() {}\\n#[cfg(test)]\\nmod tests {\\n    use super::*;\\n    #[test]\\n    fn t() { super::super::X::new(); a(); }\\n}\\n, then write src/foo.rs as fn a() {}\\n#[cfg(test)]\\nmod tests;\\n and src/foo/tests.rs as use super::*;\\n#[test]\\nfn t() { super::super::X::new(); a(); }\\n; the CLI exits 0 and prints MOVE-ONLY (items): OK; change super::super::X to super::X in the child and it exits 1 and prints MOVE-ONLY (items): DIFFERENT.', () => {
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-move-only-z-'));
+  try {
+    execFileSync('git', ['init'], { cwd: tmpdir });
+    fs.mkdirSync(path.join(tmpdir, 'src'));
+    fs.writeFileSync(path.join(tmpdir, 'src/foo.rs'), 'fn a() {}\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t() { super::super::X::new(); a(); }\n}\n');
+    execFileSync('git', ['add', '.'], { cwd: tmpdir });
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'init'], { cwd: tmpdir });
+
+    fs.writeFileSync(path.join(tmpdir, 'src/foo.rs'), 'fn a() {}\n#[cfg(test)]\nmod tests;\n');
+    fs.mkdirSync(path.join(tmpdir, 'src/foo'));
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/tests.rs'), 'use super::*;\n#[test]\nfn t() { super::super::X::new(); a(); }\n');
+
+    const resOk = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo.rs'], { encoding: 'utf8' });
+    assert.equal(resOk.status, 0);
+    assert.ok(resOk.stdout.includes('MOVE-ONLY (items): OK'));
+
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/tests.rs'), 'use super::*;\n#[test]\nfn t() { super::X::new(); a(); }\n');
+    const resDiff = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo.rs'], { encoding: 'utf8' });
+    assert.equal(resDiff.status, 1);
+    assert.ok(resDiff.stdout.includes('MOVE-ONLY (items): DIFFERENT'));
+  } finally {
+    fs.rmSync(tmpdir, { recursive: true, force: true });
+  }
+});
+

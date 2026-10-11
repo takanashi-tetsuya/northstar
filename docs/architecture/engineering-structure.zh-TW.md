@@ -132,8 +132,12 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    為鍵，因此同一型別的方法可分散到不同子檔各自的 `impl` 區塊，標頭（含屬性與 where 子句）不同
    則判為不同；trait impl 無法拆開，維持整體比對。impl 標頭上的註解，以及檔尾、區塊尾只含註解的
    部分，也各自作為項目比較（WP-04）。比較時忽略 `use`、無本體的 `mod x;`、可見性修飾、字面值以外的空白與 rustfmt 重排
-   產生的尾逗號；子檔中的 `super::super::` 視為原本的 `super::`，單一的 `super::` 視為原本的
-   `self::`；字串與字元字面值逐位元組比較，因此縮排變動不能改到多行字串內容。被忽略的可見性
+   產生的尾逗號。開頭的 `super::` 依實際模組深度換算（WP-05）：子目錄外深度 0、子目錄內深度 1，
+   每層內嵌 `mod x { ... }` 再加 1；連續 k 個 `super::` 換算為「深度 − k」層，在被拆模組之上仍寫
+   `super::`，等於被拆模組時寫 `self::`。因此子檔中的 `super::super::` 等同原本的 `super::`，單一的
+   `super::` 等同原本的 `self::`；整個內嵌模組（如 `#[cfg(test)] mod tests { ... }`）搬成獨立檔案時
+   模組深度不變，路徑原樣保留即判為相同。字串與字元字面值逐位元組比較，因此縮排變動不能改到多行
+   字串內容；`include_str!` 路徑相對於所在檔案，檔案搬進子目錄時須改寫，會列為差異逐項審閱。被忽略的可見性
    修飾另以 `VISIBILITY:` 行列出供審閱，不影響結果。拆檔時 agy 逐字複製、不重排；`cargo fmt`
    由架構負責人執行（確定性格式化，不屬撰寫程式）。
 4. agy 的檔案工具不受 worktree 限制（曾把修改寫進主 checkout）。規格一律寫明 worktree 的絕對
@@ -183,3 +187,4 @@ Stage 證據仍綁定其原提交。
 | WP-04 | 完成：只移動檢查把固有 impl 區塊展開為成員比對，trait impl 維持整體；impl 標頭註解與只含註解的結尾也納入比較。12 個新測試；以 `--after-rev` 重驗 WP-21／22／23 結果不變；兩輪回饋修正重構時被加倍的反斜線跳脫 | 見 `git log --grep '\[WP-04\]'` |
 | WP-24 | 完成：`xmpp/protocol/muc.rs` 6,165 行拆為 admin／admin_batch／discussion／owner／moderate／register／groupchat／join，父檔 973 行，最大子檔 `join.rs` 1,438 行；兩個 `impl ProtocolSession` 區塊的方法分到各子檔自己的 impl 區塊，182 個項目不變、0 輪回饋。32 項可見性變更全部是維持原範圍的寫法；2,186 個測試名稱不變；6 個反例（`state.cluster`、`state.metrics`、`state.pool`、移除 MUC 階段、改動討論封套、原始 XML 字面值）放入新子檔均被門禁抓到。後續：`muc_presence`（1,384 行）、`muc_admin_set`（998 行）、`muc_owner_set`（645 行）、`muc_message`（614 行）是單一函式過長，屬邏輯重構，不在只移動範圍 | 見 `git log --grep '\[WP-24\]'` |
 | WP-15 | 完成：架構與執行門禁對 `db/archive.rs` 改以模組讀取（`payload_value` 禁止檢查與個人 admission insert 計數讀含測試子檔的全模組）。5 個反例：測試子檔中的 `payload_value`、搬入子檔後改壞的 `impl Drop for FederatedMamRoomGuard`、搬入測試子檔的 `commit_mix_archive` 均以對應規則失敗；原樣搬入正式子檔的兩者仍通過。初版規格措辭含糊致 agy 未做修改，改為逐字原文／新文後一次完成 | 見 `git log --grep '\[WP-15\]'` |
+| WP-05 | 完成：只移動檢查依實際模組深度（子目錄＋內嵌模組層數）換算開頭的 `super::`，整個內嵌模組搬成獨立檔案時不再誤判；深度 0 與 1 的結果與舊規則相同。6 個新測試；以 `--after-rev` 重驗 WP-21／22／23／24／31 結果不變；以 `db/archive.rs` 的 `history_identity_pg_tests` 試搬，新規則判為相同、舊規則判為不同 | 見 `git log --grep '\[WP-05\]'` |

@@ -69,8 +69,8 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | --- | --- | --- |
 | R1 行數預算 | 生產 `.rs` 檔 ≤ 1,500 行；測試檔 ≤ 3,000 行。既有超標檔記錄在基線，只能縮小；新檔不得超標 | `scripts/check-source-structure.mjs`＋`catalog/source-structure-baseline.json` |
 | R2 根目錄收斂 | `src/` 根目錄 `.rs` 數只能減少；不得新增根目錄測試檔 | 同上 |
-| R3 模組拆分方式 | 大檔拆成「`foo.rs`＋`foo/子模組.rs`」，以 `pub(crate) use` 保持原有模組路徑；拆分 WP 只移動程式碼，不改邏輯 | 「只移動」差異檢查（第 6 節） |
-| R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取 | `scripts/lib/source-module.mjs` |
+| R3 模組拆分方式 | 大檔拆成「`foo.rs`＋`foo/子模組.rs`」，保持原有模組路徑；拆分 WP 只移動程式碼，不改邏輯。協議模組以明確的 `pub(crate) use self::子模組::項目;` 轉出，兄弟子模組互用的項目標 `pub(super)`；已由 `db/mod.rs` 以 `pub use x::*` 整體轉出的 db 模組，父檔改以 `pub use self::子模組::*;` 轉出，可見性一律不動（bin crate 中未被使用的明確轉出是 unused import，`-D warnings` 下失敗）。原本的 `pub(super)` 搬入子模組後要寫成 `pub(in crate::db)` 才維持同一範圍 | 「只移動」差異檢查（第 6 節） |
+| R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取。Rust 單元測試以 `include_str!` 讀自身模組原始碼者，拆分時改讀父檔的 `#[cfg(test)] const MODULE_SOURCE`（父檔＋各子檔），並以守衛測試確認清單與 `mod` 宣告一致 | `scripts/lib/source-module.mjs`；Rust 測試見 `src/db/cluster_muc.rs` |
 | R5 證據不可改寫 | `scripts/fixtures/**/historical*`、`docs/evidence/**` 與已記錄的 Stage 證據不得因結構工作修改 | 審閱 |
 | R6 測試專用碼 | 受控重播與實驗程式只能存在於 `#[cfg(test)]` 模組 | 既有門禁＋審閱 |
 | R7 提交 | 一個 WP 一至數個提交，訊息首行以 `[WP-xx]` 開頭；不推 WIP | 審閱 |
@@ -81,10 +81,10 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | --- | --- | --- | --- |
 | S0 護欄 | WP-01 | `scripts/lib/source-module.mjs`：模組檔案解析、模組全文讀取、Rust 項目括號配對擷取（略過字串、字元、註解）；提供 CLI 給 shell／Python 門禁；附單元測試 | 新測試通過；不改任何既有門禁 |
 | | WP-02 | `scripts/check-source-structure.mjs`＋基線 JSON（R1／R2 ratchet）；接入 CI `web-static` | 在基線提交上通過；人為加長檔案時失敗 |
-| S1 門禁解耦 | WP-1x | 依拆檔目標，逐一把引用該檔的門禁改為模組讀取（R4）。盤點範圍包含 `scripts/` 與 `catalog/` 中以路徑＋anchor 指向原始碼的項目（WP-31 時 `runtime-experiments.json` 的測試 anchor 隨測試搬家） | 改寫前後門禁在同一提交都通過；以故意刪除被檢片段的反例確認仍會失敗 |
+| S1 門禁解耦 | WP-1x | 依拆檔目標，逐一把引用該檔的門禁改為模組讀取（R4）。盤點以檔案路徑全文搜尋 `scripts/`（含 shell／WSL 套件與 Python 實驗程式）、`catalog/`、`.github/` 與 `CODEOWNERS`，並搜尋 `src/`、`crates/` 中的 `include_str!("*.rs")`，不只看 `ci.yml` 中的 node 門禁。禁止型斷言（「原始碼不得含 X」）只讀單一檔案時，拆分後不會失敗而是靜默失效，因此盤點不能只靠「拆完後測試仍通過」（WP-31 時 `runtime-experiments.json` 的測試 anchor 隨測試搬家；`muc-cluster-wsl.sh` 綁定 `db/cluster_muc.rs`，由 WP-13 先行解耦）。盤點結果見 5.1 | 改寫前後門禁在同一提交都通過；以故意刪除被檢片段的反例確認仍會失敗（shell 門禁同樣需要反例，WP-13 即由反例抓到傳入絕對路徑而全部失敗的錯誤） |
 | | WP-11 | `check-outbound-xml-construction.mjs` 的基線項目加上 `module`／`file` 範圍：`module` 以 `productionModuleFiles` 展開（拆出的子檔自動繼承預算）；子樹內已有既存發現的 `protocol.rs`、`services/mix.rs` 維持 `file` | 展開後的檔案集合包含原清單；在 `federated_muc/` 下放入原始 XML 字面值時失敗 |
 | | WP-12 | `check-architecture-boundaries.mjs` 對 `federated_muc.rs` 改用 `readProductionModule`；修正 2148／2259／2262 行在 template literal 中被吞掉的 `\b`、`\s`、`\.` 跳脫 | 修正後的禁止規則對注入的 `db::` 呼叫會失敗；現行原始碼仍通過 |
-| S2 拆大檔 | WP-2x | 一次拆一個大檔（順序：`federated_muc.rs` → `db/pubsub.rs`、`db/cluster_muc.rs`（無門禁路徑綁定，不需 S1）→ `xmpp/protocol/muc.rs` → `db/archive.rs` → `xmpp/protocol/mix.rs` → `db/mix.rs` → `state.rs` → `cluster.rs` → `config.rs`） | 只移動差異檢查通過；fmt、受影響套件 check／clippy `-D warnings`、單元測試與相關門禁通過；基線下修 |
+| S2 拆大檔 | WP-2x | 一次拆一個大檔（順序：`federated_muc.rs` → `db/pubsub.rs`、`db/cluster_muc.rs`（後者先做 WP-13）→ `xmpp/protocol/muc.rs` → `db/archive.rs` → `xmpp/protocol/mix.rs` → `db/mix.rs` → `state.rs` → `cluster.rs` → `config.rs`） | 只移動差異檢查通過；fmt、受影響套件 check／clippy `-D warnings`、單元測試與相關門禁通過；基線下修 |
 | S3 測試歸位 | WP-3x | 7 個根目錄測試檔移入受測模組 | 測試數量與名稱集合不變 |
 | S4 根目錄分層 | WP-4x | 依 3.1 分組搬動，最後移除舊路徑轉出 | `src/` 根目錄只剩 `main.rs` 與各層目錄宣告 |
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
@@ -93,6 +93,21 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
 移出，再套用修正，而不是放寬基線。
+
+### 5.1 S1 盤點：剩餘 S2 目標的路徑綁定（`1d524b9`）
+
+拆檔前，下表每個綁定都要確認在拆分後仍成立：已以模組讀取者不需動；以單一檔案讀取且被檢內容
+可能搬進子檔者，先開 WP-1x 改為模組讀取（R4）。
+
+| 目標 | 以檔案路徑綁定的門禁與資料 |
+| --- | --- |
+| `xmpp/protocol/muc.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-database-role-boundaries.sh` |
+| `db/archive.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、自身測試的 `include_str!("archive.rs")` |
+| `xmpp/protocol/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`test-mix-outbox-boundaries.mjs`、`test-source-module.mjs`、`catalog/runtime-experiments.json` |
+| `db/mix.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh` |
+| `state.rs` | `check-architecture-boundaries.mjs`、`check-execution-boundaries.mjs`、`check-session-lifecycle-boundary.mjs`、`check-subserver-boundaries.mjs`、`check-omemo.mjs`、`check-migration-versions.sh`、`check-database-role-boundaries.sh`、`catalog/runtime-experiments.json`、`.github/CODEOWNERS` |
+| `cluster.rs` | `check-architecture-boundaries.mjs`、`check-outbound-xml-construction.mjs`、`check-migration-versions.sh`、`muc-cluster-wsl.sh`（WP-13 起以模組讀取）、`cluster-wsl.py`（`NODE_PROTOCOL_VERSION`；CI 的 `test-cluster-*.py` 在匯入時即讀取）、`catalog/runtime-experiments.json` |
+| `config.rs` | `check-architecture-boundaries.mjs`、`check-abuse.mjs`、`listener-readiness-stress-wsl.sh` |
 
 ## 6. 委派與驗收協議
 
@@ -103,8 +118,11 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    `--dangerously-skip-permissions`。規格須明寫「不得執行任何 shell 指令，只用檔案檢視與編輯
    工具」，否則新對話會先嘗試指令、被 headless 模式拒絕後不做任何修改。
 3. 架構負責人執行驗證：`cargo fmt --check`、受影響套件的 `cargo check`／`clippy -D warnings`
-   （all-targets）、相關單元測試、`ci.yml` 中全部原始碼／catalog 門禁（43 項，先在乾淨基準提交上
-   全數通過，之後任何失敗都歸因於該 WP），以及 R3 的只移動檢查。只移動檢查以「項目」為單位：
+   （all-targets）、相關單元測試、CI 離線步驟，以及 R3 的只移動檢查。CI 離線步驟是 `ci.yml` 中
+   不需外部服務的全部步驟（`web-static`、`rust-quality` 的驗證步驟、fuzz 目標前置檢查），逐字照
+   workflow 執行，只跳過需要 root 的套件安裝與 `sudo` 測試並逐行列出；另加 `muc-cluster-wsl.sh`
+   在啟動 Redis 前的靜態契約。這組步驟先在乾淨基準提交上全數通過，之後任何失敗都歸因於該 WP。
+   只移動檢查以「項目」為單位：
    拆分前後的頂層項目多重集合必須相同；比較時忽略 `use`、無本體的 `mod x;`、可見性修飾、
    字面值以外的空白與 rustfmt 重排產生的尾逗號，並把子檔中的 `super::super::` 視為原本的
    `super::`；字串與字元字面值逐位元組比較，因此縮排變動不能改到多行字串內容。拆檔時 agy
@@ -114,8 +132,10 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
    diff 與未追蹤檔內容雜湊），把越界修改移回 worktree 並還原原處。
 5. 多步驟的拆檔，每一步開新的 agy 對話並給完整、獨立的規格，刪除範圍寫明行號。同一對話持續
    累積上下文時，單步可達 35 分鐘、170 萬 tokens，且會嘗試以 shell 刪除大段程式；新對話同樣
-   規模的一步約 6 分鐘、25 萬 tokens。可見性清單需包含出現在 `pub(super)` 項目簽名中的型別
-   與測試直接讀取的欄位（WP-21 漏列 `FederatedRoomConfig`，由編譯錯誤回饋一輪修正）。
+   規模的一步約 6 分鐘、25 萬 tokens（WP-22／23 的 15 步每步 1–4 分鐘、4–16 萬 tokens）。
+   可見性清單需包含出現在 `pub(super)` 項目簽名中的型別與測試直接讀取的欄位（WP-21 漏列
+   `FederatedRoomConfig`，由編譯錯誤回饋一輪修正）。規格中交給 `source-module.mjs` 的路徑必須是
+   相對於 repository 的路徑（它拒絕絕對路徑；WP-13 初版因此每項檢查都失敗，由反例抓到）。
 6. 失敗輸出回饋到同一個 agy 對話（`--conversation`）修正，最多三輪；仍失敗則縮小 WP 範圍。
 7. 審閱通過後以 `[WP-xx]` 提交到 `dev`；推送後以該提交的完整 CI 為準，不沿用舊綠燈。
 
@@ -145,4 +165,7 @@ Stage 證據仍綁定其原提交。
 | WP-21 | 完成：`federated_muc.rs` 7,326 行拆為 presence／message／iq／owner／admin／moderate／tests，父檔 843 行；74 個項目不變，可見性一輪回饋 | 見 `git log --grep '\[WP-21\]'` |
 | WP-31 | 完成：`operation_runtime.rs` 測試移至 `operation_runtime/tests.rs`（47 個項目不變），catalog anchor 同步 | 見 `git log --grep '\[WP-31\]'` |
 | BUG-01 | 完成：spawned heartbeat 以 drop guard 停止；移除 guard 時新測試失敗 | 見 `git log --grep '\[BUG-01\]'` |
-| WP-03 | 待辦：把架構負責人的驗證工具（項目級只移動檢查、43 項門禁執行器、越界寫入指紋）收進 `scripts/`，附測試並接入 CI | — |
+| WP-13 | 完成：`muc-cluster-wsl.sh` 的 `db/cluster_muc.rs`、`cluster.rs` 靜態契約改以模組讀取；7 個反例全部如預期失敗 | 見 `git log --grep '\[WP-13\]'` |
+| WP-22 | 完成：`db/pubsub.rs` 4,565 行拆為 node／subscription／affiliation／item／collection／disco／digest，父檔 1,161 行；109 個項目不變，以 `pub use self::子模組::*;` 轉出、可見性不動；agy 在 SQL 字面值內多加一個空白，由逐位元組字面值比較抓到並一輪修正 | 見 `git log --grep '\[WP-22\]'` |
+| WP-23 | 完成：`db/cluster_muc.rs` 5,964 行拆為 query／session_route／outbox／room／moderation／admin_batch／affiliation／occupancy，父檔 1,090 行；121 個項目不變，唯一可見性變更為 `grant_cluster_muc_invitation_in_tx` 由 `pub(super)` 改為等價的 `pub(in crate::db)`。兩個 `include_str!` 自讀測試改讀 `MODULE_SOURCE`（其中一個禁止型斷言原本已靜默失效），並以反例確認 | 見 `git log --grep '\[WP-23\]'` |
+| WP-03 | 待辦：把架構負責人的驗證工具（項目級只移動檢查、CI 離線步驟執行器、越界寫入指紋）收進 `scripts/`，附測試並接入 CI | — |

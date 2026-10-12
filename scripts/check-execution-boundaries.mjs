@@ -22,7 +22,7 @@ const files = {
   websocket: 'src/xmpp/websocket_action.rs',
   bosh: 'src/bosh.rs',
   boshAction: 'src/bosh/action.rs',
-  outbound: 'src/outbound.rs',
+  outbound: 'src/xmpp/outbound.rs',
   muc: 'src/xmpp/protocol/muc.rs',
   mucFanout: 'src/services/muc/fanout.rs',
   mucCore: 'crates/northstar-room-application/src/discussion.rs',

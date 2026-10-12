@@ -24,7 +24,7 @@ const targets = new Map([
     "bosh_ws_framing",
     {
       modules: [
-        ["transport_parsing", "../../src/transport_parsing.rs"],
+        ["transport_parsing", "../../src/xmpp/transport_parsing.rs"],
       ],
       crates: [["northstar-xml-framing", /\buse\s+northstar_xml_framing\s+as\s+framing\s*;/]],
       entryPoints: [

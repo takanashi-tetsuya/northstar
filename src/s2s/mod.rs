@@ -1,3 +1,4 @@
+pub(crate) mod components;
 pub(crate) mod dane;
 pub mod dialback;
 pub mod dns;

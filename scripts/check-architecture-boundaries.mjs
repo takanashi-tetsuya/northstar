@@ -3229,7 +3229,7 @@ if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sIn
   throw new Error('inbound S2S personal storage must use the message service');
 }
 const s2sOutboundSource = read('src/s2s/outbound.rs');
-const componentsSource = read('src/components.rs');
+const componentsSource = read('src/s2s/components.rs');
 const federationCoreSource = read('crates/northstar-federation-core/src/lib.rs');
 if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
     || !federationCoreSource.includes('pub const fn accepts_s2s_stream_target(')
@@ -3917,7 +3917,7 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || /(?:self\.)?state\.metrics\b/.test(federatedMucSource)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
-const componentTransport = read('src/components.rs');
+const componentTransport = read('src/s2s/components.rs');
 if (!componentTransport.includes('struct ComponentTelemetry')
     || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(componentTransport)
     || !componentTransport.includes('component_telemetry().connection_failed()')

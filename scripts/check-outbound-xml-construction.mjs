@@ -40,7 +40,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/sm.rs', 0],
   ['src/services/mix.rs', 0],
   ['src/db/mix.rs', 0],
-  ['src/components.rs', 0],
+  ['src/s2s/components.rs', 0],
   ['src/cluster.rs', 0],
   ['src/s2s/inbound.rs', 0],
   ['src/s2s/outbound.rs', 0],

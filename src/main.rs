@@ -4,13 +4,10 @@ mod api;
 mod auth;
 mod bosh;
 mod cluster;
-mod components;
 mod db;
 #[cfg(test)]
 mod direct_replay;
 mod jid;
-mod mam_pubsub_parsing;
-mod outbound;
 mod platform;
 mod runtime;
 mod s2s;
@@ -21,7 +18,6 @@ mod stage4_replay;
 mod state;
 mod storage;
 mod tools;
-mod transport_parsing;
 mod xmpp;
 
 // Old paths of modules moved into layer directories (S4); WP-48 rewrites the callers and removes them.
@@ -31,8 +27,10 @@ use runtime::{
     capacity_maintenance, connection_actors, operation_runtime, retention, subscription_cleanup,
     subservers, test_activation, upload_worker, workers,
 };
+use s2s::components;
 use security::{abuse, account_recovery, crl, ocsp, password_work, tls};
 use tools::{identity_audit, pie};
+use xmpp::{mam_pubsub_parsing, outbound, transport_parsing};
 
 use anyhow::{Context, Result};
 use config::Config;

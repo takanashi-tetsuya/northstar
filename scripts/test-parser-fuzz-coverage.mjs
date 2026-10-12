@@ -39,7 +39,7 @@ rejects((model) => {
 }, /northstar-xep-0313: production crate manifest or library is missing/);
 
 rejects((model) => {
-  model.existingPaths.delete(path.join(model.root, "src", "transport_parsing.rs"));
+  model.existingPaths.delete(path.join(model.root, "src", "xmpp", "transport_parsing.rs"));
 }, /declared production module does not resolve below src/);
 
 rejects((model) => {

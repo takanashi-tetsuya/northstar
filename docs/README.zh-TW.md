@@ -25,10 +25,10 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 
 ### 發行套件
 
-Northstar `0.2.0` 套件將在維護者發佈 Release 後，透過
+Northstar `0.2.0` 套件已透過
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
-提供下載。Tag workflow 會先建立包含下列檔案的草稿，並驗證 checksum、
-provenance 與映像 digest：
+提供下載。Tag workflow 會先以草稿建立每個 Release，包含下列檔案，並驗證
+checksum、provenance 與映像 digest，維護者審閱後才發佈：
 
 | 資產 | 用途 |
 |---|---|

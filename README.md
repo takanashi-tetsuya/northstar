@@ -30,10 +30,11 @@ integrated or production-ready service.
 
 ### Release packages
 
-Northstar `0.2.0` packages will be available from
-[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) after
-the maintainer publishes the Release. The tag workflow prepares a draft with
-the following files and verifies their checksums, provenance and image digests:
+Northstar `0.2.0` packages are available from
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases).
+The tag workflow prepares each Release as a draft with the following files and
+verifies their checksums, provenance and image digests before the maintainer
+publishes it:
 
 | Asset | Intended use |
 |---|---|

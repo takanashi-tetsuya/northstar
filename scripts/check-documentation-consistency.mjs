@@ -343,6 +343,21 @@ for (const relativePath of [
     throw new Error(`${relativePath} does not link current migration ${currentMigrationFile}`);
   }
 }
+// KNOWN_ISSUES.md states the migration chain in prose. Derive the expected
+// range, count and intentional gaps from migrations/ so the sentence cannot drift.
+const firstMigration = [...migrationVersions].sort()[0];
+const migrationGaps = [];
+for (let version = Number(firstMigration); version < Number(currentMigration); version += 1) {
+  const padded = String(version).padStart(4, '0');
+  if (!migrationVersions.has(padded)) migrationGaps.push(`\`${padded}\``);
+}
+const migrationChainStatement =
+  `遷移鏈為\`${firstMigration}\`–\`${currentMigration}\`，共${migrationFiles.length}項` +
+  (migrationGaps.length > 0 ? `，保留刻意缺號${migrationGaps.join('、')}` : '') +
+  '。';
+if (!knownIssues.replace(/\s+/g, '').includes(migrationChainStatement)) {
+  throw new Error(`KNOWN_ISSUES.md does not state the migration chain as ${migrationChainStatement}`);
+}
 
 const architecture = read('docs/ARCHITECTURE.md').replace(/\s+/g, ' ');
 const architectureBudget =

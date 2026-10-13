@@ -19,9 +19,9 @@ pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
 pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_case};
 
 use crate::state::{AppState, ClientConnectionGuard};
-use crate::transport_parsing::parse_bosh_frame;
 use crate::xmpp::frame_execution::FrameFailure;
 use crate::xmpp::protocol::{ClientTransport, ProtocolSession, ResumeTransportParts};
+use crate::xmpp::transport_parsing::parse_bosh_frame;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
 use axum::body::{Body, Bytes};
@@ -58,7 +58,7 @@ const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn superseded_bosh_message_id(error: &anyhow::Error) -> Option<uuid::Uuid> {
     error
-        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+        .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
         .map(|superseded| superseded.message_id)
 }
 
@@ -177,7 +177,7 @@ struct CachedResponse {
     rid: u64,
     fingerprint: [u8; 32],
     response: BoshHttpResponse,
-    durable_ownership: Arc<crate::outbound::BoshResponseOwnership>,
+    durable_ownership: Arc<crate::xmpp::outbound::BoshResponseOwnership>,
     transport_receipts: Vec<mpsc::UnboundedSender<()>>,
     owned_at: Instant,
     response_bytes: usize,
@@ -205,14 +205,14 @@ struct BoshActor {
     mix_service: crate::state::BoshMixService,
     sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
     commands: mpsc::Receiver<BoshCommand>,
-    outbound: mpsc::Receiver<crate::outbound::OutboundItem>,
+    outbound: mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
     next_rid: u64,
     highest_received: u64,
     highest_responded: u64,
     buffered: BTreeMap<u64, PendingRequest>,
     held: Option<HeldRequest>,
     replay: VecDeque<CachedResponse>,
-    output: VecDeque<crate::outbound::OutboundItem>,
+    output: VecDeque<crate::xmpp::outbound::OutboundItem>,
     output_bytes: usize,
     wait: Duration,
     hold: u8,
@@ -309,7 +309,7 @@ impl BoshManager {
         let (outbound_tx, outbound_rx) = mpsc::channel(policy.max_output_stanzas);
         let mut protocol = ProtocolSession::new(
             state.clone(),
-            crate::outbound::OutboundSender::new(outbound_tx),
+            crate::xmpp::outbound::OutboundSender::new(outbound_tx),
             true,
             ClientTransport::Bosh,
             None,
@@ -393,7 +393,7 @@ impl BoshManager {
             _session_slot: session_slot,
         };
         if let Err(error) = actors.try_spawn(
-            crate::connection_actors::ConnectionActorKind::C2sBosh,
+            crate::runtime::connection_actors::ConnectionActorKind::C2sBosh,
             Some(peer_ip.to_string()),
             actor.run(),
         ) {
@@ -1068,7 +1068,7 @@ impl BoshActor {
 
     async fn record_and_push_item(
         &mut self,
-        item: crate::outbound::OutboundItem,
+        item: crate::xmpp::outbound::OutboundItem,
         operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
         let mut output = ownership::Output {
@@ -1109,7 +1109,7 @@ impl BoshActor {
 
     async fn queue_outbound(
         &mut self,
-        item: crate::outbound::OutboundItem,
+        item: crate::xmpp::outbound::OutboundItem,
         operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
         // BOSH cannot prove an individual stanza reached the peer without
@@ -1122,10 +1122,10 @@ impl BoshActor {
     }
 
     fn push_output(&mut self, stanza: String) -> bool {
-        self.push_output_item(crate::outbound::OutboundItem::plain(stanza))
+        self.push_output_item(crate::xmpp::outbound::OutboundItem::plain(stanza))
     }
 
-    fn push_output_item(&mut self, item: crate::outbound::OutboundItem) -> bool {
+    fn push_output_item(&mut self, item: crate::xmpp::outbound::OutboundItem) -> bool {
         ownership::Output {
             items: &mut self.output,
             bytes: &mut self.output_bytes,
@@ -1304,7 +1304,7 @@ impl BoshActor {
 }
 
 fn queue_bosh_resume_payload(
-    output: &mut VecDeque<crate::outbound::OutboundItem>,
+    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
     output_bytes: &mut usize,
     max_output_stanzas: usize,
     max_output_bytes: usize,
@@ -1345,7 +1345,7 @@ fn queue_bosh_resume_payload(
     }
 
     let hold = Arc::new(transient_capacity);
-    let control = crate::outbound::OutboundItem::resume_fragment(control, Arc::clone(&hold));
+    let control = crate::xmpp::outbound::OutboundItem::resume_fragment(control, Arc::clone(&hold));
     let control = if activate_route {
         let Some(holder) = auth_publication else {
             return false;
@@ -1362,7 +1362,7 @@ fn queue_bosh_resume_payload(
     };
     output.push_back(control);
     for stanza in post_control.into_iter().chain(replay) {
-        output.push_back(crate::outbound::OutboundItem::resume_fragment(
+        output.push_back(crate::xmpp::outbound::OutboundItem::resume_fragment(
             stanza,
             Arc::clone(&hold),
         ));
@@ -1373,35 +1373,35 @@ fn queue_bosh_resume_payload(
 
 type BoshResponseBody = (
     BoshHttpResponse,
-    Vec<crate::outbound::TransportOwnershipSource>,
+    Vec<crate::xmpp::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
-    VecDeque<crate::outbound::OutboundItem>,
+    VecDeque<crate::xmpp::outbound::OutboundItem>,
 );
 
 type BoshResponsePayload = (
     String,
-    Vec<crate::outbound::TransportOwnershipSource>,
+    Vec<crate::xmpp::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
     Vec<Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
-    VecDeque<crate::outbound::OutboundItem>,
+    VecDeque<crate::xmpp::outbound::OutboundItem>,
 );
 
 /// Put a failed response attempt back ahead of later actor output. An exact
 /// superseded C2S item is the only one discarded; every other stanza and its
 /// receipt keep their original relative order for response reconstruction.
 fn restore_response_items(
-    output: &mut VecDeque<crate::outbound::OutboundItem>,
+    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
     output_bytes: &mut usize,
-    selected: VecDeque<crate::outbound::OutboundItem>,
+    selected: VecDeque<crate::xmpp::outbound::OutboundItem>,
     superseded: Option<uuid::Uuid>,
 ) -> bool {
     restore_response_items_observed(output, output_bytes, selected, superseded, |_| {})
 }
 
 fn restore_response_items_observed(
-    output: &mut VecDeque<crate::outbound::OutboundItem>,
+    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
     output_bytes: &mut usize,
-    selected: VecDeque<crate::outbound::OutboundItem>,
+    selected: VecDeque<crate::xmpp::outbound::OutboundItem>,
     superseded: Option<uuid::Uuid>,
     mut on_removed: impl FnMut(usize),
 ) -> bool {
@@ -1424,7 +1424,7 @@ fn restore_response_items_observed(
 }
 
 fn take_response_payload(
-    output: &mut VecDeque<crate::outbound::OutboundItem>,
+    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
     output_bytes: &mut usize,
     max_response_bytes: usize,
     governor: &Arc<crate::services::sm_capacity::SmMemoryGovernor>,
@@ -1700,21 +1700,21 @@ fn replay_response(
 ) -> Option<(
     BoshHttpResponse,
     bool,
-    Arc<crate::outbound::BoshResponseOwnership>,
+    Arc<crate::xmpp::outbound::BoshResponseOwnership>,
 )> {
     let cached = replay.iter_mut().find(|cached| cached.rid == request.rid)?;
     if cached.fingerprint != request.fingerprint {
         return Some((
             terminal_response("bad-request"),
             true,
-            Arc::new(crate::outbound::BoshResponseOwnership::default()),
+            Arc::new(crate::xmpp::outbound::BoshResponseOwnership::default()),
         ));
     }
     if cached.replays >= MAX_RESPONSE_REPLAYS {
         return Some((
             terminal_response("policy-violation"),
             true,
-            Arc::new(crate::outbound::BoshResponseOwnership::default()),
+            Arc::new(crate::xmpp::outbound::BoshResponseOwnership::default()),
         ));
     }
     cached.replays += 1;

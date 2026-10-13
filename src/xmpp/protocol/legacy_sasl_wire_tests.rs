@@ -285,13 +285,17 @@ fn resume_test_governor(
     (governor, metrics)
 }
 
-fn replay_source(bytes: usize) -> std::collections::VecDeque<crate::outbound::SmUnackedStanza> {
-    std::collections::VecDeque::from([crate::outbound::SmUnackedStanza::plain("x".repeat(bytes))])
+fn replay_source(
+    bytes: usize,
+) -> std::collections::VecDeque<crate::xmpp::outbound::SmUnackedStanza> {
+    std::collections::VecDeque::from([crate::xmpp::outbound::SmUnackedStanza::plain(
+        "x".repeat(bytes),
+    )])
 }
 
 fn resume_payload(
     governor: &std::sync::Arc<crate::services::sm_capacity::SmMemoryGovernor>,
-    source: &std::collections::VecDeque<crate::outbound::SmUnackedStanza>,
+    source: &std::collections::VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
 ) -> anyhow::Result<ResumePayload> {
     let mut control = String::with_capacity(64);
     control.push_str("<resumed xmlns='urn:xmpp:sm:3'/>");
@@ -366,7 +370,7 @@ fn transport_failure_drops_resume_capacity_with_the_failed_action() {
 
 #[tokio::test]
 async fn post_transport_resume_publication_cannot_run_while_replay_is_pending() {
-    let metrics = crate::metrics::Metrics::default();
+    let metrics = crate::platform::metrics::Metrics::default();
     let telemetry = PostActionTelemetry::new(
         &metrics.post_action_tasks_started_total,
         &metrics.post_action_tasks_completed_total,
@@ -408,7 +412,7 @@ async fn post_transport_resume_publication_cannot_run_while_replay_is_pending() 
 
 #[tokio::test]
 async fn external_recovery_task_waits_for_current_transport_action() {
-    let metrics = crate::metrics::Metrics::default();
+    let metrics = crate::platform::metrics::Metrics::default();
     let telemetry = PostActionTelemetry::new(
         &metrics.post_action_tasks_started_total,
         &metrics.post_action_tasks_completed_total,

@@ -8,7 +8,7 @@ use super::{
     UndeliveredDisposition,
 };
 use crate::{
-    abuse::{AbuseAction, PowIntent},
+    security::abuse::{AbuseAction, PowIntent},
     xmpp::xml_util::{
         set_from, set_root_attribute, strip_pow_element, strip_untrusted_direct_delays,
     },

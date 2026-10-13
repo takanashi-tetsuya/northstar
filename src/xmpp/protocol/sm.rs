@@ -943,7 +943,7 @@ impl ProtocolSession {
         };
         let issued_fast = receipt.take_issued_fast();
         self.retain_credential_commit(receipt, credential_attempt)?;
-        let remaining: VecDeque<crate::outbound::SmUnackedStanza> = activated.unacked.into();
+        let remaining: VecDeque<crate::xmpp::outbound::SmUnackedStanza> = activated.unacked.into();
         let exact_base_bytes = remaining.iter().map(|entry| entry.stanza.len()).sum();
         let muc_resume_ready = self
             .state
@@ -1133,7 +1133,7 @@ impl ProtocolSession {
         );
         let suffix_growth = muc_replay_suffix.iter().try_fold(0usize, |bytes, stanza| {
             bytes
-                .checked_add(std::mem::size_of::<crate::outbound::SmUnackedStanza>())
+                .checked_add(std::mem::size_of::<crate::xmpp::outbound::SmUnackedStanza>())
                 .and_then(|bytes| bytes.checked_add(stanza.len()))
         });
         let projected = self
@@ -1401,12 +1401,12 @@ impl ProtocolSession {
 /// endpoint. Capacity and byte accounting include the durable unacked prefix,
 /// so one disconnect cannot obtain an independent per-room overflow budget.
 fn stage_muc_replay_suffix(
-    unacked: &VecDeque<crate::outbound::SmUnackedStanza>,
+    unacked: &VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
     outbound_h: u32,
     suffix: Vec<String>,
     max_stanzas: usize,
     max_bytes: usize,
-) -> Option<(VecDeque<crate::outbound::SmUnackedStanza>, u32)> {
+) -> Option<(VecDeque<crate::xmpp::outbound::SmUnackedStanza>, u32)> {
     let total_stanzas = unacked.len().checked_add(suffix.len())?;
     let existing_bytes = unacked
         .iter()
@@ -1421,7 +1421,7 @@ fn stage_muc_replay_suffix(
     let mut staged_h = outbound_h;
     for stanza in suffix {
         staged_h = staged_h.wrapping_add(1);
-        staged.push_back(crate::outbound::SmUnackedStanza {
+        staged.push_back(crate::xmpp::outbound::SmUnackedStanza {
             stanza,
             source: None,
         });

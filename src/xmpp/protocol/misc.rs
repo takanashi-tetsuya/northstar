@@ -2,8 +2,8 @@ use super::{Action, ProtocolSession};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use crate::{
-    abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     auth,
+    security::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::{
         account::{
             DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome,
@@ -368,7 +368,7 @@ impl ProtocolSession {
             format!("behavior:{}", user.id),
         ];
         let subject = format!("password_change:{}", user.id);
-        let intent = crate::abuse::PowIntent::xmpp(
+        let intent = crate::security::abuse::PowIntent::xmpp(
             AbuseAction::PasswordChange,
             "/xmpp/password-change",
             powless_query.as_bytes(),
@@ -442,7 +442,7 @@ impl ProtocolSession {
             format!("user:{}", user.id),
             format!("behavior:{}", user.id),
         ];
-        let intent = crate::abuse::PowIntent::xmpp(
+        let intent = crate::security::abuse::PowIntent::xmpp(
             AbuseAction::PasswordChange,
             "/xmpp/account-remove",
             powless_query.as_bytes(),
@@ -488,9 +488,11 @@ impl ProtocolSession {
                 )));
             }
         }
-        match crate::account_recovery::finalize(&self.state, user.id, &user.username).await {
-            Ok(crate::account_recovery::FinalizeAccountDeletion::Deleted) => {}
-            Ok(crate::account_recovery::FinalizeAccountDeletion::Missing) => {
+        match crate::security::account_recovery::finalize(&self.state, user.id, &user.username)
+            .await
+        {
+            Ok(crate::security::account_recovery::FinalizeAccountDeletion::Deleted) => {}
+            Ok(crate::security::account_recovery::FinalizeAccountDeletion::Missing) => {
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "registration-required",

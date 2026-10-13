@@ -277,7 +277,7 @@ pub enum Action {
     /// replies these may carry a durable-delivery fence which the transport
     /// must complete only at its negotiated recovery boundary (SM h, BOSH
     /// response ack, or the explicit non-SM socket-write fallback).
-    SendManyItems(Vec<crate::outbound::OutboundItem>),
+    SendManyItems(Vec<crate::xmpp::outbound::OutboundItem>),
     /// The first frame is the terminal authentication success. Publish the
     /// staged login epoch and already-committed route only after that frame
     /// reaches the transport.
@@ -324,7 +324,7 @@ impl ResumePayload {
         governor: &Arc<crate::services::sm_capacity::SmMemoryGovernor>,
         control: String,
         post_control: Vec<String>,
-        replay_source: &VecDeque<crate::outbound::SmUnackedStanza>,
+        replay_source: &VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
         activate_route: bool,
     ) -> Result<Self> {
         let requested_bytes = resume_payload_requested_bytes(
@@ -533,7 +533,7 @@ struct SmSubstate {
     inbound_h: u32,
     outbound_h: u32,
     acked_h: u32,
-    unacked: VecDeque<crate::outbound::SmUnackedStanza>,
+    unacked: VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
     /// Process-local bytes retained for a resumable XEP-0198 epoch.
     capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
     /// One replaceable observation; retained old handles keep their own facts.
@@ -616,7 +616,7 @@ impl SessionTerminationSignals {
 pub struct ProtocolSession {
     state: Arc<AppState>,
     sm_runtime_policy: SmRuntimePolicy,
-    outbound: crate::outbound::OutboundSender,
+    outbound: crate::xmpp::outbound::OutboundSender,
     /// Authoritative transport-security decision. Native TLS and trusted
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
     /// never used as an authentication bypass.
@@ -689,7 +689,7 @@ pub struct ProtocolSession {
     /// because the client happened to present a certificate.
     client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
     tls_generation: u64,
-    _certificate_session: Option<crate::tls::CertificateSessionGuard>,
+    _certificate_session: Option<crate::security::tls::CertificateSessionGuard>,
     disconnect: tokio_util::sync::CancellationToken,
     /// Stable owner of the durable stream row.  A resumed transport gets a
     /// fresh value so a late checkpoint from the old connection cannot win.
@@ -879,8 +879,8 @@ impl ProtocolSession {
 
     pub(super) async fn fence_c2s_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
-    ) -> Result<crate::outbound::DurableDelivery> {
+        delivery: crate::xmpp::outbound::DurableDelivery,
+    ) -> Result<crate::xmpp::outbound::DurableDelivery> {
         self.state
             .replay_service()
             .fence_socket_write(delivery)
@@ -889,8 +889,8 @@ impl ProtocolSession {
 
     pub(super) async fn fence_mix_socket_write(
         &self,
-        delivery: crate::outbound::MixDelivery,
-    ) -> Result<crate::outbound::MixDelivery> {
+        delivery: crate::xmpp::outbound::MixDelivery,
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         self.state
             .mix_service()
             .fence_mix_socket_write(delivery)
@@ -901,7 +901,8 @@ impl ProtocolSession {
         &self,
         request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<()> {
-        let crate::outbound::TransportOwnershipSource::C2s(delivery) = request.source() else {
+        let crate::xmpp::outbound::TransportOwnershipSource::C2s(delivery) = request.source()
+        else {
             anyhow::bail!("native C2S acknowledgement source mismatch");
         };
         self.state
@@ -968,7 +969,7 @@ impl ProtocolSession {
 
     pub fn new(
         state: Arc<AppState>,
-        outbound: crate::outbound::OutboundSender,
+        outbound: crate::xmpp::outbound::OutboundSender,
         secure_transport: bool,
         transport: ClientTransport,
         stream_limits: Option<StreamLimits>,
@@ -1177,10 +1178,12 @@ impl ProtocolSession {
         )
     }
 
-    fn external_certificate_session(&self) -> Result<crate::tls::CertificateSessionGuard> {
+    fn external_certificate_session(
+        &self,
+    ) -> Result<crate::security::tls::CertificateSessionGuard> {
         self.state.tls_context().register_certificate_session(
             self.connection_id,
-            crate::tls::CertificateSessionKind::C2s,
+            crate::security::tls::CertificateSessionKind::C2s,
             self.client_certificate_chain.clone(),
             self.tls_generation,
             self.disconnect.clone(),
@@ -1218,7 +1221,7 @@ impl ProtocolSession {
     /// row after `write()`.
     pub(crate) async fn record_outbound_item(
         &mut self,
-        item: &crate::outbound::OutboundItem,
+        item: &crate::xmpp::outbound::OutboundItem,
     ) -> Result<bool> {
         let mut turn = self.sm_transport_turn();
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
@@ -1235,7 +1238,7 @@ impl ProtocolSession {
     async fn record_outbound_with_source(
         &mut self,
         stanza: &str,
-        durable_source: Option<crate::outbound::TransportOwnershipSource>,
+        durable_source: Option<crate::xmpp::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
         let mut turn = self.sm_transport_turn();
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
@@ -1309,7 +1312,7 @@ impl ProtocolSession {
 
     fn sm_snapshot_with_unacked(
         &self,
-        unacked: Vec<crate::outbound::SmUnackedStanza>,
+        unacked: Vec<crate::xmpp::outbound::SmUnackedStanza>,
     ) -> crate::services::sm::SmSessionSnapshot {
         self.sm_snapshot_view().snapshot(&self.sm, unacked)
     }
@@ -1350,7 +1353,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn apply_sm_ownership_resolution_to_unacked(
-        stanzas: &mut VecDeque<crate::outbound::SmUnackedStanza>,
+        stanzas: &mut VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
         resolution: &crate::services::sm::SmQueueOwnershipResolution,
     ) {
         for stanza in stanzas {

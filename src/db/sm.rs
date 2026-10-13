@@ -1,3 +1,4 @@
+use crate::xmpp::outbound;
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use std::{
@@ -27,7 +28,7 @@ pub struct SmSessionSnapshot {
     pub joined_rooms: Vec<SmMucMembership>,
     pub directed_presence: Vec<String>,
     pub last_presence: Option<String>,
-    pub unacked: Vec<crate::outbound::SmUnackedStanza>,
+    pub unacked: Vec<outbound::SmUnackedStanza>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,7 +56,7 @@ pub struct SmResumeClaim {
     pub joined_rooms: Vec<SmMucMembership>,
     pub directed_presence: Vec<String>,
     pub last_presence: Option<String>,
-    pub unacked: Vec<crate::outbound::SmUnackedStanza>,
+    pub unacked: Vec<outbound::SmUnackedStanza>,
 }
 
 #[derive(Debug)]
@@ -115,7 +116,7 @@ pub struct SmTeardownBatch {
 #[derive(Clone, Debug)]
 pub struct ActivatedSmSession {
     pub outbound_h: u32,
-    pub unacked: Vec<crate::outbound::SmUnackedStanza>,
+    pub unacked: Vec<outbound::SmUnackedStanza>,
 }
 
 /// One MIX lease capability rotated while it crosses into durable XEP-0198
@@ -125,8 +126,8 @@ pub struct ActivatedSmSession {
 /// only after the transaction commits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmMixLeaseRotation {
-    pub previous: crate::outbound::MixDelivery,
-    pub current: crate::outbound::MixDelivery,
+    pub previous: outbound::MixDelivery,
+    pub current: outbound::MixDelivery,
 }
 
 /// Exact source rewrites committed by one SM queue replacement.
@@ -392,7 +393,7 @@ pub async fn checkpoint_sm_session_and_acknowledge(
     id: Uuid,
     connection_id: Uuid,
     snapshot: &SmSessionSnapshot,
-    acknowledged: &[crate::outbound::SmUnackedStanza],
+    acknowledged: &[outbound::SmUnackedStanza],
     ttl_seconds: u64,
     live_lease_seconds: u64,
     max_stanzas: usize,
@@ -421,7 +422,7 @@ pub async fn checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
     id: Uuid,
     connection_id: Uuid,
     snapshot: &SmSessionSnapshot,
-    acknowledged: &[crate::outbound::SmUnackedStanza],
+    acknowledged: &[outbound::SmUnackedStanza],
     ttl_seconds: u64,
     live_lease_seconds: u64,
     max_stanzas: usize,
@@ -448,7 +449,7 @@ pub(crate) async fn checkpoint_sm_session_and_acknowledge_observed(
     id: Uuid,
     connection_id: Uuid,
     snapshot: &SmSessionSnapshot,
-    acknowledged: &[crate::outbound::SmUnackedStanza],
+    acknowledged: &[outbound::SmUnackedStanza],
     ttl_seconds: u64,
     live_lease_seconds: u64,
     max_stanzas: usize,
@@ -1227,12 +1228,12 @@ enum SmDurableSourceKey {
     Mix(Uuid),
 }
 
-fn durable_source_key(source: crate::outbound::TransportOwnershipSource) -> SmDurableSourceKey {
+fn durable_source_key(source: outbound::TransportOwnershipSource) -> SmDurableSourceKey {
     match source {
-        crate::outbound::TransportOwnershipSource::C2s(delivery) => {
+        outbound::TransportOwnershipSource::C2s(delivery) => {
             SmDurableSourceKey::C2s(delivery.message_id)
         }
-        crate::outbound::TransportOwnershipSource::Mix(delivery) => {
+        outbound::TransportOwnershipSource::Mix(delivery) => {
             SmDurableSourceKey::Mix(delivery.delivery_id)
         }
     }
@@ -1244,21 +1245,21 @@ fn durable_source_from_columns(
     claim_id: Option<Uuid>,
     mix_delivery_id: Option<Uuid>,
     mix_delivery_lease_token: Option<Uuid>,
-) -> Result<Option<crate::outbound::TransportOwnershipSource>> {
+) -> Result<Option<outbound::TransportOwnershipSource>> {
     match (
         (recipient_id, message_id, claim_id),
         (mix_delivery_id, mix_delivery_lease_token),
     ) {
         ((None, None, None), (None, None)) => Ok(None),
         ((Some(recipient_id), Some(message_id), claim_id), (None, None)) => Ok(Some(
-            crate::outbound::TransportOwnershipSource::C2s(crate::outbound::DurableDelivery {
+            outbound::TransportOwnershipSource::C2s(outbound::DurableDelivery {
                 recipient_id,
                 message_id,
                 claim_id,
             }),
         )),
         ((None, None, None), (Some(delivery_id), Some(lease_token))) => Ok(Some(
-            crate::outbound::TransportOwnershipSource::Mix(crate::outbound::MixDelivery {
+            outbound::TransportOwnershipSource::Mix(outbound::MixDelivery {
                 delivery_id,
                 lease_token,
             }),
@@ -1268,9 +1269,9 @@ fn durable_source_from_columns(
 }
 
 fn source_map(
-    entries: &[crate::outbound::SmUnackedStanza],
+    entries: &[outbound::SmUnackedStanza],
     context: &str,
-) -> Result<HashMap<SmDurableSourceKey, crate::outbound::TransportOwnershipSource>> {
+) -> Result<HashMap<SmDurableSourceKey, outbound::TransportOwnershipSource>> {
     let mut sources = HashMap::new();
     for entry in entries {
         let Some(source) = entry.source else {
@@ -1286,7 +1287,7 @@ fn source_map(
 
 async fn lock_new_c2s_source_for_sm_transfer(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    delivery: crate::outbound::DurableDelivery,
+    delivery: outbound::DurableDelivery,
 ) -> Result<()> {
     let row = sqlx::query(
         "SELECT delivery_claim_id FROM offline_messages
@@ -1297,14 +1298,14 @@ async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(row) = row else {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
     if stored_claim != delivery.claim_id {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -1318,7 +1319,7 @@ async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_one(&mut **transaction)
     .await?;
     if bosh_owned {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -1332,7 +1333,7 @@ async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_one(&mut **transaction)
     .await?;
     if sm_owned {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -1391,8 +1392,8 @@ async fn lock_mix_bosh_fence_for_sm_transfer(
 /// BOSH hand-off path, so neither transport can form a reverse lock cycle.
 async fn rotate_new_mix_source_for_sm_transfer(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    previous: crate::outbound::MixDelivery,
-) -> Result<crate::outbound::MixDelivery> {
+    previous: outbound::MixDelivery,
+) -> Result<outbound::MixDelivery> {
     let row = sqlx::query(
         "SELECT lease_token,lease_until>clock_timestamp() AS active
            FROM mix_delivery_recipients
@@ -1431,7 +1432,7 @@ async fn rotate_new_mix_source_for_sm_transfer(
     // bounded cluster fence before recording the next SM owner so a target
     // node which later exits cannot release a source now owned by XEP-0198.
     super::mix::consume_mix_cluster_delivery_fence_tx(transaction, previous).await?;
-    let current = crate::outbound::MixDelivery {
+    let current = outbound::MixDelivery {
         delivery_id: previous.delivery_id,
         lease_token: Uuid::new_v4(),
     };
@@ -1455,7 +1456,7 @@ async fn rotate_new_mix_source_for_sm_transfer(
 
 async fn delete_completed_mix_source_from_sm(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    delivery: crate::outbound::MixDelivery,
+    delivery: outbound::MixDelivery,
 ) -> Result<()> {
     let row = sqlx::query(
         "SELECT lease_token FROM mix_delivery_recipients
@@ -1511,14 +1512,14 @@ async fn delete_completed_mix_source_from_sm(
 /// lease cannot partially consume an earlier C2S prefix.
 pub async fn acknowledge_transport_sources(
     pool: &PgPool,
-    sources: &[crate::outbound::TransportOwnershipSource],
+    sources: &[outbound::TransportOwnershipSource],
 ) -> Result<()> {
     acknowledge_transport_sources_observed(pool, sources, None).await
 }
 
 pub(crate) async fn acknowledge_transport_sources_observed(
     pool: &PgPool,
-    sources: &[crate::outbound::TransportOwnershipSource],
+    sources: &[outbound::TransportOwnershipSource],
     observation: Option<&northstar_delivery_core::sm_ownership::Request>,
 ) -> Result<()> {
     if let Some(request) = observation {
@@ -1671,7 +1672,7 @@ pub(crate) async fn acknowledge_transport_sources_observed(
             "durable C2S delivery disappeared during acknowledgement"
         );
         if let Some(deleted) = deleted.as_mut() {
-            deleted.push(crate::outbound::TransportOwnershipSource::C2s(*delivery));
+            deleted.push(outbound::TransportOwnershipSource::C2s(*delivery));
         }
     }
     for delivery in &mix {
@@ -1689,7 +1690,7 @@ pub(crate) async fn acknowledge_transport_sources_observed(
             "MIX delivery lease changed during acknowledgement"
         );
         if let Some(deleted) = deleted.as_mut() {
-            deleted.push(crate::outbound::TransportOwnershipSource::Mix(*delivery));
+            deleted.push(outbound::TransportOwnershipSource::Mix(*delivery));
         }
     }
     if let Some(request) = observation {
@@ -1714,8 +1715,8 @@ pub(crate) async fn acknowledge_transport_sources_observed(
 async fn replace_queue(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
-    queue: &[crate::outbound::SmUnackedStanza],
-    acknowledged: &[crate::outbound::SmUnackedStanza],
+    queue: &[outbound::SmUnackedStanza],
+    acknowledged: &[outbound::SmUnackedStanza],
 ) -> Result<SmQueueOwnershipResolution> {
     replace_queue_inner(transaction, id, queue, acknowledged, None).await
 }
@@ -1723,9 +1724,9 @@ async fn replace_queue(
 async fn replace_queue_inner(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
-    queue: &[crate::outbound::SmUnackedStanza],
-    acknowledged: &[crate::outbound::SmUnackedStanza],
-    mut settled: Option<&mut Vec<crate::outbound::TransportOwnershipSource>>,
+    queue: &[outbound::SmUnackedStanza],
+    acknowledged: &[outbound::SmUnackedStanza],
+    mut settled: Option<&mut Vec<outbound::TransportOwnershipSource>>,
 ) -> Result<SmQueueOwnershipResolution> {
     // First lock the current SM queue.  All later source locks are ordered
     // C2S offline rows, then MIX recipient rows, then their BOSH fence rows.
@@ -1787,7 +1788,7 @@ async fn replace_queue_inner(
     let mut new_c2s = next
         .values()
         .filter_map(|source| match *source {
-            crate::outbound::TransportOwnershipSource::C2s(delivery)
+            outbound::TransportOwnershipSource::C2s(delivery)
                 if !existing.contains_key(&durable_source_key(*source)) =>
             {
                 Some(delivery)
@@ -1803,7 +1804,7 @@ async fn replace_queue_inner(
     let mut new_mix = next
         .values()
         .filter_map(|source| match *source {
-            crate::outbound::TransportOwnershipSource::Mix(delivery)
+            outbound::TransportOwnershipSource::Mix(delivery)
                 if !existing.contains_key(&durable_source_key(*source)) =>
             {
                 Some(delivery)
@@ -1815,10 +1816,10 @@ async fn replace_queue_inner(
     let mut ownership = SmQueueOwnershipResolution::default();
     for previous in new_mix {
         let current = rotate_new_mix_source_for_sm_transfer(transaction, previous).await?;
-        let key = durable_source_key(crate::outbound::TransportOwnershipSource::Mix(previous));
-        let replaced = next.insert(key, crate::outbound::TransportOwnershipSource::Mix(current));
+        let key = durable_source_key(outbound::TransportOwnershipSource::Mix(previous));
+        let replaced = next.insert(key, outbound::TransportOwnershipSource::Mix(current));
         anyhow::ensure!(
-            replaced == Some(crate::outbound::TransportOwnershipSource::Mix(previous)),
+            replaced == Some(outbound::TransportOwnershipSource::Mix(previous)),
             "MIX source changed while rotating into SM ownership"
         );
         ownership
@@ -1839,8 +1840,8 @@ async fn replace_queue_inner(
                     .context("SM snapshot source disappeared during replacement")
             })
             .transpose()?;
-        let c2s = source.and_then(crate::outbound::TransportOwnershipSource::c2s);
-        let mix = source.and_then(crate::outbound::TransportOwnershipSource::mix);
+        let c2s = source.and_then(outbound::TransportOwnershipSource::c2s);
+        let mix = source.and_then(outbound::TransportOwnershipSource::mix);
         sqlx::query(
             "INSERT INTO sm_resume_stanzas(
                 session_id,position,stanza,delivery_recipient_id,
@@ -1876,7 +1877,7 @@ async fn replace_queue_inner(
             "SM acknowledged durable delivery row was not present"
         );
         if let Some(settled) = settled.as_deref_mut() {
-            settled.push(crate::outbound::TransportOwnershipSource::C2s(delivery));
+            settled.push(outbound::TransportOwnershipSource::C2s(delivery));
         }
     }
     let mut completed_mix = completed
@@ -1887,7 +1888,7 @@ async fn replace_queue_inner(
     for delivery in completed_mix {
         delete_completed_mix_source_from_sm(transaction, delivery).await?;
         if let Some(settled) = settled.as_deref_mut() {
-            settled.push(crate::outbound::TransportOwnershipSource::Mix(delivery));
+            settled.push(outbound::TransportOwnershipSource::Mix(delivery));
         }
     }
     Ok(ownership)
@@ -1896,7 +1897,7 @@ async fn replace_queue_inner(
 async fn fetch_queue(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
-) -> Result<Vec<crate::outbound::SmUnackedStanza>> {
+) -> Result<Vec<outbound::SmUnackedStanza>> {
     sqlx::query(
         "SELECT stanza,delivery_recipient_id,delivery_message_id,delivery_claim_id,
                 mix_delivery_id,mix_delivery_lease_token
@@ -1915,9 +1916,7 @@ async fn fetch_queue(
             row.try_get("mix_delivery_id")?,
             row.try_get("mix_delivery_lease_token")?,
         )?;
-        Ok(crate::outbound::SmUnackedStanza::with_source(
-            stanza, source,
-        ))
+        Ok(outbound::SmUnackedStanza::with_source(stanza, source))
     })
     .collect()
 }
@@ -1993,7 +1992,7 @@ fn canonical_snapshot_identities(
 }
 
 fn validate_queue(
-    queue: &[crate::outbound::SmUnackedStanza],
+    queue: &[outbound::SmUnackedStanza],
     max_stanzas: usize,
     max_bytes: usize,
 ) -> Result<()> {

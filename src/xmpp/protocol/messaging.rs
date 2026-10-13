@@ -23,7 +23,9 @@ use crate::services::{
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_util::*;
 use crate::{
-    abuse::{MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof},
+    security::abuse::{
+        MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof,
+    },
     state::bare_jid,
 };
 use anyhow::Result;
@@ -198,7 +200,7 @@ mod direct_preparation_tests {
         ) -> Result<MessageAdmissionStart> {
             Ok(MessageAdmissionStart::Proceed {
                 lease: None,
-                requirement: crate::abuse::WorkRequirement {
+                requirement: crate::security::abuse::WorkRequirement {
                     action: "message".into(),
                     step: 0,
                     work_factor: 1,
@@ -213,7 +215,7 @@ mod direct_preparation_tests {
         }
         async fn accept(
             &self,
-            _: &crate::abuse::MessageAdmissionAcceptance<'_>,
+            _: &crate::security::abuse::MessageAdmissionAcceptance<'_>,
             _: &AdmissionWitness,
         ) -> Result<FinalizeDecision> {
             panic!("preparation does not finalize")
@@ -533,12 +535,12 @@ mod direct_preparation_tests {
 
     struct PreparedQueue;
     impl crate::services::messaging::OnlineRoutePort for PreparedQueue {
-        type Session = crate::outbound::OutboundSender;
+        type Session = crate::xmpp::outbound::OutboundSender;
         fn try_local(
             &self,
             session: &Self::Session,
-            item: crate::outbound::RouteEnqueue,
-        ) -> std::result::Result<(), crate::outbound::RouteSendError> {
+            item: crate::xmpp::outbound::RouteEnqueue,
+        ) -> std::result::Result<(), crate::xmpp::outbound::RouteSendError> {
             session.try_send_route_item(item)
         }
         fn record_local_accept(&self, _: bool) {}
@@ -546,7 +548,7 @@ mod direct_preparation_tests {
             &self,
             _: &str,
             _: &str,
-            _: Option<crate::outbound::DurableDelivery>,
+            _: Option<crate::xmpp::outbound::DurableDelivery>,
         ) -> bool {
             panic!("valid prepared target is local")
         }
@@ -554,7 +556,7 @@ mod direct_preparation_tests {
             &self,
             _: &str,
             _: &str,
-            _: Option<crate::outbound::DurableDelivery>,
+            _: Option<crate::xmpp::outbound::DurableDelivery>,
         ) -> crate::services::messaging::OnlineRouteResult {
             panic!("valid prepared target is local")
         }
@@ -581,7 +583,7 @@ mod direct_preparation_tests {
         fn clustered_direct_routes(&self) -> bool {
             true
         }
-        async fn rearm_direct_route(&self, _: crate::outbound::DurableDelivery) {
+        async fn rearm_direct_route(&self, _: crate::xmpp::outbound::DurableDelivery) {
             panic!("accepted queue is never rearmed")
         }
     }
@@ -670,7 +672,10 @@ mod direct_preparation_tests {
                     unreachable!()
                 };
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                let targets = [(target.to_owned(), crate::outbound::OutboundSender::new(tx))];
+                let targets = [(
+                    target.to_owned(),
+                    crate::xmpp::outbound::OutboundSender::new(tx),
+                )];
                 let mut request = DirectRouteRequest {
                     message_type: original.message_type,
                     target: if target == bare_jid(target) {
@@ -684,11 +689,13 @@ mod direct_preparation_tests {
                     sender: original.sender,
                     recipient_id: local.authority.recipient_id,
                     stanza: &local.recipient_delivery,
-                    delivery: DirectRouteDelivery::Committed(crate::outbound::DurableDelivery {
-                        recipient_id: local.authority.recipient_id,
-                        message_id: local.authority.recipient_stable_id,
-                        claim_id: Some(local.authority.recipient_stable_id),
-                    }),
+                    delivery: DirectRouteDelivery::Committed(
+                        crate::xmpp::outbound::DurableDelivery {
+                            recipient_id: local.authority.recipient_id,
+                            message_id: local.authority.recipient_stable_id,
+                            claim_id: Some(local.authority.recipient_stable_id),
+                        },
+                    ),
                     approved_targets: &targets,
                     enforce_direct_health: true,
                 };
@@ -1148,7 +1155,7 @@ impl ProtocolSession {
                     // Fail closed before routing/archive. A backend failure may
                     // leave this admission or a separate guard transaction
                     // unconfirmed; it does not prove rollback or permit retry.
-                    if crate::abuse::is_abuse_state_busy(&error) {
+                    if crate::security::abuse::is_abuse_state_busy(&error) {
                         tracing::warn!(user_id = %user.id, "message anti-abuse actor state was busy; rejected without waiting on a database connection lock");
                         self.state.personal_message_telemetry().rate_limited();
                         return Ok(message_error(root, "wait", "resource-constraint"));
@@ -2177,11 +2184,13 @@ impl ProtocolSession {
         };
         let live_delivery_id = durable_direct_invite.or(durable_c2s_delivery);
         let delivery = match live_delivery_id {
-            Some(message_id) => DirectRouteDelivery::Committed(crate::outbound::DurableDelivery {
-                recipient_id: recipient.id,
-                message_id,
-                claim_id: live_claim_id,
-            }),
+            Some(message_id) => {
+                DirectRouteDelivery::Committed(crate::xmpp::outbound::DurableDelivery {
+                    recipient_id: recipient.id,
+                    message_id,
+                    claim_id: live_claim_id,
+                })
+            }
             None => DirectRouteDelivery::Volatile,
         };
         self.enter_frame_stage(Stage::MessageRouting);

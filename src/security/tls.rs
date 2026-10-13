@@ -596,7 +596,7 @@ fn federation_root_store(extra_root_path: Option<&Path>) -> Result<RootCertStore
 
 fn c2s_client_verifier(
     trust_root_path: Option<&Path>,
-    crls: Option<&crate::crl::CrlSet>,
+    crls: Option<&crate::security::crl::CrlSet>,
 ) -> Result<ClientVerifierAndRoots> {
     let Some(path) = trust_root_path else {
         return Ok((None, None));
@@ -626,10 +626,10 @@ fn c2s_client_verifier(
     Ok((Some(verifier), Some(roots)))
 }
 
-fn crl_set(path: Option<&Path>, label: &str) -> Result<Option<Arc<crate::crl::CrlSet>>> {
+fn crl_set(path: Option<&Path>, label: &str) -> Result<Option<Arc<crate::security::crl::CrlSet>>> {
     path.map(|path| {
         let bytes = read_stable_regular_file(path, label, MAX_CRL_FILE_BYTES, false)?;
-        crate::crl::CrlSet::from_pem(&bytes, label).map(Arc::new)
+        crate::security::crl::CrlSet::from_pem(&bytes, label).map(Arc::new)
     })
     .transpose()
 }
@@ -861,7 +861,7 @@ fn validate_server_chain(
 
 struct FreshOcspResolver {
     key: Arc<CertifiedKey>,
-    response: Arc<crate::ocsp::ValidatedOcspResponse>,
+    response: Arc<crate::security::ocsp::ValidatedOcspResponse>,
 }
 
 impl std::fmt::Debug for FreshOcspResolver {
@@ -880,7 +880,7 @@ fn server_config(
     chain: &[CertificateDer<'static>],
     key: &PrivateKeyDer<'static>,
     client_verifier: Option<Arc<dyn ClientCertVerifier>>,
-    ocsp: Option<&Arc<crate::ocsp::ValidatedOcspResponse>>,
+    ocsp: Option<&Arc<crate::security::ocsp::ValidatedOcspResponse>>,
     alpn: Option<&'static [u8]>,
 ) -> Result<Arc<ServerConfig>> {
     let builder = ServerConfig::builder_with_provider(crypto_provider())
@@ -981,7 +981,9 @@ fn tls_material(input: TlsMaterialInput<'_>) -> Result<Arc<TlsMaterial>> {
     let federation_crls = crl_set(federation_crl_path, "federation CRL file")?;
     let c2s_client_crls = crl_set(c2s_client_crl_path, "C2S client CRL file")?;
     let ocsp = ocsp_response_path
-        .map(|path| crate::ocsp::ValidatedOcspResponse::from_file(path, &chain).map(Arc::new))
+        .map(|path| {
+            crate::security::ocsp::ValidatedOcspResponse::from_file(path, &chain).map(Arc::new)
+        })
         .transpose()?;
     let s2s_verifier: Arc<dyn ClientCertVerifier> = Arc::new(PresentedServerCertificate::new());
     let (c2s_verifier, c2s_client_roots) =
@@ -1030,11 +1032,11 @@ pub struct TlsMaterial {
     pub s2s_client_starttls: Arc<ClientConfig>,
     pub s2s_client_direct: Arc<ClientConfig>,
     pub federation_roots: Arc<RootCertStore>,
-    pub federation_crls: Option<Arc<crate::crl::CrlSet>>,
+    pub federation_crls: Option<Arc<crate::security::crl::CrlSet>>,
     /// Retained solely for exact re-evaluation of already authenticated C2S
     /// EXTERNAL sessions after a local CRL snapshot changes.
     c2s_client_roots: Option<Arc<RootCertStore>>,
-    c2s_client_crls: Option<Arc<crate::crl::CrlSet>>,
+    c2s_client_crls: Option<Arc<crate::security::crl::CrlSet>>,
     /// RFC 5929 endpoint binding is absent for hashless certificate signature
     /// algorithms such as Ed25519.  TLS trust and every non-endpoint binding
     /// remain usable in that case.
@@ -1045,7 +1047,7 @@ pub struct TlsMaterial {
 
 impl TlsMaterial {
     fn revocation_decision_with_role(
-        crls: &crate::crl::CrlSet,
+        crls: &crate::security::crl::CrlSet,
         roots: &RootCertStore,
         session: &CertificateSessionEntry,
         server_role: bool,
@@ -1066,22 +1068,26 @@ impl TlsMaterial {
         let now = UnixTime::now();
         let current = recheck(now);
         match current {
-            crate::crl::RevocationRecheck::Valid => LiveRevocationDecision::NotRevoked,
-            crate::crl::RevocationRecheck::ExplicitlyRevoked => {
+            crate::security::crl::RevocationRecheck::Valid => LiveRevocationDecision::NotRevoked,
+            crate::security::crl::RevocationRecheck::ExplicitlyRevoked => {
                 LiveRevocationDecision::ExplicitlyRevoked
             }
-            crate::crl::RevocationRecheck::OtherValidationFailure if crls.is_fresh_at(now) => {
+            crate::security::crl::RevocationRecheck::OtherValidationFailure
+                if crls.is_fresh_at(now) =>
+            {
                 match recheck(session.authenticated_at) {
-                    crate::crl::RevocationRecheck::Valid => LiveRevocationDecision::NotRevoked,
-                    crate::crl::RevocationRecheck::ExplicitlyRevoked => {
+                    crate::security::crl::RevocationRecheck::Valid => {
+                        LiveRevocationDecision::NotRevoked
+                    }
+                    crate::security::crl::RevocationRecheck::ExplicitlyRevoked => {
                         LiveRevocationDecision::ExplicitlyRevoked
                     }
-                    crate::crl::RevocationRecheck::OtherValidationFailure => {
+                    crate::security::crl::RevocationRecheck::OtherValidationFailure => {
                         LiveRevocationDecision::Inconclusive
                     }
                 }
             }
-            crate::crl::RevocationRecheck::OtherValidationFailure => {
+            crate::security::crl::RevocationRecheck::OtherValidationFailure => {
                 LiveRevocationDecision::Inconclusive
             }
         }
@@ -1160,7 +1166,7 @@ pub(crate) struct FederationTlsSnapshot {
     pub s2s_client_starttls: Arc<ClientConfig>,
     pub s2s_client_direct: Arc<ClientConfig>,
     pub roots: Arc<RootCertStore>,
-    pub crls: Option<Arc<crate::crl::CrlSet>>,
+    pub crls: Option<Arc<crate::security::crl::CrlSet>>,
     pub generation: u64,
 }
 

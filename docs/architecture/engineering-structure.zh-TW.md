@@ -71,7 +71,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | R2 根目錄收斂 | `src/` 根目錄 `.rs` 數只能減少；不得新增根目錄測試檔 | 同上 |
 | R3 模組拆分方式 | 大檔拆成「`foo.rs`＋`foo/子模組.rs`」，保持原有模組路徑；拆分 WP 只移動程式碼，不改邏輯。可見性的不變式：搬移後每個名稱的可見範圍只能維持或縮小，不得擴大。維持原範圍的寫法是「私有→`pub(super)`、`pub(super)`→`pub(in <父模組的上層>)`（如 `pub(in crate::xmpp::protocol)`、`pub(in crate::db)`）、`pub(crate)`／`pub` 不動」，適用於搬入子檔的頂層項目、結構欄位與固有 impl 成員；不需跨檔使用者也可維持私有（範圍縮小）。WP-24 起一律採維持原範圍的寫法，由只移動檢查的 `VISIBILITY:` 行逐項核對，免去依編譯錯誤反覆補可見性。協議模組的父檔以明確的 `use self::子模組::{…};` 列出兄弟子檔與測試使用的名稱（只供測試者加 `#[cfg(test)]`），模組外使用者以原可見性轉出（`pub(super) use`／`pub(crate) use`）；已由 `db/mod.rs` 以 `pub use x::*` 整體轉出的 db 模組，父檔改以 `pub use self::子模組::*;` 轉出（bin crate 中未被使用的明確轉出是 unused import，`-D warnings` 下失敗） | 「只移動」差異檢查（第 6 節，`scripts/check-move-only.mjs`） |
 | R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取。Rust 單元測試以 `include_str!` 讀自身模組原始碼者，拆分時改讀父檔的 `#[cfg(test)] const MODULE_SOURCE`（父檔＋各正式子檔），並以守衛測試確認清單與非測試的 `mod` 宣告一致。子檔依拆分前在單檔中的先後順序列出：有些契約以出現不只一次的標記切割原始碼，依字母排列會取錯片段（WP-25 的 `let exact_replay =`） | `scripts/lib/source-module.mjs`；Rust 測試見 `src/db/cluster_muc.rs`、`src/db/archive.rs` |
-| R5 證據不可改寫 | `scripts/fixtures/**/historical*`、`docs/evidence/**` 與已記錄的 Stage 證據不得因結構工作修改 | 審閱 |
+| R5 證據不可改寫 | `scripts/fixtures/**/historical*`、`docs/evidence/**` 與已記錄的 Stage 證據不得因結構工作修改；Stage 4 工具以 SHA-256 綁定內容的原始碼也逐位元組不變，搬移與路徑改寫都略過它們 | 審閱；被綁定的 `src/` 檔案（`bosh/response_owner.rs`、`stage4_replay.rs`、`stage4_replay/compact.rs` 與 16 個 `stage4_replay/fixtures/S*.json`）列於 `catalog/source-structure-baseline.json` 的 `pinned`，由 `scripts/check-source-structure.mjs` 比對 |
 | R6 測試專用碼 | 受控重播與實驗程式只能存在於 `#[cfg(test)]` 模組 | 既有門禁＋審閱 |
 | R7 提交 | 一個 WP 一至數個提交，訊息首行以 `[WP-xx]` 開頭；不推 WIP | 審閱 |
 
@@ -166,6 +166,14 @@ S4 後根目錄保留的檔案：`main.rs`；同名目錄的模組檔 `state.rs`
 `#[cfg(test)]` 編譯的 `stage4_replay.rs`（`controlled_admission_supervision.py` 綁定它與
 `stage4_replay/compact.rs`）與 `direct_replay.rs`；相容 facade `auth.rs`、`jid.rs`（分別有 38、170 個
 使用檔），在 S5 呼叫方改用 crate 後移除。
+
+`bosh/response_owner.rs` 與 `stage4_replay.rs` 的綁定不只是路徑。`test-stage4-saved-profile-historical.py`
+與 `stage4_build_record.py` 釘住 `response_owner.rs` 的大小、SHA-256 與變異位移，`controlled_admission_supervision.py`
+釘住 `stage4_replay.rs`、`stage4_replay/compact.rs` 的 SHA-256，`stage4_case.py` 釘住 16 個存檔夾具。上表的盤點只找路徑綁定，
+因此 WP-48b 改了 `stage4_replay.rs` 的一行匯入；這項比對只在驗證組合實驗契約時執行，離線 CI 沒有抓到。WP-48d 的完整 CI
+因 `response_owner.rs` 的歷史綁定測試失敗才發現。WP-48d 先恢復 `stage4_replay.rs`，並把這 19 個檔案的 SHA-256 記錄為結構基線的
+`pinned`，由結構門禁比對（R5）。這兩個檔案只用到 `crate::outbound` 一個舊路徑，WP-48 不改寫它們，`main.rs` 的
+`outbound` 轉出保留給它們。
 
 ## 6. 委派與驗收協議
 

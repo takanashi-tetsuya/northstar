@@ -5649,8 +5649,8 @@ mod tests {
 mod saved_dispatcher {
     use super::*;
     use crate::bosh::stage4_saved as bosh;
+    use crate::outbound::{OutboundItem, RouteEnqueue};
     use crate::xmpp::auth_publication::stage4_saved as auth;
-    use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
     use crate::xmpp::protocol::mix::stage4_saved as mix;
     use crate::xmpp::stage4_native as native;
     use anyhow::{anyhow, bail, ensure, Context, Result};

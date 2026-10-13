@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   classify,
+  digestPinned,
   evaluateStructure,
   buildBaseline,
   lowerBaseline,
@@ -132,6 +134,67 @@ test('evaluateStructure - invalid schemas', () => {
   assert.equal(result2.violations[0], "catalog/source-structure-baseline.json: invalid schema or budgets");
 });
 
+test('evaluateStructure - pinned digests', () => {
+  const digest = 'a'.repeat(64);
+  const baseline = {
+    schema: "northstar-source-structure-baseline-v1",
+    budgets: { production: 1500, test: 3000 },
+    oversize: {},
+    root_rust_files: [],
+    pinned: { "src/db/frozen.rs": digest }
+  };
+  const files = [{ path: "src/db/frozen.rs", lines: 10 }];
+  const same = evaluateStructure({ files, baseline, digests: new Map([["src/db/frozen.rs", digest]]) });
+  assert.deepEqual(same.violations, []);
+
+  const changed = evaluateStructure({ files, baseline, digests: new Map([["src/db/frozen.rs", 'b'.repeat(64)]]) });
+  assert.equal(changed.violations.length, 1);
+  assert.match(changed.violations[0], /src\/db\/frozen\.rs: content changed, but Stage 4 evidence pins its SHA-256/);
+
+  const missing = evaluateStructure({ files: [], baseline, digests: new Map([["src/db/frozen.rs", null]]) });
+  assert.equal(missing.violations.length, 1);
+  assert.match(missing.violations[0], /src\/db\/frozen\.rs: pinned file is missing/);
+
+  const unread = evaluateStructure({ files, baseline });
+  assert.equal(unread.violations.length, 1);
+  assert.match(unread.violations[0], /src\/db\/frozen\.rs: pinned file is missing/);
+});
+
+test('evaluateStructure - invalid pinned entries', () => {
+  const digest = 'a'.repeat(64);
+  for (const pinned of [
+    [],
+    { "src/db/frozen.rs": 'A'.repeat(64) },
+    { "src/db/frozen.rs": 'a'.repeat(63) },
+    { "scripts/frozen.py": digest },
+    { "src/../frozen.rs": digest }
+  ]) {
+    const baseline = {
+      schema: "northstar-source-structure-baseline-v1",
+      budgets: { production: 1500, test: 3000 },
+      oversize: {},
+      root_rust_files: [],
+      pinned
+    };
+    const result = evaluateStructure({ files: [], baseline });
+    assert.deepEqual(result.violations, ["catalog/source-structure-baseline.json: invalid schema or budgets"]);
+  }
+});
+
+test('digestPinned - hashes listed files and reports unreadable ones as null', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-structure-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src', 'db'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'src', 'db', 'frozen.json'), '{}\n');
+    const digests = digestPinned(tmp, { "src/db/frozen.json": 'a'.repeat(64), "src/db/gone.rs": 'a'.repeat(64) });
+    assert.equal(digests.get("src/db/frozen.json"), crypto.createHash('sha256').update('{}\n').digest('hex'));
+    assert.equal(digests.get("src/db/gone.rs"), null);
+    assert.equal(digestPinned(tmp, undefined).size, 0);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('lowerBaseline - lowers and removes but never raises or adds', () => {
   const baseline = {
     schema: "northstar-source-structure-baseline-v1",
@@ -241,3 +304,53 @@ test('CLI tests', () => {
   }
 });
 
+test('CLI - pinned files', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-structure-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src', 'db'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'catalog'));
+    fs.writeFileSync(path.join(tmp, 'src', 'main.rs'), '\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'db', 'heavy.rs'), '\n'.repeat(1600));
+    fs.writeFileSync(path.join(tmp, 'src', 'db', 'frozen.json'), '{}\n');
+    const digest = crypto.createHash('sha256').update('{}\n').digest('hex');
+    const baselinePath = path.join(tmp, 'catalog', 'source-structure-baseline.json');
+    fs.writeFileSync(baselinePath, JSON.stringify({
+      schema: "northstar-source-structure-baseline-v1",
+      budgets: { production: 1500, test: 3000 },
+      oversize: { "src/db/heavy.rs": 1600 },
+      root_rust_files: ["src/main.rs"],
+      pinned: { "src/db/frozen.json": digest }
+    }, null, 2) + '\n');
+    const scriptPath = fileURLToPath(new URL('./check-source-structure.mjs', import.meta.url));
+
+    let res = spawnSync(process.execPath, [scriptPath, '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /, 1 pinned\./);
+
+    // --update lowers the baseline and keeps the pinned digests
+    fs.writeFileSync(path.join(tmp, 'src', 'db', 'heavy.rs'), '\n'.repeat(1550));
+    res = spawnSync(process.execPath, [scriptPath, '--update', '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 0);
+    let written = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+    assert.equal(written.oversize["src/db/heavy.rs"], 1550);
+    assert.deepEqual(written.pinned, { "src/db/frozen.json": digest });
+
+    // a changed pinned file fails the check, and --update does not record it
+    fs.writeFileSync(path.join(tmp, 'src', 'db', 'frozen.json'), '{ }\n');
+    res = spawnSync(process.execPath, [scriptPath, '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /src\/db\/frozen\.json: content changed, but Stage 4 evidence pins its SHA-256/);
+    res = spawnSync(process.execPath, [scriptPath, '--update', '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 1);
+    written = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+    assert.deepEqual(written.pinned, { "src/db/frozen.json": digest });
+
+    // a missing pinned file fails the check
+    fs.rmSync(path.join(tmp, 'src', 'db', 'frozen.json'));
+    res = spawnSync(process.execPath, [scriptPath, '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /src\/db\/frozen\.json: pinned file is missing/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

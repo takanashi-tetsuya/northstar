@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
@@ -63,13 +64,37 @@ export function scanSource(root) {
 }
 
 /**
+ * Reads the SHA-256 digest of each pinned file.
+ * @param {string} root
+ * @param {object} pinned Repository-relative paths mapped to their recorded digests
+ * @returns {Map<string, string|null>} null for a file that cannot be read
+ */
+export function digestPinned(root, pinned) {
+  root = path.resolve(root);
+  const digests = new Map();
+  if (!pinned || typeof pinned !== 'object' || Array.isArray(pinned)) {
+    return digests;
+  }
+  for (const relPath of Object.keys(pinned)) {
+    try {
+      const buf = fs.readFileSync(path.join(root, relPath));
+      digests.set(relPath, crypto.createHash('sha256').update(buf).digest('hex'));
+    } catch (e) {
+      digests.set(relPath, null);
+    }
+  }
+  return digests;
+}
+
+/**
  * Evaluates the current source files against the baseline.
  * @param {object} params
  * @param {Array<{path: string, lines: number}>} params.files
  * @param {object} params.baseline
+ * @param {Map<string, string|null>} [params.digests] Digests of the pinned files (see digestPinned)
  * @returns {{violations: string[], notices: string[]}}
  */
-export function evaluateStructure({ files, baseline }) {
+export function evaluateStructure({ files, baseline, digests = new Map() }) {
   const violations = [];
   const notices = [];
 
@@ -82,7 +107,8 @@ export function evaluateStructure({ files, baseline }) {
     !Number.isInteger(baseline.budgets.production) || baseline.budgets.production <= 0 ||
     !Number.isInteger(baseline.budgets.test) || baseline.budgets.test <= 0 ||
     (baseline.oversize !== undefined && !isPlainObject(baseline.oversize)) ||
-    (baseline.root_rust_files !== undefined && !Array.isArray(baseline.root_rust_files))
+    (baseline.root_rust_files !== undefined && !Array.isArray(baseline.root_rust_files)) ||
+    (baseline.pinned !== undefined && !isPlainObject(baseline.pinned))
   ) {
     invalidBaseline = true;
   } else {
@@ -94,6 +120,13 @@ export function evaluateStructure({ files, baseline }) {
     }
     for (const val of (baseline.root_rust_files || [])) {
       if (typeof val !== 'string') {
+        invalidBaseline = true;
+        break;
+      }
+    }
+    for (const [key, val] of Object.entries(baseline.pinned || {})) {
+      if (!key.startsWith('src/') || key.split('/').includes('..') ||
+          typeof val !== 'string' || !/^[0-9a-f]{64}$/.test(val)) {
         invalidBaseline = true;
         break;
       }
@@ -126,6 +159,15 @@ export function evaluateStructure({ files, baseline }) {
       if (!root_rust_files.includes(path)) {
         violations.push(`${path}: new root source file`);
       }
+    }
+  }
+
+  for (const [path, digest] of Object.entries(baseline.pinned || {})) {
+    const current = digests.get(path);
+    if (typeof current !== 'string') {
+      violations.push(`${path}: pinned file is missing`);
+    } else if (current !== digest) {
+      violations.push(`${path}: content changed, but Stage 4 evidence pins its SHA-256 (R5)`);
     }
   }
 
@@ -293,12 +335,13 @@ if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
     process.exit(1);
   }
 
-  const { violations, notices } = evaluateStructure({ files, baseline });
+  const digests = digestPinned(root, baseline.pinned);
+  const { violations, notices } = evaluateStructure({ files, baseline, digests });
 
   if (violations.length > 0) {
     for (const v of violations) console.error(`error: ${v}`);
     for (const n of notices) console.error(`notice: ${n}`);
-    console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files.`);
+    console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files, ${digests.size} pinned.`);
     process.exit(1);
   }
 
@@ -311,12 +354,15 @@ if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
         oversize: newBaseline.oversize,
         root_rust_files: newBaseline.root_rust_files
       };
+      if (newBaseline.pinned !== undefined) {
+        sortedBaseline.pinned = newBaseline.pinned;
+      }
       fs.writeFileSync(baselinePath, JSON.stringify(sortedBaseline, null, 2) + '\n');
     }
     process.exit(0);
   }
 
   for (const n of notices) console.error(`notice: ${n}`);
-  console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files.`);
+  console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files, ${digests.size} pinned.`);
   process.exit(0);
 }

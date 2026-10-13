@@ -359,6 +359,29 @@ if (!knownIssues.replace(/\s+/g, '').includes(migrationChainStatement)) {
   throw new Error(`KNOWN_ISSUES.md does not state the migration chain as ${migrationChainStatement}`);
 }
 
+// docs/README.md maps each kind of project state to its one authoritative
+// document; the handoff links that map instead of restating the states.
+const statusMap = read('docs/README.md').split('\n## Status map\n')[1]?.split('\n## ', 1)[0];
+if (!statusMap) throw new Error('docs/README.md is missing its status map');
+for (const authority of [
+  '(KNOWN_ISSUES.md)',
+  '(XEP_MATRIX.md)',
+  '(TRACEABILITY.md)',
+  '(../migrations/)',
+  '(https://github.com/takanashi-tetsuya/northstar/releases)',
+  '(architecture/engineering-structure.zh-TW.md)',
+  '(MODULARIZATION_EXECUTION_PLAN.md)',
+  '(architecture/experimental-rebuild-plan.zh-TW.md)',
+  '(HANDOFF.md)',
+]) {
+  if (!statusMap.includes(authority)) {
+    throw new Error(`docs/README.md status map does not link ${authority}`);
+  }
+}
+if (!read('docs/HANDOFF.md').includes('(README.md#status-map)')) {
+  throw new Error('docs/HANDOFF.md does not link the status map in docs/README.md');
+}
+
 const architecture = read('docs/ARCHITECTURE.md').replace(/\s+/g, ' ');
 const architectureBudget =
   '`AppState=0` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +

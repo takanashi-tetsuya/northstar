@@ -3,6 +3,23 @@
 Start with the [installation guide](INSTALL.md) for release packages or the
 [project README](../README.md) for a source checkout.
 
+## Status map
+
+Each kind of project state has one authoritative document. Other documents link
+to it instead of restating it.
+
+| State | Authoritative document |
+| --- | --- |
+| Product limitations, accepted boundaries and release gates | [Known limitations](KNOWN_ISSUES.md) |
+| Supported RFC and XEP profiles | [XMPP compatibility matrix](XEP_MATRIX.md) |
+| Implementation and test evidence per issue and Core profile | [Implementation and test coverage](TRACEABILITY.md) |
+| Database schema version | The newest file in [`migrations/`](../migrations/) |
+| Published releases and their dates | [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) |
+| Source layout, module ownership, line budgets and structural work packages | [Engineering structure](architecture/engineering-structure.zh-TW.md) |
+| Moving domain logic from the server into `crates/` | [Modularization execution plan](MODULARIZATION_EXECUTION_PLAN.md) |
+| Experimental architecture rebuild, Stages 0–6 | [Experimental rebuild ledger](architecture/experimental-rebuild-plan.zh-TW.md) |
+| Branches, pushes and the local VM lab | [Development handoff](HANDOFF.md) |
+
 ## Deployment
 
 - [Production operations](PRODUCTION_OPERATIONS.md): configuration, TLS, migrations and recovery.
@@ -25,7 +42,7 @@ Start with the [installation guide](INSTALL.md) for release packages or the
 
 | Directory | Contents |
 | --- | --- |
-| `src/` | Main Rust server |
+| `src/` | Main Rust server, in the layer directories of the [engineering structure](architecture/engineering-structure.zh-TW.md) |
 | `crates/` | Shared workspace libraries and protocol modules |
 | `services/` | Experimental service processes |
 | `web/` | Browser client, administration UI and translations |

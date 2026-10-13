@@ -135,9 +135,9 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
     probeExact.includes('SELECT 1') && probeExact.includes('.execute(&mut **connection)'),
   'all retention modes must claim the same schema-scoped physical session and close it on drop');
 
-  const dispatch = body(main, 'if process_role == subservers::ProcessRole::Maintenance');
-  requireBoundary(dispatch.includes('return subservers::run_maintenance().await') &&
-    main.indexOf('if process_role == subservers::ProcessRole::Maintenance') < main.indexOf('Config::from_env()?'),
+  const dispatch = body(main, 'if process_role == runtime::subservers::ProcessRole::Maintenance');
+  requireBoundary(dispatch.includes('return runtime::subservers::run_maintenance().await') &&
+    main.indexOf('if process_role == runtime::subservers::ProcessRole::Maintenance') < main.indexOf('Config::from_env()?'),
   'maintenance must exit the composition path before general Config and AppState assembly');
   const dotenv = main.indexOf('config::load_dotenv()?;');
   requireBoundary(dotenv >= 0, 'dotenv loading errors must propagate before mode-specific configuration');

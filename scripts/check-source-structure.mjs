@@ -26,9 +26,41 @@ export function classify(p) {
 }
 
 /**
- * Scans the source directory and returns files with line counts.
+ * Counts the uses of crate::outbound outside line comments, written directly or as an entry of a
+ * `crate::{...}` group. main.rs keeps that one S4 shim (`use xmpp::outbound;`) only for the pinned
+ * Stage 4 files; all other code writes crate::xmpp::outbound.
+ * @param {string} text Rust source
+ * @returns {number}
+ */
+export function countOutboundShimUses(text) {
+  const code = text.replace(/\/\/.*$/gm, '');
+  let count = (code.match(/\bcrate::outbound\b/g) || []).length;
+  const groups = /\bcrate::\{/g;
+  while (groups.exec(code) !== null) {
+    let depth = 1;
+    let entryStart = groups.lastIndex;
+    for (let i = groups.lastIndex; i < code.length && depth > 0; i++) {
+      const c = code[i];
+      if (c === '{') {
+        depth++;
+      } else if (c === '}') {
+        depth--;
+      }
+      if ((c === ',' && depth === 1) || depth === 0) {
+        if (/^outbound\b/.test(code.slice(entryStart, i).trim())) {
+          count++;
+        }
+        entryStart = i + 1;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Scans the source directory and returns files with line counts and crate::outbound uses.
  * @param {string} root
- * @returns {Array<{path: string, lines: number}>}
+ * @returns {Array<{path: string, lines: number, outboundShimUses: number}>}
  */
 export function scanSource(root) {
   root = path.resolve(root);
@@ -53,7 +85,7 @@ export function scanSource(root) {
           if (buf[i] === 10) lines++;
         }
         const relPath = path.relative(root, fullPath).replace(/\\/g, '/');
-        results.push({ path: relPath, lines });
+        results.push({ path: relPath, lines, outboundShimUses: countOutboundShimUses(buf.toString('utf8')) });
       }
     }
   }
@@ -140,10 +172,11 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
 
   const oversize = baseline.oversize || {};
   const root_rust_files = baseline.root_rust_files || [];
+  const pinned = baseline.pinned || {};
   
   const currentFiles = new Map(files.map(f => [f.path, f.lines]));
   
-  for (const { path, lines } of files) {
+  for (const { path, lines, outboundShimUses } of files) {
     const cls = classify(path);
     const budget = baseline.budgets[cls];
     
@@ -159,6 +192,10 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
       if (!root_rust_files.includes(path)) {
         violations.push(`${path}: new root source file`);
       }
+    }
+
+    if (outboundShimUses > 0 && !(path in pinned)) {
+      violations.push(`${path}: uses crate::outbound; write crate::xmpp::outbound (the S4 shim stays only for pinned files)`);
     }
   }
 

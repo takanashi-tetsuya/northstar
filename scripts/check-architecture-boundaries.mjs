@@ -481,7 +481,7 @@ if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<
   throw new Error('AppState must receive the already-reserved runtime-control connection');
 }
 const terminalMain = structBody(mainSource, 'async fn main()');
-if (terminalMain.replace(/\s+/g, '') !== 'logging::report_result(run().await)') {
+if (terminalMain.replace(/\s+/g, '') !== 'platform::logging::report_result(run().await)') {
   throw new Error('main must report its final result through the bounded console owner');
 }
 const runtimeMain = structBody(mainSource, 'async fn run()');
@@ -3368,7 +3368,7 @@ const supervisedWorkerContracts = [
   { name: 'account-deletion-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(1_200))', draining: false },
   { name: 'upload-storage-reconciliation', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(600))', draining: false },
   { name: 'archive-retention', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(retention_max_silence)', draining: false },
-  { name: 'pubsub-subscription-cleanup', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(subscription_cleanup::MAX_SILENCE)', draining: false },
+  { name: 'pubsub-subscription-cleanup', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(runtime::subscription_cleanup::MAX_SILENCE)', draining: false },
   { name: 'admin-session-cleanup', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
   { name: 'redis-pubsub', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(45))', draining: false },
   { name: 'account-revocations', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(10))', draining: false },
@@ -3680,7 +3680,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext>')
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');
-if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:crate::metrics::)?Metrics\b/.test(capsEffectSource)
+if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:(?:crate::)?(?:platform::)?metrics::)?Metrics\b/.test(capsEffectSource)
     || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }
@@ -3719,7 +3719,7 @@ if (/\bstate\s*\.metrics\b/.test(mixProtocol)
 const accountRecoverySource = read('src/security/account_recovery.rs');
 const accountRecoveryTelemetry = structBody(accountRecoverySource, 'pub(crate) struct AccountDeletionRecoveryTelemetry');
 if (/\.metrics\b/.test(accountRecoverySource)
-    || /Arc<(?:crate::metrics::)?Metrics>/.test(accountRecoveryTelemetry)
+    || /Arc<(?:(?:crate::)?(?:platform::)?metrics::)?Metrics>/.test(accountRecoveryTelemetry)
     || !accountRecoveryTelemetry.includes("success: &'a AtomicU64")
     || !accountRecoveryTelemetry.includes("failure: &'a AtomicU64")
     || !accountRecoveryTelemetry.includes("lease_loss: &'a AtomicU64")

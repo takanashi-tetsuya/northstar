@@ -20,30 +20,24 @@ mod storage;
 mod tools;
 mod xmpp;
 
-// Old paths of modules moved into layer directories (S4); WP-48 rewrites the callers and removes them.
-use platform::{config, logging};
-use runtime::{
-    capacity_maintenance, operation_runtime, retention, subscription_cleanup, subservers,
-    test_activation, upload_worker, workers,
-};
-use s2s::components;
-use security::account_recovery;
-use tools::{identity_audit, pie};
+// Stage 4 evidence pins the bytes of src/bosh/response_owner.rs and src/stage4_replay.rs
+// (`pinned` in catalog/source-structure-baseline.json), and both still name crate::outbound.
+// This S4 shim stays for them only; check-source-structure.mjs rejects crate::outbound elsewhere.
 use xmpp::outbound;
 
 use anyhow::{Context, Result};
-use config::Config;
+use platform::config::Config;
 use runtime::service_tasks::{
     await_shutdown_notifications, drain_service_tasks, spawn_service_task,
     unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
 };
+use runtime::workers::{WorkerCriticality, WorkerMode};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use state::AppState;
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
-use workers::{WorkerCriticality, WorkerMode};
 use zeroize::Zeroizing;
 
 const ABUSE_KEY_AUTHORITY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -71,7 +65,7 @@ fn migration_environment_from_values(
     );
     let database_url = match (database_url, database_url_file) {
         (Some(value), None) => Zeroizing::new(value),
-        (None, Some(path)) => Zeroizing::new(config::read_secret_file(
+        (None, Some(path)) => Zeroizing::new(platform::config::read_secret_file(
             &path,
             "MIGRATOR_DATABASE_URL_FILE",
         )?),
@@ -155,7 +149,7 @@ fn install_crypto_provider() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    logging::report_result(run().await)
+    platform::logging::report_result(run().await)
 }
 
 async fn run() -> Result<()> {
@@ -167,7 +161,7 @@ async fn run() -> Result<()> {
     }
     if arguments.first().map(String::as_str) == Some("--subservers") {
         anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --subservers");
-        return subservers::print_inventory();
+        return runtime::subservers::print_inventory();
     }
     if matches!(
         arguments.first().map(String::as_str),
@@ -185,7 +179,7 @@ async fn run() -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::to_string(&config::runtime_connection_budget_manifest())?
+            serde_json::to_string(&platform::config::runtime_connection_budget_manifest())?
         );
         return Ok(());
     }
@@ -195,7 +189,7 @@ async fn run() -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::to_string(&config::storage_connection_budget_manifest())?
+            serde_json::to_string(&platform::config::storage_connection_budget_manifest())?
         );
         return Ok(());
     }
@@ -222,12 +216,12 @@ async fn run() -> Result<()> {
     if arguments != ["serve", "maintenance"]
         && std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")
     {
-        config::load_dotenv()?;
+        platform::config::load_dotenv()?;
     }
-    if let Some(outcome) = identity_audit::maybe_run(&arguments).await? {
+    if let Some(outcome) = tools::identity_audit::maybe_run(&arguments).await? {
         return match outcome {
-            identity_audit::AuditOutcome::Clean | identity_audit::AuditOutcome::Help => Ok(()),
-            identity_audit::AuditOutcome::Dirty => anyhow::bail!(
+            tools::identity_audit::AuditOutcome::Clean | tools::identity_audit::AuditOutcome::Help => Ok(()),
+            tools::identity_audit::AuditOutcome::Dirty => anyhow::bail!(
                 "identity audit found issues requiring operator review; the complete JSON report was written to stdout and the database was not modified"
             ),
         };
@@ -252,19 +246,19 @@ async fn run() -> Result<()> {
         }
     }
     let process_role = if arguments.first().map(String::as_str) == Some("pie") {
-        subservers::ProcessRole::Standalone
+        runtime::subservers::ProcessRole::Standalone
     } else {
-        subservers::ProcessRole::parse(&arguments)?
+        runtime::subservers::ProcessRole::parse(&arguments)?
     };
-    if process_role == subservers::ProcessRole::Maintenance {
-        return subservers::run_maintenance().await;
+    if process_role == runtime::subservers::ProcessRole::Maintenance {
+        return runtime::subservers::run_maintenance().await;
     }
     let config = Config::from_env()?;
     let _log_guard = init_logging(&config)?;
-    if process_role == subservers::ProcessRole::Core {
-        anyhow::ensure!(config.database_max_connections <= subservers::MAX_CORE_PRIMARY_CONNECTIONS,
+    if process_role == runtime::subservers::ProcessRole::Core {
+        anyhow::ensure!(config.database_max_connections <= runtime::subservers::MAX_CORE_PRIMARY_CONNECTIONS,
             "core subserver DATABASE_MAX_CONNECTIONS must be at most {}, reserving shared-role capacity for maintenance",
-            subservers::MAX_CORE_PRIMARY_CONNECTIONS);
+            runtime::subservers::MAX_CORE_PRIMARY_CONNECTIONS);
         tracing::info!(
             role = "core",
             "core subserver selected; archive retention is owned by the maintenance process"
@@ -277,22 +271,23 @@ async fn run() -> Result<()> {
         );
     }
     if arguments.first().map(String::as_str) == Some("pie") {
-        return pie::run(&config, &arguments[1..]).await;
+        return tools::pie::run(&config, &arguments[1..]).await;
     }
     // This reservation deliberately precedes primary-pool construction and
     // every startup database operation.  Runtime policy and service-control
     // authority must survive a cold-start cohort that would otherwise fill
     // the traffic pool before it can establish its own isolated connection.
-    let startup_phase = logging::StartupPhase::begin("runtime_control_reservation");
+    let startup_phase = platform::logging::StartupPhase::begin("runtime_control_reservation");
     let mut runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
     if process_role.embeds_retention() {
         // Retention ownership shares this already-reserved physical session;
         // it consumes no primary-pool slot. Its existing critical supervisor
         // cancels this process if the exact connection stops making progress.
-        subservers::claim_maintenance_on_connection(&mut runtime_control_connection).await?;
+        runtime::subservers::claim_maintenance_on_connection(&mut runtime_control_connection)
+            .await?;
     }
     startup_phase.complete();
-    let startup_phase = logging::StartupPhase::begin("primary_pool_and_role_attestation");
+    let startup_phase = platform::logging::StartupPhase::begin("primary_pool_and_role_attestation");
     let pool_options = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
@@ -314,7 +309,7 @@ async fn run() -> Result<()> {
         db::attest_runtime_role(&pool).await?;
     }
     startup_phase.complete();
-    let startup_phase = logging::StartupPhase::begin("schema_verification");
+    let startup_phase = platform::logging::StartupPhase::begin("schema_verification");
     db::verify_schema(&pool, &config.domain)
         .await
         .context("database schema verification failed")?;
@@ -325,7 +320,8 @@ async fn run() -> Result<()> {
     // be legitimately committing the same epoch while this process has not
     // yet received CPU time. The database lock remains fail-closed and is
     // released automatically if its owner dies.
-    let startup_phase = logging::StartupPhase::begin("deployment_capacity_reconciliation");
+    let startup_phase =
+        platform::logging::StartupPhase::begin("deployment_capacity_reconciliation");
     db::reconcile_deployment_capacity(
         &pool,
         db::DeploymentCapacityConfiguration::from_config(&config)?,
@@ -333,7 +329,7 @@ async fn run() -> Result<()> {
     .await
     .context("could not establish deployment-wide capacity authority")?;
     startup_phase.complete();
-    let startup_phase = logging::StartupPhase::begin("credential_maintenance");
+    let startup_phase = platform::logging::StartupPhase::begin("credential_maintenance");
     if !config.scram_sha1_enabled {
         let removed = db::clear_scram_sha1_credentials(&pool).await?;
         if removed > 0 {
@@ -342,7 +338,7 @@ async fn run() -> Result<()> {
     }
     db::ensure_bootstrap_admin(&pool, &config).await?;
     startup_phase.complete();
-    let components = components::registry();
+    let components = s2s::components::registry();
     let (federation, federation_rx) = services::federation_outbox::FederationOutboxService::channel(
         db::federation_outbox_repository::PostgresFederationOutboxRepository::new(pool.clone()),
         northstar_federation_core::S2sOutboxPolicy::new(
@@ -359,7 +355,7 @@ async fn run() -> Result<()> {
             .collect(),
     );
     let cancel = CancellationToken::new();
-    let startup_phase = logging::StartupPhase::begin("application_state");
+    let startup_phase = platform::logging::StartupPhase::begin("application_state");
     let state = AppState::new(
         config,
         pool,
@@ -446,7 +442,7 @@ async fn run() -> Result<()> {
         Some(capacity_interval.saturating_mul(2)),
         cancel.clone(),
         move |heartbeat| {
-            capacity_maintenance::serve_renewal(
+            runtime::capacity_maintenance::serve_renewal(
                 capacity_context.clone(),
                 capacity_cancel.clone(),
                 heartbeat,
@@ -461,7 +457,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(120)),
         cancel.clone(),
         move |heartbeat| {
-            capacity_maintenance::serve_reaper(
+            runtime::capacity_maintenance::serve_reaper(
                 capacity_reaper_context.clone(),
                 capacity_reaper_cancel.clone(),
                 heartbeat,
@@ -496,7 +492,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(1_200)),
         cancel.clone(),
         move |heartbeat| {
-            account_recovery::serve(
+            security::account_recovery::serve(
                 Arc::clone(&deletion_context),
                 deletion_cancel.clone(),
                 heartbeat,
@@ -523,7 +519,9 @@ async fn run() -> Result<()> {
             move |heartbeat| {
                 let upload_context = Arc::clone(&upload_context);
                 let upload_cancel = upload_cancel.clone();
-                async move { upload_worker::serve(upload_context, upload_cancel, heartbeat).await }
+                async move {
+                    runtime::upload_worker::serve(upload_context, upload_cancel, heartbeat).await
+                }
             },
         );
     }
@@ -541,7 +539,9 @@ async fn run() -> Result<()> {
             move |heartbeat| {
                 let context = Arc::clone(&retention_context);
                 let retention_cancel = retention_cancel.clone();
-                async move { retention::serve_context(context, retention_cancel, heartbeat).await }
+                async move {
+                    runtime::retention::serve_context(context, retention_cancel, heartbeat).await
+                }
             },
         );
         let subscriptions = Arc::new(state.subscription_cleanup_context());
@@ -550,10 +550,10 @@ async fn run() -> Result<()> {
             "pubsub-subscription-cleanup",
             WorkerCriticality::Restartable,
             WorkerMode::Continuous,
-            Some(subscription_cleanup::MAX_SILENCE),
+            Some(runtime::subscription_cleanup::MAX_SILENCE),
             cancel.clone(),
             move |heartbeat| {
-                subscription_cleanup::serve_context(
+                runtime::subscription_cleanup::serve_context(
                     Arc::clone(&subscriptions),
                     subscription_cancel.clone(),
                     heartbeat,
@@ -622,13 +622,14 @@ async fn run() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "external component",
-        components::serve(state.clone(), cancel.clone(), component_listener),
+        s2s::components::serve(state.clone(), cancel.clone(), component_listener),
     );
-    let operation_worker_runtime = operation_runtime::OperationWorkerRuntime::from_state(&state);
+    let operation_worker_runtime =
+        runtime::operation_runtime::OperationWorkerRuntime::from_state(&state);
     spawn_service_task(
         &mut service_tasks,
         "durable operation worker",
-        operation_runtime::serve(operation_worker_runtime, cancel.clone()),
+        runtime::operation_runtime::serve(operation_worker_runtime, cancel.clone()),
     );
 
     // Credential-generation and exact-connection cleanup is a security
@@ -645,7 +646,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(90)),
         cancel.clone(),
         move |heartbeat| {
-            operation_runtime::serve_admin_session_cleanup(
+            runtime::operation_runtime::serve_admin_session_cleanup(
                 Arc::clone(&admin_cleanup_context),
                 admin_cleanup_cancel.clone(),
                 heartbeat,
@@ -771,7 +772,7 @@ async fn run() -> Result<()> {
             api::serve_administration(state.clone(), cancel.clone(), listener),
         );
     }
-    test_activation::publish_if_enabled(
+    runtime::test_activation::publish_if_enabled(
         state.test_listener_activation_policy(),
         &listener_addresses,
         std::process::id(),
@@ -977,7 +978,7 @@ async fn container_healthcheck(address: &str) -> Result<()> {
     }
 }
 
-fn init_logging(config: &Config) -> Result<logging::LogGuards> {
+fn init_logging(config: &Config) -> Result<platform::logging::LogGuards> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let rotation = match config.log_rotation.to_lowercase().as_str() {
@@ -995,8 +996,8 @@ fn init_logging(config: &Config) -> Result<logging::LogGuards> {
         .context("failed to build rolling file appender")?;
 
     let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
-    let (console, console_guard) = logging::console(std::io::stderr());
-    let guards = logging::LogGuards::new(vec![file_guard, console_guard]);
+    let (console, console_guard) = platform::logging::console(std::io::stderr());
+    let guards = platform::logging::LogGuards::new(vec![file_guard, console_guard]);
 
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

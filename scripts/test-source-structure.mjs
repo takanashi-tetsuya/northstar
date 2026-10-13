@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   classify,
+  countOutboundShimUses,
   digestPinned,
   evaluateStructure,
   buildBaseline,
@@ -195,6 +196,37 @@ test('digestPinned - hashes listed files and reports unreadable ones as null', (
   }
 });
 
+test('countOutboundShimUses', () => {
+  assert.equal(countOutboundShimUses('let x = crate::outbound::OutboundItem::plain(y);'), 1);
+  assert.equal(countOutboundShimUses('use crate::{\n    outbound::{BoshResponseOwnership, OutboundItem},\n    services::replay::ReplayService,\n};'), 1);
+  assert.equal(countOutboundShimUses('use crate::{config, outbound};\nuse crate::outbound;'), 2);
+  assert.equal(countOutboundShimUses('use crate::xmpp::outbound::OutboundItem;\nuse crate::{xmpp::{outbound, protocol}, db};'), 0);
+  assert.equal(countOutboundShimUses('use crate::outbound_policy;\nuse super::outbound;'), 0);
+  assert.equal(countOutboundShimUses('// crate::outbound is now crate::xmpp::outbound'), 0);
+});
+
+test('evaluateStructure - crate::outbound only in pinned files', () => {
+  const digest = 'a'.repeat(64);
+  const baseline = {
+    schema: "northstar-source-structure-baseline-v1",
+    budgets: { production: 1500, test: 3000 },
+    oversize: {},
+    root_rust_files: [],
+    pinned: { "src/db/frozen.rs": digest }
+  };
+  const digests = new Map([["src/db/frozen.rs", digest]]);
+  const files = [
+    { path: "src/db/frozen.rs", lines: 10, outboundShimUses: 2 },
+    { path: "src/db/other.rs", lines: 10, outboundShimUses: 0 }
+  ];
+  assert.deepEqual(evaluateStructure({ files, baseline, digests }).violations, []);
+
+  files[1].outboundShimUses = 1;
+  const result = evaluateStructure({ files, baseline, digests });
+  assert.equal(result.violations.length, 1);
+  assert.match(result.violations[0], /src\/db\/other\.rs: uses crate::outbound; write crate::xmpp::outbound/);
+});
+
 test('lowerBaseline - lowers and removes but never raises or adds', () => {
   const baseline = {
     schema: "northstar-source-structure-baseline-v1",
@@ -226,6 +258,9 @@ test('scanSource - relative path', () => {
     const files = scanSource(relRoot);
     assert.equal(files.length, 1);
     assert.equal(files[0].path, 'src/test_relative.rs');
+    assert.equal(files[0].outboundShimUses, 0);
+    fs.writeFileSync(path.join(tmp, 'src', 'test_relative.rs'), 'use crate::outbound::OutboundItem;\n');
+    assert.equal(scanSource(relRoot)[0].outboundShimUses, 1);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

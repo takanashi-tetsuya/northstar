@@ -1,6 +1,6 @@
 //! Shared PostgreSQL wake transport for SM, MIX and account revocation workers.
 use crate::{
-    config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS,
+    platform::config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS,
     services::{
         mix::{MixDeliveryWakeBroker, MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL},
         sm::SmAuthorityBroker,
@@ -25,7 +25,7 @@ async fn run_database_authority_listener(
     account_revocations: Arc<tokio::sync::Notify>,
     direct_spool_wake: Arc<tokio::sync::Notify>,
     cancel: tokio_util::sync::CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
+    heartbeat: crate::runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     // PgListener internally retains this one-connection pool solely to rebuild
     // its socket after a PostgreSQL failover. It is deliberately unrelated to
@@ -163,13 +163,13 @@ pub(crate) fn start_database_authority_listener(
     account_revocations: Arc<tokio::sync::Notify>,
     direct_spool_wake: Arc<tokio::sync::Notify>,
     connect_options: PgConnectOptions,
-    registry: Arc<crate::workers::WorkerRegistry>,
+    registry: Arc<crate::runtime::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     registry.supervise(
         "sm-authority-listener",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(15)),
         cancel.clone(),
         move |heartbeat| {

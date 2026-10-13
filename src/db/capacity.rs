@@ -17,7 +17,7 @@ pub struct DeploymentCapacityConfiguration {
 }
 
 impl DeploymentCapacityConfiguration {
-    pub fn from_config(config: &crate::config::Config) -> Result<Self> {
+    pub fn from_config(config: &crate::platform::config::Config) -> Result<Self> {
         Ok(Self {
             epoch: config.deployment_capacity_epoch,
             accounts: config.max_accounts_total,

@@ -1,7 +1,7 @@
-use crate::config::Config;
+use crate::platform::config::Config;
 use crate::{
-    abuse::{AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome},
     auth,
+    security::abuse::{AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -144,7 +144,7 @@ pub async fn create_user(
 ) -> Result<User> {
     let username = auth::normalize_username(username)?;
     let password = Zeroizing::new(password.to_owned());
-    let creds = crate::password_work::run(move || {
+    let creds = crate::security::password_work::run(move || {
         auth::hash_password(&password, !force, scram_iterations, scram_sha1_enabled)
     })
     .await
@@ -391,7 +391,7 @@ pub async fn prepare_registration(
     let username =
         auth::normalize_username(username).map_err(RegistrationError::InvalidUsername)?;
     let password = Zeroizing::new(password.to_owned());
-    let creds = crate::password_work::run(move || {
+    let creds = crate::security::password_work::run(move || {
         auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await
@@ -418,7 +418,7 @@ pub async fn prepare_registration_with_reservation(
     password: &str,
     scram_iterations: u32,
     scram_sha1_enabled: bool,
-    password_work: crate::password_work::PasswordWorkReservation,
+    password_work: crate::security::password_work::PasswordWorkReservation,
 ) -> std::result::Result<PreparedRegistration, RegistrationError> {
     let username =
         auth::normalize_username(username).map_err(RegistrationError::InvalidUsername)?;
@@ -458,7 +458,7 @@ pub async fn create_user_with_invitation_guarded_in_tx_v2(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::abuse::PowIntent,
+    intent: &crate::security::abuse::PowIntent,
     guard_already_verified: bool,
     prepared: PreparedRegistration,
     invitation_token: Option<&str>,
@@ -490,7 +490,7 @@ async fn create_user_with_invitation_guarded_in_tx_bound(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::abuse::PowIntent,
+    intent: &crate::security::abuse::PowIntent,
     guard_already_verified: bool,
     prepared: PreparedRegistration,
     invitation_token: Option<&str>,
@@ -1172,7 +1172,7 @@ pub async fn prepare_login(
     // Bound the whole password-authentication request before its user lookup,
     // not only the Argon2 closure. Otherwise a random-username flood could
     // bypass the retained-work cap while consuming database connections.
-    let password_work = crate::password_work::admit()
+    let password_work = crate::security::password_work::admit()
         .map_err(anyhow::Error::from)
         .context("password authentication admission failed")?;
     let Some(mut user) = find_user(pool, &username).await? else {
@@ -1641,7 +1641,7 @@ pub async fn prepare_password_change(
     let current_hash = Zeroizing::new(expected_password_hash.to_owned());
     let current_candidate = Zeroizing::new(current_password.to_owned());
     let password = Zeroizing::new(new_password.to_owned());
-    let prepared = crate::password_work::run(move || {
+    let prepared = crate::security::password_work::run(move || {
         if !auth::verify_password(&current_hash, &current_candidate)
             .context("stored Argon2 verifier failed integrity validation")?
         {
@@ -1797,7 +1797,7 @@ pub async fn change_password_guarded_v2(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::abuse::PowIntent,
+    intent: &crate::security::abuse::PowIntent,
     user_id: Uuid,
     expected_auth_generation: i64,
     new_password: &str,
@@ -1807,7 +1807,7 @@ pub async fn change_password_guarded_v2(
     // Reserve bounded CPU capacity before borrowing a database connection.
     // Proof consumption and the credential write remain one transaction, but
     // password-work queueing can no longer occupy the entire PgPool.
-    let password_work = crate::password_work::reserve()
+    let password_work = crate::security::password_work::reserve()
         .await
         .map_err(anyhow::Error::from)
         .context("password-change work admission failed")?;
@@ -1863,7 +1863,7 @@ pub async fn change_password(
     scram_sha1_enabled: bool,
 ) -> Result<()> {
     let password = Zeroizing::new(new_password.to_owned());
-    let creds = crate::password_work::run(move || {
+    let creds = crate::security::password_work::run(move || {
         auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await
@@ -2212,7 +2212,7 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::abuse::PowIntent,
+    intent: &crate::security::abuse::PowIntent,
     user_id: Uuid,
     expected_auth_generation: i64,
 ) -> Result<std::result::Result<bool, GuardError>> {

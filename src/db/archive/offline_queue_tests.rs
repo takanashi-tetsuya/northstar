@@ -1,8 +1,10 @@
 //! Offline queue and message deduplication tests.
 
 use super::*;
-use crate::abuse::{AbuseConfig, AbuseGuard, MessageDedupeCandidate, MessageDedupeIdentity};
 use crate::db;
+use crate::security::abuse::{
+    AbuseConfig, AbuseGuard, MessageDedupeCandidate, MessageDedupeIdentity,
+};
 use std::sync::Arc;
 use tokio::sync::Barrier;
 
@@ -179,7 +181,7 @@ async fn offline_dedupe_rotation_grace_capacity_and_cleanup_are_bounded() {
     assert_eq!(offline_message_count(&pool, user_id).await.unwrap(), 1);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
-    let tx = crate::outbound::OutboundSender::new(tx);
+    let tx = crate::xmpp::outbound::OutboundSender::new(tx);
     assert_eq!(
         deliver_offline(&pool, user_id, 365, &tx, None)
             .await

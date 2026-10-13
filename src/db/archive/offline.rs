@@ -90,7 +90,7 @@ pub async fn store_offline_idempotent(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
 ) -> Result<OfflineStoreOutcome> {
     store_offline_idempotent_inner(
         pool,
@@ -119,7 +119,7 @@ pub async fn store_offline_idempotent_for_recipient(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
 ) -> Result<OfflineStoreOutcome> {
     store_offline_idempotent_inner(
         pool,
@@ -144,7 +144,7 @@ pub(crate) async fn store_offline_idempotent_for_recipient_with_direct_fence(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
     cluster: Option<&crate::cluster::ClusterAdmission>,
 ) -> Result<OfflineStoreOutcome> {
     let Some(cluster) = cluster else {
@@ -183,7 +183,7 @@ pub(super) async fn store_offline_idempotent_inner(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
     cluster: Option<&crate::cluster::ClusterAdmission>,
 ) -> Result<OfflineStoreOutcome> {
     let (recipient_authority, target_resource) =
@@ -517,7 +517,7 @@ pub async fn deliver_offline(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::outbound::OutboundSender,
+    outbound: &crate::xmpp::outbound::OutboundSender,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
     deliver_offline_mode(
@@ -538,7 +538,7 @@ pub async fn deliver_bind2_offline(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::outbound::OutboundSender,
+    outbound: &crate::xmpp::outbound::OutboundSender,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
     deliver_offline_mode(
@@ -557,7 +557,7 @@ pub(super) async fn deliver_offline_mode(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::outbound::OutboundSender,
+    outbound: &crate::xmpp::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {

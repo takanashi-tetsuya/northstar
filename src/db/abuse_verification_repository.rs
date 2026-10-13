@@ -3,8 +3,8 @@
 
 use crate::services::message_admission::witness::{commit_observed, AdmissionWitness};
 use crate::{
-    abuse::{GuardError, WorkRequirement},
     db::abuse_actor_state_repository::{lock_db_states, persist_db_states, DbActorState},
+    security::abuse::{GuardError, WorkRequirement},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};

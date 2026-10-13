@@ -1,7 +1,7 @@
 //! One transaction owns report/appeal authorization, one-use proof, mutation and replay.
 use crate::{
-    abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     db,
+    security::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{api_mutations::*, reports::*},
 };
 use anyhow::Result;

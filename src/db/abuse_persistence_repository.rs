@@ -2,14 +2,14 @@
 
 use crate::services::message_admission::witness::AdmissionWitness;
 use crate::{
-    abuse::{
-        AbuseGuard, AbusePersistence, AbusePersistenceFuture, FailurePolicy, IssueDecision,
-        MessageAdmissionCandidate, MessageAdmissionRequest, MessageAdmissionStart,
-        MessageDedupeIdentity, RequirementPolicy, VerificationPolicy,
-    },
     db::{
         abuse_actor_state_repository, abuse_challenge_issuance_repository,
         abuse_verification_repository, challenge_cleanup_repository, message_admission_repository,
+    },
+    security::abuse::{
+        AbuseGuard, AbusePersistence, AbusePersistenceFuture, FailurePolicy, IssueDecision,
+        MessageAdmissionCandidate, MessageAdmissionRequest, MessageAdmissionStart,
+        MessageDedupeIdentity, RequirementPolicy, VerificationPolicy,
     },
 };
 use sqlx::PgPool;
@@ -30,7 +30,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         &'a self,
         request: abuse_challenge_issuance_repository::IssueRequest,
         decide: IssueDecision<'a>,
-    ) -> AbusePersistenceFuture<'a, crate::abuse::PowChallenge> {
+    ) -> AbusePersistenceFuture<'a, crate::security::abuse::PowChallenge> {
         Box::pin(async move {
             abuse_challenge_issuance_repository::issue(&self.pool, request, decide).await
         })
@@ -44,7 +44,10 @@ impl AbusePersistence for PostgresAbusePersistence {
         witness: Option<&'a AdmissionWitness>,
     ) -> AbusePersistenceFuture<
         'a,
-        std::result::Result<crate::abuse::WorkRequirement, crate::abuse::GuardError>,
+        std::result::Result<
+            crate::security::abuse::WorkRequirement,
+            crate::security::abuse::GuardError,
+        >,
     > {
         Box::pin(async move {
             abuse_verification_repository::verify(
@@ -62,7 +65,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         &'a self,
         actor_state_keys: &'a [String],
         decide: RequirementPolicy<'a>,
-    ) -> AbusePersistenceFuture<'a, crate::abuse::WorkRequirement> {
+    ) -> AbusePersistenceFuture<'a, crate::security::abuse::WorkRequirement> {
         Box::pin(async move {
             abuse_actor_state_repository::current_requirement(&self.pool, actor_state_keys, decide)
                 .await

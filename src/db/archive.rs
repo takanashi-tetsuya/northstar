@@ -1,4 +1,4 @@
-use crate::abuse::ContentIdentityAuthenticators;
+use crate::security::abuse::ContentIdentityAuthenticators;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;

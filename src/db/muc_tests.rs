@@ -578,13 +578,13 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
     // delivery acknowledgement. Simulate a disconnect before socket
     // write: the exact durable item is dropped, but its spool row remains
     // available for a later transport to complete.
-    let local_delivery = crate::outbound::DurableDelivery {
+    let local_delivery = crate::xmpp::outbound::DurableDelivery {
         recipient_id,
         message_id: offline_id,
         claim_id: None,
     };
     let (local_tx, mut local_rx) = tokio::sync::mpsc::channel(1);
-    crate::outbound::OutboundSender::new(local_tx)
+    crate::xmpp::outbound::OutboundSender::new(local_tx)
         .try_send_durable(local_invitation, local_delivery)
         .unwrap();
     let queued = local_rx.recv().await.unwrap();
@@ -635,13 +635,13 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         outcome => panic!("unexpected repeated local admission outcome: {outcome:?}"),
     };
     assert_eq!(admitted_repeated_invite_id, repeated_invite_id);
-    let federated_delivery = crate::outbound::DurableDelivery {
+    let federated_delivery = crate::xmpp::outbound::DurableDelivery {
         recipient_id,
         message_id: repeated_invite_id,
         claim_id: None,
     };
     let (federated_tx, mut federated_rx) = tokio::sync::mpsc::channel(1);
-    crate::outbound::OutboundSender::new(federated_tx)
+    crate::xmpp::outbound::OutboundSender::new(federated_tx)
         .try_send_durable(federated_invitation, federated_delivery)
         .unwrap();
     let queued = federated_rx.recv().await.unwrap();

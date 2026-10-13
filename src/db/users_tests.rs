@@ -183,7 +183,7 @@ async fn login_publication_preserves_each_scram_family_across_rolling_configurat
     assert_eq!(rebuilt_iterations, (10_000, 8_000));
 }
 
-fn solve_pow(challenge: &crate::abuse::PowChallenge) -> crate::abuse::PowProof {
+fn solve_pow(challenge: &crate::security::abuse::PowChallenge) -> crate::security::abuse::PowProof {
     use sha2::{Digest, Sha256};
 
     let target = u64::MAX / challenge.requirement.work_factor.max(1);
@@ -194,7 +194,7 @@ fn solve_pow(challenge: &crate::abuse::PowChallenge) -> crate::abuse::PowProof {
         hasher.update(nonce.as_bytes());
         let digest = hasher.finalize();
         if u64::from_be_bytes(digest[..8].try_into().unwrap()) <= target {
-            return crate::abuse::PowProof {
+            return crate::security::abuse::PowProof {
                 challenge_id: challenge.challenge_id,
                 nonce,
             };
@@ -425,7 +425,7 @@ async fn concurrent_registration_cannot_exceed_the_global_hourly_limit() {
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema"]
 async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_audit() {
-    use crate::abuse::{AbuseConfig, AbuseGuard};
+    use crate::security::abuse::{AbuseConfig, AbuseGuard};
     use std::time::Duration;
 
     let url = std::env::var("TEST_DATABASE_URL")
@@ -469,7 +469,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     let actors = vec![format!("ip:198.51.100.{}", suffix.as_bytes()[0])];
     let subject = format!("registration:{}", actors[0]);
     let registration_password = "guarded-registration-password";
-    let intent = crate::abuse::PowIntent::xmpp_registration(
+    let intent = crate::security::abuse::PowIntent::xmpp_registration(
         &username,
         registration_password,
         Some(&invitation),
@@ -574,7 +574,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     };
     assert_eq!(created.username, username);
 
-    let replay_intent = crate::abuse::PowIntent::xmpp_registration(
+    let replay_intent = crate::security::abuse::PowIntent::xmpp_registration(
         &replay_username,
         registration_password,
         Some(&invitation),
@@ -909,7 +909,7 @@ async fn rest_password_cas_and_admin_authorization_are_atomic() {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
-    use crate::abuse::{AbuseAction, AbuseConfig, AbuseGuard, TransactionalGuardOutcome};
+    use crate::security::abuse::{AbuseAction, AbuseConfig, AbuseGuard, TransactionalGuardOutcome};
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;

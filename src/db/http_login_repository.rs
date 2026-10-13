@@ -1,8 +1,8 @@
 //! Durable REST login: idempotency, abuse admission, verifier work, and
 //! session publication. Password work occurs outside SQL transactions.
 use crate::{
-    abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     auth, db,
+    security::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{json_replay_headers, StoredApiResponse},
         http_login::{
@@ -184,9 +184,9 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                         return Ok(Outcome::LeaseLost);
                     }
                     guard_tx.commit().await?;
-                    return Ok(Outcome::AbuseDenied(crate::abuse::GuardError::Required(
-                        requirement,
-                    )));
+                    return Ok(Outcome::AbuseDenied(
+                        crate::security::abuse::GuardError::Required(requirement),
+                    ));
                 }
                 match db::abuse_transaction_repository::verify_in_tx(
                     &mut guard_tx,
@@ -231,7 +231,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         .await
         {
             Ok(prepared) => prepared,
-            Err(error) if crate::password_work::is_overloaded(&error) => {
+            Err(error) if crate::security::password_work::is_overloaded(&error) => {
                 if let Some(lease) = lease.as_ref() {
                     if !db::yield_idempotency_lease(&self.pool, lease).await? {
                         return Ok(Outcome::LeaseLost);

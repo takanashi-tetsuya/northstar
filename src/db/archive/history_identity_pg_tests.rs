@@ -22,7 +22,7 @@ fn personal_identity<'a>(
         actor_scope,
         target_scope,
         identity_value,
-        payload_authenticators: crate::abuse::test_personal_message_content_keyring()
+        payload_authenticators: crate::security::abuse::test_personal_message_content_keyring()
             .authenticators(payload.as_bytes()),
         legacy_payload_digest: Sha256::digest(payload.as_bytes()).into(),
     }
@@ -1761,7 +1761,7 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
         );
     }
     let (offline_tx, mut offline_rx) = tokio::sync::mpsc::channel(4);
-    let offline_tx = crate::outbound::OutboundSender::new(offline_tx);
+    let offline_tx = crate::xmpp::outbound::OutboundSender::new(offline_tx);
     assert_eq!(
         deliver_offline(&pool, owner_id, 30, &offline_tx, None)
             .await
@@ -1801,7 +1801,7 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
         );
     }
     let (bind2_tx, mut bind2_rx) = tokio::sync::mpsc::channel(4);
-    let bind2_tx = crate::outbound::OutboundSender::new(bind2_tx);
+    let bind2_tx = crate::xmpp::outbound::OutboundSender::new(bind2_tx);
     assert_eq!(
         deliver_bind2_offline(&pool, recipient_owner_id, 30, &bind2_tx, None)
             .await

@@ -339,7 +339,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let live_delivery = crate::outbound::DurableDelivery {
+        let live_delivery = crate::xmpp::outbound::DurableDelivery {
             recipient_id: raced_recipient,
             message_id: raced_message,
             claim_id: None,
@@ -348,8 +348,8 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(
-            loser.downcast_ref::<crate::outbound::DurableDeliverySuperseded>(),
-            Some(&crate::outbound::DurableDeliverySuperseded {
+            loser.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>(),
+            Some(&crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: raced_message,
             })
         );
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(persisted_claim, Some(replay_claim));
         let winner = crate::db::replay::fence_durable_socket_write(
             &pool,
-            crate::outbound::DurableDelivery {
+            crate::xmpp::outbound::DurableDelivery {
                 claim_id: Some(replay_claim),
                 ..live_delivery
             },
@@ -430,7 +430,7 @@ mod tests {
         assert_eq!(initial_claim, Some(reserved_message));
         let fenced = crate::db::replay::fence_durable_socket_write(
             &pool,
-            crate::outbound::DurableDelivery {
+            crate::xmpp::outbound::DurableDelivery {
                 recipient_id: reserved_recipient,
                 message_id: reserved_message,
                 claim_id: initial_claim,

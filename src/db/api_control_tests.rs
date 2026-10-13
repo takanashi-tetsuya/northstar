@@ -434,7 +434,7 @@ async fn capacity_lock_contention_fails_fast_without_starving_pool() {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn failed_login_penalty_and_replay_are_one_transaction() {
-    use crate::abuse::{AbuseAction, AbuseConfig, AbuseGuard};
+    use crate::security::abuse::{AbuseAction, AbuseConfig, AbuseGuard};
     use std::time::Duration;
 
     let url = std::env::var("TEST_DATABASE_URL")

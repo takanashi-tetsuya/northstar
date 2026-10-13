@@ -1,6 +1,6 @@
 //! PostgreSQL row locking and persistence for anti-abuse actor state.
 
-use crate::abuse::AbuseStateBusy;
+use crate::security::abuse::AbuseStateBusy;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};

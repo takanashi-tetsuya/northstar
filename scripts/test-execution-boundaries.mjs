@@ -1184,8 +1184,8 @@ for (const [kind, database, other] of [['Ack', 'acknowledge', 'defer'], ['Defer'
     `db::${other}_mix_delivery_worker_observed(&self.pool, request).await?`, /typed command and exact request/);
 }
 rejectsMixWorker('MIX claim projection cannot replace its actual lease token', 'mixDb',
-  'source: crate::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: delivery.lease_token, },',
-  'source: crate::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: other_token, },', /claimed attempt projection/);
+  'source: crate::xmpp::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: delivery.lease_token, },',
+  'source: crate::xmpp::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: other_token, },', /claimed attempt projection/);
 rejectsMixWorker('MIX archive adapter cannot retarget a personal projection', 'mixArchive',
   'pool, command.personal_archive_id, command.owner_id, &command.channel_jid,',
   'pool, command.personal_archive_id, other_owner, &command.channel_jid,', /bound command/);

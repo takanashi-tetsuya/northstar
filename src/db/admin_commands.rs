@@ -327,7 +327,7 @@ pub async fn create_admin_account_authorized(
 ) -> Result<AdminCreateAccountOutcome> {
     let username = crate::auth::normalize_username(username)?;
     let password = zeroize::Zeroizing::new(password.to_owned());
-    let credentials = crate::password_work::run(move || {
+    let credentials = crate::security::password_work::run(move || {
         crate::auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await
@@ -402,7 +402,7 @@ pub async fn reset_admin_account_password_authorized(
         "password-reset JID does not match the target account"
     );
     let password = zeroize::Zeroizing::new(password.to_owned());
-    let credentials = crate::password_work::run(move || {
+    let credentials = crate::security::password_work::run(move || {
         crate::auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await

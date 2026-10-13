@@ -2,8 +2,8 @@
 //! password changes. No transaction or credential-bearing subject escapes.
 
 use crate::{
-    abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     db,
+    security::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{self, StoredApiResponse},
         password_change::{
@@ -244,7 +244,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         .await
         {
             Ok(prepared) => prepared,
-            Err(error) if crate::password_work::is_overloaded(&error) => {
+            Err(error) if crate::security::password_work::is_overloaded(&error) => {
                 if !self.yield_lease(&lease).await? {
                     return Ok(Outcome::LeaseLost);
                 }
@@ -362,7 +362,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
 mod tests {
     use super::*;
     use crate::{
-        abuse::{AbuseConfig, PowIntent},
+        security::abuse::{AbuseConfig, PowIntent},
         services::{
             api_mutations::{api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest},
             password_change::PasswordChangeService,

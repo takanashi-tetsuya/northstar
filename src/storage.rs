@@ -238,7 +238,7 @@ pub(crate) fn upload_storage_namespace_id(
             digest.update([u8::from(settings.path_style), u8::from(settings.allow_http)]);
             if let Some(kms_file) = settings.sse_kms_key_id_file.as_deref() {
                 digest.update([1]);
-                let mut kms = Zeroizing::new(crate::config::read_secret_file(
+                let mut kms = Zeroizing::new(crate::platform::config::read_secret_file(
                     kms_file,
                     "UPLOAD_S3_SSE_KMS_KEY_ID_FILE",
                 )?);

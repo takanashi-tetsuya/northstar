@@ -13,7 +13,7 @@ impl PostgresMaintenanceRepository {
     }
 }
 
-impl crate::retention::RetentionRepository for PostgresMaintenanceRepository {
+impl crate::runtime::retention::RetentionRepository for PostgresMaintenanceRepository {
     async fn purge_resolved_retention_batch(
         &self,
         store: RetentionStore,
@@ -44,7 +44,9 @@ impl crate::retention::RetentionRepository for PostgresMaintenanceRepository {
     }
 }
 
-impl crate::subscription_cleanup::SubscriptionCleanupRepository for PostgresMaintenanceRepository {
+impl crate::runtime::subscription_cleanup::SubscriptionCleanupRepository
+    for PostgresMaintenanceRepository
+{
     async fn cleanup_expired_subscriptions(&self, batch_size: i64) -> Result<u64> {
         crate::db::cleanup_expired_subscriptions(&self.pool, batch_size).await
     }
@@ -80,7 +82,7 @@ pub(crate) async fn purge_expired_retraction_intents(
     .rows_affected())
 }
 
-pub use crate::retention::RetentionStore;
+pub use crate::runtime::retention::RetentionStore;
 
 /// `0` deliberately means that automated deletion is disabled. It never
 /// means "delete everything now", which keeps a missing/zero configuration
@@ -349,7 +351,7 @@ mod tests {
             actor_scope: "sender@example.test",
             target_scope: "recipient@example.test",
             identity_value: "retention-origin",
-            payload_authenticators: crate::abuse::test_personal_message_content_keyring()
+            payload_authenticators: crate::security::abuse::test_personal_message_content_keyring()
                 .authenticators(payload.as_bytes()),
             legacy_payload_digest: Sha256::digest(payload.as_bytes()).into(),
         }
@@ -923,7 +925,7 @@ mod tests {
             &pool,
             bosh_session,
             41,
-            &[crate::outbound::DurableDelivery {
+            &[crate::xmpp::outbound::DurableDelivery {
                 recipient_id: user,
                 message_id: bosh_message,
                 claim_id: None,
@@ -950,9 +952,9 @@ mod tests {
             joined_rooms: vec![],
             directed_presence: vec![],
             last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
-            unacked: vec![crate::outbound::SmUnackedStanza::with_delivery(
+            unacked: vec![crate::xmpp::outbound::SmUnackedStanza::with_delivery(
                 "<message id='sm-owned'/>".to_owned(),
-                Some(crate::outbound::DurableDelivery {
+                Some(crate::xmpp::outbound::DurableDelivery {
                     recipient_id: user,
                     message_id: sm_message,
                     claim_id: None,

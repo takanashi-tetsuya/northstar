@@ -143,7 +143,7 @@ pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
 pub async fn admit_cluster_envelope_replay(
     pool: &PgPool,
     namespace: &str,
-    envelope: &crate::cluster_security::SignedClusterEnvelope,
+    envelope: &crate::cluster::security::SignedClusterEnvelope,
 ) -> Result<bool> {
     let event_id = Uuid::parse_str(&envelope.event_id)?;
     let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.expires_at, 0)

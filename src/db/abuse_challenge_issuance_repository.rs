@@ -1,8 +1,8 @@
 //! Atomic issuance-window, capacity, actor-state, and challenge persistence.
 
 use crate::{
-    abuse::{AbuseAction, ChallengeCapacityExceeded, PowChallenge},
     db::abuse_actor_state_repository::{lock_db_states, persist_db_states, DbActorState},
+    security::abuse::{AbuseAction, ChallengeCapacityExceeded, PowChallenge},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};

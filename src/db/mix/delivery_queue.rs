@@ -572,7 +572,7 @@ pub(super) async fn claim_mix_deliveries_inner(
             .into_iter()
             .map(|delivery| {
                 std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row {
-                    source: crate::outbound::MixDelivery {
+                    source: crate::xmpp::outbound::MixDelivery {
                         delivery_id: delivery.delivery_id,
                         lease_token: delivery.lease_token,
                     },
@@ -642,8 +642,8 @@ pub(crate) async fn acknowledge_mix_delivery_observed(
 ) -> Result<bool> {
     use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
     if let Some(observation) = observation {
-        observation.validate_source(crate::outbound::TransportOwnershipSource::Mix(
-            crate::outbound::MixDelivery {
+        observation.validate_source(crate::xmpp::outbound::TransportOwnershipSource::Mix(
+            crate::xmpp::outbound::MixDelivery {
                 delivery_id,
                 lease_token,
             },

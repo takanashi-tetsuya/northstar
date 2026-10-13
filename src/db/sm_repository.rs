@@ -466,7 +466,7 @@ impl SmRepository for PostgresSmRepository {
         session_id: Uuid,
         connection_id: Uuid,
         snapshot: &SmSessionSnapshot,
-        acknowledged: &[crate::outbound::SmUnackedStanza],
+        acknowledged: &[crate::xmpp::outbound::SmUnackedStanza],
         ttl_seconds: u64,
         live_lease_seconds: u64,
         max_stanzas: usize,
@@ -505,7 +505,7 @@ impl SmRepository for PostgresSmRepository {
     }
     async fn acknowledge_delivery_batch(
         &self,
-        sources: &[crate::outbound::TransportOwnershipSource],
+        sources: &[crate::xmpp::outbound::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
         if let Some(prepared) = observation {
@@ -833,7 +833,7 @@ fn database_projection(snapshot: &db::SmSessionSnapshot) -> ownership::SnapshotP
 #[cfg(test)]
 mod sm_owner_tests {
     use super::*;
-    use crate::outbound::SmUnackedStanza;
+    use crate::xmpp::outbound::SmUnackedStanza;
     use northstar_delivery_core::sm_ownership::{Observation, Purpose, Scope};
     #[test]
     fn converted_checkpoint_projection_binds_all_snapshot_fields_without_io() {

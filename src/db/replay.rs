@@ -1068,7 +1068,7 @@ pub async fn deliver_offline_leased(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::outbound::OutboundSender,
+    outbound: &crate::xmpp::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
@@ -1094,7 +1094,7 @@ pub async fn deliver_offline_leased_before(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::outbound::OutboundSender,
+    outbound: &crate::xmpp::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
     replay_started_at: DateTime<Utc>,
@@ -1140,7 +1140,7 @@ async fn deliver_offline_pages_for_test(
     pool: &PgPool,
     lease: &OfflineReplayLease,
     ttl_days: i64,
-    outbound: &crate::outbound::OutboundSender,
+    outbound: &crate::xmpp::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
     owner_bare_jid: &str,
@@ -1189,7 +1189,7 @@ async fn deliver_offline_pages_for_test(
                 std::time::Duration::from_secs(5),
                 outbound.send_durable(
                     row.stanza.clone(),
-                    crate::outbound::DurableDelivery {
+                    crate::xmpp::outbound::DurableDelivery {
                         recipient_id: lease.recipient_id,
                         message_id: row.id,
                         claim_id: Some(page.claim_token),
@@ -1234,7 +1234,7 @@ async fn deliver_offline_pages_for_test(
 /// worker lost its fence and must be reported.
 pub async fn acknowledge_durable_delivery(
     pool: &PgPool,
-    delivery: crate::outbound::DurableDelivery,
+    delivery: crate::xmpp::outbound::DurableDelivery,
 ) -> Result<()> {
     acknowledge_durable_deliveries(pool, std::slice::from_ref(&delivery)).await
 }
@@ -1245,14 +1245,14 @@ pub async fn acknowledge_durable_delivery(
 /// a returned error alone does not prove that the prefix was retained.
 pub async fn acknowledge_durable_deliveries(
     pool: &PgPool,
-    deliveries: &[crate::outbound::DurableDelivery],
+    deliveries: &[crate::xmpp::outbound::DurableDelivery],
 ) -> Result<()> {
     acknowledge_durable_deliveries_observed(pool, deliveries, None).await
 }
 
 pub(crate) async fn acknowledge_durable_deliveries_observed(
     pool: &PgPool,
-    deliveries: &[crate::outbound::DurableDelivery],
+    deliveries: &[crate::xmpp::outbound::DurableDelivery],
     observation: Option<&northstar_delivery_core::native_write::AckRequest>,
 ) -> Result<()> {
     use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
@@ -1261,7 +1261,7 @@ pub(crate) async fn acknowledge_durable_deliveries_observed(
             deliveries.len() == 1,
             "native ACK observation requires its one exact source"
         );
-        observation.validate_source(crate::outbound::TransportOwnershipSource::C2s(
+        observation.validate_source(crate::xmpp::outbound::TransportOwnershipSource::C2s(
             deliveries[0],
         ))?;
     }
@@ -1373,8 +1373,8 @@ pub(crate) async fn acknowledge_durable_deliveries_observed(
 /// lease expires after a crash/timeout.
 pub async fn fence_durable_socket_write(
     pool: &PgPool,
-    delivery: crate::outbound::DurableDelivery,
-) -> Result<crate::outbound::DurableDelivery> {
+    delivery: crate::xmpp::outbound::DurableDelivery,
+) -> Result<crate::xmpp::outbound::DurableDelivery> {
     // A newly committed clustered live row is reserved with its message UUID
     // until the primary route reaches a transport. Rotate that initial token
     // under the exact row lock: a concurrent no-route/degradation cleanup may
@@ -1399,14 +1399,14 @@ pub async fn fence_durable_socket_write(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = row else {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
     if stored_claim != delivery.claim_id {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -1422,7 +1422,7 @@ pub async fn fence_durable_socket_write(
     .fetch_one(&mut *transaction)
     .await?;
     if transport_owned {
-        return Err(crate::outbound::DurableDeliverySuperseded {
+        return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -1445,7 +1445,7 @@ pub async fn fence_durable_socket_write(
         "durable delivery disappeared during socket write fencing"
     );
     transaction.commit().await?;
-    Ok(crate::outbound::DurableDelivery {
+    Ok(crate::xmpp::outbound::DurableDelivery {
         claim_id: Some(claim_id),
         ..delivery
     })
@@ -1464,9 +1464,9 @@ pub async fn bind_bosh_transport_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    sources: &[crate::outbound::TransportOwnershipSource],
+    sources: &[crate::xmpp::outbound::TransportOwnershipSource],
     ttl_seconds: u64,
-) -> Result<crate::outbound::BoshResponseOwnership> {
+) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
     bind_bosh_transport_response_inner(pool, session_id, response_rid, sources, ttl_seconds, None)
         .await
 }
@@ -1474,7 +1474,7 @@ pub async fn bind_bosh_transport_response(
 pub(crate) async fn bind_bosh_transport_response_observed(
     pool: &PgPool,
     request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
-) -> Result<crate::outbound::BoshResponseOwnership> {
+) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
     request.validate_for_io()?;
     bind_bosh_transport_response_inner(
         pool,
@@ -1491,10 +1491,10 @@ async fn bind_bosh_transport_response_inner(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    sources: &[crate::outbound::TransportOwnershipSource],
+    sources: &[crate::xmpp::outbound::TransportOwnershipSource],
     ttl_seconds: u64,
     observation: Option<&northstar_delivery_core::bosh_ownership::response::BindRequest>,
-) -> Result<crate::outbound::BoshResponseOwnership> {
+) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
     let response_rid = i64::try_from(response_rid).context("BOSH RID exceeds bigint")?;
     let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, BOSH_FENCE_MAX_AGE_SECONDS as u64))
         .context("BOSH delivery-fence TTL is too large")?;
@@ -1502,13 +1502,13 @@ async fn bind_bosh_transport_response_inner(
     let mut mix = BTreeMap::new();
     for source in sources {
         match source {
-            crate::outbound::TransportOwnershipSource::C2s(delivery) => {
+            crate::xmpp::outbound::TransportOwnershipSource::C2s(delivery) => {
                 anyhow::ensure!(
                     c2s.insert(delivery.message_id, *delivery).is_none(),
                     "duplicate C2S durable delivery in one BOSH response"
                 );
             }
-            crate::outbound::TransportOwnershipSource::Mix(delivery) => {
+            crate::xmpp::outbound::TransportOwnershipSource::Mix(delivery) => {
                 anyhow::ensure!(
                     mix.insert(delivery.delivery_id, *delivery).is_none(),
                     "duplicate MIX durable delivery in one BOSH response"
@@ -1568,7 +1568,7 @@ async fn bind_bosh_transport_response_inner(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            return Err(crate::outbound::DurableDeliverySuperseded {
+            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -1582,7 +1582,7 @@ async fn bind_bosh_transport_response_inner(
         .fetch_one(&mut *transaction)
         .await?;
         if sm_owned {
-            return Err(crate::outbound::DurableDeliverySuperseded {
+            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -1602,7 +1602,7 @@ async fn bind_bosh_transport_response_inner(
                     .try_get::<Option<Uuid>, _>("delivery_claim_id")?
                     .is_some()
                 {
-                    return Err(crate::outbound::DurableDeliverySuperseded {
+                    return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                         message_id: delivery.message_id,
                     }
                     .into());
@@ -1626,7 +1626,7 @@ async fn bind_bosh_transport_response_inner(
                 continue;
             }
             if existing.try_get::<bool, _>("active")? {
-                return Err(crate::outbound::DurableDeliverySuperseded {
+                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                     message_id: delivery.message_id,
                 }
                 .into());
@@ -1637,7 +1637,7 @@ async fn bind_bosh_transport_response_inner(
                 .await?;
         }
         if offline.try_get::<Option<Uuid>, _>("delivery_claim_id")? != delivery.claim_id {
-            return Err(crate::outbound::DurableDeliverySuperseded {
+            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -1727,7 +1727,7 @@ async fn bind_bosh_transport_response_inner(
         .rows_affected();
         anyhow::ensure!(bound == 1, "MIX BOSH response fence lost ownership");
     }
-    let ownership = crate::outbound::BoshResponseOwnership {
+    let ownership = crate::xmpp::outbound::BoshResponseOwnership {
         c2s_message_ids: c2s.into_keys().collect(),
         mix_delivery_ids: mix.into_keys().collect(),
     };
@@ -1758,7 +1758,7 @@ pub async fn bind_bosh_delivery_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    deliveries: &[crate::outbound::DurableDelivery],
+    deliveries: &[crate::xmpp::outbound::DurableDelivery],
     ttl_seconds: u64,
 ) -> Result<()> {
     let response_rid = i64::try_from(response_rid).context("BOSH RID exceeds bigint")?;
@@ -1811,7 +1811,7 @@ pub async fn bind_bosh_delivery_response(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            return Err(crate::outbound::DurableDeliverySuperseded {
+            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -1825,7 +1825,7 @@ pub async fn bind_bosh_delivery_response(
         .fetch_one(&mut *transaction)
         .await?;
         if sm_owned {
-            return Err(crate::outbound::DurableDeliverySuperseded {
+            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -1845,7 +1845,7 @@ pub async fn bind_bosh_delivery_response(
                     .try_get::<Option<Uuid>, _>("delivery_claim_id")?
                     .is_some()
                 {
-                    return Err(crate::outbound::DurableDeliverySuperseded {
+                    return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                         message_id: delivery.message_id,
                     }
                     .into());
@@ -1868,7 +1868,7 @@ pub async fn bind_bosh_delivery_response(
                 continue;
             }
             if existing.try_get::<bool, _>("active")? {
-                return Err(crate::outbound::DurableDeliverySuperseded {
+                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                     message_id: delivery.message_id,
                 }
                 .into());
@@ -1880,7 +1880,7 @@ pub async fn bind_bosh_delivery_response(
         }
         let stored_claim: Option<Uuid> = offline.try_get("delivery_claim_id")?;
         if stored_claim != delivery.claim_id {
-            return Err(crate::outbound::DurableDeliverySuperseded {
+            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -2308,7 +2308,7 @@ pub async fn acknowledge_bosh_transport_responses(
         anyhow::ensure!(deleted == 1, "MIX BOSH-owned delivery disappeared");
         deleted_sources.push(
             northstar_delivery_core::bosh_ownership::response::DeletedSource::Mix(
-                crate::outbound::MixDelivery {
+                crate::xmpp::outbound::MixDelivery {
                     delivery_id,
                     lease_token,
                 },

@@ -514,7 +514,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   requireBoundary(bindSql === 'request.validate_for_io()?;bind_bosh_transport_response_inner(pool,request.session_id(),request.rid(),request.sources(),request.ttl_seconds(),Some(request)).await',
     'BOSH bind SQL must use validated closed inputs and retain its request');
   const bindInner = normalize(body(replayDb, 'async\\s+fn\\s+bind_bosh_transport_response_inner\\b'));
-  ordered(bindInner, ['letownership=crate::outbound::BoshResponseOwnership{', 'letreceipt=ownership.clone();',
+  ordered(bindInner, ['letownership=crate::xmpp::outbound::BoshResponseOwnership{', 'letreceipt=ownership.clone();',
     'response::bind_commit_observed(transaction.commit(),request,receipt).await?;', 'Ok(ownership)'],
   'BOSH bind must prepare its independent membership receipt before actual COMMIT and return');
   const renewSql = normalize(body(replayDb, 'async\\s+fn\\s+renew_bosh_transport_fences\\b'));
@@ -1690,7 +1690,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
     claimDb.includes('.fetch_all(&mut*connection).await?;letdeliveries:Vec<_>=rows.into_iter()') &&
     claimDb.includes('request.received(entered.expect(),rows.clone())?;Ok(MixClaimReturn::Observed(rows))'),
     'MIX claim must distinguish authorized read-empty from the actual autocommit statement receipt');
-  requireBoundary(claimDb.includes('std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row{source:crate::outbound::MixDelivery{delivery_id:delivery.delivery_id,lease_token:delivery.lease_token},event_id:delivery.event_id,channel_id:delivery.channel_id,channel_jid:delivery.channel_jid,participant_id:delivery.recipient.participant_id,recipient_jid:delivery.recipient.jid,recipient_nick:delivery.recipient.nick,stanza:delivery.stanza,authoritative_stanza_id:delivery.authoritative_stanza_id,archive:delivery.archive,encrypted:delivery.encrypted,attempt_count:delivery.attempt_count,route_wake_generation:delivery.route_wake_generation})'),
+  requireBoundary(claimDb.includes('std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row{source:crate::xmpp::outbound::MixDelivery{delivery_id:delivery.delivery_id,lease_token:delivery.lease_token},event_id:delivery.event_id,channel_id:delivery.channel_id,channel_jid:delivery.channel_jid,participant_id:delivery.recipient.participant_id,recipient_jid:delivery.recipient.jid,recipient_nick:delivery.recipient.nick,stanza:delivery.stanza,authoritative_stanza_id:delivery.authoritative_stanza_id,archive:delivery.archive,encrypted:delivery.encrypted,attempt_count:delivery.attempt_count,route_wake_generation:delivery.route_wake_generation})'),
     'MIX claimed attempt projection must retain actual source, payload and optional archive identity');
   requireBoundary(method(mixDb, 'claim_mix_deliveries_observed').includes('letcommand=request.command();matchclaim_mix_deliveries_inner(pool,command.limit,command.max_bytes,Some(request)).await?'),
     'MIX claim SQL must use the bound limits and same observation');

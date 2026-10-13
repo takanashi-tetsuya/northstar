@@ -11,7 +11,7 @@ use super::*;
 /// no-op; a different active token is always an ownership violation.
 pub(crate) async fn consume_mix_cluster_delivery_fence_tx(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    source: crate::outbound::MixDelivery,
+    source: crate::xmpp::outbound::MixDelivery,
 ) -> Result<()> {
     let fence = sqlx::query(
         "SELECT lease_token,expires_at>clock_timestamp() AS active
@@ -51,11 +51,11 @@ pub(crate) async fn consume_mix_cluster_delivery_fence_tx(
 /// can only leave a recoverable remote fence rather than two active writers.
 pub async fn transfer_mix_delivery_to_cluster(
     pool: &PgPool,
-    source: crate::outbound::MixDelivery,
+    source: crate::xmpp::outbound::MixDelivery,
     node_id: &str,
     request_id: Uuid,
     ttl_seconds: u64,
-) -> Result<crate::outbound::MixDelivery> {
+) -> Result<crate::xmpp::outbound::MixDelivery> {
     anyhow::ensure!(
         !node_id.is_empty() && node_id.len() <= 128 && !node_id.chars().any(char::is_control),
         "MIX cluster hand-off node identifier is invalid"
@@ -127,7 +127,7 @@ pub async fn transfer_mix_delivery_to_cluster(
             .execute(&mut *transaction)
             .await?;
     }
-    let transferred = crate::outbound::MixDelivery {
+    let transferred = crate::xmpp::outbound::MixDelivery {
         delivery_id: source.delivery_id,
         lease_token: Uuid::new_v4(),
     };
@@ -171,7 +171,7 @@ pub async fn transfer_mix_delivery_to_cluster(
 /// it proves that a later local transport already took responsibility.
 pub async fn release_mix_cluster_delivery(
     pool: &PgPool,
-    source: crate::outbound::MixDelivery,
+    source: crate::xmpp::outbound::MixDelivery,
     node_id: &str,
     request_id: Uuid,
 ) -> Result<bool> {
@@ -246,8 +246,8 @@ pub async fn release_mix_cluster_delivery(
 /// recovery path after its caller is cancelled.
 pub async fn fence_mix_socket_write(
     pool: &PgPool,
-    source: crate::outbound::MixDelivery,
-) -> Result<crate::outbound::MixDelivery> {
+    source: crate::xmpp::outbound::MixDelivery,
+) -> Result<crate::xmpp::outbound::MixDelivery> {
     let mut transaction = pool.begin().await?;
     let recipient = sqlx::query(
         "SELECT lease_until>clock_timestamp() AS active
@@ -296,7 +296,7 @@ pub async fn fence_mix_socket_write(
         "MIX delivery is already owned by an active BOSH response"
     );
     consume_mix_cluster_delivery_fence_tx(&mut transaction, source).await?;
-    let fenced = crate::outbound::MixDelivery {
+    let fenced = crate::xmpp::outbound::MixDelivery {
         delivery_id: source.delivery_id,
         lease_token: Uuid::new_v4(),
     };
@@ -328,7 +328,7 @@ pub async fn fence_mix_socket_write(
 pub async fn transfer_mix_delivery_to_bosh(
     pool: &PgPool,
     request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-) -> Result<crate::outbound::MixDelivery> {
+) -> Result<crate::xmpp::outbound::MixDelivery> {
     request.validate_for_io()?;
     let source = request.source();
     let session_id = request.session_id();
@@ -389,7 +389,7 @@ pub async fn transfer_mix_delivery_to_bosh(
             .execute(&mut *transaction)
             .await?;
     }
-    let transferred = crate::outbound::MixDelivery {
+    let transferred = crate::xmpp::outbound::MixDelivery {
         delivery_id: source.delivery_id,
         lease_token: Uuid::new_v4(),
     };

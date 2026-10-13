@@ -1,11 +1,11 @@
 //! Compose anti-abuse decisions with caller-owned business transactions.
 
 use crate::{
-    abuse::{
+    db::{abuse_actor_state_repository, abuse_verification_repository},
+    security::abuse::{
         AbuseAction, AbuseGuard, PersistentVerificationInput, PowIntent, PowProof,
         TransactionalGuardOutcome, WorkRequirement,
     },
-    db::{abuse_actor_state_repository, abuse_verification_repository},
 };
 use anyhow::Result;
 use sqlx::{Postgres, Transaction};

@@ -1,9 +1,9 @@
 //! PostgreSQL transactions for personal messages and members-only invitations.
 
 use crate::{
-    abuse::PersonalMessageContentKeyring,
     cluster::{ClusterAdmission, DirectPostCommitMode, DirectSpoolEligibility},
     db,
+    security::abuse::PersonalMessageContentKeyring,
     services::{messaging::*, muc::DurableMucInviteOutcome, privacy::PrivacyStanzaKind},
 };
 use anyhow::Result;
@@ -1003,7 +1003,7 @@ mod tests {
         let service = MessageService::new(
             PostgresMessageRepository::new(
                 pool.clone(),
-                crate::abuse::test_personal_message_content_keyring(),
+                crate::security::abuse::test_personal_message_content_keyring(),
                 "local.test",
                 100,
                 8_000_000,
@@ -1169,7 +1169,7 @@ mod tests {
         // Bind 2 receives the recipient projection from MAM. The transient
         // queue row is acknowledged without sending a second wire copy.
         let (outbound, mut receiver) = tokio::sync::mpsc::channel(1);
-        let outbound = crate::outbound::OutboundSender::new(outbound);
+        let outbound = crate::xmpp::outbound::OutboundSender::new(outbound);
         assert_eq!(
             db::deliver_bind2_offline(&pool, recipient_id, 30, &outbound, None)
                 .await
@@ -1263,7 +1263,7 @@ mod tests {
         let quota_service = MessageService::new(
             PostgresMessageRepository::new(
                 pool.clone(),
-                crate::abuse::test_personal_message_content_keyring(),
+                crate::security::abuse::test_personal_message_content_keyring(),
                 "local.test",
                 1,
                 8_000_000,

@@ -188,14 +188,14 @@ impl ReplayRepository for PostgresReplayRepository {
 
     async fn fence_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
-    ) -> Result<crate::outbound::DurableDelivery> {
+        delivery: crate::xmpp::outbound::DurableDelivery,
+    ) -> Result<crate::xmpp::outbound::DurableDelivery> {
         db::replay::fence_durable_socket_write(&self.pool, delivery).await
     }
 
     async fn acknowledge_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
+        delivery: crate::xmpp::outbound::DurableDelivery,
         observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> Result<()> {
         match observation {
@@ -231,7 +231,7 @@ impl ReplayRepository for PostgresReplayRepository {
     async fn bind_bosh_response_sources(
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
-    ) -> Result<crate::outbound::BoshResponseOwnership> {
+    ) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
         db::replay::bind_bosh_transport_response_observed(&self.pool, request).await
     }
 

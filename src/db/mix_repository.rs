@@ -18,8 +18,8 @@ impl MixService<PostgresMixRepository> {
     pub(crate) fn new_with_test_keyrings(pool: PgPool) -> Self {
         Self::new(
             PostgresMixRepository::new(pool),
-            crate::abuse::test_mix_message_content_keyring(),
-            crate::abuse::test_mix_retraction_content_keyring(),
+            crate::security::abuse::test_mix_message_content_keyring(),
+            crate::security::abuse::test_mix_retraction_content_keyring(),
             32,
             "public".to_owned(),
         )
@@ -287,7 +287,7 @@ impl MixRepository for PostgresMixRepository {
     async fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         let StoreMixMessageRequest {
             channel_id,
@@ -349,7 +349,7 @@ impl MixRepository for PostgresMixRepository {
     async fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         let identity = request.command().identity.as_ref().zip(authenticators).map(
             |(identity, authenticators)| {
@@ -394,7 +394,7 @@ impl MixRepository for PostgresMixRepository {
     async fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let ingress = request.ingress();
         let identity = ingress
@@ -431,7 +431,7 @@ impl MixRepository for PostgresMixRepository {
         channel_id: Uuid,
         actor: &str,
         identity: &MixReplayIdentity,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let existing = db::lookup_mix_business_intent(
             &self.pool,
@@ -459,7 +459,7 @@ impl MixRepository for PostgresMixRepository {
         actor: &str,
         target_id: Uuid,
         identity: &MixReplayIdentity,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let existing = db::lookup_mix_business_intent(
             &self.pool,
@@ -807,7 +807,7 @@ impl MixRepository for PostgresMixRepository {
     async fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> Result<RetractMixMessageAdmission> {
         let RetractMixMessageRequest {
             channel_id,
@@ -1338,17 +1338,17 @@ impl MixRepository for PostgresMixRepository {
     }
     async fn fence_mix_socket_write(
         &self,
-        source: crate::outbound::MixDelivery,
-    ) -> Result<crate::outbound::MixDelivery> {
+        source: crate::xmpp::outbound::MixDelivery,
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         db::mix::fence_mix_socket_write(&self.pool, source).await
     }
     async fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> Result<crate::outbound::MixDelivery> {
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         db::mix::transfer_mix_delivery_to_cluster(
             &self.pool,
             source,
@@ -1360,7 +1360,7 @@ impl MixRepository for PostgresMixRepository {
     }
     async fn release_mix_cluster_delivery(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> Result<bool> {
@@ -1372,7 +1372,7 @@ impl MixRepository for PostgresMixRepository {
     async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> Result<crate::outbound::MixDelivery> {
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         db::mix::transfer_mix_delivery_to_bosh(&self.pool, request).await
     }
 

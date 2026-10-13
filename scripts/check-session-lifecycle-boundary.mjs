@@ -36,6 +36,7 @@ function verifyMucSmAssociationBoundary(source) {
 }
 
 const protocol = read("src/xmpp/protocol.rs");
+const protocolTests = read("src/xmpp/protocol/legacy_sasl_wire_tests.rs");
 const transport = read("src/xmpp/mod.rs");
 const bosh = read("src/bosh.rs");
 const replay = read("src/services/replay.rs");
@@ -81,7 +82,7 @@ requireMatch(
   "post-transport work must remain bounded, owned, aborted and drained",
 );
 requireMatch(
-  protocol,
+  protocolTests,
   /drop_requires_local_quiesce\(false, 1\)/,
   "the cancellation-after-cleanup-claim regression test is missing",
 );

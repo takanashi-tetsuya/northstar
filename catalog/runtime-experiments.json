@@ -321,7 +321,7 @@
           "status": "declared",
           "command": "cargo test --locked --bin rust-xmpp-server resume_policy_releases_only_the_exact_mismatched_claim",
           "test": {
-            "path": "src/services/sm.rs",
+            "path": "src/services/sm/tests.rs",
             "anchor": "async fn resume_policy_releases_only_the_exact_mismatched_claim() {"
           },
           "assertions": [

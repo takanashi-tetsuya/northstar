@@ -2,11 +2,11 @@
 //! Actual credential/service/holder/publication owners over finite replies.
 #![cfg(test)]
 use super::*;
-use crate::outbound::OutboundItem;
 use crate::services::authentication::publication::{CredentialKind, CredentialObservation};
 use crate::services::authentication::{AuthenticationService, FastCommitPlan};
 use crate::services::sm::{BindingFinalizationOutcome, SmService};
 use crate::stage4_replay as wire;
+use crate::xmpp::outbound::OutboundItem;
 use crate::xmpp::protocol::{mix::stage4_saved::RouteHandle, ClientTransport};
 use std::collections::BTreeMap;
 

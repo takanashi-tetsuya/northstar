@@ -30,7 +30,7 @@ use runtime::{
 use s2s::components;
 use security::{abuse, account_recovery, crl, ocsp, password_work, tls};
 use tools::{identity_audit, pie};
-use xmpp::{mam_pubsub_parsing, outbound, transport_parsing};
+use xmpp::outbound;
 
 use anyhow::{Context, Result};
 use config::Config;

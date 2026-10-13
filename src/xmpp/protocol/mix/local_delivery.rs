@@ -104,14 +104,14 @@ impl std::fmt::Display for MixLocalTransportFailure {
 /// hand-off, while cancellation, shutdown, or the outbox attempt deadline
 /// closes the one transport that could otherwise later expose a stale item.
 pub(super) struct PendingMixLocalHandoff {
-    pub(super) sender: crate::outbound::OutboundSender,
+    pub(super) sender: crate::xmpp::outbound::OutboundSender,
     pub(super) disconnect: tokio_util::sync::CancellationToken,
     pub(super) completed: bool,
 }
 
 impl PendingMixLocalHandoff {
     pub(super) fn new(
-        sender: crate::outbound::OutboundSender,
+        sender: crate::xmpp::outbound::OutboundSender,
         disconnect: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
@@ -144,19 +144,19 @@ impl Drop for PendingMixLocalHandoff {
 /// another qualified resource; only a typed hand-off lets it transfer or
 /// consume the source.
 pub(super) async fn try_send_local_durable_mix(
-    sender: &crate::outbound::OutboundSender,
+    sender: &crate::xmpp::outbound::OutboundSender,
     disconnect: &tokio_util::sync::CancellationToken,
     stanza: String,
-    source: crate::outbound::MixDelivery,
-) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    source: crate::xmpp::outbound::MixDelivery,
+) -> std::result::Result<crate::xmpp::outbound::MixTransportCompletion, MixLocalTransportFailure> {
     try_send_local_durable_mix_inner(sender, disconnect, stanza, source, None).await
 }
 
 pub(super) async fn try_send_local_durable_mix_observed(
-    sender: &crate::outbound::OutboundSender,
+    sender: &crate::xmpp::outbound::OutboundSender,
     disconnect: &tokio_util::sync::CancellationToken,
     request: &mix_worker::LocalRequest,
-) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+) -> std::result::Result<crate::xmpp::outbound::MixTransportCompletion, MixLocalTransportFailure> {
     try_send_local_durable_mix_inner(
         sender,
         disconnect,
@@ -168,12 +168,12 @@ pub(super) async fn try_send_local_durable_mix_observed(
 }
 
 pub(super) async fn try_send_local_durable_mix_inner(
-    sender: &crate::outbound::OutboundSender,
+    sender: &crate::xmpp::outbound::OutboundSender,
     disconnect: &tokio_util::sync::CancellationToken,
     stanza: String,
-    source: crate::outbound::MixDelivery,
+    source: crate::xmpp::outbound::MixDelivery,
     observation: Option<&mix_worker::LocalRequest>,
-) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+) -> std::result::Result<crate::xmpp::outbound::MixTransportCompletion, MixLocalTransportFailure> {
     if let Some(request) = observation {
         request
             .start()
@@ -222,13 +222,13 @@ pub(super) async fn try_send_local_durable_mix_inner(
     pending.mark_completed();
     if let Some(request) = observation {
         let boundary = match completion {
-            crate::outbound::MixTransportCompletion::SocketFenced { connection_id } => {
+            crate::xmpp::outbound::MixTransportCompletion::SocketFenced { connection_id } => {
                 mix_worker::TransferBoundary::SocketFenced(connection_id)
             }
-            crate::outbound::MixTransportCompletion::SmPersisted { session_id } => {
+            crate::xmpp::outbound::MixTransportCompletion::SmPersisted { session_id } => {
                 mix_worker::TransferBoundary::SmPersisted(session_id)
             }
-            crate::outbound::MixTransportCompletion::BoshPersisted { session_id } => {
+            crate::xmpp::outbound::MixTransportCompletion::BoshPersisted { session_id } => {
                 mix_worker::TransferBoundary::BoshPersisted(session_id)
             }
         };

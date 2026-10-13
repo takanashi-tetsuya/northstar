@@ -803,7 +803,7 @@ async fn federated_muc_presence_owned(
     if let Some(password_hash) = room.password_hash.as_deref() {
         let supplied = zeroize::Zeroizing::new(request.password.clone());
         let password_hash = zeroize::Zeroizing::new(password_hash.to_owned());
-        let valid = match crate::password_work::run(move || {
+        let valid = match crate::security::password_work::run(move || {
             Ok(crate::services::muc::verify_room_password(
                 &password_hash,
                 &supplied,

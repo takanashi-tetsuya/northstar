@@ -277,7 +277,7 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
     'self.sm.outbound_h=self.sm.outbound_h.wrapping_add(1);',
     'self.sm.unacked.push_back(SmUnackedStanza::with_source(stanza.to_owned(),source));',
     'observation.appended();', 'self.checkpoint_in_turn(observation).await',
-    'iferror.downcast_ref::<crate::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
+    'iferror.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
     'self.sm.unacked.pop_back();', 'self.sm.outbound_h=self.sm.outbound_h.wrapping_sub(1);', 'observation.restored();'],
   'SM recording must append before checkpoint and restore only typed supersession');
   requireBoundary(count(record, 'pop_back(') === 1 && count(record, '.await') === 1,
@@ -1290,7 +1290,7 @@ export function verifyExecutionBoundaries(sources) {
   ordered(boshActivate, ['ifindex==0{', 'holder.validate_connection(self.protocol.connection_id)',
     '.and_then(|_|holder.validate_control(&reply))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
     'ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}',
-    'letitem=crate::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
+    'letitem=crate::xmpp::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
     'item.with_auth_publication(holder.take().expect())', 'if!self.push_output_item(item){returnfalse;}'],
     'BOSH activation must validate before recording then enqueue the exact first control holder');
   const boshResume = normalize(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));
@@ -1746,7 +1746,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   requireBoundary(local.startsWith('ifletSome(request)=observation{request.start().map_err(MixLocalTransportFailure::Observation)?;}letreceiver=matchsender.try_send_durable_mix(stanza,source){') &&
     local.includes('letmutpending=PendingMixLocalHandoff::new(sender.clone(),disconnect.clone());ifletSome(request)=observation{request.enqueued().map_err(MixLocalTransportFailure::Observation)?;}letcompletion=matchreceiver.await{'),
     'MIX local effect must start before enqueue and retain the existing pending-disconnect guard');
-  requireBoundary(local.includes('pending.mark_completed();ifletSome(request)=observation{letboundary=matchcompletion{crate::outbound::MixTransportCompletion::SocketFenced{connection_id}=>{mix_worker::TransferBoundary::SocketFenced(connection_id)}crate::outbound::MixTransportCompletion::SmPersisted{session_id}=>{mix_worker::TransferBoundary::SmPersisted(session_id)}crate::outbound::MixTransportCompletion::BoshPersisted{session_id}=>{mix_worker::TransferBoundary::BoshPersisted(session_id)}};request.returned(mix_worker::LocalResult::Transferred(boundary)).map_err(MixLocalTransportFailure::Observation)?;}Ok(completion)'),
+  requireBoundary(local.includes('pending.mark_completed();ifletSome(request)=observation{letboundary=matchcompletion{crate::xmpp::outbound::MixTransportCompletion::SocketFenced{connection_id}=>{mix_worker::TransferBoundary::SocketFenced(connection_id)}crate::xmpp::outbound::MixTransportCompletion::SmPersisted{session_id}=>{mix_worker::TransferBoundary::SmPersisted(session_id)}crate::xmpp::outbound::MixTransportCompletion::BoshPersisted{session_id}=>{mix_worker::TransferBoundary::BoshPersisted(session_id)}};request.returned(mix_worker::LocalResult::Transferred(boundary)).map_err(MixLocalTransportFailure::Observation)?;}Ok(completion)'),
     'MIX local typed transfer must be consumed immediately before any later await or return');
   requireBoundary(method(mixProduction, 'send_claimed_cluster_mix') === 'request.start()?;letresult=context.send_cluster_mix(request.node(),request.recipient(),request.stanza(),Some(request.source())).await;record_claimed_cluster_result(request,&result)?;result',
     'MIX cluster invocation must consume its actual typed result before returning');

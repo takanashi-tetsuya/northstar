@@ -329,7 +329,7 @@ impl SmRepository for Repository {
         _: Uuid,
         _: Uuid,
         _: &SmSessionSnapshot,
-        _: &[crate::outbound::SmUnackedStanza],
+        _: &[crate::xmpp::outbound::SmUnackedStanza],
         _: u64,
         _: u64,
         _: usize,
@@ -340,7 +340,7 @@ impl SmRepository for Repository {
     }
     async fn acknowledge_delivery_batch(
         &self,
-        _: &[crate::outbound::TransportOwnershipSource],
+        _: &[crate::xmpp::outbound::TransportOwnershipSource],
         _: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
         Err(self.unsupported())

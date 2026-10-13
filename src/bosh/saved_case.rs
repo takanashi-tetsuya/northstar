@@ -6,11 +6,11 @@ use super::{
 };
 use crate::{
     direct_replay as wire,
-    outbound::{
+    services::sm_capacity::SmMemoryGovernor,
+    xmpp::outbound::{
         BoshResponseOwnership, MixDelivery, MixTransportCompletion, OutboundItem,
         TransportOwnershipSource as Source,
     },
-    services::sm_capacity::SmMemoryGovernor,
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::bosh_ownership::{self as core, response as response_core};
@@ -1411,7 +1411,7 @@ mod tests {
             sequence,
         );
         let request = profile_request(REQUEST, 4, 100, None).unwrap();
-        let delivery = crate::outbound::DurableDelivery {
+        let delivery = crate::xmpp::outbound::DurableDelivery {
             recipient_id: uuid::Uuid::from_u128(2),
             message_id: uuid::Uuid::from_u128(13),
             claim_id: Some(uuid::Uuid::from_u128(13)),

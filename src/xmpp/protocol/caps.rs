@@ -314,7 +314,7 @@ async fn execute_caps_effects(
 async fn run_caps_effect_dispatcher(
     context: Arc<CapsEffectDispatchContext>,
     cancel: CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
+    heartbeat: crate::runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
     let dispatcher = context.dispatcher.as_ref();
     context.observations.recover_interrupted(Instant::now());
@@ -451,13 +451,13 @@ async fn run_caps_effect_dispatcher(
 
 pub(crate) fn start_caps_effect_dispatcher(
     context: Arc<CapsEffectDispatchContext>,
-    worker_registry: Arc<crate::workers::WorkerRegistry>,
+    worker_registry: Arc<crate::runtime::workers::WorkerRegistry>,
     cancel: CancellationToken,
 ) {
     worker_registry.supervise_draining(
         "caps-side-effects",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(60)),
         CAPS_EFFECT_DRAIN_GRACE,
         cancel.clone(),
@@ -1535,7 +1535,7 @@ mod tests {
         let coalesced = std::sync::atomic::AtomicU64::new(0);
         let queue_saturated = std::sync::atomic::AtomicU64::new(0);
         let failures = std::sync::atomic::AtomicU64::new(0);
-        let latency = crate::metrics::DurationHistogram::default();
+        let latency = crate::platform::metrics::DurationHistogram::default();
         let telemetry = CapsEffectTelemetry::new(&coalesced, &queue_saturated, &failures, &latency);
         let dispatcher = CapsEffectDispatcher::with_limits(1, 1);
         let index = CapsResourceIndex::with_limits(4, 4);

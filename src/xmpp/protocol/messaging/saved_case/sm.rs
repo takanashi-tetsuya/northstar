@@ -2,7 +2,6 @@
 //! same real substate/governor/turn; only existing persistence ports are fake.
 use super::{next, wire, Sequence, SmMetadata, TransportOwnershipSource};
 use crate::{
-    outbound::OutboundItem,
     services::{
         sm::{
             ownership::{PreparedBatch, PreparedCheckpoint, SnapshotProjection},
@@ -10,6 +9,7 @@ use crate::{
         },
         sm_capacity::{SmCapacityLease, SmCapacityMetrics, SmMemoryGovernor},
     },
+    xmpp::outbound::OutboundItem,
     xmpp::protocol::{
         sm_owner::{SmOwnerPort, SmTransportTurn, SmTurnRunner},
         SmRuntimePolicy, SmSubstate,

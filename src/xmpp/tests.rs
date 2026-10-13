@@ -108,15 +108,15 @@ fn accepts_utf8_split_between_network_reads() {
 
 #[test]
 fn websocket_frames_must_start_with_markup() {
-    assert!(crate::transport_parsing::websocket_frame_starts_with_markup("<response/>"));
+    assert!(crate::xmpp::transport_parsing::websocket_frame_starts_with_markup("<response/>"));
     assert!(
-        crate::transport_parsing::websocket_frame_starts_with_markup(
+        crate::xmpp::transport_parsing::websocket_frame_starts_with_markup(
             "<?xml version='1.0'?><response/>"
         )
     );
     for invalid in ["", " <response/>", "\n<response/>", "x<response/>"] {
         assert!(
-            !crate::transport_parsing::websocket_frame_starts_with_markup(invalid),
+            !crate::xmpp::transport_parsing::websocket_frame_starts_with_markup(invalid),
             "{invalid:?}"
         );
     }

@@ -635,7 +635,7 @@ async fn auth_activates_the_same_prestaged_queue_before_fresh_mix_projection_and
     .split();
     let actual_control_bytes = auth_item.stanza.clone();
     let enqueue =
-        crate::outbound::RouteEnqueue::bind(auth_item, None, &actual_control_bytes).unwrap();
+        crate::xmpp::outbound::RouteEnqueue::bind(auth_item, None, &actual_control_bytes).unwrap();
     route.sender().try_send_route_item(enqueue).unwrap();
     let same_auth_item = queue.try_recv().unwrap();
     let owner = crate::xmpp::stage4_native::write_auth(

@@ -940,12 +940,13 @@ impl ProtocolSession {
                                     .await;
                                 continue;
                             }
-                            let live_delivery =
-                                durable_invite.map(|message_id| crate::outbound::DurableDelivery {
+                            let live_delivery = durable_invite.map(|message_id| {
+                                crate::xmpp::outbound::DurableDelivery {
                                     recipient_id: recipient.id,
                                     message_id,
                                     claim_id: live_claim_id,
-                                });
+                                }
+                            });
                             let mut delivered = false;
                             let mut delivered_full_jid = None;
                             for (full_jid, target) in targets {

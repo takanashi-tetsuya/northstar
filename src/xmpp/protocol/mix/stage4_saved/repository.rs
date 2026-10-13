@@ -19,7 +19,7 @@ pub(super) struct Supplied {
     pub(super) privacy: Option<bool>,
     pub(super) settlement: Option<(wire::CommitCut, bool)>,
     pub(super) native: Option<wire::DurableNative>,
-    pub(super) native_ack: Option<(wire::CommitCut, crate::outbound::MixDelivery)>,
+    pub(super) native_ack: Option<(wire::CommitCut, crate::xmpp::outbound::MixDelivery)>,
     pub(super) transfer: Option<wire::BoshTransferReply>,
     pub(super) fresh: Option<(room::Stored, wire::CommitCut)>,
     pub(super) replay: Option<Option<room::Existing>>,
@@ -177,7 +177,7 @@ impl MixRepository for ControlledRepository {
     fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send {
         std::future::ready(Err(self.unused("store_mix_message")))
     }
@@ -186,7 +186,7 @@ impl MixRepository for ControlledRepository {
         channel_id: Uuid,
         actor: &str,
         identity: &MixReplayIdentity,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send {
         std::future::ready(Err(self.unused("lookup_mix_message_replay")))
     }
@@ -196,7 +196,7 @@ impl MixRepository for ControlledRepository {
         actor: &str,
         target_id: Uuid,
         identity: &MixReplayIdentity,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send {
         std::future::ready(Err(self.unused("lookup_mix_retraction_replay")))
     }
@@ -343,7 +343,7 @@ impl MixRepository for ControlledRepository {
     fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<RetractMixMessageAdmission>> + Send {
         std::future::ready(Err(self.unused("retract_mix_message")))
     }
@@ -581,16 +581,16 @@ impl MixRepository for ControlledRepository {
     }
     fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send {
+    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send {
         std::future::ready(Err(self.unused("transfer_mix_delivery_to_cluster")))
     }
     fn release_mix_cluster_delivery(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> impl std::future::Future<Output = Result<bool>> + Send {
@@ -655,7 +655,7 @@ impl MixRepository for ControlledRepository {
     async fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
-        _authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        _authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         let ((stored, cut), capture) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -700,7 +700,7 @@ impl MixRepository for ControlledRepository {
     async fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let (raw, capture) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -874,8 +874,8 @@ impl MixRepository for ControlledRepository {
     }
     async fn fence_mix_socket_write(
         &self,
-        source: crate::outbound::MixDelivery,
-    ) -> Result<crate::outbound::MixDelivery> {
+        source: crate::xmpp::outbound::MixDelivery,
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         let reply = self
             .0
             .lock()
@@ -911,7 +911,8 @@ impl MixRepository for ControlledRepository {
             "native ACK source mismatch"
         );
         let observation = observation.context("unobserved native ACK rejected")?;
-        observation.validate_source(crate::outbound::TransportOwnershipSource::Mix(source))?;
+        observation
+            .validate_source(crate::xmpp::outbound::TransportOwnershipSource::Mix(source))?;
         native_write::commit_observed(supplied_commit(cut), observation, AckDisposition::Deleted)
             .await
             .map_err(|e| match e {
@@ -923,7 +924,7 @@ impl MixRepository for ControlledRepository {
     async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> Result<crate::outbound::MixDelivery> {
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         use northstar_delivery_core::bosh_ownership::{self, CompletionError};
         let reply = self
             .0

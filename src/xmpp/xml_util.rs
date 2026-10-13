@@ -1,4 +1,4 @@
-use crate::abuse::WorkRequirement;
+use crate::security::abuse::WorkRequirement;
 use crate::state::{attr_escape, bare_jid};
 use crate::xmpp::xml_builder::{ValidatedXmlFragment, XmlElement};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};

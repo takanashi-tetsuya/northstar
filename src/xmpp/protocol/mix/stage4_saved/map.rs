@@ -70,7 +70,7 @@ scalar!(
     DeadLettered
 );
 scalar!(wake, f::Wake, w::Wake, Unavailable, Ready, Invoked);
-pub(super) fn source(v: crate::outbound::MixDelivery) -> w::MixSource<w::EvidenceId> {
+pub(super) fn source(v: crate::xmpp::outbound::MixDelivery) -> w::MixSource<w::EvidenceId> {
     w::MixSource {
         delivery_id: id(v.delivery_id),
         lease_token: id(v.lease_token),

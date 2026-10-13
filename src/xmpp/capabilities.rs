@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::metrics::{DurationHistogram, DurationTimer};
+use crate::platform::metrics::{DurationHistogram, DurationTimer};
 
 /// Admission and completion observations for caps side effects.
 pub(crate) struct CapsEffectTelemetry<'a> {
@@ -709,7 +709,7 @@ mod tests {
         PersonalMessageTelemetryCells, PostAcceptFailureTelemetry, PubSubOutboxTelemetry,
         PushSubscriptionTelemetry,
     };
-    use crate::metrics::DurationHistogram;
+    use crate::platform::metrics::DurationHistogram;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 

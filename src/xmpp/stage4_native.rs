@@ -7,8 +7,8 @@ use super::auth_publication::{
 use super::direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner};
 use crate::xmpp::protocol::mix::stage4_saved::Service;
 use crate::{
-    outbound::{DurableDelivery, MixDelivery, OutboundItem},
     stage4_replay as wire,
+    xmpp::outbound::{DurableDelivery, MixDelivery, OutboundItem},
 };
 use anyhow::{ensure, Result};
 use northstar_delivery_core::native_write as actual;

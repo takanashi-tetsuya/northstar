@@ -23,7 +23,7 @@ pub(super) struct ChannelStanzaDelivery<'a> {
     /// The exact leased MIX recipient source for a durable outbox row. A
     /// source is deliberately absent for live ingress: only a claimed source
     /// may be transferred to a recoverable transport or acknowledged.
-    pub(super) mix_source: Option<crate::outbound::MixDelivery>,
+    pub(super) mix_source: Option<crate::xmpp::outbound::MixDelivery>,
     pub(super) channel_jid: &'a str,
     pub(super) recipient: &'a MixParticipant,
     pub(super) stanza: String,
@@ -390,9 +390,15 @@ pub(super) async fn deliver_channel_stanza_inner(
                         };
                         match result {
                             Ok(
-                                crate::outbound::MixTransportCompletion::SocketFenced { .. }
-                                | crate::outbound::MixTransportCompletion::SmPersisted { .. }
-                                | crate::outbound::MixTransportCompletion::BoshPersisted { .. },
+                                crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+                                    ..
+                                }
+                                | crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+                                    ..
+                                }
+                                | crate::xmpp::outbound::MixTransportCompletion::BoshPersisted {
+                                    ..
+                                },
                             ) => {
                                 accepted = true;
                                 transferred_to_recoverable_transport = true;

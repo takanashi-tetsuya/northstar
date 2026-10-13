@@ -18,9 +18,9 @@ mod websocket_action;
 pub(crate) mod xml_builder;
 pub(crate) mod xml_util;
 
-use crate::metrics::C2sBackpressureTelemetry;
+use crate::platform::metrics::C2sBackpressureTelemetry;
 use crate::state::AppState;
-use crate::transport_parsing::{
+use crate::xmpp::transport_parsing::{
     take_websocket_frame, websocket_close_has_content,
     websocket_has_invalid_stream_header_namespace, WEBSOCKET_FRAMING_NS,
 };
@@ -105,7 +105,7 @@ pub async fn serve_tcp(
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
-            crate::connection_actors::ConnectionActorKind::C2sTcp,
+            crate::runtime::connection_actors::ConnectionActorKind::C2sTcp,
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
@@ -156,7 +156,7 @@ pub async fn serve_xmpps_tcp(
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
-            crate::connection_actors::ConnectionActorKind::C2sDirectTls,
+            crate::runtime::connection_actors::ConnectionActorKind::C2sDirectTls,
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
@@ -200,7 +200,10 @@ async fn xmpps_tcp_connection(
             result.context("Direct TLS handshake timed out")?.context("Direct TLS handshake failed")?
         }
     };
-    if !crate::tls::direct_tls_sni_matches(secure.get_ref().1.server_name(), state.local_domain()) {
+    if !crate::security::tls::direct_tls_sni_matches(
+        secure.get_ref().1.server_name(),
+        state.local_domain(),
+    ) {
         anyhow::bail!("client Direct TLS SNI does not match the XMPP domain");
     }
     if secure
@@ -222,7 +225,7 @@ async fn xmpps_tcp_connection(
     )?;
     let mut session = ProtocolSession::new(
         state,
-        crate::outbound::OutboundSender::new(tx),
+        crate::xmpp::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
         Some(stream_limits),
@@ -260,7 +263,7 @@ async fn tcp_connection(
     let transport_policy = NativeTransportPolicy::from_state(&state);
     let mut session = ProtocolSession::new(
         state,
-        crate::outbound::OutboundSender::new(tx),
+        crate::xmpp::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
         Some(stream_limits),
@@ -344,7 +347,7 @@ fn tls_session_evidence(
     let channel_bindings = channel_bindings(secure, tls_server_end_point)?;
     let client_certificate_identities = connection
         .peer_certificates()
-        .map(|certificates| crate::tls::c2s_client_xmpp_identities(certificates, domain))
+        .map(|certificates| crate::security::tls::c2s_client_xmpp_identities(certificates, domain))
         .transpose()?
         .unwrap_or_default();
     let client_certificate_chain = connection
@@ -424,7 +427,7 @@ async fn drive_io<S>(
     mut io: S,
     transport_policy: &NativeTransportPolicy,
     session: &mut ProtocolSession,
-    rx: &mut mpsc::Receiver<crate::outbound::OutboundItem>,
+    rx: &mut mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
     actor_shutdown: &tokio_util::sync::CancellationToken,
     stream_limits: protocol::StreamLimits,
 ) -> Result<DriveOutcome<S>>
@@ -920,7 +923,7 @@ async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
 async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     io: &mut S,
     session: &mut ProtocolSession,
-    item: &crate::outbound::OutboundItem,
+    item: &crate::xmpp::outbound::OutboundItem,
     opening: bool,
 ) -> Result<bool> {
     let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
@@ -930,7 +933,7 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
                 Ok(lease) => lease,
                 Err(error)
                     if error
-                        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                        .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
                         .is_some() =>
                 {
                     tracing::debug!(
@@ -990,7 +993,7 @@ pub async fn websocket_connection(
     let transport_policy = NativeTransportPolicy::from_state(&state);
     let mut session = ProtocolSession::new(
         state,
-        crate::outbound::OutboundSender::new(tx),
+        crate::xmpp::outbound::OutboundSender::new(tx),
         true,
         protocol::ClientTransport::WebSocket,
         Some(stream_limits),
@@ -1274,7 +1277,7 @@ pub async fn websocket_connection(
 async fn websocket_record_and_send_item(
     socket: &mut WebSocket,
     session: &mut ProtocolSession,
-    item: &crate::outbound::OutboundItem,
+    item: &crate::xmpp::outbound::OutboundItem,
     opening: bool,
     terminal: &mut WebSocketTerminalSequence,
     cancellation: &WebSocketSendCancellation<'_>,
@@ -1286,7 +1289,7 @@ async fn websocket_record_and_send_item(
                 Ok(lease) => lease,
                 Err(error)
                     if error
-                        .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                        .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
                         .is_some() =>
                 {
                     tracing::debug!(

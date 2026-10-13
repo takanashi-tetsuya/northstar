@@ -1428,7 +1428,7 @@ mod tests {
         );
         let retained = frame.direct_operation();
         let mut runner = Box::pin(frame.run(async {
-            let request = crate::abuse::MessageAdmissionRequest {
+            let request = crate::security::abuse::MessageAdmissionRequest {
                 actor_id: Uuid::from_u128(1),
                 account_bare: "alice@example.test",
                 normalized_target: "bob@example.test",
@@ -2095,7 +2095,7 @@ mod tests {
         let mut executions = SessionExecutions::default();
         let original = executions.begin(ClientTransport::Bosh, "<message/>");
         let old_owner = original.direct_operation();
-        let request = crate::abuse::MessageAdmissionRequest {
+        let request = crate::security::abuse::MessageAdmissionRequest {
             actor_id: Uuid::from_u128(100),
             account_bare: "alice@example.test",
             normalized_target: "bob@example.test/resource",

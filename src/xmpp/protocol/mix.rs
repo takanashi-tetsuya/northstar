@@ -191,13 +191,13 @@ pub(crate) fn session_mix_capability(state: &AppState, full_jid: &str) -> MixSes
 
 pub(crate) fn start_mix_iq_relay_expiry(
     context: Arc<MixIqRelayExpiryContext>,
-    registry: Arc<crate::workers::WorkerRegistry>,
+    registry: Arc<crate::runtime::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     registry.supervise(
         "mix-iq-relay-expiry",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(10)),
         cancel.clone(),
         move |heartbeat| {
@@ -224,7 +224,7 @@ pub(crate) fn start_mix_iq_relay_expiry(
 
 pub(crate) fn start_mix_presence_recovery(
     context: Arc<MixPresenceRecoveryContext>,
-    registry: Arc<crate::workers::WorkerRegistry>,
+    registry: Arc<crate::runtime::workers::WorkerRegistry>,
     cutoff: chrono::DateTime<chrono::Utc>,
     // The state layer snapshots these targets straight from its own
     // repository query; the persistence-type conversion happens on this
@@ -235,8 +235,8 @@ pub(crate) fn start_mix_presence_recovery(
     let probes: Vec<MixPresenceProbeTarget> = probes.into_iter().map(Into::into).collect();
     registry.supervise(
         "mix-presence-recovery",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::OneShot,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::OneShot,
         Some(Duration::from_secs(90)),
         cancel,
         move |heartbeat| {

@@ -53,7 +53,7 @@ impl BoshActor {
                     if self.protocol.record_outbound(&reply).await.is_err() {
                         return false;
                     }
-                    let item = crate::outbound::OutboundItem::plain(reply);
+                    let item = crate::xmpp::outbound::OutboundItem::plain(reply);
                     let item = if index == 0 {
                         match item.with_auth_publication(holder.take().expect("first auth control"))
                         {

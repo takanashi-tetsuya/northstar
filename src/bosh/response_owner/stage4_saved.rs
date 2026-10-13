@@ -43,7 +43,7 @@ pub(crate) struct Session {
     observed_items: Vec<(
         u8,
         String,
-        Option<crate::outbound::TransportOwnershipSource>,
+        Option<crate::xmpp::outbound::TransportOwnershipSource>,
         Option<Uuid>,
     )>,
     observed_items_valid: bool,
@@ -98,7 +98,7 @@ impl Session {
         item: &OutboundItem,
     ) -> (
         String,
-        Option<crate::outbound::TransportOwnershipSource>,
+        Option<crate::xmpp::outbound::TransportOwnershipSource>,
         Option<Uuid>,
     ) {
         (
@@ -113,7 +113,7 @@ impl Session {
         &mut self,
         (xml, source, control): (
             String,
-            Option<crate::outbound::TransportOwnershipSource>,
+            Option<crate::xmpp::outbound::TransportOwnershipSource>,
             Option<Uuid>,
         ),
         ordinal: u8,
@@ -238,7 +238,7 @@ impl Session {
             async fn transfer(
                 &self,
                 request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-            ) -> Result<crate::outbound::MixDelivery> {
+            ) -> Result<crate::xmpp::outbound::MixDelivery> {
                 let capture = |returned_source| {
                     observed::emit(
                         &self.recorder,

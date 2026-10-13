@@ -4,13 +4,9 @@
 //! pending cfg(test) SessionExecutions::for_saved_frame constructor.
 //! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
-use crate::abuse::{
+use crate::security::abuse::{
     MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
     MessageAdmissionStart, MessageDedupeIdentity, WorkRequirement,
-};
-use crate::outbound::{
-    DurableDelivery, MixDelivery, OutboundItem, OutboundSender, RouteEnqueue,
-    TransportOwnershipSource,
 };
 use crate::services::message_admission::{
     self,
@@ -19,6 +15,10 @@ use crate::services::message_admission::{
 };
 use crate::services::muc::fanout::{run_muc_discussion_fanout, MucFanoutPort, MucFanoutStage};
 use crate::stage4_replay::{self as wire, driver};
+use crate::xmpp::outbound::{
+    DurableDelivery, MixDelivery, OutboundItem, OutboundSender, RouteEnqueue,
+    TransportOwnershipSource,
+};
 use crate::xmpp::stage4_frame_capture::capture_frame;
 use crate::xmpp::{
     direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner},

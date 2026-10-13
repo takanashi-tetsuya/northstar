@@ -386,7 +386,7 @@ fn roster_removal_presence(from: &str, to: &str, kind: &str) -> String {
 
 struct RosterSyncFlush {
     failure_telemetry: crate::xmpp::capabilities::PostAcceptFailureTelemetry,
-    outbound: crate::outbound::OutboundSender,
+    outbound: crate::xmpp::outbound::OutboundSender,
     gate: Arc<RosterSyncGate>,
     disconnect: tokio_util::sync::CancellationToken,
     permit: RosterSyncPermit,
@@ -406,7 +406,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
         initial_delta,
         target,
     } = request;
-    async fn enqueue(outbound: &crate::outbound::OutboundSender, stanza: String) -> bool {
+    async fn enqueue(outbound: &crate::xmpp::outbound::OutboundSender, stanza: String) -> bool {
         matches!(
             tokio::time::timeout(Duration::from_secs(5), outbound.send(stanza)).await,
             Ok(Ok(()))

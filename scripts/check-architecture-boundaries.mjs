@@ -746,7 +746,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     startup.includes('run_mix_outbox_lane(context,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
     startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
   'production lanes must share a fresh independent hard token and receive the parent stop separately');
-  requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
+  requireMix(startup.includes('registry.supervise_draining(,crate::runtime::workers::WorkerCriticality::Restartable,crate::runtime::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
   'supervisor must enforce the existing 14-second whole-worker drain');
   const deliveryWrapper = compact(structBody(mixProtocolProduction, 'async fn process_claimed_mix_delivery('));
   requireMix(deliveryWrapper ===

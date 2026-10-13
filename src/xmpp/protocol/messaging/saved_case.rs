@@ -4,10 +4,6 @@
 //! Full fixed-profile execution and qualification remain separately gated.
 use super::*;
 use crate::direct_replay as wire;
-use crate::outbound::{
-    DurableDelivery, OutboundItem, OutboundSender, RouteEnqueue, RouteSendError,
-    TransportOwnershipSource,
-};
 use crate::services::message_admission::{
     self,
     witness::{self, AdmissionWitness},
@@ -15,6 +11,10 @@ use crate::services::message_admission::{
 };
 use crate::services::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
+};
+use crate::xmpp::outbound::{
+    DurableDelivery, OutboundItem, OutboundSender, RouteEnqueue, RouteSendError,
+    TransportOwnershipSource,
 };
 use anyhow::Context;
 use northstar_abuse_policy::{
@@ -294,11 +294,11 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         else {
             anyhow::bail!("unexpected rated admission call");
         };
-        let lease = crate::abuse::MessageAdmissionLease::new(
+        let lease = crate::security::abuse::MessageAdmissionLease::new(
             wire::unhex(&fence.admission_key_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             wire::unhex(&fence.payload_mac_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             fence.lease_token.0,
-            crate::abuse::MessageDedupeIdentity {
+            crate::security::abuse::MessageDedupeIdentity {
                 identity_digest: wire::unhex(&fence.dedupe_digest_hex)
                     .map_err(|_| anyhow::anyhow!("invalid dedupe binding"))?,
                 candidates: vec![],
@@ -324,7 +324,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         self.log.prefix();
         Ok(MessageAdmissionStart::Proceed {
             lease: Some(lease),
-            requirement: crate::abuse::WorkRequirement {
+            requirement: crate::security::abuse::WorkRequirement {
                 action: requirement.action.clone(),
                 step: requirement.step,
                 work_factor: requirement.work_factor,
@@ -339,7 +339,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
     }
     async fn accept(
         &self,
-        acceptance: &crate::abuse::MessageAdmissionAcceptance<'_>,
+        acceptance: &crate::security::abuse::MessageAdmissionAcceptance<'_>,
         observation: &AdmissionWitness,
     ) -> Result<FinalizeDecision> {
         let wire::Admission::Reserved {
@@ -913,8 +913,8 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
     }
     async fn fence_mix(
         &self,
-        _: crate::outbound::MixDelivery,
-    ) -> Result<crate::outbound::MixDelivery> {
+        _: crate::xmpp::outbound::MixDelivery,
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         anyhow::bail!("unexpected native MIX fence")
     }
     async fn acknowledge_c2s(
@@ -1090,7 +1090,7 @@ struct NativePlan<'a> {
 struct ItemReceivers {
     mix: Option<(
         Uuid,
-        tokio::sync::oneshot::Receiver<crate::outbound::MixTransportCompletion>,
+        tokio::sync::oneshot::Receiver<crate::xmpp::outbound::MixTransportCompletion>,
     )>,
     ownership: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
 }
@@ -1099,7 +1099,7 @@ impl ItemReceivers {
         let Some((delivery_id, mut receiver)) = self.mix.take() else {
             return;
         };
-        use crate::outbound::MixTransportCompletion as Completion;
+        use crate::xmpp::outbound::MixTransportCompletion as Completion;
         let result = match receiver.try_recv() {
             Ok(Completion::SmPersisted { session_id }) => wire::MixHandoffResult::SmPersisted {
                 session_id: wire::Id(session_id),
@@ -1995,11 +1995,11 @@ mod route_observation_tests {
             actors: &[],
             proof: None,
         };
-        let lease = crate::abuse::MessageAdmissionLease::new(
+        let lease = crate::security::abuse::MessageAdmissionLease::new(
             vec![1; 32],
             vec![2; 32],
             Uuid::from_u128(6),
-            crate::abuse::MessageDedupeIdentity {
+            crate::security::abuse::MessageDedupeIdentity {
                 identity_digest: vec![3; 32],
                 candidates: vec![],
             },

@@ -842,7 +842,7 @@ async fn federated_muc_message_owned(
                     }
                 }
                 let live_delivery =
-                    durable_invite.map(|message_id| crate::outbound::DurableDelivery {
+                    durable_invite.map(|message_id| crate::xmpp::outbound::DurableDelivery {
                         recipient_id: local_user.id,
                         message_id,
                         claim_id: live_claim_id,

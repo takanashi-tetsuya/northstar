@@ -2,7 +2,7 @@ use super::{Action, ProtocolSession};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use crate::{
-    abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
+    security::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::account::{RegistrationOutcome, RegistrationRequest},
 };
 use anyhow::Result;

@@ -2,7 +2,6 @@
 //! substate. Only the current persistence/capacity capabilities are injected.
 use super::{ProtocolSession, SmRuntimePolicy, SmSubstate};
 use crate::{
-    outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource},
     services::{
         sm::{
             ownership::{CheckpointPolicy, PreparedBatch, PreparedCheckpoint},
@@ -11,6 +10,7 @@ use crate::{
         sm_capacity::{SmCapacityLease, SmMemoryGovernor},
     },
     state::JoinedMucMembership,
+    xmpp::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource},
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership::{self, Observation, Purpose, Scope, Terminal};
@@ -128,7 +128,7 @@ impl SmSnapshotView<'_> {
         add(sm
             .unacked
             .len()
-            .checked_mul(std::mem::size_of::<crate::outbound::SmUnackedStanza>())?)?;
+            .checked_mul(std::mem::size_of::<crate::xmpp::outbound::SmUnackedStanza>())?)?;
         for stanza in &sm.unacked {
             add(stanza.stanza.len())?;
         }
@@ -330,9 +330,9 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
                     .sm
                     .db_id
                     .context("XEP-0198 MIX ownership was not persisted")?;
-                item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SmPersisted {
-                    session_id,
-                });
+                item.complete_mix_handoff(
+                    crate::xmpp::outbound::MixTransportCompletion::SmPersisted { session_id },
+                );
             } else {
                 item.confirm_transport_ownership();
             }
@@ -387,7 +387,7 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
             observation.appended();
             if let Err(error) = self.checkpoint_in_turn(observation).await {
                 if error
-                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                    .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
                     .is_some()
                     && observation.may_restore_superseded()
                 {
@@ -595,9 +595,9 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
 mod tests {
     use super::*;
     use crate::{
-        outbound::{DurableDelivery, MixDelivery},
         services::sm::{SmMixLeaseRotation, SmQueueOwnershipResolution},
         services::sm_capacity::SmCapacityMetrics,
+        xmpp::outbound::{DurableDelivery, MixDelivery},
     };
     use northstar_delivery_core::sm_ownership::{
         CommitFact, HDecision, Knowledge, KnowledgeClass, MixRotation,
@@ -650,7 +650,7 @@ mod tests {
                 .find_map(|source| source.c2s())
                 .unwrap()
                 .message_id;
-            crate::outbound::DurableDeliverySuperseded { message_id }.into()
+            crate::xmpp::outbound::DurableDeliverySuperseded { message_id }.into()
         }
         async fn commit(&self, request: &sm_ownership::Request, fact: CommitFact) -> Result<()> {
             self.event("commit");
@@ -728,7 +728,7 @@ mod tests {
                     .find_map(|entry| entry.source.and_then(TransportOwnershipSource::c2s))
                     .unwrap()
                     .message_id;
-                return Err(crate::outbound::DurableDeliverySuperseded { message_id }.into());
+                return Err(crate::xmpp::outbound::DurableDeliverySuperseded { message_id }.into());
             }
             if self.cut == Cut::BeforeCommit {
                 anyhow::bail!("injected pre-COMMIT failure");
@@ -1151,7 +1151,7 @@ mod tests {
             } else {
                 assert_eq!(
                     receipt.try_recv().unwrap(),
-                    crate::outbound::MixTransportCompletion::SmPersisted {
+                    crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
                         session_id: fixture.sm.db_id.unwrap()
                     }
                 );
@@ -1590,7 +1590,7 @@ mod tests {
             if let Some(receipt) = mix_receipt.as_mut() {
                 assert_eq!(
                     receipt.try_recv().unwrap(),
-                    crate::outbound::MixTransportCompletion::SmPersisted {
+                    crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
                         session_id: port.turn.sm.db_id.unwrap()
                     }
                 );
@@ -1672,7 +1672,7 @@ mod tests {
                     );
                     assert_eq!(
                         receipt.try_recv().unwrap(),
-                        crate::outbound::MixTransportCompletion::SmPersisted {
+                        crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
                             session_id: record.turn.sm.db_id.unwrap()
                         }
                     );
@@ -1716,7 +1716,7 @@ mod tests {
             let error = fixture.record(&c2s_item()).await.unwrap_err();
             assert_eq!(
                 error
-                    .downcast_ref::<crate::outbound::DurableDeliverySuperseded>()
+                    .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
                     .unwrap()
                     .message_id,
                 c2s().message_id

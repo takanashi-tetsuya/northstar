@@ -404,7 +404,7 @@ pub(super) async fn federated_muc_owner(
         FederatedOwnerAction::Configure(config) => {
             let replacement_password_hash = if let Some(secret) = config.password_secret {
                 let secret = zeroize::Zeroizing::new(secret);
-                match crate::password_work::run(move || {
+                match crate::security::password_work::run(move || {
                     crate::services::muc::hash_room_password(&secret)
                 })
                 .await

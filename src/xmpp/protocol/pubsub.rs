@@ -1,5 +1,4 @@
 use super::{Action, ProtocolSession};
-use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::pubsub::{
     subscription_event_children, CollectionDiscoItems, CollectionUpdateOutcome, CreateNodeOutcome,
     LeafDiscoItems, OwnerMutationOutcome, PubSubAuthorizeSubscriptionCommand,
@@ -17,6 +16,7 @@ use crate::services::pubsub::{
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
+use crate::xmpp::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
@@ -2307,8 +2307,8 @@ pub(crate) fn start_pubsub_digest_delivery(
     let context = Arc::new(state.pubsub_digest_worker_context());
     registry.supervise(
         "pubsub-digest-delivery",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(5)),
         cancel,
         move |heartbeat| {
@@ -2341,8 +2341,8 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
     let context = Arc::new(state.pubsub_event_outbox_worker_context());
     registry.supervise(
         "pubsub-event-outbox-delivery",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {
@@ -2419,7 +2419,7 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
 
 async fn deliver_last_items_on_presence(
     state: Arc<AppState>,
-    outbound: crate::outbound::OutboundSender,
+    outbound: crate::xmpp::outbound::OutboundSender,
     recipient_id: uuid::Uuid,
     active_privacy_list: Option<String>,
     connection_id: uuid::Uuid,

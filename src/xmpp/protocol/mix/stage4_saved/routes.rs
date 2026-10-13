@@ -2,9 +2,9 @@
 //! No AppState, SQL, workers, discovery or transport is constructed here.
 use super::{driver, map, observed, Recorder};
 use crate::{
-    outbound::{OutboundItem, OutboundSender},
     stage4_replay as wire,
     state::{self, OnlineSession},
+    xmpp::outbound::{OutboundItem, OutboundSender},
 };
 use anyhow::{ensure, Result};
 use dashmap::DashMap;

@@ -6,7 +6,7 @@ use northstar_xep_0352::{
 
 pub(super) struct CsiSubstate {
     state: CsiStateMachine,
-    deferred: DeferredQueue<crate::outbound::OutboundItem>,
+    deferred: DeferredQueue<crate::xmpp::outbound::OutboundItem>,
 }
 
 impl Default for CsiSubstate {
@@ -44,8 +44,8 @@ impl ProtocolSession {
     /// delivery and transport acknowledgement fences always bypass deferral.
     pub(crate) fn csi_filter_outbound(
         &mut self,
-        item: crate::outbound::OutboundItem,
-    ) -> Option<crate::outbound::OutboundItem> {
+        item: crate::xmpp::outbound::OutboundItem,
+    ) -> Option<crate::xmpp::outbound::OutboundItem> {
         if self.csi.state.is_active() {
             return Some(item);
         }
@@ -54,9 +54,9 @@ impl ProtocolSession {
 }
 
 fn defer_stanza(
-    deferred: &mut DeferredQueue<crate::outbound::OutboundItem>,
-    item: crate::outbound::OutboundItem,
-) -> Option<crate::outbound::OutboundItem> {
+    deferred: &mut DeferredQueue<crate::xmpp::outbound::OutboundItem>,
+    item: crate::xmpp::outbound::OutboundItem,
+) -> Option<crate::xmpp::outbound::OutboundItem> {
     let metadata = StanzaMetadata {
         is_durable: item.durable_source.is_some(),
         has_transport_receipt: item.transport_receipt.is_some()
@@ -91,14 +91,14 @@ pub(crate) fn valid_indication(root: roxmltree::Node<'_, '_>) -> bool {
     northstar_xep_0352::is_valid_indication_node(root)
 }
 
-pub(crate) fn default_queue() -> DeferredQueue<crate::outbound::OutboundItem> {
+pub(crate) fn default_queue() -> DeferredQueue<crate::xmpp::outbound::OutboundItem> {
     DeferredQueue::new(CsiPolicyConfig::default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{default_queue, defer_stanza, valid_indication};
-    use crate::outbound::{DurableDelivery, OutboundItem};
+    use crate::xmpp::outbound::{DurableDelivery, OutboundItem};
     use roxmltree::Document;
 
     #[test]

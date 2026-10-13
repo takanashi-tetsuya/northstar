@@ -1,8 +1,8 @@
 //! Pending MIX transfer at the actual BOSH item/FIFO boundary. The existing
 //! actor owns request policy and timers; this helper owns no actor or service.
 use crate::{
-    outbound::{MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource},
     services::mix::{MixRepository, MixService},
+    xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource},
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::bosh_ownership::{Operation, Terminal, TransferRequest, Transferred};
@@ -420,7 +420,7 @@ mod tests {
                 anyhow::bail!("injected post-receipt error");
             }
             if self.cut == Cut::TypedAfterReceipt {
-                return Err(crate::outbound::DurableDeliverySuperseded {
+                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                     message_id: old().delivery_id,
                 }
                 .into());
@@ -454,7 +454,7 @@ mod tests {
             match self.mode {
                 RecordMode::Unmanaged => Ok(false),
                 RecordMode::Error => anyhow::bail!("injected record error"),
-                RecordMode::Superseded => Err(crate::outbound::DurableDeliverySuperseded {
+                RecordMode::Superseded => Err(crate::xmpp::outbound::DurableDeliverySuperseded {
                     message_id: Uuid::from_u128(99),
                 }
                 .into()),

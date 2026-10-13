@@ -1,7 +1,7 @@
 //! Factual projections copy observed values, never expected input.
 use super::*;
-use crate::outbound::TransportOwnershipSource;
 use crate::services::authentication::publication as actual;
+use crate::xmpp::outbound::TransportOwnershipSource;
 use wire::EvidenceId as Id;
 
 pub(crate) fn id(value: Uuid) -> Id {
@@ -28,7 +28,7 @@ pub(crate) fn observe(recorder: &Capture, make: impl FnOnce() -> Result<wire::Fa
 pub(crate) fn count(value: usize) -> Result<u32> {
     Ok(u32::try_from(value)?)
 }
-pub(crate) fn mix(value: crate::outbound::MixDelivery) -> wire::MixSource<Id> {
+pub(crate) fn mix(value: crate::xmpp::outbound::MixDelivery) -> wire::MixSource<Id> {
     wire::MixSource {
         delivery_id: id(value.delivery_id),
         lease_token: id(value.lease_token),
@@ -182,7 +182,7 @@ pub(crate) fn publication(read: &actual::Observation, cut: wire::Cut) -> wire::F
     }))
 }
 pub(crate) fn queue_item(
-    item: &crate::outbound::OutboundItem,
+    item: &crate::xmpp::outbound::OutboundItem,
     connection: Uuid,
     ordinal: u8,
 ) -> Result<wire::QueueItem<Id>> {

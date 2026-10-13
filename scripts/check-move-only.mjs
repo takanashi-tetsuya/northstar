@@ -18,7 +18,9 @@
 //     `self::__depth_L::`;
 //   * whitespace outside literals is removed and a trailing comma before a
 //     closing delimiter is dropped (rustfmt reflow); string and char literal
-//     contents are compared byte for byte;
+//     contents are compared byte for byte, except that in a non-raw string the
+//     whitespace after a backslash-newline continuation is dropped, as rustc
+//     drops it from the value (a re-indented continuation line is the same string);
 //   * --allow-doc drops `//!` inner doc comments (new child-module headers).
 //   * comment-only remainders (e.g. trailing comments after the last item in a
 //     file or impl body) are compared as their own item.
@@ -72,6 +74,30 @@ export function lexRust(src) {
     }
     if (/[A-Za-z0-9_]/.test(c)) { let j = i; while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++; push('word', j); continue; }
     push('punct', i + 1);
+  }
+  return out;
+}
+
+// A backslash at the end of a line inside a non-raw string or byte string skips the
+// newline and the whitespace (space, tab, CR, LF) at the start of the next line, so
+// re-indenting such a continuation line does not change the value. Other literals
+// are returned unchanged.
+export function normalizeStringContinuations(lit) {
+  if (!(lit.startsWith('"') || lit.startsWith('b"'))) return lit;
+  let out = '';
+  for (let i = 0; i < lit.length; i++) {
+    const c = lit[i];
+    if (c !== '\\') { out += c; continue; }
+    const next = lit[i + 1];
+    if (next === '\n' || next === '\r') {
+      let j = i + 1;
+      while (j < lit.length && ' \t\r\n'.includes(lit[j])) j++;
+      out += '\\\n';
+      i = j - 1;
+    } else {
+      out += c + (next ?? '');
+      i++;
+    }
   }
   return out;
 }
@@ -154,7 +180,7 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
         visibility.push(visStr.trim());
         continue;
       }
-      parts.push(t.text);
+      parts.push(t.kind === 'lit' ? normalizeStringContinuations(t.text) : t.text);
     }
     let s = parts.join('\u0001');
     s = s.replace(/(^|\u0001)(super\u0001:\u0001:(?:\u0001super\u0001:\u0001:)*)/g, (match, prefix, run) => {

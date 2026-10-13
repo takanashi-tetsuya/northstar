@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { lexRust, normalizeItems, compareItemSets } from './check-move-only.mjs';
+import { lexRust, normalizeItems, compareItemSets, normalizeStringContinuations } from './check-move-only.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -434,3 +434,21 @@ test('z. Extend nothing in test h or t; instead add a CLI end-to-end test like t
   }
 });
 
+test('aa. A backslash-newline continuation line in a string, re-indented by a move: no removed, no added (also for a byte string); a changed character after the continuation, a changed number of spaces before the backslash, an escaped backslash before the newline (the newline is then content) and a re-indented line in a raw string: DIFFERENT.', () => {
+  const cmp = (before, after) => compareItemSets(
+    [{ path: 'src/foo.rs', source: before, isChild: false }],
+    [{ path: 'src/foo/tests.rs', source: after, isChild: true }],
+  );
+  const same = cmp('fn f() { "a\\n\\\n        b"; }', 'fn f() { "a\\n\\\n    b"; }');
+  assert.equal(same.removed.length, 0);
+  assert.equal(same.added.length, 0);
+  const sameBytes = cmp('fn f() { b"a\\\n        b"; }', 'fn f() { b"a\\\n    b"; }');
+  assert.equal(sameBytes.removed.length, 0);
+  assert.equal(sameBytes.added.length, 0);
+  assert.equal(cmp('fn f() { "a\\n\\\n        b"; }', 'fn f() { "a\\n\\\n    c"; }').removed.length, 1);
+  assert.equal(cmp('fn f() { "a \\\n        b"; }', 'fn f() { "a  \\\n    b"; }').removed.length, 1);
+  assert.equal(cmp('fn f() { "a\\\\\n        b"; }', 'fn f() { "a\\\\\n    b"; }').removed.length, 1);
+  assert.equal(cmp('fn f() { r"a\n        b"; }', 'fn f() { r"a\n    b"; }').removed.length, 1);
+  assert.equal(normalizeStringContinuations('"a\\\n  \t b"'), '"a\\\nb"');
+  assert.equal(normalizeStringContinuations('r"a\\\n  b"'), 'r"a\\\n  b"');
+});

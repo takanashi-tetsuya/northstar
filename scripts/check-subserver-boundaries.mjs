@@ -34,7 +34,7 @@ function body(source, declaration) {
 }
 
 function exactFields(source, declaration, expected) {
-  const fields = [...codeOnly(body(source, declaration)).matchAll(/^\s*(?:pub(?:\(crate\))?\s+)?([a-z_]+)\s*:/gm)]
+  const fields = [...codeOnly(body(source, declaration)).matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?([a-z_]+)\s*:/gm)]
     .map((match) => match[1]).sort();
   requireBoundary(JSON.stringify(fields) === JSON.stringify([...expected].sort()), `${declaration} capability inventory changed`);
 }

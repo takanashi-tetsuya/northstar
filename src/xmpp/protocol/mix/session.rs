@@ -2,9 +2,9 @@
 
 use super::*;
 
-/// Supervised durable MIX delivery worker.  Database rows are the authority;
-/// the timer is only a wake mechanism.  A crash after personal MAM commit is
-/// safe because archive replay continues to the same stanza-id delivery.
+/// Deliver the latest persisted roster change between `user` and the MIX
+/// channel (XEP-0405). The stored change decides whether the item is removed,
+/// so `_removed` is unused; a joined membership adds its participant id.
 pub(super) async fn push_mix_roster_update(
     state: &Arc<AppState>,
     user: &crate::services::mix::MixAccount,

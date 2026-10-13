@@ -222,7 +222,7 @@ pub(crate) fn get_or_create_outbound(
         }
     };
     if let Err(error) = actors.try_spawn(
-        crate::connection_actors::ConnectionActorKind::S2sOutbound,
+        crate::runtime::connection_actors::ConnectionActorKind::S2sOutbound,
         Some(target_domain.clone()),
         actor,
     ) {
@@ -542,7 +542,7 @@ struct AuthenticatedTransport {
     limits: AdvertisedStreamLimits,
     external: bool,
     bidi: bool,
-    certificate: Option<crate::tls::CertificateSessionGuard>,
+    certificate: Option<crate::security::tls::CertificateSessionGuard>,
 }
 
 async fn authenticate_transport(
@@ -605,7 +605,7 @@ async fn authenticate_transport(
     let certificate_session = if external {
         Some(state.tls_context().register_certificate_session(
             uuid::Uuid::new_v4(),
-            crate::tls::CertificateSessionKind::OutboundS2s,
+            crate::security::tls::CertificateSessionKind::OutboundS2s,
             peer_certificates,
             tls_generation,
             disconnect.clone(),

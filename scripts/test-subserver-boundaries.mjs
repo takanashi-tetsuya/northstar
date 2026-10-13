@@ -48,7 +48,7 @@ rejectsMutation('subscription cleanup keeps the physical cleanup cadence', 'subs
 rejectsMutation('physical cleanup cannot return to digest delivery', 'pubsubProtocol', 'let mut interval = tokio::time::interval(Duration::from_secs(1));', 'cleanup_expired_subscriptions(&state.pool, 1000).await;\nlet mut interval = tokio::time::interval(Duration::from_secs(1));', /delivery-worker/);
 rejectsMutation('subscription cleanup cannot skip its actual deadline', 'subscriptionCleanup', 'tokio::time::timeout_at(deadline, async { cleanup().await })', 'unbounded_cleanup(async { cleanup().await })', /total pass deadline/);
 rejectsMutation('subscription cleanup cannot publish stale success during a pass', 'subscriptionCleanup', 'readiness.begin_pass();', 'readiness.complete_pass();', /total pass deadline/);
-rejectsMutation('maintenance cleanup watchdog keeps its own budget', 'subservers', 'Some(crate::subscription_cleanup::MAX_SILENCE)', 'Some(Duration::from_secs(5))', /independent restart/);
+rejectsMutation('maintenance cleanup watchdog keeps its own budget', 'subservers', 'Some(crate::runtime::subscription_cleanup::MAX_SILENCE)', 'Some(Duration::from_secs(5))', /independent restart/);
 rejectsMutation('subscription cleanup cannot silently increase batch size', 'subscriptionCleanup', 'CLEANUP_BATCH_SIZE: i64 = 1_000', 'CLEANUP_BATCH_SIZE: i64 = 100_000', /batch size/);
 rejectsMutation('readiness also requires worker health', 'subservers', 'workers.readiness_error().is_none()', 'true', /bounded local authority/);
 rejectsMutation('reap health connections on cancellation', 'subservers', 'connections.shutdown().await', 'drop(connections)', /bounded local authority/);

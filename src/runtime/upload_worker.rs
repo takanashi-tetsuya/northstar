@@ -1,5 +1,5 @@
 use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
-use crate::{services::upload_maintenance::*, workers::WorkerHeartbeat};
+use crate::{runtime::workers::WorkerHeartbeat, services::upload_maintenance::*};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
 use std::{
@@ -24,7 +24,7 @@ pub(crate) struct UploadMaintenanceContext<R> {
     policy: UploadMaintenancePolicy,
     safety_gate: Arc<UploadSafetyGate>,
     startup_audits: Arc<StartupAuditHandoff>,
-    metrics: Arc<crate::metrics::Metrics>,
+    metrics: Arc<crate::platform::metrics::Metrics>,
 }
 
 impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
@@ -34,7 +34,7 @@ impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
         policy: UploadMaintenancePolicy,
         safety_gate: Arc<UploadSafetyGate>,
         startup_audits: Arc<StartupAuditHandoff>,
-        metrics: Arc<crate::metrics::Metrics>,
+        metrics: Arc<crate::platform::metrics::Metrics>,
     ) -> Self {
         Self {
             repository,
@@ -1279,7 +1279,7 @@ mod tests {
         steps: Vec<(u64, AuditResult, bool)>,
     ) -> (
         Vec<AuditStep>,
-        std::sync::Arc<crate::workers::WorkerRegistry>,
+        std::sync::Arc<crate::runtime::workers::WorkerRegistry>,
         tokio_util::sync::CancellationToken,
     ) {
         capacity_scenario(
@@ -1295,7 +1295,7 @@ mod tests {
         steps: Vec<(u64, AuditResult, bool)>,
     ) -> (
         Vec<AuditStep>,
-        std::sync::Arc<crate::workers::WorkerRegistry>,
+        std::sync::Arc<crate::runtime::workers::WorkerRegistry>,
         tokio_util::sync::CancellationToken,
     ) {
         capacity_scenario(
@@ -1314,10 +1314,10 @@ mod tests {
         steps: Vec<(AuditKind, u64, AuditResult, bool)>,
     ) -> (
         Vec<AuditStep>,
-        std::sync::Arc<crate::workers::WorkerRegistry>,
+        std::sync::Arc<crate::runtime::workers::WorkerRegistry>,
         tokio_util::sync::CancellationToken,
     ) {
-        use crate::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+        use crate::runtime::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
         use std::sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,

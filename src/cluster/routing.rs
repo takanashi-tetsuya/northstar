@@ -274,7 +274,7 @@ impl ClusterManager {
         node_id: &str,
         target_jid: &str,
         stanza: &str,
-        delivery: crate::outbound::DurableDelivery,
+        delivery: crate::xmpp::outbound::DurableDelivery,
     ) -> Result<bool> {
         Ok(self
             .send_to_node_receipt(
@@ -559,7 +559,7 @@ impl ClusterManager {
         node_id: &str,
         target_jid: &str,
         stanza: &str,
-        delivery: crate::outbound::DurableDelivery,
+        delivery: crate::xmpp::outbound::DurableDelivery,
     ) -> Result<NodeDeliveryReceipt> {
         self.send_to_node_receipt(
             node_id,

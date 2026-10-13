@@ -121,7 +121,7 @@ pub struct ClusterManager {
     key_prefix: String,
     pool: Option<Pool<RedisConnectionManager>>,
     client: Option<redis::Client>,
-    security: Option<Arc<crate::cluster_security::ClusterSecurityConfig>>,
+    security: Option<Arc<crate::cluster::security::ClusterSecurityConfig>>,
     connection_uuid: uuid::Uuid,
     instance_epoch: Arc<AtomicI64>,
     authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
@@ -152,7 +152,7 @@ impl ClusterManager {
         tls_ca_cert_path: Option<&std::path::Path>,
         tls_client_cert_path: Option<&std::path::Path>,
         tls_client_key_path: Option<&std::path::Path>,
-        security: Option<Arc<crate::cluster_security::ClusterSecurityConfig>>,
+        security: Option<Arc<crate::cluster::security::ClusterSecurityConfig>>,
     ) -> Result<Self> {
         let namespace = crate::jid::prepare_domainpart(namespace)
             .context("cluster namespace must be a valid XMPP domain")?;
@@ -201,18 +201,23 @@ impl ClusterManager {
         let tls_files_configured = tls_ca_cert_path.is_some() || tls_client_cert_path.is_some();
         let client = if tls_files_configured {
             let root_cert = tls_ca_cert_path
-                .map(|path| crate::config::read_secret_file(path, "REDIS_TLS_CA_CERT_PATH"))
+                .map(|path| {
+                    crate::platform::config::read_secret_file(path, "REDIS_TLS_CA_CERT_PATH")
+                })
                 .transpose()?
                 .map(String::into_bytes);
             let client_tls = match (tls_client_cert_path, tls_client_key_path) {
                 (Some(cert), Some(key)) => Some(redis::ClientTlsConfig {
-                    client_cert: crate::config::read_secret_file(
+                    client_cert: crate::platform::config::read_secret_file(
                         cert,
                         "REDIS_TLS_CLIENT_CERT_PATH",
                     )?
                     .into_bytes(),
-                    client_key: crate::config::read_secret_file(key, "REDIS_TLS_CLIENT_KEY_PATH")?
-                        .into_bytes(),
+                    client_key: crate::platform::config::read_secret_file(
+                        key,
+                        "REDIS_TLS_CLIENT_KEY_PATH",
+                    )?
+                    .into_bytes(),
                 }),
                 (None, None) => None,
                 _ => anyhow::bail!(
@@ -543,8 +548,8 @@ pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken
     let context = Arc::new(state.cluster_muc_outbox_worker_context());
     worker_registry.supervise(
         "cluster-muc-outbox",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {

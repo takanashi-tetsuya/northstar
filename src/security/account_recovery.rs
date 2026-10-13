@@ -5,8 +5,8 @@
 //! silently drift into two implementations.
 
 use crate::{
+    runtime::workers::WorkerHeartbeat,
     state::{AccountDeletionRecoveryContext, AppState},
-    workers::WorkerHeartbeat,
     xmpp::protocol::roster::deliver_roster_change_with,
 };
 use anyhow::{Context, Result};

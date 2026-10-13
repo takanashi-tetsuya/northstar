@@ -214,7 +214,7 @@ pub async fn serve_s2s_tls(
                     actor_shutdown,
                 );
                 let result = actors.try_spawn(
-                    crate::connection_actors::ConnectionActorKind::S2sInboundDirectTls,
+                    crate::runtime::connection_actors::ConnectionActorKind::S2sInboundDirectTls,
                     Some(peer.to_string()),
                     actor,
                 );
@@ -272,7 +272,7 @@ pub async fn serve(
                     actor_shutdown,
                 );
                 let result = actors.try_spawn(
-                    crate::connection_actors::ConnectionActorKind::S2sInboundStartTls,
+                    crate::runtime::connection_actors::ConnectionActorKind::S2sInboundStartTls,
                     Some(peer.to_string()),
                     actor,
                 );
@@ -413,7 +413,7 @@ pub(crate) async fn inbound_xmpps_connection(
         .await?;
         anyhow::bail!("inbound S2S stream asserted a locally hosted source domain");
     }
-    if !crate::tls::direct_tls_sni_matches(direct_tls_sni.as_deref(), &target) {
+    if !crate::security::tls::direct_tls_sni_matches(direct_tls_sni.as_deref(), &target) {
         send_initial_stream_error(
             &mut secure,
             state.local_domain(),
@@ -971,7 +971,7 @@ async fn drive_authenticated_inbound(
     let certificate_session = if via_external {
         Some(state.tls_context().register_certificate_session(
             connection_id,
-            crate::tls::CertificateSessionKind::InboundS2s,
+            crate::security::tls::CertificateSessionKind::InboundS2s,
             peer_certificates,
             tls_generation,
             disconnect.clone(),
@@ -3518,7 +3518,7 @@ pub(crate) async fn route_inbound_message(
         }
     }
     let delivery = durable_c2s_delivery.map_or(DirectRouteDelivery::Volatile, |message_id| {
-        DirectRouteDelivery::Committed(crate::outbound::DurableDelivery {
+        DirectRouteDelivery::Committed(crate::xmpp::outbound::DurableDelivery {
             recipient_id: recipient.id,
             message_id,
             claim_id: live_claim_id,

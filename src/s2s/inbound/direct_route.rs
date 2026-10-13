@@ -2,11 +2,11 @@
 //! route owner. Admission, XML errors, history, Push and Carbons stay inbound.
 
 use crate::{
-    outbound::DurableDelivery,
     services::messaging::{
         DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
     },
     state::{AppState, OnlineSession},
+    xmpp::outbound::DurableDelivery,
 };
 use anyhow::Result;
 
@@ -18,8 +18,8 @@ impl OnlineRoutePort for S2sDirectRoutePort<'_> {
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::outbound::RouteEnqueue,
-    ) -> Result<(), crate::outbound::RouteSendError> {
+        enqueue: crate::xmpp::outbound::RouteEnqueue,
+    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
         OnlineRoutePort::try_local(self.0, session, enqueue)
     }
 

@@ -342,7 +342,7 @@ fn database_url_from_env() -> Result<Zeroizing<String>> {
     match (direct, file) {
         (Some(_), Some(_)) => anyhow::bail!("set only one of DATABASE_URL and DATABASE_URL_FILE"),
         (Some(value), None) => Ok(Zeroizing::new(value)),
-        (None, Some(path)) => Ok(Zeroizing::new(crate::config::read_secret_file(
+        (None, Some(path)) => Ok(Zeroizing::new(crate::platform::config::read_secret_file(
             &path,
             "DATABASE_URL_FILE",
         )?)),

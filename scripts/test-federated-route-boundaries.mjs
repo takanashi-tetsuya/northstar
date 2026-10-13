@@ -32,10 +32,10 @@ test('irrelevant strings, nested comments and character braces are masked', () =
   });
 });
 test('an unrelated declaration cannot spoof the owned entry signature', () => {
-  const before = ') -> Result<(), crate::outbound::RouteSendError> {';
+  const before = ') -> Result<(), crate::xmpp::outbound::RouteSendError> {';
   assert.equal(baseline.adapter.split(before).length - 1, 1);
   const changed = baseline.adapter.replace(before, ') -> Result<(), anyhow::Error> {')
-    + '\nfn fake_fntry_local(&self, session: &Self::Session, enqueue: crate::outbound::RouteEnqueue,) -> Result<(), crate::outbound::RouteSendError> {}';
+    + '\nfn fake_fntry_local(&self, session: &Self::Session, enqueue: crate::xmpp::outbound::RouteEnqueue,) -> Result<(), crate::xmpp::outbound::RouteSendError> {}';
   assert.notEqual(changed, baseline.adapter);
   assert.throws(() => verifyFederatedRouteBoundaries({ ...baseline, adapter: changed }), /owned local enqueue and preserve its refusal type/);
 });
@@ -63,8 +63,8 @@ rejectsMutation('local adapter cannot erase the refused item', 'adapter', 'Onlin
 rejectsMutation('local adapter cannot discard the refusal result', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'let _ = OnlineRoutePort::try_local(self.0, session, enqueue); Ok(())', /exact owned local enqueue/);
 rejectsMutation('local adapter cannot drop before forwarding', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'drop(enqueue); OnlineRoutePort::try_local(self.0, session, replacement)', /exact owned local enqueue/);
 rejectsMutation('local adapter cannot forward twice', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, enqueue); OnlineRoutePort::try_local(self.0, session, enqueue)', /exact owned local enqueue/);
-rejectsMutation('local adapter must take ownership', 'adapter', 'enqueue: crate::outbound::RouteEnqueue,', 'enqueue: &crate::outbound::RouteEnqueue,', /owned local enqueue and preserve its refusal type/);
-rejectsMutation('local adapter must retain the typed refusal', 'adapter', ') -> Result<(), crate::outbound::RouteSendError> {', ') -> Result<(), anyhow::Error> {', /owned local enqueue and preserve its refusal type/);
+rejectsMutation('local adapter must take ownership', 'adapter', 'enqueue: crate::xmpp::outbound::RouteEnqueue,', 'enqueue: &crate::xmpp::outbound::RouteEnqueue,', /owned local enqueue and preserve its refusal type/);
+rejectsMutation('local adapter must retain the typed refusal', 'adapter', ') -> Result<(), crate::xmpp::outbound::RouteSendError> {', ') -> Result<(), anyhow::Error> {', /owned local enqueue and preserve its refusal type/);
 rejectsMutation('local adapter cannot add a second entry', 'adapter', '    fn try_local(', '    fn try_local(&self) {}\n    fn try_local(', /one owned local enqueue entry/);
 rejectsMutation('fanout adapter cannot switch routing origins', 'adapter', '.route_s2s_message_to_available_remote_resources(jid, stanza, delivery)', '.route_personal_message_to_available_remote_resources(jid, stanza, delivery)', /federation remote adapter/);
 rejectsMutation('primary adapter cannot switch routing origins', 'adapter', '.route_s2s_message_to_remote_primary(jid, stanza, delivery)', '.route_personal_message_to_remote_primary(jid, stanza, delivery)', /federation remote adapter/);

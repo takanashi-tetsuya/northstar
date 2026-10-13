@@ -11,7 +11,7 @@ fn session(
     user_id: Uuid,
     generation: i64,
     connection_id: Uuid,
-    sender: tokio::sync::mpsc::Sender<crate::outbound::OutboundItem>,
+    sender: tokio::sync::mpsc::Sender<crate::xmpp::outbound::OutboundItem>,
 ) -> crate::state::OnlineSession {
     crate::state::OnlineSession {
         user_id,
@@ -22,7 +22,7 @@ fn session(
         lifecycle: Arc::default(),
         metrics_counted: Arc::default(),
         routable: Arc::new(AtomicBool::new(true)),
-        sender: crate::outbound::OutboundSender::new(sender),
+        sender: crate::xmpp::outbound::OutboundSender::new(sender),
         available: Arc::default(),
         availability_generation: Arc::default(),
         post_actions: crate::xmpp::protocol::PostActionHandle::default(),
@@ -66,7 +66,7 @@ fn muc_occupant(
         full_jid: full_jid.into(),
         room_jid: room_jid.into(),
         nick: nick.into(),
-        endpoint: MucOccupantEndpoint::Local(crate::outbound::OutboundSender::new(sender)),
+        endpoint: MucOccupantEndpoint::Local(crate::xmpp::outbound::OutboundSender::new(sender)),
         affiliation: "member".into(),
         role: "participant".into(),
         room_non_anonymous: false,

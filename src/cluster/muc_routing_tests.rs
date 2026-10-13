@@ -12,7 +12,7 @@ impl RoutingFixture {
             .expect("set TEST_REDIS_URL to a disposable Redis instance");
         let namespace = format!("muc-routing-{}.test", uuid::Uuid::new_v4().simple());
         let (first_security, second_security) =
-            crate::cluster_security::test_configuration_pair(&namespace);
+            crate::cluster::security::test_configuration_pair(&namespace);
         let first = ClusterManager::new(
             Some(&redis_url),
             &namespace,
@@ -179,7 +179,7 @@ async fn redis_muc_routing_bounds_node_hints_and_propagates_invalid_redis_state(
         let manager = &fixture.first;
         let room = "bounded@conference.example.test";
         let nodes = manager.key(format!("muc_nodes:{room}"));
-        let limit = crate::cluster_security::MAX_PEERS + 1;
+        let limit = crate::cluster::security::MAX_PEERS + 1;
         let mut conn = manager.pool.as_ref().unwrap().get().await.unwrap();
         let mut seed = redis::pipe();
         for index in 0..limit {
@@ -206,7 +206,7 @@ async fn redis_muc_routing_bounds_node_hints_and_propagates_invalid_redis_state(
 
         for invalid in [
             String::new(),
-            "x".repeat(crate::cluster_security::MAX_NODE_ID_BYTES + 1),
+            "x".repeat(crate::cluster::security::MAX_NODE_ID_BYTES + 1),
         ] {
             let _: usize = conn.sadd(&nodes, &invalid).await.unwrap();
             let error = manager.active_muc_nodes(room).await.unwrap_err();

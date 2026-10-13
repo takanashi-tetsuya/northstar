@@ -318,8 +318,8 @@ impl Config {
             .redis_url
             .as_ref()
             .map(|_| {
-                crate::cluster_security::load_configuration(
-                    crate::cluster_security::ClusterSecurityConfiguration {
+                crate::cluster::security::load_configuration(
+                    crate::cluster::security::ClusterSecurityConfiguration {
                         namespace: &domain,
                         node_id: raw
                             .cluster_node_id

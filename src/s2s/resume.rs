@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::util::S2sInputState;
-use crate::tls::CertificateSessionGuard;
+use crate::security::tls::CertificateSessionGuard;
 use northstar_federation_core::AdvertisedStreamLimits;
 
 pub(crate) const WINDOW: Duration = Duration::from_secs(60);

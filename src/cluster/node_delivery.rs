@@ -7,14 +7,14 @@ use super::*;
 /// its completion channel, the route is torn down before an old queued item
 /// can become visible after its database lease is released for retry.
 pub(super) struct PendingClusterMixHandoff {
-    pub(super) sender: crate::outbound::OutboundSender,
+    pub(super) sender: crate::xmpp::outbound::OutboundSender,
     pub(super) disconnect: CancellationToken,
     pub(super) completed: bool,
 }
 
 impl PendingClusterMixHandoff {
     pub(super) fn new(
-        sender: crate::outbound::OutboundSender,
+        sender: crate::xmpp::outbound::OutboundSender,
         disconnect: CancellationToken,
     ) -> Self {
         Self {
@@ -43,11 +43,11 @@ impl Drop for PendingClusterMixHandoff {
 /// fences the source before bytes, while SM and BOSH persist it.  Cancellation
 /// closes only this route and leaves the database fence reclaimable.
 pub(super) async fn try_send_cluster_mix_transport(
-    sender: &crate::outbound::OutboundSender,
+    sender: &crate::xmpp::outbound::OutboundSender,
     disconnect: &CancellationToken,
     stanza: String,
-    source: crate::outbound::MixDelivery,
-) -> Result<crate::outbound::MixTransportCompletion> {
+    source: crate::xmpp::outbound::MixDelivery,
+) -> Result<crate::xmpp::outbound::MixTransportCompletion> {
     let receiver = match sender.try_send_durable_mix(stanza, source) {
         Ok(receiver) => receiver,
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -227,7 +227,7 @@ impl ClusterNodeDelivery {
         node_id: &str,
         target_jid: &str,
         stanza: &str,
-        source: Option<crate::outbound::MixDelivery>,
+        source: Option<crate::xmpp::outbound::MixDelivery>,
     ) -> Result<NodeDeliveryReceipt> {
         self.send_to_node_receipt(
             node_id,
@@ -637,7 +637,8 @@ impl ClusterNodeDelivery {
                 // explicit current-version contract is exactly representable by that old
                 // algorithm. In particular, a volatile no-store stanza with
                 // such an ID must wait for the rolling upgrade to finish.
-                let identity = crate::outbound::recipient_delivery_identity(stanza, &target_jid);
+                let identity =
+                    crate::xmpp::outbound::recipient_delivery_identity(stanza, &target_jid);
                 if !delivery_contract_compatible_with_peer(
                     peer_version.as_deref(),
                     contract,

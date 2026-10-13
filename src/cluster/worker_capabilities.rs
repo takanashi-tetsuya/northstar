@@ -31,7 +31,7 @@ pub(crate) struct ClusterPubsubListenerTransport {
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<crate::cluster::security::ClusterFailurePolicy>,
 }
 
 impl ClusterPubsubListenerTransport {
@@ -104,7 +104,7 @@ impl ClusterListenerSecurity {
         raw: &str,
         channel: &str,
         expected_source: Option<&str>,
-    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
+    ) -> Result<crate::cluster::security::SignedClusterEnvelope> {
         anyhow::ensure!(
             raw.len() <= MAX_CLUSTER_PAYLOAD_BYTES,
             "cluster envelope is oversized"
@@ -114,7 +114,7 @@ impl ClusterListenerSecurity {
             .security
             .as_ref()
             .context("cluster verifier is not configured")?;
-        let envelope: crate::cluster_security::SignedClusterEnvelope =
+        let envelope: crate::cluster::security::SignedClusterEnvelope =
             serde_json::from_str(raw).context("cluster envelope is invalid JSON")?;
         envelope.verify(
             &self.publisher.namespace,
@@ -130,7 +130,7 @@ impl ClusterListenerSecurity {
 
     pub(super) fn validate_verified_envelope(
         &self,
-        envelope: &crate::cluster_security::SignedClusterEnvelope,
+        envelope: &crate::cluster::security::SignedClusterEnvelope,
     ) -> Result<()> {
         let security = self
             .publisher
@@ -179,9 +179,9 @@ impl ClusterListenerSecurity {
         raw: &str,
         channel: &str,
         expected_source: Option<&str>,
-    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
+    ) -> Result<crate::cluster::security::SignedClusterEnvelope> {
         let envelope = self.verify_current_envelope(raw, channel, expected_source)?;
-        if envelope.kind == crate::cluster_security::ClusterCommandKind::Ack {
+        if envelope.kind == crate::cluster::security::ClusterCommandKind::Ack {
             anyhow::ensure!(
                 serde_json::to_vec(&envelope.payload)?.len() <= MAX_DELIVERY_ACK_BYTES,
                 "cluster acknowledgement payload is oversized"
@@ -298,7 +298,7 @@ pub(crate) struct ClusterRevocationAuthority {
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) notify: Arc<tokio::sync::Notify>,
     pub(super) enabled: bool,
-    pub(super) failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<crate::cluster::security::ClusterFailurePolicy>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
 }
@@ -318,7 +318,7 @@ pub(crate) struct ClusterFailureSupervisorAuthority {
     pub(super) authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<crate::cluster::security::ClusterFailurePolicy>,
     pub(super) safety_lease_seconds: Option<u64>,
 }
 
@@ -332,7 +332,7 @@ pub(crate) struct ClusterMaintenanceControl {
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
     pub(super) direct_spool_notify: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<crate::cluster::security::ClusterFailurePolicy>,
 }
 
 /// A MUC outbox worker needs only its node identity and committed wake signal
@@ -591,9 +591,9 @@ impl ClusterFailureSupervisorAuthority {
         );
     }
 
-    pub(crate) fn failure_policy(&self) -> crate::cluster_security::ClusterFailurePolicy {
+    pub(crate) fn failure_policy(&self) -> crate::cluster::security::ClusterFailurePolicy {
         self.failure_policy
-            .unwrap_or(crate::cluster_security::ClusterFailurePolicy::FailClosed)
+            .unwrap_or(crate::cluster::security::ClusterFailurePolicy::FailClosed)
     }
 
     pub(crate) fn safety_lease_expired(&self) -> bool {

@@ -244,7 +244,7 @@ pub fn load_configuration(
     // The secret-file helper returns an owned String.  Wrap it before doing
     // any fallible decode/parse work so every error path wipes the base64
     // private key rather than leaving a second ordinary heap allocation.
-    let encoded = Zeroizing::new(crate::config::read_secret_file(
+    let encoded = Zeroizing::new(crate::platform::config::read_secret_file(
         private_key_file,
         "CLUSTER_SIGNING_PRIVATE_KEY_FILE",
     )?);
@@ -401,7 +401,7 @@ fn load_peers(
 }
 
 fn read_public_key(path: &Path, variable: &str) -> Result<[u8; 32]> {
-    let value = crate::config::read_secret_file(path, variable)?;
+    let value = crate::platform::config::read_secret_file(path, variable)?;
     decode_public_key(value.trim())
 }
 

@@ -10,13 +10,13 @@ pub(super) struct ClusterSignedPublisher {
     pub(super) namespace: String,
     pub(super) key_prefix: String,
     pub(super) node_id: String,
-    pub(super) security: Option<Arc<crate::cluster_security::ClusterSecurityConfig>>,
+    pub(super) security: Option<Arc<crate::cluster::security::ClusterSecurityConfig>>,
     pub(super) connection_uuid: uuid::Uuid,
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<crate::cluster::security::ClusterFailurePolicy>,
     pub(super) publication_gate: Arc<tokio::sync::RwLock<()>>,
 }
 
@@ -78,8 +78,8 @@ impl ClusterSignedPublisher {
         let mut nodes: Vec<String> = script
             .key(key)
             .arg(self.key("node:".to_owned()))
-            .arg(crate::cluster_security::MAX_PEERS + 1)
-            .arg(crate::cluster_security::MAX_NODE_ID_BYTES)
+            .arg(crate::cluster::security::MAX_PEERS + 1)
+            .arg(crate::cluster::security::MAX_NODE_ID_BYTES)
             .invoke_async(&mut *conn)
             .await?;
         nodes.sort_unstable();
@@ -157,8 +157,8 @@ impl ClusterSignedPublisher {
             destination.valid_until > Instant::now() && destination.refresh_until > Instant::now(),
             "cluster destination process authority is stale"
         );
-        let kind = crate::cluster_security::infer_kind(&payload)?;
-        let envelope = crate::cluster_security::SignedClusterEnvelope::sign(
+        let kind = crate::cluster::security::infer_kind(&payload)?;
+        let envelope = crate::cluster::security::SignedClusterEnvelope::sign(
             &security.signer(),
             &self.namespace,
             &self.node_id,
@@ -449,7 +449,7 @@ impl ClusterManager {
         raw: &str,
         channel: &str,
         expected_source: Option<&str>,
-    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
+    ) -> Result<crate::cluster::security::SignedClusterEnvelope> {
         self.verify_signed_payload_inner(raw, channel, expected_source, true)
     }
 
@@ -460,7 +460,7 @@ impl ClusterManager {
         channel: &str,
         expected_source: Option<&str>,
         remember_replay: bool,
-    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
+    ) -> Result<crate::cluster::security::SignedClusterEnvelope> {
         let envelope =
             self.listener_security()
                 .verify_current_envelope(raw, channel, expected_source)?;
@@ -473,7 +473,7 @@ impl ClusterManager {
     #[cfg(test)]
     pub(super) fn remember_envelope_replay(
         &self,
-        envelope: &crate::cluster_security::SignedClusterEnvelope,
+        envelope: &crate::cluster::security::SignedClusterEnvelope,
     ) -> Result<()> {
         let replay_key = format!(
             "{}:{}:{}:{}",
@@ -485,7 +485,7 @@ impl ClusterManager {
         let now = chrono::Utc::now().timestamp();
         let accept_until = envelope
             .expires_at
-            .saturating_add(crate::cluster_security::CLOCK_SKEW_SECONDS);
+            .saturating_add(crate::cluster::security::CLOCK_SKEW_SECONDS);
         self.remember_replay_key(replay_key, accept_until, now, MAX_REPLAY_ENTRIES)
     }
 

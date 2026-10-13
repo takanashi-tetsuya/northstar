@@ -5,7 +5,7 @@
 //! passwords.  Import is one serializable transaction, including its audit
 //! record; `--dry-run` executes the same database writes and then rolls back.
 
-use crate::{auth, config::Config, db, jid};
+use crate::{auth, db, jid, platform::config::Config};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
@@ -208,7 +208,7 @@ pub async fn run(config: &Config, arguments: &[String]) -> Result<()> {
         zeroize::Zeroizing::new(match (value, file) {
             (Some(value), None) if !value.trim().is_empty() => value,
             (None, Some(path)) => {
-                crate::config::read_secret_file(&path, "MIGRATOR_DATABASE_URL_FILE")?
+                crate::platform::config::read_secret_file(&path, "MIGRATOR_DATABASE_URL_FILE")?
             }
             _ => anyhow::bail!(
                 "production PIE import requires MIGRATOR_DATABASE_URL_FILE (preferred) or MIGRATOR_DATABASE_URL"

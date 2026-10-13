@@ -201,7 +201,7 @@ pub struct Config {
     pub stun_service: Option<(String, u16)>,
     pub turn_service: Option<(String, u16)>,
     pub components: Vec<ComponentCredential>,
-    pub cluster_security: Option<Arc<crate::cluster_security::ClusterSecurityConfig>>,
+    pub cluster_security: Option<Arc<crate::cluster::security::ClusterSecurityConfig>>,
     /// True only when FAST has a mounted deployment key or the explicit
     /// loopback-only ephemeral development policy was accepted.
     pub(crate) fast_token_enabled: bool,

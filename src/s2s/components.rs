@@ -1,6 +1,6 @@
 use crate::{
-    config::{ComponentConnectionMode, ComponentCredential},
-    metrics::{DurationHistogram, DurationTimer},
+    platform::config::{ComponentConnectionMode, ComponentCredential},
+    platform::metrics::{DurationHistogram, DurationTimer},
     s2s,
     state::AppState,
     xmpp::xml_builder::XmlElement,
@@ -360,7 +360,7 @@ pub async fn serve(
             connection_cancel,
         );
         let result = actors.try_spawn(
-            crate::connection_actors::ConnectionActorKind::ComponentAccept,
+            crate::runtime::connection_actors::ConnectionActorKind::ComponentAccept,
             Some(peer.to_string()),
             actor,
         );
@@ -419,7 +419,7 @@ async fn outbound_component_supervisor(
         );
         actors
             .try_spawn(
-                crate::connection_actors::ConnectionActorKind::ComponentConnect,
+                crate::runtime::connection_actors::ConnectionActorKind::ComponentConnect,
                 Some(domain.clone()),
                 actor,
             )

@@ -1,4 +1,4 @@
-use crate::{config::Config, metrics::Metrics};
+use crate::{platform::config::Config, platform::metrics::Metrics};
 use chrono::Utc;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -246,7 +246,7 @@ pub(crate) async fn run_once_context<R: RetentionRepository>(
 pub(crate) async fn serve_context<R: RetentionRepository>(
     context: Arc<RetentionContext<R>>,
     cancel: CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
+    heartbeat: crate::runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
     serve_with(
         &context.policy,
@@ -431,7 +431,7 @@ async fn serve_with<F, Fut>(
     counters: &RetentionCounters,
     mut run_pass: F,
     cancel: CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
+    heartbeat: crate::runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()>
 where
     F: FnMut() -> Fut,

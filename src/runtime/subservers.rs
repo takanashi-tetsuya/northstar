@@ -6,9 +6,9 @@
 
 use crate::{
     db,
-    metrics::Metrics,
-    retention::{RetentionContext, RetentionPolicy, RetentionReadiness},
-    workers::{WorkerCriticality, WorkerMode, WorkerRegistry},
+    platform::metrics::Metrics,
+    runtime::retention::{RetentionContext, RetentionPolicy, RetentionReadiness},
+    runtime::workers::{WorkerCriticality, WorkerMode, WorkerRegistry},
 };
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) const MAINTENANCE_POOL_MAX_CONNECTIONS: u32 = 3;
 pub(crate) const MAX_CORE_PRIMARY_CONNECTIONS: u32 =
-    crate::config::DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS;
+    crate::platform::config::DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProcessRole {
@@ -185,15 +185,15 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         "set only one of DATABASE_URL and DATABASE_URL_FILE"
     );
     let url = zeroize::Zeroizing::new(match config.database_url_file.as_ref() {
-        Some(path) => crate::config::read_secret_file(path, "DATABASE_URL_FILE")?,
+        Some(path) => crate::platform::config::read_secret_file(path, "DATABASE_URL_FILE")?,
         None => std::mem::take(&mut config.database_url),
     });
     anyhow::ensure!(
         !url.trim().is_empty(),
         "maintenance requires DATABASE_URL_FILE or DATABASE_URL"
     );
-    let (console, console_guard) = crate::logging::console(std::io::stdout());
-    let _log_guard = crate::logging::LogGuards::new(vec![console_guard]);
+    let (console, console_guard) = crate::platform::logging::console(std::io::stdout());
+    let _log_guard = crate::platform::logging::LogGuards::new(vec![console_guard]);
     tracing_subscriber::fmt()
         .with_writer(console)
         .json()
@@ -251,7 +251,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     let retention = Arc::new(RetentionContext::new(
         db::retention::PostgresMaintenanceRepository::new(pool.clone()),
         policy,
-        crate::retention::RetentionCounters::from_metrics(&metrics),
+        crate::runtime::retention::RetentionCounters::from_metrics(&metrics),
     ));
     let retention_readiness = retention.readiness();
     let worker_cancel = cancel.clone();
@@ -262,7 +262,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         Some(silence),
         cancel.clone(),
         move |heartbeat| {
-            crate::retention::serve_context(
+            crate::runtime::retention::serve_context(
                 Arc::clone(&retention),
                 worker_cancel.clone(),
                 heartbeat,
@@ -270,7 +270,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         },
     );
     let subscriptions = Arc::new(
-        crate::subscription_cleanup::SubscriptionCleanupContext::new(
+        crate::runtime::subscription_cleanup::SubscriptionCleanupContext::new(
             db::retention::PostgresMaintenanceRepository::new(pool.clone()),
             Arc::clone(&metrics.subscription_cleanup),
         ),
@@ -281,10 +281,10 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         "pubsub-subscription-cleanup",
         WorkerCriticality::Restartable,
         WorkerMode::Continuous,
-        Some(crate::subscription_cleanup::MAX_SILENCE),
+        Some(crate::runtime::subscription_cleanup::MAX_SILENCE),
         cancel.clone(),
         move |heartbeat| {
-            crate::subscription_cleanup::serve_context(
+            crate::runtime::subscription_cleanup::serve_context(
                 Arc::clone(&subscriptions),
                 subscription_cancel.clone(),
                 heartbeat,
@@ -397,7 +397,7 @@ async fn private_health(
                             "GET /healthz HTTP/1.1" | "GET /healthz HTTP/1.0" => ("200 OK", "ok\n".to_owned()),
                             "GET /readyz HTTP/1.1" | "GET /readyz HTTP/1.0" if retention_readiness.is_ready() && subscription_readiness.is_ready() && workers.readiness_error().is_none() => ("200 OK", "ready\n".to_owned()),
                             "GET /readyz HTTP/1.1" | "GET /readyz HTTP/1.0" => ("503 Service Unavailable", "maintenance-not-ready\n".to_owned()),
-                            "GET /metrics HTTP/1.1" | "GET /metrics HTTP/1.0" => ("200 OK", metrics.render() + &crate::logging::render_metrics()),
+                            "GET /metrics HTTP/1.1" | "GET /metrics HTTP/1.0" => ("200 OK", metrics.render() + &crate::platform::logging::render_metrics()),
                             _ => ("404 Not Found", "not-found\n".to_owned()),
                         };
                         stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}", body.len()).as_bytes()).await?;

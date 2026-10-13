@@ -21,14 +21,13 @@ mod tools;
 mod xmpp;
 
 // Old paths of modules moved into layer directories (S4); WP-48 rewrites the callers and removes them.
-use cluster::security as cluster_security;
-use platform::{config, logging, metrics};
+use platform::{config, logging};
 use runtime::{
-    capacity_maintenance, connection_actors, operation_runtime, retention, subscription_cleanup,
-    subservers, test_activation, upload_worker, workers,
+    capacity_maintenance, operation_runtime, retention, subscription_cleanup, subservers,
+    test_activation, upload_worker, workers,
 };
 use s2s::components;
-use security::{account_recovery, crl, ocsp, tls};
+use security::account_recovery;
 use tools::{identity_audit, pie};
 use xmpp::outbound;
 

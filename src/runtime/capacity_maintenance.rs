@@ -1,7 +1,7 @@
 //! Supervised local lease renewal and deployment-wide expiry maintenance.
 use crate::{
+    runtime::workers::WorkerHeartbeat,
     state::{CapacityLeaseReaperContext, CapacityLeaseRenewalContext},
-    workers::WorkerHeartbeat,
 };
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;

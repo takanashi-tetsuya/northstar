@@ -244,7 +244,7 @@ async fn revocation_authority_failure_requires_immediate_shutdown() {
 
 #[tokio::test]
 async fn postgres_authority_failure_is_terminal_from_healthy_and_degraded_under_both_policies() {
-    use crate::cluster_security::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
+    use crate::cluster::security::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
 
     for policy in [FailClosed, DurableDirectOnly] {
         for already_degraded in [false, true] {
@@ -421,7 +421,7 @@ fn muc_soft_state_lease_survives_multiple_refresh_and_node_lease_windows() {
 
 pub(super) fn verification_manager(
     namespace: &str,
-    security: Arc<crate::cluster_security::ClusterSecurityConfig>,
+    security: Arc<crate::cluster::security::ClusterSecurityConfig>,
 ) -> ClusterManager {
     ClusterManager {
         node_id: security.node_id.clone(),
@@ -452,7 +452,7 @@ pub(super) fn verification_manager(
 
 pub(super) fn listener_health_manager() -> ClusterManager {
     let namespace = "listener-health.test";
-    let (_, security) = crate::cluster_security::test_configuration_pair(namespace);
+    let (_, security) = crate::cluster::security::test_configuration_pair(namespace);
     let mut manager = verification_manager(namespace, security);
     // A lazy, unused pool enables the health policy without opening Redis.
     let client = redis::Client::open("redis://127.0.0.1:1").unwrap();
@@ -832,7 +832,7 @@ fn disabled_cluster_direct_commit_stays_live_without_authority() {
 
 #[tokio::test]
 async fn recovery_defers_while_spooled_direct_commit_is_active() {
-    use crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly;
+    use crate::cluster::security::ClusterFailurePolicy::DurableDirectOnly;
     let manager = listener_health_manager();
     manager.note_listener_generation();
     record_cluster_failure(
@@ -864,7 +864,7 @@ async fn recovery_defers_while_spooled_direct_commit_is_active() {
 
 #[tokio::test]
 async fn failure_overrides_queued_reconciliation_before_direct_commit_finishes() {
-    use crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly;
+    use crate::cluster::security::ClusterFailurePolicy::DurableDirectOnly;
     let manager = listener_health_manager();
     manager.note_listener_generation();
     record_cluster_failure(
@@ -984,7 +984,7 @@ fn recovery_plan_advances_past_busy_first_page_and_rescans_only_when_incomplete(
 #[test]
 fn replay_cache_capacity_admission_is_linearizable() {
     let namespace = "example.test";
-    let (_, receiver_security) = crate::cluster_security::test_configuration_pair(namespace);
+    let (_, receiver_security) = crate::cluster::security::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, receiver_security);
     let workers = 64;
     let limit = 16;
@@ -1015,7 +1015,7 @@ fn replay_cache_capacity_admission_is_linearizable() {
 #[test]
 fn full_replay_cache_without_expiry_rejects_in_constant_time_path() {
     let namespace = "example.test";
-    let (_, receiver_security) = crate::cluster_security::test_configuration_pair(namespace);
+    let (_, receiver_security) = crate::cluster::security::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, receiver_security);
     manager
         .remember_replay_key("resident".to_owned(), 200, 100, 1)
@@ -1037,7 +1037,7 @@ fn full_replay_cache_without_expiry_rejects_in_constant_time_path() {
 #[test]
 fn replay_cache_preserves_the_clock_skew_boundary_and_reclaims_after_it() {
     let namespace = "example.test";
-    let (_, receiver_security) = crate::cluster_security::test_configuration_pair(namespace);
+    let (_, receiver_security) = crate::cluster::security::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, receiver_security);
 
     manager
@@ -1060,7 +1060,7 @@ fn replay_cache_preserves_the_clock_skew_boundary_and_reclaims_after_it() {
 fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
     let namespace = "example.test";
     let (sender_security, receiver_security) =
-        crate::cluster_security::test_configuration_pair(namespace);
+        crate::cluster::security::test_configuration_pair(namespace);
     let receiver = verification_manager(namespace, receiver_security);
     let instance_uuid = uuid::Uuid::new_v4();
     let now = Instant::now();
@@ -1085,7 +1085,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
         },
     );
     let channel = format!("northstar:{namespace}:node:{}", receiver.node_id);
-    let envelope = crate::cluster_security::SignedClusterEnvelope::sign(
+    let envelope = crate::cluster::security::SignedClusterEnvelope::sign(
         &sender_security.signer(),
         namespace,
         &sender_security.node_id,
@@ -1095,7 +1095,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
         &receiver.security.as_ref().unwrap().current_key_id,
         receiver.security.as_ref().unwrap().key_epoch,
         &channel,
-        crate::cluster_security::ClusterCommandKind::DirectDelivery,
+        crate::cluster::security::ClusterCommandKind::DirectDelivery,
         instance_uuid,
         7,
         serde_json::json!({"target":"alice@example.test","stanza":"<message/>"}),
@@ -1115,7 +1115,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
 fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
     let namespace = "example.test";
     let (staged_sender, receiver_security, active_key_id) =
-        crate::cluster_security::test_prepared_staged_pair(namespace);
+        crate::cluster::security::test_prepared_staged_pair(namespace);
     let receiver_peers = receiver_security.peers();
     let receiver = verification_manager(namespace, receiver_security);
     let copied_uuid = uuid::Uuid::new_v4();
@@ -1141,7 +1141,7 @@ fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
         },
     );
     let channel = format!("northstar:{namespace}:node:{}", receiver.node_id);
-    let envelope = crate::cluster_security::SignedClusterEnvelope::sign(
+    let envelope = crate::cluster::security::SignedClusterEnvelope::sign(
         &staged_sender.signer(),
         namespace,
         &staged_sender.node_id,
@@ -1151,7 +1151,7 @@ fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
         &receiver.security.as_ref().unwrap().current_key_id,
         receiver.security.as_ref().unwrap().key_epoch,
         &channel,
-        crate::cluster_security::ClusterCommandKind::DirectDelivery,
+        crate::cluster::security::ClusterCommandKind::DirectDelivery,
         copied_uuid,
         7,
         serde_json::json!({"target":"alice@example.test","stanza":"<message/>"}),
@@ -1278,7 +1278,7 @@ fn postgres_key_cache_controls_prepare_activate_and_retire_acceptance() {
 #[test]
 fn admission_capability_observes_shared_health_transitions() {
     let namespace = "admission-capability.test";
-    let (_, security) = crate::cluster_security::test_configuration_pair(namespace);
+    let (_, security) = crate::cluster::security::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, security);
     let admission = manager.admission();
     for state in [
@@ -1324,7 +1324,7 @@ fn cluster_failure_policy_static_matrix_is_fail_closed_by_class() {
             operation == ClusterOperation::DurableDirect
         );
     }
-    use crate::cluster_security::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
+    use crate::cluster::security::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
     assert!(!degraded_shutdown_required(FailClosed, true, false));
     assert!(degraded_shutdown_required(FailClosed, true, true));
     assert!(!degraded_shutdown_required(DurableDirectOnly, true, true));
@@ -1568,7 +1568,7 @@ async fn redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba() {
         std::env::var("TEST_REDIS_URL").expect("set TEST_REDIS_URL to a disposable Redis instance");
     let namespace = format!("muc-{}.test", uuid::Uuid::new_v4().simple());
     let (first_security, second_security) =
-        crate::cluster_security::test_configuration_pair(&namespace);
+        crate::cluster::security::test_configuration_pair(&namespace);
     let first = ClusterManager::new(
         Some(&redis_url),
         &namespace,
@@ -1862,7 +1862,7 @@ async fn redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys() {
     let redis_url =
         std::env::var("TEST_REDIS_URL").expect("set TEST_REDIS_URL to a disposable Redis instance");
     let namespace = format!("muc-churn-{}.test", uuid::Uuid::new_v4().simple());
-    let (security, _) = crate::cluster_security::test_configuration_pair(&namespace);
+    let (security, _) = crate::cluster::security::test_configuration_pair(&namespace);
     let cluster = ClusterManager::new(
         Some(&redis_url),
         &namespace,
@@ -2241,8 +2241,8 @@ fn rolling_delivery_contract_never_turns_volatile_into_legacy_durable() {
     let recipient_id = uuid::Uuid::from_u128(12);
     let stanza_id = uuid::Uuid::from_u128(13);
     let other_row = uuid::Uuid::from_u128(14);
-    let exact = crate::outbound::RecipientDeliveryIdentity::Exact(stanza_id);
-    let missing = crate::outbound::RecipientDeliveryIdentity::Missing;
+    let exact = crate::xmpp::outbound::RecipientDeliveryIdentity::Exact(stanza_id);
+    let missing = crate::xmpp::outbound::RecipientDeliveryIdentity::Missing;
 
     assert!(delivery_contract_compatible_with_peer(
         Some("8"),
@@ -2327,7 +2327,7 @@ fn durable_contract_carries_the_real_row_fence_not_the_stanza_id() {
         outbound_delivery_contract(
             &stanza,
             "bob@example.test",
-            Some(crate::outbound::DurableDelivery {
+            Some(crate::xmpp::outbound::DurableDelivery {
                 recipient_id,
                 message_id: offline_row_id,
                 claim_id: None,
@@ -2344,7 +2344,7 @@ fn durable_contract_carries_the_real_row_fence_not_the_stanza_id() {
 
 #[test]
 fn mix_contract_carries_only_the_exact_recipient_lease() {
-    let source = crate::outbound::MixDelivery {
+    let source = crate::xmpp::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(41),
         lease_token: uuid::Uuid::from_u128(42),
     };
@@ -2673,7 +2673,7 @@ fn transport_receipt_ack_requires_one_exact_resource_or_none() {
 
 #[test]
 fn mix_transport_receipt_ack_requires_confirmed_capable_resource() {
-    let source = crate::outbound::MixDelivery {
+    let source = crate::xmpp::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(11),
         lease_token: uuid::Uuid::from_u128(12),
     };
@@ -2740,12 +2740,12 @@ fn mix_transport_receipt_ack_requires_confirmed_capable_resource() {
 async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     // A queued stanza is not yet delivered. The peer must explicitly
     // signal the output boundary before the remote node reports success.
-    let source = crate::outbound::MixDelivery {
+    let source = crate::xmpp::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(21),
         lease_token: uuid::Uuid::from_u128(22),
     };
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::outbound::OutboundSender::new(output);
+    let sender = crate::xmpp::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     let waiter = {
         let sender = sender.clone();
@@ -2755,18 +2755,20 @@ async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
         })
     };
     let item = consumer.recv().await.expect("MIX item was queued");
-    item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SocketFenced {
-        connection_id: uuid::Uuid::from_u128(23),
-    });
+    item.complete_mix_handoff(
+        crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+            connection_id: uuid::Uuid::from_u128(23),
+        },
+    );
     assert!(matches!(
         waiter.await.unwrap(),
-        Ok(crate::outbound::MixTransportCompletion::SocketFenced { .. })
+        Ok(crate::xmpp::outbound::MixTransportCompletion::SocketFenced { .. })
     ));
     assert!(!disconnect.is_cancelled());
 
     // A full bounded queue must not become a successful remote receipt.
     let (output, _consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::outbound::OutboundSender::new(output);
+    let sender = crate::xmpp::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     sender.try_send("older".to_owned()).unwrap();
     assert!(
@@ -2780,7 +2782,7 @@ async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     // row, even though the caller has a live session object.
     let (output, consumer) = tokio::sync::mpsc::channel(1);
     drop(consumer);
-    let sender = crate::outbound::OutboundSender::new(output);
+    let sender = crate::xmpp::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     assert!(
         try_send_cluster_mix_transport(&sender, &disconnect, "closed".to_owned(), source)
@@ -2793,7 +2795,7 @@ async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     // boundary closes the one-shot and is rejected without inventing a
     // timer-based delivery decision.
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::outbound::OutboundSender::new(output);
+    let sender = crate::xmpp::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     let waiter = {
         let sender = sender.clone();

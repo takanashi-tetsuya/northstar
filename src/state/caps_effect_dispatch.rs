@@ -5,8 +5,8 @@ use super::{
     pep_last_items::PepLastItemsContext, AppState, OnlineSession,
 };
 use crate::{
-    metrics::DurationHistogram, outbound::OutboundSender, s2s::FederationRouter,
-    xmpp::capabilities::CapsEffectTelemetry,
+    platform::metrics::DurationHistogram, s2s::FederationRouter,
+    xmpp::capabilities::CapsEffectTelemetry, xmpp::outbound::OutboundSender,
 };
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{

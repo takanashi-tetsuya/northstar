@@ -6,11 +6,11 @@ use super::{
 };
 use crate::{
     cluster::{ClusterMixRouteLookup, ClusterNodeDelivery, NodeDeliveryReceipt},
-    config::ExternalRouteDomainPolicy,
     db::mix_repository::PostgresMixRepository,
-    outbound::MixDelivery,
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::mix::MixService,
+    xmpp::outbound::MixDelivery,
     xmpp::{
         capabilities::MixPostCommitTelemetry,
         protocol::mix::{MixSessionCapability, CORE_NS, PAM_NS},

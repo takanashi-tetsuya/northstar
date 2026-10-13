@@ -1,7 +1,7 @@
 //! Authenticated upload deletion can queue an authorized removal and time the request.
 
 use super::{AppState, UploadService};
-use crate::metrics::{DurationHistogram, DurationTimer};
+use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload::UserUploadDeleteOutcome;
 use std::sync::Arc;
 use uuid::Uuid;

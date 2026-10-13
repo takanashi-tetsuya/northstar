@@ -2,7 +2,7 @@
 //! the public-file projection, immutable transport policy, and one timer.
 
 use super::{AppState, UploadAdmission, UploadDownloadGuard, UploadService};
-use crate::metrics::{DurationHistogram, DurationTimer};
+use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload::UploadSlot;
 use crate::storage::{StoredUploadReader, UploadStore};
 use std::net::IpAddr;

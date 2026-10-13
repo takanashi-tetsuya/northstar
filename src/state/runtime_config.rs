@@ -6,11 +6,11 @@ use super::*;
 /// and the existing typed persistence service, never AppState or a mutable
 /// cluster, worker, connection, upload, or SM owner.
 pub(crate) struct ReadinessContext {
-    pub(super) connection: crate::connection_actors::ConnectionAdmissionReadiness,
+    pub(super) connection: crate::runtime::connection_actors::ConnectionAdmissionReadiness,
     pub(super) sm: crate::services::sm_capacity::SmMemoryReadiness,
     pub(super) upload: crate::services::upload_safety::UploadSafetyReadiness,
     pub(super) cluster: crate::cluster::ClusterReadinessProbe,
-    pub(super) workers: crate::workers::WorkerReadinessProbe,
+    pub(super) workers: crate::runtime::workers::WorkerReadinessProbe,
     pub(super) abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
     pub(super) persistence: crate::services::readiness::ReadinessService<
         db::readiness_repository::PostgresReadinessRepository,
@@ -143,7 +143,7 @@ pub(crate) struct UploadSlotLimits {
 }
 
 impl AppState {
-    pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
+    pub(crate) fn tls_context(&self) -> &crate::security::tls::TlsContext {
         &self.tls_context
     }
 
@@ -324,8 +324,8 @@ impl AppState {
 
     pub(crate) fn test_listener_activation_policy(
         &self,
-    ) -> crate::test_activation::TestActivationPolicy<'_> {
-        crate::test_activation::TestActivationPolicy {
+    ) -> crate::runtime::test_activation::TestActivationPolicy<'_> {
+        crate::runtime::test_activation::TestActivationPolicy {
             enabled: self.config.test_listener_activation,
             destination: self.config.test_readiness_file.as_deref(),
             nonce: self.config.test_readiness_nonce.as_deref(),

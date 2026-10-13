@@ -6,11 +6,11 @@ use super::{
     OnlineSession, RuntimeFederationPolicy,
 };
 use crate::{
-    account_recovery::AccountDeletionRecoveryTelemetry,
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    config::ExternalRouteDomainPolicy,
     db::account_repository::PostgresAccountRepository,
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
+    security::account_recovery::AccountDeletionRecoveryTelemetry,
     services::account::{AccountService, DeletionRecoveryJob, RemovedAccount},
     xmpp::xml_builder::XmlElement,
 };
@@ -119,7 +119,7 @@ pub(crate) struct AccountDeletionRecoveryContext {
     roster: RosterPushDelivery,
     presence: AccountDeletionPresence,
     teardown: AccountTeardownRuntime,
-    metrics: Arc<crate::metrics::Metrics>,
+    metrics: Arc<crate::platform::metrics::Metrics>,
     domain: String,
 }
 

@@ -2,7 +2,7 @@
 
 use super::{session_entries_for_in, AppState, OnlineSession};
 use crate::{
-    cluster::ClusterListenerPresenceRoutes, config::ExternalRouteDomainPolicy,
+    cluster::ClusterListenerPresenceRoutes, platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter, xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;

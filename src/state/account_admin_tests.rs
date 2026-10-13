@@ -14,7 +14,7 @@ fn session(connection_id: Uuid, routable: bool) -> OnlineSession {
         lifecycle: Arc::default(),
         metrics_counted: Arc::default(),
         routable: Arc::new(AtomicBool::new(routable)),
-        sender: crate::outbound::OutboundSender::new(sender),
+        sender: crate::xmpp::outbound::OutboundSender::new(sender),
         available: Arc::default(),
         availability_generation: Arc::default(),
         post_actions: crate::xmpp::protocol::PostActionHandle::default(),

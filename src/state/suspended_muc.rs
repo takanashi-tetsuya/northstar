@@ -99,7 +99,7 @@ pub(crate) fn muc_suspended_teardown_identity_matches(
 
 #[derive(Clone)]
 pub enum MucOccupantEndpoint {
-    Local(crate::outbound::OutboundSender),
+    Local(crate::xmpp::outbound::OutboundSender),
     /// A local occupant whose transport disappeared while a durable XEP-0198
     /// resume window is open.  Traffic is bounded and moved into PostgreSQL;
     /// it is never sent into the dead transport channel.
@@ -127,7 +127,7 @@ pub struct SuspendedMucEndpoint {
 
 #[derive(Clone)]
 pub(super) enum SuspendedMucRoute {
-    Live(crate::outbound::OutboundSender),
+    Live(crate::xmpp::outbound::OutboundSender),
     /// A short synchronous hand-off. Deliveries wait rather than falling back
     /// to a stale occupant-local sender.
     Transitioning,
@@ -403,7 +403,7 @@ pub(super) fn append_suspended_muc_suffix_to_snapshot(
         snapshot.outbound_h = snapshot.outbound_h.wrapping_add(1);
         snapshot
             .unacked
-            .push(crate::outbound::SmUnackedStanza::with_delivery(
+            .push(crate::xmpp::outbound::SmUnackedStanza::with_delivery(
                 stanza.xml.clone(),
                 None,
             ));
@@ -442,7 +442,7 @@ impl SuspendedMucEndpoint {
 
     pub(super) fn new_live(
         sm_session_id: uuid::Uuid,
-        sender: crate::outbound::OutboundSender,
+        sender: crate::xmpp::outbound::OutboundSender,
     ) -> Self {
         Self {
             sm_session_id,

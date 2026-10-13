@@ -3,9 +3,9 @@
 use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPolicy};
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    config::ExternalRouteDomainPolicy,
     db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
     jid::CanonicalJid,
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::{messaging::MessageService, privacy::PrivacyStanzaKind, pubsub::PubSubService},
     xmpp::xml_builder::XmlElement,

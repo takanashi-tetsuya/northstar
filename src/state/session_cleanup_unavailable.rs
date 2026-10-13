@@ -3,8 +3,8 @@
 use super::{bare_jid, session_entries_for_in, AppState, OnlineSession};
 use crate::{
     cluster::ClusterUnavailableDelivery,
-    config::ExternalRouteDomainPolicy,
     db::{self, sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository},
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::{
         messaging::MessageService,

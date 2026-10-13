@@ -2,9 +2,9 @@
 
 use super::{AppState, RuntimeFederationPolicy};
 use crate::{
-    config::ExternalRouteDomainPolicy,
     db::mix_repository::PostgresMixRepository,
     jid::{prepare_domainpart, CanonicalJid},
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::mix::{MixService, NODE_PRESENCE},
 };

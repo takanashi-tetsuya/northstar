@@ -2,7 +2,7 @@
 //! writes, and the immutable transport and retention settings it needs.
 
 use super::{AppState, UploadAdmission, UploadRequestGuard, UploadService};
-use crate::metrics::{DurationHistogram, DurationTimer};
+use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload_safety::{
     UploadIoClass, UploadIoPermit, UploadSafetyError, UploadSafetyGate,
 };

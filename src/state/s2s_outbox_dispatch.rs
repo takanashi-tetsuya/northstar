@@ -5,9 +5,9 @@ use super::{
     OnlineSession, RuntimeFederationPolicy,
 };
 use crate::{
-    config::ExternalRouteDomainPolicy,
     db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
     jid::{prepare_domainpart, CanonicalJid},
+    platform::config::ExternalRouteDomainPolicy,
     s2s::{
         telemetry::OutboundDispositionTelemetry, BidiRouteSnapshot, FederationEnvelope,
         S2sConnectionRegistry,

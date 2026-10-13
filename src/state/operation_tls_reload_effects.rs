@@ -1,8 +1,8 @@
 //! TLS reload authority for committed administrator operations.
 
 use super::AppState;
-use crate::metrics::Metrics;
-use crate::tls::{TlsContext, TlsReloadOutcome};
+use crate::platform::metrics::Metrics;
+use crate::security::tls::{TlsContext, TlsReloadOutcome};
 use anyhow::Result;
 use std::sync::{atomic::Ordering, Arc};
 

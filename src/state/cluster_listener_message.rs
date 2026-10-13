@@ -1,7 +1,7 @@
 //! Typed policy and durable hand-off effects for authenticated node delivery.
 
 use super::{AppState, OnlineSession};
-use crate::{db, metrics::Metrics};
+use crate::{db, platform::metrics::Metrics};
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ impl AppState {
 }
 
 impl ClusterListenerMessagePolicy {
-    pub(crate) fn start_redis_setup_timer(&self) -> crate::metrics::DurationTimer<'_> {
+    pub(crate) fn start_redis_setup_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
         self.metrics.redis_operation_duration_seconds.start_timer()
     }
 
@@ -110,11 +110,11 @@ impl ClusterListenerMessagePolicy {
 
     pub(crate) async fn transfer_mix_delivery(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> anyhow::Result<crate::outbound::MixDelivery> {
+    ) -> anyhow::Result<crate::xmpp::outbound::MixDelivery> {
         self.mix
             .transfer_mix_delivery_to_cluster(source, node_id, request_id, ttl_seconds)
             .await
@@ -122,7 +122,7 @@ impl ClusterListenerMessagePolicy {
 
     pub(crate) async fn release_mix_delivery(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> anyhow::Result<bool> {

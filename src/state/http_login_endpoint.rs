@@ -63,7 +63,7 @@ impl HttpLoginEndpointContext {
 #[cfg(test)]
 mod tests {
     use super::HttpLoginEndpointCounters;
-    use crate::metrics::Metrics;
+    use crate::platform::metrics::Metrics;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 

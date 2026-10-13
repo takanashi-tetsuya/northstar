@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     db::pubsub_repository::PostgresPubSubRepository,
-    metrics::{DurationHistogram, DurationTimer},
+    platform::metrics::{DurationHistogram, DurationTimer},
     services::pubsub::{
         ClaimedPubSubOutboxDelivery, PepOutboxAuthorizationOutcome, PubSubOutboxDeliveryKind,
         PubSubService,

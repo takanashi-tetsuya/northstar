@@ -1,6 +1,6 @@
 //! Governance handlers own use-case calls and the existing outcome counters.
 use crate::{
-    metrics::Metrics,
+    platform::metrics::Metrics,
     services::{api_mutations::*, api_queries::ApiReadAuthority, governance::*},
 };
 use std::sync::{atomic::Ordering, Arc};

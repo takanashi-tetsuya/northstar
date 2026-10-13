@@ -1,7 +1,7 @@
 //! Exact local connection snapshots for capacity renewal; no routing authority escapes.
 use super::OnlineSession;
 use crate::{
-    metrics::Metrics,
+    platform::metrics::Metrics,
     services::capacity_maintenance::{CapacityMaintenanceRepository, CapacityMaintenanceService},
 };
 use anyhow::{Context, Result};
@@ -210,7 +210,7 @@ mod tests {
             lifecycle: Arc::default(),
             metrics_counted: Arc::default(),
             routable: Arc::new(AtomicBool::new(routable)),
-            sender: crate::outbound::OutboundSender::new(sender),
+            sender: crate::xmpp::outbound::OutboundSender::new(sender),
             available: Arc::default(),
             availability_generation: Arc::default(),
             post_actions: crate::xmpp::protocol::PostActionHandle::default(),

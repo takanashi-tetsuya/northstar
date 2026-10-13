@@ -2,8 +2,8 @@
 
 use super::AppState;
 use crate::{
-    db::privacy::PostgresPrivacyRepository, metrics::Metrics, services::privacy::PrivacyService,
-    workers::WorkerRegistry,
+    db::privacy::PostgresPrivacyRepository, platform::metrics::Metrics,
+    runtime::workers::WorkerRegistry, services::privacy::PrivacyService,
 };
 use anyhow::Result;
 use std::sync::{atomic::Ordering, Arc};

@@ -2,7 +2,7 @@
 
 use super::{AppState, SerializableMucOccupant};
 use crate::cluster::{MucRename, MucRoleChange, NodeDeliveryReceipt};
-use crate::outbound::DurableDelivery;
+use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
 use std::collections::HashMap;
 

@@ -42,7 +42,7 @@ impl AppState {
         mut config: Config,
         pool: PgPool,
         federation: FederationRouter,
-        components: crate::components::ComponentRegistry,
+        components: crate::s2s::components::ComponentRegistry,
         runtime_control_connection: PoolConnection<Postgres>,
         worker_cancel: CancellationToken,
     ) -> anyhow::Result<Arc<Self>> {
@@ -53,7 +53,7 @@ impl AppState {
         }
         let metrics_bearer_token = config.metrics_bearer_token.take();
         let web_admin_gateway_token = config.web_admin_gateway_token.take();
-        let component_credentials: Arc<[crate::config::ComponentCredential]> =
+        let component_credentials: Arc<[crate::platform::config::ComponentCredential]> =
             std::mem::take(&mut config.components).into();
         config.components = component_credentials
             .iter()
@@ -103,18 +103,19 @@ impl AppState {
             keyrings?
         };
         let api_control = Arc::new(api_control);
-        let startup_phase = crate::logging::StartupPhase::begin("mix_delivery_capacity_audit");
+        let startup_phase =
+            crate::platform::logging::StartupPhase::begin("mix_delivery_capacity_audit");
         db::audit_mix_delivery_capacity_ledger(&pool)
             .await
             .context("MIX delivery capacity ledger failed startup reconciliation")?;
         startup_phase.complete();
-        let startup_phase = crate::logging::StartupPhase::begin("mix_pam_capacity_audit");
+        let startup_phase = crate::platform::logging::StartupPhase::begin("mix_pam_capacity_audit");
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
         startup_phase.complete();
         let upload_startup_phase =
-            crate::logging::StartupPhase::begin("upload_storage_initialization");
+            crate::platform::logging::StartupPhase::begin("upload_storage_initialization");
         anyhow::ensure!(
             !db::upload_migration_active(&pool).await?,
             "offline upload migration is active; keep all nodes stopped"
@@ -154,7 +155,7 @@ impl AppState {
                 let upload_safety_gate = UploadSafetyGate::new();
                 let upload_namespace = upload_storage_namespace_id(&config)?;
                 let startup_phase =
-                    crate::logging::StartupPhase::begin("upload_namespace_and_policy");
+                    crate::platform::logging::StartupPhase::begin("upload_namespace_and_policy");
                 let namespace_generation = db::validate_upload_storage_backend(
                     upload_db,
                     &config.upload_storage_backend,
@@ -178,7 +179,8 @@ impl AppState {
                     capacity_policy: capacity_policy_generation,
                 };
                 startup_phase.complete();
-                let startup_phase = crate::logging::StartupPhase::begin("upload_authority_audit");
+                let startup_phase =
+                    crate::platform::logging::StartupPhase::begin("upload_authority_audit");
                 let authority_audit_started_at = tokio::time::Instant::now();
                 let authority_audit = db::audit_upload_capacity_authority(
                     upload_db,
@@ -200,7 +202,7 @@ impl AppState {
                 }
                 startup_phase.complete();
                 let startup_phase =
-                    crate::logging::StartupPhase::begin("upload_ledger_reconciliation");
+                    crate::platform::logging::StartupPhase::begin("upload_ledger_reconciliation");
                 let ledger_audit_started_at = tokio::time::Instant::now();
                 let capacity_reconciliation = db::reconcile_upload_capacity_ledger(upload_db)
                     .await
@@ -328,7 +330,7 @@ impl AppState {
                     _ => unreachable!("upload backend was validated by Config"),
                 };
                 upload_startup_audits =
-                    crate::upload_worker::StartupAuditHandoff::after_successful_audits(
+                    crate::runtime::upload_worker::StartupAuditHandoff::after_successful_audits(
                         upload_authority_generation,
                         [
                             config.upload_storage_max_pending_jobs,
@@ -355,7 +357,8 @@ impl AppState {
                 tracing::info!(
                     "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
                 );
-                upload_startup_audits = crate::upload_worker::StartupAuditHandoff::default();
+                upload_startup_audits =
+                    crate::runtime::upload_worker::StartupAuditHandoff::default();
                 (
                     UploadSafetyGate::disabled(),
                     [0_u8; 32],
@@ -444,11 +447,11 @@ impl AppState {
                 minimum_overlap: abuse.minimum_key_rotation_overlap(),
             }
         });
-        let tls = crate::tls::ReloadableTlsConfig::new(
+        let tls = crate::security::tls::ReloadableTlsConfig::new(
             &config.tls_cert_path,
             &config.tls_key_path,
             &config.domain,
-            crate::tls::TlsPolicyFiles {
+            crate::security::tls::TlsPolicyFiles {
                 extra_root: config.federation_extra_root_cert_path.as_deref(),
                 c2s_client_trust_root: config.c2s_client_trust_root_cert_path.as_deref(),
                 federation_crl: config.federation_crl_path.as_deref(),
@@ -518,7 +521,7 @@ impl AppState {
         let s2s_connection_attempts = Arc::new(Semaphore::new(config.max_s2s_connections));
         let component_connections = Arc::new(Semaphore::new(config.max_component_connections));
         let connection_actors =
-            crate::connection_actors::ConnectionActorRegistry::for_transport_limits(
+            crate::runtime::connection_actors::ConnectionActorRegistry::for_transport_limits(
                 config.max_client_connections,
                 config.max_s2s_connections,
                 config.max_component_connections,
@@ -704,7 +707,7 @@ impl AppState {
             )
             .with_api_control(Arc::clone(&api_control)),
             config.configured_registration_mode()
-                == crate::config::RegistrationMode::InvitationOnly,
+                == crate::platform::config::RegistrationMode::InvitationOnly,
             config.registration_rate_per_hour,
             config.scram_iterations,
             config.scram_sha1_enabled,
@@ -1273,7 +1276,7 @@ impl AppState {
             abuse_key_deployment,
             started_at,
             process_started_at,
-            tls_context: crate::tls::TlsContext::new(tls),
+            tls_context: crate::security::tls::TlsContext::new(tls),
             federation_write_policy,
             registration_closed,
             federation_runtime_policy: Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -1284,11 +1287,11 @@ impl AppState {
             )),
             service_shutdown: Arc::new(std::sync::OnceLock::new()),
             runtime_control_liveness: Arc::new(()),
-            workers: crate::workers::WorkerRegistry::new(),
+            workers: crate::runtime::workers::WorkerRegistry::new(),
         });
         state.worker_registry().register_observer(
             "session-cleanup",
-            crate::workers::WorkerCriticality::Restartable,
+            crate::runtime::workers::WorkerCriticality::Restartable,
         );
         db::authority_listener::start_database_authority_listener(
             state.sm_service().authority_broker(),

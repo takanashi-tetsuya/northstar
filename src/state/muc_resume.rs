@@ -662,7 +662,7 @@ impl AppState {
     pub async fn commit_local_muc_resume(
         &self,
         restored: RestoredLocalMucOccupants,
-        sender: &crate::outbound::OutboundSender,
+        sender: &crate::xmpp::outbound::OutboundSender,
         capacity: crate::services::sm_capacity::SmCapacityLease,
     ) -> CommittedLocalMucResume {
         let RestoredLocalMucOccupants {

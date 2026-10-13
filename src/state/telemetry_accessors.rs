@@ -36,7 +36,9 @@ impl AppState {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn c2s_backpressure_telemetry(&self) -> crate::metrics::C2sBackpressureTelemetry {
+    pub(crate) fn c2s_backpressure_telemetry(
+        &self,
+    ) -> crate::platform::metrics::C2sBackpressureTelemetry {
         self.metrics.c2s_backpressure_telemetry()
     }
 
@@ -94,28 +96,36 @@ impl AppState {
         MetricsContext::from_state(self)
     }
 
-    pub(crate) fn broadcast_routes(&self) -> crate::operation_runtime::LocalBroadcastRoutes {
-        crate::operation_runtime::LocalBroadcastRoutes::new(
+    pub(crate) fn broadcast_routes(
+        &self,
+    ) -> crate::runtime::operation_runtime::LocalBroadcastRoutes {
+        crate::runtime::operation_runtime::LocalBroadcastRoutes::new(
             Arc::clone(&self.sessions),
             self.config.domain.clone(),
             self.cluster.node_id.clone(),
         )
     }
 
-    pub(crate) fn session_kick_routes(&self) -> crate::operation_runtime::LocalSessionKickRoutes {
-        crate::operation_runtime::LocalSessionKickRoutes::new(Arc::clone(&self.sessions))
+    pub(crate) fn session_kick_routes(
+        &self,
+    ) -> crate::runtime::operation_runtime::LocalSessionKickRoutes {
+        crate::runtime::operation_runtime::LocalSessionKickRoutes::new(Arc::clone(&self.sessions))
     }
 
     pub(crate) fn generation_cleanup_routes(
         &self,
-    ) -> crate::operation_runtime::LocalGenerationCleanupRoutes {
-        crate::operation_runtime::LocalGenerationCleanupRoutes::new(Arc::clone(&self.sessions))
+    ) -> crate::runtime::operation_runtime::LocalGenerationCleanupRoutes {
+        crate::runtime::operation_runtime::LocalGenerationCleanupRoutes::new(Arc::clone(
+            &self.sessions,
+        ))
     }
 
     pub(crate) fn panic_disconnect_routes(
         &self,
-    ) -> crate::operation_runtime::LocalPanicDisconnectRoutes {
-        crate::operation_runtime::LocalPanicDisconnectRoutes::new(Arc::clone(&self.sessions))
+    ) -> crate::runtime::operation_runtime::LocalPanicDisconnectRoutes {
+        crate::runtime::operation_runtime::LocalPanicDisconnectRoutes::new(Arc::clone(
+            &self.sessions,
+        ))
     }
 
     pub(crate) fn muc_telemetry(&self) -> crate::xmpp::capabilities::MucTelemetry<'_> {
@@ -227,7 +237,9 @@ impl AppState {
         )
     }
 
-    pub(crate) fn sasl2_authentication_timer(&self) -> crate::metrics::OwnedDurationTimer {
+    pub(crate) fn sasl2_authentication_timer(
+        &self,
+    ) -> crate::platform::metrics::OwnedDurationTimer {
         self.metrics
             .authentication_duration_seconds
             .start_owned_timer()
@@ -310,8 +322,8 @@ impl AppState {
         )
     }
 
-    pub(crate) fn component_telemetry(&self) -> crate::components::ComponentTelemetry<'_> {
-        crate::components::ComponentTelemetry::new(
+    pub(crate) fn component_telemetry(&self) -> crate::s2s::components::ComponentTelemetry<'_> {
+        crate::s2s::components::ComponentTelemetry::new(
             &self.metrics.component_connections_active,
             &self.metrics.outbox_delivery_duration_seconds,
             &self.metrics.component_failures_total,

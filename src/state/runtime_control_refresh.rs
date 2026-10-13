@@ -5,8 +5,9 @@ use super::{
     RuntimeControlDiagnostics, RuntimeControlPhase, RuntimeFederationPolicy,
 };
 use crate::{
-    db::runtime_control_repository::PostgresRuntimeControlRepository, s2s::S2sOutboundClearance,
-    services::runtime_control::RuntimeControlService, workers::WorkerHeartbeat,
+    db::runtime_control_repository::PostgresRuntimeControlRepository,
+    runtime::workers::WorkerHeartbeat, s2s::S2sOutboundClearance,
+    services::runtime_control::RuntimeControlService,
 };
 use anyhow::Result;
 use arc_swap::ArcSwap;

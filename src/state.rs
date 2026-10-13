@@ -259,14 +259,14 @@ impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReadContext {
 }
 
 use crate::{
-    abuse::{AbuseConfig, AbuseGuard},
-    config::{
+    db,
+    platform::config::{
         AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
         SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
     },
-    db,
-    metrics::Metrics,
+    platform::metrics::Metrics,
     s2s::FederationRouter,
+    security::abuse::{AbuseConfig, AbuseGuard},
     services::upload_safety::{UploadAuthorityGeneration, UploadSafetyGate},
     storage::{GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore},
 };
@@ -525,12 +525,12 @@ pub struct AppState {
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
-    upload_startup_audits: Arc<crate::upload_worker::StartupAuditHandoff>,
+    upload_startup_audits: Arc<crate::runtime::upload_worker::StartupAuditHandoff>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
-    component_credentials: Arc<[crate::config::ComponentCredential]>,
-    components: crate::components::ComponentRegistry,
+    component_credentials: Arc<[crate::platform::config::ComponentCredential]>,
+    components: crate::s2s::components::ComponentRegistry,
     s2s_connection_registry: Arc<crate::s2s::S2sConnectionRegistry>,
     /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.
     s2s_dns_resolver: TokioResolver,
@@ -568,7 +568,7 @@ pub struct AppState {
     s2s_connections: Arc<Semaphore>,
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
-    connection_actors: crate::connection_actors::ConnectionActorRegistry,
+    connection_actors: crate::runtime::connection_actors::ConnectionActorRegistry,
     challenge_issue_service: crate::services::challenge_issuance::ChallengeIssueService<
         db::challenge_issuance_repository::PostgresChallengeRepository,
     >,
@@ -588,7 +588,7 @@ pub struct AppState {
     abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
-    tls_context: crate::tls::TlsContext,
+    tls_context: crate::security::tls::TlsContext,
     /// Linearization gate for the federation kill switch. Application
     /// stanza writes hold a read guard only across the socket write; island
     /// mode transitions take the exclusive guard.
@@ -599,7 +599,7 @@ pub struct AppState {
     federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
     service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
     runtime_control_liveness: Arc<()>,
-    workers: Arc<crate::workers::WorkerRegistry>,
+    workers: Arc<crate::runtime::workers::WorkerRegistry>,
 }
 
 impl AppState {
@@ -612,8 +612,8 @@ impl AppState {
         );
         state.worker_registry().supervise(
             "locked-muc-expiry",
-            crate::workers::WorkerCriticality::Restartable,
-            crate::workers::WorkerMode::Continuous,
+            crate::runtime::workers::WorkerCriticality::Restartable,
+            crate::runtime::workers::WorkerMode::Continuous,
             Some(Duration::from_secs(20)),
             cancel,
             move |heartbeat| {
@@ -635,8 +635,8 @@ impl AppState {
         let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
             "runtime-control-refresh",
-            crate::workers::WorkerCriticality::Critical,
-            crate::workers::WorkerMode::Continuous,
+            crate::runtime::workers::WorkerCriticality::Critical,
+            crate::runtime::workers::WorkerMode::Continuous,
             Some(max_silence),
             cancel,
             move |heartbeat| {

@@ -75,14 +75,14 @@ pub(super) enum UploadRuntime {
 }
 
 impl UploadRuntime {
-    pub(super) fn from_config(config: &crate::config::Config) -> Self {
+    pub(super) fn from_config(config: &crate::platform::config::Config) -> Self {
         let downloads = || UploadAdmission {
             semaphore: Arc::new(Semaphore::new(config.upload_download_max_concurrent)),
             by_ip: Arc::new(DashMap::new()),
             max_per_ip: config.upload_download_max_per_ip,
         };
         match config.upload_mode {
-            crate::config::UploadMode::Enabled => Self::Enabled {
+            crate::platform::config::UploadMode::Enabled => Self::Enabled {
                 requests: UploadAdmission {
                     semaphore: Arc::new(Semaphore::new(32)),
                     by_ip: Arc::new(DashMap::new()),
@@ -90,10 +90,10 @@ impl UploadRuntime {
                 },
                 downloads: downloads(),
             },
-            crate::config::UploadMode::DrainReadOnly => Self::DrainReadOnly {
+            crate::platform::config::UploadMode::DrainReadOnly => Self::DrainReadOnly {
                 downloads: downloads(),
             },
-            crate::config::UploadMode::Disabled => Self::Disabled,
+            crate::platform::config::UploadMode::Disabled => Self::Disabled,
         }
     }
 

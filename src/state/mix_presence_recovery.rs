@@ -5,8 +5,8 @@ use super::{
     AppState, OnlineSession, RuntimeFederationPolicy,
 };
 use crate::{
-    config::ExternalRouteDomainPolicy,
     db::mix_repository::PostgresMixRepository,
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::mix::{MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome},
 };

@@ -7,8 +7,8 @@ use crate::{
         api_queries::PostgresApiQueryRepository,
         omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     },
-    error::AppError,
-    metrics::Metrics,
+    platform::error::AppError,
+    platform::metrics::Metrics,
     services::{
         api_queries::ApiQueryService,
         omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService},

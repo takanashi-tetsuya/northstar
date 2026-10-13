@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
-    services::locked_muc_expiry::LockedMucExpiryService, workers::WorkerHeartbeat,
+    runtime::workers::WorkerHeartbeat, services::locked_muc_expiry::LockedMucExpiryService,
 };
 use dashmap::DashMap;
 use std::{
@@ -110,7 +110,7 @@ pub(crate) async fn run_locked_muc_expiry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{outbound::OutboundSender, state::MucOccupantEndpoint};
+    use crate::{state::MucOccupantEndpoint, xmpp::outbound::OutboundSender};
 
     fn occupant(full_jid: &str, connection_id: uuid::Uuid, epoch: uuid::Uuid) -> MucOccupant {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);

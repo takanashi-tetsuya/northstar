@@ -6,7 +6,7 @@ use super::{
     cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints, muc_delivery::MucDeliveryContext,
     AppState,
 };
-use crate::{cluster::ClusterMucOutboxSignal, db, metrics::Metrics, services};
+use crate::{cluster::ClusterMucOutboxSignal, db, platform::metrics::Metrics, services};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
 

@@ -1,7 +1,6 @@
 //! Cluster routes for client IQs, personal messages, and their Carbons.
 
 use super::{AppState, OnlineSession};
-use crate::outbound::DurableDelivery;
 use crate::services::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
@@ -9,6 +8,7 @@ use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
 use crate::services::privacy::PrivacyStanzaKind;
+use crate::xmpp::outbound::DurableDelivery;
 use crate::xmpp::xml_util::carbon_message;
 use anyhow::Result;
 use std::sync::atomic::Ordering;
@@ -20,8 +20,8 @@ impl OnlineRoutePort for AppState {
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::outbound::RouteEnqueue,
-    ) -> Result<(), crate::outbound::RouteSendError> {
+        enqueue: crate::xmpp::outbound::RouteEnqueue,
+    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
         session.sender.try_send_route_item(enqueue)
     }
 
@@ -146,7 +146,7 @@ impl AppState {
         &self,
         jid: &str,
         stanza: &str,
-        delivery: Option<crate::outbound::DurableDelivery>,
+        delivery: Option<crate::xmpp::outbound::DurableDelivery>,
     ) -> bool {
         let mut delivered = false;
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
@@ -179,7 +179,7 @@ impl AppState {
         &self,
         jid: &str,
         stanza: &str,
-        delivery: Option<crate::outbound::DurableDelivery>,
+        delivery: Option<crate::xmpp::outbound::DurableDelivery>,
     ) -> OnlineRouteResult {
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
             for node_id in nodes {

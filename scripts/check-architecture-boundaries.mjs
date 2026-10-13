@@ -418,7 +418,7 @@ for (const [call, description] of [
 }
 if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
-    || !/"runtime-control-refresh",\s*crate::workers::WorkerCriticality::Critical,\s*crate::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
+    || !/"runtime-control-refresh",\s*crate::runtime::workers::WorkerCriticality::Critical,\s*crate::runtime::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
     || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRun)
     || /\bArc<AppState>\b/.test(runtimeControlContext)
     || !runtimeControlRun.includes('Duration::from_millis(500)')

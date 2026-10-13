@@ -2,8 +2,8 @@
 
 use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPolicy};
 use crate::{
-    config::ExternalRouteDomainPolicy,
     jid::{prepare_domainpart, CanonicalJid},
+    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
 };
 use dashmap::DashMap;

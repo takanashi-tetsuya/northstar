@@ -105,7 +105,9 @@ mod tests {
             full_jid: "alice@example.test/Phone".to_owned(),
             room_jid: "room@conference.example.test".to_owned(),
             nick: "Alice".to_owned(),
-            endpoint: MucOccupantEndpoint::Local(crate::outbound::OutboundSender::new(sender)),
+            endpoint: MucOccupantEndpoint::Local(crate::xmpp::outbound::OutboundSender::new(
+                sender,
+            )),
             affiliation: "member".to_owned(),
             role: "participant".to_owned(),
             room_non_anonymous: false,

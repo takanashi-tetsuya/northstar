@@ -27,7 +27,7 @@ pub struct OnlineSession {
     /// Pending routes may reserve a cluster key, but no stanza delivery path
     /// may expose the transport before the authoritative database commit.
     pub routable: Arc<AtomicBool>,
-    pub sender: crate::outbound::OutboundSender,
+    pub sender: crate::xmpp::outbound::OutboundSender,
     pub available: Arc<AtomicBool>,
     /// The protocol actor's exact available/unavailable epoch. Recovery
     /// replay must reject an unavailable/available ABA on this same route.
@@ -802,7 +802,7 @@ impl AppState {
         expected: &OnlineSession,
         user_id: uuid::Uuid,
         auth_generation: i64,
-        recipient: &crate::outbound::OutboundSender,
+        recipient: &crate::xmpp::outbound::OutboundSender,
         presence: &str,
     ) -> bool {
         let Some(current) = self.sessions.get(key) else {

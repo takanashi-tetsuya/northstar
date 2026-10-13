@@ -1,6 +1,6 @@
 //! Identity lookup and submission capabilities for report and appeal handlers.
 use crate::{
-    metrics::Metrics,
+    platform::metrics::Metrics,
     services::{
         api_queries::{ApiPrincipal, ApiQueryRepository, ApiQueryService},
         reports::{ReportEffect, ReportRepository, ReportService},

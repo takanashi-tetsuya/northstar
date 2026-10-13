@@ -50,7 +50,7 @@ fn live_sm_shutdown_write_receipt_does_not_cross_the_suspension_fence() {
     let (sender, mut outbound) = tokio::sync::mpsc::channel(2);
     let endpoint = SuspendedMucEndpoint::new_live(
         uuid::Uuid::new_v4(),
-        crate::outbound::OutboundSender::new(sender),
+        crate::xmpp::outbound::OutboundSender::new(sender),
     );
     let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
     assert!(endpoint
@@ -307,7 +307,7 @@ fn sm_snapshot(outbound_h: u32, unacked: &[&str]) -> crate::services::sm::SmSess
         last_presence: None,
         unacked: unacked
             .iter()
-            .map(|stanza| crate::outbound::SmUnackedStanza::plain((*stanza).to_owned()))
+            .map(|stanza| crate::xmpp::outbound::SmUnackedStanza::plain((*stanza).to_owned()))
             .collect(),
     }
 }
@@ -498,7 +498,7 @@ async fn disconnect_fence_survives_a_busy_checkpoint_buffer_without_clearing_it(
     let (raw_sender, _receiver) = tokio::sync::mpsc::channel(2);
     let endpoint = Arc::new(SuspendedMucEndpoint::new_live(
         uuid::Uuid::new_v4(),
-        crate::outbound::OutboundSender::new(raw_sender),
+        crate::xmpp::outbound::OutboundSender::new(raw_sender),
     ));
     let mut buffer = endpoint.buffer.lock().await;
     buffer.phase = SuspendedMucPhase::CheckpointOwned;
@@ -531,7 +531,7 @@ fn live_route_send_and_transition_share_one_linearization_fence() {
     let (raw_sender, mut receiver) = tokio::sync::mpsc::channel(2);
     let endpoint = Arc::new(SuspendedMucEndpoint::new_live(
         uuid::Uuid::new_v4(),
-        crate::outbound::OutboundSender::new(raw_sender),
+        crate::xmpp::outbound::OutboundSender::new(raw_sender),
     ));
     let barrier = Arc::new(std::sync::Barrier::new(2));
     std::thread::scope(|scope| {
@@ -869,7 +869,7 @@ fn test_muc_occupant(
         full_jid: full_jid.to_owned(),
         room_jid: "room@conference.example.test".to_owned(),
         nick: "Alice".to_owned(),
-        endpoint: MucOccupantEndpoint::Local(crate::outbound::OutboundSender::new(sender)),
+        endpoint: MucOccupantEndpoint::Local(crate::xmpp::outbound::OutboundSender::new(sender)),
         affiliation: "member".to_owned(),
         role: "participant".to_owned(),
         room_non_anonymous: true,
@@ -1321,7 +1321,8 @@ fn delayed_suspended_teardown_cannot_remove_resumed_connection() {
     ));
 
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
-    current.endpoint = MucOccupantEndpoint::Local(crate::outbound::OutboundSender::new(sender));
+    current.endpoint =
+        MucOccupantEndpoint::Local(crate::xmpp::outbound::OutboundSender::new(sender));
     current.connection_id = new_connection_id;
     assert_eq!(current.cluster_epoch, stale_teardown.cluster_epoch);
     assert!(!muc_suspended_teardown_identity_matches(

@@ -30,11 +30,12 @@ impl AppState {
 
     pub(crate) fn retention_context(
         &self,
-    ) -> crate::retention::RetentionContext<db::retention::PostgresMaintenanceRepository> {
-        crate::retention::RetentionContext::new(
+    ) -> crate::runtime::retention::RetentionContext<db::retention::PostgresMaintenanceRepository>
+    {
+        crate::runtime::retention::RetentionContext::new(
             db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
-            crate::retention::RetentionPolicy::from_config(&self.config),
-            crate::retention::RetentionCounters::from_metrics(&self.metrics),
+            crate::runtime::retention::RetentionPolicy::from_config(&self.config),
+            crate::runtime::retention::RetentionCounters::from_metrics(&self.metrics),
         )
     }
 
@@ -49,10 +50,10 @@ impl AppState {
 
     pub(crate) fn subscription_cleanup_context(
         &self,
-    ) -> crate::subscription_cleanup::SubscriptionCleanupContext<
+    ) -> crate::runtime::subscription_cleanup::SubscriptionCleanupContext<
         db::retention::PostgresMaintenanceRepository,
     > {
-        crate::subscription_cleanup::SubscriptionCleanupContext::new(
+        crate::runtime::subscription_cleanup::SubscriptionCleanupContext::new(
             db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
             Arc::clone(&self.metrics.subscription_cleanup),
         )
@@ -196,16 +197,16 @@ impl AppState {
             || self.registration_closed.load(Ordering::Acquire)
     }
 
-    pub(crate) fn registration_mode(&self) -> crate::config::RegistrationMode {
+    pub(crate) fn registration_mode(&self) -> crate::platform::config::RegistrationMode {
         if self.registration_is_closed() {
-            crate::config::RegistrationMode::Closed
+            crate::platform::config::RegistrationMode::Closed
         } else {
             self.config.configured_registration_mode()
         }
     }
 
     pub(crate) fn registration_requires_invitation(&self) -> bool {
-        self.registration_mode() == crate::config::RegistrationMode::InvitationOnly
+        self.registration_mode() == crate::platform::config::RegistrationMode::InvitationOnly
     }
 
     pub(crate) fn http_registration_availability(
@@ -215,11 +216,11 @@ impl AppState {
             Arc::clone(&self.registration_closed),
             self.config.registration_dependency_locked(),
             self.config.configured_registration_mode()
-                == crate::config::RegistrationMode::InvitationOnly,
+                == crate::platform::config::RegistrationMode::InvitationOnly,
         )
     }
 
-    pub(crate) fn worker_registry(&self) -> &Arc<crate::workers::WorkerRegistry> {
+    pub(crate) fn worker_registry(&self) -> &Arc<crate::runtime::workers::WorkerRegistry> {
         &self.workers
     }
 
@@ -249,7 +250,9 @@ impl AppState {
         &self.sm_memory_governor
     }
 
-    pub(crate) fn connection_actors(&self) -> &crate::connection_actors::ConnectionActorRegistry {
+    pub(crate) fn connection_actors(
+        &self,
+    ) -> &crate::runtime::connection_actors::ConnectionActorRegistry {
         &self.connection_actors
     }
 
@@ -319,7 +322,7 @@ impl AppState {
     /// Authenticated external-component ownership and wake-up authority.
     /// The registry exposes only owner-fenced operations; its concurrent map
     /// remains encapsulated inside the component subsystem.
-    pub(crate) fn component_registry(&self) -> &crate::components::ComponentRegistry {
+    pub(crate) fn component_registry(&self) -> &crate::s2s::components::ComponentRegistry {
         &self.components
     }
 
@@ -334,11 +337,13 @@ impl AppState {
             .collect()
     }
 
-    pub(crate) fn component_connect_credentials(&self) -> Vec<crate::config::ComponentCredential> {
+    pub(crate) fn component_connect_credentials(
+        &self,
+    ) -> Vec<crate::platform::config::ComponentCredential> {
         self.component_credentials
             .iter()
             .filter(|credential| {
-                credential.connection == crate::config::ComponentConnectionMode::Connect
+                credential.connection == crate::platform::config::ComponentConnectionMode::Connect
             })
             .cloned()
             .collect()
@@ -346,14 +351,14 @@ impl AppState {
 
     pub(crate) fn accepts_component_connections(&self) -> bool {
         self.component_credentials.iter().any(|credential| {
-            credential.connection == crate::config::ComponentConnectionMode::Accept
+            credential.connection == crate::platform::config::ComponentConnectionMode::Accept
         })
     }
 
     pub(crate) fn component_authentication_credential(
         &self,
         domain: &str,
-    ) -> Option<crate::config::ComponentCredential> {
+    ) -> Option<crate::platform::config::ComponentCredential> {
         let domain = crate::jid::prepare_domainpart(domain).ok()?;
         self.component_credentials
             .iter()
@@ -369,26 +374,28 @@ impl AppState {
     pub(crate) fn upload_maintenance_context(
         &self,
     ) -> Option<
-        crate::upload_worker::UploadMaintenanceContext<
+        crate::runtime::upload_worker::UploadMaintenanceContext<
             db::upload_maintenance::PostgresUploadMaintenanceRepository,
         >,
     > {
-        Some(crate::upload_worker::UploadMaintenanceContext::new(
-            db::upload_maintenance::PostgresUploadMaintenanceRepository::new(
-                self.upload_storage_pool.as_ref()?.clone(),
+        Some(
+            crate::runtime::upload_worker::UploadMaintenanceContext::new(
+                db::upload_maintenance::PostgresUploadMaintenanceRepository::new(
+                    self.upload_storage_pool.as_ref()?.clone(),
+                ),
+                Arc::clone(self.upload_store.as_ref()?),
+                crate::runtime::upload_worker::UploadMaintenancePolicy {
+                    max_pending_jobs: self.config.upload_storage_max_pending_jobs,
+                    max_retained_files: self.config.upload_storage_max_retained_files,
+                    max_retained_bytes: self.config.upload_storage_max_retained_bytes,
+                    retention_seconds: self.config.upload_retention_seconds,
+                    namespace_sha256: self.upload_storage_namespace_sha256,
+                    generation: self.upload_authority_generation,
+                },
+                Arc::clone(&self.upload_safety_gate),
+                Arc::clone(&self.upload_startup_audits),
+                Arc::clone(&self.metrics),
             ),
-            Arc::clone(self.upload_store.as_ref()?),
-            crate::upload_worker::UploadMaintenancePolicy {
-                max_pending_jobs: self.config.upload_storage_max_pending_jobs,
-                max_retained_files: self.config.upload_storage_max_retained_files,
-                max_retained_bytes: self.config.upload_storage_max_retained_bytes,
-                retention_seconds: self.config.upload_retention_seconds,
-                namespace_sha256: self.upload_storage_namespace_sha256,
-                generation: self.upload_authority_generation,
-            },
-            Arc::clone(&self.upload_safety_gate),
-            Arc::clone(&self.upload_startup_audits),
-            Arc::clone(&self.metrics),
-        ))
+        )
     }
 }

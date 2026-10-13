@@ -6,11 +6,11 @@ use super::{AppState, MucOccupant};
 use crate::cluster::ClusterMetricsProbe;
 use crate::db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository;
 use crate::s2s::S2sOutboundCountProbe;
+use crate::security::tls::TlsMetricsProbe;
 use crate::services::metrics_snapshot::{
     DatabaseMetricsSnapshot, DatabasePoolStatus, MetricsSnapshotService, ProcessGaugeSnapshot,
     SmRecoveryGaugeSnapshot,
 };
-use crate::tls::TlsMetricsProbe;
 use dashmap::DashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
@@ -37,7 +37,7 @@ pub(crate) struct MetricsContext {
 
 #[derive(Clone)]
 struct MetricsRenderProbe {
-    registry: Arc<crate::metrics::Metrics>,
+    registry: Arc<crate::platform::metrics::Metrics>,
 }
 
 /// Auditable count-only view of local MUC occupancy. The underlying map is

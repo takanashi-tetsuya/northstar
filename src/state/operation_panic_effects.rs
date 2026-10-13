@@ -1,7 +1,7 @@
 //! Local cancellation and durable teardown for committed panic-disconnect operations.
 
 use super::{session_cleanup_sm_revoker::SessionCleanupSmRevoker, AppState};
-use crate::operation_runtime::{panic_disconnect_with, LocalPanicDisconnectRoutes};
+use crate::runtime::operation_runtime::{panic_disconnect_with, LocalPanicDisconnectRoutes};
 use anyhow::Result;
 use serde_json::Value;
 

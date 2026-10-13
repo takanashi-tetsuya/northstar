@@ -6,7 +6,7 @@ use super::{AppState, OnlineSession};
 use crate::{
     cluster::{ClusterAdmission, ClusterReadinessAuthority, DirectPostCommitMode},
     db,
-    metrics::Metrics,
+    platform::metrics::Metrics,
     services::replay::{RecoveryReplayAuthority, ReplayService},
     xmpp::{capabilities::PostActionTelemetry, protocol::replay},
 };
@@ -450,7 +450,7 @@ mod tests {
             lifecycle: Arc::default(),
             metrics_counted: Arc::default(),
             routable: Arc::new(AtomicBool::new(true)),
-            sender: crate::outbound::OutboundSender::new(sender),
+            sender: crate::xmpp::outbound::OutboundSender::new(sender),
             available: Arc::new(AtomicBool::new(true)),
             availability_generation: Arc::new(AtomicU64::new(3)),
             post_actions: crate::xmpp::protocol::PostActionHandle::default(),

@@ -1,6 +1,6 @@
 //! Retention endpoints receive policy operations and their read timers.
 use crate::{
-    metrics::Metrics,
+    platform::metrics::Metrics,
     services::retention_policy::{
         RetentionPolicyError, RetentionPolicyRepository, RetentionPolicyService,
         UserRetentionPolicy,

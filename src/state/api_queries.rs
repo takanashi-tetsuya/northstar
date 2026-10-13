@@ -17,13 +17,13 @@ pub(super) struct ApiQueryRuntime {
     pub(super) node_id: String,
     pub(super) require_encrypted_archive: bool,
     pub(super) federation_configured: bool,
-    pub(super) configured_registration_mode: crate::config::RegistrationMode,
+    pub(super) configured_registration_mode: crate::platform::config::RegistrationMode,
     pub(super) registration_dependency_locked: bool,
     pub(super) registration_closed: Arc<AtomicBool>,
     pub(super) island_mode: Arc<AtomicBool>,
     pub(super) sessions: Arc<DashMap<String, OnlineSession>>,
     pub(super) occupants: Arc<DashMap<String, MucOccupant>>,
-    pub(super) metrics: Arc<crate::metrics::Metrics>,
+    pub(super) metrics: Arc<crate::platform::metrics::Metrics>,
     pub(super) started_at: Instant,
 }
 
@@ -88,7 +88,7 @@ impl<R: ApiQueryRepository> ApiQueryContext<R> {
     pub(crate) fn registration_requires_invitation(&self) -> bool {
         !self.registration_is_closed()
             && self.runtime.configured_registration_mode
-                == crate::config::RegistrationMode::InvitationOnly
+                == crate::platform::config::RegistrationMode::InvitationOnly
     }
     pub(crate) fn live_statistics(&self) -> LiveAdminStats {
         LiveAdminStats {
@@ -130,13 +130,13 @@ impl<R: ApiQueryRepository> ApiQueryContext<R> {
             .filter(|occupant| occupant.room_jid == room_jid)
             .count()
     }
-    pub(crate) fn authentication_timer(&self) -> crate::metrics::DurationTimer<'_> {
+    pub(crate) fn authentication_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
         self.runtime
             .metrics
             .authentication_duration_seconds
             .start_timer()
     }
-    pub(crate) fn database_timer(&self) -> crate::metrics::DurationTimer<'_> {
+    pub(crate) fn database_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
         self.runtime
             .metrics
             .database_operation_duration_seconds

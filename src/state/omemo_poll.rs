@@ -1,7 +1,7 @@
 //! Bounded public completion polling, independent of account session authority.
 use super::{admit_bounded_omemo_poll_ip, OMEMO_POLL_CONCURRENCY, OMEMO_POLL_MAX_ACTIVE_IPS};
 use crate::{
-    metrics::Metrics,
+    platform::metrics::Metrics,
     services::omemo_recovery::{
         OmemoRecoveryPollRepository, OmemoRecoveryPollService, OmemoRecoveryPollStatus,
     },

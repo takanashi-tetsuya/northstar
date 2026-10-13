@@ -7,7 +7,7 @@ use crate::{
         operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
         OperationLease,
     },
-    operation_runtime::LocalBroadcastTargetSnapshot,
+    runtime::operation_runtime::LocalBroadcastTargetSnapshot,
     services::{
         operation_effect_fence::OperationEffectFenceService,
         operation_journal_worker::OperationJournalWorkerService,

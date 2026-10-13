@@ -7,12 +7,12 @@ use crate::{
         background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
         challenge_issuance_repository::PostgresChallengeRepository,
     },
+    runtime::workers::WorkerHeartbeat,
     services::{
         admin_commands::AdminCommandService,
         background_housekeeping::{BackgroundHousekeepingContext, BackgroundHousekeepingCounters},
         challenge_issuance::ChallengeCleanupService,
     },
-    workers::WorkerHeartbeat,
 };
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;

@@ -1,7 +1,7 @@
 //! Local session effects for committed administrator operations.
 
 use super::AppState;
-use crate::operation_runtime::{
+use crate::runtime::operation_runtime::{
     LocalBroadcastRoutes, LocalGenerationCleanupRoutes, LocalSessionKickRoutes,
 };
 use anyhow::Result;

@@ -531,9 +531,45 @@ for (const relativePath of markdownDocuments) {
   }
 }
 
+// S4 moved these root modules into layer directories (see section 5.2 of
+// docs/architecture/engineering-structure.zh-TW.md, which records the moves).
+// Current documents name the new paths; dated records under evidence/, archive/,
+// handoff/, changelog/ and releases/ keep the paths of their time, and links
+// pinned to a commit keep that commit's paths.
+const retiredRootModules = [
+  'abuse', 'account_recovery', 'capacity_maintenance', 'cluster_security', 'components',
+  'config', 'connection_actors', 'crl', 'error', 'identity_audit', 'logging',
+  'mam_pubsub_parsing', 'metrics', 'ocsp', 'operation_runtime', 'outbound', 'password_work',
+  'pie', 'retention', 'subscription_cleanup', 'subservers', 'test_activation', 'tls',
+  'transport_parsing', 'upload_worker', 'workers',
+];
+const retiredRootPath = new RegExp(
+  `(?<![\\w/.-])src/(?:${retiredRootModules.join('|')})(?:\\.rs\\b|/)`,
+);
+const crateMigrationNotes = fs
+  .readdirSync(path.join(root, 'crates'))
+  .map((name) => `crates/${name}/MIGRATION.md`)
+  .filter((relativePath) => fs.existsSync(path.join(root, relativePath)));
+let currentPathDocuments = 0;
+for (const relativePath of [...markdownDocuments, ...crateMigrationNotes]) {
+  if (/^docs\/(?:evidence|archive|handoff|changelog|releases)\//.test(relativePath)) continue;
+  if (['CHANGELOG.md', 'docs/architecture/engineering-structure.zh-TW.md'].includes(relativePath)) {
+    continue;
+  }
+  const source = read(relativePath)
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/(?:\.\.\/)+src\//g, 'src/');
+  const retired = source.match(retiredRootPath);
+  if (retired) {
+    throw new Error(`${relativePath} names ${retired[0]}, a root module path retired by S4`);
+  }
+  currentPathDocuments += 1;
+}
+
 console.log(
   `Documentation consistency checks passed: ${matrixRows} protocol rows and ` +
     `${markdownDocuments.length} Markdown documents checked; ` +
     `${currentIssueIds.size} current known issues validated, ${tracedIssues.size} trace rows and ` +
-    `${tracedCoreStandards.size} Core profiles traced; current migration ${currentMigration}`,
+    `${tracedCoreStandards.size} Core profiles traced; current migration ${currentMigration}; ` +
+    `${currentPathDocuments} current documents free of retired root paths`,
 );

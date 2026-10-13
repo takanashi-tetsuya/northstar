@@ -154,7 +154,7 @@ The following gates passed on 2026-08-26:
 - production-secret generation, ownership and mode regression tests as WSL
   root; and
 - tracked-secret scanning (the only private-key-shaped text is an intentional
-  invalid test fixture in `src/tls.rs`).
+  invalid test fixture in `src/security/tls.rs`).
 
 The isolated PostgreSQL suite additionally passed:
 

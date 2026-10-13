@@ -246,23 +246,23 @@ Key ownership:
   still need narrower runtime authority; zero public state fields do not prove
   every caller is scoped.
 - `src/s2s/` owns discovery, DANE, TLS, EXTERNAL/Dialback and durable delivery.
-- `src/components.rs` isolates component domain authority and outbox handling.
+- `src/s2s/components.rs` isolates component domain authority and outbox handling.
 - `src/bosh.rs` and the WebSocket path adapt HTTP framing to the same
   `ProtocolSession` state machine.
 - `northstar-delivery-core::OrderedOutboundSink` separates session ordering
   from the Tokio queue adapter. A rejected or stale item is returned to its
   durable owner, and only the adapter owns channel/cancellation primitives.
-- `src/abuse.rs` owns PostgreSQL-backed PoW/rate/message-admission policy.
+- `src/security/abuse.rs` owns PostgreSQL-backed PoW/rate/message-admission policy.
 - `src/cluster.rs` owns optional Redis leases/PubSub, the node/delivery-contract
   protocol v13 and its explicit degraded state machine;
-  `src/cluster_security.rs` independently owns the signed Ed25519 envelope
+  `src/cluster/security.rs` independently owns the signed Ed25519 envelope
   format v8, node ACLs and replay binding; `src/db/cluster_keys.rs` owns
   non-secret key generations and key-bound process-instance leases. Redis
   locates live sockets and carries authenticated cross-node commands but is
   never authoritative.
   PostgreSQL retains the security fences, storage-eligible direct-message
   spools and durable queues listed below.
-- `src/api/` and `src/operation_runtime.rs` own REST authorization,
+- `src/api/` and `src/runtime/operation_runtime.rs` own REST authorization,
   idempotency, bounded operations and ambiguous-effect handling.
 - `web/omemo.js` owns browser endpoint cryptography; the server never receives
   its private device/session keys.

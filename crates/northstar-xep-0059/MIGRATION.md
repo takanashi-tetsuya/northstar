@@ -28,7 +28,7 @@ orthstar-xep-0059 |
 | :--- | :--- | :--- | :--- |
 | crates/northstar-xep-0060/src/rsm.rs | RsmRequest, RsmResponse, parse_rsm_element, uild_rsm_set, paginate_items | Temporary internal PubSub copy. Hardcoded MAX_RSM_PAGE_SIZE = 1_000 and MAX_RSM_INDEX = 1_000_000. Direct mapping to PubSubError. | 
 orthstar_xep_0059::{RsmRequest, RsmResponse, parse_rsm_element, build_rsm_set, paginate_items, RsmBounds::PUBSUB} |
-| src/mam_pubsub_parsing.rs | parse_mam_rsm, parse_pubsub_rsm, MamRsmPage, PubSubRsmRequest | Dual parser implementation for MAM (100 item cap) and PubSub (1000 item cap). Handled string errors (bad-request, resource-constraint). | 
+| src/xmpp/mam_pubsub_parsing.rs | parse_mam_rsm, parse_pubsub_rsm, MamRsmPage, PubSubRsmRequest | Dual parser implementation for MAM (100 item cap) and PubSub (1000 item cap). Handled string errors (bad-request, resource-constraint). | 
 orthstar_xep_0059::{parse_rsm_element_with_bounds, RsmBounds::MAM, RsmBounds::PUBSUB, PagingDirective} |
 | src/xmpp/protocol/discovery.rs | DiscoItemsRequest, parse_disco_items_request, disco_rsm_result | Ad-hoc RSM parser embedded in disco logic with 100 max cap. Standalone string builder disco_rsm_result_element. | 
 orthstar_xep_0059::{parse_rsm_from_parent_with_bounds, build_rsm_set, RsmBounds::DISCOVERY} |
@@ -104,7 +104,7 @@ orthstar-xep-0059 = { path = ../northstar-xep-0059 } to crates/northstar-xep-006
    - In crates/northstar-xep-0060/src/rsm.rs, re-export or alias types from 
 orthstar_xep_0059.
 
-3. **src/mam_pubsub_parsing.rs**:
+3. **src/xmpp/mam_pubsub_parsing.rs**:
    - Replace internal parse_mam_rsm and parse_pubsub_rsm with 
 orthstar_xep_0059::parse_rsm_element_with_bounds(&RsmBounds::MAM) and &RsmBounds::PUBSUB.
    - Replace PubSubRsmRequest with 

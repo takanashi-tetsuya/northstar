@@ -125,9 +125,9 @@ are migrated independently:
 | `src/auth.rs`, `src/scram.rs` | `northstar-auth-core` | account lookup, password-work admission, credential persistence and TLS facts |
 | `src/jid.rs` | `northstar-xmpp-types` | route authorization and external effects |
 | `src/xmpp/framing.rs` | `northstar-xml-framing` | transport buffers, deadlines and socket closure |
-| `src/abuse.rs` | `northstar-abuse-policy` | actor-state storage, database locks, clock, randomness and challenge lifecycle |
+| `src/security/abuse.rs` | `northstar-abuse-policy` | actor-state storage, database locks, clock, randomness and challenge lifecycle |
 | `src/xmpp/protocol/*` | matching XEP crates | authentication, application authorization, transactions, delivery and error mapping |
-| `src/api/mod.rs`, `src/config.rs`, `src/main.rs` | `northstar-web-surface` | listener binding, Axum routing, static assets and supervised task lifetime |
+| `src/api/mod.rs`, `src/platform/config.rs`, `src/main.rs` | `northstar-web-surface` | listener binding, Axum routing, static assets and supervised task lifetime |
 
 A facade must delegate security-sensitive pure logic; it may not keep a second
 implementation. Architecture checks are updated when ownership legitimately

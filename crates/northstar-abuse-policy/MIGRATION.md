@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary & Purpose
 
-`northstar-abuse-policy` is a capability-free, deterministic Rust library crate extracted from `src/abuse.rs` and related anti-abuse configuration in `src/config.rs`. It encapsulates pure cryptographic PoW binding algorithms, $n^2$ computational work escalation, exponential cooldown schedules, sliding-window state transition functions, and rate admission decisions for the Northstar XMPP server.
+`northstar-abuse-policy` is a capability-free, deterministic Rust library crate extracted from `src/security/abuse.rs` and related anti-abuse configuration in `src/platform/config.rs`. It encapsulates pure cryptographic PoW binding algorithms, $n^2$ computational work escalation, exponential cooldown schedules, sliding-window state transition functions, and rate admission decisions for the Northstar XMPP server.
 
 ### Crate Specifications
 - **Package Name**: `northstar-abuse-policy`
@@ -71,8 +71,8 @@ The following call sites in `src/` reference abuse functionality and will transi
 
 | Caller File | Referenced Symbols | Adapter / Usage Description |
 |---|---|---|
-| `src/abuse.rs` | `AbuseGuard`, `AbuseConfig`, `AbuseAction`, `PowIntent`, `PowProof`, `PowChallenge`, `WorkRequirement`, `MessageAdmissionRequest`, etc. | Core server adapter containing PostgreSQL transaction handling, in-memory DashMap caches, and background cleanup jobs. |
-| `src/config.rs` | `pow_base_work_factor`, `pow_max_work_factor`, `abuse_window_seconds`, `abuse_cooldown_seconds`, `abuse_max_wait_seconds`, `abuse_message_free_burst`, `pow_max_device_seconds` | Configuration validation rules enforcing positive intervals and work bounds. |
+| `src/security/abuse.rs` | `AbuseGuard`, `AbuseConfig`, `AbuseAction`, `PowIntent`, `PowProof`, `PowChallenge`, `WorkRequirement`, `MessageAdmissionRequest`, etc. | Core server adapter containing PostgreSQL transaction handling, in-memory DashMap caches, and background cleanup jobs. |
+| `src/platform/config.rs` | `pow_base_work_factor`, `pow_max_work_factor`, `abuse_window_seconds`, `abuse_cooldown_seconds`, `abuse_max_wait_seconds`, `abuse_message_free_burst`, `pow_max_device_seconds` | Configuration validation rules enforcing positive intervals and work bounds. |
 | `src/state.rs` | `AbuseGuard::new_persistent_for_deployment`, `AbuseConfig` | Server runtime state initialization and key mounting. |
 | `src/db/abuse_keys.rs` | `AbuseKeyDeploymentIdentity`, `reconcile_abuse_key_deployment`, `minimum_key_rotation_overlap` | Database deployment authority for rotating HMAC keys and fencing legacy generations. |
 | `src/db/api_control.rs` | `AbuseConfig` | Test fixtures for API control rate limiting. |
@@ -99,7 +99,7 @@ During structural extraction, the following legacy formula behaviors and design 
    - *Resolution*: Preserved exactly in `ActorDimension::is_shared_ip` and `requirement_from_snapshots`.
 
 3. **In-Memory vs. Persistent Authority Divergence**:
-   - Legacy `src/abuse.rs` implemented two parallel paths: an in-memory `Instant` + `DashMap` mode for unit tests and a persistent `chrono::DateTime<Utc>` + PostgreSQL mode for production.
+   - Legacy `src/security/abuse.rs` implemented two parallel paths: an in-memory `Instant` + `DashMap` mode for unit tests and a persistent `chrono::DateTime<Utc>` + PostgreSQL mode for production.
    - *Resolution*: `northstar-abuse-policy` unifies deterministic state transitions using injected timestamps (`chrono::DateTime<Utc>` or `Duration`), allowing the same pure logic to be used across unit tests, memory caches, and PostgreSQL persistence adapters.
 
 4. **Prefetched Message Challenge Relaxation**:
@@ -124,4 +124,4 @@ During structural extraction, the following legacy formula behaviors and design 
    ```toml
    northstar-abuse-policy = { path = "crates/northstar-abuse-policy" }
    ```
-4. Refactor `src/abuse.rs` into a pure adapter layer that delegates calculations, intent validation, and state snapshots to `northstar_abuse_policy`.
+4. Refactor `src/security/abuse.rs` into a pure adapter layer that delegates calculations, intent validation, and state snapshots to `northstar_abuse_policy`.

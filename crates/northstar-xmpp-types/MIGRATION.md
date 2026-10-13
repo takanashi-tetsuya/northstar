@@ -84,12 +84,12 @@ The following modules and crates directly depend on JID canonicalization and par
 
 1. **Authentication & Identity**:
    - `src/auth.rs`: SASL PLAIN / SCRAM authorization identity (`authzid`) and authentication identity (`authcid`) normalization.
-   - `src/account_recovery.rs`: Address validation for recovery tokens.
+   - `src/security/account_recovery.rs`: Address validation for recovery tokens.
    - `src/db/authorization_identity.rs`: Canonical bare JID extraction.
 
 2. **Cluster & Routing**:
    - `src/cluster.rs`: Inter-node packet routing and session targets.
-   - `src/components.rs`: External component domain routing.
+   - `src/s2s/components.rs`: External component domain routing.
 
 3. **HTTP API Surfaces**:
    - `src/api/admin.rs`: MUC room destroy/query JID normalization.

@@ -15,7 +15,7 @@ secret values, extended data forms and deterministic selection plans.
 | `src/xmpp/protocol/extdisco.rs::parse_credential_requests` | canonical `CredentialsRequest` parsing and bounds |
 | `src/xmpp/protocol/extdisco.rs::service_element` | safe public, push and credential response builders |
 | `src/services/extdisco.rs` | remains the provider adapter for rate limits, time and TURN credential derivation |
-| `src/config.rs` STUN/TURN records | application adapter converts validated configuration to `PublicService` |
+| `src/platform/config.rs` STUN/TURN records | application adapter converts validated configuration to `PublicService` |
 
 ## Authority boundary
 

@@ -14,7 +14,7 @@ replacement/delete decision.
 | `src/xmpp/xml_util.rs::validate_stanza_ids` | `wire::parse_message` and strict element parsers |
 | `src/xmpp/xml_util.rs::add_stanza_id` | `builder::build_stanza_id` plus `policy::plan_authority_update` |
 | `src/xmpp/xml_util.rs::strip_stanza_ids_by_domain` | server adapter selects the canonical assigning entity and applies the typed authority plan |
-| `src/abuse.rs` origin identity material | `DeduplicationKey::Origin`; hashing and persistent replay admission remain server authorities |
+| `src/security/abuse.rs` origin identity material | `DeduplicationKey::Origin`; hashing and persistent replay admission remain server authorities |
 | archive/MUC/MIX/S2S stable IDs | `DeduplicationKey::Authoritative`; UUID allocation and durable projection remain application-service authorities |
 
 ## Authority boundary

@@ -18,13 +18,13 @@ This document records the extraction of pure XEP-0313 Message Archive Management
 
 | Legacy Source Location | Legacy Symbol / Function | New Crate Location | Architectural Description |
 | :--- | :--- | :--- | :--- |
-| `src/mam_pubsub_parsing.rs` & `src/xmpp/protocol/mam.rs` | `MAM_NS`, `RSM_NS`, `MAX_MAM_RESULTS`, bounds | `constants.rs` | Protocol namespaces (`XMLNS_MAM`, `XMLNS_RSM`, `XMLNS_DATA`, `XMLNS_FORWARD`, `XMLNS_DELAY`, `XMLNS_SID`), bounds (`MAX_MAM_RESULTS`, `MAX_MAM_IDS`, `MAX_MAM_RSM_INDEX`, `MAX_PREFS_JIDS`, `MAX_QUERY_ID_BYTES`, `MAX_ARCHIVE_ID_BYTES`), and static `DESCRIPTOR: ExtensionDescriptor`. |
-| `src/mam_pubsub_parsing.rs` & `src/xmpp/protocol/mam.rs` | `Result<T, &'static str>` error conditions | `error.rs` | Typed `MamError` enum with automated RFC 6120 error condition (`as_stanza_error_condition`) and type categorization (`stanza_error_type`). |
-| `src/mam_pubsub_parsing.rs` | `parse_archive_id`, `MamRsmPage`, `ParsedMamQuery` | `query.rs` | Typed domain models `ArchiveId` (UUID validation & canonicalization), `UtcTimestamp` (pure RFC 3339 parsing and conversion), `MamRsmPage`, `MamFilter`, and `MamQuery`. |
+| `src/xmpp/mam_pubsub_parsing.rs` & `src/xmpp/protocol/mam.rs` | `MAM_NS`, `RSM_NS`, `MAX_MAM_RESULTS`, bounds | `constants.rs` | Protocol namespaces (`XMLNS_MAM`, `XMLNS_RSM`, `XMLNS_DATA`, `XMLNS_FORWARD`, `XMLNS_DELAY`, `XMLNS_SID`), bounds (`MAX_MAM_RESULTS`, `MAX_MAM_IDS`, `MAX_MAM_RSM_INDEX`, `MAX_PREFS_JIDS`, `MAX_QUERY_ID_BYTES`, `MAX_ARCHIVE_ID_BYTES`), and static `DESCRIPTOR: ExtensionDescriptor`. |
+| `src/xmpp/mam_pubsub_parsing.rs` & `src/xmpp/protocol/mam.rs` | `Result<T, &'static str>` error conditions | `error.rs` | Typed `MamError` enum with automated RFC 6120 error condition (`as_stanza_error_condition`) and type categorization (`stanza_error_type`). |
+| `src/xmpp/mam_pubsub_parsing.rs` | `parse_archive_id`, `MamRsmPage`, `ParsedMamQuery` | `query.rs` | Typed domain models `ArchiveId` (UUID validation & canonicalization), `UtcTimestamp` (pure RFC 3339 parsing and conversion), `MamRsmPage`, `MamFilter`, and `MamQuery`. |
 | `src/xmpp/protocol/mam.rs` & `src/db/archive.rs` | `MamPreferences`, `parse_mam_preferences`, `archive_allowed` | `prefs.rs` | Typed `DefaultPolicy` and `MamPreferences` with strict disjointness validation, canonical JID preparation, and capability-free pure decision evaluation (`evaluate_preference`, `evaluate_preference_with_canonical`). |
 | `src/xmpp/protocol/mam.rs` & `src/db/archive.rs` | `ArchiveRow`, `ArchivePage`, `ArchiveBoundary` | `result_fin.rs` | Capability-free wire representations `MamResult`, `MamFin`, `MamMetadataBoundary`, and `MamMetadata`. |
 | `src/xmpp/xml_util.rs` & `src/xmpp/protocol/mam.rs` | `mam_extended_form`, `mam_preferences_xml`, `add_stanza_id`, fin/result building | `builder.rs` | Safe XML builders for data forms (`build_extended_form`), metadata (`build_metadata`), preferences (`build_preferences`), forwarded wrapper (`build_forwarded`), results (`build_result_payload`, `build_result_message`), and fin envelopes (`build_fin`, `build_fin_from_model`). Pure `reassert_archive_stanza_id` strips forged account claims and asserts authoritative stanza-id. |
-| `src/mam_pubsub_parsing.rs` & `src/xmpp/protocol/mam.rs` | `parse_mam_query`, `parse_mam_form`, `parse_mam_rsm`, `parse_mam_preferences`, `empty_mam_command` | `parser.rs` | Deterministic, strictly bounded XML parsers for queries, forms, preferences, metadata, fin responses, and empty GET commands. RSM envelopes are delegated to `northstar-xep-0059`. |
+| `src/xmpp/mam_pubsub_parsing.rs` & `src/xmpp/protocol/mam.rs` | `parse_mam_query`, `parse_mam_form`, `parse_mam_rsm`, `parse_mam_preferences`, `empty_mam_command` | `parser.rs` | Deterministic, strictly bounded XML parsers for queries, forms, preferences, metadata, fin responses, and empty GET commands. RSM envelopes are delegated to `northstar-xep-0059`. |
 | (Internal server utility) | XML text & attribute escaping | `xml.rs` | Lightweight XML building primitives (`XmlElement`, `escape_xml_text`, `escape_xml_attr`, `attr_escape`, `xml_escape`, `validate_qname`). |
 
 ---
@@ -74,7 +74,7 @@ This document records the extraction of pure XEP-0313 Message Archive Management
 During the server root integration phase, the following steps will link the server handlers to `northstar-xep-0313`:
 
 1. **Workspace Registration**: Add `"crates/northstar-xep-0313"` to the root `Cargo.toml` workspace members list and remove `[workspace]` from `crates/northstar-xep-0313/Cargo.toml`.
-2. **Import Replacement**: Replace internal MAM protocol types in `src/xmpp/protocol/mam.rs` and `src/mam_pubsub_parsing.rs` with `northstar_xep_0313::*`.
+2. **Import Replacement**: Replace internal MAM protocol types in `src/xmpp/protocol/mam.rs` and `src/xmpp/mam_pubsub_parsing.rs` with `northstar_xep_0313::*`.
 3. **Handler Adapter**: Refactor MAM IQ handlers to:
    - Call `parse_mam_query`, `parse_mam_preferences`, and `is_empty_mam_command`.
    - Use `evaluate_preference` in message pipeline filters.
@@ -85,7 +85,7 @@ During the server root integration phase, the following steps will link the serv
 ## 7. Known Correction Debt & Legacy Inconsistencies
 
 1. **UUID Format Strictness vs Opaque Archive IDs**:
-   - XEP-0313 specifies that archive IDs are opaque string tokens. In Northstar's Postgres backend, archive IDs are 128-bit UUIDs stored as UUID columns and formatted as standard 36-character hyphenated hexadecimal strings. Legacy `src/mam_pubsub_parsing.rs` used `Uuid::parse_str(value).map_err(|_| "item-not-found")`. `northstar-xep-0313::ArchiveId` preserves this exact validation behavior, normalizing to lowercase hex and returning `MamError::ItemNotFound` on invalid syntax.
+   - XEP-0313 specifies that archive IDs are opaque string tokens. In Northstar's Postgres backend, archive IDs are 128-bit UUIDs stored as UUID columns and formatted as standard 36-character hyphenated hexadecimal strings. Legacy `src/xmpp/mam_pubsub_parsing.rs` used `Uuid::parse_str(value).map_err(|_| "item-not-found")`. `northstar-xep-0313::ArchiveId` preserves this exact validation behavior, normalizing to lowercase hex and returning `MamError::ItemNotFound` on invalid syntax.
 2. **Whitespace in JID Filters**:
    - In legacy XML parsing, leading or trailing whitespace around a JID in `<field var='with'><value> alice@example.test </value></field>` caused `jid-malformed` errors because PRECIS username profiles disallow surrounding whitespace. `northstar-xep-0313` strictly preserves this behavior through `northstar-xmpp-types`.
 3. **Empty vs Missing Preference Lists**:

@@ -86,12 +86,12 @@ The framing logic extracted into this crate is consumed by all XMPP transport me
    - Enforces structural limits (`MAX_XML_DEPTH`, `MAX_XML_ELEMENTS`, `MAX_XML_ATTRIBUTES_PER_ELEMENT`) before stanza parsing.
    - Maps framing errors directly to S2S stream error closures.
 
-3. **RFC 7395 WebSocket Transport (`src/transport_parsing.rs`, `src/xmpp/mod.rs`)**:
+3. **RFC 7395 WebSocket Transport (`src/xmpp/transport_parsing.rs`, `src/xmpp/mod.rs`)**:
    - Parses RFC 7395 text frames containing `<open/>`, `<close/>`, and standalone stanzas.
    - Uses `framer.reset_pending_frame()` between distinct WebSocket text frames to prevent scan state bleed-through if a malformed message is encountered, while preserving XML declaration entity history.
    - Validates single-frame boundaries and whitespace padding using `is_xml_whitespace`.
 
-4. **BOSH / HTTP Binding (`src/transport_parsing.rs`)**:
+4. **BOSH / HTTP Binding (`src/xmpp/transport_parsing.rs`)**:
    - Validates XML entity framing and ensures request bodies contain well-formed `<body/>` wrapper frames without exceeding resource ceilings.
 
 5. **HTTP Upload & S2S DNS Framing Verification (`src/api/upload.rs`, `src/s2s/dns.rs`)**:

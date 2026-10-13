@@ -74,6 +74,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | R5 證據不可改寫 | `scripts/fixtures/**/historical*`、`docs/evidence/**` 與已記錄的 Stage 證據不得因結構工作修改；Stage 4 工具以 SHA-256 綁定內容的原始碼也逐位元組不變，搬移與路徑改寫都略過它們 | 審閱；被綁定的 `src/` 檔案（`bosh/response_owner.rs`、`stage4_replay.rs`、`stage4_replay/compact.rs` 與 16 個 `stage4_replay/fixtures/S*.json`）列於 `catalog/source-structure-baseline.json` 的 `pinned`，由 `scripts/check-source-structure.mjs` 比對 |
 | R6 測試專用碼 | 受控重播與實驗程式只能存在於 `#[cfg(test)]` 模組 | 既有門禁＋審閱 |
 | R7 提交 | 一個 WP 一至數個提交，訊息首行以 `[WP-xx]` 開頭；不推 WIP | 審閱 |
+| R8 文件不留舊路徑 | 現行文件與 `crates/*/MIGRATION.md` 不得寫 S4 已移走的根目錄模組路徑（含 `../src/` 與目錄形式）；有日期的紀錄（`docs/` 下的 `evidence`、`archive`、`handoff`、`changelog`、`releases` 與 `CHANGELOG.md`）、本文與固定提交的連結保留當時的路徑 | `scripts/check-documentation-consistency.mjs` |
 
 ## 5. 工作包順序
 
@@ -88,7 +89,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | S3 測試歸位 | WP-3x | 7 個根目錄測試檔移入受測模組（WP-32 搬 cluster 四個與 abuse 一個；`shutdown_notification_tests.rs` 測的是 `main.rs` 的關機監督，`test_activation.rs` 是只因檔名被歸為測試的正式模組，兩者改在 S4 隨 `main.rs` 的程式碼搬入 `src/runtime/` 時歸位） | 測試數量與名稱集合不變 |
 | S4 根目錄分層 | WP-4x | 依 3.1 分組搬動，最後移除舊路徑轉出（分組、規則與綁定見 5.2） | `src/` 根目錄只剩 `main.rs` 與各層目錄宣告；5.2 列出的保留檔除外 |
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
-| S6 文件收斂 | WP-6x | 修正 KNOWN_ISSUES 的 migration 數、README 的發佈敘述、HANDOFF 現況；`docs/README.md` 建立狀態地圖 | 文件一致性門禁通過 |
+| S6 文件收斂 | WP-61–63 | 修正 KNOWN_ISSUES 的遷移鏈敘述與 README 的發佈敘述（WP-61）；HANDOFF 改為只記錄其他文件沒有的現況，`docs/README.md` 建立狀態地圖（WP-62）；現行文件與 `crates/*/MIGRATION.md` 改用分層路徑，`resource-bounds` 的原始碼連結固定到審閱提交（WP-63） | 文件一致性門禁通過，並檢查遷移鏈敘述、狀態地圖與舊路徑（R8）。已完成 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -118,7 +119,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 因此指向被搬檔案的連結（`docs/TRACEABILITY.md` 18 處、`docs/architecture/resource-bounds.zh-TW.md`
 6 處）也是路徑綁定，在同一 WP 改寫。這項綁定在 WP-41 的完整 CI 才發現，之後改以掃描全部連結的
 腳本盤點，結果列入下表。只在內文提到的舊路徑（`docs/` 與 `crates/*/MIGRATION.md`），以及
-`resource-bounds` 連結上已過時的行號錨點，留到 S6 一併修正。tracing 事件的預設 target 是模組路徑，
+`resource-bounds` 連結上已過時的行號錨點，由 S6 的 WP-63 修正。tracing 事件的預設 target 是模組路徑，
 搬移後會改變（例如 `rust_xmpp_server::tools::pie`）；`RUST_LOG` 設定、WSL 腳本與文件只篩選不搬移
 的模組（`cluster`、`s2s::inbound`、`xmpp::…`），因此不受影響。
 
@@ -247,6 +248,9 @@ WP 規格固定包含：目標、允許修改的檔案、不得改變的語義�
 | [重建帳本](experimental-rebuild-plan.zh-TW.md) | Stage 0–6 受控驗證；結構 WP 不改寫其證據，未來 record 須用新來源契約 |
 | [已知問題](../KNOWN_ISSUES.md) | 產品限制與發布門禁 |
 
+版本、資料庫遷移、XEP 支援、需求追溯與交接等其他狀態的權威文件，列在 `docs/README.md` 的
+[狀態地圖](../README.md#status-map)。
+
 結構搬動會使綁定舊路徑與雜湊的受控 record 合約失效；這只影響之後的新 record，已保存的
 Stage 證據仍綁定其原提交。
 
@@ -300,3 +304,4 @@ Stage 證據仍綁定其原提交。
 | WP-49 | 完成，兩個提交，處理 S2–S4 留下的三個後續項目。`check-subserver-boundaries.mjs` 盤點結構欄位的正規表示式只接受 `pub` 與 `pub(crate)`，宣告為 `pub(super)` 或 `pub(in …)` 的欄位不列入盤點，新增欄位可繞過能力清單；改為接受任何 `pub(…)`，現有四個結構沒有這類欄位，結果不變，自測增加 2 個。`xmpp/protocol/mix/session.rs` 中 `push_mix_roster_update` 上方的註解描述的是 MIX 投遞工作者（從拆分前的 `mix.rs` 帶來），改為描述函式本身。`check-move-only.mjs` 把只含一個運算式的 match 分支區塊視同去掉區塊的寫法（rustfmt 隨縮排在兩者間切換，見第 6 節），有頂層 `;`、註解或開頭屬性的區塊與空區塊照原樣比較；WP-26 以 `--after-rev` 重新稽核由不同（1／1）變為相同，其他拆分 WP 的稽核結果不變，自測增加 1 個。agy 依 8 處精確替換產出，結果逐位元組相同；架構負責人審閱探針後在自測補 3 行守衛斷言（合法 Rust 的比較無法區分有無 `;` 守衛）。9 個反例都失敗：兩個受限可見性的新欄位（門禁）、舊正規表示式（自測）、不展開區塊（自測與 WP-26 稽核）、拿掉 `;`／註解／屬性／空區塊守衛（自測） | 見 `git log --grep '\[WP-49\]'` |
 | WP-61 | 完成：`KNOWN_ISSUES.md` 開頭的遷移鏈敘述由 `0001`–`0156`／155 項改為 `0001`–`0158`／157 項。這句話在 9/29 的審計中已漂移過一次，因此文件一致性門禁改由 `migrations/` 推導範圍、數量與刻意缺號（現為 `0021`），忽略空白後逐字比對；新增 migration 或出現新缺號而沒有同步這句話時失敗。`README.md` 與 `docs/README.zh-TW.md` 的發行套件段落原寫「維護者發佈後提供」，改為已發佈（`v0.2.0` 於 2026-09-20 發佈），保留 tag workflow 先建草稿、審閱後才發佈的說明；發佈狀態無法離線驗證，不加門禁。agy 依 5 處精確替換產出，結果逐位元組相同；5 個反例（舊範圍、舊數量、缺少缺號、新增 migration 並同步四份操作文件的連結、移走一個 migration）都由新檢查抓到 | 見 `git log --grep '\[WP-61\]'` |
 | WP-62 | 完成：`docs/HANDOFF.md` 停在 2026-09-29（等待是否重跑浸泡），以 `git mv` 移為 `docs/handoff/2026-09-29/HANDOFF.md`，開頭註明為歷史快照並連到現行交接，8 個相對連結多兩層 `../`。新的 `docs/HANDOFF.md` 只記錄不屬於其他權威文件的現況（分支與推送、本機 VM 實驗室、接手步驟），其餘只連結；VM 狀態（六台 shut off、沒有 `northstar*` user unit、私有證據沒有 9/29 之後的浸泡紀錄）於 2026-10-13 核對。`docs/README.md` 新增狀態地圖，列出九類狀態各自的權威文件（第 1 節第 5 項），`src/` 一列連到本文。文件一致性門禁要求狀態地圖存在並連結這九個權威來源，且現行交接連結狀態地圖。agy 依 10 處精確替換與 1 個新檔產出，結果逐位元組相同；6 個反例（缺少地圖標題、地圖缺交接或本文、migrations 連結移出地圖、交接不連結地圖、移動後的交接保留舊相對連結）都失敗 | 見 `git log --grep '\[WP-62\]'` |
+| WP-63 | 完成：WP-48 留下只在內文提到的舊路徑（見 5.2）。15 份文件（`docs/` 6 份與 9 份 `crates/*/MIGRATION.md`）中 48 處根目錄模組路徑改為分層路徑（`cluster_security` 改為 `src/cluster/security.rs`）。`docs/architecture/resource-bounds.zh-TW.md` 的 23 個原始碼連結帶著審閱時的行號，搬移後已不對應；改為固定到審閱提交 `f1e4f83` 的 GitHub 永久連結（四個已搬移的檔案用該提交的舊路徑），並註明行號屬於該提交。文件一致性門禁新增第 4 節 R8：現行文件與 MIGRATION.md 寫出 26 個已移走模組的根目錄路徑（含 `../src/` 與目錄形式）時失敗；有日期的紀錄、`CHANGELOG.md`、本文與 `http(s)` 連結略過，摘要行加上通過的文件數。agy 依 5 份規格共 41 處精確替換產出（內容過濾器限制每份規格的敏感詞數，`northstar-abuse-policy` 另拆兩份）；`northstar-xep-0059/MIGRATION.md` 少了檔首 BOM，由架構負責人補回，其餘逐位元組相同（預期檔原本漏了該檔的 7 個 CR，以 agy 保留的原始位元組為準）。8 個探針：現行文件、MIGRATION.md、未連結的 `../src/` 形式與目錄形式的舊路徑都失敗；固定提交的連結、crate 內部路徑、有日期的交接與 `CHANGELOG.md` 都通過 | 見 `git log --grep '\[WP-63\]'` |

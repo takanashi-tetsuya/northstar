@@ -37,13 +37,13 @@ The following existing callers in `src/` reference `crate::auth` and will cleanl
 
 | Caller File | Referenced Symbols | Usage Description |
 |---|---|---|
-| `src/abuse.rs` | `MIN_SCRAM_ITERATIONS` | Work factor validation for abuse rate-limiting thresholds. |
+| `src/security/abuse.rs` | `MIN_SCRAM_ITERATIONS` | Work factor validation for abuse rate-limiting thresholds. |
 | `src/api/admin.rs` | `new_session_token` | Admin session token generation. |
 | `src/api/auth_routes.rs` | `normalize_username`, `validate_password`, `is_password_verifier_integrity_error` | HTTP REST authentication endpoint input validation and integrity classification. |
 | `src/api/mod.rs` | `normalize_username`, `token_hash` | REST API authentication header handling and token digests. |
 | `src/api/upload.rs` | `token_hash` | File upload bearer token hashing. |
 | `src/api/users.rs` | `validate_password`, `is_password_verifier_integrity_error` | User registration and password modification API. |
-| `src/config.rs` | `DEFAULT_SCRAM_ITERATIONS`, `MIN_SCRAM_ITERATIONS`, `MAX_SCRAM_ITERATIONS`, `constant_time_bytes_eq` | Configuration validation for SCRAM iteration settings and constant-time secret comparison. |
+| `src/platform/config.rs` | `DEFAULT_SCRAM_ITERATIONS`, `MIN_SCRAM_ITERATIONS`, `MAX_SCRAM_ITERATIONS`, `constant_time_bytes_eq` | Configuration validation for SCRAM iteration settings and constant-time secret comparison. |
 | `src/db/admin_commands.rs` | `normalize_username`, `hash_password`, `new_session_token` | Admin CLI user creation and password resets. |
 | `src/db/api_control.rs` | `MIN_SCRAM_ITERATIONS`, `token_hash`, `new_session_token` | API key and invitation token generation and verification. |
 | `src/db/fast.rs` | `derive_fast_token`, `fast_channel_binding_name`, `token_hash`, `is_fast_mechanism`, `constant_time_bytes_eq`, `verify_fast_proof`, `fast_proof` | Database layer storage and validation of FAST token proofs. |
@@ -52,7 +52,7 @@ The following existing callers in `src/` reference `crate::auth` and will cleanl
 | `src/db/roster.rs` | `normalize_username` | Normalizing roster contact usernames. |
 | `src/db/upload.rs` | `token_hash`, `new_session_token` | HTTP upload slot token generation and validation. |
 | `src/db/upload_admin.rs` | `token_hash` | Admin upload verification. |
-| `src/pie.rs` | `normalize_username`, `hash_password` | Account import/export handling. |
+| `src/tools/pie.rs` | `normalize_username`, `hash_password` | Account import/export handling. |
 | `src/services/sm.rs` | `new_session_token` | Stream management resumption token generation. |
 | `src/state.rs` | `DEFAULT_SCRAM_ITERATIONS`, `MIN_SCRAM_ITERATIONS`, `MAX_SCRAM_ITERATIONS` | Server runtime state configuration defaults. |
 | `src/xmpp/mod.rs` | `ChannelBindings`, `SaslMechanism`, `PlainMechanism`, `ExternalMechanism`, `ScramSha256Mechanism`, `SaslStep` | C2S TLS handshake and SASL mechanism initialization. |

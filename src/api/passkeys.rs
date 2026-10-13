@@ -55,11 +55,11 @@ async fn guard_start(
     username: &str,
     path: &str,
     body: &Value,
-    proof: Option<&crate::abuse::PowProof>,
+    proof: Option<&crate::security::abuse::PowProof>,
 ) -> Result<()> {
     let ip = client_ip_with_trusted_proxies(peer.ip(), headers, state.trusted_proxies());
     let (subject, actors) = login_abuse_identity(ip, username).ok_or(AppError::Unauthorized)?;
-    let intent = crate::abuse::PowIntent::http_json(AbuseAction::Login, path, body);
+    let intent = crate::security::abuse::PowIntent::http_json(AbuseAction::Login, path, body);
     state
         .verify_start(&subject, &actors, proof, &intent)
         .await?
@@ -82,7 +82,7 @@ pub(super) async fn list(
 pub(super) struct RegisterStart {
     password: String,
     label: String,
-    pow: Option<crate::abuse::PowProof>,
+    pow: Option<crate::security::abuse::PowProof>,
 }
 
 pub(super) async fn register_start(
@@ -139,7 +139,7 @@ pub(super) async fn register_finish(
 pub(super) struct LoginStart {
     username: String,
     device_id: Uuid,
-    pow: Option<crate::abuse::PowProof>,
+    pow: Option<crate::security::abuse::PowProof>,
 }
 
 pub(super) async fn login_start(
@@ -191,7 +191,7 @@ pub(super) async fn login_finish(
 pub(super) struct Remove {
     id: Uuid,
     password: String,
-    pow: Option<crate::abuse::PowProof>,
+    pow: Option<crate::security::abuse::PowProof>,
 }
 
 pub(super) async fn remove(

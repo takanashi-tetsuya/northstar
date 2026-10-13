@@ -2,7 +2,7 @@
 //! Reservation, independent finalization and guard-only transactions stay distinct.
 pub(crate) mod witness;
 
-use crate::abuse::{
+use crate::security::abuse::{
     MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
     MessageAdmissionStart,
 };
@@ -33,7 +33,7 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
 }
 
 pub(crate) fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
-    crate::abuse::validate_message_admission_request(request)?;
+    crate::security::abuse::validate_message_admission_request(request)?;
     Ok(Command::Begin(BeginRequest::from(
         northstar_abuse_policy::MessageAdmissionRequest {
             actor_id: request.actor_id,
@@ -82,7 +82,7 @@ struct AdmissionExecutionError {
 }
 
 fn failure(error: &anyhow::Error) -> FailureKind {
-    if crate::abuse::is_abuse_state_busy(error) {
+    if crate::security::abuse::is_abuse_state_busy(error) {
         FailureKind::ActorBusy
     } else {
         FailureKind::Backend
@@ -93,7 +93,7 @@ fn error_for(outcome: ExecutionOutcome) -> anyhow::Error {
         outcome,
         ExecutionOutcome::PreCommitFailure(FailureKind::ActorBusy)
     ) {
-        return crate::abuse::AbuseStateBusy.into();
+        return crate::security::abuse::AbuseStateBusy.into();
     }
     AdmissionExecutionError { outcome }.into()
 }
@@ -339,7 +339,7 @@ pub(crate) async fn finalize_message_admission_with<A, O, F, E>(
 #[cfg(test)]
 pub(crate) mod continuation_fixture {
     use super::*;
-    use crate::abuse::{MessageDedupeIdentity, WorkRequirement};
+    use crate::security::abuse::{MessageDedupeIdentity, WorkRequirement};
     use northstar_abuse_policy::admission_execution::{
         BeginCommitPurpose, CommitFact, FinalizeSuccess,
     };
@@ -481,7 +481,7 @@ pub(crate) mod continuation_fixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abuse::{MessageDedupeIdentity, WorkRequirement};
+    use crate::security::abuse::{MessageDedupeIdentity, WorkRequirement};
     use northstar_abuse_policy::admission_execution::{
         BeginCommitPurpose, CommitFact, FinalizeSuccess,
     };
@@ -564,7 +564,7 @@ mod tests {
                     )?;
                     anyhow::bail!("backend error with forbidden-private-row-text")
                 }
-                Mode::Busy => Err(crate::abuse::AbuseStateBusy.into()),
+                Mode::Busy => Err(crate::security::abuse::AbuseStateBusy.into()),
                 Mode::Conflict => Ok(MessageAdmissionStart::Conflict),
             }
         }
@@ -640,7 +640,7 @@ mod tests {
             .begin_message_admission(&request())
             .await
             .unwrap_err();
-        assert!(crate::abuse::is_abuse_state_busy(&busy));
+        assert!(crate::security::abuse::is_abuse_state_busy(&busy));
         let unknown = MessageAdmissionService::new(Repository(Mode::CommitUnknown))
             .begin_message_admission(&request())
             .await
@@ -734,8 +734,8 @@ mod tests {
                 (Ok(MessageAdmissionStart::Conflict), Ok(MessageAdmissionStart::Conflict)) => {}
                 (Err(actual), Err(ordinary)) => {
                     assert_eq!(
-                        crate::abuse::is_abuse_state_busy(actual),
-                        crate::abuse::is_abuse_state_busy(ordinary)
+                        crate::security::abuse::is_abuse_state_busy(actual),
+                        crate::security::abuse::is_abuse_state_busy(ordinary)
                     );
                     if let (Some(actual), Some(ordinary)) = (
                         actual.downcast_ref::<AdmissionExecutionError>(),

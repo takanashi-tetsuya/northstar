@@ -12,9 +12,9 @@ use super::{
     privacy::PrivacyStanzaKind,
     retractions::FederationOutboxPolicy,
 };
-use crate::abuse::MessageDedupeIdentity;
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
-use crate::outbound::{DurableDelivery, OutboundItem, RouteEnqueue};
+use crate::security::abuse::MessageDedupeIdentity;
+use crate::xmpp::outbound::{DurableDelivery, OutboundItem, RouteEnqueue};
 use anyhow::Result;
 use northstar_message_application::direct_commit::{
     CommitError as DirectCommitError, DirectCommitRepository,
@@ -92,7 +92,7 @@ pub(crate) trait OnlineRoutePort: Sync {
         &self,
         session: &Self::Session,
         enqueue: RouteEnqueue,
-    ) -> Result<(), crate::outbound::RouteSendError>;
+    ) -> Result<(), crate::xmpp::outbound::RouteSendError>;
     fn record_local_accept(&self, durable: bool);
     fn route_available_remote(
         &self,
@@ -211,14 +211,14 @@ impl<'a> RoutePayload<'a> {
         };
         match port.try_local(session, enqueue) {
             Ok(()) => true,
-            Err(crate::outbound::RouteSendError::Binding(rejected)) => {
+            Err(crate::xmpp::outbound::RouteSendError::Binding(rejected)) => {
                 self.item = Some(rejected.0);
                 self.binding_rejected = true;
                 false
             }
             Err(
-                crate::outbound::RouteSendError::Full(item)
-                | crate::outbound::RouteSendError::Closed(item),
+                crate::xmpp::outbound::RouteSendError::Full(item)
+                | crate::xmpp::outbound::RouteSendError::Closed(item),
             ) => {
                 self.item = Some(item);
                 false

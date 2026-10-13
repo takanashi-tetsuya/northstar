@@ -1,4 +1,4 @@
-use crate::abuse::{AbuseAction, PowIntent, PowIntentRequest, PowProof};
+use crate::security::abuse::{AbuseAction, PowIntent, PowIntentRequest, PowProof};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use zeroize::Zeroize;

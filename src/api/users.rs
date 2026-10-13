@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::error::{AppError, Result};
+use crate::platform::error::{AppError, Result};
 use crate::state::{
     account_teardown_runtime::AccountTeardownRuntime,
     password_change_http::PasswordChangeHttpContext,

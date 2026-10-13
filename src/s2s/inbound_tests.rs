@@ -756,7 +756,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     let online_stable_id = uuid::Uuid::new_v4();
     let retraction_service = RetractionService::new(
         crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
-        crate::abuse::test_personal_retraction_content_keyring(),
+        crate::security::abuse::test_personal_retraction_content_keyring(),
         "local.test",
     );
     let online_action = "<message from='alice@remote.test/Phone' to='bob@local.test' id='online-retraction'><retract xmlns='urn:xmpp:message-retract:1' id='remote-original'/></message>";

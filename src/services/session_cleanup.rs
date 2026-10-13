@@ -470,7 +470,7 @@ impl CleanupReport {
         self.completed_steps += 1;
     }
 
-    fn observe(&self, registry: &crate::workers::WorkerRegistry) {
+    fn observe(&self, registry: &crate::runtime::workers::WorkerRegistry) {
         if !self.is_clean() {
             registry.observer_error(
                 "session-cleanup",
@@ -550,7 +550,7 @@ async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionReposit
     context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
+    heartbeat: crate::runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let mut retry_tick = tokio::time::interval(Duration::from_secs(1));
     retry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -626,14 +626,14 @@ pub(crate) fn start_sm_suspension_recovery<
     R: super::sm_suspension::SmSuspensionRepository + 'static,
 >(
     context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
-    registry: Arc<crate::workers::WorkerRegistry>,
+    registry: Arc<crate::runtime::workers::WorkerRegistry>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     registry.supervise_draining(
         "sm-suspension-recovery",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
+        crate::runtime::workers::WorkerCriticality::Restartable,
+        crate::runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         Duration::from_secs(5),
         cancel.clone(),
@@ -1256,11 +1256,11 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    fn cleanup_observer() -> Arc<crate::workers::WorkerRegistry> {
-        let registry = crate::workers::WorkerRegistry::new();
+    fn cleanup_observer() -> Arc<crate::runtime::workers::WorkerRegistry> {
+        let registry = crate::runtime::workers::WorkerRegistry::new();
         registry.register_observer(
             "session-cleanup",
-            crate::workers::WorkerCriticality::Restartable,
+            crate::runtime::workers::WorkerCriticality::Restartable,
         );
         registry
     }
@@ -1426,7 +1426,7 @@ mod tests {
             joined_rooms: Vec::new(),
             directed_presence: Vec::new(),
             last_presence: None,
-            unacked: vec![crate::outbound::SmUnackedStanza::plain(
+            unacked: vec![crate::xmpp::outbound::SmUnackedStanza::plain(
                 "ordered".to_owned(),
             )],
         }

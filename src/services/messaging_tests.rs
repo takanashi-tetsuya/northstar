@@ -3,7 +3,7 @@ use super::{
     FullJidFallbackPort, FullJidFallbackResult, OfflineAdmissionOutcome, OnlineMessageRouter,
     OnlineRoutePort, OnlineRouteResult, RoutePayload,
 };
-use crate::outbound::DurableDelivery;
+use crate::xmpp::outbound::DurableDelivery;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,
@@ -72,8 +72,8 @@ impl OnlineRoutePort for RoutePort {
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::outbound::RouteEnqueue,
-    ) -> Result<(), crate::outbound::RouteSendError> {
+        enqueue: crate::xmpp::outbound::RouteEnqueue,
+    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
         self.events
             .lock()
             .unwrap()

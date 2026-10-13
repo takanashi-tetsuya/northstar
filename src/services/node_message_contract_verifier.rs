@@ -21,8 +21,8 @@ pub(crate) enum RequestedNodeMessageProjection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum VerifiedNodeMessageProjection {
     Volatile,
-    Durable(crate::outbound::DurableDelivery),
-    Mix(crate::outbound::MixDelivery),
+    Durable(crate::xmpp::outbound::DurableDelivery),
+    Mix(crate::xmpp::outbound::MixDelivery),
 }
 
 pub(crate) struct MixDeliveryProjection {
@@ -66,7 +66,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
         stanza: &str,
         target_jid: &str,
     ) -> Result<VerifiedNodeMessageProjection> {
-        use crate::outbound::{recipient_delivery_identity, RecipientDeliveryIdentity};
+        use crate::xmpp::outbound::{recipient_delivery_identity, RecipientDeliveryIdentity};
 
         match request {
             RequestedNodeMessageProjection::Volatile => Ok(VerifiedNodeMessageProjection::Volatile),
@@ -92,7 +92,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                     "cluster durable delivery payload does not match its PostgreSQL projection"
                 );
                 Ok(VerifiedNodeMessageProjection::Durable(
-                    crate::outbound::DurableDelivery {
+                    crate::xmpp::outbound::DurableDelivery {
                         recipient_id,
                         message_id,
                         claim_id: None,
@@ -130,7 +130,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                     "cluster durable MIX payload does not match its PostgreSQL projection"
                 );
                 Ok(VerifiedNodeMessageProjection::Mix(
-                    crate::outbound::MixDelivery {
+                    crate::xmpp::outbound::MixDelivery {
                         delivery_id,
                         lease_token,
                     },
@@ -157,7 +157,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                     "legacy cluster durable delivery payload does not match its PostgreSQL projection"
                 );
                 Ok(VerifiedNodeMessageProjection::Durable(
-                    crate::outbound::DurableDelivery {
+                    crate::xmpp::outbound::DurableDelivery {
                         recipient_id,
                         message_id,
                         claim_id: None,
@@ -327,7 +327,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            VerifiedNodeMessageProjection::Durable(crate::outbound::DurableDelivery {
+            VerifiedNodeMessageProjection::Durable(crate::xmpp::outbound::DurableDelivery {
                 recipient_id,
                 message_id,
                 claim_id: None,
@@ -402,7 +402,7 @@ mod tests {
                 .resolve(request, &routed, "bob@example.test")
                 .await
                 .unwrap(),
-            VerifiedNodeMessageProjection::Mix(crate::outbound::MixDelivery {
+            VerifiedNodeMessageProjection::Mix(crate::xmpp::outbound::MixDelivery {
                 delivery_id,
                 lease_token,
             })
@@ -436,7 +436,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            VerifiedNodeMessageProjection::Durable(crate::outbound::DurableDelivery {
+            VerifiedNodeMessageProjection::Durable(crate::xmpp::outbound::DurableDelivery {
                 recipient_id,
                 message_id,
                 claim_id: None,

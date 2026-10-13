@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::error::{AppError, Result};
+use crate::platform::error::{AppError, Result};
 use crate::state::{MetricsContext, ReadinessContext};
 use crate::xmpp;
 
@@ -376,9 +376,9 @@ async fn collect_metrics(context: &MetricsContext) -> String {
         &process,
     );
     body.push_str(&render_password_work_metrics(
-        crate::password_work::rejections_total(),
+        crate::security::password_work::rejections_total(),
     ));
-    body.push_str(&crate::logging::render_metrics());
+    body.push_str(&crate::platform::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));
     let sm = context.sm_snapshot();
     body.push_str(&crate::services::metrics_snapshot::render_sm_recovery_gauges(&sm));
@@ -575,7 +575,7 @@ pub async fn websocket(
             let actors = state.connection_actors().clone();
             let actor_shutdown = actors.shutdown_token().child_token();
             let result = actors.try_spawn(
-                crate::connection_actors::ConnectionActorKind::C2sWebSocket,
+                crate::runtime::connection_actors::ConnectionActorKind::C2sWebSocket,
                 Some(peer_ip.to_string()),
                 async move {
                     let _connection_guard = connection_guard;
@@ -639,10 +639,10 @@ fn allowed_websocket_origin(
         },
         _ => return false,
     };
-    let Some(origin) = crate::config::canonical_web_origin(origin) else {
+    let Some(origin) = crate::platform::config::canonical_web_origin(origin) else {
         return false;
     };
-    crate::config::canonical_public_web_origin(public_url).as_ref() == Some(&origin)
+    crate::platform::config::canonical_public_web_origin(public_url).as_ref() == Some(&origin)
         || configured_origins
             .iter()
             .any(|configured| configured == &origin)
@@ -674,11 +674,11 @@ pub async fn public_config(
 ) -> Json<Value> {
     let policy = state.policy();
     let registration_mode = state.registration_mode();
-    let open_registration = registration_mode != crate::config::RegistrationMode::Closed;
+    let open_registration = registration_mode != crate::platform::config::RegistrationMode::Closed;
     let registration_mode = match registration_mode {
-        crate::config::RegistrationMode::Closed => "closed",
-        crate::config::RegistrationMode::Open => "open",
-        crate::config::RegistrationMode::InvitationOnly => "invitation",
+        crate::platform::config::RegistrationMode::Closed => "closed",
+        crate::platform::config::RegistrationMode::Open => "open",
+        crate::platform::config::RegistrationMode::InvitationOnly => "invitation",
     };
     let federation_enabled = state.federation_enabled();
     Json(json!({
@@ -709,9 +709,9 @@ pub async fn public_config(
             "upload_admission":policy.upload_mode.admits_new_uploads(),
             "upload_download":policy.upload_mode.keeps_storage_runtime(),
             "upload_mode":match policy.upload_mode {
-                crate::config::UploadMode::Enabled => "enabled",
-                crate::config::UploadMode::DrainReadOnly => "drain_read_only",
-                crate::config::UploadMode::Disabled => "disabled",
+                crate::platform::config::UploadMode::Enabled => "enabled",
+                crate::platform::config::UploadMode::DrainReadOnly => "drain_read_only",
+                crate::platform::config::UploadMode::Disabled => "disabled",
             }
         }
     }))

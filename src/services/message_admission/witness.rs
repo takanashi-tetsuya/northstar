@@ -34,7 +34,7 @@ impl DirectOperationHandle {
 
     pub(crate) fn begin(
         &self,
-        request: &crate::abuse::MessageAdmissionRequest<'_>,
+        request: &crate::security::abuse::MessageAdmissionRequest<'_>,
     ) -> anyhow::Result<RetainedAdmission> {
         // The existing validator runs before cloning any authority input.
         let Command::Begin(request) = super::begin_command(request)? else {
@@ -53,7 +53,7 @@ impl DirectOperationHandle {
 
     pub(crate) fn finalize(
         &self,
-        lease: &crate::abuse::MessageAdmissionLease,
+        lease: &crate::security::abuse::MessageAdmissionLease,
     ) -> anyhow::Result<RetainedAdmission> {
         let fence = super::acceptance_fence(&lease.acceptance());
         let mut operation = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -102,7 +102,7 @@ impl DirectOperationHandle {
     pub(crate) fn consume_route(
         &self,
         grant: direct_handoff::RouteGrant,
-        source: crate::outbound::DurableDelivery,
+        source: crate::xmpp::outbound::DurableDelivery,
     ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
         self.0
             .lock()

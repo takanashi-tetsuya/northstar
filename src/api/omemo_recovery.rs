@@ -17,7 +17,7 @@ use crate::{
         ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
         OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
     },
-    error::AppError,
+    platform::error::AppError,
     services::omemo_recovery::*,
     state::{
         account_generation_teardown::AccountGenerationTeardownSequence,

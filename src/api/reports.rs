@@ -10,9 +10,9 @@ use serde_json::Value;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use crate::abuse::AbuseAction;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
-use crate::error::{AppError, Result};
+use crate::platform::error::{AppError, Result};
+use crate::security::abuse::AbuseAction;
 use crate::services::{
     api_mutations::*,
     reports::{ReportCommit, ReportEvidenceInput, ReportInput},

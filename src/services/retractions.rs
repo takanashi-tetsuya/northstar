@@ -6,7 +6,7 @@
 //! tombstones, action archives and local or federated delivery together.
 
 use crate::{
-    abuse::{ContentIdentityAuthenticators, PersonalRetractionContentKeyring},
+    security::abuse::{ContentIdentityAuthenticators, PersonalRetractionContentKeyring},
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};

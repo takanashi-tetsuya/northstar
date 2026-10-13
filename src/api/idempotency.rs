@@ -1,4 +1,4 @@
-use crate::{error::AppError, services::api_mutations::StoredApiResponse};
+use crate::{platform::error::AppError, services::api_mutations::StoredApiResponse};
 use axum::{body::Body, response::Response};
 
 pub(crate) fn stored_api_response(stored: StoredApiResponse) -> Result<Response, AppError> {

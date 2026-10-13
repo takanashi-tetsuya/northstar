@@ -93,8 +93,8 @@ impl OnlineRoutePort for Port {
     fn try_local(
         &self,
         target: &Target,
-        enqueue: crate::outbound::RouteEnqueue,
-    ) -> Result<(), crate::outbound::RouteSendError> {
+        enqueue: crate::xmpp::outbound::RouteEnqueue,
+    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
         self.record("enqueue");
         self.record_route(
             RouteDestination::Local(target.jid),

@@ -4,7 +4,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use tokio::sync::mpsc;
 
-use crate::components::{ComponentRegistry, ComponentRoute};
+use crate::s2s::components::{ComponentRegistry, ComponentRoute};
 use northstar_federation_core::S2sOutboxPolicy;
 
 pub(crate) trait FederationOutboxRepository: Clone + Send + Sync {
@@ -153,7 +153,7 @@ mod tests {
         let (service, wake) = FederationOutboxService::channel(
             repository,
             S2sOutboxPolicy::new(300, 100, 1_000_000, 100),
-            crate::components::registry(),
+            crate::s2s::components::registry(),
             HashSet::new(),
         );
         (service, wake, entered, send)

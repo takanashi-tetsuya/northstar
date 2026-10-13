@@ -14,7 +14,7 @@ struct Session {
     enabled: bool,
     room_nick: Option<(&'static str, &'static str)>,
     privacy: bool,
-    sender: crate::outbound::OutboundSender,
+    sender: crate::xmpp::outbound::OutboundSender,
 }
 
 #[derive(Default)]
@@ -100,7 +100,7 @@ impl CarbonDeliveryPort for Port {
 
 fn session() -> (
     Session,
-    tokio::sync::mpsc::Receiver<crate::outbound::OutboundItem>,
+    tokio::sync::mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
 ) {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     (
@@ -108,7 +108,7 @@ fn session() -> (
             enabled: true,
             room_nick: None,
             privacy: true,
-            sender: crate::outbound::OutboundSender::new(sender),
+            sender: crate::xmpp::outbound::OutboundSender::new(sender),
         },
         receiver,
     )
@@ -243,7 +243,7 @@ async fn timed_out_target_counts_failure_before_remote_fanout() {
 #[tokio::test]
 async fn one_slow_target_does_not_starve_healthy_resources() {
     let (slow_tx, _slow_rx) = tokio::sync::mpsc::channel(1);
-    let slow = crate::outbound::OutboundSender::new(slow_tx);
+    let slow = crate::xmpp::outbound::OutboundSender::new(slow_tx);
     slow.try_send("occupied".to_owned()).unwrap();
     let (fast_one_tx, mut fast_one_rx) = tokio::sync::mpsc::channel(1);
     let (fast_two_tx, mut fast_two_rx) = tokio::sync::mpsc::channel(1);
@@ -251,11 +251,11 @@ async fn one_slow_target_does_not_starve_healthy_resources() {
         ("slow", slow),
         (
             "fast-one",
-            crate::outbound::OutboundSender::new(fast_one_tx),
+            crate::xmpp::outbound::OutboundSender::new(fast_one_tx),
         ),
         (
             "fast-two",
-            crate::outbound::OutboundSender::new(fast_two_tx),
+            crate::xmpp::outbound::OutboundSender::new(fast_two_tx),
         ),
     ];
     let attempts: Vec<(String, AttemptFuture<'_>)> = targets

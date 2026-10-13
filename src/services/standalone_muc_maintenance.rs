@@ -1,12 +1,12 @@
 //! PostgreSQL MUC occupancy renewal when Redis clustering is disabled.
 
 use crate::{
+    runtime::workers::WorkerHeartbeat,
     services::muc::{
         ClusterMucOccupancyTarget, MucOccupancyLookup, MucResolvedOccupancy,
         MAX_MUC_OCCUPANCY_RENEW_BATCH,
     },
     state::cluster_maintenance_context::StandaloneMucMaintenanceContext,
-    workers::WorkerHeartbeat,
 };
 use anyhow::{ensure, Result};
 use std::{

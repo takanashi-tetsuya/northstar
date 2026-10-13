@@ -15,7 +15,7 @@ use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::auth;
-use crate::error::{AppError, Result};
+use crate::platform::error::{AppError, Result};
 use crate::services::upload::{
     AcquirePromotionOutcome, FinalizePromotionCommand, FinalizePromotionOutcome,
     PromotedUploadProjection, PromotionClaim, UploadClaimOutcome, UploadRenewOutcome,

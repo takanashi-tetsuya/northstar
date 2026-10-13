@@ -208,11 +208,11 @@ pub(crate) trait ReplayRepository: ReplayLeaseRepository {
     ) -> impl std::future::Future<Output = Result<PendingPresencePage>> + Send;
     fn fence_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
-    ) -> impl std::future::Future<Output = Result<crate::outbound::DurableDelivery>> + Send;
+        delivery: crate::xmpp::outbound::DurableDelivery,
+    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::DurableDelivery>> + Send;
     fn acknowledge_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
+        delivery: crate::xmpp::outbound::DurableDelivery,
         observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn renew_bosh_fences(
@@ -226,7 +226,7 @@ pub(crate) trait ReplayRepository: ReplayLeaseRepository {
     fn bind_bosh_response_sources(
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
-    ) -> impl std::future::Future<Output = Result<crate::outbound::BoshResponseOwnership>> + Send;
+    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::BoshResponseOwnership>> + Send;
     fn release_bosh_fences(
         &self,
         session_id: Uuid,
@@ -370,14 +370,14 @@ impl<R: ReplayRepository> ReplayService<R> {
 
     pub(crate) async fn fence_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
-    ) -> Result<crate::outbound::DurableDelivery> {
+        delivery: crate::xmpp::outbound::DurableDelivery,
+    ) -> Result<crate::xmpp::outbound::DurableDelivery> {
         self.repository.fence_socket_write(delivery).await
     }
 
     pub(crate) async fn acknowledge_socket_write(
         &self,
-        delivery: crate::outbound::DurableDelivery,
+        delivery: crate::xmpp::outbound::DurableDelivery,
     ) -> Result<()> {
         self.repository
             .acknowledge_socket_write(delivery, None)
@@ -386,7 +386,7 @@ impl<R: ReplayRepository> ReplayService<R> {
 
     pub(crate) async fn acknowledge_socket_write_observed(
         &self,
-        delivery: crate::outbound::DurableDelivery,
+        delivery: crate::xmpp::outbound::DurableDelivery,
         observation: Option<&northstar_delivery_core::native_write::AckRequest>,
     ) -> Result<()> {
         match observation {
@@ -416,7 +416,7 @@ impl<R: ReplayRepository> ReplayService<R> {
     pub(crate) async fn bind_bosh_response_sources(
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
-    ) -> Result<crate::outbound::BoshResponseOwnership> {
+    ) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
         self.repository.bind_bosh_response_sources(request).await
     }
 

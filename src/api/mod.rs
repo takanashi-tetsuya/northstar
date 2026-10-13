@@ -12,9 +12,9 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::abuse::AbuseAction;
 use crate::auth;
-use crate::error::{AppError, Result};
+use crate::platform::error::{AppError, Result};
+use crate::security::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
@@ -27,7 +27,7 @@ use crate::state::{
     RetentionPolicyContext, UploadHttpReadContext,
 };
 
-use crate::abuse::GuardError;
+use crate::security::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
 use axum::routing::{delete, options, patch};

@@ -81,7 +81,7 @@ impl PreparedLiveDirect<'_> {
     pub(crate) fn archive_written(&self) -> bool {
         self.archive_written
     }
-    pub(crate) fn source(&self) -> crate::outbound::DurableDelivery {
+    pub(crate) fn source(&self) -> crate::xmpp::outbound::DurableDelivery {
         self.handoff.grant.source()
     }
 
@@ -131,7 +131,7 @@ where
 
 pub(crate) async fn continue_prepared_local_direct<'live, A, P, F>(
     applied: AppliedLocalDirect<'live>,
-    lease: &mut Option<crate::abuse::MessageAdmissionLease>,
+    lease: &mut Option<crate::security::abuse::MessageAdmissionLease>,
     admission: &MessageAdmissionService<A>,
     route: &P,
     enter_followup: F,
@@ -447,7 +447,7 @@ pub(crate) struct PreparedDirectHandoff<'a> {
 }
 
 pub(crate) struct PreparedDirectRecovery {
-    pub(super) source: crate::outbound::DurableDelivery,
+    pub(super) source: crate::xmpp::outbound::DurableDelivery,
     pub(super) witness: northstar_message_application::direct_handoff::HandoffHandle,
 }
 
@@ -486,7 +486,7 @@ impl PreparedDirectHandoff<'_> {
         self,
         request: &super::DirectRouteRequest<'_, S>,
     ) -> anyhow::Result<(
-        crate::outbound::OutboundItem,
+        crate::xmpp::outbound::OutboundItem,
         northstar_message_application::direct_handoff::HandoffHandle,
     )> {
         let source = self.grant.source();
@@ -507,7 +507,7 @@ impl PreparedDirectHandoff<'_> {
         );
         let witness = self.owner.consume_route(self.grant, source)?;
         Ok((
-            crate::outbound::OutboundItem::durable(self.live.stanza.to_owned(), source),
+            crate::xmpp::outbound::OutboundItem::durable(self.live.stanza.to_owned(), source),
             witness,
         ))
     }
@@ -539,11 +539,11 @@ mod continuation_tests {
     };
     use super::*;
     use crate::{
-        abuse::{MessageAdmissionLease, MessageAdmissionStart},
-        outbound::{DurableDelivery, OutboundSender, RouteEnqueue, RouteSendError},
+        security::abuse::{MessageAdmissionLease, MessageAdmissionStart},
         services::message_admission::continuation_fixture::{
             self as admission_fixture, Admission, Events, FinalizeCut,
         },
+        xmpp::outbound::{DurableDelivery, OutboundSender, RouteEnqueue, RouteSendError},
     };
     use northstar_message_application::{
         direct_lifecycle::{OriginalAdmission, TerminalReason},
@@ -1812,7 +1812,7 @@ mod tests {
             recipient_id: Uuid::from_u128(3),
             stanza: "private-live-stanza",
             delivery: super::super::DirectRouteDelivery::Committed(
-                crate::outbound::DurableDelivery {
+                crate::xmpp::outbound::DurableDelivery {
                     recipient_id: Uuid::from_u128(3),
                     message_id: Uuid::from_u128(2),
                     claim_id: Some(Uuid::from_u128(2)),
@@ -1901,7 +1901,7 @@ mod tests {
 
     #[test]
     fn real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_sending() {
-        use crate::outbound::{OutboundItem, OutboundSender, RouteEnqueue};
+        use crate::xmpp::outbound::{OutboundItem, OutboundSender, RouteEnqueue};
         for changed_source in [true, false] {
             let (_, handoff) = handoff();
             let (mut item, witness) = handoff.bind_route(&route_request::<()>(&[])).unwrap();
@@ -1910,7 +1910,7 @@ mod tests {
             if changed_source {
                 item = OutboundItem::durable(
                     item.stanza,
-                    crate::outbound::DurableDelivery {
+                    crate::xmpp::outbound::DurableDelivery {
                         message_id: Uuid::from_u128(99),
                         ..source
                     },
@@ -1936,7 +1936,7 @@ mod tests {
 
     #[test]
     fn actual_full_and_closed_refusals_preserve_item_channels_and_disconnect_order() {
-        use crate::outbound::{OutboundSender, RouteEnqueue};
+        use crate::xmpp::outbound::{OutboundSender, RouteEnqueue};
         use northstar_message_application::direct_handoff::Refusal;
         for closed in [false, true] {
             let (_, handoff) = handoff();
@@ -1960,16 +1960,16 @@ mod tests {
             .unwrap();
             let refused = sender.try_send_route_item(enqueue).unwrap_err();
             let item = match refused {
-                crate::outbound::RouteSendError::Full(item) => {
+                crate::xmpp::outbound::RouteSendError::Full(item) => {
                     assert!(!closed);
                     assert!(sender.backpressure_disconnect().is_cancelled());
                     item
                 }
-                crate::outbound::RouteSendError::Closed(item) => {
+                crate::xmpp::outbound::RouteSendError::Closed(item) => {
                     assert!(closed);
                     item
                 }
-                crate::outbound::RouteSendError::Binding(_) => panic!("valid item rejected"),
+                crate::xmpp::outbound::RouteSendError::Binding(_) => panic!("valid item rejected"),
             };
             assert_eq!(item.stanza.as_ptr(), address);
             assert_eq!(item.c2s_delivery(), Some(source));
@@ -2007,12 +2007,12 @@ mod tests {
         pending_rearm: bool,
     }
     impl super::super::OnlineRoutePort for RealQueuePort {
-        type Session = crate::outbound::OutboundSender;
+        type Session = crate::xmpp::outbound::OutboundSender;
         fn try_local(
             &self,
             session: &Self::Session,
-            enqueue: crate::outbound::RouteEnqueue,
-        ) -> Result<(), crate::outbound::RouteSendError> {
+            enqueue: crate::xmpp::outbound::RouteEnqueue,
+        ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
             self.events.lock().unwrap().push("enqueue");
             session.try_send_route_item(enqueue)
         }
@@ -2024,7 +2024,7 @@ mod tests {
             &self,
             _: &str,
             _: &str,
-            _: Option<crate::outbound::DurableDelivery>,
+            _: Option<crate::xmpp::outbound::DurableDelivery>,
         ) -> bool {
             false
         }
@@ -2032,7 +2032,7 @@ mod tests {
             &self,
             _: &str,
             _: &str,
-            _: Option<crate::outbound::DurableDelivery>,
+            _: Option<crate::xmpp::outbound::DurableDelivery>,
         ) -> super::super::OnlineRouteResult {
             self.events.lock().unwrap().push("remote");
             super::super::OnlineRouteResult::default()
@@ -2067,7 +2067,7 @@ mod tests {
         fn clustered_direct_routes(&self) -> bool {
             true
         }
-        async fn rearm_direct_route(&self, _: crate::outbound::DurableDelivery) {
+        async fn rearm_direct_route(&self, _: crate::xmpp::outbound::DurableDelivery) {
             self.events.lock().unwrap().push("rearm");
             if self.pending_rearm {
                 std::future::pending::<()>().await;
@@ -2086,7 +2086,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let targets = [(
             "bob@example.test/device".into(),
-            crate::outbound::OutboundSender::new(tx),
+            crate::xmpp::outbound::OutboundSender::new(tx),
         )];
         let mut future = Box::pin(async {
             let outcome = super::super::DirectMessageRouter::route_prepared(
@@ -2165,7 +2165,7 @@ mod tests {
         let mut payload =
             super::super::RoutePayload::prepared("private-live-stanza", item, witness.clone());
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let sender = crate::outbound::OutboundSender::new(tx);
+        let sender = crate::xmpp::outbound::OutboundSender::new(tx);
         rx.close();
         assert!(!payload.enqueue(&port, &sender));
         let before = owner.snapshot();
@@ -2173,7 +2173,7 @@ mod tests {
         // production keeps this value private between attempts.
         payload.item.as_mut().unwrap().stanza = "same IDs, substituted payload".into();
         let (tx, mut accepted_rx) = tokio::sync::mpsc::channel(1);
-        let next = crate::outbound::OutboundSender::new(tx);
+        let next = crate::xmpp::outbound::OutboundSender::new(tx);
         assert!(!payload.enqueue(&port, &next));
         assert!(payload.binding_rejected);
         assert_eq!(owner.snapshot(), before);
@@ -2228,7 +2228,7 @@ mod tests {
 
     #[test]
     fn held_enqueue_permit_cannot_start_after_frame_retirement() {
-        use crate::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
+        use crate::xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
         let (owner, handoff) = handoff();
         let (item, witness) = handoff.bind_route(&route_request::<()>(&[])).unwrap();
         let permit = witness.local_permit(item.c2s_delivery().unwrap()).unwrap();

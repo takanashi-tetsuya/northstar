@@ -10,7 +10,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    error::AppError,
+    platform::error::AppError,
     services::{
         api_queries::{ApiReadDenial, AuthorizedRead, PageBoundary},
         operations::{OperationPageBoundary, OperationRecord, OperationTargetRecord},

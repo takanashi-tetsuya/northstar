@@ -5,7 +5,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::api::models::{BooleanToggle, BroadcastRequest, MucRoomView, OfflineMessagesStats};
-use crate::error::{AppError, Result};
+use crate::platform::error::{AppError, Result};
 
 pub async fn admin_stats(
     State(state): State<crate::state::ApiQueryContext>,

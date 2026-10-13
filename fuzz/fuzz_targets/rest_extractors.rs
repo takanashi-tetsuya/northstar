@@ -14,21 +14,23 @@ use uuid::Uuid;
 // tiny rejection stub lets this target compile and execute the production
 // extractor implementation without pulling the database/server graph into the
 // libFuzzer process.
-mod error {
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
+mod platform {
+    pub mod error {
+        use axum::{
+            http::StatusCode,
+            response::{IntoResponse, Response},
+        };
 
-    #[derive(Debug)]
-    pub enum AppError {
-        BadRequest(String),
-    }
+        #[derive(Debug)]
+        pub enum AppError {
+            BadRequest(String),
+        }
 
-    impl IntoResponse for AppError {
-        fn into_response(self) -> Response {
-            match self {
-                Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+        impl IntoResponse for AppError {
+            fn into_response(self) -> Response {
+                match self {
+                    Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+                }
             }
         }
     }

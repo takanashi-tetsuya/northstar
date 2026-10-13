@@ -1,6 +1,6 @@
 //! Complete REST password-change command and transport-neutral outcomes.
 
-use crate::abuse::{PowIntent, PowProof};
+use crate::security::abuse::{PowIntent, PowProof};
 use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse, StoredApiResponse};
 use anyhow::Result;
 use std::net::IpAddr;

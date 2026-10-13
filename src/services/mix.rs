@@ -3,7 +3,7 @@
 //! The service owns replay proofs, admission limits and committed delivery wakes.
 //! Repository operations preserve each cross-table transaction.
 
-use crate::abuse::{MixMessageContentKeyring, MixRetractionContentKeyring};
+use crate::security::abuse::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_xml_builder::XmlElement;
@@ -864,24 +864,24 @@ pub(crate) trait MixRepository: Send + Sync {
     fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
     fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
     fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,
         actor: &str,
         identity: &MixReplayIdentity,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn lookup_mix_retraction_replay(
         &self,
@@ -889,7 +889,7 @@ pub(crate) trait MixRepository: Send + Sync {
         actor: &str,
         target_id: Uuid,
         identity: &MixReplayIdentity,
-        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn authorized_mix_event_page(
         &self,
@@ -1001,7 +1001,7 @@ pub(crate) trait MixRepository: Send + Sync {
     fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
-        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<RetractMixMessageAdmission>> + Send;
     fn begin_remote_pam_join(
         &self,
@@ -1208,25 +1208,25 @@ pub(crate) trait MixRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn fence_mix_socket_write(
         &self,
-        source: crate::outbound::MixDelivery,
-    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
+        source: crate::xmpp::outbound::MixDelivery,
+    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send;
     fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
+    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send;
     fn release_mix_cluster_delivery(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
+    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send;
     fn renew_mix_delivery_lease(
         &self,
         delivery_id: Uuid,
@@ -2348,7 +2348,7 @@ impl<R: MixRepository> MixService<R> {
         &self,
         request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<bool> {
-        let crate::outbound::TransportOwnershipSource::Mix(source) = request.source() else {
+        let crate::xmpp::outbound::TransportOwnershipSource::Mix(source) = request.source() else {
             anyhow::bail!("native MIX acknowledgement source mismatch");
         };
         self.acknowledge_mix_delivery_inner(source.delivery_id, source.lease_token, Some(request))
@@ -2377,8 +2377,8 @@ impl<R: MixRepository> MixService<R> {
     /// SQL capability and must treat the returned token as writer-private.
     pub(crate) async fn fence_mix_socket_write(
         &self,
-        source: crate::outbound::MixDelivery,
-    ) -> Result<crate::outbound::MixDelivery> {
+        source: crate::xmpp::outbound::MixDelivery,
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.fence_mix_socket_write(source).await
     }
@@ -2387,11 +2387,11 @@ impl<R: MixRepository> MixService<R> {
     /// is allowed to enqueue this exact MIX source on the destination node.
     pub(crate) async fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> Result<crate::outbound::MixDelivery> {
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository
             .transfer_mix_delivery_to_cluster(source, node_id, request_id, ttl_seconds)
@@ -2402,7 +2402,7 @@ impl<R: MixRepository> MixService<R> {
     /// local durable boundary. A later transfer is never overwritten.
     pub(crate) async fn release_mix_cluster_delivery(
         &self,
-        source: crate::outbound::MixDelivery,
+        source: crate::xmpp::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> Result<bool> {
@@ -2423,7 +2423,7 @@ impl<R: MixRepository> MixService<R> {
     pub(crate) async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> Result<crate::outbound::MixDelivery> {
+    ) -> Result<crate::xmpp::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.transfer_mix_delivery_to_bosh(request).await
     }
@@ -3423,8 +3423,8 @@ mod tests {
         // therefore gives this outbox gate exactly one FIFO permit.
         let service = MixService::new(
             crate::db::mix_repository::PostgresMixRepository::new(pool),
-            crate::abuse::test_mix_message_content_keyring(),
-            crate::abuse::test_mix_retraction_content_keyring(),
+            crate::security::abuse::test_mix_message_content_keyring(),
+            crate::security::abuse::test_mix_retraction_content_keyring(),
             2,
             "public".to_owned(),
         )
@@ -3472,8 +3472,8 @@ mod tests {
             .expect("a lazy test pool does not connect");
         let service = MixService::new(
             crate::db::mix_repository::PostgresMixRepository::new(pool),
-            crate::abuse::test_mix_message_content_keyring(),
-            crate::abuse::test_mix_retraction_content_keyring(),
+            crate::security::abuse::test_mix_message_content_keyring(),
+            crate::security::abuse::test_mix_retraction_content_keyring(),
             3,
             "public".to_owned(),
         )

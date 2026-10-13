@@ -1,6 +1,6 @@
 //! REST login application port. Transport builds the canonical request identity;
 //! persistence owns the guard, credential verification, and session transaction.
-use crate::abuse::{GuardError, PowIntent, PowProof};
+use crate::security::abuse::{GuardError, PowIntent, PowProof};
 use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse, StoredApiResponse};
 use anyhow::Result;
 
@@ -10,7 +10,7 @@ pub(crate) trait LoginFailureMetrics: Send + Sync {
     fn record_authentication_backend_failure(&self);
 }
 
-impl LoginFailureMetrics for crate::metrics::Metrics {
+impl LoginFailureMetrics for crate::platform::metrics::Metrics {
     fn record_authentication_backend_failure(&self) {
         self.authentication_backend_failures_total
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

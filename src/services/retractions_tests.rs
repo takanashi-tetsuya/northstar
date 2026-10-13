@@ -20,16 +20,18 @@ async fn validation_precedes_persistence_and_repository_failure_remains_an_error
                 "bob@remote.test"
             );
             let primary = prepared.semantic_authenticators.primary();
-            assert!(crate::abuse::test_personal_retraction_content_keyring()
-                .authenticators(&prepared.canonical_semantics)
-                .verifies(primary.key_id(), primary.mac()));
+            assert!(
+                crate::security::abuse::test_personal_retraction_content_keyring()
+                    .authenticators(&prepared.canonical_semantics)
+                    .verifies(primary.key_id(), primary.mac())
+            );
             anyhow::bail!("injected repository unavailable")
         }
     }
 
     let service = RetractionService::new(
         UnavailableRepository(AtomicUsize::new(0)),
-        crate::abuse::test_personal_retraction_content_keyring(),
+        crate::security::abuse::test_personal_retraction_content_keyring(),
         "local.test",
     );
     let command = RetractionCommand {
@@ -501,7 +503,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
         .unwrap();
     let service = RetractionService::new(
         crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
-        crate::abuse::test_personal_retraction_content_keyring(),
+        crate::security::abuse::test_personal_retraction_content_keyring(),
         "local.test",
     );
     let owners = [OwnerProjection {
@@ -1037,7 +1039,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
 
     let service = RetractionService::new(
         crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
-        crate::abuse::test_personal_retraction_content_keyring(),
+        crate::security::abuse::test_personal_retraction_content_keyring(),
         "local.test",
     );
     let owners = [OwnerProjection {

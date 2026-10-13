@@ -21,6 +21,10 @@
 //     contents are compared byte for byte, except that in a non-raw string the
 //     whitespace after a backslash-newline continuation is dropped, as rustc
 //     drops it from the value (a re-indented continuation line is the same string);
+//   * a match-arm body block holding a single expression is unwrapped
+//     (`=> { x }` compares equal to `=> x,`): rustfmt adds or removes that block
+//     when re-indenting changes the line width; a block with a top-level `;`,
+//     a comment or a leading attribute is kept;
 //   * --allow-doc drops `//!` inner doc comments (new child-module headers).
 //   * comment-only remainders (e.g. trailing comments after the last item in a
 //     file or impl body) are compared as their own item.
@@ -98,6 +102,31 @@ export function normalizeStringContinuations(lit) {
       out += c + (next ?? '');
       i++;
     }
+  }
+  return out;
+}
+
+// rustfmt wraps a match-arm body in a block when it no longer fits on the arm's
+// line and unwraps a block holding a single expression when it fits, so moving
+// code to another indentation can switch between `=> { x }` and `=> x,`. Both
+// evaluate x as the arm body. Unwrap such blocks in a normalized token list
+// (comments are entries ending in a newline); keep blocks with a top-level `;`,
+// a comment or a leading attribute, and empty blocks.
+export function unwrapArmBlocks(parts) {
+  const out = [...parts];
+  for (let i = 0; i + 2 < out.length; i++) {
+    if (out[i] !== '=' || out[i + 1] !== '>' || out[i + 2] !== '{') continue;
+    let depth = 0, close = -1, single = true;
+    for (let j = i + 2; j < out.length; j++) {
+      const p = out[j];
+      if (p === '(' || p === '[' || p === '{') depth++;
+      else if ((p === ')' || p === ']' || p === '}') && --depth === 0) { close = j; break; }
+      else if (p === ';' && depth === 1) single = false;
+      if (p.endsWith('\n')) single = false;
+    }
+    if (close < 0 || close === i + 3 || !single || out[i + 3] === '#') continue;
+    const body = out.slice(i + 3, close);
+    out.splice(i + 2, close - i - 1, ...body, ...(out[close + 1] === ',' ? [] : [',']));
   }
   return out;
 }
@@ -182,7 +211,7 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
       }
       parts.push(t.kind === 'lit' ? normalizeStringContinuations(t.text) : t.text);
     }
-    let s = parts.join('\u0001');
+    let s = unwrapArmBlocks(parts).join('\u0001');
     s = s.replace(/(^|\u0001)(super\u0001:\u0001:(?:\u0001super\u0001:\u0001:)*)/g, (match, prefix, run) => {
       const k = (run.match(/super\u0001:\u0001:/g) || []).length;
       const L = depth - k;

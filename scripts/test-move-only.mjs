@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { lexRust, normalizeItems, compareItemSets, normalizeStringContinuations } from './check-move-only.mjs';
+import { lexRust, normalizeItems, compareItemSets, normalizeStringContinuations, unwrapArmBlocks } from './check-move-only.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -451,4 +451,32 @@ test('aa. A backslash-newline continuation line in a string, re-indented by a mo
   assert.equal(cmp('fn f() { r"a\n        b"; }', 'fn f() { r"a\n    b"; }').removed.length, 1);
   assert.equal(normalizeStringContinuations('"a\\\n  \t b"'), '"a\\\nb"');
   assert.equal(normalizeStringContinuations('r"a\\\n  b"'), 'r"a\\\n  b"');
+});
+
+test('ab. A match-arm body block holding one expression, which rustfmt adds or removes when re-indenting: => { x } compares equal to => x, (also as the last arm, before a comma and nested); a block with a statement, a comment or an attribute, and an empty block, stay DIFFERENT from the unwrapped form.', () => {
+  const cmp = (before, after) => compareItemSets(
+    [{ path: 'src/foo.rs', source: before, isChild: false }],
+    [{ path: 'src/foo/tests.rs', source: after, isChild: true }],
+  );
+  const same = (before, after) => {
+    const result = cmp(before, after);
+    assert.equal(result.removed.length, 0);
+    assert.equal(result.added.length, 0);
+  };
+  same('fn f(x: u8) -> u8 { match x { 0 => { g(1) } _ => 2, } }', 'fn f(x: u8) -> u8 { match x { 0 => g(1), _ => 2 } }');
+  same('fn f(x: u8) -> u8 { match x { 0 => 1, _ => { 2 } } }', 'fn f(x: u8) -> u8 { match x { 0 => 1, _ => 2, } }');
+  same('fn f(x: u8) { match x { 0 => { g(1) }, _ => {} } }', 'fn f(x: u8) { match x { 0 => g(1), _ => {} } }');
+  same(
+    'fn f(x: u8) -> u8 { match x { 0 => { match y { 1 => { 3 } _ => 4 } } _ => 2 } }',
+    'fn f(x: u8) -> u8 { match x { 0 => match y { 1 => 3, _ => 4 }, _ => 2 } }',
+  );
+  const unwrapped = 'fn f(x: u8) -> u8 { match x { 0 => 1, _ => 2 } }';
+  assert.equal(cmp('fn f(x: u8) -> u8 { match x { 0 => { g(); 1 } _ => 2 } }', unwrapped).removed.length, 1);
+  assert.equal(cmp('fn f(x: u8) -> u8 { match x { 0 => { // one\n 1 } _ => 2 } }', unwrapped).removed.length, 1);
+  assert.equal(cmp('fn f(x: u8) -> u8 { match x { 0 => { #[allow(unused)] 1 } _ => 2 } }', unwrapped).removed.length, 1);
+  assert.equal(cmp('fn f(x: u8) { match x { 0 => {} _ => {} } }', 'fn f(x: u8) { match x { 0 => (), _ => {} } }').removed.length, 1);
+  assert.deepEqual(unwrapArmBlocks(['=', '>', '{', 'x', '}', '_']), ['=', '>', 'x', ',', '_']);
+  for (const kept of [['g', '(', ')', ';', 'x'], ['// c\n', 'x'], ['#', '[', 'a', ']', 'x'], []]) {
+    assert.deepEqual(unwrapArmBlocks(['=', '>', '{', ...kept, '}']), ['=', '>', '{', ...kept, '}']);
+  }
 });

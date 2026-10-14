@@ -58,9 +58,34 @@ export function countOutboundShimUses(text) {
 }
 
 /**
- * Scans the source directory and returns files with line counts and crate::outbound uses.
+ * Counts the top-level inline test modules of a Rust file: a `mod name {` line without indentation
+ * whose attributes include #[cfg(test)]. An oversize production file moves such modules into child
+ * files (R1, WP-71), so only its production code counts against the budget.
+ * @param {string} text Rust source
+ * @returns {number}
+ */
+export function countInlineTestModules(text) {
+  const lines = text.split('\n');
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{/.test(lines[i])) {
+      continue;
+    }
+    for (let j = i - 1; j >= 0 && lines[j].startsWith('#['); j--) {
+      if (/^#\[cfg\((?:all\()?test\b/.test(lines[j])) {
+        count++;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Scans the source directory and returns files with line counts, crate::outbound uses and inline
+ * test modules.
  * @param {string} root
- * @returns {Array<{path: string, lines: number, outboundShimUses: number}>}
+ * @returns {Array<{path: string, lines: number, outboundShimUses: number, inlineTestModules: number}>}
  */
 export function scanSource(root) {
   root = path.resolve(root);
@@ -85,7 +110,13 @@ export function scanSource(root) {
           if (buf[i] === 10) lines++;
         }
         const relPath = path.relative(root, fullPath).replace(/\\/g, '/');
-        results.push({ path: relPath, lines, outboundShimUses: countOutboundShimUses(buf.toString('utf8')) });
+        const text = buf.toString('utf8');
+        results.push({
+          path: relPath,
+          lines,
+          outboundShimUses: countOutboundShimUses(text),
+          inlineTestModules: countInlineTestModules(text),
+        });
       }
     }
   }
@@ -176,7 +207,7 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
   
   const currentFiles = new Map(files.map(f => [f.path, f.lines]));
   
-  for (const { path, lines, outboundShimUses } of files) {
+  for (const { path, lines, outboundShimUses, inlineTestModules = 0 } of files) {
     const cls = classify(path);
     const budget = baseline.budgets[cls];
     
@@ -185,6 +216,9 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
         violations.push(`${path}: new oversize file`);
       } else if (lines > oversize[path]) {
         violations.push(`${path}: grew from ${oversize[path]} to ${lines} lines`);
+      }
+      if (cls === 'production' && inlineTestModules > 0 && !(path in pinned)) {
+        violations.push(`${path}: oversize file keeps ${inlineTestModules} inline test module(s); move them into child files (R1)`);
       }
     }
     

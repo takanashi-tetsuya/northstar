@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   classify,
+  countInlineTestModules,
   countOutboundShimUses,
   digestPinned,
   evaluateStructure,
@@ -227,6 +228,40 @@ test('evaluateStructure - crate::outbound only in pinned files', () => {
   assert.match(result.violations[0], /src\/db\/other\.rs: uses crate::outbound; write crate::xmpp::outbound/);
 });
 
+test('countInlineTestModules', () => {
+  assert.equal(countInlineTestModules('#[cfg(test)]\nmod tests {\n    use super::*;\n}\n'), 1);
+  assert.equal(countInlineTestModules('#[cfg(test)]\n#[allow(clippy::x)]\nmod a_tests {\n}\n\n#[cfg(all(test, unix))]\npub(crate) mod b {\n}\n'), 2);
+  assert.equal(countInlineTestModules('#[cfg(test)]\nmod tests;\n'), 0);
+  assert.equal(countInlineTestModules('mod helpers {\n}\n#[cfg(feature = "x")]\nmod gated {\n}\n'), 0);
+  assert.equal(countInlineTestModules('fn f() {\n    #[cfg(test)]\n    mod nested {\n    }\n}\n'), 0);
+  assert.equal(countInlineTestModules('#[cfg(test)]\nfn helper() {}\nmod tests {\n}\n'), 0);
+});
+
+test('evaluateStructure - oversize production files keep no inline test modules', () => {
+  const digest = 'a'.repeat(64);
+  const baseline = {
+    schema: "northstar-source-structure-baseline-v1",
+    budgets: { production: 1500, test: 3000 },
+    oversize: { "src/db/big.rs": 2000, "src/db/frozen.rs": 2000, "src/db/big_tests.rs": 3500 },
+    root_rust_files: [],
+    pinned: { "src/db/frozen.rs": digest }
+  };
+  const digests = new Map([["src/db/frozen.rs", digest]]);
+  const files = [
+    { path: "src/db/big.rs", lines: 2000, inlineTestModules: 0 },
+    { path: "src/db/small.rs", lines: 1000, inlineTestModules: 1 },
+    { path: "src/db/frozen.rs", lines: 2000, inlineTestModules: 1 },
+    { path: "src/db/big_tests.rs", lines: 3500, inlineTestModules: 1 }
+  ];
+  assert.deepEqual(evaluateStructure({ files, baseline, digests }).violations, []);
+
+  files[0].inlineTestModules = 2;
+  const result = evaluateStructure({ files, baseline, digests });
+  assert.deepEqual(result.violations, [
+    'src/db/big.rs: oversize file keeps 2 inline test module(s); move them into child files (R1)'
+  ]);
+});
+
 test('lowerBaseline - lowers and removes but never raises or adds', () => {
   const baseline = {
     schema: "northstar-source-structure-baseline-v1",
@@ -259,8 +294,11 @@ test('scanSource - relative path', () => {
     assert.equal(files.length, 1);
     assert.equal(files[0].path, 'src/test_relative.rs');
     assert.equal(files[0].outboundShimUses, 0);
+    assert.equal(files[0].inlineTestModules, 0);
     fs.writeFileSync(path.join(tmp, 'src', 'test_relative.rs'), 'use crate::outbound::OutboundItem;\n');
     assert.equal(scanSource(relRoot)[0].outboundShimUses, 1);
+    fs.writeFileSync(path.join(tmp, 'src', 'test_relative.rs'), '#[cfg(test)]\nmod tests {\n}\n');
+    assert.equal(scanSource(relRoot)[0].inlineTestModules, 1);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

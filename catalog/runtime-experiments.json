@@ -136,7 +136,7 @@
           "command": "cargo test --locked --bin rust-xmpp-server frame_execution::tests",
           "test": {
             "path": "src/xmpp/frame_execution.rs",
-            "anchor": "mod tests {"
+            "anchor": "mod tests;"
           },
           "assertions": [
             "Real observation runner tests typed frame/publication results, terminal cardinality and sanitized fields under supplied futures; source gates separately check adapter wiring."

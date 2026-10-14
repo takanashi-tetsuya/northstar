@@ -90,6 +90,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | S4 根目錄分層 | WP-4x | 依 3.1 分組搬動，最後移除舊路徑轉出（分組、規則與綁定見 5.2） | `src/` 根目錄只剩 `main.rs` 與各層目錄宣告；5.2 列出的保留檔除外 |
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
 | S6 文件收斂 | WP-61–63 | 修正 KNOWN_ISSUES 的遷移鏈敘述與 README 的發佈敘述（WP-61）；HANDOFF 改為只記錄其他文件沒有的現況，`docs/README.md` 建立狀態地圖（WP-62）；現行文件與 `crates/*/MIGRATION.md` 改用分層路徑，`resource-bounds` 的原始碼連結固定到審閱提交（WP-63） | 文件一致性門禁通過，並檢查遷移鏈敘述、狀態地圖與舊路徑（R8）。已完成 |
+| S7 R1 收斂 | WP-71a–c | 超標生產檔的頂層內嵌測試模組移為子檔，只移動、不改測試；最後由結構門禁拒絕超標生產檔保留內嵌測試模組（R1）。盤點見 5.3 | 測試名稱集合不變；全部門禁與完整 CI 通過；基線刪除降到上限內的條目並下修其餘條目 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -175,6 +176,30 @@ S4 後根目錄保留的檔案：`main.rs`；同名目錄的模組檔 `state.rs`
 因 `response_owner.rs` 的歷史綁定測試失敗才發現。WP-48d 先恢復 `stage4_replay.rs`，並把這 19 個檔案的 SHA-256 記錄為結構基線的
 `pinned`，由結構門禁比對（R5）。這兩個檔案只用到 `crate::outbound` 一個舊路徑，WP-48 不改寫它們，`main.rs` 的
 `outbound` 轉出保留給它們。
+
+### 5.3 S7 盤點：超標生產檔的內嵌測試模組（`657a660`）
+
+S4 完成時有 60 個超標生產檔，共 144,606 行，其中 47 個含 54 個頂層內嵌測試模組。測試留在超標檔中有兩個問題。
+第一，之後依角色拆分時，正式碼和測試要一起搬。第二，以模組讀取的門禁讀正式模組時只排除測試子檔，
+內嵌模組仍在讀取範圍內，必要片段只出現在測試中時門禁也會通過（見 5.1 的 `config.rs`）。
+
+S7 依 WP-30、WP-48a 的作法處理 45 個檔案的 52 個模組：`foo.rs` 的模組移到 `foo/<模組>.rs`，
+`mod.rs` 的模組移到同一目錄，原處只留 `#[cfg(test)] mod <模組>;`。`bosh/response_owner.rs` 與
+`stage4_replay.rs` 的內容被 Stage 4 證據釘住（R5），保留內嵌測試。
+
+| WP | 範圍 | 檔案／模組 | 降到上限內 |
+| --- | --- | --- | --- |
+| WP-71a | `src/xmpp/`：`frame_execution.rs`、`auth_publication.rs` 與 `protocol/` 下 11 個檔案 | 13／14 | 6 |
+| WP-71b | `src/db/` | 14／16 | 6 |
+| WP-71c | `src/api/`、`src/runtime/`、`src/s2s/`、`src/services/`、`src/storage*`、`src/tools/`、`direct_replay.rs`；結構門禁新增 R1 的內嵌測試規則 | 18／22 | 10 |
+
+子檔多一層目錄，相對路徑的 `include_str!`／`include!` 要多一個 `../`。`api/mod.rs` 的子檔在同一目錄，
+路徑不變。`catalog/runtime-experiments.json` 有兩個測試錨點：`frame_execution.rs` 的 `mod tests {`
+改為 `mod tests;`；workers 測試的檔案路徑改為 `src/runtime/workers/tests.rs`。全部移完後，在暫存副本上
+2,191 個測試名稱不變，全部門禁結果與 dev 相同，fmt、clippy 與單元測試都通過。
+
+S7 結束時剩 38 個超標生產檔，共 91,605 行。除了 3 個被釘住的檔案（R5），其餘 35 個要依角色拆分
+（S2 的作法），另開後續 WP 處理。
 
 ## 6. 委派與驗收協議
 
@@ -305,3 +330,4 @@ Stage 證據仍綁定其原提交。
 | WP-61 | 完成：`KNOWN_ISSUES.md` 開頭的遷移鏈敘述由 `0001`–`0156`／155 項改為 `0001`–`0158`／157 項。這句話在 9/29 的審計中已漂移過一次，因此文件一致性門禁改由 `migrations/` 推導範圍、數量與刻意缺號（現為 `0021`），忽略空白後逐字比對；新增 migration 或出現新缺號而沒有同步這句話時失敗。`README.md` 與 `docs/README.zh-TW.md` 的發行套件段落原寫「維護者發佈後提供」，改為已發佈（`v0.2.0` 於 2026-09-20 發佈），保留 tag workflow 先建草稿、審閱後才發佈的說明；發佈狀態無法離線驗證，不加門禁。agy 依 5 處精確替換產出，結果逐位元組相同；5 個反例（舊範圍、舊數量、缺少缺號、新增 migration 並同步四份操作文件的連結、移走一個 migration）都由新檢查抓到 | 見 `git log --grep '\[WP-61\]'` |
 | WP-62 | 完成：`docs/HANDOFF.md` 停在 2026-09-29（等待是否重跑浸泡），以 `git mv` 移為 `docs/handoff/2026-09-29/HANDOFF.md`，開頭註明為歷史快照並連到現行交接，8 個相對連結多兩層 `../`。新的 `docs/HANDOFF.md` 只記錄不屬於其他權威文件的現況（分支與推送、本機 VM 實驗室、接手步驟），其餘只連結；VM 狀態（六台 shut off、沒有 `northstar*` user unit、私有證據沒有 9/29 之後的浸泡紀錄）於 2026-10-13 核對。`docs/README.md` 新增狀態地圖，列出九類狀態各自的權威文件（第 1 節第 5 項），`src/` 一列連到本文。文件一致性門禁要求狀態地圖存在並連結這九個權威來源，且現行交接連結狀態地圖。agy 依 10 處精確替換與 1 個新檔產出，結果逐位元組相同；6 個反例（缺少地圖標題、地圖缺交接或本文、migrations 連結移出地圖、交接不連結地圖、移動後的交接保留舊相對連結）都失敗 | 見 `git log --grep '\[WP-62\]'` |
 | WP-63 | 完成：WP-48 留下只在內文提到的舊路徑（見 5.2）。15 份文件（`docs/` 6 份與 9 份 `crates/*/MIGRATION.md`）中 48 處根目錄模組路徑改為分層路徑（`cluster_security` 改為 `src/cluster/security.rs`）。`docs/architecture/resource-bounds.zh-TW.md` 的 23 個原始碼連結帶著審閱時的行號，搬移後已不對應；改為固定到審閱提交 `f1e4f83` 的 GitHub 永久連結（四個已搬移的檔案用該提交的舊路徑），並註明行號屬於該提交。文件一致性門禁新增第 4 節 R8：現行文件與 MIGRATION.md 寫出 26 個已移走模組的根目錄路徑（含 `../src/` 與目錄形式）時失敗；有日期的紀錄、`CHANGELOG.md`、本文與 `http(s)` 連結略過，摘要行加上通過的文件數。agy 依 5 份規格共 41 處精確替換產出（內容過濾器限制每份規格的敏感詞數，`northstar-abuse-policy` 另拆兩份）；`northstar-xep-0059/MIGRATION.md` 少了檔首 BOM，由架構負責人補回，其餘逐位元組相同（預期檔原本漏了該檔的 7 個 CR，以 agy 保留的原始位元組為準）。8 個探針：現行文件、MIGRATION.md、未連結的 `../src/` 形式與目錄形式的舊路徑都失敗；固定提交的連結、crate 內部路徑、有日期的交接與 `CHANGELOG.md` 都通過 | 見 `git log --grep '\[WP-63\]'` |
+| WP-71a | 完成：`src/xmpp/` 13 個超標檔的 14 個頂層內嵌測試模組（195 個測試）移為子檔，例如 `frame_execution.rs` 移為 `frame_execution/tests.rs`；`saved_case.rs` 的兩個模組分別移為 `saved_case/route_observation_tests.rs` 與 `saved_case/replacement_gate_tests.rs`。原處只留 `#[cfg(test)] mod <模組>;`。13 個父檔由 31,375 行減為 21,654 行；子檔共 9,639 行，最大的 2,045 行，在測試上限內。基線刪除 6 個降到上限內的條目（`frame_execution.rs`、`auth_publication.rs`、`caps.rs`、`dispatch.rs`、`saved_stage4.rs`、`sm_owner.rs`），下修 7 個（如 `pep.rs` 由 3,884 減為 3,308）。`pep/tests.rs` 的 `include_str!` 改讀 `../pep.rs`；`catalog/runtime-experiments.json` 中 frame_execution 測試的錨點由 `mod tests {` 改為 `mod tests;`。架構負責人以腳本產生預期檔（去縮排、`cargo fmt`、修正相對路徑與錨點、基線 `--update`），每個模組一份規格，列出去縮排後被 rustfmt 重排的行。agy 依 15 份規格產出，`presence/tests.rs` 有兩處 `assert_eq!` 少了 `!`，由架構負責人補回，其餘逐位元組相同。2,191 個測試名稱不變。3 個反例都失敗：錨點改回 `mod tests {`（執行實驗門禁）、`presence.rs` 多一行（結構門禁）、`include_str!` 改回原路徑（無法編譯） | 見 `git log --grep '\[WP-71a\]'` |

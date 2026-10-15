@@ -36,7 +36,6 @@
     "src/xmpp/protocol/messaging.rs": 2036,
     "src/xmpp/protocol/pep.rs": 3308,
     "src/xmpp/protocol/presence.rs": 1705,
-    "src/xmpp/protocol/pubsub.rs": 3220,
     "src/xmpp/protocol/sasl2.rs": 1609,
     "src/xmpp/xml_util.rs": 2697
   },

@@ -26,7 +26,6 @@
     "src/security/tls.rs": 1570,
     "src/services/mix.rs": 3289,
     "src/services/muc.rs": 1846,
-    "src/services/pubsub.rs": 2214,
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431,
     "src/xmpp/protocol.rs": 2330,

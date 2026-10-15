@@ -20,7 +20,6 @@
     "src/db/upload_tests.rs": 3429,
     "src/db/users.rs": 2828,
     "src/s2s/inbound.rs": 3822,
-    "src/s2s/outbound.rs": 1731,
     "src/security/abuse.rs": 2622,
     "src/security/tls.rs": 1570,
     "src/services/mix.rs": 3289,

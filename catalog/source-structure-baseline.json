@@ -20,7 +20,6 @@
     "src/db/sm.rs": 2030,
     "src/db/upload_tests.rs": 3429,
     "src/db/users.rs": 2828,
-    "src/direct_replay.rs": 1726,
     "src/s2s/components.rs": 2049,
     "src/s2s/inbound.rs": 3822,
     "src/s2s/outbound.rs": 1731,

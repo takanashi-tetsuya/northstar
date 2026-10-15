@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import assert from "node:assert/strict";
-import { readProductionModule } from "./lib/source-module.mjs";
+import { findRustItem, readProductionModule } from "./lib/source-module.mjs";
 
 function read(path) {
   return fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -40,7 +40,7 @@ const protocolTests = read("src/xmpp/protocol/legacy_sasl_wire_tests.rs");
 const transport = read("src/xmpp/mod.rs");
 const bosh = read("src/bosh.rs");
 const replay = read("src/services/replay.rs");
-const sasl2 = read("src/xmpp/protocol/sasl2.rs");
+const sasl2 = readProductionModule("src/xmpp/protocol/sasl2.rs");
 const state = readProductionModule("src/state.rs"); // whole production module
 
 verifyMucSmAssociationBoundary(state);
@@ -132,10 +132,10 @@ for (const entry of [
   "sasl2_response(&mut self, root: Node<'_, '_>) -> Result<Action>",
   "sasl2_abort(&mut self, root: Node<'_, '_>) -> Action",
 ]) {
-  const start = sasl2.indexOf(entry);
-  if (start < 0) throw new Error(`SASL2 entry ${entry} is missing`);
+  if (!sasl2.includes(entry)) throw new Error(`SASL2 entry ${entry} is missing`);
+  const item = findRustItem(sasl2, entry);
   requireMatch(
-    sasl2.slice(start + entry.length),
+    item.text.slice(entry.length),
     /^\s*\{\s*let _authentication_timer = self\.state\.sasl2_authentication_timer\(\);/,
     `${entry} must start its owned timer before any early return`,
   );

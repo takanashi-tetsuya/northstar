@@ -62,7 +62,10 @@ const files = {
 
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
-const productionModules = new Set(['muc', 'mixArchive', 'mix', 'mixDb', 'state']);
+const productionModules = new Set([
+  'muc', 'mixArchive', 'mix', 'mixDb', 'state', 'authUsers', 'sasl2',
+  'mucService', 'mucDb', 'mucRepository', 'mixService', 'replayDb', 'smDb', 'mixRepository',
+]);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);
@@ -537,8 +540,11 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
 // Auth-specific lexical drift checks for independent credential transaction
 // observations and the existing receipt/transport-bound publication owner.
 export function verifyAuthPublicationBoundaries(sources) {
-  const { authFacts, authOwner, authService, authDb, authUsers, credentialSmService, credentialSmDb, authCaps, protocol, frame,
-    transport, websocket, bosh, boshResponse, sasl2, smProtocol, authMisc, state } = sources;
+  const { authFacts, authOwner, authService, authDb, authUsers: usersModule, credentialSmService, credentialSmDb, authCaps, protocol, frame,
+    transport, websocket, bosh, boshResponse, sasl2: sasl2Module, smProtocol, authMisc, state } = sources;
+  // These sources include child files after their parent's test-module boundary.
+  const authUsers = withoutTestModules(usersModule);
+  const sasl2 = withoutTestModules(sasl2Module);
   const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const method = (source, name) => normalize(body(productionModule(source), `(?:async\\s+)?fn\\s+${name}\\b`));
   const facts = productionModule(authFacts);

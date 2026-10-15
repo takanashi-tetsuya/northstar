@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const paths = {
@@ -99,7 +100,8 @@ function ordered(source, steps, label) {
 
 export function readAdmissionSources() {
   return Object.fromEntries(Object.entries(paths).map(([name, file]) => [name,
-    fs.readFileSync(path.join(root, file), 'utf8')]));
+    name === 'messaging' ? readProductionModule(file, { root })
+      : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 // The result/continuation adapter is deliberately small enough to bind its

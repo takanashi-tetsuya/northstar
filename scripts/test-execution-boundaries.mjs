@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { findRustItem } from './lib/source-module.mjs';
 import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
@@ -13,6 +14,18 @@ function rejects(name, file, before, after, expected) {
 }
 
 test('current production execution owners satisfy the gate', () => verifyExecutionBoundaries(baseline));
+for (const [name, declaration] of [
+  ['authUsers', "pub(crate) async fn lock_auth_generation_observed<'a>("],
+  ['authUsers', "pub async fn lock_auth_generation<'a>("],
+  ['sasl2', 'impl ProtocolSession'],
+]) {
+  test(`${declaration} remains checked after the parent test-module boundary`, () => {
+    const source = baseline[name];
+    const item = findRustItem(source, declaration);
+    const split = source.slice(0, item.start) + source.slice(item.close + 1) + '\nmod moved;\n' + item.text;
+    verifyExecutionBoundaries({ ...baseline, [name]: split });
+  });
+}
 test('comments and ordinary formatting are not executable authority', () => {
   verifyExecutionBoundaries(changed('frame', 'let result = future.await;',
     'let /* comment { } */ result =\n future . await;'));

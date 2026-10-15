@@ -40,9 +40,10 @@ function exactFields(source, declaration, expected) {
 }
 
 export function readSubserverSources() {
-  // src/state.rs is read as its whole production module.
+  // State and PubSub sources are read as their whole production modules.
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    name === 'state' ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
+    ['state', 'pubsubProtocol', 'pubsubService'].includes(name)
+      ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, runtimeControl, cluster, responsibility }) {

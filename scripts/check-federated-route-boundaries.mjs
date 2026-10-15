@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { readProductionModule } from './lib/source-module.mjs';
 
 // Source-shape wiring guard only. Routing, health races, exact delivery tuples
 // and acceptance semantics are exercised by direct_route_tests.rs, not proved
@@ -8,7 +9,7 @@ import path from 'node:path';
 export function readFederatedRouteSources() {
   const read = file => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   return {
-    inbound: read('src/s2s/inbound.rs'),
+    inbound: readProductionModule('src/s2s/inbound.rs'),
     adapter: read('src/s2s/inbound/direct_route.rs'),
   };
 }

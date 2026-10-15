@@ -189,7 +189,7 @@ fn event_retry_identity_is_stable_and_capacity_is_sharded() {
 fn destroyed_room_recreation_and_retention_are_epoch_fenced() {
     let authority = include_str!("../../migrations/0089_cluster_muc_authority.sql");
     let capacity = include_str!("../../migrations/0090_deployment_capacity_ledger.sql");
-    let source = include_str!("muc.rs");
+    let source = crate::db::muc::module_source();
     assert!(authority.contains("DROP CONSTRAINT IF EXISTS muc_rooms_localpart_key"));
     assert!(authority.contains("muc_rooms_live_localpart_unique"));
     assert!(source.contains("ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING"));

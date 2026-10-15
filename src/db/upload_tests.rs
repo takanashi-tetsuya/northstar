@@ -823,7 +823,7 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
     // may race it by pre-inserting a second cleanup projection.
     for source in [
         include_str!("users.rs"),
-        include_str!("../tools/pie.rs"),
+        crate::tools::pie::module_source().as_str(),
         include_str!("pie.rs"),
     ] {
         assert!(!source.contains("INSERT INTO upload_cleanup_queue"));

@@ -257,7 +257,7 @@ for capability in northstar_admin_command_issue_delete_cleanup \
     "migration 0111 is missing administrator cleanup capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "runtime SECURITY DEFINER allowlist is missing administrator cleanup capability: $capability"
-  require_literal "$role_attestation" "$capability" \
+  require_module_literal src/db/role_attestation.rs "$capability" \
     "runtime role attestation is missing administrator cleanup capability: $capability"
 done
 require_literal "$compose" 'NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets' \
@@ -517,18 +517,18 @@ require_literal "$main_source" 'db::pin_public_application_schema(pool_options)'
 require_module_literal src/state.rs \
   'crate::db::pin_public_application_schema(omemo_recovery_pool_options)' \
   'isolated OMEMO recovery pool does not inherit the production schema pin'
-require_literal "$pie_source" 'crate::db::pin_public_application_schema(pool_options)' \
+require_module_literal src/tools/pie.rs 'crate::db::pin_public_application_schema(pool_options)' \
   'PIE worker pool does not override DSN search_path options'
-require_literal "$role_attestation" \
+require_module_literal src/db/role_attestation.rs \
   "set_config('search_path','public',FALSE)" \
   'production pool schema pin is missing or transaction-local'
-require_literal "$role_attestation" "role.rolname='northstar_runtime'" \
+require_module_literal src/db/role_attestation.rs "role.rolname='northstar_runtime'" \
   'runtime role attestation is not bound to the exact workload identity'
-require_literal "$role_attestation" 'embedded migration ledger contains an unreviewed version gap' \
+require_module_literal src/db/role_attestation.rs 'embedded migration ledger contains an unreviewed version gap' \
   'runtime embedded ledger accepts an unreviewed migration-version gap'
-require_literal "$role_attestation" "session_user=current_user" \
+require_module_literal src/db/role_attestation.rs "session_user=current_user" \
   'database role attestation does not reject SET ROLE identity masquerading'
-require_literal "$role_attestation" "current_schemas(FALSE)=ARRAY['public'::pg_catalog.name]" \
+require_module_literal src/db/role_attestation.rs "current_schemas(FALSE)=ARRAY['public'::pg_catalog.name]" \
   'production role attestation does not pin the exact application schema'
 require_literal "$backup_runner" "current_user='northstar_backup'" \
   'backup does not attest its exact read-only database identity'
@@ -602,7 +602,7 @@ require_literal "$grant_apply" \
 require_literal "$role_runner" \
   'pg_temp.northstar_runtime_relation_manifest expected' \
   'existing-volume role audit does not consume the canonical runtime relation manifest'
-require_literal "$role_attestation" \
+require_module_literal src/db/role_attestation.rs \
   'attest_runtime_relation_capability_manifest(pool).await?' \
   'startup role attestation does not consume the canonical runtime relation manifest'
 if grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public' "$grant_apply"; then
@@ -635,10 +635,10 @@ require_literal "$grant_apply" \
 require_literal "$role_runner" \
   "routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype" \
   'runtime role audit must classify trigger-only SECURITY INVOKER helpers as owner-only direct execution'
-require_literal "$role_attestation" \
+require_module_literal src/db/role_attestation.rs \
   "routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype" \
   'startup role attestation must reject runtime direct EXECUTE on trigger-only invoker helpers'
-require_literal "$role_attestation" \
+require_module_literal src/db/role_attestation.rs \
   'trigger-only runtime routine execution' \
   'startup role attestation must describe trigger-only invoker execution drift'
 require_literal "$grant_apply" \
@@ -680,7 +680,7 @@ for capability in northstar_user_register northstar_user_create_bootstrap_admin 
     "migration 0108 is missing typed capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "runtime SECURITY DEFINER allowlist is missing: $capability"
-  require_literal "$role_attestation" "$capability" \
+  require_module_literal src/db/role_attestation.rs "$capability" \
     "runtime role attestation is missing: $capability"
 done
 for capability in northstar_admin_command_create_session \
@@ -692,7 +692,7 @@ for capability in northstar_admin_command_create_session \
     "migration 0108 is missing command-issuer capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "command role allowlist is missing: $capability"
-  require_literal "$role_attestation" "$capability" \
+  require_module_literal src/db/role_attestation.rs "$capability" \
     "command role attestation is missing: $capability"
 done
 for capability in northstar_admin_tls_reload_admit \
@@ -703,7 +703,7 @@ for capability in northstar_admin_tls_reload_admit \
     "command role allowlist is missing TLS reload capability: $capability"
   [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
     fail "TLS reload capability must appear in grant and both exact role audits: $capability"
-  require_literal "$role_attestation" "$capability" \
+  require_module_literal src/db/role_attestation.rs "$capability" \
     "command role attestation is missing TLS reload capability: $capability"
 done
 for capability in northstar_admin_panic_disconnect_admit \
@@ -714,7 +714,7 @@ for capability in northstar_admin_panic_disconnect_admit \
     "command role allowlist is missing panic-disconnect capability: $capability"
   [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
     fail "panic-disconnect capability must appear in grant and both exact role audits: $capability"
-  require_literal "$role_attestation" "$capability" \
+  require_module_literal src/db/role_attestation.rs "$capability" \
     "command role attestation is missing panic-disconnect capability: $capability"
 done
 for capability in northstar_admin_registration_admit \
@@ -725,7 +725,7 @@ for capability in northstar_admin_registration_admit \
     "command role allowlist is missing registration capability: $capability"
   [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
     fail "registration capability must appear in grant and both exact role audits: $capability"
-  require_literal "$role_attestation" "$capability" \
+  require_module_literal src/db/role_attestation.rs "$capability" \
     "command role attestation is missing registration capability: $capability"
 done
 require_literal "$registration_repository" 'db::api_control::AdminCommandRoute::Registration,' \
@@ -741,23 +741,23 @@ if grep -Eiq 'EXECUTE[[:space:]]+[^;]*(requested_|caller_)|format\([^)]*(request
   "$user_capability_migration"; then
   fail 'user command capabilities must not use caller-directed SQL or custom-GUC authority'
 fi
-require_literal "$users_source" 'SELECT northstar_user_register(' \
+require_module_literal src/db/users.rs 'SELECT northstar_user_register(' \
   'registration does not use the typed database capability'
-require_literal "$users_source" 'SELECT northstar_user_apply_login(' \
+require_module_literal src/db/users.rs 'SELECT northstar_user_apply_login(' \
   'login publication does not use the typed database capability'
-require_literal "$users_source" 'SELECT northstar_user_change_password_api(' \
+require_module_literal src/db/users.rs 'SELECT northstar_user_change_password_api(' \
   'REST password rotation does not use the bearer-fenced database capability'
-require_literal "$users_source" 'SELECT northstar_user_change_password_stream(' \
+require_module_literal src/db/users.rs 'SELECT northstar_user_change_password_stream(' \
   'XMPP password rotation does not use the generation-fenced database capability'
-require_literal "$admin_commands_source" 'SELECT northstar_admin_command_user_lifecycle(' \
+require_module_literal src/db/admin_commands.rs 'SELECT northstar_admin_command_user_lifecycle(' \
   'XEP-0133 lifecycle mutation does not consume an execution claim'
-require_literal "$roster_source" 'SELECT northstar_user_bump_roster_version($1)' \
+require_module_literal src/db/roster.rs 'SELECT northstar_user_bump_roster_version($1)' \
   'roster mutation still writes users directly'
 require_module_literal src/db/mix.rs 'SELECT northstar_user_bump_roster_version($1)' \
   'MIX roster mutation still writes users directly'
 require_literal "$omemo_recovery_source" 'SELECT northstar_user_consume_recovery_generation($1,$2,$3)' \
   'OMEMO recovery does not use the exact bearer/generation capability'
-require_literal "$pie_source" 'production PIE import requires MIGRATOR_DATABASE_URL_FILE' \
+require_module_literal src/tools/pie.rs 'production PIE import requires MIGRATOR_DATABASE_URL_FILE' \
   'offline PIE import was not moved behind the stopped migrator boundary'
 require_literal "$grant_apply" \
   'cluster_muc_delivery_handoffs' \
@@ -1557,7 +1557,7 @@ if grep -Fq 'no_matching_frame' "$message_pow_fixture"; then
   fail 'message PoW duplicate suppression must use an ordered recipient barrier instead of a timed absence window'
 fi
 
-require_literal "$muc_source" '#[path = "muc_tests.rs"]' \
+require_module_literal src/db/muc.rs '#[path = "muc_tests.rs"]' \
   'MUC repository must compile its extracted tests'
 require_literal "$muc_protocol_source" '#[path = "muc_tests.rs"]' \
   'MUC protocol must compile its extracted tests'

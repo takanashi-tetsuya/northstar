@@ -794,6 +794,10 @@ fi
 mix_db_production_source=$(module_source --production src/db/mix.rs) || exit 1
 mix_db_module_source=$(module_source src/db/mix.rs) || exit 1
 mix_protocol_production_source=$(module_source --production src/xmpp/protocol/mix.rs) || exit 1
+mix_service_production_source=$(module_source --production src/services/mix.rs) || exit 1
+mix_repository_production_source=$(module_source --production src/db/mix_repository.rs) || exit 1
+replay_db_production_source=$(module_source --production src/db/replay.rs) || exit 1
+sm_db_production_source=$(module_source --production src/db/sm.rs) || exit 1
 mix_ack_source=$(module_item src/db/mix.rs 'async fn remove_mix_delivery_tx(') || exit 1
 for forbidden_fragment in \
     'mix_delivery_events' \
@@ -839,7 +843,7 @@ if printf '%s\n' "$mix_capacity_fence_source" | grep -Fq 'pg_try_advisory_xact_l
 fi
 # Count both compatibility and observed store entries; each keeps its own gate.
 # The architecture and execution checkers also verify their individual ordering.
-if [ "$(grep -Fc 'let _admission = self.delivery_admission_guard().await;' src/services/mix.rs)" -ne 19 ]; then
+if [ "$(printf '%s\n' "$mix_service_production_source" | grep -Fc 'let _admission = self.delivery_admission_guard().await;')" -ne 19 ]; then
     echo "every MIX delivery-producing application-service entry must share the fair pre-pool gate" >&2
     exit 1
 fi
@@ -1020,7 +1024,7 @@ if grep -Fq 'pg_try_advisory_xact_lock' "$mix_capacity_authority_migration" \
     echo "MIX-PAM capacity must wait behind exact authority, not reject ordinary contention" >&2
     exit 1
 fi
-if [ "$(grep -Fc 'let _admission = self.pam_capacity_admission_guard().await;' src/services/mix.rs)" -ne 3 ]; then
+if [ "$(printf '%s\n' "$mix_service_production_source" | grep -Fc 'let _admission = self.pam_capacity_admission_guard().await;')" -ne 3 ]; then
     echo "MIX-PAM insert/prune entries must share one FIFO gate before PgPool checkout" >&2
     exit 1
 fi
@@ -1210,7 +1214,7 @@ for required_source_fragment in \
     'accept_committed_notification' \
     'publish_listener_transition'
 do
-    if ! grep -Fq "$required_source_fragment" src/services/mix.rs; then
+    if ! printf '%s\n' "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null; then
         echo "MIX delivery wake broker is missing source invariant: $required_source_fragment" >&2
         exit 1
     fi
@@ -1267,8 +1271,7 @@ for required_source_fragment in \
     'route_wake_generation: delivery.route_wake_generation' \
     'delivery.route_wake_generation,'
 do
-    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" | grep -Fq "$required_source_fragment" \
-       && ! grep -Fq "$required_source_fragment" src/db/mix_repository.rs src/services/mix.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" "$mix_repository_production_source" "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null; then
         echo "MIX route-wake epoch source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi
@@ -1354,8 +1357,8 @@ for required_source_fragment in \
     'TransportOwnershipSource::Mix' \
     'BoshResponseOwnership'
 do
-    if ! printf '%s\n' "$mix_db_production_source" | grep -Fq "$required_source_fragment" \
-       && ! grep -Fq "$required_source_fragment" src/db/replay.rs src/db/sm.rs src/services/mix.rs src/services/replay.rs src/services/sm.rs src/bosh.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" "$replay_db_production_source" "$sm_db_production_source" "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null \
+       && ! grep -Fq "$required_source_fragment" src/services/replay.rs src/services/sm.rs src/bosh.rs; then
         echo "MIX transport ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi
@@ -1432,8 +1435,8 @@ for required_source_fragment in \
     'consume_mix_cluster_delivery_fence_tx' \
     'SocketFenced'
 do
-    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" "$cluster_production_source" | grep -Fq "$required_source_fragment" \
-       && ! grep -Fq "$required_source_fragment" src/db/sm.rs src/services/mix.rs src/xmpp/mod.rs; then
+    if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" "$cluster_production_source" "$sm_db_production_source" "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null \
+       && ! grep -Fq "$required_source_fragment" src/xmpp/mod.rs; then
         echo "MIX cluster ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi

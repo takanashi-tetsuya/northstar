@@ -10,6 +10,7 @@ numeric counts and grant reconciliation cannot attest itself.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import hashlib
 from collections import Counter
@@ -206,6 +207,27 @@ def read(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except OSError as error:
         fail(f"could not read {path.relative_to(ROOT)}: {error}")
+
+
+def module_source(path: Path, command: str = "cat", declaration: str | None = None) -> str:
+    arguments = [
+        "node", "scripts/lib/source-module.mjs", command, "--production",
+        path.relative_to(ROOT).as_posix(),
+    ]
+    if declaration is not None:
+        arguments.append(declaration)
+    try:
+        return subprocess.check_output(arguments, cwd=ROOT, text=True, stderr=subprocess.PIPE)
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else error
+        fail(f"could not read {path.relative_to(ROOT)}: {detail}")
+
+
+def module_parts(path: Path) -> list[tuple[Path, str]]:
+    return [
+        (ROOT / name, read(ROOT / name))
+        for name in module_source(path, "files").splitlines()
+    ]
 
 
 def signatures_between(text: str, start: str, end: str) -> list[str]:
@@ -1072,7 +1094,7 @@ for relation_name, expected_acl in {
 # catalog health functions execute again at runtime, not only during install.
 postgresql_safety_documents = migration_documents + [
     (GRANTS, read(GRANTS)),
-    (ROLE_ATTESTATION, read(ROLE_ATTESTATION)),
+    *module_parts(ROLE_ATTESTATION),
     (ROLE_RECONCILER, read(ROLE_RECONCILER)),
     (DATABASE_CI, read(DATABASE_CI)),
     (BACKUP_RUNNER, read(BACKUP_RUNNER)),
@@ -1576,19 +1598,20 @@ if "\\ir northstar-capability-manifest.sql" not in wrapper_text:
 if "\\ir northstar-migration-ledger-manifest.sql" not in wrapper_text:
     fail("ordinary grant reconciliation does not load the canonical migration ledger")
 
-attestation_text = read(ROLE_ATTESTATION)
+attestation_text = module_source(ROLE_ATTESTATION)
 runtime_attestation = signatures_between(
     attestation_text,
     "WITH expected_definer(signature) AS (",
     "), resolved_definer AS (",
 )
 require_exact("runtime startup attestation", runtime_attestation, by_workload["runtime"])
-storage_start = attestation_text.index("pub async fn attest_storage_role(")
-command_start = attestation_text.index("pub async fn attest_admin_command_role(")
-if "workload == \"storage\"" not in attestation_text[storage_start:command_start]:
+storage_attestation = module_source(
+    ROLE_ATTESTATION, "item", "pub async fn attest_storage_role("
+)
+if "workload == \"storage\"" not in storage_attestation:
     fail("storage startup attestation is not driven by the storage manifest partition")
 command_attestation = signatures_between(
-    attestation_text[command_start:],
+    module_source(ROLE_ATTESTATION, "item", "pub async fn attest_admin_command_role("),
     "WITH expected(signature) AS (",
     "), resolved AS (",
 )

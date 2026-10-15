@@ -25,9 +25,10 @@ module_source() {
 
 require_module_literal() {
   local module_file="$1" literal="$2" contract="$3" text
+  local source_file="${4:-$module_file module}"
   text="$(module_source "$module_file")" || exit 1
   if ! grep -Fq -- "$literal" <<<"$text"; then
-    echo "MUC cluster static contract is missing: $contract ($module_file module: $literal)" >&2
+    echo "MUC cluster static contract is missing: $contract ($source_file: $literal)" >&2
     exit 1
   fi
 }
@@ -74,10 +75,12 @@ require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
   "northstar_admit_cluster_envelope_replay" "cluster replay admission fence"
 require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
   "existing.destination_instance_uuid<>p_destination_uuid" "destination instance replay fence"
-require_literal "$project_dir/src/db/muc.rs" \
-  "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency"
-require_literal "$project_dir/src/cluster/listener.rs" \
-  "executable MUC control rejected" "untrusted executable MUC control rejection"
+require_module_literal "src/db/muc.rs" \
+  "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency" \
+  "$project_dir/src/db/muc.rs"
+require_module_literal "src/cluster/listener.rs" \
+  "executable MUC control rejected" "untrusted executable MUC control rejection" \
+  "$project_dir/src/cluster/listener.rs"
 require_module_literal "src/cluster.rs" \
   "worker.delivery_read.recipient_snapshot(delivery).await" "recipient snapshot service boundary"
 require_literal "$project_dir/src/services/cluster_muc_delivery_read.rs" \

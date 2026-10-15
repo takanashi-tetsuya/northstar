@@ -10,7 +10,6 @@
     "src/bosh/response_owner.rs": 2884,
     "src/cluster/listener.rs": 1634,
     "src/db/admin_commands.rs": 2037,
-    "src/db/api_operations.rs": 2106,
     "src/db/mix_repository.rs": 1727,
     "src/db/muc.rs": 3149,
     "src/db/pubsub_integration_tests.rs": 6108,

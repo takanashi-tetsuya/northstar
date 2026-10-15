@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
 import { verifyNativeAckService } from './check-execution-boundaries.mjs';
-import { moduleFiles, readProductionModule, readModule, rustItemBody } from './lib/source-module.mjs';
+import { moduleFiles, readProductionModule, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -304,13 +304,13 @@ if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + cluster)
   throw new Error('process and cluster workers must use narrow state-owned database capabilities');
 }
 if (!state.includes('fn local_domain(&self) -> &str')
-    || /\bstate\.config\.domain\b/.test(read('src/s2s/inbound.rs'))) {
+    || /\bstate\.config\.domain\b/.test(readProductionModule('src/s2s/inbound.rs', { root }))) {
   throw new Error('S2S ingress must receive only the validated local domain');
 }
 const clusterMessageResolver = rustItemBody(cluster, 'async fn resolve_node_message_delivery<');
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
-    || !read('src/cluster/listener.rs').includes('message_policy.verifier()')
+    || !readProductionModule('src/cluster/listener.rs', { root }).includes('message_policy.verifier()')
     || !read('src/state/cluster_listener_message.rs').includes('verifier: self.node_message_contract_verifier()')) {
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
@@ -961,6 +961,15 @@ const protocolFiles = fs
   .filter((name) => name.endsWith('.rs'))
   .sort();
 
+// Preserve single-file reads for unrelated modules in the mixed inventories below.
+const productionProtocolModules = new Set([
+  'pep.rs', 'pubsub.rs', 'messaging.rs', 'commands.rs', 'presence.rs', 'sasl2.rs',
+]);
+function readProtocolSource(name) {
+  const relative = `src/xmpp/protocol/${name}`;
+  return productionProtocolModules.has(name) ? readProductionModule(relative, { root }) : read(relative);
+}
+
 let protocolDbAuthorityReferences = 0;
 let protocolDbDomainReferences = 0;
 let protocolStatePoolReferences = 0;
@@ -1036,7 +1045,7 @@ const mixProducerMethods = mixProducerMappings.map(([serviceMethod]) => serviceM
 if (new Set(mixProducerMethods).size !== mixProducerMethods.length) {
   throw new Error('MIX service producer mapping contains duplicate service methods');
 }
-const mixServiceSource = read('src/services/mix.rs');
+const mixServiceSource = readProductionModule('src/services/mix.rs', { root });
 const mixServiceProduction = productionWithoutCfgTestModules(
   mixServiceSource,
   'src/services/mix.rs',
@@ -1214,8 +1223,14 @@ for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)
     ({ opening, closing }) => opening < match.index && match.index < closing,
   );
   if (!owner) {
-    const line = countMatches(mixServiceProduction.slice(0, match.index), /\n/g) + 1;
-    throw new Error(`src/services/mix.rs:${line} acquires an outbox DB permit outside a service method`);
+    let offset = match.index;
+    for (const part of readModuleParts('src/services/mix.rs', { root, includeTests: false })) {
+      if (offset <= part.source.length) {
+        const line = countMatches(part.source.slice(0, offset), /\n/g) + 1;
+        throw new Error(`${part.path}:${line} acquires an outbox DB permit outside a service method`);
+      }
+      offset -= part.source.length + 1;
+    }
   }
   mixOutboxDbPermitOwners.set(owner.name, (mixOutboxDbPermitOwners.get(owner.name) ?? 0) + 1);
 }
@@ -1353,7 +1368,7 @@ if (
 ) {
   throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
 }
-const mixAdapterSource = read('src/db/mix_repository.rs');
+const mixAdapterSource = readProductionModule('src/db/mix_repository.rs', { root });
 for (const [serviceMethod] of mixProducerMappings) {
   const body = structBody(mixServiceSource, `pub(crate) async fn ${serviceMethod}(`);
   const gate = body.indexOf('self.delivery_admission_guard().await');
@@ -1808,7 +1823,7 @@ for (const [name, serviceAccessor, source] of [
       throw new Error('replay.rs must receive a narrow ReplayService handle');
     }
     for (const caller of ['presence.rs', 'sasl2.rs', 'sm.rs']) {
-      if (!/\.replay_service\s*\(\s*\)/.test(read(`src/xmpp/protocol/${caller}`))) {
+      if (!/\.replay_service\s*\(\s*\)/.test(readProtocolSource(caller))) {
         throw new Error(`${caller} no longer obtains the replay service for deferred work`);
       }
     }
@@ -1828,7 +1843,7 @@ for (const invariant of [
   'MAX_BUFFERED_ROSTER_CHANGES',
   'RosterSyncState::Flushing',
 ]) {
-  if (!rosterServiceSource.includes(invariant) && !read('src/db/roster.rs').includes(invariant)) {
+  if (!rosterServiceSource.includes(invariant) && !readProductionModule('src/db/roster.rs', { root }).includes(invariant)) {
     throw new Error(`RosterService lost safety invariant: ${invariant}`);
   }
 }
@@ -1899,7 +1914,7 @@ for (const invariant of [
     throw new Error(`resource-scoped replay migration lost invariant: ${invariant}`);
   }
 }
-const replayDbSource = read('src/db/replay.rs').replace(/\s+/g, ' ');
+const replayDbSource = readProductionModule('src/db/replay.rs', { root }).replace(/\s+/g, ' ');
 for (const invariant of [
   'ON CONFLICT(recipient_id,resource)',
   'SET owner_token=EXCLUDED.owner_token',
@@ -1932,7 +1947,7 @@ for (const invariant of ['ReplayStartOutcome', 'ReplayStartOutcome::BusyUntil'])
 if (!replayProtocolSource.includes('REPLAY_RECOVERY_DEADLINE')) {
   throw new Error('offline replay busy retry lost its bounded recovery deadline');
 }
-const sasl2Source = read('src/xmpp/protocol/sasl2.rs');
+const sasl2Source = readProductionModule('src/xmpp/protocol/sasl2.rs', { root });
 for (const forbidden of [
   'deliver_bind2_offline',
   'deliver_offline_leased',
@@ -2095,7 +2110,7 @@ if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b
   throw new Error('AccountService RegistrationAccount regained credential or authority fields');
 }
 const authCorePasswordSource = read('crates/northstar-auth-core/src/password.rs');
-const usersSource = read('src/db/users.rs');
+const usersSource = readProductionModule('src/db/users.rs', { root });
 for (const [name, source, typeName] of [
   ['PasswordCredentials', authCorePasswordSource, 'PasswordCredentials'],
   ['PreparedScramUpgrade', usersSource, 'PreparedScramUpgrade'],
@@ -2279,7 +2294,7 @@ for (const [name, accessor, forbiddenAuthority] of [
   ['upload.rs', 'upload_service', 'create_upload_slot_bounded'],
 ]) {
   const production = productionWithoutCfgTestModules(
-    read(`src/xmpp/protocol/${name}`),
+    readProtocolSource(name),
     `${name} production`,
   );
   if (new RegExp(`\\bdb\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
@@ -2301,9 +2316,9 @@ for (const [name, source] of [
   ['PasskeyService', read('src/services/passkeys.rs')],
   ['MessageService', read('src/services/messaging.rs')],
   ['MamService', mamServiceSource],
-  ['MucService', read('src/services/muc.rs')],
+  ['MucService', readProductionModule('src/services/muc.rs', { root })],
   ['ProfileService', read('src/services/profile.rs')],
-  ['PubSubService', read('src/services/pubsub.rs')],
+  ['PubSubService', readProductionModule('src/services/pubsub.rs', { root })],
   ['BlockingService', read('src/services/blocking.rs')],
   ['PrivacyService', read('src/services/privacy.rs')],
   ['PresenceService', read('src/services/presence.rs')],
@@ -2339,7 +2354,7 @@ for (const [name, source] of [
   ['GovernanceContext', read('src/state/governance.rs')],
   ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
   ['FederationOutboxService', read('src/services/federation_outbox.rs')],
-  ['TlsContext', read('src/security/tls.rs')],
+  ['TlsContext', readProductionModule('src/security/tls.rs', { root })],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],
@@ -2636,7 +2651,7 @@ if (!/muc_destroy_effects\.notify_committed\(operation\.id\)\.await/.test(operat
     || !committedMucWakeServiceSource.includes('notify_committed_operation(self.repository.descriptor(operation_id), wake, operation_id)')) {
   throw new Error('operation worker must wake committed MUC effects through the typed post-commit port');
 }
-const mucServiceSource = read('src/services/muc.rs');
+const mucServiceSource = readProductionModule('src/services/muc.rs', { root });
 const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
   throw new Error('MucService must receive its repository port');
@@ -2644,7 +2659,7 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
 if (/find_user[\s\S]*Result<Option<\s*db::User\s*>>/.test(mucServiceSource)) {
   throw new Error('MucService leaks the credential-bearing db::User DTO');
 }
-if (!/enabled_local_account[\s\S]*db::enabled_user_id/.test(read('src/db/room.rs'))) {
+if (!/enabled_local_account[\s\S]*db::enabled_user_id/.test(readProductionModule('src/db/room.rs', { root }))) {
   throw new Error('MucService no longer fails closed for disabled local routing targets');
 }
 if (!/find_enabled_user[\s\S]*?FROM users\s+WHERE username=\$1 AND NOT is_disabled/.test(usersSource)) {
@@ -2766,7 +2781,7 @@ if (!/\.finalize_sm_resume\s*\(/.test(smProtocolSource)) {
 // must delegate persistence, audit and command lifecycle authority to the
 // private AdminCommandService. Keep protocol code limited to form parsing,
 // in-memory routing effects and stanza construction.
-const commandsSource = read('src/xmpp/protocol/commands.rs');
+const commandsSource = readProductionModule('src/xmpp/protocol/commands.rs', { root });
 const commandsProductionSource = productionWithoutCfgTestModules(
   commandsSource,
   'commands.rs production',
@@ -3022,8 +3037,8 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
   throw new Error('new personal admission writes must never use legacy/plaintext evidence columns');
 }
 
-const abuseSource = read('src/security/abuse.rs');
-const abuseProductionSource = abuseSource.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0];
+const abuseSource = readProductionModule('src/security/abuse.rs', { root });
+const abuseProductionSource = productionWithoutCfgTestModules(abuseSource, 'abuse.rs production');
 if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
   throw new Error('message admission acceptance must remain behind its issued service/repository fence');
 }
@@ -3091,7 +3106,7 @@ for (const [serviceName, body, expectedKeyring] of [
   }
 }
 const keyedProtocolSource = protocolFiles
-  .map((name) => fs.readFileSync(path.join(protocolDirectory, name), 'utf8'))
+  .map((name) => readProtocolSource(name))
   .join('\n');
 if (/\b(?:PersonalMessageContentKeyring|PersonalRetractionContentKeyring)\b/.test(keyedProtocolSource)) {
   throw new Error('protocol tree must not receive durable content-key capabilities');
@@ -3131,7 +3146,7 @@ for (const retirementReference of [
 // operations from services/AppState methods, but must never name or traverse
 // long-lived configuration material directly.
 const protocolSource = protocolFiles
-  .map((name) => fs.readFileSync(path.join(protocolDirectory, name), 'utf8'))
+  .map((name) => readProtocolSource(name))
   .join('\n');
 for (const credentialAccessor of [
   'component_authentication_credential',
@@ -3180,7 +3195,7 @@ if (/^\s*pub(?:\(crate\))?\s+turn_shared_secret\s*:/m.test(extdiscoInner)) {
 // import domain value types, but all PostgreSQL authority must pass through
 // the private MessageService capability. This is a semantic boundary rather
 // than only a repository-wide count budget.
-const messagingSource = read('src/xmpp/protocol/messaging.rs');
+const messagingSource = readProductionModule('src/xmpp/protocol/messaging.rs', { root });
 if (/state\s*\.\s*pool/.test(messagingSource)) {
   throw new Error('messaging.rs regained direct AppState PostgreSQL authority');
 }
@@ -3222,14 +3237,14 @@ if (/Deliver\s*\(\s*db::User\s*\)/.test(messageServiceSource)) {
 const capsProtocolSource =
   read('crates/northstar-protocol-runtime/src/caps.rs') +
   read('src/xmpp/protocol/caps.rs');
-const s2sInboundSource = read('src/s2s/inbound.rs');
+const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root });
 if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
     || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')
     || !s2sInboundSource.includes('.admit_history(&writes)')) {
   throw new Error('inbound S2S personal storage must use the message service');
 }
-const s2sOutboundSource = read('src/s2s/outbound.rs');
-const componentsSource = read('src/s2s/components.rs');
+const s2sOutboundSource = readProductionModule('src/s2s/outbound.rs', { root });
+const componentsSource = readProductionModule('src/s2s/components.rs', { root });
 const federationCoreSource = read('crates/northstar-federation-core/src/lib.rs');
 if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
     || !federationCoreSource.includes('pub const fn accepts_s2s_stream_target(')
@@ -3308,7 +3323,7 @@ for (const invariant of [
 if (/interval\s*\(\s*CAPS_EFFECT_RETRY_BASE\s*\)/.test(capsProtocolSource)) {
   throw new Error('Caps retry correctness regressed to fixed periodic reconstruction');
 }
-if (/\.take\(128\)/.test(capsProtocolSource + read('src/xmpp/protocol/pep.rs'))) {
+if (/\.take\(128\)/.test(capsProtocolSource + readProductionModule('src/xmpp/protocol/pep.rs', { root }))) {
   throw new Error('Caps/PEP fan-out silently truncates a verified notify summary');
 }
 if (countMatches(capsProtocolSource, /self\.entries\.insert\(\s*full_jid,/g) < 2) {
@@ -3692,7 +3707,7 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
     || /\b(?:AppState|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
   throw new Error('Passkey login completion must check the live origin before using its narrow service');
 }
-const presenceProtocol = read('src/xmpp/protocol/presence.rs');
+const presenceProtocol = readProductionModule('src/xmpp/protocol/presence.rs', { root });
 const presenceClusterRouting = read('src/state/presence_cluster_routing.rs');
 if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
     || countMatches(presenceClusterRouting, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
@@ -3795,7 +3810,7 @@ if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occup
     || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
-const clusterListener = structBody(read('src/cluster/listener.rs'), 'async fn listen_once(');
+const clusterListener = rustItemBody(readProductionModule('src/cluster/listener.rs', { root }), 'async fn listen_once(');
 const clusterListenerTransport = rustItemBody(cluster, 'pub(crate) struct ClusterPubsubListenerTransport');
 const clusterListenerSupervisor = rustItemBody(cluster, 'pub(crate) async fn run_pubsub_listener(');
 if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
@@ -3911,13 +3926,13 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/ibr.rs'))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/misc.rs'))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sm.rs'))
-    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sasl2.rs'))
+    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(readProductionModule('src/xmpp/protocol/sasl2.rs', { root }))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(c2sProtocol)
-    || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/messaging.rs'))
+    || /(?:self\.)?state\.metrics\b/.test(readProductionModule('src/xmpp/protocol/messaging.rs', { root }))
     || /(?:self\.)?state\.metrics\b/.test(federatedMucSource)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
-const componentTransport = read('src/s2s/components.rs');
+const componentTransport = readProductionModule('src/s2s/components.rs', { root });
 if (!componentTransport.includes('struct ComponentTelemetry')
     || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(componentTransport)
     || !componentTransport.includes('component_telemetry().connection_failed()')
@@ -3929,12 +3944,12 @@ if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
     || !s2sTelemetry.includes('struct InboundConnectionTelemetry')
     || !s2sTelemetry.includes('struct OutboundDispositionTelemetry')
     || /\b(?:AppState|Metrics|PgPool)\b/.test(s2sTelemetry)
-    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(read('src/s2s/inbound.rs'))
-    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(read('src/s2s/outbound.rs'))) {
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(readProductionModule('src/s2s/inbound.rs', { root }))
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(readProductionModule('src/s2s/outbound.rs', { root }))) {
   throw new Error('S2S ingress and egress must use narrow telemetry cells');
 }
 for (const protocol of ['pep.rs', 'pubsub.rs']) {
-  if (/\bstate\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${protocol}`))) {
+  if (/\bstate\s*\.\s*metrics\b/.test(readProductionModule(`src/xmpp/protocol/${protocol}`, { root }))) {
     throw new Error(`${protocol} must use a narrow telemetry capability`);
   }
 }

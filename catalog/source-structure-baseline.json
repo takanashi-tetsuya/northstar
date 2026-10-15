@@ -14,7 +14,6 @@
     "src/db/mix_repository.rs": 1727,
     "src/db/muc.rs": 3149,
     "src/db/pubsub_integration_tests.rs": 6108,
-    "src/db/pubsub_repository.rs": 3513,
     "src/db/replay.rs": 2396,
     "src/db/role_attestation.rs": 1573,
     "src/db/room.rs": 1570,

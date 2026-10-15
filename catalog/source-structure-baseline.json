@@ -31,7 +31,6 @@
     "src/services/pubsub.rs": 2214,
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431,
-    "src/tools/identity_audit.rs": 1932,
     "src/tools/pie.rs": 2219,
     "src/xmpp/protocol.rs": 2330,
     "src/xmpp/protocol/commands.rs": 1754,

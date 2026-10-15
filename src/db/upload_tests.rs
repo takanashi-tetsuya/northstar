@@ -864,7 +864,7 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
         "PIE must use SQL-native NOWAIT admission without shortening replacement work"
     );
 
-    let upload_source = include_str!("upload.rs");
+    let upload_source = super::module_source();
     let authority = include_str!("../../migrations/0113_upload_authority_capabilities.sql");
     for capability in [
         "northstar_upload_reserve_slot(",
@@ -946,7 +946,7 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
 
 #[test]
 fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
-    let source = include_str!("upload.rs");
+    let source = super::module_source();
     let authority = include_str!("../../migrations/0113_upload_authority_capabilities.sql");
     let nowait = include_str!("../../migrations/0131_upload_capacity_nowait.sql");
     let trigger = nowait
@@ -1304,7 +1304,7 @@ fn upload_runtime_health_scans_are_bounded_and_timeout_fail_closed() {
         );
     }
 
-    let source = include_str!("upload.rs");
+    let source = super::module_source();
     let reconciliation = source
         .split("pub async fn reconcile_upload_capacity_ledger(")
         .nth(1)

@@ -48,12 +48,18 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/ibr.rs', 0],
 ]);
 
-// These entries' descendant directories hold independently owned modules
-// (protocol/dispatch.rs, protocol/replay.rs, services/mix/foreground.rs,
-// services/mix/outbox.rs) that are not yet migrated off raw XML, so these
-// two entries check only their own file until those modules get their own
-// entries. File-scoped entries check only the key file.
-const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs', 'src/services/mix.rs']);
+// This entry's descendant directory holds independently owned modules
+// (protocol/dispatch.rs, protocol/replay.rs) that are not yet migrated off raw
+// XML, so it checks only its own file until those modules get their own entries.
+// File-scoped entries check only the key file.
+const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs']);
+
+// These pre-existing child modules have findings outside the entry file's zero
+// baseline. Exclude their production subtrees, while covering the entry file
+// and any new children introduced by splitting it.
+const EXCLUDED_CHILD_MODULES = new Map([
+  ['src/services/mix.rs', ['src/services/mix/foreground.rs', 'src/services/mix/outbox.rs']],
+]);
 
 // Static protocol constants may be exempted only by an exact file, line and
 // literal match plus a reason. Exemptions must be parser input, never outbound
@@ -449,7 +455,14 @@ for (const [entryKey] of BASELINE) {
   if (FILE_SCOPED_ENTRIES.has(entryKey)) {
     filesToCheck = [entryKey];
   } else {
-    filesToCheck = productionModuleFiles(entryKey, { root });
+    const excludedFiles = new Set(
+      (EXCLUDED_CHILD_MODULES.get(entryKey) ?? []).flatMap((child) =>
+        productionModuleFiles(child, { root }),
+      ),
+    );
+    filesToCheck = productionModuleFiles(entryKey, { root }).filter(
+      (file) => !excludedFiles.has(file),
+    );
   }
   
   entryFiles.set(entryKey, filesToCheck);

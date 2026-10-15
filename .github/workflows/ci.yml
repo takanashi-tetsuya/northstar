@@ -454,6 +454,7 @@ jobs:
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
           node scripts/check-outbound-xml-construction.mjs
+          node --test scripts/test-outbound-xml-construction.mjs
           node scripts/check-parser-fuzz-coverage.mjs
           node scripts/test-parser-fuzz-coverage.mjs
           node scripts/check-ci-required.mjs --workflow-only

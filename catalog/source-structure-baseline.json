@@ -19,7 +19,6 @@
     "src/db/users.rs": 2828,
     "src/s2s/inbound.rs": 3822,
     "src/security/abuse.rs": 2622,
-    "src/security/tls.rs": 1570,
     "src/services/mix.rs": 3289,
     "src/services/muc.rs": 1846,
     "src/stage4_replay.rs": 7270,

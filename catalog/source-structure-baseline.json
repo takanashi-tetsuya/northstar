@@ -8,7 +8,6 @@
     "src/api/mod.rs": 1539,
     "src/bosh.rs": 2122,
     "src/bosh/response_owner.rs": 2884,
-    "src/db/mix_repository.rs": 1727,
     "src/db/pubsub_integration_tests.rs": 6108,
     "src/db/upload_tests.rs": 3429,
     "src/stage4_replay.rs": 7270,

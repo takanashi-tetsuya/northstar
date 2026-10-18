@@ -16,7 +16,6 @@
     "src/db/roster.rs": 2480,
     "src/db/sm.rs": 2030,
     "src/db/upload_tests.rs": 3429,
-    "src/security/abuse.rs": 2622,
     "src/services/muc.rs": 1846,
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431,

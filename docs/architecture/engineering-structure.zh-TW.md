@@ -1,6 +1,6 @@
 # Northstar 工程結構藍圖
 
-更新：2026-10-11。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
+更新：2026-10-18。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
 
 本文是**結構工作**（程式碼放在哪裡、由誰擁有、如何機械驗證）的唯一權威。
 它不改變任何協議、交易、migration 或安全語義。領域邏輯收斂仍依
@@ -70,7 +70,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | R1 行數預算 | 生產 `.rs` 檔 ≤ 1,500 行；測試檔 ≤ 3,000 行。既有超標檔記錄在基線，只能縮小；新檔不得超標。超標的生產檔不得保留頂層內嵌測試模組（`#[cfg(test)] mod x { … }`），測試移為子檔（S7）；被釘住的檔案（R5）除外 | `scripts/check-source-structure.mjs`＋`catalog/source-structure-baseline.json` |
 | R2 根目錄收斂 | `src/` 根目錄 `.rs` 數只能減少；不得新增根目錄測試檔 | 同上 |
 | R3 模組拆分方式 | 大檔拆成「`foo.rs`＋`foo/子模組.rs`」，保持原有模組路徑；拆分 WP 只移動程式碼，不改邏輯。可見性的不變式：搬移後每個名稱的可見範圍只能維持或縮小，不得擴大。維持原範圍的寫法是「私有→`pub(super)`、`pub(super)`→`pub(in <父模組的上層>)`（如 `pub(in crate::xmpp::protocol)`、`pub(in crate::db)`）、`pub(crate)`／`pub` 不動」，適用於搬入子檔的頂層項目、結構欄位與固有 impl 成員；不需跨檔使用者也可維持私有（範圍縮小）。WP-24 起一律採維持原範圍的寫法，由只移動檢查的 `VISIBILITY:` 行逐項核對，免去依編譯錯誤反覆補可見性。協議模組的父檔以明確的 `use self::子模組::{…};` 列出兄弟子檔與測試使用的名稱（只供測試者加 `#[cfg(test)]`），模組外使用者以原可見性轉出（`pub(super) use`／`pub(crate) use`）；已由 `db/mod.rs` 以 `pub use x::*` 整體轉出的 db 模組，父檔改以 `pub use self::子模組::*;` 轉出（bin crate 中未被使用的明確轉出是 unused import，`-D warnings` 下失敗） | 「只移動」差異檢查（第 6 節，`scripts/check-move-only.mjs`） |
-| R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取。Rust 單元測試以 `include_str!` 讀自身模組原始碼者，拆分時改讀父檔的 `#[cfg(test)] const MODULE_SOURCE`（父檔＋各正式子檔），並以守衛測試確認清單與非測試的 `mod` 宣告一致。子檔依拆分前在單檔中的先後順序列出：有些契約以出現不只一次的標記切割原始碼，依字母排列會取錯片段（WP-25 的 `let exact_replay =`） | `scripts/lib/source-module.mjs`；Rust 測試見 `src/db/cluster_muc.rs`、`src/db/archive.rs` |
+| R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取。Rust 單元測試以 `include_str!` 讀自身模組原始碼者，拆分時改讀父檔的 `#[cfg(test)] const MODULE_SOURCE`（父檔＋各正式子檔），並以守衛測試確認清單與非測試的 `mod` 宣告一致。子檔依拆分前在單檔中的先後順序列出：有些契約以出現不只一次的標記切割原始碼，依字母排列會取錯片段（WP-25 的 `let exact_replay =`）。模組目錄另有獨立擁有模組的 `xmpp/protocol.rs`、`api/mod.rs`、`bosh.rs` 不以模組讀取（會納入無關模組），門禁改讀「父檔＋`catalog/source-role-splits.json` 所列角色子檔」（`roleSplitFiles`／`readRoleSplitFile`，CLI `--role-split`）；結構門禁驗證該清單（鍵依序排列、子檔為葉檔、父檔有非測試的 `mod` 宣告且清單依宣告順序），這些檔案的守衛測試改比對該清單（WP-82g） | `scripts/lib/source-module.mjs`、`catalog/source-role-splits.json`；Rust 測試見 `src/db/cluster_muc.rs`、`src/db/archive.rs` |
 | R5 證據不可改寫 | `scripts/fixtures/**/historical*`、`docs/evidence/**` 與已記錄的 Stage 證據不得因結構工作修改；Stage 4 工具以 SHA-256 綁定內容的原始碼也逐位元組不變，搬移與路徑改寫都略過它們 | 審閱；被綁定的 `src/` 檔案（`bosh/response_owner.rs`、`stage4_replay.rs`、`stage4_replay/compact.rs` 與 16 個 `stage4_replay/fixtures/S*.json`）列於 `catalog/source-structure-baseline.json` 的 `pinned`，由 `scripts/check-source-structure.mjs` 比對 |
 | R6 測試專用碼 | 受控重播與實驗程式只能存在於 `#[cfg(test)]` 模組 | 既有門禁＋審閱 |
 | R7 提交 | 一個 WP 一至數個提交，訊息首行以 `[WP-xx]` 開頭；不推 WIP | 審閱 |
@@ -91,7 +91,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
 | S6 文件收斂 | WP-61–63 | 修正 KNOWN_ISSUES 的遷移鏈敘述與 README 的發佈敘述（WP-61）；HANDOFF 改為只記錄其他文件沒有的現況，`docs/README.md` 建立狀態地圖（WP-62）；現行文件與 `crates/*/MIGRATION.md` 改用分層路徑，`resource-bounds` 的原始碼連結固定到審閱提交（WP-63） | 文件一致性門禁通過，並檢查遷移鏈敘述、狀態地圖與舊路徑（R8）。已完成 |
 | S7 R1 收斂 | WP-71a–c | 超標生產檔的頂層內嵌測試模組移為子檔，只移動、不改測試；最後由結構門禁拒絕超標生產檔保留內嵌測試模組（R1）。盤點見 5.3 | 測試名稱集合不變；全部門禁與完整 CI 通過；基線刪除降到上限內的條目並下修其餘條目。已完成 |
-| S8 角色拆分 | WP-81a–f、WP-82a–e、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。進行中 |
+| S8 角色拆分 | WP-81a–f、WP-82a–i、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4），模組目錄另有獨立模組的三檔改讀角色拆分清單（WP-82g）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。已完成：基線只剩被釘住的 3 個生產檔（R5）與 2 個超過測試上限的測試檔（`db/pubsub_integration_tests.rs` 6,108 行、`db/upload_tests.rs` 3,429 行） |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -209,8 +209,8 @@ S7 結束時剩 38 個超標生產檔，共 91,605 行。除了 3 個被釘住�
 | 組 | WP | 檔案 | 前置條件 |
 | --- | --- | --- | --- |
 | 無單檔綁定 | WP-81a–f | `db/pubsub_repository.rs`、`db/api_operations.rs`、`db/upload.rs`、`tools/identity_audit.rs`、`xmpp/protocol/messaging/saved_case.rs`、`direct_replay.rs` | 無：只有結構基線與 R5 夾具提到路徑 |
-| 門禁以單檔讀取 | WP-82a–e 解耦，WP-83a–z 拆分 | 其餘 26 檔（如 `s2s/inbound.rs`、`services/mix.rs`、`db/users.rs`、`xmpp/protocol/sasl2.rs`） | 14 個門禁腳本改為讀正式模組（R4），以模擬拆分的反例確認仍會失敗 |
-| 模組目錄另有獨立模組 | WP-84a–c | `xmpp/protocol.rs`（63 個正式子模組）、`api/mod.rs`（18 個）、`bosh.rs`（3 個，含被釘住的 `response_owner.rs`） | 門禁刻意以單檔讀取，改為讀整個模組會納入無關模組；另行設計讀取範圍 |
+| 門禁以單檔讀取 | WP-82a–e 解耦（WP-82f、82h 為拆分後的跟進），WP-83a–z 拆分 | 其餘 26 檔（如 `s2s/inbound.rs`、`services/mix.rs`、`db/users.rs`、`xmpp/protocol/sasl2.rs`） | 14 個門禁腳本改為讀正式模組（R4），以模擬拆分的反例確認仍會失敗 |
+| 模組目錄另有獨立模組 | WP-82g 讀取範圍，WP-84a–c 拆分 | `xmpp/protocol.rs`（63 個正式子模組）、`api/mod.rs`（18 個）、`bosh.rs`（3 個，含被釘住的 `response_owner.rs`） | 門禁刻意以單檔讀取，改為讀整個模組會納入無關模組；WP-82g 改讀「父檔＋`catalog/source-role-splits.json` 所列角色子檔」，清單為空時門禁輸出逐字不變（R4） |
 
 拆分沿用 S2 的規則：只移動整個項目，`use` 不移動；R3 的可見性改寫由只移動檢查的 `VISIBILITY:` 行逐項核對；
 `db/mod.rs` 以 `pub use x::*` 整體轉出的模組，父檔以 `pub use self::子模組::*;` 轉出，其他模組由父檔明確匯入
@@ -230,7 +230,8 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
 
 - 以 `include_str!` 讀原始碼的 Rust 測試改讀 `MODULE_SOURCE`（R4）：`s2s/inbound_tests.rs`、`xmpp/protocol/pep/tests.rs`、
   `db/cluster_muc_tests.rs`（讀 `db/muc.rs`）、`db/upload_tests.rs`（讀 `db/users.rs` 與 `tools/pie.rs`）、
-  `db/replay/bosh_ack_bound_schema_tests.rs`。讀者在模組外時，`MODULE_SOURCE` 與 `module_source()` 用可達的最窄可見性
+  `db/replay/bosh_ack_bound_schema_tests.rs`、`api/tests.rs` 與 `api/system/tests.rs`（讀 `api/mod.rs`）。
+  讀者在模組外時，`MODULE_SOURCE` 與 `module_source()` 用可達的最窄可見性
   （`pub(super)`、`pub(crate)`）；`db/mod.rs` 的 glob 轉出會把它們帶進 `db`，同名不衝突，未使用時也不產生警告。
   `upload_tests.rs` 已超過測試檔上限，不得變長，守衛測試一律放在新的測試子檔 `module_source_tests.rs`（WP-81c）。
 - 依相鄰順序切割的測試：`upload_tests.rs` 取 `async fn delete_user_with_roster_inner(` 到
@@ -322,6 +323,10 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
      codex 改在記憶體中比較，結果仍由架構負責人在沙箱外重跑確認。
    - 盤點 `include_str!` 讀者時不得截斷搜尋輸出：WP-81c 的盤點以 `head` 截斷而漏看 `db/upload.rs` 的三個
      讀者，由單元測試抓到。
+   - 整合後除了門禁本身，也要跑門禁的自測：WP-83t、83w 拆分後執行門禁仍通過，但自測的變異輔助已失效
+     （WP-82h）；以檔案與行號綁定的豁免（對外 XML 門禁的 allowlist）隨拆分移動，列入拆分 WP 的規格。
+   - 角色拆分（WP-84）：新子檔加入 `catalog/source-role-splits.json`。平行拆分各自修改同一份清單，整合時
+     不套用 codex 對清單的修改，改由整合腳本依設計寫入該檔的條目。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -406,3 +411,36 @@ Stage 證據仍綁定其原提交。
 | WP-82c | 完成：執行、admission、子伺服器、聯邦路由與 session 生命週期門禁對 14 處讀取改讀正式模組；SASL2 計時器檢查改以 `findRustItem` 擷取入口函式，執行門禁的認證檢查逐一移除測試模組（自測增加 3 個） | 見 `git log --grep '\[WP-82c\]'` |
 | WP-82d | 完成：遷移版本、資料庫角色、MUC 叢集與能力清單門禁對 6 個目標改讀正式模組；能力清單的 SQL 安全掃描逐一檢查 `db/role_attestation` 的每個正式檔案並報出子檔路徑與行號，儲存與命令角色的認證改以宣告擷取，不再以標頭之間切割 | 見 `git log --grep '\[WP-82d\]'` |
 | WP-82e | 完成：`check-abuse.mjs` 對 `security/abuse`、`protocol/messaging`、`db/users`、`xml_util` 改讀正式模組；users 的交易檢查改以宣告擷取。WP-82a–e 由 codex 平行執行；整合後架構負責人在 4 個目標放入反例子檔，門禁均失敗；全部門禁、自測與完整 CI 通過 | 見 `git log --grep '\[WP-82e\]'` |
+| WP-82f | 完成：架構門禁的三個直接呼叫 db:: MIX 掃描，原只豁免 `db/mix_repository.rs` 單檔，改為豁免該模組的正式檔案（測試檔照舊受檢）；執行門禁的 `MucService<R>` 檢查改選含 `fn new` 的那個同標頭 impl 區塊（`bodyContaining`），沒有或多於一個都失敗。自測增加 3 個 | 見 `git log --grep '\[WP-82f\]'` |
+| WP-82g | 完成：`catalog/source-role-splits.json` 列出 `xmpp/protocol.rs`、`api/mod.rs`、`bosh.rs` 拆出的角色子檔；`source-module.mjs` 新增 `roleSplitFiles`／`readRoleSplitFile`／`validateRoleSplits` 與 `--role-split`，結構門禁驗證清單（排序、子檔存在且為葉檔、父檔有非測試的 `mod` 宣告且依宣告順序）。架構、abuse、web-auth、OMEMO、對外 XML、執行、session 生命週期、遷移版本與 runtime experiments 門禁對這三檔的單檔讀取改讀「父檔＋所列子檔」。清單為空時十個門禁輸出逐字相同；把 `bosh/action.rs` 列為子檔並放入 `protocol.state` 時架構門禁失敗，清單損毀時遷移與結構門禁失敗 | 見 `git log --grep '\[WP-82g\]'` |
+| WP-82h | 完成：WP-83t、83w 拆分後執行門禁本身仍通過，但兩個自測失敗：sasl2 的 `impl ProtocolSession` 在每個檔案各出現一次而無法唯一擷取，改取含 `payload.replace_envelope(` 的區塊；BOSH、SM 與 BOSH 回應的變異輔助在第一個 `#[cfg(test)] mod tests` 截斷，模組讀取時會把附在父檔 `mod tests;` 宣告之後的子檔一併截掉，改為只以行內 `mod tests { ... }` 為界（同時讓 WP-84c 後的 BOSH 變異仍有效）。拆分前後 609 個自測都通過 | 見 `git log --grep '\[WP-82h\]'` |
+| WP-82i | 完成：只移動檢查以去掉 `.rs` 推導子目錄，`api/mod.rs` 因此在 `api/mod/` 找子檔、只比較父檔；改為讀 `mod.rs` 所在的目錄，工作樹走訪也不再重複列出父檔。新增的 CLI 測試 h2 把 `mod.rs` 父檔拆出同目錄子檔，不修正時失敗。由 WP-84b 的拆分發現 | 見 `git log --grep '\[WP-82i\]'` |
+| WP-83a | 完成：`s2s/inbound.rs` 3,822 行拆為 negotiation／session／dispatch／presence／iq，父檔 948 行，最大子檔 `negotiation.rs` 724 行；77 個項目不變，48 項可見性變更。`s2s/inbound_tests.rs` 的原始碼讀取改讀 `MODULE_SOURCE`（R4） | 見 `git log --grep '\[WP-83a\]'` |
+| WP-83b | 完成：`xmpp/protocol/pep.rs` 3,308 行拆為 publishing／notifications／node_management／payload_validation，父檔 814 行，最大子檔 `publishing.rs` 731 行；92 個項目不變，35 項可見性變更。模組內的 `pep/tests.rs` 改讀 `MODULE_SOURCE`，在只移動檢查中顯示為一個只改讀取行的項目 | 見 `git log --grep '\[WP-83b\]'` |
+| WP-83c | 完成：`services/mix.rs` 3,289 行拆為 contracts／operations／payloads／wake，父檔 1,001 行，最大子檔 `contracts.rs` 968 行；268 個項目不變，13 項可見性變更 | 見 `git log --grep '\[WP-83c\]'` |
+| WP-83d | 完成：`xmpp/protocol/pubsub.rs` 3,220 行拆為 entity／owner／forms，父檔 1,221 行，最大子檔 `entity.rs` 987 行；115 個項目不變，17 項可見性變更 | 見 `git log --grep '\[WP-83d\]'` |
+| WP-83e | 完成：`db/muc.rs` 3,149 行拆為 membership／history／admin，父檔 1,121 行，最大子檔 `membership.rs` 781 行；89 個項目不變，14 項可見性變更。`db/cluster_muc_tests.rs` 的原始碼讀取改讀 `MODULE_SOURCE` | 見 `git log --grep '\[WP-83e\]'` |
+| WP-83f | 完成：`db/users.rs` 2,828 行拆為 registration／authentication／api_sessions，父檔 1,265 行，最大子檔 `authentication.rs` 862 行；93 個項目不變，10 項可見性變更。`db/upload_tests.rs` 讀 `db/users.rs` 的測試改讀 `MODULE_SOURCE` | 見 `git log --grep '\[WP-83f\]'` |
+| WP-83g | 完成：`xmpp/xml_util.rs` 2,697 行拆為 muc／message_validation／stanza_rewrite，父檔 1,216 行，最大子檔 `message_validation.rs` 847 行；117 個項目不變，32 項可見性變更 | 見 `git log --grep '\[WP-83g\]'` |
+| WP-83h | 完成：`security/abuse.rs` 2,622 行拆為 key_management／persistence／challenges，父檔 916 行，最大子檔 `challenges.rs` 701 行；201 個項目不變，49 項可見性變更 | 見 `git log --grep '\[WP-83h\]'` |
+| WP-83i | 完成：`db/roster.rs` 2,480 行拆為 persistence／presence／blocking，父檔 717 行，最大子檔 `presence.rs` 933 行；80 個項目不變，21 項可見性變更 | 見 `git log --grep '\[WP-83i\]'` |
+| WP-83j | 完成：`db/replay.rs` 2,396 行拆為 presence_policy／offline_delivery／bosh_transport，父檔 717 行，最大子檔 `offline_delivery.rs` 872 行；56 個項目不變，17 項可見性變更。模組內的 `replay/bosh_ack_bound_schema_tests.rs` 改讀 `MODULE_SOURCE`，在只移動檢查中顯示為一個只改讀取行的項目 | 見 `git log --grep '\[WP-83j\]'` |
+| WP-83k | 完成：`tools/pie.rs` 2,219 行拆為 export_data／import_loading／import_payloads，父檔 745 行，最大子檔 `import_payloads.rs` 606 行；124 個項目不變，35 項可見性變更。`db/upload_tests.rs` 讀 `tools/pie.rs` 的測試改讀 `MODULE_SOURCE` | 見 `git log --grep '\[WP-83k\]'` |
+| WP-83l | 完成：`services/pubsub.rs` 2,214 行拆為 repository_access／outbox，父檔 1,226 行，最大子檔 `outbox.rs` 520 行；130 個項目不變，3 項可見性變更 | 見 `git log --grep '\[WP-83l\]'` |
+| WP-83m | 完成：`s2s/components.rs` 2,049 行拆為 connections／session／wire，父檔 523 行，最大子檔 `session.rs` 601 行；107 個項目不變，41 項可見性變更 | 見 `git log --grep '\[WP-83m\]'` |
+| WP-83n | 完成：`db/admin_commands.rs` 2,037 行拆為 accounts／command_sessions／runtime_control，父檔 910 行，最大子檔 `runtime_control.rs` 453 行；73 個項目不變，4 項可見性變更 | 見 `git log --grep '\[WP-83n\]'` |
+| WP-83o | 完成：`xmpp/protocol/messaging.rs` 2,036 行拆為 message_delivery，父檔 601 行，子檔 1,445 行；144 個項目不變，沒有可見性變更 | 見 `git log --grep '\[WP-83o\]'` |
+| WP-83p | 完成：`db/sm.rs` 2,030 行拆為 lifecycle／persistence，父檔 972 行，最大子檔 `persistence.rs` 716 行；60 個項目不變，15 項可見性變更 | 見 `git log --grep '\[WP-83p\]'` |
+| WP-83q | 完成：`services/muc.rs` 1,846 行拆為 room_operations／cluster_operations，父檔 968 行，最大子檔 `room_operations.rs` 543 行；155 個項目不變，沒有可見性變更 | 見 `git log --grep '\[WP-83q\]'` |
+| WP-83r | 完成：`xmpp/protocol/commands.rs` 1,754 行拆為 execution／forms，父檔 687 行，最大子檔 `execution.rs` 691 行；82 個項目不變，21 項可見性變更 | 見 `git log --grep '\[WP-83r\]'` |
+| WP-83s | 完成：`s2s/outbound.rs` 1,731 行拆為 connection／transport，父檔 816 行，最大子檔 `connection.rs` 483 行；69 個項目不變，19 項可見性變更 | 見 `git log --grep '\[WP-83s\]'` |
+| WP-83t | 完成：`db/mix_repository.rs` 1,727 行拆為 repository_impl，父檔 285 行，子檔 1,448 行；33 個項目不變，沒有可見性變更 | 見 `git log --grep '\[WP-83t\]'` |
+| WP-83u | 完成：`xmpp/protocol/presence.rs` 1,705 行拆為 subscriptions／availability，父檔 860 行，最大子檔 `availability.rs` 533 行；39 個項目不變，22 項可見性變更 | 見 `git log --grep '\[WP-83u\]'` |
+| WP-83v | 完成：`cluster/listener.rs` 1,634 行拆為 responses，父檔 1,473 行，子檔 173 行；14 個項目不變，12 項可見性變更；`listen_once` 是單一函式，整體留在父檔 | 見 `git log --grep '\[WP-83v\]'` |
+| WP-83w | 完成：`xmpp/protocol/sasl2.rs` 1,609 行拆為 parsing／authentication，父檔 826 行，最大子檔 `parsing.rs` 481 行；64 個項目不變，18 項可見性變更。對外 XML 門禁以檔案、行號與值豁免的 `</stream:stream>` 字面值由第 627 行移到第 136 行，allowlist、門禁內的自檢與 `test-outbound-xml-construction.mjs` 一併更新 | 見 `git log --grep '\[WP-83w\]'` |
+| WP-83x | 完成：`db/role_attestation.rs` 1,573 行拆為 manifests／catalog，父檔 592 行，最大子檔 `manifests.rs` 549 行；34 個項目不變，9 項可見性變更。搬移的項目都是私有，父檔以私有的 `use self::子模組::*;` 匯入、不轉出（`db/mod.rs` 只轉出公開項目） | 見 `git log --grep '\[WP-83x\]'` |
+| WP-83y | 完成：`db/room.rs` 1,570 行拆為 occupancy／conversions，父檔 903 行，最大子檔 `conversions.rs` 535 行；51 個項目不變，8 項可見性變更 | 見 `git log --grep '\[WP-83y\]'` |
+| WP-83z | 完成：`security/tls.rs` 1,570 行拆為 certificates／material，父檔 871 行，最大子檔 `certificates.rs` 451 行；102 個項目不變，30 項可見性變更。WP-83a–z 由 codex 分兩批平行執行（每批最多 16 個），各自通過只移動檢查；整合後 fmt、clippy、單元測試、全部門禁與完整 CI（15 項通過、2 項本機略過）通過，基線刪除 26 個條目 | 見 `git log --grep '\[WP-83z\]'` |
+| WP-84a | 完成：`xmpp/protocol.rs` 2,330 行拆為 legacy_auth／session_transport／session_sm，父檔 1,034 行，最大子檔 `legacy_auth.rs` 629 行；整個 protocol 模組 1,936 個項目不變，32 項可見性變更。三個子檔列入 `catalog/source-role-splits.json`，以單檔讀取 `protocol.rs` 的門禁隨之讀到搬走的程式碼 | 見 `git log --grep '\[WP-84a\]'` |
+| WP-84b | 完成：`api/mod.rs` 1,539 行拆出 route_composition（572 行），父檔 1,009 行；整個 api 模組 534 個項目不變，21 項可見性變更。`api/tests.rs` 與 `api/system/tests.rs` 改讀 `MODULE_SOURCE`，守衛測試 `module_source_lists_every_role_split_child` 比對角色拆分清單 | 見 `git log --grep '\[WP-84b\]'` |
+| WP-84c | 完成：`bosh.rs` 2,122 行拆為 response_output／request_policy，父檔 1,409 行，最大子檔 `request_policy.rs` 442 行；380 個項目不變，36 項可見性變更，被釘住的 `bosh/response_owner.rs` 不動。WP-84a–c 由 codex 平行執行，清單條目由整合腳本寫入；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線刪除 3 個條目 | 見 `git log --grep '\[WP-84c\]'` |

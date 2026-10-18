@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { readProductionModule } from './lib/source-module.mjs';
+import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
 
 const omemo = fs.readFileSync(new URL('../web/omemo.js', import.meta.url), 'utf8');
 const xmpp = fs.readFileSync(new URL('../web/xmpp.js', import.meta.url), 'utf8');
@@ -11,7 +11,7 @@ const recoveryApi = fs.readFileSync(new URL('../src/api/omemo_recovery.rs', impo
 const recoveryDb = fs.readFileSync(new URL('../src/db/omemo_recovery.rs', import.meta.url), 'utf8');
 const recoveryRepository = fs.readFileSync(new URL('../src/db/omemo_recovery_repository.rs', import.meta.url), 'utf8');
 const recoveryPoll = fs.readFileSync(new URL('../src/state/omemo_poll.rs', import.meta.url), 'utf8');
-const api = fs.readFileSync(new URL('../src/api/mod.rs', import.meta.url), 'utf8');
+const api = readRoleSplitFile('src/api/mod.rs');
 const serverState = readProductionModule('src/state.rs'); // whole production module
 const metrics = fs.readFileSync(new URL('../src/platform/metrics.rs', import.meta.url), 'utf8');
 

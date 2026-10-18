@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
+import { validateRoleSplits } from './lib/source-module.mjs';
 
 /**
  * Classify a source file as 'test' or 'production'.
@@ -408,6 +409,7 @@ if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
 
   const digests = digestPinned(root, baseline.pinned);
   const { violations, notices } = evaluateStructure({ files, baseline, digests });
+  violations.push(...validateRoleSplits({ root }));
 
   if (violations.length > 0) {
     for (const v of violations) console.error(`error: ${v}`);

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { productionModuleFiles } from './lib/source-module.mjs';
+import { productionModuleFiles, roleSplitFiles } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -48,10 +48,10 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/ibr.rs', 0],
 ]);
 
-// This entry's descendant directory holds independently owned modules
-// (protocol/dispatch.rs, protocol/replay.rs) that are not yet migrated off raw
-// XML, so it checks only its own file until those modules get their own entries.
-// File-scoped entries check only the key file.
+// This entry's directory holds independently owned modules, so it checks
+// the file and its role-split children listed in catalog/source-role-splits.json.
+// Other modules (protocol/dispatch.rs, protocol/replay.rs) are not yet migrated
+// off raw XML and stay outside this entry until they get their own entries.
 const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs']);
 
 // These pre-existing child modules have findings outside the entry file's zero
@@ -453,7 +453,7 @@ for (const [entryKey] of BASELINE) {
   
   let filesToCheck = [];
   if (FILE_SCOPED_ENTRIES.has(entryKey)) {
-    filesToCheck = [entryKey];
+    filesToCheck = roleSplitFiles(entryKey, { root });
   } else {
     const excludedFiles = new Set(
       (EXCLUDED_CHILD_MODULES.get(entryKey) ?? []).flatMap((child) =>

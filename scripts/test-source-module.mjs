@@ -10,6 +10,9 @@ import {
   productionModuleFiles,
   readModuleParts,
   readModule,
+  roleSplitFiles,
+  readRoleSplitFile,
+  validateRoleSplits,
   matchingRustBrace,
   findRustItem,
   rustItemBody,
@@ -18,6 +21,14 @@ import {
 } from './lib/source-module.mjs';
 
 const libraryPath = path.join(repositoryRoot, 'scripts/lib/source-module.mjs');
+
+function writeRoleCatalog(root, files) {
+  fs.mkdirSync(path.join(root, 'catalog'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'catalog/source-role-splits.json'), JSON.stringify({
+    schema: 'northstar-source-role-splits-v1',
+    files
+  }) + '\n');
+}
 
 test('module without child directory returns only itself', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
@@ -92,6 +103,157 @@ test('readModule joins parts with \\n; readModuleParts preserves order', () => {
     
     const joined = readModule('src/mix.rs', { root });
     assert.equal(joined, 'a\nb\nc');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('role-split reads preserve declaration order and exclude independent siblings for both parent styles', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src/a/b'), { recursive: true });
+    const parent = 'pub(crate) mod z_first;\nmod a_second;';
+    fs.writeFileSync(path.join(root, 'src/a/b.rs'), parent);
+    fs.writeFileSync(path.join(root, 'src/a/b/z_first.rs'), 'first');
+    fs.writeFileSync(path.join(root, 'src/a/b/a_second.rs'), 'second');
+    fs.writeFileSync(path.join(root, 'src/a/b/independent.rs'), 'excluded');
+    fs.writeFileSync(path.join(root, 'src/a/mod.rs'), 'pub mod leaf;');
+    fs.writeFileSync(path.join(root, 'src/a/leaf.rs'), 'leaf');
+    writeRoleCatalog(root, {
+      'src/a/b.rs': ['z_first', 'a_second'],
+      'src/a/mod.rs': ['leaf']
+    });
+    assert.deepEqual(roleSplitFiles('src/a/b.rs', { root }), [
+      'src/a/b.rs', 'src/a/b/z_first.rs', 'src/a/b/a_second.rs'
+    ]);
+    assert.equal(readRoleSplitFile('src/a/b.rs', { root }), parent + '\nfirst\nsecond');
+    assert.deepEqual(roleSplitFiles('src/a/mod.rs', { root }), ['src/a/mod.rs', 'src/a/leaf.rs']);
+    assert.equal(readRoleSplitFile('src/a/mod.rs', { root }), 'pub mod leaf;\nleaf');
+    assert.deepEqual(validateRoleSplits({ root }), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('role-split reads reject unlisted files, missing children and unsafe paths with catalog context', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src/a'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src/a/b.rs'), 'mod missing;');
+    fs.writeFileSync(path.join(root, 'src/unlisted.rs'), '');
+    writeRoleCatalog(root, { 'src/a/b.rs': ['missing'] });
+    for (const file of ['src/unlisted.rs', 'src/a/b.rs', '/absolute.rs', 'src/../a.rs', 'src/a.txt']) {
+      assert.throws(() => roleSplitFiles(file, { root }), error => {
+        assert.ok(error.message.includes('catalog/source-role-splits.json:'));
+        assert.ok(error.message.includes(file));
+        return true;
+      });
+    }
+    assert.throws(() => readRoleSplitFile('src/a/b.rs', { root }), /missing/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('role-split catalog rules 1-3 reject the whole catalog before any read', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src/a'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src/a/b.rs'), '');
+    fs.writeFileSync(path.join(root, 'src/a/c.rs'), '');
+    writeRoleCatalog(root, { 'src/a/b.rs': [] });
+    const catalogPath = path.join(root, 'catalog/source-role-splits.json');
+    const schema = 'northstar-source-role-splits-v1';
+    const invalidCatalogs = [
+      '{',
+      null,
+      [],
+      { schema, files: {}, extra: true },
+      { files: {} },
+      { schema },
+      { schema: 'wrong', files: {} },
+      { schema, files: [] },
+      { schema, files: null },
+      { schema, files: { 'src/a/c.rs': [], 'src/a/b.rs': [] } },
+      ...['/src/a/b.rs', 'src/../a.rs', 'outside.rs', 'src/a/b.txt', 'src/missing.rs', 'src/a.rs']
+        .map(file => ({ schema, files: { 'src/a/b.rs': [], [file]: [] } })),
+      ...[null, 'leaf', ['leaf', 'leaf'], [1], ['Bad'], ['a/b'], ['mod'], ['tests']]
+        .map(children => ({ schema, files: { 'src/a/b.rs': [], 'src/a/c.rs': children } }))
+    ];
+    fs.mkdirSync(path.join(root, 'src/a.rs'));
+    for (const catalog of invalidCatalogs) {
+      fs.writeFileSync(catalogPath, typeof catalog === 'string' ? catalog : JSON.stringify(catalog));
+      const violations = validateRoleSplits({ root });
+      assert.ok(violations.length > 0, JSON.stringify(catalog));
+      assert.ok(violations.every(violation => violation.startsWith('catalog/source-role-splits.json:')));
+      assert.throws(() => roleSplitFiles('src/a/b.rs', { root }), /catalog\/source-role-splits\.json:.*src\/a\/b.rs/);
+    }
+    fs.rmSync(catalogPath);
+    assert.ok(validateRoleSplits({ root }).length > 0);
+    assert.throws(() => roleSplitFiles('src/a/b.rs', { root }), /catalog\/source-role-splits\.json:.*src\/a\/b.rs/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('role-split rule 4 requires existing leaf files and production declarations in parent order', () => {
+  const cases = [
+    { source: 'mod leaf;', missing: true },
+    { source: 'mod leaf;', directory: true },
+    { source: '// mod leaf;' },
+    { source: 'mod leaf {}' },
+    { source: 'const S: &str = "mod leaf;";' },
+    { source: '#[cfg(test)]\n/// helper\n#[allow(dead_code)]\npub(crate) mod leaf;' },
+    { source: 'mod other;\nmod leaf;', children: ['leaf', 'other'] }
+  ];
+  for (const fixture of cases) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
+    try {
+      fs.mkdirSync(path.join(root, 'src/a/b'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'src/a/b.rs'), fixture.source);
+      if (!fixture.missing) fs.writeFileSync(path.join(root, 'src/a/b/leaf.rs'), '');
+      fs.writeFileSync(path.join(root, 'src/a/b/other.rs'), '');
+      if (fixture.directory) fs.mkdirSync(path.join(root, 'src/a/b/leaf'));
+      writeRoleCatalog(root, { 'src/a/b.rs': fixture.children ?? ['leaf'] });
+      const violations = validateRoleSplits({ root });
+      assert.ok(violations.length > 0, JSON.stringify(fixture));
+      assert.ok(violations.every(violation => violation.startsWith('catalog/source-role-splits.json:')));
+      if (!fixture.missing && !fixture.directory) {
+        assert.doesNotThrow(() => roleSplitFiles('src/a/b.rs', { root }));
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('role-split CLI reads a fixture catalog and rejects conflicting flags', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
+  try {
+    fs.mkdirSync(path.join(root, 'scripts/lib'), { recursive: true });
+    fs.copyFileSync(libraryPath, path.join(root, 'scripts/lib/source-module.mjs'));
+    fs.mkdirSync(path.join(root, 'src/a/b'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src/a/b.rs'), 'mod leaf;');
+    fs.writeFileSync(path.join(root, 'src/a/b/leaf.rs'), 'child');
+    fs.writeFileSync(path.join(root, 'src/a/b/independent.rs'), 'excluded');
+    writeRoleCatalog(root, { 'src/a/b.rs': ['leaf'] });
+    const script = path.join(root, 'scripts/lib/source-module.mjs');
+    let res = spawnSync(process.execPath, [script, 'files', '--role-split', 'src/a/b.rs'], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout, 'src/a/b.rs\nsrc/a/b/leaf.rs\n');
+    res = spawnSync(process.execPath, [script, 'cat', '--role-split', 'src/a/b.rs'], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout, 'mod leaf;\nchild');
+    for (const subcommand of ['files', 'cat']) {
+      for (const flags of [['--production', '--role-split'], ['--role-split', '--production']]) {
+        res = spawnSync(process.execPath, [script, subcommand, ...flags, 'src/a/b.rs'], { encoding: 'utf8' });
+        assert.equal(res.status, 1);
+        assert.match(res.stderr, /--production.*--role-split|--role-split.*--production/);
+      }
+    }
+    res = spawnSync(process.execPath, [script, 'files', '--role-split', 'src/unlisted.rs'], { encoding: 'utf8' });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /catalog\/source-role-splits\.json:.*src\/unlisted.rs/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

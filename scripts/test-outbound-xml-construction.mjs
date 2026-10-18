@@ -24,11 +24,16 @@ function fixture(run) {
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, source);
   };
+  const roleSplits = (children) => write('catalog/source-role-splits.json', JSON.stringify({
+    schema: 'northstar-source-role-splits-v1',
+    files: { 'src/xmpp/protocol.rs': children },
+  }));
   try {
     for (const script of [gate, 'scripts/lib/source-module.mjs']) {
       write(script, fs.readFileSync(path.join(root, script), 'utf8'));
     }
     for (const entry of entries) write(entry, '');
+    roleSplits([]);
     write('src/xmpp/protocol/mix/worker.rs', '');
     write('src/services/mix.rs', 'pub(crate) mod foreground;\npub(crate) mod outbox;\n');
     for (const child of ['foreground', 'outbox']) {
@@ -37,6 +42,7 @@ function fixture(run) {
     }
     run({
       write,
+      roleSplits,
       append: (relativePath, source) => fs.appendFileSync(path.join(fixtureRoot, relativePath), source),
       check: () => {
         const stdoutPath = path.join(fixtureRoot, 'stdout');
@@ -82,6 +88,23 @@ test('MIX keeps existing child modules and their descendants outside its zero bu
     const result = check();
     passes(result);
     assert.match(result.stdout, /src\/services\/mix\.rs: current=0, baseline=0, files=1/);
+  });
+});
+
+test('file-scoped entries check listed role children at their real file and line', () => {
+  fixture(({ write, append, roleSplits, check }) => {
+    append('src/xmpp/protocol.rs', 'mod zz_probe;\n');
+    write('src/xmpp/protocol/zz_probe.rs', `\n\n${rawXml}`);
+    roleSplits(['zz_probe']);
+    rejects(check(), 'src/xmpp/protocol/zz_probe.rs', 3);
+  });
+});
+
+test('file-scoped entries leave independently owned siblings outside their budget', () => {
+  fixture(({ write, append, check }) => {
+    append('src/xmpp/protocol.rs', 'mod zz_probe;\n');
+    write('src/xmpp/protocol/zz_probe.rs', rawXml);
+    passes(check());
   });
 });
 

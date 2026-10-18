@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { readRoleSplitFile } from './lib/source-module.mjs';
 
 const clientSource = fs.readFileSync(new URL('../web/client.js', import.meta.url), 'utf8');
 const xmppSource = fs.readFileSync(new URL('../web/xmpp.js', import.meta.url), 'utf8');
 const omemoSource = fs.readFileSync(new URL('../web/omemo.js', import.meta.url), 'utf8');
 const appSource = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const storageSource = fs.readFileSync(new URL('../web/storage.js', import.meta.url), 'utf8');
-const apiSource = fs.readFileSync(new URL('../src/api/mod.rs', import.meta.url), 'utf8');
+const apiSource = readRoleSplitFile('src/api/mod.rs');
 const csp = apiSource.match(/const SPA_CONTENT_SECURITY_POLICY: &str = "([^"]+)";/)?.[1] || '';
 const nodeRequire = createRequire(import.meta.url);
 const { safeFrame } = nodeRequire('./web-e2e.cjs');

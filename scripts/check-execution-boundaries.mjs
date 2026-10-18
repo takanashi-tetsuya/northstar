@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readProductionModule } from './lib/source-module.mjs';
+import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
@@ -66,6 +66,10 @@ const productionModules = new Set([
   'muc', 'mixArchive', 'mix', 'mixDb', 'state', 'authUsers', 'sasl2',
   'mucService', 'mucDb', 'mucRepository', 'mixService', 'replayDb', 'smDb', 'mixRepository',
 ]);
+
+// These directories hold independently owned modules, so read the file plus
+// its role-split children listed in catalog/source-role-splits.json.
+const roleSplitSources = new Set(['protocol', 'bosh']);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);
@@ -194,7 +198,8 @@ function ordered(source, steps, message) {
 
 export function readExecutionSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    productionModules.has(name) ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
+    productionModules.has(name) ? readProductionModule(file, { root })
+      : roleSplitSources.has(name) ? readRoleSplitFile(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 // Drift detection for the existing native/compatibility MIX service boundary.

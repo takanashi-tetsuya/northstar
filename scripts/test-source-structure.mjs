@@ -311,6 +311,10 @@ test('CLI tests', () => {
     fs.mkdirSync(path.join(tmp, 'src'));
     fs.mkdirSync(path.join(tmp, 'src', 'db'));
     fs.mkdirSync(path.join(tmp, 'catalog'));
+    fs.writeFileSync(path.join(tmp, 'catalog', 'source-role-splits.json'), JSON.stringify({
+      schema: 'northstar-source-role-splits-v1',
+      files: {}
+    }) + '\n');
     
     // Create a production file that is oversize
     const oversizeContent = '\n'.repeat(1600);
@@ -377,11 +381,45 @@ test('CLI tests', () => {
   }
 });
 
+test('CLI - role-split catalog is checked under --root', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-structure-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src', 'db'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'catalog'));
+    fs.writeFileSync(path.join(tmp, 'src', 'db', 'role.rs'), 'mod leaf;\n');
+    const scriptPath = fileURLToPath(new URL('./check-source-structure.mjs', import.meta.url));
+    const catalogPath = path.join(tmp, 'catalog', 'source-role-splits.json');
+    const catalog = {
+      schema: 'northstar-source-role-splits-v1',
+      files: { 'src/db/role.rs': ['leaf'] }
+    };
+    fs.writeFileSync(catalogPath, JSON.stringify(catalog) + '\n');
+    let res = spawnSync(process.execPath, [scriptPath, '--init', '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 0);
+
+    res = spawnSync(process.execPath, [scriptPath, '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /error: catalog\/source-role-splits\.json:.*src\/db\/role.rs.*leaf/);
+
+    catalog.files['src/db/role.rs'] = [];
+    fs.writeFileSync(catalogPath, JSON.stringify(catalog) + '\n');
+    res = spawnSync(process.execPath, [scriptPath, '--root', tmp], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('CLI - pinned files', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-structure-'));
   try {
     fs.mkdirSync(path.join(tmp, 'src', 'db'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'catalog'));
+    fs.writeFileSync(path.join(tmp, 'catalog', 'source-role-splits.json'), JSON.stringify({
+      schema: 'northstar-source-role-splits-v1',
+      files: {}
+    }) + '\n');
     fs.writeFileSync(path.join(tmp, 'src', 'main.rs'), '\n');
     fs.writeFileSync(path.join(tmp, 'src', 'db', 'heavy.rs'), '\n'.repeat(1600));
     fs.writeFileSync(path.join(tmp, 'src', 'db', 'frozen.json'), '{}\n');

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { findRustItem, readModuleParts, readProductionModule } from './lib/source-module.mjs';
+import { findRustItem, readModuleParts, readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
@@ -21,8 +21,8 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   read('src/db/abuse_verification_repository.rs'),
   // src/platform/config.rs and its non-test child files (the whole production module)
   readProductionModule('src/platform/config.rs'), read('.env.example'),
-  read('src/api/mod.rs'), read('src/api/auth_routes.rs'),
-  read('src/api/reports.rs'), read('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
+  readRoleSplitFile('src/api/mod.rs'), read('src/api/auth_routes.rs'),
+  read('src/api/reports.rs'), readRoleSplitFile('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
   readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/db/account_repository.rs'), read('src/security/account_recovery.rs'), readProductionModule('src/db/users.rs'), read('src/db/api_control.rs'), read('src/platform/error.rs'), readProductionModule('src/xmpp/xml_util.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),

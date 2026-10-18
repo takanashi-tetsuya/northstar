@@ -7,6 +7,83 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 /** Absolute path to the repository root, two directories above this file. */
 export const repositoryRoot = path.resolve(currentDir, '../..').replaceAll('\\', '/');
 
+const roleSplitCatalogPath = 'catalog/source-role-splits.json';
+
+/**
+ * Returns the normalized module path and its child directory after checking path guards.
+ */
+function modulePaths(modulePath) {
+  if (path.isAbsolute(modulePath)) throw new Error(`absolute path rejected: ${modulePath}`);
+  if (modulePath.split(/[/\\]/).includes('..')) throw new Error(`.. segments rejected: ${modulePath}`);
+  if (!modulePath.endsWith('.rs')) throw new Error(`must end with .rs: ${modulePath}`);
+
+  const normalizedModulePath = modulePath.replaceAll('\\', '/');
+  let childDir;
+  if (normalizedModulePath.endsWith('/mod.rs')) {
+    childDir = normalizedModulePath.slice(0, -7);
+  } else if (normalizedModulePath === 'mod.rs') {
+    childDir = '.';
+  } else {
+    childDir = normalizedModulePath.slice(0, -3);
+  }
+  return { normalizedModulePath, childDir };
+}
+
+/**
+ * Reads the role-split catalog and checks its schema, parent paths and child names.
+ */
+function readRoleSplitCatalog(root) {
+  const violations = [];
+  const report = message => violations.push(`${roleSplitCatalogPath}: ${message}`);
+  let catalog;
+  try {
+    catalog = JSON.parse(fs.readFileSync(path.join(root, roleSplitCatalogPath), 'utf8'));
+  } catch (error) {
+    report(`cannot read catalog: ${error.message}`);
+    return { files: {}, violations };
+  }
+
+  const isPlainObject = value => value !== null && typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype;
+  if (!isPlainObject(catalog) || Object.keys(catalog).length !== 2 ||
+    !Object.hasOwn(catalog, 'schema') || !Object.hasOwn(catalog, 'files')) {
+    report('must have exactly the keys schema and files');
+  }
+  if (catalog?.schema !== 'northstar-source-role-splits-v1') {
+    report('schema must be northstar-source-role-splits-v1');
+  }
+  if (!isPlainObject(catalog?.files)) {
+    report('files must be a plain object');
+    return { files: {}, violations };
+  }
+
+  const files = catalog.files;
+  const filePaths = Object.keys(files);
+  if (filePaths.join('\n') !== [...filePaths].sort().join('\n')) {
+    report('files keys must be in ascending order');
+  }
+  for (const [filePath, children] of Object.entries(files)) {
+    try {
+      const { normalizedModulePath } = modulePaths(filePath);
+      if (!normalizedModulePath.startsWith('src/')) throw new Error('must be under src/');
+      const absoluteFilePath = path.join(root, normalizedModulePath);
+      if (!fs.existsSync(absoluteFilePath) || !fs.statSync(absoluteFilePath).isFile()) {
+        throw new Error('parent file does not exist or is not a regular file');
+      }
+    } catch (error) {
+      report(`${filePath}: ${error.message}`);
+    }
+    if (!Array.isArray(children)) {
+      report(`${filePath}: children must be an array`);
+    } else if (children.some(child => typeof child !== 'string' ||
+      !/^[a-z_][a-z0-9_]*$/.test(child) || child === 'mod' || child === 'tests') ||
+      new Set(children).size !== children.length) {
+      report(`${filePath}: children must be unique module names other than mod or tests`);
+    }
+  }
+  return { files, violations };
+}
+
 /**
  * Returns test-only submodules found in the source.
  * Recognizes only line-leading outer #[cfg(test)] on bodyless mod declarations; #[path] redirects are not followed.
@@ -34,23 +111,11 @@ function getTestModules(source) {
  * Returns the module file and all recursively nested .rs files in its child directory.
  */
 export function moduleFiles(modulePath, { root = repositoryRoot, includeTests = true } = {}) {
-  if (path.isAbsolute(modulePath)) throw new Error(`absolute path rejected: ${modulePath}`);
-  if (modulePath.split(/[/\\]/).includes('..')) throw new Error(`.. segments rejected: ${modulePath}`);
-  if (!modulePath.endsWith('.rs')) throw new Error(`must end with .rs: ${modulePath}`);
+  const { normalizedModulePath, childDir } = modulePaths(modulePath);
 
   const absoluteModulePath = path.join(root, modulePath);
   if (!fs.existsSync(absoluteModulePath) || !fs.statSync(absoluteModulePath).isFile()) {
     throw new Error(`module file does not exist: ${modulePath}`);
-  }
-
-  const normalizedModulePath = modulePath.replaceAll('\\', '/');
-  let childDir;
-  if (normalizedModulePath.endsWith('/mod.rs')) {
-    childDir = normalizedModulePath.slice(0, -7);
-  } else if (normalizedModulePath === 'mod.rs') {
-    childDir = '.';
-  } else {
-    childDir = normalizedModulePath.slice(0, -3);
   }
 
   const results = [normalizedModulePath];
@@ -140,6 +205,91 @@ export function readModule(modulePath, options) {
  */
 export function readProductionModule(modulePath, options) {
   return readModule(modulePath, { ...options, includeTests: false });
+}
+
+/**
+ * Returns the file and exactly the role children listed in the role-split catalog.
+ */
+export function roleSplitFiles(filePath, { root = repositoryRoot } = {}) {
+  let locations;
+  try {
+    locations = modulePaths(filePath);
+  } catch (error) {
+    throw new Error(`${roleSplitCatalogPath}: ${filePath}: ${error.message}`);
+  }
+  const { files, violations } = readRoleSplitCatalog(root);
+  if (violations.length > 0) {
+    throw new Error(`${roleSplitCatalogPath}: ${filePath}: invalid catalog\n${violations.join('\n')}`);
+  }
+  const { normalizedModulePath, childDir } = locations;
+  const catalogFilePath = Object.keys(files).find(file => file.replaceAll('\\', '/') === normalizedModulePath);
+  if (catalogFilePath === undefined) {
+    throw new Error(`${roleSplitCatalogPath}: ${filePath}: file is not listed`);
+  }
+  const childPaths = files[catalogFilePath].map(child => {
+    const childPath = path.posix.join(childDir, `${child}.rs`);
+    const absoluteChildPath = path.join(root, childPath);
+    if (!fs.existsSync(absoluteChildPath) || !fs.statSync(absoluteChildPath).isFile()) {
+      throw new Error(`${roleSplitCatalogPath}: ${filePath}: child file does not exist: ${childPath}`);
+    }
+    const absoluteChildDir = path.join(root, childDir, child);
+    if (fs.existsSync(absoluteChildDir) && fs.statSync(absoluteChildDir).isDirectory()) {
+      throw new Error(`${roleSplitCatalogPath}: ${filePath}: role child must be a leaf file: ${childPath}`);
+    }
+    return childPath;
+  });
+  return [normalizedModulePath, ...childPaths];
+}
+
+/**
+ * Returns the sources of a file and its listed role children joined with newlines.
+ */
+export function readRoleSplitFile(filePath, options) {
+  const rootDir = options?.root ?? repositoryRoot;
+  return roleSplitFiles(filePath, options).map(file => fs.readFileSync(path.join(rootDir, file), 'utf8')).join('\n');
+}
+
+/**
+ * Returns violations of the role-split catalog schema, files and declaration order.
+ */
+export function validateRoleSplits({ root = repositoryRoot } = {}) {
+  const { files, violations } = readRoleSplitCatalog(root);
+  if (violations.length > 0) return violations;
+
+  for (const [filePath, children] of Object.entries(files)) {
+    const { normalizedModulePath, childDir } = modulePaths(filePath);
+    const source = fs.readFileSync(path.join(root, normalizedModulePath), 'utf8');
+    const testModules = getTestModules(source);
+    const declarations = new Map();
+    const declarationRegex = /^[ \t]*(?:pub(?:\([^)]+\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/gm;
+    let match;
+    while ((match = declarationRegex.exec(source)) !== null) {
+      if (!declarations.has(match[1])) declarations.set(match[1], match.index);
+    }
+
+    let previousDeclaration = -1;
+    for (const child of children) {
+      const childPath = path.posix.join(childDir, `${child}.rs`);
+      const absoluteChildPath = path.join(root, childPath);
+      if (!fs.existsSync(absoluteChildPath) || !fs.statSync(absoluteChildPath).isFile()) {
+        violations.push(`${roleSplitCatalogPath}: ${filePath}: child file does not exist: ${childPath}`);
+      }
+      const absoluteChildDir = path.join(root, childDir, child);
+      if (fs.existsSync(absoluteChildDir) && fs.statSync(absoluteChildDir).isDirectory()) {
+        violations.push(`${roleSplitCatalogPath}: ${filePath}: role child must be a leaf file: ${childPath}`);
+      }
+      if (!declarations.has(child) || testModules.has(child)) {
+        violations.push(`${roleSplitCatalogPath}: ${filePath}: child ${child} needs a non-test bodyless mod declaration`);
+      } else {
+        const declaration = declarations.get(child);
+        if (declaration < previousDeclaration) {
+          violations.push(`${roleSplitCatalogPath}: ${filePath}: children must follow parent declaration order`);
+        }
+        previousDeclaration = declaration;
+      }
+    }
+  }
+  return violations;
 }
 
 /**
@@ -268,33 +418,39 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     let args = process.argv.slice(2);
     if (args.length === 0) {
-      process.stderr.write('Usage: source-module.mjs <files|cat|item> [--production] <module.rs> [declaration]\n');
+      process.stderr.write('Usage: source-module.mjs <files|cat> [--production|--role-split] <module.rs> | item [--production] <module.rs> <declaration>\n');
       process.exit(2);
     }
     const subcommand = args[0];
     args = args.slice(1);
     
     let includeTests = true;
-    if (args[0] === '--production') {
-      includeTests = false;
+    let roleSplit = false;
+    while (args[0] === '--production' || args[0] === '--role-split') {
+      if (args[0] === '--production') includeTests = false;
+      else roleSplit = true;
       args = args.slice(1);
+    }
+    if (!includeTests && roleSplit) throw new Error('--production and --role-split are mutually exclusive');
+    if (roleSplit && subcommand !== 'files' && subcommand !== 'cat') {
+      throw new Error('--role-split is only supported by files and cat');
     }
     
     if (subcommand === 'files') {
       if (args.length !== 1) {
-        process.stderr.write('Usage: source-module.mjs files [--production] <module.rs>\n');
+        process.stderr.write('Usage: source-module.mjs files [--production|--role-split] <module.rs>\n');
         process.exit(2);
       }
-      const files = moduleFiles(args[0], { root: repositoryRoot, includeTests });
+      const files = roleSplit ? roleSplitFiles(args[0]) : moduleFiles(args[0], { root: repositoryRoot, includeTests });
       for (const file of files) {
         process.stdout.write(file + '\n');
       }
     } else if (subcommand === 'cat') {
       if (args.length !== 1) {
-        process.stderr.write('Usage: source-module.mjs cat [--production] <module.rs>\n');
+        process.stderr.write('Usage: source-module.mjs cat [--production|--role-split] <module.rs>\n');
         process.exit(2);
       }
-      const source = readModule(args[0], { root: repositoryRoot, includeTests });
+      const source = roleSplit ? readRoleSplitFile(args[0]) : readModule(args[0], { root: repositoryRoot, includeTests });
       process.stdout.write(source);
     } else if (subcommand === 'item') {
       if (args.length !== 2) {
@@ -305,7 +461,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.stdout.write(item.text + '\n');
     } else {
       process.stderr.write(`Unknown subcommand: ${subcommand}\n`);
-      process.stderr.write('Usage: source-module.mjs <files|cat|item> [--production] <module.rs> [declaration]\n');
+      process.stderr.write('Usage: source-module.mjs <files|cat> [--production|--role-split] <module.rs> | item [--production] <module.rs> <declaration>\n');
       process.exit(2);
     }
   } catch (err) {

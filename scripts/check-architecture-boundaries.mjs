@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
 import { verifyNativeAckService } from './check-execution-boundaries.mjs';
-import { moduleFiles, readProductionModule, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
+import { moduleFiles, readProductionModule, readRoleSplitFile, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2009,7 +2009,7 @@ for (const forbidden of [
 if (/AuthenticationResult\s*<\s*(?:crate::)?db::User\s*>/.test(authenticationServiceSource)) {
   throw new Error('AuthenticationService must never return the credential-bearing db::User DTO');
 }
-const legacyAuthProtocolSource = read('src/xmpp/protocol.rs');
+const legacyAuthProtocolSource = readRoleSplitFile('src/xmpp/protocol.rs', { root });
 const protocolSessionBody = structBody(legacyAuthProtocolSource, 'pub struct ProtocolSession');
 if (!/^\s*state\s*:\s*Arc<AppState>\s*,?\s*$/m.test(protocolSessionBody)) {
   throw new Error('ProtocolSession must keep AppState private to its protocol implementation');
@@ -2031,7 +2031,7 @@ for (const [name, source] of [
   }
 }
 for (const transport of ['src/bosh.rs', 'src/xmpp/mod.rs', 'src/xmpp/tcp_action.rs', 'src/xmpp/websocket_action.rs']) {
-  if (/\b(?:session|protocol)\s*\.\s*state\b/.test(read(transport))) {
+  if (/\b(?:session|protocol)\s*\.\s*state\b/.test(transport === 'src/bosh.rs' ? readRoleSplitFile(transport, { root }) : read(transport))) {
     throw new Error(`${transport} traverses ProtocolSession into global state`);
   }
 }
@@ -2407,7 +2407,7 @@ const sessionSnapshot = adminSessionRepository.indexOf('snapshot()');
 if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
   throw new Error('administrator session snapshot must run after database authorization');
 }
-if (/begin_authorized_read/.test(read('src/api/mod.rs'))) {
+if (/begin_authorized_read/.test(readRoleSplitFile('src/api/mod.rs', { root }))) {
   throw new Error('HTTP principals must not expose database read transactions');
 }
 const cleanupServiceSource = productionWithoutCfgTestModules(read('src/services/session_cleanup.rs'), 'Session cleanup');
@@ -3748,7 +3748,7 @@ if (/\.metrics\b/.test(accountRecoverySource)
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
 const metricsContext = structBody(read('src/state/metrics_context.rs'), 'pub(crate) struct MetricsContext');
-const metricsServe = structBody(read('src/api/mod.rs'), 'pub async fn serve_metrics(');
+const metricsServe = structBody(readRoleSplitFile('src/api/mod.rs', { root }), 'pub async fn serve_metrics(');
 if (!metricsEndpoint.includes('context: MetricsContext')
     || /Arc<AppState>/.test(metricsEndpoint)
     || /\b(?:AppState|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)
@@ -3763,7 +3763,7 @@ const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyE
 const readinessContext = rustItemBody(state, 'pub(crate) struct ReadinessContext');
 if (!readinessEndpoint.includes('context: ReadinessContext')
     || /Arc<AppState>|(?:AppState|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
-    || countMatches(read('src/api/mod.rs'), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
+    || countMatches(readRoleSplitFile('src/api/mod.rs', { root }), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
 const clusterSource = cluster;
@@ -3901,7 +3901,7 @@ if (!mainSource.includes('state.account_revocation_worker_context()')
   throw new Error('account revocation worker must use a narrow live-identity and fail-closed route context');
 }
 const c2sTelemetry = read('src/xmpp/capabilities.rs');
-const c2sProtocol = read('src/xmpp/protocol.rs');
+const c2sProtocol = readRoleSplitFile('src/xmpp/protocol.rs', { root });
 const c2sDispatch = read('src/xmpp/protocol/dispatch.rs');
 if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || !c2sTelemetry.includes('struct InboundStanzaTelemetry')

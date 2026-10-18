@@ -1,0 +1,8 @@
+{
+  "schema": "northstar-source-role-splits-v1",
+  "files": {
+    "src/api/mod.rs": [],
+    "src/bosh.rs": [],
+    "src/xmpp/protocol.rs": []
+  }
+}

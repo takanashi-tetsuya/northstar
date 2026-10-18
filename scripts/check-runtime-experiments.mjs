@@ -2,8 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifiedRuntimeInventory } from './check-architecture-boundaries.mjs';
+import { readRoleSplitFile } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Files listed in catalog/source-role-splits.json sit next to independently
+// owned modules; source anchors cover the file and its listed role children.
+const roleSplitSources = new Set(Object.keys(
+  JSON.parse(fs.readFileSync(path.join(root, 'catalog/source-role-splits.json'), 'utf8')).files));
 export const requiredFamilies = ['startup', 'c2s', 'direct', 'session', 'federation', 'muc', 'mix',
   'visibility', 'pubsub', 'upload', 'administration', 'cluster', 'workers', 'diagnostics', 'recovery', 'client'];
 const levels = new Set(['static', 'deterministic_unit', 'isolated_db', 'wire', 'operator_only']);
@@ -19,7 +24,8 @@ export function readRuntimeExperiments() {
   return JSON.parse(fs.readFileSync(path.join(root, 'catalog/runtime-experiments.json'), 'utf8'));
 }
 export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeInventory,
-  read = relative => fs.readFileSync(path.join(root, relative), 'utf8') } = {}) {
+  read = relative => roleSplitSources.has(relative)
+    ? readRoleSplitFile(relative, { root }) : fs.readFileSync(path.join(root, relative), 'utf8') } = {}) {
   fields(catalog, ['schema', 'purpose', 'required_families', 'families', 'executable_contract', 'controlled_contract'], 'catalog');
   requireValue(catalog.schema === 'northstar-runtime-experiments-v2', 'unsupported schema');
   text(catalog.purpose, 'purpose');

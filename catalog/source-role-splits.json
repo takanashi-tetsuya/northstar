@@ -4,7 +4,10 @@
     "src/api/mod.rs": [
       "route_composition"
     ],
-    "src/bosh.rs": [],
+    "src/bosh.rs": [
+      "request_policy",
+      "response_output"
+    ],
     "src/xmpp/protocol.rs": [
       "legacy_auth",
       "session_sm",

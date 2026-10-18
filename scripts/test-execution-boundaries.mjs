@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findRustItem } from './lib/source-module.mjs';
+import { findRustItem, matchingRustBrace } from './lib/source-module.mjs';
 import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
@@ -13,15 +13,28 @@ function rejects(name, file, before, after, expected) {
   test(name, () => assert.throws(() => verifyExecutionBoundaries(changedMuc(file, before, after)), expected));
 }
 
+// A split module repeats an inherent impl header once per file; take the
+// block that holds the given member.
+function itemContaining(source, declaration, member) {
+  const items = [];
+  for (let start = source.indexOf(declaration); start >= 0; start = source.indexOf(declaration, start + 1)) {
+    const close = matchingRustBrace(source, source.indexOf('{', start + declaration.length));
+    items.push({ start, close, text: source.slice(start, close + 1) });
+  }
+  const containing = items.filter(item => item.text.includes(member));
+  assert.equal(containing.length, 1, `exactly one ${declaration} must hold ${member}`);
+  return containing[0];
+}
+
 test('current production execution owners satisfy the gate', () => verifyExecutionBoundaries(baseline));
-for (const [name, declaration] of [
+for (const [name, declaration, member] of [
   ['authUsers', "pub(crate) async fn lock_auth_generation_observed<'a>("],
   ['authUsers', "pub async fn lock_auth_generation<'a>("],
-  ['sasl2', 'impl ProtocolSession'],
+  ['sasl2', 'impl ProtocolSession', 'payload.replace_envelope('],
 ]) {
   test(`${declaration} remains checked after the parent test-module boundary`, () => {
     const source = baseline[name];
-    const item = findRustItem(source, declaration);
+    const item = member ? itemContaining(source, declaration, member) : findRustItem(source, declaration);
     const split = source.slice(0, item.start) + source.slice(item.close + 1) + '\nmod moved;\n' + item.text;
     verifyExecutionBoundaries({ ...baseline, [name]: split });
   });
@@ -839,9 +852,12 @@ test('SM production ownership paths satisfy their source gate', () => verifySmOw
 test('SM comments cannot provide additional executable effects', () => {
   verifySmOwnershipBoundaries({ ...baseline, smOwner: `/* pool.begin(); request.no_persistence(); */\n${baseline.smOwner}` });
 });
+// Only an inline `mod tests { ... }` ends the production source in the
+// mutation helpers below: a module read appends child files after the
+// parent's bodyless `mod tests;` declaration.
 function rejectsSm(name, file, method, pattern, replacement, expected) {
   test(name, () => {
-    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\b/);
+    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\s*\{/);
     const production = testModule < 0 ? baseline[file] : baseline[file].slice(0, testModule);
     const declaration = new RegExp(`\\bfn\\s+${method}\\b`, 'g');
     const matches = [...production.matchAll(declaration)];
@@ -895,7 +911,7 @@ test('BOSH transfer comments do not supply executable receipt authority', () => 
 });
 function rejectsBosh(name, file, pattern, replacement, expected) {
   test(name, () => {
-    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\b/);
+    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\s*\{/);
     const production = testModule < 0 ? baseline[file] : baseline[file].slice(0, testModule);
     assert.equal([...production.matchAll(pattern)].length, 1, 'BOSH mutation must match exactly once in production source');
     const source = production.replace(pattern, replacement) + baseline[file].slice(production.length);
@@ -940,7 +956,7 @@ test('BOSH response comments cannot add receipt or exposure authority', () => {
 function rejectsBoshResponse(name, file, pattern, replacement, expected) {
   test(name, () => {
     const source = baseline[file];
-    const marker = /\n#\[cfg\(test\)\]\s*\nmod tests\b/.exec(source);
+    const marker = /\n#\[cfg\(test\)\]\s*\nmod tests\s*\{/.exec(source);
     const split = marker ? marker.index : source.length;
     const production = source.slice(0, split);
     assert.equal([...production.matchAll(pattern)].length, 1, 'BOSH response mutation must match exactly once in production source');

@@ -822,7 +822,7 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
     // Deletion has exactly one queue authority. Neither application path
     // may race it by pre-inserting a second cleanup projection.
     for source in [
-        include_str!("users.rs"),
+        crate::db::users::module_source().as_str(),
         crate::tools::pie::module_source().as_str(),
         include_str!("pie.rs"),
     ] {

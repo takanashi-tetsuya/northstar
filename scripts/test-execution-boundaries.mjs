@@ -673,6 +673,21 @@ function rejectsMucDiscussion(name, file, before, after, expected) {
   test(name, () => assert.throws(() => verifyMucDiscussionBoundaries(changedMuc(file, before, after)), expected));
 }
 test('current MUC discussion source bridges retain accepted knowledge', () => verifyMucDiscussionBoundaries(baseline));
+test('MUC service constructor remains checked with an unrelated impl block', () => {
+  const mucService = baseline.mucService + '\nimpl<R: MucRepository> MucService<R> {\n    pub(crate) fn zz_probe(&self) {}\n}\n';
+  verifyMucDiscussionBoundaries({ ...baseline, mucService });
+});
+test('MUC service constructor cannot appear in multiple impl blocks', () => {
+  const mucService = baseline.mucService + '\nimpl<R: MucRepository> MucService<R> {\n    pub(crate) fn zz_probe(&self) {}\n    pub(crate) fn new() {}\n}\n';
+  assert.throws(() => verifyMucDiscussionBoundaries({ ...baseline, mucService }), /expected one production body containing/);
+});
+test('MUC service preparation must stay in the constructor-bearing impl', () => {
+  const source = baseline.mucService;
+  const item = findRustItem(source, 'pub(crate) fn prepare_muc_discussion(');
+  const mucService = source.slice(0, item.start) + source.slice(item.close + 1)
+    + '\nimpl<R: MucRepository> MucService<R> {\n' + item.text + '\n}\n';
+  assert.throws(() => verifyMucDiscussionBoundaries({ ...baseline, mucService }), /expected one production body: .*prepare_muc_discussion/);
+});
 rejectsMucDiscussion('MUC prepared domain must come from receiving configuration', 'mucApplication',
   'discussion::PreparedDiscussion::new(command, self.configured_domain.clone())',
   'discussion::PreparedDiscussion::new(command, caller_domain())', /receiving application configuration/);

@@ -134,6 +134,23 @@ function body(source, declaration, original = false) {
   throw new Error(`execution boundary: unterminated body: ${declaration}`);
 }
 
+function bodyContaining(source, declaration, member) {
+  const code = codeOnly(source);
+  const bodies = [...code.matchAll(new RegExp(declaration, 'g'))].map(match => {
+    const opening = code.indexOf('{', match.index + match[0].length);
+    requireBoundary(opening >= 0, `missing body: ${declaration}`);
+    let depth = 1;
+    for (let index = opening + 1; index < code.length; index++) {
+      if (code[index] === '{') depth++;
+      else if (code[index] === '}' && --depth === 0) return code.slice(opening + 1, index);
+    }
+    throw new Error(`execution boundary: unterminated body: ${declaration}`);
+  });
+  const containing = bodies.filter(candidate => new RegExp(member).test(candidate));
+  requireBoundary(containing.length === 1, `expected one production body containing ${member}: ${declaration}`);
+  return containing[0];
+}
+
 function productionModule(source) {
   const markers = [...codeOnly(source).matchAll(/\n#\[cfg\(test\)\]\s*\nmod\s+tests\b/g)];
   requireBoundary(markers.length <= 1, 'expected at most one test-module boundary');
@@ -1373,7 +1390,7 @@ export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mu
   const repository = compact(body(mucRepository, 'fn\\s+admit_discussion_observed\\b'));
   requireBoundary(repository.includes('db::admit_muc_discussion_observed(&self.pool,request).await?'),
     'MUC production repository must use the observed SQL entry');
-  const serviceOwner = body(mucService, 'impl<R:\\s*MucRepository>\\s+MucService<R>');
+  const serviceOwner = bodyContaining(mucService, 'impl<R:\\s*MucRepository>\\s+MucService<R>', 'fn\\s+new\\b');
   const serviceNew = compact(body(serviceOwner, 'fn\\s+new\\b'));
   ordered(serviceNew, ['letconfigured_domain:Arc<str>=Arc::from(configured_domain.as_ref());',
     'discussion_application:RoomApplication::new(repository.clone(),configured_domain.to_string())',

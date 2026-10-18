@@ -1388,6 +1388,8 @@ for (const [serviceMethod] of mixProducerMappings) {
 // files) is exempt from the src-wide repository-caller scans below, as the
 // single file was before the module was split.
 const mixRepositoryModuleFiles = new Set(moduleFiles('src/db/mix.rs', { root }));
+// Production files of the MIX repository adapter module are exempt from the same scans.
+const mixRepositoryAdapterFiles = new Set(moduleFiles('src/db/mix_repository.rs', { root, includeTests: false }));
 
 const mixDeliveryProducerBypassPattern = new RegExp(
   `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
@@ -1404,7 +1406,7 @@ while (pendingMixDeliveryBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/db/mix_repository.rs' || mixRepositoryModuleFiles.has(relative)) continue;
+    if (mixRepositoryAdapterFiles.has(relative) || mixRepositoryModuleFiles.has(relative)) continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixDeliveryProducerBypassPattern.test(production)) {
       mixDeliveryProducerBypasses.push(relative);
@@ -1635,7 +1637,7 @@ while (pendingPamBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/db/mix_repository.rs' || mixRepositoryModuleFiles.has(relative)) continue;
+    if (mixRepositoryAdapterFiles.has(relative) || mixRepositoryModuleFiles.has(relative)) continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixPamCapacityCallPattern.test(production)) mixPamCapacityBypasses.push(relative);
   }
@@ -1661,7 +1663,7 @@ while (pendingMixBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/db/mix_repository.rs' || mixRepositoryModuleFiles.has(relative)) continue;
+    if (mixRepositoryAdapterFiles.has(relative) || mixRepositoryModuleFiles.has(relative)) continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixProducerCallPattern.test(production)) mixProducerBypasses.push(relative);
   }

@@ -11,7 +11,6 @@
     "src/cluster/listener.rs": 1634,
     "src/db/mix_repository.rs": 1727,
     "src/db/pubsub_integration_tests.rs": 6108,
-    "src/db/sm.rs": 2030,
     "src/db/upload_tests.rs": 3429,
     "src/services/muc.rs": 1846,
     "src/stage4_replay.rs": 7270,

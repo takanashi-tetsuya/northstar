@@ -25,7 +25,7 @@ fn bookmarks_event_contains_only_the_locked_changed_items() {
 
 #[test]
 fn c2s_pep_subscription_handlers_delegate_authority_to_the_service() {
-    let source = include_str!("../pep.rs");
+    let source = super::module_source();
     let subscribe = source
         .split_once("async fn pep_subscribe(")
         .expect("PEP subscribe handler must remain identifiable")

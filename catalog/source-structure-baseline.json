@@ -24,7 +24,6 @@
     "src/stage4_replay/compact.rs": 3431,
     "src/xmpp/protocol.rs": 2330,
     "src/xmpp/protocol/messaging.rs": 2036,
-    "src/xmpp/protocol/pep.rs": 3308,
     "src/xmpp/protocol/presence.rs": 1705,
     "src/xmpp/protocol/sasl2.rs": 1609
   },

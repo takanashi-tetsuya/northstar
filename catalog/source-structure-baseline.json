@@ -13,8 +13,7 @@
     "src/db/upload_tests.rs": 3429,
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431,
-    "src/xmpp/protocol.rs": 2330,
-    "src/xmpp/protocol/sasl2.rs": 1609
+    "src/xmpp/protocol.rs": 2330
   },
   "root_rust_files": [
     "src/auth.rs",

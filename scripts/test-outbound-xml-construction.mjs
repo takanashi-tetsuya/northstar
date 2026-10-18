@@ -118,11 +118,11 @@ test('MIX excludes a cfg(test) bodyless child module', () => {
 
 test('the SASL2 parser literal exemption remains specific to its original file', () => {
   fixture(({ write, append, check }) => {
-    const parserLiteral = '\n'.repeat(626) + 'fn parser_input() { let closing = "</stream:stream>"; }\n';
+    const parserLiteral = '\n'.repeat(135) + 'fn parser_input() { let closing = "</stream:stream>"; }\n';
     write('src/xmpp/protocol/sasl2.rs', parserLiteral);
     passes(check());
     append('src/xmpp/protocol/sasl2.rs', 'mod zz_probe;\n');
     write('src/xmpp/protocol/sasl2/zz_probe.rs', parserLiteral);
-    rejects(check(), 'src/xmpp/protocol/sasl2/zz_probe.rs', 627);
+    rejects(check(), 'src/xmpp/protocol/sasl2/zz_probe.rs', 136);
   });
 });

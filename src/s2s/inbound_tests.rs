@@ -1086,7 +1086,7 @@ fn authenticated_sender_cannot_escape_the_peer_domain() {
 
 #[test]
 fn federated_pep_subscription_branch_has_no_split_authority_reads() {
-    let source = include_str!("inbound.rs");
+    let source = super::module_source();
     let branch = source
         .split_once("if !is_xep0357_notification_publish(child) =>")
         .expect("federated PEP set branch must remain identifiable")

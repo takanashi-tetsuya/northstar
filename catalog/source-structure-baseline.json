@@ -15,7 +15,6 @@
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431,
     "src/xmpp/protocol.rs": 2330,
-    "src/xmpp/protocol/presence.rs": 1705,
     "src/xmpp/protocol/sasl2.rs": 1609
   },
   "root_rust_files": [

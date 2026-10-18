@@ -3,6 +3,10 @@
   "files": {
     "src/api/mod.rs": [],
     "src/bosh.rs": [],
-    "src/xmpp/protocol.rs": []
+    "src/xmpp/protocol.rs": [
+      "legacy_auth",
+      "session_sm",
+      "session_transport"
+    ]
   }
 }

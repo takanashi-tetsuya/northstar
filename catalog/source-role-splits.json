@@ -1,7 +1,9 @@
 {
   "schema": "northstar-source-role-splits-v1",
   "files": {
-    "src/api/mod.rs": [],
+    "src/api/mod.rs": [
+      "route_composition"
+    ],
     "src/bosh.rs": [],
     "src/xmpp/protocol.rs": [
       "legacy_auth",

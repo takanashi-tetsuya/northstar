@@ -772,7 +772,7 @@ fn openapi_contract_lists_exact_router_methods() {
         }
     }
 
-    let router_source = include_str!("../mod.rs");
+    let router_source = crate::api::module_source();
     let mut router_contract = BTreeSet::new();
     let mut search_from = 0;
     while let Some(relative) = router_source[search_from..].find(".route(") {

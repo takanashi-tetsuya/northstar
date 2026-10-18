@@ -27,7 +27,7 @@ fn public_and_administrator_static_manifests_are_explicitly_isolated() {
 
 #[test]
 fn public_router_never_merges_administrator_routes() {
-    let source = include_str!("mod.rs");
+    let source = super::module_source();
     let public = source
         .split_once("pub fn public_router")
         .unwrap()

@@ -183,6 +183,32 @@ test('h. CLI end to end in a temporary git repository', () => {
   }
 });
 
+test('h2. CLI with a mod.rs parent compares the files of its own directory', () => {
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-move-only-'));
+  try {
+    execFileSync('git', ['init'], { cwd: tmpdir });
+    fs.mkdirSync(path.join(tmpdir, 'src/foo'), { recursive: true });
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/mod.rs'), 'fn f() { "A" }\nfn g() { "B" }');
+    execFileSync('git', ['add', '.'], { cwd: tmpdir });
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'init'], { cwd: tmpdir });
+
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/mod.rs'), 'mod child;\nfn g() { "B" }');
+    fs.writeFileSync(path.join(tmpdir, 'src/foo/child.rs'), 'fn f() { "A" }');
+    const resOk = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo/mod.rs'], { encoding: 'utf8' });
+    assert.equal(resOk.status, 0, resOk.stdout + resOk.stderr);
+    assert.match(resOk.stdout, /after: +2 files/);
+    assert.ok(resOk.stdout.includes('MOVE-ONLY (items): OK'));
+
+    execFileSync('git', ['add', '.'], { cwd: tmpdir });
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'split'], { cwd: tmpdir });
+    const resAfterRev = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, '--after-rev', 'HEAD', 'HEAD~1', 'src/foo/mod.rs'], { encoding: 'utf8' });
+    assert.equal(resAfterRev.status, 0, resAfterRev.stdout + resAfterRev.stderr);
+    assert.match(resAfterRev.stdout, /after: +2 files/);
+  } finally {
+    fs.rmSync(tmpdir, { recursive: true, force: true });
+  }
+});
+
 test('i. Parent impl S { fn a() {} fn b() {} } split into parent mod child; impl S { fn a() {} } and child use super::*; impl S { fn b() {} }: no removed, no added.', () => {
   const before = [{ path: 'src/foo.rs', source: 'impl S { fn a() {} fn b() {} }', isChild: false }];
   const after = [

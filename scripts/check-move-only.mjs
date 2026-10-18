@@ -444,7 +444,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exit(2);
     }
 
-    const childDir = modulePath.replace(/\.rs$/, '');
+    // `a/b.rs` keeps its children in `a/b/`, `a/mod.rs` in `a/` next to itself.
+    const childDir = modulePath.endsWith('/mod.rs') ? modulePath.slice(0, -'/mod.rs'.length) : modulePath.replace(/\.rs$/, '');
 
     let beforePaths = [];
     try {
@@ -495,7 +496,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         for (const e of fs.readdirSync(path.join(repo, d), { withFileTypes: true })) {
           const p = `${d}/${e.name}`;
           if (e.isDirectory()) walk(p);
-          else if (e.name.endsWith('.rs')) afterPaths.push(p);
+          else if (e.name.endsWith('.rs') && p !== modulePath) afterPaths.push(p);
         }
       };
       walk(childDir);

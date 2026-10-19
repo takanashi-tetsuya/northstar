@@ -1,6 +1,6 @@
 # Northstar 工程結構藍圖
 
-更新：2026-10-18。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
+更新：2026-10-19。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
 
 本文是**結構工作**（程式碼放在哪裡、由誰擁有、如何機械驗證）的唯一權威。
 它不改變任何協議、交易、migration 或安全語義。領域邏輯收斂仍依
@@ -91,7 +91,8 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | S5 領域收斂 | — | 依模組化執行計劃 C1／C2／D1 把邏輯移入 crates | 依該計劃 |
 | S6 文件收斂 | WP-61–63 | 修正 KNOWN_ISSUES 的遷移鏈敘述與 README 的發佈敘述（WP-61）；HANDOFF 改為只記錄其他文件沒有的現況，`docs/README.md` 建立狀態地圖（WP-62）；現行文件與 `crates/*/MIGRATION.md` 改用分層路徑，`resource-bounds` 的原始碼連結固定到審閱提交（WP-63） | 文件一致性門禁通過，並檢查遷移鏈敘述、狀態地圖與舊路徑（R8）。已完成 |
 | S7 R1 收斂 | WP-71a–c | 超標生產檔的頂層內嵌測試模組移為子檔，只移動、不改測試；最後由結構門禁拒絕超標生產檔保留內嵌測試模組（R1）。盤點見 5.3 | 測試名稱集合不變；全部門禁與完整 CI 通過；基線刪除降到上限內的條目並下修其餘條目。已完成 |
-| S8 角色拆分 | WP-81a–f、WP-82a–i、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4），模組目錄另有獨立模組的三檔改讀角色拆分清單（WP-82g）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。已完成：基線只剩被釘住的 3 個生產檔（R5）與 2 個超過測試上限的測試檔（`db/pubsub_integration_tests.rs` 6,108 行、`db/upload_tests.rs` 3,429 行） |
+| S8 角色拆分 | WP-81a–f、WP-82a–i、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4），模組目錄另有獨立模組的三檔改讀角色拆分清單（WP-82g）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。已完成：基線只剩被釘住的 3 個生產檔（R5）與 2 個超過測試上限的測試檔（`db/pubsub_integration_tests.rs` 6,108 行、`db/upload_tests.rs` 3,429 行），由 S9 拆分 |
+| S9 測試檔拆分 | WP-91、WP-92a–b | 超過測試上限的兩個測試檔拆為「`x_tests.rs`＋`x_tests/角色_tests.rs`」，子檔是原測試模組的子模組；只移動檢查先改為依所在檔案解析 `include_str!`／`include_bytes!` 的路徑（WP-91）。盤點見 5.5 | 只移動檢查通過；去掉子模組一段後測試名稱與 ignored 測試集合不變；WSL 腳本的每個選擇器恰好對應一個測試；全部門禁與完整 CI 通過。已完成：基線只剩被釘住的 3 個生產檔（R5） |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -242,6 +243,27 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
   以 `pub(crate) struct PubSubService<R> {` 綁定 `services/pubsub.rs`，以 `API_BODY_LIMIT_BYTES` 綁定 `api/mod.rs`；
   `xmpp/protocol/pubsub.rs` 的兩個工作者註冊由架構門禁與 catalog 綁定該檔。
 
+### 5.5 S9 盤點：超過上限的測試檔（`f1b63cc`）
+
+`db/upload_tests.rs`（3,429 行，模組 `db::upload::tests`）與 `db/pubsub_integration_tests.rs`（6,108 行，模組
+`db::pubsub::integration_tests`）都只以 `#[cfg(test)] #[path]` 從父檔載入，沒有門禁讀它們的原始碼，綁定在測試路徑
+與檔案位置：
+
+- 測試路徑：CI 的 PubSub 資料庫分片執行 `scripts/pubsub-db-wsl.sh`，以 `--exact` 逐一選取其中 27 個測試，
+  拆分後選擇器須加上子模組；HTTP Upload 分片的 `scripts/upload-db-wsl.sh` 以子字串 `db::upload::tests` 選取。
+  子檔若改成父檔的兄弟模組（`db/mix.rs` 的 `*_integration_tests` 寫法），upload 測試會落出這個篩選而靜默不跑，
+  因此子檔一律是原測試模組的子模組，測試路徑變為「原模組::子模組::名稱」。
+- 子檔位置：以 `#[path]` 載入的檔案被當作 `mod.rs`，其中的 `mod x;` 會找 `src/db/x.rs`，子檔須以
+  `#[path = "x_tests/角色_tests.rs"]` 明確宣告。子檔名以 `_tests.rs` 結尾：結構門禁的 `classify` 與架構門禁的
+  工作者註冊掃描都依檔名辨識測試檔，`x_tests/` 目錄名不算。子檔不放進生產模組目錄（如 `db/upload/`），
+  否則會被模組讀取（R4）當成正式子檔。
+- 相對路徑：upload 測試有 12 個 `include_str!`（migration、`pie.rs`、`users.rs`、`runtime/upload_worker.rs`）
+  與 3 個 `super::module_source()`，pubsub 測試有 4 個 `super::super::` 路徑，搬入子檔後各多一層。
+  只移動檢查原本逐位元組比對字串，WP-91 改為依所在檔案解析 include 路徑後比對。
+- 不受影響：`docs/evidence/tasks/M00-03.yaml` 只以函式名提到兩個測試（R5，不改）。
+- 既有缺口（不在本階段處理）：`pubsub-db-wsl.sh` 沒有列出 `collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose`
+  與 `collection_edge_insert_linearizes_after_child_owner_revocation`，CI 從未執行這兩個資料庫測試。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8 起改由 Codex CLI 執行（第 8 點）。
@@ -327,6 +349,10 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
      （WP-82h）；以檔案與行號綁定的豁免（對外 XML 門禁的 allowlist）隨拆分移動，列入拆分 WP 的規格。
    - 角色拆分（WP-84）：新子檔加入 `catalog/source-role-splits.json`。平行拆分各自修改同一份清單，整合時
      不套用 codex 對清單的修改，改由整合腳本依設計寫入該檔的條目。
+   - 測試檔拆分（WP-92）：規格逐項列出各子檔的項目，子檔以 `use super::*;` 取得父測試模組的共用 helper 與
+     匯入。完全不用父模組名稱的子檔不要這一行（`-D warnings` 下是 unused import，WP-92a 的
+     `source_contract_tests.rs`）；只經子檔 glob 使用的父檔匯入不算未使用。`cargo fmt` 會把相鄰的 `mod`
+     宣告依字母排序。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -444,3 +470,6 @@ Stage 證據仍綁定其原提交。
 | WP-84a | 完成：`xmpp/protocol.rs` 2,330 行拆為 legacy_auth／session_transport／session_sm，父檔 1,034 行，最大子檔 `legacy_auth.rs` 629 行；整個 protocol 模組 1,936 個項目不變，32 項可見性變更。三個子檔列入 `catalog/source-role-splits.json`，以單檔讀取 `protocol.rs` 的門禁隨之讀到搬走的程式碼 | 見 `git log --grep '\[WP-84a\]'` |
 | WP-84b | 完成：`api/mod.rs` 1,539 行拆出 route_composition（572 行），父檔 1,009 行；整個 api 模組 534 個項目不變，21 項可見性變更。`api/tests.rs` 與 `api/system/tests.rs` 改讀 `MODULE_SOURCE`，守衛測試 `module_source_lists_every_role_split_child` 比對角色拆分清單 | 見 `git log --grep '\[WP-84b\]'` |
 | WP-84c | 完成：`bosh.rs` 2,122 行拆為 response_output／request_policy，父檔 1,409 行，最大子檔 `request_policy.rs` 442 行；380 個項目不變，36 項可見性變更，被釘住的 `bosh/response_owner.rs` 不動。WP-84a–c 由 codex 平行執行，清單條目由整合腳本寫入；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線刪除 3 個條目 | 見 `git log --grep '\[WP-84c\]'` |
+| WP-91 | 完成：`check-move-only.mjs` 的 `normalizeItems` 接收檔案路徑，`include_str!`／`include_bytes!` 的第一個一般字串參數依所在檔案解析為儲存庫路徑後比對；raw／byte 字串、含跳脫的字串、`include!` 與其他字面值仍逐位元組比對。自測 32 項通過；CLI 測試要呼叫 git，codex 沙箱中無法執行，由架構負責人執行 | 見 `git log --grep '\[WP-91\]'` |
+| WP-92a | 完成：`db/upload_tests.rs` 3,429 行拆為 capacity_authority／storage_jobs／capacity_admission／source_contracts 四個子測試模組（`db/upload_tests/*_tests.rs`，最大 1,146 行），父檔留匯入與共用的 `insert_user`（42 行）；23 個項目不變。12 個 `include_str!` 多一個 `../`、3 個 `super::module_source()` 多一層，由只移動檢查確認 | 見 `git log --grep '\[WP-92a\]'` |
+| WP-92b | 完成：`db/pubsub_integration_tests.rs` 6,108 行拆為 8 個子測試模組（`db/pubsub_integration_tests/*_tests.rs`，最大 1,099 行），父檔留匯入與共用 helper（380 行）；48 個項目不變，`pubsub-db-wsl.sh` 的 27 個選擇器加上子模組。WP-91、92a、92b 整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過；去掉子模組一段後 2,199 個測試名稱與 254 個 ignored 測試不變；基線刪除 2 個條目，只剩被釘住的 3 個生產檔 | 見 `git log --grep '\[WP-92b\]'` |

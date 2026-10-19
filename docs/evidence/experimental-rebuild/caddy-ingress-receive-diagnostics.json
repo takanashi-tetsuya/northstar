@@ -8,6 +8,145 @@
     "parent_result": "success",
     "same_test_Caddyfile_workflow_and_Caddy_image": true
   },
+  "diagnosed_failure": {
+    "caddy": {
+      "image": "caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648",
+      "version": "v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=",
+      "version_log_line": 307
+    },
+    "case": "POST /api/reject/408 over TLS; Content-Length 128, one body byte sent",
+    "classification": "Response without EOF: Caddy relayed the complete 408 fixture response with Connection: close, then sent nothing more and did not close within the 3-second timeout.",
+    "commit": "f1b63ccbdfdded1e73fb3fa1c44e21b9024a4701",
+    "diagnostic_log_line": 319,
+    "diagnostic_logged_at": "2026-10-19T00:43:28.0412692Z",
+    "error": "TimeoutError: The read operation timed out (read_to_close, 3-second socket timeout)",
+    "job_conclusion": "failure",
+    "job_id": 117836641052,
+    "job_name": "Pinned non-root container build",
+    "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/39181992232/job/117836641052",
+    "reply_headers_observed": [
+      "Connection: close",
+      "Content-Length: 34",
+      "Via: 1.1 Caddy"
+    ],
+    "rerun": {
+      "conclusion": "success",
+      "job_id": 117842975049,
+      "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/39181992232/job/117842975049",
+      "limitation": "A passing rerun of unchanged source shows the failure is intermittent; it is not evidence of a cause.",
+      "run_attempt": 2
+    },
+    "response_date_header": "Mon, 19 Oct 2026 00:43:25 GMT",
+    "response_diagnostic": {
+      "connection_close": true,
+      "declared_body_bytes": 34,
+      "framing": "content_length",
+      "header_bytes": 435,
+      "http_response_complete": true,
+      "parse_note": null,
+      "receive_phase": "awaiting_recv_eof",
+      "received_body_bytes": 34,
+      "received_bytes": 469,
+      "recv_eof_observed": false,
+      "status": 408
+    },
+    "run_attempt": 1,
+    "run_id": 39181992232
+  },
+  "diagnosis": {
+    "confirmed": [
+      "The CI failure received the complete 408 response with Connection: close and timed out waiting for EOF.",
+      "The pinned Caddy holds the connection after such a response in two states, about 20 s and without a deadline; goroutine dumps show both blocked in the post-handler body drain on the client TLS connection.",
+      "In both hold states Caddy had sent neither close_notify nor FIN: the dump-time ss shows both ends established, and strace shows the close_notify write only after the client closed.",
+      "A client TLS close_notify ends the pending drain read: both dumped hold states block in tls.(*Conn).Read on that connection, and in all 6 holds seen with the candidate client the proxy closed within 5 ms of the client's close_notify."
+    ],
+    "documented_behavior": [
+      {
+        "source": "https://www.rfc-editor.org/rfc/rfc9112#section-9.6",
+        "statement": "A client that receives the close connection option MUST stop sending requests and close the connection after reading that response. A server that sends it MUST initiate closure after the response; to avoid the TCP reset problem it may half-close and keep reading until the client closes. In the hold states Go defers even the half-close until its body drain ends."
+      },
+      {
+        "source": "https://www.rfc-editor.org/rfc/rfc9112#section-9.5",
+        "statement": "A client sending a message body SHOULD watch for an error response; if the server does not want the body and is closing, the client SHOULD stop transmitting it and close its side of the connection."
+      },
+      {
+        "source": "https://pkg.go.dev/net/http#Request",
+        "statement": "For server requests the Server closes the request body; handlers need not close it. The bounded post-handler read (maxPostHandlerReadBytes) is an implementation detail documented only in source comments."
+      },
+      {
+        "source": "https://caddyserver.com/docs/caddyfile/directives/request_body",
+        "statement": "request_body read_timeout bounds reading the request body; Caddy's documentation does not describe the Go server's post-response drain."
+      }
+    ],
+    "inferred": [
+      "The ordering explanation for each state (which goroutine reads first relative to abortPendingRead) comes from the Go source together with the dumps and strace; no execution trace recorded the interleaving.",
+      "The CI occurrence was one of the two hold states; a 3-second timeout cannot tell which.",
+      "The 2026-10-04 failure (job 111367947048) had the same request, timeout and Caddy build but logged no partial reply, so attributing it to this mechanism is unconfirmed."
+    ],
+    "source_references": [
+      {
+        "fact": "response.finishRequest flushes the response, calls conn.r.abortPendingRead(), then reqBody.Close(); the connection closes only after that returns.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L1664-L1686"
+      },
+      {
+        "fact": "connReader.abortPendingRead acts only while a read is in progress: it sets a past read deadline, waits for the read to return, then clears the deadline with time.Time{}.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L741-L753"
+      },
+      {
+        "fact": "Server request bodies are marked doEarlyClose.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L1044-L1046"
+      },
+      {
+        "fact": "maxPostHandlerReadBytes = 256 << 10.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L1112"
+      },
+      {
+        "fact": "body.Close holds body.mu and, with doEarlyClose and at most 256 KiB unread, drains with io.CopyN before marking the body closed.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/transfer.go#L971-L1010"
+      },
+      {
+        "fact": "transferWriter.writeBody always closes the request body; after a body read error its deferred Close runs the same drain.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/transfer.go#L338-L347"
+      },
+      {
+        "fact": "The pre-response body discard is skipped when the handler set Connection: close, so the drain happens only after the response.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L1392"
+      },
+      {
+        "fact": "request_body wraps the body with MaxBytesReader and sets the connection read deadline to now + read_timeout (20 s for the REST matcher).",
+        "url": "https://github.com/caddyserver/caddy/blob/v2.11.4/modules/caddyhttp/requestbody/requestbody.go#L84-L91"
+      },
+      {
+        "fact": "bodyNopCloserIfNotRead passes Close through once any body byte was read.",
+        "url": "https://github.com/caddyserver/caddy/blob/v2.11.4/modules/caddyhttp/reverseproxy/reverseproxy.go#L474-L483"
+      }
+    ],
+    "states": [
+      {
+        "evidence": "strace of a normal 408: the last client-socket read is the writeLoop's EAGAIN before the response; the response write is followed by close_notify and close with no further client-socket read.",
+        "id": "immediate_close",
+        "mechanism": "The writeLoop is blocked reading the client body when the handler returns. abortPendingRead sets a past deadline; the aborted read returns and the writeLoop's deferred body Close starts its drain read while that past deadline is still set. The read fails before any syscall, the body is marked closed, finishRequest's Close returns at once, and Caddy sends close_notify and closes.",
+        "observed": "Most requests; EOF within 0.2 ms of the complete response unloaded and within 7.2 ms under CPU contention."
+      },
+      {
+        "evidence": "Goroutine dump during the hold: server goroutine in finishRequest -> body.Close -> io.CopyN(..., 0x40000) -> tls.(*Conn).Read (IO wait); writeLoop blocked on the body mutex in its first body read. strace of a held 413: a client-socket read after the response write, ended by the client's close.",
+        "id": "body_deadline_hold",
+        "mechanism": "The writeLoop has not started a client-body read when the handler returns, so abortPendingRead has nothing to abort. finishRequest's body.Close drains with the request_body read deadline still set and returns when that deadline expires.",
+        "observed": "Under CPU contention; EOF about 20.05 s after the request."
+      },
+      {
+        "evidence": "Goroutine dump after 22 s without EOF: writeLoop in writeBody's deferred Close -> body.Close -> io.CopyN(..., 0x40000) -> tls.(*Conn).Read (IO wait); server goroutine in finishRequest -> body.Close waiting on sync.Mutex. ss: socket established, nothing received for 22 s, keepalive timer only.",
+        "id": "deadline_free_hold",
+        "mechanism": "The writeLoop's read is aborted, but abortPendingRead clears the read deadline before the writeLoop's deferred body Close issues its drain read. That read has no deadline, and finishRequest waits on the body mutex, so the connection stays open until the client sends data or closes.",
+        "observed": "Under CPU contention; no EOF within 30 s (rotated run) and within 62 s (dump run) until the client closed."
+      }
+    ],
+    "summary": "After Caddy relays the complete early rejection, Go's net/http server closes the request body before it closes the connection. body.Close reads up to 256 KiB of the unfinished declared body (127 bytes here). Whether that read ends at once, at the 20-second request_body deadline, or only when the client acts depends on goroutine scheduling: the reverse proxy's Transport writeLoop is still streaming the same request body upstream when the handler returns.",
+    "versions": {
+      "caddy": "v2.11.4",
+      "go": "go1.26.3"
+    }
+  },
   "failure": {
     "commit": "0963edae88b1b3d41abbf50b882e7c5cc0532129",
     "error": "SSL recv TimeoutError in early-body-rejection read_to_close",
@@ -15,13 +154,161 @@
     "observability_gap": "Exact loop status and partial reply were not logged; no-response and response-without-EOF remain distinguishable hypotheses, not conclusions.",
     "root_cause": "Unknown"
   },
+  "local_reproduction": {
+    "binary": {
+      "go": "go1.26.3",
+      "matches_ci": "Same version string and module hash as the CI extraction; the Compose image digest is unchanged since 796d129.",
+      "sha256": "b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9",
+      "version": "v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0="
+    },
+    "candidate_client_runs": {
+      "description": "A candidate client that read the complete response, sent close_notify, then waited for TCP EOF, under CPU contention.",
+      "failures": 0,
+      "instrumented_run": {
+        "held_then_closed_after_client_close_notify": 6,
+        "hold_check": "1-second readability probe before the client's close_notify",
+        "proxy_closed_before_client_close": 2094,
+        "requests": 2100
+      },
+      "max_seconds_from_client_close_to_proxy_close": 0.0062,
+      "requests": 3600,
+      "resets_at_client_close": 10
+    },
+    "runs": [
+      {
+        "holds_about_20s": 0,
+        "holds_without_deadline": 0,
+        "max_seconds_from_complete_response_to_eof": 0.0002,
+        "name": "unloaded",
+        "requests": 300
+      },
+      {
+        "holds_about_20s": 2,
+        "holds_without_deadline": 0,
+        "name": "cpu_contention",
+        "requests": 300
+      },
+      {
+        "holds_about_20s": 4,
+        "holds_without_deadline": 1,
+        "name": "cpu_contention_rotated_order",
+        "requests": 1500,
+        "wait_limit_seconds": 30
+      },
+      {
+        "holds_about_20s": 4,
+        "holds_without_deadline": 1,
+        "name": "cpu_contention_dump",
+        "note": "Stopped at the first hold without a deadline to take the goroutine dump.",
+        "requests": 1440,
+        "wait_limit_seconds": 62
+      }
+    ],
+    "scripts": "Reproduction and stress scripts lived in a session scratch directory and are not part of this change.",
+    "setup": "deploy/Caddyfile rendered exactly as scripts/test-caddy-ingress.py renders it, the same fixture backend and request, TLS on loopback. The admin endpoint was enabled only in dump runs, to read /debug/pprof/goroutine. CPU-contention runs pinned Caddy and the client to CPUs 0-3 with GOMAXPROCS=4 while busy-loop processes ran."
+  },
+  "probe_change": {
+    "behavior": [
+      "read_early_rejection reads until the shared helper classifies the reply as Content-Length complete, then asserts the status line, the fixture_<status> body, strict completeness and Connection: close.",
+      "It then closes its own TLS side (close_notify via unwrap) and requires the proxy's close_notify and TCP EOF within the same 3-second socket timeout.",
+      "BrokenPipeError or ConnectionResetError at that close step is accepted: the proxy had already closed when the client's close_notify arrived.",
+      "Any OSError in either phase prints the existing diagnostic line with phase=response or phase=close and re-raises the original error."
+    ],
+    "no_longer_required": [
+      "Proxy-initiated closure before the client closes. RFC 9112 section 9.6 asks the server to initiate it, but Go's server defers it while draining, so this is recorded as a known server deviation rather than tested."
+    ],
+    "rationale": "RFC 9112 sections 9.5 and 9.6 expect the client to close after an early error response carrying Connection: close. The probe no longer depends on the proxy closing first, which Go's server does not guarantee while it drains an unfinished body, yet it still fails when the response is incomplete or the proxy does not close promptly after the client does.",
+    "source": {
+      "bytes": 13970,
+      "path": "scripts/test-caddy-ingress.py",
+      "previous_sha256": "b0531ee0e622544ca31129a76e30e86707657024460a8338e0b5f0bfcfe7c5a9",
+      "sha256": "345351e70d00d363e308cff242b3f2b6e8204337ac93885161daed075797cd41"
+    },
+    "stricter_than_before": [
+      "Connection: close must be present",
+      "The reply must be Content-Length complete"
+    ],
+    "unchanged": [
+      "deploy/Caddyfile, every Caddy timeout and size limit, and the 408/413/429 Connection: close rule",
+      "3-second socket timeout",
+      "Request bytes and loop values",
+      "Status-line and fixture-body assertions",
+      "Other read_to_close callers (fragmented bodies, WebSocket, header deadline)",
+      "Real-application mode (--backend-port), which skips this loop"
+    ],
+    "verification": {
+      "ci_rerun": false,
+      "fake_tls_peer": [
+        {
+          "diagnostic_phase": null,
+          "expected": "passed",
+          "mode": "close_first",
+          "outcome": "passed"
+        },
+        {
+          "diagnostic_phase": null,
+          "expected": "passed",
+          "mode": "close_after_client",
+          "outcome": "passed"
+        },
+        {
+          "diagnostic_phase": "close",
+          "expected": "TimeoutError",
+          "mode": "hold_after_response",
+          "outcome": "TimeoutError"
+        },
+        {
+          "diagnostic_phase": null,
+          "expected": "AssertionError",
+          "mode": "no_connection_close",
+          "outcome": "AssertionError"
+        },
+        {
+          "diagnostic_phase": "response",
+          "expected": "TimeoutError",
+          "mode": "incomplete_body",
+          "outcome": "TimeoutError"
+        },
+        {
+          "diagnostic_phase": null,
+          "expected": "AssertionError",
+          "mode": "wrong_status",
+          "outcome": "AssertionError"
+        }
+      ],
+      "full_probe": {
+        "command": "python3 scripts/test-caddy-ingress.py --caddy <pinned caddy>",
+        "result": "passed",
+        "seconds": 44.1
+      },
+      "helper_unit_tests": "python3 scripts/test-http-response-diagnostics.py: 17 tests OK",
+      "probe_function_under_cpu_contention": {
+        "failures": 0,
+        "max_seconds": 0.0897,
+        "requests": 1500
+      }
+    }
+  },
+  "record_note": "Keys change, claim_limit, comparison, failure, source, unchanged and verification describe the diagnostic-only change of 997b473 and keep their original values. The 2026-10-19 occurrence, diagnosis, reproduction and probe change are recorded under diagnosed_failure, diagnosis, local_reproduction, probe_change and related.",
+  "related": {
+    "production_note": "In production the same race can hold an HTTP/1 connection after an early 408/413/429 with no read deadline until the client sends data or closes. No product policy was changed here; docs/PRODUCTION_OPERATIONS.md states the behavior.",
+    "real_application_observations": "real_application_expected_429 and real_application_held_expected_408 (scripts/rest-body-wire.py through Caddy to the real application) may involve the same drain, but they were not reproduced or diagnosed here and remain open.",
+    "tls_response_eof_unresolved": {
+      "assessment": "That observation matches this diagnosis in request, timeout and Caddy build but logged no partial reply; it is consistent with, not confirmed as, this mechanism.",
+      "modified": false,
+      "observation_id": "synthetic_early_rejection",
+      "path": "docs/evidence/experimental-rebuild/tls-response-eof-unresolved.json",
+      "reason_unmodified": "rest-body-held408-diagnostics.json pins this file's sha256.",
+      "sha256": "c01e56f298dc7ef2faed1c052508c259a61319764eea13e610b5bfbabd6e8b40"
+    }
+  },
   "schema": "northstar-fixture-diagnostic-source-v1",
   "source": {
     "bytes": 12837,
     "path": "scripts/test-caddy-ingress.py",
     "sha256": "c3e85d9bc27ad96362c85961df8545c54b3b6be2f8a1592a49277e95e456fbba"
   },
-  "status": "DiagnosticSourceOnlyRootCauseUnknown",
+  "status": "RootCauseReproducedProbeCloseBounded",
   "unchanged": [
     "3-second socket timeout",
     "Existing assertions",

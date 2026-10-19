@@ -75,30 +75,56 @@ def free_port():
         return probe.getsockname()[1]
 
 
-def read_to_close(stream, *, rejection_status=None):
+def read_to_close(stream):
     chunks = []
+    while chunk := stream.recv(65536):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+# The fixture answers from headers alone, leaving 127 declared bytes unsent.
+# Caddy's Go server may read them after the complete Connection: close reply,
+# until the 20-second body deadline or, after a lost race, with no deadline.
+# As RFC 9112 section 9.6 asks, read the complete response, close our TLS side,
+# and require the proxy to finish closing within the same socket timeout.
+def read_early_rejection(stream, status):
+    chunks = []
+    phase = "response"
     try:
         while chunk := stream.recv(65536):
             chunks.append(chunk)
+            if summarize_http_response(chunks)["receive_phase"] == "awaiting_recv_eof":
+                break
+        reply = b"".join(chunks)
+        summary = summarize_http_response(chunks)
+        assert reply.startswith(f"HTTP/1.1 {status} ".encode()), reply
+        assert f"fixture_{status}".encode() in reply, reply
+        assert summary["http_response_complete"] and summary["connection_close"], summary
+        phase = "close"
+        try:
+            raw = stream.unwrap()
+            tail = raw.recv(1)
+            assert tail == b"", tail
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The proxy had closed before our close_notify arrived.
+        return reply
     except OSError:
-        if rejection_status is not None:
+        try:
             preview = b""
             for chunk in chunks:
                 preview += chunk[:512 - len(preview)]
                 if len(preview) == 512:
                     break
-            try:
-                print(
-                    f"synthetic early-body-rejection: case=POST /api/reject/{rejection_status} "
-                    f"expected_status={rejection_status} declared_body_bytes=128 sent_body_bytes=1 "
-                    f"transport=tls response_diagnostic={json.dumps(summarize_http_response(chunks), separators=(',', ':'))} "
-                    f"partial_reply_prefix_512={preview!r}",
-                    file=sys.stderr, flush=True,
-                )
-            except Exception:
-                pass  # A diagnostic write must not replace the receive error.
+            print(
+                f"synthetic early-body-rejection: case=POST /api/reject/{status} "
+                f"expected_status={status} declared_body_bytes=128 sent_body_bytes=1 "
+                f"transport=tls phase={phase} response_diagnostic={json.dumps(summarize_http_response(chunks), separators=(',', ':'))} "
+                f"partial_reply_prefix_512={preview!r}",
+                file=sys.stderr, flush=True,
+            )
+        except Exception:
+            pass  # A diagnostic write must not replace the receive error.
         raise
-    return b"".join(chunks)
 
 
 def tls_socket(port, certificate, timeout=3):
@@ -173,9 +199,7 @@ def main():
                             break
                         with tls_socket(port, certificate) as stream:
                             stream.sendall(f"POST /api/reject/{status} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 128\r\n\r\n{{".encode())
-                            reply = read_to_close(stream, rejection_status=status)
-                            assert reply.startswith(f"HTTP/1.1 {status} ".encode()), reply
-                            assert f"fixture_{status}".encode() in reply, reply
+                            read_early_rejection(stream, status)
                     def fragmented_request(method, route, content):
                         with tls_socket(port, certificate, timeout=36) as stream:
                             stream.sendall(f"{method} {route} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len(content)}\r\nConnection: close\r\n\r\n".encode() + content[:1])

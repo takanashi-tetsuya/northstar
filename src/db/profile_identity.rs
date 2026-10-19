@@ -200,7 +200,7 @@ mod tests {
     async fn item(pool: &PgPool, owner_id: Uuid, node: &str, id: &str, payload_id: &str) {
         let payload = format!(
             "<item xmlns='http://jabber.org/protocol/pubsub' id='{}'><vcard xmlns='urn:ietf:params:xml:ns:vcard-4.0'><fn><text>Test</text></fn></vcard></item>",
-            crate::state::attr_escape(payload_id)
+            crate::platform::jid_text::attr_escape(payload_id)
         );
         sqlx::query("INSERT INTO pep_items(owner_id,node,item_id,payload) VALUES($1,$2,$3,$4)")
             .bind(owner_id)

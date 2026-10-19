@@ -300,7 +300,6 @@ use zeroize::{Zeroize, Zeroizing};
 mod admission_guards;
 mod construction;
 mod federation_policy;
-mod jid_text;
 mod local_muc;
 mod local_session;
 mod muc_resume;
@@ -317,7 +316,6 @@ pub use self::admission_guards::*;
 #[cfg(test)]
 use self::construction::*;
 use self::federation_policy::*;
-pub use self::jid_text::*;
 pub use self::local_muc::*;
 pub use self::local_session::*;
 pub use self::muc_resume::*;
@@ -326,6 +324,7 @@ pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 pub use self::suspended_muc::*;
 use self::upload_runtime::*;
+use crate::platform::jid_text::*;
 
 #[cfg(test)]
 #[path = "state/runtime_control_startup_tests.rs"]

@@ -1,9 +1,9 @@
 use crate::{
+    platform::jid_text::attr_escape,
     services::replay::{
         RecoveryReplayAuthority, RecoveryReplayAuthorizationGuard, ReplayBusyUntil,
         ReplayPageOutcome, ReplayRepository, ReplayService, ReplaySession, ReplayStartOutcome,
     },
-    state::attr_escape,
 };
 use anyhow::{Context, Result};
 use rand::Rng;

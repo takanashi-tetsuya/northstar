@@ -65,9 +65,9 @@ impl Case {
             if root.tag_name().name() != "message"
                 || root
                     .attribute("to")
-                    .unwrap_or(crate::state::bare_jid(&original.sender_full))
+                    .unwrap_or(crate::platform::jid_text::bare_jid(&original.sender_full))
                     != original.target
-                || crate::state::bare_jid(&original.target) != policy.recipient_bare
+                || crate::platform::jid_text::bare_jid(&original.target) != policy.recipient_bare
             {
                 return Err(Rejection::IdentityBinding);
             }
@@ -145,7 +145,7 @@ impl Case {
                 return Err(Rejection::Limit);
             }
             for target in &route.targets {
-                if crate::state::bare_jid(&target.jid) != policy.recipient_bare
+                if crate::platform::jid_text::bare_jid(&target.jid) != policy.recipient_bare
                     || Some(&target.connection_id) != self.identities.connection_id.get()
                 {
                     return Err(Rejection::IdentityBinding);

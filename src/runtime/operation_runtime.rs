@@ -452,9 +452,9 @@ impl LocalBroadcastRoutes {
             .context("message is missing")?;
         let stanza = format!(
             "<message from='{}' type='headline' id='{}'><body>{}</body></message>",
-            crate::state::attr_escape(&self.domain),
+            crate::platform::jid_text::attr_escape(&self.domain),
             Uuid::new_v4(),
-            crate::state::attr_escape(text)
+            crate::platform::jid_text::attr_escape(text)
         );
         let sent = self.sessions.get(key).is_some_and(|session| {
             session.user_id == user_id

@@ -4,6 +4,7 @@
 //! account. Remote occupants therefore live in the room map with a federated
 //! endpoint and use a separate persistent-affiliation table.
 
+use crate::platform::jid_text::{bare_jid, localpart};
 use crate::services::mam::{FederatedMamMetadataCommand, MamMetadataResult};
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
@@ -14,9 +15,7 @@ use crate::services::muc::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
     MucSubjectOutcome, OfflineStoreOutcome,
 };
-use crate::state::{
-    bare_jid, localpart, AppState, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
-};
+use crate::state::{AppState, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};

@@ -1,5 +1,5 @@
+use crate::platform::jid_text::bare_jid;
 use crate::services::privacy::PrivacyStanzaKind;
-use crate::state::bare_jid;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use crate::xmpp::xml_util::*;

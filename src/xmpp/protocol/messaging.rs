@@ -23,10 +23,10 @@ use crate::services::{
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_util::*;
 use crate::{
+    platform::jid_text::bare_jid,
     security::abuse::{
         MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof,
     },
-    state::bare_jid,
 };
 use anyhow::Result;
 use northstar_message_application::{

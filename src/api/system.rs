@@ -738,13 +738,13 @@ pub async fn host_meta_xml(
     let bosh_link = bosh_href.as_deref().map_or_else(String::new, |href| {
         format!(
             "\x20\x20<Link rel=\"urn:xmpp:alt-connections:xbosh\" href=\"{}\" />\n",
-            crate::state::attr_escape(href)
+            crate::platform::jid_text::attr_escape(href)
         )
     });
     let websocket_link = ws_href.as_deref().map_or_else(String::new, |href| {
         format!(
             "\x20\x20<Link rel=\"urn:xmpp:alt-connections:websocket\" href=\"{}\" />\n",
-            crate::state::attr_escape(href)
+            crate::platform::jid_text::attr_escape(href)
         )
     });
     let xml = format!(

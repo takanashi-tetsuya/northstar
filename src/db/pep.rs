@@ -1034,7 +1034,7 @@ mod integration_tests {
         .unwrap()
         .is_none());
 
-        let subscriber_bare = crate::state::bare_jid(&subscriber).to_owned();
+        let subscriber_bare = crate::platform::jid_text::bare_jid(&subscriber).to_owned();
         db::update_subscription(&pool, first_owner, &subscriber_bare, "from", None)
             .await
             .unwrap();

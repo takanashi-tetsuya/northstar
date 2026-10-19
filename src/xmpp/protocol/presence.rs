@@ -1,10 +1,10 @@
 use super::{Action, ProtocolSession};
+use crate::platform::jid_text::bare_jid;
 use crate::services::presence::{
     LocalPresenceEffect, LocalSubscriptionRequest, PresenceMutation, PresencePolicyDenial,
     RemoteSubscriptionTransition,
 };
 use crate::services::privacy::PrivacyStanzaKind;
-use crate::state::bare_jid;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;

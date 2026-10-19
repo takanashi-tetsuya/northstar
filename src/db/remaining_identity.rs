@@ -511,7 +511,7 @@ async fn canonicalize_mix_metadata(transaction: &mut Transaction<'_, Postgres>) 
                     pattern.clone(),
                     format!(
                         "<jid xmlns='urn:xmpp:mix:admin:0'>{}</jid>",
-                        crate::state::xml_escape(&pattern)
+                        crate::platform::jid_text::xml_escape(&pattern)
                     ),
                 )
             }

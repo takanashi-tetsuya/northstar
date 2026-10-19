@@ -3,6 +3,7 @@ use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use crate::{
     auth,
+    platform::jid_text::bare_jid,
     security::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::{
         account::{
@@ -12,7 +13,6 @@ use crate::{
         push::{PushEnableOutcome, PushResponseKind, PushResponseOutcome},
         sm::{BindingFinalizationOutcome, BindingReservationOutcome},
     },
-    state::bare_jid,
 };
 use anyhow::Result;
 use roxmltree::Node;

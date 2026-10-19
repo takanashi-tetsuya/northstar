@@ -51,7 +51,7 @@ use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use crate::{
     jid::{canonical_bare_key, prepare_domainpart, CanonicalJid},
-    state::{bare_jid, localpart},
+    platform::jid_text::{bare_jid, localpart},
 };
 use anyhow::Result;
 use northstar_room_application::discussion as discussion_owner;

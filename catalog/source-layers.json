@@ -162,9 +162,6 @@
     "src/db/pie.rs": [
       "tools"
     ],
-    "src/db/remaining_identity.rs": [
-      "state"
-    ],
     "src/db/retention.rs": [
       "runtime"
     ],
@@ -314,9 +311,6 @@
     "src/xmpp/protocol/caps.rs": [
       "state"
     ],
-    "src/xmpp/protocol/dispatch.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/federated_muc.rs": [
       "state"
     ],
@@ -330,9 +324,6 @@
       "state"
     ],
     "src/xmpp/protocol/federated_muc/presence.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/messaging.rs": [
       "state"
     ],
     "src/xmpp/protocol/misc.rs": [
@@ -380,16 +371,10 @@
     "src/xmpp/protocol/pep/publishing.rs": [
       "state"
     ],
-    "src/xmpp/protocol/presence.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/private.rs": [
       "state"
     ],
     "src/xmpp/protocol/pubsub.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/replay.rs": [
       "state"
     ],
     "src/xmpp/protocol/roster.rs": [
@@ -399,9 +384,6 @@
       "state"
     ],
     "src/xmpp/protocol/sm_owner.rs": [
-      "state"
-    ],
-    "src/xmpp/xml_util.rs": [
       "state"
     ],
     "src/xmpp/xml_util/muc.rs": [

@@ -1,0 +1,435 @@
+{
+  "schema": "northstar-source-layers-v1",
+  "layers": {
+    "composition": {
+      "rank": 4,
+      "modules": [
+        "main",
+        "runtime",
+        "state",
+        "tools"
+      ],
+      "may_use": [
+        "composition",
+        "adapter",
+        "application",
+        "platform",
+        "facade"
+      ]
+    },
+    "adapter": {
+      "rank": 3,
+      "modules": [
+        "api",
+        "bosh",
+        "cluster",
+        "db",
+        "s2s",
+        "storage",
+        "xmpp"
+      ],
+      "may_use": [
+        "adapter",
+        "application",
+        "platform",
+        "facade"
+      ]
+    },
+    "application": {
+      "rank": 2,
+      "modules": [
+        "services"
+      ],
+      "may_use": [
+        "application",
+        "platform",
+        "facade"
+      ]
+    },
+    "platform": {
+      "rank": 1,
+      "modules": [
+        "platform",
+        "security"
+      ],
+      "may_use": [
+        "platform",
+        "facade"
+      ]
+    },
+    "facade": {
+      "rank": 0,
+      "modules": [
+        "auth",
+        "jid"
+      ],
+      "may_use": [
+        "facade"
+      ]
+    }
+  },
+  "aliases": {
+    "outbound": "xmpp"
+  },
+  "baseline": {
+    "src/api/admin.rs": [
+      "state"
+    ],
+    "src/api/auth_routes.rs": [
+      "state"
+    ],
+    "src/api/body_limits.rs": [
+      "state"
+    ],
+    "src/api/data_lifecycle.rs": [
+      "state"
+    ],
+    "src/api/mod.rs": [
+      "state"
+    ],
+    "src/api/omemo_recovery.rs": [
+      "state"
+    ],
+    "src/api/operations.rs": [
+      "state"
+    ],
+    "src/api/pagination.rs": [
+      "state"
+    ],
+    "src/api/passkeys.rs": [
+      "state"
+    ],
+    "src/api/reports.rs": [
+      "state"
+    ],
+    "src/api/route_composition.rs": [
+      "state"
+    ],
+    "src/api/system.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/api/upload.rs": [
+      "state"
+    ],
+    "src/api/upload_admin.rs": [
+      "state"
+    ],
+    "src/api/users.rs": [
+      "state"
+    ],
+    "src/bosh.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/cluster.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/cluster/delivery_contract.rs": [
+      "state"
+    ],
+    "src/cluster/listener.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/cluster/listener/responses.rs": [
+      "state"
+    ],
+    "src/cluster/maintenance_redis.rs": [
+      "state"
+    ],
+    "src/cluster/muc_fanout.rs": [
+      "state"
+    ],
+    "src/cluster/muc_occupancy.rs": [
+      "state"
+    ],
+    "src/cluster/muc_outbox.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/cluster/publisher.rs": [
+      "state"
+    ],
+    "src/cluster/recovery_replay.rs": [
+      "state"
+    ],
+    "src/cluster/teardown.rs": [
+      "state"
+    ],
+    "src/cluster/worker_capabilities.rs": [
+      "state"
+    ],
+    "src/cluster/workers.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/db/authority_listener.rs": [
+      "runtime"
+    ],
+    "src/db/pie.rs": [
+      "tools"
+    ],
+    "src/db/remaining_identity.rs": [
+      "state"
+    ],
+    "src/db/retention.rs": [
+      "runtime"
+    ],
+    "src/platform/config.rs": [
+      "cluster",
+      "s2s",
+      "xmpp"
+    ],
+    "src/platform/config/loading.rs": [
+      "cluster",
+      "db",
+      "s2s",
+      "xmpp"
+    ],
+    "src/platform/config/parsing.rs": [
+      "s2s"
+    ],
+    "src/platform/metrics.rs": [
+      "db",
+      "services"
+    ],
+    "src/s2s/components.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/s2s/dialback.rs": [
+      "state"
+    ],
+    "src/s2s/dns.rs": [
+      "state"
+    ],
+    "src/s2s/inbound.rs": [
+      "state"
+    ],
+    "src/s2s/inbound/direct_route.rs": [
+      "state"
+    ],
+    "src/s2s/inbound/session.rs": [
+      "runtime"
+    ],
+    "src/s2s/outbound.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/s2s/sm.rs": [
+      "state"
+    ],
+    "src/s2s/tls.rs": [
+      "state"
+    ],
+    "src/security/abuse.rs": [
+      "db",
+      "services"
+    ],
+    "src/security/abuse/key_management.rs": [
+      "db"
+    ],
+    "src/security/abuse/persistence.rs": [
+      "db"
+    ],
+    "src/security/account_recovery.rs": [
+      "runtime",
+      "state",
+      "xmpp"
+    ],
+    "src/services/admin_session_cleanup_worker.rs": [
+      "db"
+    ],
+    "src/services/cluster_authority.rs": [
+      "cluster",
+      "db"
+    ],
+    "src/services/direct_spool_wake.rs": [
+      "cluster"
+    ],
+    "src/services/federation_outbox.rs": [
+      "s2s"
+    ],
+    "src/services/message_admission/witness.rs": [
+      "xmpp"
+    ],
+    "src/services/messaging.rs": [
+      "cluster",
+      "xmpp"
+    ],
+    "src/services/messaging/direct_route.rs": [
+      "cluster",
+      "xmpp"
+    ],
+    "src/services/messaging/direct_workflow.rs": [
+      "xmpp"
+    ],
+    "src/services/metrics_snapshot.rs": [
+      "cluster"
+    ],
+    "src/services/mix.rs": [
+      "xmpp"
+    ],
+    "src/services/mix/contracts.rs": [
+      "xmpp"
+    ],
+    "src/services/mix/operations.rs": [
+      "cluster"
+    ],
+    "src/services/mix/payloads.rs": [
+      "xmpp"
+    ],
+    "src/services/muc_delivery.rs": [
+      "db"
+    ],
+    "src/services/node_message_contract_verifier.rs": [
+      "xmpp"
+    ],
+    "src/services/profile.rs": [
+      "xmpp"
+    ],
+    "src/services/readiness.rs": [
+      "cluster",
+      "db"
+    ],
+    "src/services/replay.rs": [
+      "xmpp"
+    ],
+    "src/services/retractions.rs": [
+      "xmpp"
+    ],
+    "src/services/session_cleanup.rs": [
+      "cluster",
+      "runtime",
+      "state",
+      "xmpp"
+    ],
+    "src/services/sm.rs": [
+      "xmpp"
+    ],
+    "src/services/sm/ownership.rs": [
+      "xmpp"
+    ],
+    "src/services/sm_teardown_muc.rs": [
+      "xmpp"
+    ],
+    "src/services/standalone_muc_maintenance.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/xmpp/mod.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/xmpp/protocol.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/blocking.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/caps.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/xmpp/protocol/dispatch.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/federated_muc.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/federated_muc/admin.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/federated_muc/message.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/federated_muc/owner.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/federated_muc/presence.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/messaging.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/misc.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/mix.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/xmpp/protocol/mix/worker.rs": [
+      "runtime"
+    ],
+    "src/xmpp/protocol/mix_muc.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/admin.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/admin_batch.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/discussion.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/join.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/message.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/owner.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/presence.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/muc/register.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/pep.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/pep/notifications.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/pep/publishing.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/presence.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/private.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/pubsub.rs": [
+      "runtime",
+      "state"
+    ],
+    "src/xmpp/protocol/replay.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/roster.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/sm.rs": [
+      "state"
+    ],
+    "src/xmpp/protocol/sm_owner.rs": [
+      "state"
+    ],
+    "src/xmpp/xml_util.rs": [
+      "state"
+    ],
+    "src/xmpp/xml_util/muc.rs": [
+      "state"
+    ]
+  }
+}

@@ -439,6 +439,8 @@ jobs:
           node scripts/check-runtime-migration-boundary.mjs
           node scripts/check-source-structure.mjs
           node --test scripts/test-source-structure.mjs
+          node scripts/check-layer-dependencies.mjs
+          node --test scripts/test-layer-dependencies.mjs
           node scripts/check-architecture-boundaries.mjs
           node --test scripts/test-admission-execution.mjs
           node scripts/check-runtime-experiments.mjs

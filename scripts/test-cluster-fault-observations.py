@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import tempfile
 import traceback
 import unittest
@@ -264,6 +265,27 @@ class RejectionObservationTests(unittest.TestCase):
             self.assertTrue(cluster.wait_for_authentication_rejection(self.path, 0, 3.0))
         self.assertEqual(observe.call_count, 2)
         self.assertAlmostEqual(now[0], 0.05)
+
+    def test_observed_events_keep_the_cluster_target_in_source(self):
+        # The fixture matches the exact event target. Code moved out of
+        # src/cluster.rs logs under its own module path unless the call pins the
+        # cluster target, which only the multi-node CI job would notice.
+        root = Path(__file__).resolve().parents[1]
+        fixture_source = (root / "scripts" / "cluster-wsl.py").read_text()
+        messages = re.findall(r'cluster_log_fields_since\([^{]*\{\s*"message": "([^"]+)"', fixture_source)
+        self.assertEqual(len(messages), 2)
+        for message in messages:
+            calls = []
+            for path in sorted((root / "src").rglob("*.rs")):
+                text = path.read_text()
+                for match in re.finditer(re.escape(f'"{message}"'), text):
+                    calls.append((path, text[text.rfind("tracing::", 0, match.start()):match.start()]))
+            self.assertEqual(len(calls), 1, message)
+            path, call = calls[0]
+            self.assertTrue(
+                path == root / "src" / "cluster.rs" or 'target: "rust_xmpp_server::cluster"' in call,
+                f"{path.relative_to(root)} logs {message!r} outside the cluster target",
+            )
 
 
 if __name__ == "__main__":

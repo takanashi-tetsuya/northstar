@@ -355,7 +355,9 @@ pub(super) async fn maintenance_once(
         {
             let error = control.record_muc_projection_failure(error);
             muc_soft_state_errors = muc_soft_state_errors.saturating_add(1);
-            tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
+            // scripts/cluster-wsl.py observes this refusal under the cluster target.
+            tracing::warn!(target: "rust_xmpp_server::cluster",
+                ?error, room=%occupant.room_jid, nick=%occupant.nick,
                 "could not refresh disposable Redis MUC soft-state");
         } else {
             active_muc_rooms.insert(occupant.room_jid.clone());

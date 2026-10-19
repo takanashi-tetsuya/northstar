@@ -256,6 +256,10 @@ run_exact_ignored \
 run_exact_ignored \
   db::pubsub::integration_tests::collection_graph::repeated_associate_is_idempotent_after_a_graph_lock_wait
 run_exact_ignored \
+  db::pubsub::integration_tests::collection_graph::collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose
+run_exact_ignored \
+  db::pubsub::integration_tests::collection_graph::collection_edge_insert_linearizes_after_child_owner_revocation
+run_exact_ignored \
   db::pubsub::integration_tests::subscription_lock_wait::subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
 run_exact_ignored \
   db::pubsub::integration_tests::subscription_lock_wait::subscription_options_recheck_node_policy_after_lock_wait

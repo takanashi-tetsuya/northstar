@@ -92,7 +92,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | S6 文件收斂 | WP-61–63 | 修正 KNOWN_ISSUES 的遷移鏈敘述與 README 的發佈敘述（WP-61）；HANDOFF 改為只記錄其他文件沒有的現況，`docs/README.md` 建立狀態地圖（WP-62）；現行文件與 `crates/*/MIGRATION.md` 改用分層路徑，`resource-bounds` 的原始碼連結固定到審閱提交（WP-63） | 文件一致性門禁通過，並檢查遷移鏈敘述、狀態地圖與舊路徑（R8）。已完成 |
 | S7 R1 收斂 | WP-71a–c | 超標生產檔的頂層內嵌測試模組移為子檔，只移動、不改測試；最後由結構門禁拒絕超標生產檔保留內嵌測試模組（R1）。盤點見 5.3 | 測試名稱集合不變；全部門禁與完整 CI 通過；基線刪除降到上限內的條目並下修其餘條目。已完成 |
 | S8 角色拆分 | WP-81a–f、WP-82a–i、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4），模組目錄另有獨立模組的三檔改讀角色拆分清單（WP-82g）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。已完成：基線只剩被釘住的 3 個生產檔（R5）與 2 個超過測試上限的測試檔（`db/pubsub_integration_tests.rs` 6,108 行、`db/upload_tests.rs` 3,429 行），由 S9 拆分 |
-| S9 測試檔拆分 | WP-91、WP-92a–b | 超過測試上限的兩個測試檔拆為「`x_tests.rs`＋`x_tests/角色_tests.rs`」，子檔是原測試模組的子模組；只移動檢查先改為依所在檔案解析 `include_str!`／`include_bytes!` 的路徑（WP-91）。盤點見 5.5 | 只移動檢查通過；去掉子模組一段後測試名稱與 ignored 測試集合不變；WSL 腳本的每個選擇器恰好對應一個測試；全部門禁與完整 CI 通過。已完成：基線只剩被釘住的 3 個生產檔（R5） |
+| S9 測試檔拆分 | WP-91、WP-92a–b、WP-93 | 超過測試上限的兩個測試檔拆為「`x_tests.rs`＋`x_tests/角色_tests.rs`」，子檔是原測試模組的子模組；只移動檢查先改為依所在檔案解析 `include_str!`／`include_bytes!` 的路徑（WP-91）。盤點見 5.5 | 只移動檢查通過；去掉子模組一段後測試名稱與 ignored 測試集合不變；WSL 腳本的每個選擇器恰好對應一個測試；全部門禁與完整 CI 通過。已完成：基線只剩被釘住的 3 個生產檔（R5） |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -261,8 +261,8 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
   與 3 個 `super::module_source()`，pubsub 測試有 4 個 `super::super::` 路徑，搬入子檔後各多一層。
   只移動檢查原本逐位元組比對字串，WP-91 改為依所在檔案解析 include 路徑後比對。
 - 不受影響：`docs/evidence/tasks/M00-03.yaml` 只以函式名提到兩個測試（R5，不改）。
-- 既有缺口（不在本階段處理）：`pubsub-db-wsl.sh` 沒有列出 `collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose`
-  與 `collection_edge_insert_linearizes_after_child_owner_revocation`，CI 從未執行這兩個資料庫測試。
+- 既有缺口：`pubsub-db-wsl.sh` 原本沒有列出 `collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose`
+  與 `collection_edge_insert_linearizes_after_child_owner_revocation`，CI 從未執行這兩個資料庫測試；WP-93 補上。
 
 ## 6. 委派與驗收協議
 
@@ -473,3 +473,4 @@ Stage 證據仍綁定其原提交。
 | WP-91 | 完成：`check-move-only.mjs` 的 `normalizeItems` 接收檔案路徑，`include_str!`／`include_bytes!` 的第一個一般字串參數依所在檔案解析為儲存庫路徑後比對；raw／byte 字串、含跳脫的字串、`include!` 與其他字面值仍逐位元組比對。自測 32 項通過；CLI 測試要呼叫 git，codex 沙箱中無法執行，由架構負責人執行 | 見 `git log --grep '\[WP-91\]'` |
 | WP-92a | 完成：`db/upload_tests.rs` 3,429 行拆為 capacity_authority／storage_jobs／capacity_admission／source_contracts 四個子測試模組（`db/upload_tests/*_tests.rs`，最大 1,146 行），父檔留匯入與共用的 `insert_user`（42 行）；23 個項目不變。12 個 `include_str!` 多一個 `../`、3 個 `super::module_source()` 多一層，由只移動檢查確認 | 見 `git log --grep '\[WP-92a\]'` |
 | WP-92b | 完成：`db/pubsub_integration_tests.rs` 6,108 行拆為 8 個子測試模組（`db/pubsub_integration_tests/*_tests.rs`，最大 1,099 行），父檔留匯入與共用 helper（380 行）；48 個項目不變，`pubsub-db-wsl.sh` 的 27 個選擇器加上子模組。WP-91、92a、92b 整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過；去掉子模組一段後 2,199 個測試名稱與 254 個 ignored 測試不變；基線刪除 2 個條目，只剩被釘住的 3 個生產檔 | 見 `git log --grep '\[WP-92b\]'` |
+| WP-93 | 完成：`pubsub-db-wsl.sh` 補上 collection_graph 的兩個資料庫測試（子節點擁有權與舊邊不外洩、子節點擁有者撤銷後的邊插入線性化），從此由 CI 的 PubSub 資料庫分片執行；腳本 40 個選擇器各恰好對應一個 ignored 測試 | 見 `git log --grep '\[WP-93\]'` |

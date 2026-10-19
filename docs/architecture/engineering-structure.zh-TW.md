@@ -1,6 +1,6 @@
 # Northstar 工程結構藍圖
 
-更新：2026-10-19。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
+更新：2026-10-20。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
 
 本文是**結構工作**（程式碼放在哪裡、由誰擁有、如何機械驗證）的唯一權威。
 它不改變任何協議、交易、migration 或安全語義。領域邏輯收斂仍依
@@ -36,17 +36,22 @@
 ## 3. 目標分層
 
 `catalog/crates.yaml` 已定義 crate 層級（foundation／domain／xep／application／adapter／service／tooling）。
-根 crate 內部對應同一方向，依賴只能由上往下：
+根 crate 內部以頂層模組分層，依賴只能由上往下，同層可互相使用。分層的權威清單是
+`catalog/source-layers.json`，由 R9 執行：
 
 ```text
-L4 組合與執行期   main.rs、subservers、state（AppState 組裝）、workers、operation_runtime、維護 worker
-L3 應用服務       src/services/**  （呼叫 crates/*-application 與注入的 port）
-L2 介面卡         持久化 src/db/**；協議／傳輸 src/xmpp/** src/bosh/** src/s2s/** components；
-                  HTTP src/api/**；物件儲存 src/storage/**；叢集控制面 src/cluster/**
-L1 平台橫切       config、error、logging、metrics、tls／crl／ocsp、password_work
-L0 函式庫         crates/*（domain／xep／application／foundation），不得依賴根 crate
-測試專用          只在 #[cfg(test)]；受控重播與 Stage 4 實驗程式只在既有 cfg(test) 模組
+4 組合          main.rs、runtime（程序角色、operation runtime、維護 worker）、state（AppState 組裝）、tools
+3 介面卡        持久化 db；協議／傳輸 xmpp、bosh、s2s；HTTP api；物件儲存 storage；叢集控制面 cluster
+2 應用服務      services（呼叫 crates/*-application 與注入的 port）
+1 平台橫切      platform（config、error、logging、metrics、JID 文字工具、worker 與連線 actor 監督）、
+                security（tls／crl／ocsp、password_work、abuse、account_recovery）
+0 相容 facade   auth、jid（轉出 crates/* 的型別）
+函式庫          crates/*（domain／xep／application／foundation），不得依賴根 crate
+測試專用        只在 #[cfg(test)]；受控重播與 Stage 4 實驗程式只在既有 cfg(test) 模組
 ```
+
+介面卡呼叫應用服務，應用服務經 port 使用持久化與傳輸，因此介面卡在應用服務之上。S10 之前本節把兩者
+的順序寫反，平台層也沒有列出 worker 監督；S10 依呼叫方向修正，並量測現有的違規（5.6）。
 
 ### 3.1 根 crate 目標目錄（S4 階段才搬動）
 
@@ -75,6 +80,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | R6 測試專用碼 | 受控重播與實驗程式只能存在於 `#[cfg(test)]` 模組 | 既有門禁＋審閱 |
 | R7 提交 | 一個 WP 一至數個提交，訊息首行以 `[WP-xx]` 開頭；不推 WIP | 審閱 |
 | R8 文件不留舊路徑 | 現行文件與 `crates/*/MIGRATION.md` 不得寫 S4 已移走的根目錄模組路徑（含 `../src/` 與目錄形式）；有日期的紀錄（`docs/` 下的 `evidence`、`archive`、`handoff`、`changelog`、`releases` 與 `CHANGELOG.md`）、本文與固定提交的連結保留當時的路徑 | `scripts/check-documentation-consistency.mjs` |
+| R9 層級方向 | 根 crate 的每個頂層模組屬於 `catalog/source-layers.json` 的一層（第 3 節）；一層只能使用同層與 `may_use` 所列的層，`may_use` 不得列出 rank 較高的層。檢查範圍是從 `src/main.rs` 沿 `mod` 宣告走到的生產碼：測試專用 cfg 下宣告的模組連同整個子樹不算，檔內測試專用的項目、欄位、分支與陳述式也不算。既有違規以「檔案→目標頂層模組」記錄在同一檔案的 `baseline`，只能減少：新的違規、不再需要的基線項目與不屬任何層的目標都失敗。搬移 WP 以 `--write` 重寫基線，審閱時確認只刪不增 | `scripts/check-layer-dependencies.mjs`＋`catalog/source-layers.json` |
 
 ## 5. 工作包順序
 
@@ -93,6 +99,7 @@ L0 函式庫         crates/*（domain／xep／application／foundation），不
 | S7 R1 收斂 | WP-71a–c | 超標生產檔的頂層內嵌測試模組移為子檔，只移動、不改測試；最後由結構門禁拒絕超標生產檔保留內嵌測試模組（R1）。盤點見 5.3 | 測試名稱集合不變；全部門禁與完整 CI 通過；基線刪除降到上限內的條目並下修其餘條目。已完成 |
 | S8 角色拆分 | WP-81a–f、WP-82a–i、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4），模組目錄另有獨立模組的三檔改讀角色拆分清單（WP-82g）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。已完成：基線只剩被釘住的 3 個生產檔（R5）與 2 個超過測試上限的測試檔（`db/pubsub_integration_tests.rs` 6,108 行、`db/upload_tests.rs` 3,429 行），由 S9 拆分 |
 | S9 測試檔拆分 | WP-91、WP-92a–b、WP-93 | 超過測試上限的兩個測試檔拆為「`x_tests.rs`＋`x_tests/角色_tests.rs`」，子檔是原測試模組的子模組；只移動檢查先改為依所在檔案解析 `include_str!`／`include_bytes!` 的路徑（WP-91）。盤點見 5.5 | 只移動檢查通過；去掉子模組一段後測試名稱與 ignored 測試集合不變；WSL 腳本的每個選擇器恰好對應一個測試；全部門禁與完整 CI 通過。已完成：基線只剩被釘住的 3 個生產檔（R5） |
+| S10 層級方向 | WP-101–104 | 依頂層模組定義五層並以門禁執行（R9，WP-101）；被下層使用、本身不依賴上層的程式往下搬：worker 與連線 actor 監督（WP-102）、JID 文字工具（WP-103）移到 `platform`，MUC 占用者紀錄移到 `services::muc`（WP-104）。盤點見 5.6 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 139 條降到 104 條，其餘依 5.6 交給模組化執行計劃 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -264,6 +271,40 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
 - 既有缺口：`pubsub-db-wsl.sh` 原本沒有列出 `collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose`
   與 `collection_edge_insert_linearizes_after_child_owner_revocation`，CI 從未執行這兩個資料庫測試；WP-93 補上。
 
+### 5.6 S10 盤點：層級依賴（`bc1e493`）
+
+依第 3 節的分層，WP-101 的門禁在 `bc1e493` 走到 624 個生產檔，其中 110 檔有 139 條違反方向的引用（同一檔案對
+同一目標頂層模組算一條）：
+
+| 方向 | 條數 | 組成 |
+| --- | ---: | --- |
+| 介面卡 → 組合 | 90 | 對 `state` 73（`xmpp` 35、`api` 15、`cluster` 13、`s2s` 8、`bosh`、`db` 各 1）、對 `runtime` 16（`xmpp` 5、`cluster` 4、`s2s` 3、`db` 2、`api`、`bosh` 各 1）、`db` 對 `tools` 1 |
+| 應用 → 介面卡、組合 | 32 | `services` 對 `xmpp` 15、`cluster` 8、`db` 4、`s2s` 1、`runtime` 2、`state` 2 |
+| 平台 → 上層 | 17 | `platform` 對 `s2s` 3、`cluster`、`xmpp`、`db` 各 2、`services` 1；`security` 對 `db` 3、`services`、`runtime`、`state`、`xmpp` 各 1 |
+
+S10 只搬「被下層使用、本身不依賴上層」的程式，搬移只改路徑：
+
+- `runtime/workers.rs`（含測試）與 `runtime/connection_actors.rs` 不使用 crate 內其他模組，搬到 `platform`（WP-102，
+  減少 18 條：各介面卡、`services` 與 `security` 對 `runtime` 的引用）。
+- `state/jid_text.rs` 的五個字串工具沒有 crate 依賴，搬到 `platform`（WP-103，減少 6 條）。
+- `SerializableMucOccupant`、`LocalMucOccupantIdentity` 與兩者間的轉換是純資料，搬到 `services::muc::occupancy`
+  （WP-104，減少 11 條）。`MucOccupant` 的 endpoint 持有 session handle，連同兩個 `From<&MucOccupant>` 留在 `state`。
+
+S10 後剩 104 條，分布在 90 個檔案，都需要先有 port 或窄化的 context，交給
+[模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md)（Phase D 的 session／傳輸 port、Phase E 的基礎設施 port 與
+8.1 的 D1）；之後每減少一條，都由 R9 的基線 ratchet 記錄：
+
+- 介面卡經組合層取得狀態（58）：`xmpp` 24、`api` 15、`cluster` 8、`s2s` 8、`bosh` 1 引用 `AppState` 與 `state` 中
+  定義的窄化 context（如 `ApiQueryContext`、`ClusterMaintenanceContext`），context 型別由 `state` 組裝也定義在
+  `state`；`db/retention.rs` 實作的 retention 與訂閱清理 repository trait 定義在 `runtime`，`db/pie.rs` 使用的
+  PIE 匯入型別定義在 `tools::pie`，這兩組 port 要先移到應用層。
+- 應用服務直接使用介面卡（30）：`services` 使用 `xmpp` 的對外佇列與 XML 工具（15）、`cluster` 的就緒與路由查詢
+  （8）、`db` 的列型別（4）、`s2s` 的元件註冊表（1），以及 `state` 的 session 清理 context 與 `MucOccupant`（2）。
+- 平台層向上（16）：`platform::config` 持有 `s2s` 的 `DaneMode`、`xmpp` 的 `ExtensionRuntime`、`cluster` 的
+  `ClusterSecurityConfig` 與 `db` 的 `SmIpPolicy`；`platform::metrics` 讀 `db` 與 `services` 的計數器；
+  `security::abuse` 使用 `db` 的 abuse repository 與 `services` 的訊息准入，`security::account_recovery` 使用
+  `state` 與 `xmpp`。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8 起改由 Codex CLI 執行（第 8 點）。
@@ -353,6 +394,10 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
      匯入。完全不用父模組名稱的子檔不要這一行（`-D warnings` 下是 unused import，WP-92a 的
      `source_contract_tests.rs`）；只經子檔 glob 使用的父檔匯入不算未使用。`cargo fmt` 會把相鄰的 `mod`
      宣告依字母排序。
+   - 層級搬移（S10）：codex 的沙箱中 `.git` 唯讀，整檔搬移由架構負責人在交付前以 `git mv` 執行，規格只要求改寫
+     路徑。層級檢查必須沿模組樹判斷測試碼：原型只依檔名分類，把 `#[cfg(test)] mod saved_case;` 等宣告下的 4 個
+     檔案算成生產碼（143 條對門禁的 139 條）。平行的搬移各自修改同一個父模組（WP-102、103 都改
+     `platform/mod.rs`），整合時手動合併；每個 WP 整合後以 `--write` 重寫基線，確認只刪不增後併入該 WP 的提交。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -474,3 +519,7 @@ Stage 證據仍綁定其原提交。
 | WP-92a | 完成：`db/upload_tests.rs` 3,429 行拆為 capacity_authority／storage_jobs／capacity_admission／source_contracts 四個子測試模組（`db/upload_tests/*_tests.rs`，最大 1,146 行），父檔留匯入與共用的 `insert_user`（42 行）；23 個項目不變。12 個 `include_str!` 多一個 `../`、3 個 `super::module_source()` 多一層，由只移動檢查確認 | 見 `git log --grep '\[WP-92a\]'` |
 | WP-92b | 完成：`db/pubsub_integration_tests.rs` 6,108 行拆為 8 個子測試模組（`db/pubsub_integration_tests/*_tests.rs`，最大 1,099 行），父檔留匯入與共用 helper（380 行）；48 個項目不變，`pubsub-db-wsl.sh` 的 27 個選擇器加上子模組。WP-91、92a、92b 整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過；去掉子模組一段後 2,199 個測試名稱與 254 個 ignored 測試不變；基線刪除 2 個條目，只剩被釘住的 3 個生產檔 | 見 `git log --grep '\[WP-92b\]'` |
 | WP-93 | 完成：`pubsub-db-wsl.sh` 補上 collection_graph 的兩個資料庫測試（子節點擁有權與舊邊不外洩、子節點擁有者撤銷後的邊插入線性化），從此由 CI 的 PubSub 資料庫分片執行；腳本 40 個選擇器各恰好對應一個 ignored 測試 | 見 `git log --grep '\[WP-93\]'` |
+| WP-101 | 完成：`catalog/source-layers.json` 以頂層模組定義五層（組合 4、介面卡 3、應用 2、平台 1、facade 0）與各層的 `may_use`，別名 `outbound`→`xmpp`；`scripts/check-layer-dependencies.mjs` 從 `src/main.rs` 沿 `mod` 宣告建立生產模組樹（測試專用 cfg 下的宣告連同子樹排除），去掉檔內測試碼後收集 `crate::` 路徑、use 群組、到達根的 `super::` 與 `pub(in crate::x)` 指向的頂層模組。基線 139 條（110 檔）；新違規、過期的基線項目、不在任何層的目標，以及 `may_use` 列出較高 rank 的 catalog 都失敗。門禁與 33 個自測接入 `web-static` | 見 `git log --grep '\[WP-101\]'` |
+| WP-102 | 完成：`runtime/workers.rs`（含測試）與 `runtime/connection_actors.rs` 以 `git mv` 原樣移到 `platform/`；43 個檔案的 92 處路徑、架構門禁的 4 個樣式、`catalog/runtime-experiments.json` 的 3 個錨點與 `docs/PROGRAM_RESPONSIBILITIES.md` 的 2 處路徑隨之改寫；24 個測試的路徑由 `runtime::` 改為 `platform::`，其餘名稱不變。基線減少 18 條 | 見 `git log --grep '\[WP-102\]'` |
+| WP-103 | 完成：`state/jid_text.rs` 以 `git mv` 原樣移到 `platform/jid_text.rs`；`state.rs` 改為私有匯入，`state/` 下的模組照舊經 `use super::*;` 取用；api、db、direct_replay、runtime 與 xmpp 的呼叫方改用 `crate::platform::jid_text`。基線減少 6 條 | 見 `git log --grep '\[WP-103\]'` |
+| WP-104 | 完成：`SerializableMucOccupant`、`LocalMucOccupantIdentity` 與兩者間的轉換逐字移到 `services::muc::occupancy`，由 `services::muc` 轉出；`MucOccupant` 與兩個 `From<&MucOccupant>` 留在 `state/local_muc.rs`，29 個檔案改用 `crate::services::muc`。基線減少 11 條。WP-101–104 由 codex 平行執行，依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 139 條降到 104 條（90 檔） | 見 `git log --grep '\[WP-104\]'` |

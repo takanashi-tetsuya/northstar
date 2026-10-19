@@ -410,7 +410,7 @@ async fn federated_muc_message_owned(
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
                     let Some(updated_occupant) = state.set_local_muc_role_exact(
-                        crate::state::LocalMucOccupantIdentity::from(target),
+                        crate::services::muc::LocalMucOccupantIdentity::from(target),
                         "visitor",
                         "participant",
                         None,

@@ -1152,7 +1152,7 @@ fn authoritative_occupant_id_replaces_client_spoofing() {
 
 #[test]
 fn muc_removal_presence_carries_self_kick_and_occupant_identity() {
-    let occupant = crate::state::SerializableMucOccupant {
+    let occupant = crate::services::muc::SerializableMucOccupant {
         full_jid: "alice@example.test/phone".to_owned(),
         room_jid: "room@conference.example.test".to_owned(),
         nick: "alice".to_owned(),

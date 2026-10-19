@@ -192,7 +192,7 @@ impl ProtocolSession {
                         )));
                     }
                     let Some(current) = self.state.local_muc_occupant_exact(
-                        crate::state::LocalMucOccupantIdentity {
+                        crate::services::muc::LocalMucOccupantIdentity {
                             room_jid: &room_jid,
                             nick: &joined_nick,
                             full_jid: &full_jid,
@@ -311,7 +311,7 @@ impl ProtocolSession {
                     )));
                 };
                 drop(local_refresh_guard);
-                let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
                 if self.state.muc_redis_transport_enabled() {
                     if let Ok(json) = serde_json::to_string(&serializable) {
                         let cache_result = self
@@ -405,7 +405,7 @@ impl ProtocolSession {
                         ) && roster_nicks.insert(present.nick.clone())
                         {
                             replies.push(muc_presence_stanza(
-                                &crate::state::SerializableMucOccupant::from(&present),
+                                &crate::services::muc::SerializableMucOccupant::from(&present),
                                 &full_jid,
                                 false,
                                 false,
@@ -421,9 +421,9 @@ impl ProtocolSession {
                         .await?
                         .into_values()
                     {
-                        let Ok(present) =
-                            serde_json::from_str::<crate::state::SerializableMucOccupant>(&json)
-                        else {
+                        let Ok(present) = serde_json::from_str::<
+                            crate::services::muc::SerializableMucOccupant,
+                        >(&json) else {
                             continue;
                         };
                         if present.cluster_epoch == occupant.cluster_epoch {
@@ -632,9 +632,10 @@ impl ProtocolSession {
                 )));
             }
             let old_occupant = occupant.clone();
-            let old_serializable = crate::state::SerializableMucOccupant::from(&old_occupant);
+            let old_serializable =
+                crate::services::muc::SerializableMucOccupant::from(&old_occupant);
             occupant.nick = nick.to_owned();
-            let new_serializable = crate::state::SerializableMucOccupant::from(&occupant);
+            let new_serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
             let old_json = serde_json::to_string(&old_serializable)?;
             let new_json = serde_json::to_string(&new_serializable)?;
             let mut cluster_operation = None;
@@ -744,7 +745,7 @@ impl ProtocolSession {
                 }
             };
             let move_outcome = self.state.move_local_muc_nickname_exact(
-                crate::state::LocalMucOccupantIdentity::from(&old_occupant),
+                crate::services::muc::LocalMucOccupantIdentity::from(&old_occupant),
                 &occupant,
                 cluster_operation.is_some(),
             );
@@ -813,7 +814,7 @@ impl ProtocolSession {
                 .await?;
             for (_, recipient) in self.state.muc_occupants_for(&room_jid) {
                 let recipient_serializable =
-                    crate::state::SerializableMucOccupant::from(&recipient);
+                    crate::services::muc::SerializableMucOccupant::from(&recipient);
                 let unavailable = muc_nickname_change_presence(
                     &old_serializable,
                     &recipient_serializable,
@@ -1147,7 +1148,7 @@ impl ProtocolSession {
             sm_session_id: self.sm.db_id,
             payload,
         };
-        let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+        let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
         let mut cluster_event_id = None;
         if self.state.muc_pg_authority_enabled() {
             self.state.admit_muc_pg_mutation()?;
@@ -1322,7 +1323,7 @@ impl ProtocolSession {
         let mut roster_nicks = std::collections::HashSet::new();
         for (_, json_str) in global_map {
             if let Ok(present) =
-                serde_json::from_str::<crate::state::SerializableMucOccupant>(&json_str)
+                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&json_str)
             {
                 let visible_sender = format!("{room_jid}/{}", present.nick);
                 let real_sender = room.non_anonymous.then_some(present.full_jid.as_str());
@@ -1354,7 +1355,7 @@ impl ProtocolSession {
                 && roster_nicks.insert(target.nick.clone())
             {
                 replies.push(muc_presence_stanza(
-                    &crate::state::SerializableMucOccupant::from(target),
+                    &crate::services::muc::SerializableMucOccupant::from(target),
                     &full_jid,
                     false,
                     false,

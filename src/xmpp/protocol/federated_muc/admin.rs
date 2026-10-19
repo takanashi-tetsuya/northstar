@@ -146,9 +146,9 @@ pub(super) async fn publish_occupant_change(
     };
     let actor_nick = actor.nick.as_str();
     if let Some(status) = removal_status {
-        let Some(mut departed) = state
-            .remove_local_muc_occupant_exact(crate::state::LocalMucOccupantIdentity::from(&target))
-        else {
+        let Some(mut departed) = state.remove_local_muc_occupant_exact(
+            crate::services::muc::LocalMucOccupantIdentity::from(&target),
+        ) else {
             return Ok(());
         };
         departed.affiliation = proposed_affiliation.to_owned();
@@ -202,7 +202,7 @@ pub(super) async fn publish_occupant_change(
     } else {
         let Some(updated) = (if let Some(affiliation) = change.affiliation {
             state.set_local_muc_affiliation_exact(
-                crate::state::LocalMucOccupantIdentity::from(&target),
+                crate::services::muc::LocalMucOccupantIdentity::from(&target),
                 affiliation,
                 room.moderated,
                 false,
@@ -210,7 +210,7 @@ pub(super) async fn publish_occupant_change(
             )
         } else {
             state.set_local_muc_role_exact(
-                crate::state::LocalMucOccupantIdentity::from(&target),
+                crate::services::muc::LocalMucOccupantIdentity::from(&target),
                 &target.role,
                 proposed_role,
                 Some(target.room_non_anonymous),

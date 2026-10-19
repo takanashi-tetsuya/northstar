@@ -191,7 +191,7 @@ impl ProtocolSession {
                 let joined_epoch = joined.cluster_epoch;
                 drop(joined);
                 if let Some(occupant) = self.state.set_local_muc_affiliation_exact(
-                    crate::state::LocalMucOccupantIdentity {
+                    crate::services::muc::LocalMucOccupantIdentity {
                         room_jid: &room_jid,
                         nick: &joined_nick,
                         full_jid: self
@@ -207,7 +207,7 @@ impl ProtocolSession {
                     None,
                 ) {
                     target_is_occupant = true;
-                    let updated = crate::state::SerializableMucOccupant::from(&occupant);
+                    let updated = crate::services::muc::SerializableMucOccupant::from(&occupant);
                     let updated_json = serde_json::to_string(&updated)?;
                     let _ = self
                         .state
@@ -314,7 +314,7 @@ impl ProtocolSession {
             .await
             .unwrap_or_default();
         if occupants.get(&nick).is_some_and(|json| {
-            serde_json::from_str::<crate::state::SerializableMucOccupant>(json)
+            serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(json)
                 .ok()
                 .is_some_and(|occupant| bare_jid(&occupant.full_jid) != requester_bare)
         }) || self
@@ -354,7 +354,7 @@ impl ProtocolSession {
             let joined_epoch = joined.cluster_epoch;
             drop(joined);
             if let Some(occupant) = self.state.set_local_muc_affiliation_exact(
-                crate::state::LocalMucOccupantIdentity {
+                crate::services::muc::LocalMucOccupantIdentity {
                     room_jid: &room_jid,
                     nick: &joined_nick,
                     full_jid: self
@@ -370,7 +370,7 @@ impl ProtocolSession {
                 None,
             ) {
                 target_is_occupant = true;
-                let updated = crate::state::SerializableMucOccupant::from(&occupant);
+                let updated = crate::services::muc::SerializableMucOccupant::from(&occupant);
                 let updated_json = serde_json::to_string(&updated)?;
                 let _ = self
                     .state

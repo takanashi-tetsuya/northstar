@@ -325,6 +325,7 @@ pub(crate) use self::runtime_control::*;
 pub use self::suspended_muc::*;
 use self::upload_runtime::*;
 use crate::platform::jid_text::*;
+use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
 
 #[cfg(test)]
 #[path = "state/runtime_control_startup_tests.rs"]

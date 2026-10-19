@@ -53,7 +53,7 @@ impl ClusterMucDeparture {
         self.publisher
             .send_muc_presence_with_status(
                 &departed.room_jid,
-                &crate::state::SerializableMucOccupant::from(departed),
+                &crate::services::muc::SerializableMucOccupant::from(departed),
                 true,
                 false,
                 None,
@@ -205,7 +205,7 @@ impl ClusterSmMucTeardown {
         &self,
         room_jid: &str,
         sm_session_id: uuid::Uuid,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
     ) -> Result<()> {
         let Some(pool) = &self.sender.publisher.pool else {
             return Ok(());
@@ -326,7 +326,7 @@ impl ClusterSmSuspension {
         json: &str,
     ) -> Result<bool> {
         admit_health(&self.publisher.health, ClusterOperation::Resume)?;
-        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
+        let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
         anyhow::ensure!(
             incoming.sm_session_id == Some(sm_session_id)
                 && !incoming.cluster_epoch.is_nil()

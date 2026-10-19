@@ -224,7 +224,7 @@ impl ProtocolSession {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(nick, json)| {
-                serde_json::from_str::<crate::state::SerializableMucOccupant>(&json)
+                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&json)
                     .ok()
                     .map(|occupant| (nick, occupant))
             })
@@ -232,7 +232,7 @@ impl ProtocolSession {
         for (_, occupant) in self.state.muc_occupants_for(&room_jid) {
             occupants.insert(
                 occupant.nick.clone(),
-                crate::state::SerializableMucOccupant::from(&occupant),
+                crate::services::muc::SerializableMucOccupant::from(&occupant),
             );
         }
         match voice_form {
@@ -343,7 +343,7 @@ impl ProtocolSession {
                         )));
                     }
                     let Some(updated_occupant) = self.state.set_local_muc_role_exact(
-                        crate::state::LocalMucOccupantIdentity::from(target),
+                        crate::services::muc::LocalMucOccupantIdentity::from(target),
                         "visitor",
                         "participant",
                         None,
@@ -355,7 +355,8 @@ impl ProtocolSession {
                             "item-not-found",
                         )));
                     };
-                    let updated = crate::state::SerializableMucOccupant::from(&updated_occupant);
+                    let updated =
+                        crate::services::muc::SerializableMucOccupant::from(&updated_occupant);
                     drop(_guard);
                     for (_, recipient) in self.state.muc_occupants_for(&room_jid) {
                         let self_presence = recipient.full_jid == updated.full_jid
@@ -516,7 +517,7 @@ impl ProtocolSession {
                 .await
                 .unwrap_or_default();
             let Some(target) = occupants.get(target_nick).and_then(|json| {
-                serde_json::from_str::<crate::state::SerializableMucOccupant>(json).ok()
+                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(json).ok()
             }) else {
                 return Ok(Action::Send(muc_stanza_error(
                     root,
@@ -865,7 +866,7 @@ impl ProtocolSession {
                                 {
                                     Ok(occupants) => occupants.into_values().any(|json| {
                                         serde_json::from_str::<
-                                            crate::state::SerializableMucOccupant,
+                                            crate::services::muc::SerializableMucOccupant,
                                         >(&json)
                                         .ok()
                                         .and_then(|occupant| {

@@ -561,7 +561,7 @@ pub(super) async fn federated_muc_owner(
                     .await?;
                 for (nick, raw) in global {
                     let Ok(mut occupant) =
-                        serde_json::from_str::<crate::state::SerializableMucOccupant>(&raw)
+                        serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&raw)
                     else {
                         continue;
                     };

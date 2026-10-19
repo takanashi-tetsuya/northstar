@@ -29,7 +29,7 @@ pub(crate) fn muc_occupant_key(room_jid: &str, nick: &str) -> String {
 }
 
 pub(crate) fn muc_presence_stanza(
-    occupant: &crate::state::SerializableMucOccupant,
+    occupant: &crate::services::muc::SerializableMucOccupant,
     to: &str,
     unavailable: bool,
     self_presence: bool,
@@ -52,8 +52,8 @@ pub(crate) fn muc_presence_stanza(
 }
 
 pub(crate) fn muc_nickname_change_presence(
-    occupant: &crate::state::SerializableMucOccupant,
-    recipient: &crate::state::SerializableMucOccupant,
+    occupant: &crate::services::muc::SerializableMucOccupant,
+    recipient: &crate::services::muc::SerializableMucOccupant,
     new_nick: &str,
     id: Option<&str>,
 ) -> String {
@@ -111,7 +111,7 @@ pub(crate) fn add_muc_user_status(stanza: &str, code: u16) -> String {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn muc_presence_stanza_with_status(
-    occupant: &crate::state::SerializableMucOccupant,
+    occupant: &crate::services::muc::SerializableMucOccupant,
     to: &str,
     unavailable: bool,
     self_presence: bool,
@@ -174,7 +174,7 @@ pub(crate) fn muc_presence_stanza_with_status(
 }
 
 pub(crate) fn muc_destroy_presence(
-    occupant: &crate::state::SerializableMucOccupant,
+    occupant: &crate::services::muc::SerializableMucOccupant,
     alternate: Option<&str>,
     reason: Option<&str>,
 ) -> String {

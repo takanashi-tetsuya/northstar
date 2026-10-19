@@ -980,14 +980,15 @@ impl ProtocolSession {
         for (room_jid, membership) in memberships {
             self.joined_rooms
                 .remove_if(&room_jid, |_, current| current == &membership);
-            self.state
-                .remove_local_muc_occupant_exact(crate::state::LocalMucOccupantIdentity {
+            self.state.remove_local_muc_occupant_exact(
+                crate::services::muc::LocalMucOccupantIdentity {
                     room_jid: &room_jid,
                     nick: &membership.nick,
                     full_jid: &full_jid,
                     connection_id: self.connection_id,
                     cluster_epoch: membership.cluster_epoch,
-                });
+                },
+            );
         }
         self.directed_presence.clear();
         *self

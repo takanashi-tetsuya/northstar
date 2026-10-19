@@ -123,28 +123,13 @@
     "src/cluster.rs": [
       "state"
     ],
-    "src/cluster/delivery_contract.rs": [
-      "state"
-    ],
     "src/cluster/listener.rs": [
       "state"
     ],
     "src/cluster/listener/responses.rs": [
       "state"
     ],
-    "src/cluster/maintenance_redis.rs": [
-      "state"
-    ],
-    "src/cluster/muc_fanout.rs": [
-      "state"
-    ],
-    "src/cluster/muc_occupancy.rs": [
-      "state"
-    ],
     "src/cluster/muc_outbox.rs": [
-      "state"
-    ],
-    "src/cluster/publisher.rs": [
       "state"
     ],
     "src/cluster/recovery_replay.rs": [
@@ -317,9 +302,6 @@
     "src/xmpp/protocol/federated_muc/admin.rs": [
       "state"
     ],
-    "src/xmpp/protocol/federated_muc/message.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/federated_muc/owner.rs": [
       "state"
     ],
@@ -338,9 +320,6 @@
     "src/xmpp/protocol/muc.rs": [
       "state"
     ],
-    "src/xmpp/protocol/muc/admin.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/muc/admin_batch.rs": [
       "state"
     ],
@@ -351,15 +330,6 @@
       "state"
     ],
     "src/xmpp/protocol/muc/message.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/owner.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/presence.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/register.rs": [
       "state"
     ],
     "src/xmpp/protocol/pep.rs": [
@@ -384,9 +354,6 @@
       "state"
     ],
     "src/xmpp/protocol/sm_owner.rs": [
-      "state"
-    ],
-    "src/xmpp/xml_util/muc.rs": [
       "state"
     ]
   }

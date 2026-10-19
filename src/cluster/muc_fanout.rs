@@ -124,7 +124,7 @@ impl ClusterManager {
     pub async fn send_muc_presence(
         &self,
         room_jid: &str,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         id: Option<&str>,
@@ -145,8 +145,8 @@ impl ClusterManager {
     pub async fn send_muc_nickname_change(
         &self,
         room_jid: &str,
-        old_occupant: &crate::state::SerializableMucOccupant,
-        new_occupant: &crate::state::SerializableMucOccupant,
+        old_occupant: &crate::services::muc::SerializableMucOccupant,
+        new_occupant: &crate::services::muc::SerializableMucOccupant,
         id: Option<&str>,
     ) -> Result<()> {
         let Some(pool) = &self.pool else {
@@ -206,7 +206,8 @@ impl ClusterManager {
         let mut identities = Vec::new();
         let mut nodes = HashSet::new();
         for (nick, raw) in &raw_occupants {
-            let Ok(occupant) = serde_json::from_str::<crate::state::SerializableMucOccupant>(raw)
+            let Ok(occupant) =
+                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(raw)
             else {
                 continue;
             };
@@ -269,7 +270,7 @@ impl ClusterManager {
     pub async fn send_muc_presence_with_status(
         &self,
         room_jid: &str,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         id: Option<&str>,

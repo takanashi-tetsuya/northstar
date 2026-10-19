@@ -13,9 +13,9 @@ use crate::services::muc::{
     MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationTarget, MucConfigUpdate,
     MucConfigurationOutcome, MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome,
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
-    MucSubjectOutcome, OfflineStoreOutcome,
+    MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
 };
-use crate::state::{AppState, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant};
+use crate::state::{AppState, MucOccupant, MucOccupantEndpoint};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};

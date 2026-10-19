@@ -1461,8 +1461,8 @@ fn carbon_privacy_uses_the_forwarded_conversation_peer() {
 pub(super) fn rename_occupant(
     epoch: uuid::Uuid,
     nick: &str,
-) -> crate::state::SerializableMucOccupant {
-    crate::state::SerializableMucOccupant {
+) -> crate::services::muc::SerializableMucOccupant {
+    crate::services::muc::SerializableMucOccupant {
         full_jid: "alice@example.test/Phone".to_owned(),
         room_jid: "room@conference.example.test".to_owned(),
         nick: nick.to_owned(),
@@ -1787,7 +1787,7 @@ async fn redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba() {
         MucRoleChange::Changed(ref occupant)
             if occupant.role == "participant" && occupant.room_non_anonymous
     ));
-    let persisted: crate::state::SerializableMucOccupant = serde_json::from_str(
+    let persisted: crate::services::muc::SerializableMucOccupant = serde_json::from_str(
         first
             .get_muc_occupants(room)
             .await

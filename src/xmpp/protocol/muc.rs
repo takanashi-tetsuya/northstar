@@ -144,7 +144,7 @@ enum MucClusterEffect {
         stage: &'static str,
     },
     Evict {
-        occupant: crate::state::SerializableMucOccupant,
+        occupant: crate::services::muc::SerializableMucOccupant,
         status: u16,
         actor_nick: Option<String>,
         reason: Option<String>,
@@ -162,7 +162,7 @@ enum MucClusterEffect {
     },
     Presence {
         room: String,
-        occupant: crate::state::SerializableMucOccupant,
+        occupant: crate::services::muc::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         removal_status: Option<u16>,
@@ -294,7 +294,7 @@ async fn run_muc_cluster_fan_out(
 async fn run_muc_cluster_eviction(
     state: &crate::state::AppState,
     room: &str,
-    occupant: crate::state::SerializableMucOccupant,
+    occupant: crate::services::muc::SerializableMucOccupant,
     status: u16,
     actor_nick: Option<&str>,
     reason: Option<&str>,
@@ -335,7 +335,7 @@ async fn run_muc_cluster_occupant_refresh(
     room: &str,
     nick: &str,
     json: String,
-    occupant: crate::state::SerializableMucOccupant,
+    occupant: crate::services::muc::SerializableMucOccupant,
 ) {
     let mut plan = MucPostCommitPlan::<MucClusterEffect, 2>::new();
     plan.try_push(MucClusterEffect::Register {

@@ -549,7 +549,7 @@ pub(super) async fn listen_once(
                 .as_str()
                 .and_then(|value| uuid::Uuid::parse_str(value).ok())
                 .zip(
-                    serde_json::from_value::<crate::state::SerializableMucOccupant>(
+                    serde_json::from_value::<crate::services::muc::SerializableMucOccupant>(
                         json["occupant"].clone(),
                     )
                     .ok(),
@@ -574,9 +574,10 @@ pub(super) async fn listen_once(
                 }
             }
         } else if is_muc_evict {
-            if let Ok(occupant) = serde_json::from_value::<crate::state::SerializableMucOccupant>(
-                json["occupant"].clone(),
-            ) {
+            if let Ok(occupant) = serde_json::from_value::<
+                crate::services::muc::SerializableMucOccupant,
+            >(json["occupant"].clone())
+            {
                 let status = json["status"]
                     .as_u64()
                     .and_then(|value| u16::try_from(value).ok());
@@ -633,7 +634,7 @@ pub(super) async fn listen_once(
                             continue;
                         }
                         let removed = muc_endpoints.remove_local_exact(
-                            crate::state::LocalMucOccupantIdentity {
+                            crate::services::muc::LocalMucOccupantIdentity {
                                 room_jid: &room,
                                 nick: &identity.nick,
                                 full_jid: &identity.full_jid,
@@ -643,7 +644,7 @@ pub(super) async fn listen_once(
                         );
                         if let Some(occupant) = removed {
                             let serializable =
-                                crate::state::SerializableMucOccupant::from(&occupant);
+                                crate::services::muc::SerializableMucOccupant::from(&occupant);
                             muc_endpoints.remove_live_membership_exact(&serializable);
                             let presence = crate::xmpp::xml_util::muc_destroy_presence(
                                 &serializable,
@@ -661,9 +662,10 @@ pub(super) async fn listen_once(
                 }
             }
         } else if is_muc_role_change {
-            if let Ok(occupant) = serde_json::from_value::<crate::state::SerializableMucOccupant>(
-                json["occupant"].clone(),
-            ) {
+            if let Ok(occupant) = serde_json::from_value::<
+                crate::services::muc::SerializableMucOccupant,
+            >(json["occupant"].clone())
+            {
                 if occupant.room_jid == target
                     && !occupant.cluster_epoch.is_nil()
                     && matches!(
@@ -696,10 +698,10 @@ pub(super) async fn listen_once(
             }
         } else if is_muc_nickname_change {
             if let (Ok(old_occupant), Ok(new_occupant)) = (
-                serde_json::from_value::<crate::state::SerializableMucOccupant>(
+                serde_json::from_value::<crate::services::muc::SerializableMucOccupant>(
                     json["old_occupant"].clone(),
                 ),
-                serde_json::from_value::<crate::state::SerializableMucOccupant>(
+                serde_json::from_value::<crate::services::muc::SerializableMucOccupant>(
                     json["new_occupant"].clone(),
                 ),
             ) {
@@ -713,7 +715,7 @@ pub(super) async fn listen_once(
                     for session in muc_endpoints.room_occupants(target) {
                         let unavailable = crate::xmpp::xml_util::muc_nickname_change_presence(
                             &old_occupant,
-                            &crate::state::SerializableMucOccupant::from(&session),
+                            &crate::services::muc::SerializableMucOccupant::from(&session),
                             &new_occupant.nick,
                             id,
                         );
@@ -742,9 +744,10 @@ pub(super) async fn listen_once(
                 }
             }
         } else if is_muc_presence {
-            if let Ok(occupant) = serde_json::from_value::<crate::state::SerializableMucOccupant>(
-                json["occupant"].clone(),
-            ) {
+            if let Ok(occupant) = serde_json::from_value::<
+                crate::services::muc::SerializableMucOccupant,
+            >(json["occupant"].clone())
+            {
                 let unavailable = json["unavailable"].as_bool().unwrap_or(false);
                 let created = json["created"].as_bool().unwrap_or(false);
                 let id = json["id"].as_str();

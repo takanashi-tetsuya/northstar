@@ -408,7 +408,7 @@ async fn federated_muc_presence_owned(
                 }
             }
             let move_outcome = state.move_local_muc_nickname_exact(
-                crate::state::LocalMucOccupantIdentity::from(&old_occupant),
+                crate::services::muc::LocalMucOccupantIdentity::from(&old_occupant),
                 &occupant,
                 cluster_operation.is_some(),
             );

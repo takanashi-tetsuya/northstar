@@ -312,7 +312,7 @@ impl ProtocolSession {
                 else {
                     continue;
                 };
-                let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
                 self.state.remove_live_muc_membership(&serializable);
                 if cluster_destroy_operation.is_none() {
                     let unavailable =
@@ -357,7 +357,8 @@ impl ProtocolSession {
                     else {
                         continue;
                     };
-                    let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                    let serializable =
+                        crate::services::muc::SerializableMucOccupant::from(&occupant);
                     self.state.remove_live_muc_membership(&serializable);
                     self.joined_rooms.remove_if(room_jid, |_, membership| {
                         membership.cluster_epoch == occupant.cluster_epoch
@@ -659,10 +660,11 @@ impl ProtocolSession {
             for (_, occupant) in self.state.muc_occupants_for(room_jid) {
                 if members_only && !room.members_only && occupant.affiliation == "none" {
                     if let Some(mut departed) = self.state.remove_local_muc_occupant_exact(
-                        crate::state::LocalMucOccupantIdentity::from(&occupant),
+                        crate::services::muc::LocalMucOccupantIdentity::from(&occupant),
                     ) {
                         departed.role = "none".to_owned();
-                        let serializable = crate::state::SerializableMucOccupant::from(&departed);
+                        let serializable =
+                            crate::services::muc::SerializableMucOccupant::from(&departed);
                         self.state.remove_live_muc_membership(&serializable);
                         evicted.push(departed);
                     }
@@ -674,7 +676,7 @@ impl ProtocolSession {
                     (non_anonymous != room.non_anonymous).then_some(non_anonymous);
                 if moderated_change.is_some() || visibility_change.is_some() {
                     if let Some((updated, true)) = self.state.refresh_local_muc_policy_exact(
-                        crate::state::LocalMucOccupantIdentity::from(&occupant),
+                        crate::services::muc::LocalMucOccupantIdentity::from(&occupant),
                         moderated_change,
                         visibility_change,
                     ) {
@@ -687,7 +689,7 @@ impl ProtocolSession {
 
             let eviction_count = evicted.len();
             for (index, occupant) in evicted.into_iter().enumerate() {
-                let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
                 run_muc_cluster_eviction(
                     &self.state,
                     room_jid,
@@ -734,7 +736,7 @@ impl ProtocolSession {
                     .await;
             }
             for occupant in refreshed {
-                let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
                 if self.state.muc_redis_transport_enabled() {
                     if let Ok(json) = serde_json::to_string(&serializable) {
                         run_muc_cluster_occupant_refresh(
@@ -770,7 +772,7 @@ impl ProtocolSession {
                     for (_, recipient) in &occupants {
                         let self_presence = subject.full_jid == recipient.full_jid;
                         let presence = muc_presence_stanza(
-                            &crate::state::SerializableMucOccupant::from(subject),
+                            &crate::services::muc::SerializableMucOccupant::from(subject),
                             &recipient.full_jid,
                             false,
                             self_presence,

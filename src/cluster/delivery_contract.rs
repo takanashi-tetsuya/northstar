@@ -504,7 +504,9 @@ pub(super) struct MucOccupancyIdentity {
 
 impl MucOccupancyIdentity {
     #[allow(dead_code)] // Legacy Redis destroy compatibility; decoded identities remain wire-compatible.
-    pub(super) fn from_occupant(occupant: &crate::state::SerializableMucOccupant) -> Option<Self> {
+    pub(super) fn from_occupant(
+        occupant: &crate::services::muc::SerializableMucOccupant,
+    ) -> Option<Self> {
         (!occupant.cluster_epoch.is_nil() && !occupant.connection_id.is_nil()).then(|| Self {
             nick: occupant.nick.clone(),
             full_jid: occupant.full_jid.clone(),

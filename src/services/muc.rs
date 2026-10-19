@@ -31,7 +31,10 @@ use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 mod cluster_operations;
+mod occupancy;
 mod room_operations;
+
+pub(crate) use self::occupancy::{LocalMucOccupantIdentity, SerializableMucOccupant};
 
 /// One ordered item in an XEP-0045 administrative IQ. Target names have
 /// already been canonicalized by the protocol parser; the repository checks

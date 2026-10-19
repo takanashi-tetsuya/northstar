@@ -347,7 +347,7 @@ pub(super) async fn maintenance_once(
     let mut muc_soft_state_errors = 0_u64;
     let mut active_muc_rooms = HashSet::new();
     for occupant in renewed_muc {
-        let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+        let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
         let json = serde_json::to_string(&serializable)?;
         if let Err(error) = soft_state
             .refresh(&occupant.room_jid, &occupant.nick, &json)

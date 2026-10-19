@@ -90,7 +90,7 @@ impl ClusterSignedPublisher {
     pub(super) async fn send_muc_presence_with_status(
         &self,
         room_jid: &str,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         id: Option<&str>,

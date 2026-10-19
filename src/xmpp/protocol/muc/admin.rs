@@ -357,7 +357,8 @@ impl ProtocolSession {
                 .await?
                 .into_values()
                 .filter_map(|json| {
-                    serde_json::from_str::<crate::state::SerializableMucOccupant>(&json).ok()
+                    serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&json)
+                        .ok()
                 })
                 .map(|occupant| (occupant.nick.clone(), occupant))
                 .collect::<std::collections::HashMap<_, _>>()
@@ -451,7 +452,7 @@ impl ProtocolSession {
                             .muc_service()
                             .exact_local_cluster_occupancy_snapshot(&authoritative)
                             .await?
-                            .map(|occupancy| crate::state::SerializableMucOccupant {
+                            .map(|occupancy| crate::services::muc::SerializableMucOccupant {
                                 full_jid: occupancy.full_jid,
                                 room_jid: room_jid.to_owned(),
                                 nick: occupancy.nick,
@@ -472,7 +473,7 @@ impl ProtocolSession {
                     self.state
                         .local_muc_occupant_by_nick(room_jid, target_nick)
                         .as_ref()
-                        .map(crate::state::SerializableMucOccupant::from)
+                        .map(crate::services::muc::SerializableMucOccupant::from)
                         .or_else(|| global_occupants.get(target_nick).cloned())
                 };
                 let Some(target) = target else {
@@ -762,7 +763,8 @@ impl ProtocolSession {
                     .await?
                     .into_values()
                     .filter_map(|json| {
-                        serde_json::from_str::<crate::state::SerializableMucOccupant>(&json).ok()
+                        serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&json)
+                            .ok()
                     })
                     .filter(|occupant| {
                         canonical_bare_key(&occupant.full_jid).ok() == Some(target_bare.clone())
@@ -798,13 +800,14 @@ impl ProtocolSession {
                         new_affil == "outcast" || (new_affil == "none" && room.members_only);
                     if remove_from_room {
                         let Some(mut occupant) = self.state.remove_local_muc_occupant_exact(
-                            crate::state::LocalMucOccupantIdentity::from(&occupant),
+                            crate::services::muc::LocalMucOccupantIdentity::from(&occupant),
                         ) else {
                             continue;
                         };
                         occupant.affiliation = new_affil.to_owned();
                         occupant.role = "none".to_owned();
-                        let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                        let serializable =
+                            crate::services::muc::SerializableMucOccupant::from(&occupant);
                         self.state.remove_live_muc_membership(&serializable);
                         let is_empty = self.state.muc_occupants_for(room_jid).is_empty();
                         let removal_status = if new_affil == "outcast" { 301 } else { 321 };
@@ -820,7 +823,7 @@ impl ProtocolSession {
                         .await;
                         for (_, other) in self.state.muc_occupants_for(room_jid) {
                             let presence = muc_presence_stanza_with_status(
-                                &crate::state::SerializableMucOccupant::from(&occupant),
+                                &crate::services::muc::SerializableMucOccupant::from(&occupant),
                                 &other.full_jid,
                                 true,
                                 false,
@@ -834,7 +837,7 @@ impl ProtocolSession {
                             let _ = self.state.deliver_to_muc_occupant(&other, presence).await;
                         }
                         let self_presence = muc_presence_stanza_with_status(
-                            &crate::state::SerializableMucOccupant::from(&occupant),
+                            &crate::services::muc::SerializableMucOccupant::from(&occupant),
                             &occupant.full_jid,
                             true,
                             true,
@@ -851,7 +854,7 @@ impl ProtocolSession {
                             .await;
                     } else {
                         let Some(occupant) = self.state.set_local_muc_affiliation_exact(
-                            crate::state::LocalMucOccupantIdentity::from(&occupant),
+                            crate::services::muc::LocalMucOccupantIdentity::from(&occupant),
                             new_affil,
                             room.moderated,
                             false,
@@ -860,7 +863,8 @@ impl ProtocolSession {
                             continue;
                         };
 
-                        let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                        let serializable =
+                            crate::services::muc::SerializableMucOccupant::from(&occupant);
                         if let Ok(json) = serde_json::to_string(&serializable) {
                             run_muc_cluster_occupant_refresh(
                                 &self.state,
@@ -875,7 +879,7 @@ impl ProtocolSession {
                         for (_, other) in self.state.muc_occupants_for(room_jid) {
                             let self_presence = other.full_jid == occupant.full_jid;
                             let presence = muc_presence_stanza(
-                                &crate::state::SerializableMucOccupant::from(&occupant),
+                                &crate::services::muc::SerializableMucOccupant::from(&occupant),
                                 &other.full_jid,
                                 false,
                                 self_presence,
@@ -988,7 +992,10 @@ impl ProtocolSession {
                         .await?
                         .get(&target_nick)
                         .and_then(|json| {
-                            serde_json::from_str::<crate::state::SerializableMucOccupant>(json).ok()
+                            serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(
+                                json,
+                            )
+                            .ok()
                         });
                     let Some(mut remote) = remote else {
                         return Ok(Action::Send(iq_error_from(id, room_jid, "item-not-found")));
@@ -1104,7 +1111,8 @@ impl ProtocolSession {
                     };
                     occupant.role = "none".to_owned();
                     let reason = child_text(item, "reason").map(str::to_owned);
-                    let serializable = crate::state::SerializableMucOccupant::from(&occupant);
+                    let serializable =
+                        crate::services::muc::SerializableMucOccupant::from(&occupant);
                     for (_, other) in self.state.muc_occupants_for(room_jid) {
                         // The target receives exactly one self-presence below.
                         // Do not also deliver it through the room audience: a
@@ -1117,7 +1125,7 @@ impl ProtocolSession {
                             continue;
                         }
                         let presence = muc_presence_stanza_with_status(
-                            &crate::state::SerializableMucOccupant::from(&occupant),
+                            &crate::services::muc::SerializableMucOccupant::from(&occupant),
                             &other.full_jid,
                             true,
                             false,
@@ -1131,7 +1139,7 @@ impl ProtocolSession {
                         let _ = self.state.deliver_to_muc_occupant(&other, presence).await;
                     }
                     let presence = muc_presence_stanza_with_status(
-                        &crate::state::SerializableMucOccupant::from(&occupant),
+                        &crate::services::muc::SerializableMucOccupant::from(&occupant),
                         &occupant.full_jid,
                         true,
                         true,
@@ -1170,7 +1178,7 @@ impl ProtocolSession {
                     for (_, other) in self.state.muc_occupants_for(room_jid) {
                         let self_presence = other.full_jid == occupant.full_jid;
                         let presence = muc_presence_stanza(
-                            &crate::state::SerializableMucOccupant::from(&occupant),
+                            &crate::services::muc::SerializableMucOccupant::from(&occupant),
                             &other.full_jid,
                             false,
                             self_presence,

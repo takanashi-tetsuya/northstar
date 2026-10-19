@@ -18,7 +18,7 @@ pub enum MucRename {
 
 #[derive(Clone)]
 pub enum MucRoleChange {
-    Changed(Box<crate::state::SerializableMucOccupant>),
+    Changed(Box<crate::services::muc::SerializableMucOccupant>),
     Stale,
 }
 
@@ -53,7 +53,7 @@ impl ClusterManager {
         max_occupants: usize,
     ) -> Result<MucRegistration> {
         self.admit(ClusterOperation::MucMutation)?;
-        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
+        let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
         let canonical_room = crate::jid::canonicalize_bare(room_jid)?;
         let prepared_nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
         anyhow::ensure!(
@@ -181,7 +181,8 @@ impl ClusterManager {
         );
         for (json, expected_nick) in [(old_json, old_nick.as_str()), (new_json, new_nick.as_str())]
         {
-            let occupant: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
+            let occupant: crate::services::muc::SerializableMucOccupant =
+                serde_json::from_str(json)?;
             anyhow::ensure!(
                 occupant.cluster_epoch == expected_epoch
                     && occupant.room_jid == room
@@ -189,8 +190,10 @@ impl ClusterManager {
                 "MUC rename payload does not describe the guarded occupancy"
             );
         }
-        let old_occupant: crate::state::SerializableMucOccupant = serde_json::from_str(old_json)?;
-        let new_occupant: crate::state::SerializableMucOccupant = serde_json::from_str(new_json)?;
+        let old_occupant: crate::services::muc::SerializableMucOccupant =
+            serde_json::from_str(old_json)?;
+        let new_occupant: crate::services::muc::SerializableMucOccupant =
+            serde_json::from_str(new_json)?;
         anyhow::ensure!(
             old_occupant.full_jid == new_occupant.full_jid
                 && old_occupant.connection_id == new_occupant.connection_id
@@ -264,7 +267,7 @@ impl ClusterManager {
     pub async fn change_muc_occupant_role(
         &self,
         room_jid: &str,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         new_role: &str,
     ) -> Result<MucRoleChange> {
         self.admit(ClusterOperation::MucMutation)?;
@@ -331,7 +334,7 @@ impl ClusterManager {
     pub async fn change_muc_occupant_affiliation(
         &self,
         room_jid: &str,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         affiliation: &str,
         role: &str,
     ) -> Result<MucRoleChange> {
@@ -404,7 +407,7 @@ impl ClusterManager {
     pub async fn change_muc_occupant_policy(
         &self,
         room_jid: &str,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         role: &str,
         room_non_anonymous: bool,
     ) -> Result<MucRoleChange> {
@@ -484,8 +487,8 @@ impl ClusterManager {
     /// epoch and durable SM session id must remain unchanged.
     pub async fn resume_muc_occupant(
         &self,
-        previous: &crate::state::SerializableMucOccupant,
-        resumed: &crate::state::SerializableMucOccupant,
+        previous: &crate::services::muc::SerializableMucOccupant,
+        resumed: &crate::services::muc::SerializableMucOccupant,
     ) -> Result<bool> {
         self.admit(ClusterOperation::Resume)?;
         anyhow::ensure!(
@@ -651,7 +654,7 @@ impl ClusterManager {
     /// kick/ban from touching a later user who reused the nickname.
     pub async fn evict_muc_occupant(
         &self,
-        occupant: &crate::state::SerializableMucOccupant,
+        occupant: &crate::services::muc::SerializableMucOccupant,
         status: u16,
         actor_nick: Option<&str>,
         reason: Option<&str>,

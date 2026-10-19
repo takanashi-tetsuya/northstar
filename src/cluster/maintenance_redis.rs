@@ -207,7 +207,7 @@ impl ClusterMaintenanceRedis {
         nick: &str,
         json: &str,
     ) -> Result<bool> {
-        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
+        let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
         anyhow::ensure!(
             !incoming.cluster_epoch.is_nil()
                 && !incoming.connection_id.is_nil()

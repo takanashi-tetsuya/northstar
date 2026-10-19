@@ -734,15 +734,15 @@ impl SessionCleanupService {
             for (room_jid, membership) in memberships {
                 plan.joined_rooms
                     .remove_if(&room_jid, |_, current| current == &membership);
-                let Some(departed) =
-                    local.remove_local_muc_occupant_exact(crate::state::LocalMucOccupantIdentity {
+                let Some(departed) = local.remove_local_muc_occupant_exact(
+                    crate::services::muc::LocalMucOccupantIdentity {
                         room_jid: &room_jid,
                         nick: &membership.nick,
                         full_jid,
                         connection_id: plan.connection_id,
                         cluster_epoch: membership.cluster_epoch,
-                    })
-                else {
+                    },
+                ) else {
                     continue;
                 };
                 let remaining = local.muc_occupants_for(&room_jid);
@@ -1160,7 +1160,7 @@ impl SessionCleanupService {
             if !pg_authoritative {
                 for (_, target) in &departure.remaining {
                     let presence = crate::xmpp::xml_util::muc_presence_stanza(
-                        &crate::state::SerializableMucOccupant::from(&departure.departed),
+                        &crate::services::muc::SerializableMucOccupant::from(&departure.departed),
                         &target.full_jid,
                         true,
                         false,

@@ -21,6 +21,10 @@
 //     contents are compared byte for byte, except that in a non-raw string the
 //     whitespace after a backslash-newline continuation is dropped, as rustc
 //     drops it from the value (a re-indented continuation line is the same string);
+//   * the path literal of `include_str!`/`include_bytes!` is compared as the
+//     repository path it resolves to from the containing file, so an item moved
+//     to another directory may adjust its relative include path but must read
+//     the same file;
 //   * a match-arm body block holding a single expression is unwrapped
 //     (`=> { x }` compares equal to `=> x,`): rustfmt adds or removes that block
 //     when re-indenting changes the line width; a block with a top-level `;`,
@@ -173,7 +177,7 @@ function stripVis(s) {
   return s.slice(1);
 }
 
-export function normalizeItems(source, { isChild = false, allowDoc = false } = {}) {
+export function normalizeItems(source, { isChild = false, allowDoc = false, filePath } = {}) {
   const result = [];
 
   const normalizeTokenList = (item, depth) => {
@@ -323,7 +327,18 @@ export function normalizeItems(source, { isChild = false, allowDoc = false } = {
       if (norm.key) result.push(norm);
     }
   };
-  visit(lexRust(source), isChild ? 1 : 0);
+  const tokens = lexRust(source);
+  if (filePath !== undefined) {
+    const s = sig(tokens);
+    for (let k = 3; k < s.length; k++) {
+      const t = s[k];
+      if (t.kind !== 'lit' || !/^"[^"\\]*"$/.test(t.text)) continue;
+      if (!['include_str', 'include_bytes'].includes(s[k - 3].text) ||
+          s[k - 2].text !== '!' || s[k - 1].text !== '(') continue;
+      t.text = 'include-path:' + path.posix.normalize(path.posix.join(path.posix.dirname(filePath), t.text.slice(1, -1)));
+    }
+  }
+  visit(tokens, isChild ? 1 : 0);
   return result;
 }
 
@@ -335,7 +350,7 @@ export function compareItemSets(beforeFiles, afterFiles, { allowDoc = false } = 
   let afterCount = 0;
 
   for (const f of beforeFiles) {
-    const items = normalizeItems(f.source, { isChild: f.isChild, allowDoc });
+    const items = normalizeItems(f.source, { isChild: f.isChild, allowDoc, filePath: f.path });
     for (const item of items) {
       if (!before.has(item.key)) before.set(item.key, []);
       before.get(item.key).push(item);
@@ -344,7 +359,7 @@ export function compareItemSets(beforeFiles, afterFiles, { allowDoc = false } = 
   }
 
   for (const f of afterFiles) {
-    const items = normalizeItems(f.source, { isChild: f.isChild, allowDoc });
+    const items = normalizeItems(f.source, { isChild: f.isChild, allowDoc, filePath: f.path });
     for (const item of items) {
       if (!after.has(item.key)) after.set(item.key, []);
       after.get(item.key).push(item);

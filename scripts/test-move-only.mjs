@@ -506,3 +506,76 @@ test('ab. A match-arm body block holding one expression, which rustfmt adds or r
     assert.deepEqual(unwrapArmBlocks(['=', '>', '{', ...kept, '}']), ['=', '>', '{', ...kept, '}']);
   }
 });
+
+test('ac. Relative include_str! and include_bytes! paths adjusted for a move read the same files: no removed, no added; a path that now reads a different file: DIFFERENT; without filePath the literal contents still differ.', () => {
+  const before = [
+    { path: 'src/db/a_tests.rs', source: 'fn t() { let s = include_str!("../../migrations/x.sql"); let b = include_bytes!("pie.rs"); }', isChild: false }
+  ];
+  const afterOk = [
+    { path: 'src/db/a_tests/b_tests.rs', source: 'fn t() { let s = include_str!("../../../migrations/x.sql"); let b = include_bytes!("../pie.rs"); }', isChild: true }
+  ];
+  const resOk = compareItemSets(before, afterOk);
+  assert.equal(resOk.removed.length, 0);
+  assert.equal(resOk.added.length, 0);
+
+  const commented = files => files.map(f => ({ ...f, source: f.source.replaceAll('!(', ' /* include */ ! (\n /* path */ ') }));
+  const resComments = compareItemSets(commented(before), commented(afterOk));
+  assert.equal(resComments.removed.length, 0);
+  assert.equal(resComments.added.length, 0);
+
+  const afterDiff = [
+    { path: 'src/db/a_tests/b_tests.rs', source: 'fn t() { let s = include_str!("../../migrations/x.sql"); let b = include_bytes!("../pie.rs"); }', isChild: true }
+  ];
+  const resDiff = compareItemSets(before, afterDiff);
+  assert.equal(resDiff.removed.length, 1);
+  assert.equal(resDiff.added.length, 1);
+  assert.notEqual(normalizeItems(before[0].source)[0].key, normalizeItems(afterOk[0].source, { isChild: true })[0].key);
+  const withPath = normalizeItems('fn t() { include_str!("../migrations/x.sql"); }', { filePath: 'src/a.rs' });
+  const withoutPath = normalizeItems('fn t() { include_str!("include-path:migrations/x.sql"); }');
+  assert.notEqual(withPath[0].key, withoutPath[0].key);
+});
+
+test('ad. Literals outside include_str!/include_bytes!, raw strings, byte strings, strings with escapes, include! paths and literals after the first argument are never rewritten: DIFFERENT.', () => {
+  const cmp = (before, after) => compareItemSets(
+    [{ path: 'src/a.rs', source: before, isChild: false }],
+    [{ path: 'src/a/b.rs', source: after, isChild: true }],
+  );
+  for (const [before, after] of [
+    ['fn t() { let p = "../../x"; }', 'fn t() { let p = "../../../x"; }'],
+    ['fn t() { include_str!(r"../x.sql"); }', 'fn t() { include_str!(r"../../x.sql"); }'],
+    ['fn t() { include_bytes!(b"../x.sql"); }', 'fn t() { include_bytes!(b"../../x.sql"); }'],
+    ['fn t() { include_str!("../x\\x2esql"); }', 'fn t() { include_str!("../../x\\x2esql"); }'],
+    ['fn t() { include!("../x.rs"); }', 'fn t() { include!("../../x.rs"); }'],
+    ['fn t() { include_str!(p, "../x.sql"); }', 'fn t() { include_str!(p, "../../x.sql"); }'],
+  ]) {
+    const res = cmp(before, after);
+    assert.equal(res.removed.length, 1);
+    assert.equal(res.added.length, 1);
+  }
+});
+
+test('ae. CLI accepts include_str! paths adjusted for a move into a child file and reports a path that now reads a different file as DIFFERENT.', () => {
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-move-only-ae-'));
+  try {
+    execFileSync('git', ['init'], { cwd: tmpdir });
+    fs.mkdirSync(path.join(tmpdir, 'src'));
+    fs.writeFileSync(path.join(tmpdir, 'src/foo_tests.rs'), '#[test]\nfn t() { assert!(include_str!("../migrations/a.sql").is_empty()); }\n');
+    execFileSync('git', ['add', '.'], { cwd: tmpdir });
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'init'], { cwd: tmpdir });
+
+    fs.writeFileSync(path.join(tmpdir, 'src/foo_tests.rs'), '#[path = "foo_tests/bar_tests.rs"]\nmod bar;\n');
+    fs.mkdirSync(path.join(tmpdir, 'src/foo_tests'));
+    fs.writeFileSync(path.join(tmpdir, 'src/foo_tests/bar_tests.rs'), 'use super::*;\n#[test]\nfn t() { assert!(include_str!("../../migrations/a.sql").is_empty()); }\n');
+
+    const resOk = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo_tests.rs'], { encoding: 'utf8' });
+    assert.equal(resOk.status, 0);
+    assert.ok(resOk.stdout.includes('MOVE-ONLY (items): OK'));
+
+    fs.writeFileSync(path.join(tmpdir, 'src/foo_tests/bar_tests.rs'), 'use super::*;\n#[test]\nfn t() { assert!(include_str!("../migrations/a.sql").is_empty()); }\n');
+    const resDiff = spawnSync(process.execPath, [checkScript, '--repo', tmpdir, 'HEAD', 'src/foo_tests.rs'], { encoding: 'utf8' });
+    assert.equal(resDiff.status, 1);
+    assert.ok(resDiff.stdout.includes('MOVE-ONLY (items): DIFFERENT'));
+  } finally {
+    fs.rmSync(tmpdir, { recursive: true, force: true });
+  }
+});

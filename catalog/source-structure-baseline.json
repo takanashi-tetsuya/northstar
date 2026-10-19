@@ -7,7 +7,6 @@
   "oversize": {
     "src/bosh/response_owner.rs": 2884,
     "src/db/pubsub_integration_tests.rs": 6108,
-    "src/db/upload_tests.rs": 3429,
     "src/stage4_replay.rs": 7270,
     "src/stage4_replay/compact.rs": 3431
   },

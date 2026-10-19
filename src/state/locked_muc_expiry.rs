@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
-    runtime::workers::WorkerHeartbeat, services::locked_muc_expiry::LockedMucExpiryService,
+    platform::workers::WorkerHeartbeat, services::locked_muc_expiry::LockedMucExpiryService,
 };
 use dashmap::DashMap;
 use std::{

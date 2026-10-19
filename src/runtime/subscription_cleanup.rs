@@ -5,8 +5,8 @@
 //! receives protocol state, routing capabilities, or a separate database pool.
 
 use crate::{
-    platform::metrics::SubscriptionCleanupMetrics, runtime::retention::RetentionReadiness,
-    runtime::workers::WorkerHeartbeat,
+    platform::metrics::SubscriptionCleanupMetrics, platform::workers::WorkerHeartbeat,
+    runtime::retention::RetentionReadiness,
 };
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
@@ -165,7 +165,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+    use crate::platform::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tokio::sync::oneshot;

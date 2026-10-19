@@ -568,7 +568,7 @@ pub struct AppState {
     s2s_connections: Arc<Semaphore>,
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
-    connection_actors: crate::runtime::connection_actors::ConnectionActorRegistry,
+    connection_actors: crate::platform::connection_actors::ConnectionActorRegistry,
     challenge_issue_service: crate::services::challenge_issuance::ChallengeIssueService<
         db::challenge_issuance_repository::PostgresChallengeRepository,
     >,
@@ -599,7 +599,7 @@ pub struct AppState {
     federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
     service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
     runtime_control_liveness: Arc<()>,
-    workers: Arc<crate::runtime::workers::WorkerRegistry>,
+    workers: Arc<crate::platform::workers::WorkerRegistry>,
 }
 
 impl AppState {
@@ -612,8 +612,8 @@ impl AppState {
         );
         state.worker_registry().supervise(
             "locked-muc-expiry",
-            crate::runtime::workers::WorkerCriticality::Restartable,
-            crate::runtime::workers::WorkerMode::Continuous,
+            crate::platform::workers::WorkerCriticality::Restartable,
+            crate::platform::workers::WorkerMode::Continuous,
             Some(Duration::from_secs(20)),
             cancel,
             move |heartbeat| {
@@ -635,8 +635,8 @@ impl AppState {
         let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
             "runtime-control-refresh",
-            crate::runtime::workers::WorkerCriticality::Critical,
-            crate::runtime::workers::WorkerMode::Continuous,
+            crate::platform::workers::WorkerCriticality::Critical,
+            crate::platform::workers::WorkerMode::Continuous,
             Some(max_silence),
             cancel,
             move |heartbeat| {

@@ -7,7 +7,7 @@ use crate::{
         background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
         challenge_issuance_repository::PostgresChallengeRepository,
     },
-    runtime::workers::WorkerHeartbeat,
+    platform::workers::WorkerHeartbeat,
     services::{
         admin_commands::AdminCommandService,
         background_housekeeping::{BackgroundHousekeepingContext, BackgroundHousekeepingCounters},

@@ -575,7 +575,7 @@ pub async fn websocket(
             let actors = state.connection_actors().clone();
             let actor_shutdown = actors.shutdown_token().child_token();
             let result = actors.try_spawn(
-                crate::runtime::connection_actors::ConnectionActorKind::C2sWebSocket,
+                crate::platform::connection_actors::ConnectionActorKind::C2sWebSocket,
                 Some(peer_ip.to_string()),
                 async move {
                     let _connection_guard = connection_guard;

@@ -548,8 +548,8 @@ pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken
     let context = Arc::new(state.cluster_muc_outbox_worker_context());
     worker_registry.supervise(
         "cluster-muc-outbox",
-        crate::runtime::workers::WorkerCriticality::Restartable,
-        crate::runtime::workers::WorkerMode::Continuous,
+        crate::platform::workers::WorkerCriticality::Restartable,
+        crate::platform::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {

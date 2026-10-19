@@ -7,8 +7,8 @@
 use crate::{
     db,
     platform::metrics::Metrics,
+    platform::workers::{WorkerCriticality, WorkerMode, WorkerRegistry},
     runtime::retention::{RetentionContext, RetentionPolicy, RetentionReadiness},
-    runtime::workers::{WorkerCriticality, WorkerMode, WorkerRegistry},
 };
 use anyhow::{Context, Result};
 use serde::Deserialize;

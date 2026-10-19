@@ -233,7 +233,7 @@ pub(crate) fn get_or_create_outbound(
         }
     };
     if let Err(error) = actors.try_spawn(
-        crate::runtime::connection_actors::ConnectionActorKind::S2sOutbound,
+        crate::platform::connection_actors::ConnectionActorKind::S2sOutbound,
         Some(target_domain.clone()),
         actor,
     ) {

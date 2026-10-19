@@ -23,7 +23,7 @@ pub(super) async fn listen_once(
     admission: Arc<ClusterListenerAdmission>,
     runtime: ClusterListenerRuntime,
     cancel: CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let ClusterListenerRuntime {
         message_policy,

@@ -418,7 +418,7 @@ for (const [call, description] of [
 }
 if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
-    || !/"runtime-control-refresh",\s*crate::runtime::workers::WorkerCriticality::Critical,\s*crate::runtime::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
+    || !/"runtime-control-refresh",\s*crate::platform::workers::WorkerCriticality::Critical,\s*crate::platform::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
     || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRun)
     || /\bArc<AppState>\b/.test(runtimeControlContext)
     || !runtimeControlRun.includes('Duration::from_millis(500)')
@@ -746,7 +746,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     startup.includes('run_mix_outbox_lane(context,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
     startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
   'production lanes must share a fresh independent hard token and receive the parent stop separately');
-  requireMix(startup.includes('registry.supervise_draining(,crate::runtime::workers::WorkerCriticality::Restartable,crate::runtime::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
+  requireMix(startup.includes('registry.supervise_draining(,crate::platform::workers::WorkerCriticality::Restartable,crate::platform::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
   'supervisor must enforce the existing 14-second whole-worker drain');
   const deliveryWrapper = compact(structBody(mixProtocolProduction, 'async fn process_claimed_mix_delivery('));
   requireMix(deliveryWrapper ===

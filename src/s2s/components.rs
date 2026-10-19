@@ -385,7 +385,7 @@ pub async fn serve(
             connection_cancel,
         );
         let result = actors.try_spawn(
-            crate::runtime::connection_actors::ConnectionActorKind::ComponentAccept,
+            crate::platform::connection_actors::ConnectionActorKind::ComponentAccept,
             Some(peer.to_string()),
             actor,
         );
@@ -444,7 +444,7 @@ async fn outbound_component_supervisor(
         );
         actors
             .try_spawn(
-                crate::runtime::connection_actors::ConnectionActorKind::ComponentConnect,
+                crate::platform::connection_actors::ConnectionActorKind::ComponentConnect,
                 Some(domain.clone()),
                 actor,
             )

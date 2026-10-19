@@ -796,8 +796,8 @@ pub(crate) fn start_pubsub_digest_delivery(
     let context = Arc::new(state.pubsub_digest_worker_context());
     registry.supervise(
         "pubsub-digest-delivery",
-        crate::runtime::workers::WorkerCriticality::Restartable,
-        crate::runtime::workers::WorkerMode::Continuous,
+        crate::platform::workers::WorkerCriticality::Restartable,
+        crate::platform::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(5)),
         cancel,
         move |heartbeat| {
@@ -830,8 +830,8 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
     let context = Arc::new(state.pubsub_event_outbox_worker_context());
     registry.supervise(
         "pubsub-event-outbox-delivery",
-        crate::runtime::workers::WorkerCriticality::Restartable,
-        crate::runtime::workers::WorkerMode::Continuous,
+        crate::platform::workers::WorkerCriticality::Restartable,
+        crate::platform::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {

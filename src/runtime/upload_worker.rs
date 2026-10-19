@@ -1,5 +1,5 @@
 use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
-use crate::{runtime::workers::WorkerHeartbeat, services::upload_maintenance::*};
+use crate::{platform::workers::WorkerHeartbeat, services::upload_maintenance::*};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
 use std::{

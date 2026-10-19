@@ -376,7 +376,7 @@ impl BoshManager {
             _session_slot: session_slot,
         };
         if let Err(error) = actors.try_spawn(
-            crate::runtime::connection_actors::ConnectionActorKind::C2sBosh,
+            crate::platform::connection_actors::ConnectionActorKind::C2sBosh,
             Some(peer_ip.to_string()),
             actor.run(),
         ) {

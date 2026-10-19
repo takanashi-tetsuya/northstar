@@ -27,11 +27,11 @@ use xmpp::outbound;
 
 use anyhow::{Context, Result};
 use platform::config::Config;
+use platform::workers::{WorkerCriticality, WorkerMode};
 use runtime::service_tasks::{
     await_shutdown_notifications, drain_service_tasks, spawn_service_task,
     unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
 };
-use runtime::workers::{WorkerCriticality, WorkerMode};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use state::AppState;
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};

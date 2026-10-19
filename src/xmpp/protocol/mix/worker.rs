@@ -314,7 +314,7 @@ pub(super) async fn run_mix_outbox_lane(
     queue: MixOutboxQueue,
     concurrency: usize,
     maintain: bool,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     debug_assert!(concurrency > 0);
     let mut in_flight = FuturesUnordered::<MixOutboxTask>::new();
@@ -531,13 +531,13 @@ where
 
 pub(crate) fn start_mix_delivery_outbox(
     context: Arc<MixOutboxContext>,
-    registry: Arc<crate::runtime::workers::WorkerRegistry>,
+    registry: Arc<crate::platform::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     registry.supervise_draining(
         "mix-delivery-outbox",
-        crate::runtime::workers::WorkerCriticality::Restartable,
-        crate::runtime::workers::WorkerMode::Continuous,
+        crate::platform::workers::WorkerCriticality::Restartable,
+        crate::platform::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         MIX_OUTBOX_DRAIN_GRACE,
         cancel.clone(),

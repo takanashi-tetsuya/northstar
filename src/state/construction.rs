@@ -521,7 +521,7 @@ impl AppState {
         let s2s_connection_attempts = Arc::new(Semaphore::new(config.max_s2s_connections));
         let component_connections = Arc::new(Semaphore::new(config.max_component_connections));
         let connection_actors =
-            crate::runtime::connection_actors::ConnectionActorRegistry::for_transport_limits(
+            crate::platform::connection_actors::ConnectionActorRegistry::for_transport_limits(
                 config.max_client_connections,
                 config.max_s2s_connections,
                 config.max_component_connections,
@@ -1287,11 +1287,11 @@ impl AppState {
             )),
             service_shutdown: Arc::new(std::sync::OnceLock::new()),
             runtime_control_liveness: Arc::new(()),
-            workers: crate::runtime::workers::WorkerRegistry::new(),
+            workers: crate::platform::workers::WorkerRegistry::new(),
         });
         state.worker_registry().register_observer(
             "session-cleanup",
-            crate::runtime::workers::WorkerCriticality::Restartable,
+            crate::platform::workers::WorkerCriticality::Restartable,
         );
         db::authority_listener::start_database_authority_listener(
             state.sm_service().authority_broker(),

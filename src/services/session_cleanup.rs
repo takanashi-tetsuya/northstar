@@ -470,7 +470,7 @@ impl CleanupReport {
         self.completed_steps += 1;
     }
 
-    fn observe(&self, registry: &crate::runtime::workers::WorkerRegistry) {
+    fn observe(&self, registry: &crate::platform::workers::WorkerRegistry) {
         if !self.is_clean() {
             registry.observer_error(
                 "session-cleanup",
@@ -550,7 +550,7 @@ async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionReposit
     context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let mut retry_tick = tokio::time::interval(Duration::from_secs(1));
     retry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -626,14 +626,14 @@ pub(crate) fn start_sm_suspension_recovery<
     R: super::sm_suspension::SmSuspensionRepository + 'static,
 >(
     context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
-    registry: Arc<crate::runtime::workers::WorkerRegistry>,
+    registry: Arc<crate::platform::workers::WorkerRegistry>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     registry.supervise_draining(
         "sm-suspension-recovery",
-        crate::runtime::workers::WorkerCriticality::Restartable,
-        crate::runtime::workers::WorkerMode::Continuous,
+        crate::platform::workers::WorkerCriticality::Restartable,
+        crate::platform::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         Duration::from_secs(5),
         cancel.clone(),

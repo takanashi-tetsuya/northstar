@@ -25,7 +25,7 @@ async fn run_database_authority_listener(
     account_revocations: Arc<tokio::sync::Notify>,
     direct_spool_wake: Arc<tokio::sync::Notify>,
     cancel: tokio_util::sync::CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     // PgListener internally retains this one-connection pool solely to rebuild
     // its socket after a PostgreSQL failover. It is deliberately unrelated to
@@ -163,13 +163,13 @@ pub(crate) fn start_database_authority_listener(
     account_revocations: Arc<tokio::sync::Notify>,
     direct_spool_wake: Arc<tokio::sync::Notify>,
     connect_options: PgConnectOptions,
-    registry: Arc<crate::runtime::workers::WorkerRegistry>,
+    registry: Arc<crate::platform::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     registry.supervise(
         "sm-authority-listener",
-        crate::runtime::workers::WorkerCriticality::Restartable,
-        crate::runtime::workers::WorkerMode::Continuous,
+        crate::platform::workers::WorkerCriticality::Restartable,
+        crate::platform::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(15)),
         cancel.clone(),
         move |heartbeat| {

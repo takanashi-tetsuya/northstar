@@ -82,7 +82,7 @@ pub(crate) async fn serve(
 pub async fn serve_admin_session_cleanup(
     context: Arc<AdminSessionCleanupContext>,
     cancel: CancellationToken,
-    health: crate::runtime::workers::WorkerHeartbeat,
+    health: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let worker_id = Uuid::new_v4();
     loop {

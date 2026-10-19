@@ -105,7 +105,7 @@ pub async fn serve_tcp(
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
-            crate::runtime::connection_actors::ConnectionActorKind::C2sTcp,
+            crate::platform::connection_actors::ConnectionActorKind::C2sTcp,
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
@@ -156,7 +156,7 @@ pub async fn serve_xmpps_tcp(
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
-            crate::runtime::connection_actors::ConnectionActorKind::C2sDirectTls,
+            crate::platform::connection_actors::ConnectionActorKind::C2sDirectTls,
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;

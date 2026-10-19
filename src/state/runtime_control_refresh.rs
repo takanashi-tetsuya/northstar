@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     db::runtime_control_repository::PostgresRuntimeControlRepository,
-    runtime::workers::WorkerHeartbeat, s2s::S2sOutboundClearance,
+    platform::workers::WorkerHeartbeat, s2s::S2sOutboundClearance,
     services::runtime_control::RuntimeControlService,
 };
 use anyhow::Result;

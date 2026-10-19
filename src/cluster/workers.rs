@@ -9,7 +9,7 @@ pub(crate) async fn run_account_revocations<
 >(
     context: Arc<AccountRevocationWorkerContext<R>>,
     cancel: CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -72,7 +72,7 @@ pub(crate) async fn run_account_revocations<
 pub(crate) async fn run_maintenance(
     context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let wake_context = Arc::clone(&context);
     let wake_cancel = cancel.clone();
@@ -146,7 +146,7 @@ pub(super) async fn run_direct_spool_wake_loop(
 pub(super) async fn run_maintenance_passes(
     context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let control = &context.control;
     let locals = &context.locals;
@@ -453,7 +453,7 @@ pub(crate) async fn run_pubsub_listener(
     admission: Arc<ClusterListenerAdmission>,
     state: Arc<AppState>,
     cancel: CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     if !transport.is_enabled() {
         return Ok(());
@@ -487,7 +487,7 @@ pub(crate) async fn run_pubsub_listener(
 pub async fn run_failure_supervisor(
     context: Arc<crate::state::cluster_failure_supervisor::ClusterFailureSupervisorContext>,
     cancel: CancellationToken,
-    heartbeat: crate::runtime::workers::WorkerHeartbeat,
+    heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let authority = &context.authority;
     if !authority.is_enabled() {

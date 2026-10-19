@@ -1,4 +1,4 @@
-use crate::runtime::connection_actors::{
+use crate::platform::connection_actors::{
     ConnectionActorKind, ConnectionActorRegistry, ConnectionActorSpawnError,
 };
 use crate::xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundItem, OutboundSender};

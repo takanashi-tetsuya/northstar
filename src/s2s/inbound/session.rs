@@ -44,7 +44,7 @@ pub async fn serve_s2s_tls(
                     actor_shutdown,
                 );
                 let result = actors.try_spawn(
-                    crate::runtime::connection_actors::ConnectionActorKind::S2sInboundDirectTls,
+                    crate::platform::connection_actors::ConnectionActorKind::S2sInboundDirectTls,
                     Some(peer.to_string()),
                     actor,
                 );
@@ -102,7 +102,7 @@ pub async fn serve(
                     actor_shutdown,
                 );
                 let result = actors.try_spawn(
-                    crate::runtime::connection_actors::ConnectionActorKind::S2sInboundStartTls,
+                    crate::platform::connection_actors::ConnectionActorKind::S2sInboundStartTls,
                     Some(peer.to_string()),
                     actor,
                 );

@@ -1,6 +1,6 @@
 //! Supervised local lease renewal and deployment-wide expiry maintenance.
 use crate::{
-    runtime::workers::WorkerHeartbeat,
+    platform::workers::WorkerHeartbeat,
     state::{CapacityLeaseReaperContext, CapacityLeaseRenewalContext},
 };
 use anyhow::Result;

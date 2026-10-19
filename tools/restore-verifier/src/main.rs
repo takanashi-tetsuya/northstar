@@ -39,7 +39,7 @@ enum Error {
         source: std::io::Error,
     },
     #[error("invalid restore catalog: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    Parse(#[from] serde_saphyr::Error),
     #[error("restore catalog validation failed: {0}")]
     Validation(String),
 }
@@ -116,6 +116,14 @@ fn validate(catalog: &RestoreCatalog) -> Result<(), Error> {
     Ok(())
 }
 
+/// YAML 1.2 booleans only and `<<` as an ordinary key, preserving catalog parsing behavior.
+fn yaml_options() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+    }
+}
+
 fn run() -> Result<(), Error> {
     let mut args = env::args().skip(1);
     let mut catalog_path = None;
@@ -130,7 +138,7 @@ fn run() -> Result<(), Error> {
         path: path.clone(),
         source,
     })?;
-    let catalog: RestoreCatalog = serde_yaml::from_slice(&bytes)?;
+    let catalog: RestoreCatalog = serde_saphyr::from_slice_with_options(&bytes, yaml_options())?;
     validate(&catalog)?;
     println!(
         "restore catalog valid: {} logical database(s), {} ordered phases",

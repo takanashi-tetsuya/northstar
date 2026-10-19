@@ -29,6 +29,14 @@ const MODES: &[&str] = &[
     "pass-through-codec",
 ];
 
+/// YAML 1.2 booleans only and `<<` as an ordinary key, preserving catalog parsing behavior.
+fn yaml_options() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+    }
+}
+
 fn read_yaml<T: serde::de::DeserializeOwned>(
     root: &Path,
     relative: &str,
@@ -42,7 +50,7 @@ fn read_yaml<T: serde::de::DeserializeOwned>(
             return None;
         }
     };
-    match serde_yaml::from_str(&text) {
+    match serde_saphyr::from_str_with_options(&text, yaml_options()) {
         Ok(value) => Some(value),
         Err(error) => {
             errors.push(format!("{relative}: YAML error: {error}"));
@@ -424,23 +432,24 @@ fn validate_data_policy_assets(root: &Path, errors: &mut Vec<String>) {
                 continue;
             }
         };
-        let value: serde_yaml::Value = match serde_yaml::from_str(&text) {
-            Ok(value) => value,
-            Err(error) => {
-                errors.push(format!("{relative}: YAML error: {error}"));
-                continue;
-            }
-        };
+        let value: serde_json::Value =
+            match serde_saphyr::from_str_with_options(&text, yaml_options()) {
+                Ok(value) => value,
+                Err(error) => {
+                    errors.push(format!("{relative}: YAML error: {error}"));
+                    continue;
+                }
+            };
         if value
             .get("version")
-            .and_then(serde_yaml::Value::as_str)
+            .and_then(serde_json::Value::as_str)
             .is_none()
         {
             errors.push(format!("{relative}.version: required"));
         }
         if value
             .get(collection)
-            .and_then(serde_yaml::Value::as_sequence)
+            .and_then(serde_json::Value::as_array)
             .is_none_or(Vec::is_empty)
         {
             errors.push(format!(

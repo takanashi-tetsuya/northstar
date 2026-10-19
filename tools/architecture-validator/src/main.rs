@@ -235,6 +235,14 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, 
     (compile, runtime, data, metadata)
 }
 
+/// YAML 1.2 booleans only and `<<` as an ordinary key, preserving catalog parsing behavior.
+fn yaml_options() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+    }
+}
+
 fn read_yaml<T: for<'de> Deserialize<'de>>(
     root: &Path,
     relative: &str,
@@ -248,7 +256,7 @@ fn read_yaml<T: for<'de> Deserialize<'de>>(
             return None;
         }
     };
-    match serde_yaml::from_str(&text) {
+    match serde_saphyr::from_str_with_options(&text, yaml_options()) {
         Ok(value) => Some(value),
         Err(error) => {
             errors.push(format!("{relative}: YAML error: {error}"));
@@ -301,7 +309,7 @@ fn check_crate_catalog(root: &Path, metadata: &CargoMetadata, errors: &mut Vec<S
             return;
         }
     };
-    let catalog: CrateCatalog = match serde_yaml::from_str(&text) {
+    let catalog: CrateCatalog = match serde_saphyr::from_str_with_options(&text, yaml_options()) {
         Ok(value) => value,
         Err(error) => {
             errors.push(format!("catalog/crates.yaml: YAML error: {error}"));

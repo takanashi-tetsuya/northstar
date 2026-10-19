@@ -39,7 +39,7 @@ enum Error {
         source: std::io::Error,
     },
     #[error("invalid ownership catalog: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    Parse(#[from] serde_saphyr::Error),
     #[error("unsafe PostgreSQL identifier '{0}' in ownership catalog")]
     UnsafeIdentifier(String),
 }
@@ -95,6 +95,14 @@ fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+/// YAML 1.2 booleans only and `<<` as an ordinary key, preserving catalog parsing behavior.
+fn yaml_options() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+    }
+}
+
 fn run() -> Result<(), Error> {
     let mut args = env::args().skip(1);
     let mut catalog_path = None;
@@ -112,7 +120,7 @@ fn run() -> Result<(), Error> {
         path: catalog_path.clone(),
         source,
     })?;
-    let catalog: OwnershipCatalog = serde_yaml::from_slice(&bytes)?;
+    let catalog: OwnershipCatalog = serde_saphyr::from_slice_with_options(&bytes, yaml_options())?;
     let rendered = render(&catalog)?;
     if let Some(parent) = Path::new(&output_path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -164,7 +172,8 @@ ownership:
     ops_role: identity_ops
     backup_role: identity_backup
 "#;
-        let catalog: OwnershipCatalog = serde_yaml::from_str(yaml).unwrap();
+        let catalog: OwnershipCatalog =
+            serde_saphyr::from_str_with_options(yaml, yaml_options()).unwrap();
         let sql = render(&catalog).unwrap();
         assert!(sql.contains("CREATE ROLE \"identity_runtime\" LOGIN"));
         assert!(!sql.contains("PASSWORD"));

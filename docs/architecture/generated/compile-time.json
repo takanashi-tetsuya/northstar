@@ -4,11 +4,14 @@
     "aho-corasick",
     "allocator-api2",
     "android_system_properties",
+    "annotate-snippets",
+    "anstyle",
     "anyhow",
     "arc-swap",
     "architecture-validator",
     "arcstr",
     "argon2",
+    "arraydeque",
     "asn1-rs",
     "asn1-rs-derive",
     "asn1-rs-impl",
@@ -68,6 +71,7 @@
     "dunce",
     "either",
     "encoding_rs",
+    "encoding_rs_io",
     "envy",
     "equivalent",
     "errno",
@@ -103,6 +107,7 @@
     "futures-util",
     "generic-array",
     "getrandom",
+    "granit-parser",
     "h2",
     "half",
     "hashbrown",
@@ -307,13 +312,13 @@
     "security-framework-sys",
     "semver",
     "serde",
+    "serde-saphyr",
     "serde_cbor_2",
     "serde_core",
     "serde_derive",
     "serde_json",
     "serde_path_to_error",
     "serde_urlencoded",
-    "serde_yaml",
     "service-admin-orchestrator",
     "service-delivery-router",
     "service-federation-outbox",
@@ -396,7 +401,7 @@
     "unicode-ident",
     "unicode-normalization",
     "unicode-properties",
-    "unsafe-libyaml",
+    "unicode-width",
     "untrusted",
     "url",
     "utf8_iter",
@@ -469,6 +474,18 @@
       "libc"
     ],
     [
+      "annotate-snippets",
+      "anstyle"
+    ],
+    [
+      "annotate-snippets",
+      "memchr"
+    ],
+    [
+      "annotate-snippets",
+      "unicode-width"
+    ],
+    [
       "arc-swap",
       "rustversion"
     ],
@@ -478,11 +495,11 @@
     ],
     [
       "architecture-validator",
-      "serde_json"
+      "serde-saphyr"
     ],
     [
       "architecture-validator",
-      "serde_yaml"
+      "serde_json"
     ],
     [
       "argon2",
@@ -878,11 +895,11 @@
     ],
     [
       "catalog-validator",
-      "serde_json"
+      "serde-saphyr"
     ],
     [
       "catalog-validator",
-      "serde_yaml"
+      "serde_json"
     ],
     [
       "cc",
@@ -1070,7 +1087,7 @@
     ],
     [
       "db-bootstrap",
-      "serde_yaml"
+      "serde-saphyr"
     ],
     [
       "db-bootstrap",
@@ -1147,6 +1164,10 @@
     [
       "encoding_rs",
       "cfg-if"
+    ],
+    [
+      "encoding_rs_io",
+      "encoding_rs"
     ],
     [
       "envy",
@@ -1531,6 +1552,14 @@
     [
       "getrandom",
       "wasm-bindgen"
+    ],
+    [
+      "granit-parser",
+      "arraydeque"
+    ],
+    [
+      "granit-parser",
+      "smallvec"
     ],
     [
       "h2",
@@ -2350,11 +2379,11 @@
     ],
     [
       "kafka-policy-generator",
-      "serde_json"
+      "serde-saphyr"
     ],
     [
       "kafka-policy-generator",
-      "serde_yaml"
+      "serde_json"
     ],
     [
       "kafka-policy-generator",
@@ -4186,7 +4215,7 @@
     ],
     [
       "restore-verifier",
-      "serde_yaml"
+      "serde-saphyr"
     ],
     [
       "restore-verifier",
@@ -4817,6 +4846,30 @@
       "serde_derive"
     ],
     [
+      "serde-saphyr",
+      "annotate-snippets"
+    ],
+    [
+      "serde-saphyr",
+      "encoding_rs_io"
+    ],
+    [
+      "serde-saphyr",
+      "granit-parser"
+    ],
+    [
+      "serde-saphyr",
+      "num-traits"
+    ],
+    [
+      "serde-saphyr",
+      "serde_core"
+    ],
+    [
+      "serde-saphyr",
+      "smallvec"
+    ],
+    [
       "serde_cbor_2",
       "half"
     ],
@@ -4887,26 +4940,6 @@
     [
       "serde_urlencoded",
       "serde"
-    ],
-    [
-      "serde_yaml",
-      "indexmap"
-    ],
-    [
-      "serde_yaml",
-      "itoa"
-    ],
-    [
-      "serde_yaml",
-      "ryu"
-    ],
-    [
-      "serde_yaml",
-      "serde"
-    ],
-    [
-      "serde_yaml",
-      "unsafe-libyaml"
     ],
     [
       "service-admin-orchestrator",

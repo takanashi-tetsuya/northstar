@@ -45,7 +45,7 @@ enum Error {
         source: std::io::Error,
     },
     #[error("invalid topic catalog: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    Parse(#[from] serde_saphyr::Error),
     #[error("topic policy validation failed: {0}")]
     Validation(String),
     #[error("cannot render policy JSON: {0}")]
@@ -147,6 +147,14 @@ fn validate(catalog: &TopicCatalog) -> Result<(), Error> {
     Ok(())
 }
 
+/// YAML 1.2 booleans only and `<<` as an ordinary key, preserving catalog parsing behavior.
+fn yaml_options() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+    }
+}
+
 fn run() -> Result<(), Error> {
     let mut args = env::args().skip(1);
     let mut catalog_path = None;
@@ -164,7 +172,7 @@ fn run() -> Result<(), Error> {
         path: catalog_path,
         source,
     })?;
-    let catalog: TopicCatalog = serde_yaml::from_slice(&bytes)?;
+    let catalog: TopicCatalog = serde_saphyr::from_slice_with_options(&bytes, yaml_options())?;
     validate(&catalog)?;
     let rendered = serde_json::to_string_pretty(&catalog.topics)? + "\n";
     fs::write(&output_path, rendered).map_err(|source| Error::Write {

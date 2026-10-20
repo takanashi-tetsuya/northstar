@@ -33,8 +33,8 @@ pub(crate) use self::contracts::{
 pub(crate) use self::operations::{
     canonical_mix_access_pattern, mix_timestamp_item_id, participant_jid_visible, prepare_mix_nick,
     valid_join_nodes, valid_stable_participant_id, ArchiveBoundary, MamArchiveQuery, MamRsmPage,
-    MixDiscoPage, MixEvent, MixEventPage, MixMamPage, MixMucMirror, MixPresenceItem,
-    MixPresenceProbeTarget, MixReadOutcome, PepNodeConfig, VCardRecord,
+    MixClusterRouteLookup, MixDiscoPage, MixEvent, MixEventPage, MixMamPage, MixMucMirror,
+    MixPresenceItem, MixPresenceProbeTarget, MixReadOutcome, PepNodeConfig, VCardRecord,
 };
 #[cfg(test)]
 use self::payloads::{

@@ -20,6 +20,15 @@ impl ClusterMixRouteLookup {
     }
 }
 
+impl crate::services::mix::MixClusterRouteLookup for ClusterMixRouteLookup {
+    fn lookup_nodes<'a>(
+        &'a self,
+        jid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send + 'a {
+        ClusterMixRouteLookup::lookup_nodes(self, jid)
+    }
+}
+
 /// The PubSub reader's connection, self-loop and generation fence. This handle
 /// cannot sign a command, consume replay authority or dispatch an ACK.
 #[derive(Clone)]

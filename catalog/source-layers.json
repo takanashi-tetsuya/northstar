@@ -183,9 +183,6 @@
     "src/services/messaging/direct_workflow.rs": [
       "xmpp"
     ],
-    "src/services/mix/operations.rs": [
-      "cluster"
-    ],
     "src/services/mix/payloads.rs": [
       "xmpp"
     ],

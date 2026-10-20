@@ -109,6 +109,15 @@ pub(crate) struct MamArchiveQuery {
     pub(crate) max: i64,
 }
 
+/// Current cluster session-route ownership for a claimed durable MIX outbox row. The implementation reads
+/// authority outside the claimed outbox transaction; it receives no publication or session-mutation authority.
+pub(crate) trait MixClusterRouteLookup: Send + Sync {
+    fn lookup_nodes<'a>(
+        &'a self,
+        jid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send + 'a;
+}
+
 impl<R: MixRepository> MixService<R> {
     /// Atomically link existing same-localpart MIX and MUC entities after the
     /// repository proves that the authenticated bare JID still owns both.
@@ -421,7 +430,7 @@ impl<R: MixRepository> MixService<R> {
     /// admission permit while this separate authority read is pending.
     pub(crate) async fn outbox_lookup_cluster_nodes(
         &self,
-        routes: &crate::cluster::ClusterMixRouteLookup,
+        routes: &impl MixClusterRouteLookup,
         jid: &str,
     ) -> Result<Vec<String>> {
         routes.lookup_nodes(jid).await

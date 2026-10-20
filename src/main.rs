@@ -740,7 +740,7 @@ async fn run() -> Result<()> {
                 let maintenance_context = Arc::clone(&maintenance_context);
                 let maintenance_cancel = maintenance_cancel.clone();
                 async move {
-                    services::standalone_muc_maintenance::run(
+                    state::standalone_muc_maintenance::run(
                         maintenance_context,
                         maintenance_cancel,
                         heartbeat,

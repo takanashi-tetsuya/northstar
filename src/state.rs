@@ -231,6 +231,7 @@ mod sm_teardown_local;
 mod sm_teardown_muc_projection;
 pub(crate) mod sm_teardown_runtime;
 mod sm_teardown_session;
+pub(crate) mod standalone_muc_maintenance;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;

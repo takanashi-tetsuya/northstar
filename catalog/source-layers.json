@@ -197,9 +197,6 @@
     "src/services/sm_teardown_muc.rs": [
       "xmpp"
     ],
-    "src/services/standalone_muc_maintenance.rs": [
-      "state"
-    ],
     "src/xmpp/mod.rs": [
       "state"
     ],

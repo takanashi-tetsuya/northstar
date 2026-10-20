@@ -1,7 +1,7 @@
 //! Storage operations required by MUC endpoint delivery.
 
-use crate::db::PrivacyStanzaKind;
 use anyhow::Result;
+use northstar_xep_0016::PrivacyStanzaKind;
 use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 

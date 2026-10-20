@@ -3,7 +3,7 @@ use super::{
     FullJidFallbackPort, FullJidFallbackResult, OfflineAdmissionOutcome, OnlineMessageRouter,
     OnlineRoutePort, OnlineRouteResult, RoutePayload,
 };
-use crate::xmpp::outbound::DurableDelivery;
+use northstar_delivery_core::DurableDelivery;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,

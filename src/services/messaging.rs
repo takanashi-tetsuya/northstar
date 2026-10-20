@@ -12,10 +12,10 @@ use super::{
     privacy::PrivacyStanzaKind,
     retractions::FederationOutboxPolicy,
 };
-use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 use crate::security::abuse::MessageDedupeIdentity;
-use crate::xmpp::outbound::{DurableDelivery, OutboundItem, RouteEnqueue};
+use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
 use anyhow::Result;
+use northstar_delivery_core::DurableDelivery;
 use northstar_message_application::direct_commit::{
     CommitError as DirectCommitError, DirectCommitRepository,
 };
@@ -28,6 +28,7 @@ pub(crate) use northstar_message_core::{
     IdentityAuthority, LocalDelivery, MessageCommit as DurableAdmissionOutcome, MessageIdentity,
     MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
+use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use std::future::Future;
 use uuid::Uuid;
 

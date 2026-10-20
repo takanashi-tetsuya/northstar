@@ -1,7 +1,7 @@
 //! Profile publication policy and atomic repository operations.
 
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_xml_builder::XmlElement;
 use sha1::{Digest, Sha1};
 use std::sync::Arc;
 use uuid::Uuid;

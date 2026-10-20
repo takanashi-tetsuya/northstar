@@ -5,12 +5,10 @@
 //! validation and keyed content commitments. The repository commits original
 //! tombstones, action archives and local or federated delivery together.
 
-use crate::{
-    security::abuse::{ContentIdentityAuthenticators, PersonalRetractionContentKeyring},
-    xmpp::xml_builder::XmlElement,
-};
+use crate::security::abuse::{ContentIdentityAuthenticators, PersonalRetractionContentKeyring};
 use anyhow::{Context, Result};
 pub(crate) use northstar_message_core::ArchiveProjection as ArchiveWrite;
+use northstar_xml_builder::XmlElement;
 
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256, Sha512};

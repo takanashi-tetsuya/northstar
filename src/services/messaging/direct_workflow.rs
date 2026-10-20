@@ -81,7 +81,7 @@ impl PreparedLiveDirect<'_> {
     pub(crate) fn archive_written(&self) -> bool {
         self.archive_written
     }
-    pub(crate) fn source(&self) -> crate::xmpp::outbound::DurableDelivery {
+    pub(crate) fn source(&self) -> northstar_delivery_core::DurableDelivery {
         self.handoff.grant.source()
     }
 
@@ -447,7 +447,7 @@ pub(crate) struct PreparedDirectHandoff<'a> {
 }
 
 pub(crate) struct PreparedDirectRecovery {
-    pub(super) source: crate::xmpp::outbound::DurableDelivery,
+    pub(super) source: northstar_delivery_core::DurableDelivery,
     pub(super) witness: northstar_message_application::direct_handoff::HandoffHandle,
 }
 

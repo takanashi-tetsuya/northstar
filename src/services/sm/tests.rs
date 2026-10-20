@@ -272,7 +272,7 @@ impl super::SmRepository for ResumeRepository {
         _session_id: Uuid,
         _connection_id: Uuid,
         _snapshot: &super::SmSessionSnapshot,
-        _acknowledged: &[crate::xmpp::outbound::SmUnackedStanza],
+        _acknowledged: &[northstar_delivery_core::SmUnackedStanza],
         _ttl_seconds: u64,
         _live_lease_seconds: u64,
         _max_stanzas: usize,
@@ -283,7 +283,7 @@ impl super::SmRepository for ResumeRepository {
     }
     async fn acknowledge_delivery_batch(
         &self,
-        _sources: &[crate::xmpp::outbound::TransportOwnershipSource],
+        _sources: &[northstar_delivery_core::TransportOwnershipSource],
         _observation: Option<&super::ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
         panic!("unexpected persistence operation")

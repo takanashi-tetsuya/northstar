@@ -206,15 +206,7 @@
     "src/services/federation_outbox.rs": [
       "s2s"
     ],
-    "src/services/message_admission/witness.rs": [
-      "xmpp"
-    ],
     "src/services/messaging.rs": [
-      "cluster",
-      "xmpp"
-    ],
-    "src/services/messaging/direct_route.rs": [
-      "cluster",
       "xmpp"
     ],
     "src/services/messaging/direct_workflow.rs": [
@@ -223,33 +215,18 @@
     "src/services/metrics_snapshot.rs": [
       "cluster"
     ],
-    "src/services/mix.rs": [
-      "xmpp"
-    ],
-    "src/services/mix/contracts.rs": [
-      "xmpp"
-    ],
     "src/services/mix/operations.rs": [
       "cluster"
     ],
     "src/services/mix/payloads.rs": [
       "xmpp"
     ],
-    "src/services/muc_delivery.rs": [
-      "db"
-    ],
     "src/services/node_message_contract_verifier.rs": [
-      "xmpp"
-    ],
-    "src/services/profile.rs": [
       "xmpp"
     ],
     "src/services/readiness.rs": [
       "cluster",
       "db"
-    ],
-    "src/services/replay.rs": [
-      "xmpp"
     ],
     "src/services/retractions.rs": [
       "xmpp"
@@ -257,12 +234,6 @@
     "src/services/session_cleanup.rs": [
       "cluster",
       "state",
-      "xmpp"
-    ],
-    "src/services/sm.rs": [
-      "xmpp"
-    ],
-    "src/services/sm/ownership.rs": [
       "xmpp"
     ],
     "src/services/sm_teardown_muc.rs": [
@@ -338,9 +309,6 @@
       "state"
     ],
     "src/xmpp/protocol/sm.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/sm_owner.rs": [
       "state"
     ]
   }

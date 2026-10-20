@@ -8,8 +8,9 @@ use crate::{
     services::message_admission::continuation_fixture::{
         self as admission_fixture, Admission, Events, FinalizeCut,
     },
-    xmpp::outbound::{DurableDelivery, OutboundSender, RouteEnqueue, RouteSendError},
+    xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError},
 };
+use northstar_delivery_core::DurableDelivery;
 use northstar_message_application::{
     direct_lifecycle::{OriginalAdmission, TerminalReason},
     MessageApplication, PersonalMessageCommitRepository,

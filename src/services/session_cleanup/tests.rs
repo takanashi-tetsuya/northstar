@@ -175,7 +175,7 @@ fn snapshot() -> crate::services::sm::SmSessionSnapshot {
         joined_rooms: Vec::new(),
         directed_presence: Vec::new(),
         last_presence: None,
-        unacked: vec![crate::xmpp::outbound::SmUnackedStanza::plain(
+        unacked: vec![northstar_delivery_core::SmUnackedStanza::plain(
             "ordered".to_owned(),
         )],
     }

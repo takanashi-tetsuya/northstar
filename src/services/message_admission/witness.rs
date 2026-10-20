@@ -102,7 +102,7 @@ impl DirectOperationHandle {
     pub(crate) fn consume_route(
         &self,
         grant: direct_handoff::RouteGrant,
-        source: crate::xmpp::outbound::DurableDelivery,
+        source: northstar_delivery_core::DurableDelivery,
     ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
         self.0
             .lock()

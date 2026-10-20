@@ -199,7 +199,7 @@ fn route_request<S>(targets: &[(String, S)]) -> super::super::DirectRouteRequest
         recipient_id: Uuid::from_u128(3),
         stanza: "private-live-stanza",
         delivery: super::super::DirectRouteDelivery::Committed(
-            crate::xmpp::outbound::DurableDelivery {
+            northstar_delivery_core::DurableDelivery {
                 recipient_id: Uuid::from_u128(3),
                 message_id: Uuid::from_u128(2),
                 claim_id: Some(Uuid::from_u128(2)),
@@ -297,7 +297,7 @@ fn real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_s
         if changed_source {
             item = OutboundItem::durable(
                 item.stanza,
-                crate::xmpp::outbound::DurableDelivery {
+                northstar_delivery_core::DurableDelivery {
                     message_id: Uuid::from_u128(99),
                     ..source
                 },
@@ -410,7 +410,7 @@ impl super::super::OnlineRoutePort for RealQueuePort {
         &self,
         _: &str,
         _: &str,
-        _: Option<crate::xmpp::outbound::DurableDelivery>,
+        _: Option<northstar_delivery_core::DurableDelivery>,
     ) -> bool {
         false
     }
@@ -418,7 +418,7 @@ impl super::super::OnlineRoutePort for RealQueuePort {
         &self,
         _: &str,
         _: &str,
-        _: Option<crate::xmpp::outbound::DurableDelivery>,
+        _: Option<northstar_delivery_core::DurableDelivery>,
     ) -> super::super::OnlineRouteResult {
         self.events.lock().unwrap().push("remote");
         super::super::OnlineRouteResult::default()
@@ -449,7 +449,7 @@ impl super::super::DirectMessageRoutePort for RealQueuePort {
     fn clustered_direct_routes(&self) -> bool {
         true
     }
-    async fn rearm_direct_route(&self, _: crate::xmpp::outbound::DurableDelivery) {
+    async fn rearm_direct_route(&self, _: northstar_delivery_core::DurableDelivery) {
         self.events.lock().unwrap().push("rearm");
         if self.pending_rearm {
             std::future::pending::<()>().await;

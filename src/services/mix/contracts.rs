@@ -904,25 +904,25 @@ pub(crate) trait MixRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn fence_mix_socket_write(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
-    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send;
+        source: northstar_delivery_core::MixDelivery,
+    ) -> impl std::future::Future<Output = Result<northstar_delivery_core::MixDelivery>> + Send;
     fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_delivery_core::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send;
+    ) -> impl std::future::Future<Output = Result<northstar_delivery_core::MixDelivery>> + Send;
     fn release_mix_cluster_delivery(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_delivery_core::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send;
+    ) -> impl std::future::Future<Output = Result<northstar_delivery_core::MixDelivery>> + Send;
     fn renew_mix_delivery_lease(
         &self,
         delivery_id: Uuid,

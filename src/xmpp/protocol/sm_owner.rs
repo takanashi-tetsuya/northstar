@@ -9,11 +9,11 @@ use crate::{
         },
         sm_capacity::{SmCapacityLease, SmMemoryGovernor},
     },
-    state::JoinedMucMembership,
     xmpp::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource},
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership::{self, Observation, Purpose, Scope, Terminal};
+use northstar_session_core::JoinedMucMembership;
 use std::{
     collections::VecDeque,
     future::Future,

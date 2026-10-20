@@ -36,7 +36,7 @@ pub(crate) struct SmSessionSnapshot {
     pub(crate) joined_rooms: Vec<SmMucMembership>,
     pub(crate) directed_presence: Vec<String>,
     pub(crate) last_presence: Option<String>,
-    pub(crate) unacked: Vec<crate::xmpp::outbound::SmUnackedStanza>,
+    pub(crate) unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 impl SmSessionSnapshot {
@@ -73,7 +73,7 @@ impl SmSessionSnapshot {
         add(self
             .unacked
             .len()
-            .checked_mul(std::mem::size_of::<crate::xmpp::outbound::SmUnackedStanza>())?)?;
+            .checked_mul(std::mem::size_of::<northstar_delivery_core::SmUnackedStanza>())?)?;
         for stanza in &self.unacked {
             add(stanza.stanza.len())?;
         }
@@ -102,7 +102,7 @@ pub(crate) struct SmResumeClaim {
     pub(crate) joined_rooms: Vec<SmMucMembership>,
     pub(crate) directed_presence: Vec<String>,
     pub(crate) last_presence: Option<String>,
-    pub(crate) unacked: Vec<crate::xmpp::outbound::SmUnackedStanza>,
+    pub(crate) unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 impl SmResumeClaim {
@@ -141,7 +141,7 @@ impl SmResumeClaim {
         add(self
             .unacked
             .len()
-            .checked_mul(std::mem::size_of::<crate::xmpp::outbound::SmUnackedStanza>())?)?;
+            .checked_mul(std::mem::size_of::<northstar_delivery_core::SmUnackedStanza>())?)?;
         for stanza in &self.unacked {
             add(stanza.stanza.len())?;
         }
@@ -152,7 +152,7 @@ impl SmResumeClaim {
 #[derive(Debug)]
 pub(crate) struct ActivatedSmSession {
     pub(crate) outbound_h: u32,
-    pub(crate) unacked: Vec<crate::xmpp::outbound::SmUnackedStanza>,
+    pub(crate) unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 pub(crate) struct SmSessionCreationRequest<'a> {
@@ -175,8 +175,8 @@ pub(crate) struct SmSessionCreationRequest<'a> {
 /// C2S identities remain stable; only MIX hand-offs rotate their lease token.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SmMixLeaseRotation {
-    pub(crate) previous: crate::xmpp::outbound::MixDelivery,
-    pub(crate) current: crate::xmpp::outbound::MixDelivery,
+    pub(crate) previous: northstar_delivery_core::MixDelivery,
+    pub(crate) current: northstar_delivery_core::MixDelivery,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -187,19 +187,19 @@ pub(crate) struct SmQueueOwnershipResolution {
 impl SmQueueOwnershipResolution {
     pub(crate) fn resolve_source(
         &self,
-        source: Option<crate::xmpp::outbound::TransportOwnershipSource>,
-    ) -> Option<crate::xmpp::outbound::TransportOwnershipSource> {
+        source: Option<northstar_delivery_core::TransportOwnershipSource>,
+    ) -> Option<northstar_delivery_core::TransportOwnershipSource> {
         match source {
-            Some(crate::xmpp::outbound::TransportOwnershipSource::Mix(previous)) => self
+            Some(northstar_delivery_core::TransportOwnershipSource::Mix(previous)) => self
                 .mix_rotations
                 .iter()
                 .find(|rotation| rotation.previous == previous)
                 .map(|rotation| {
-                    crate::xmpp::outbound::TransportOwnershipSource::Mix(rotation.current)
+                    northstar_delivery_core::TransportOwnershipSource::Mix(rotation.current)
                 })
-                .or(Some(crate::xmpp::outbound::TransportOwnershipSource::Mix(
-                    previous,
-                ))),
+                .or(Some(
+                    northstar_delivery_core::TransportOwnershipSource::Mix(previous),
+                )),
             other => other,
         }
     }
@@ -660,7 +660,7 @@ pub(crate) trait SmRepository: Send + Sync {
         session_id: Uuid,
         connection_id: Uuid,
         snapshot: &SmSessionSnapshot,
-        acknowledged: &[crate::xmpp::outbound::SmUnackedStanza],
+        acknowledged: &[northstar_delivery_core::SmUnackedStanza],
         ttl_seconds: u64,
         live_lease_seconds: u64,
         max_stanzas: usize,
@@ -669,7 +669,7 @@ pub(crate) trait SmRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
     fn acknowledge_delivery_batch(
         &self,
-        sources: &[crate::xmpp::outbound::TransportOwnershipSource],
+        sources: &[northstar_delivery_core::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn reserve_binding(
@@ -822,7 +822,7 @@ impl<R: SmRepository> SmService<R> {
         session_id: Uuid,
         connection_id: Uuid,
         snapshot: &SmSessionSnapshot,
-        acknowledged: &[crate::xmpp::outbound::SmUnackedStanza],
+        acknowledged: &[northstar_delivery_core::SmUnackedStanza],
         ttl_seconds: u64,
         live_lease_seconds: u64,
         max_stanzas: usize,
@@ -845,7 +845,7 @@ impl<R: SmRepository> SmService<R> {
     }
     pub(crate) async fn acknowledge_delivery_batch(
         &self,
-        sources: &[crate::xmpp::outbound::TransportOwnershipSource],
+        sources: &[northstar_delivery_core::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
         self.repository

@@ -788,7 +788,8 @@ impl<R: MixRepository> MixService<R> {
         &self,
         request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<bool> {
-        let crate::xmpp::outbound::TransportOwnershipSource::Mix(source) = request.source() else {
+        let northstar_delivery_core::TransportOwnershipSource::Mix(source) = request.source()
+        else {
             anyhow::bail!("native MIX acknowledgement source mismatch");
         };
         self.acknowledge_mix_delivery_inner(source.delivery_id, source.lease_token, Some(request))
@@ -817,8 +818,8 @@ impl<R: MixRepository> MixService<R> {
     /// SQL capability and must treat the returned token as writer-private.
     pub(crate) async fn fence_mix_socket_write(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+        source: northstar_delivery_core::MixDelivery,
+    ) -> Result<northstar_delivery_core::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.fence_mix_socket_write(source).await
     }
@@ -827,11 +828,11 @@ impl<R: MixRepository> MixService<R> {
     /// is allowed to enqueue this exact MIX source on the destination node.
     pub(crate) async fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_delivery_core::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+    ) -> Result<northstar_delivery_core::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository
             .transfer_mix_delivery_to_cluster(source, node_id, request_id, ttl_seconds)
@@ -842,7 +843,7 @@ impl<R: MixRepository> MixService<R> {
     /// local durable boundary. A later transfer is never overwritten.
     pub(crate) async fn release_mix_cluster_delivery(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_delivery_core::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> Result<bool> {
@@ -863,7 +864,7 @@ impl<R: MixRepository> MixService<R> {
     pub(crate) async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+    ) -> Result<northstar_delivery_core::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.transfer_mix_delivery_to_bosh(request).await
     }

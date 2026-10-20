@@ -61,7 +61,7 @@ pub(crate) struct SessionCleanupPlan {
     pub(crate) available: Option<Arc<AtomicBool>>,
     pub(crate) active_privacy_list: Option<String>,
     pub(crate) directed_presence: Vec<String>,
-    pub(crate) joined_rooms: Arc<DashMap<String, crate::state::JoinedMucMembership>>,
+    pub(crate) joined_rooms: Arc<DashMap<String, northstar_session_core::JoinedMucMembership>>,
     pub(crate) sm: SessionSmCleanup,
 }
 

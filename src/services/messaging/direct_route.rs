@@ -8,7 +8,8 @@ use super::{
     committed_live_delivery_has_fence, FullJidFallback, FullJidFallbackPlan, FullJidFallbackPort,
     FullJidFallbackResult, OnlineMessageRouter, OnlineRouteResult, RoutePayload,
 };
-use crate::{cluster::DirectPostCommitMode, xmpp::outbound::DurableDelivery};
+use northstar_delivery_core::DurableDelivery;
+use northstar_message_core::DirectPostCommitMode;
 use northstar_message_core::{bare_message_route, BareMessageRoute};
 use std::future::Future;
 use uuid::Uuid;

@@ -2,8 +2,8 @@
 //! The existing service-to-database DTO conversion is checked without cloning
 //! another stanza or resampling live session metadata.
 use super::{SmMucMembership, SmSessionSnapshot};
-use crate::xmpp::outbound::{SmUnackedStanza, TransportOwnershipSource};
 use northstar_delivery_core::sm_ownership::{Binding, Observation, Request};
+use northstar_delivery_core::{SmUnackedStanza, TransportOwnershipSource};
 use std::{collections::VecDeque, net::IpAddr};
 use uuid::Uuid;
 

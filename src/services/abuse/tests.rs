@@ -944,7 +944,9 @@ async fn overlap_keeps_previous_primary_until_retirement_is_fenced() {
     let old = AbuseGuard::new_persistent(config, pool.clone(), Some(old_secret), None);
     let overlap = AbuseGuard::new_persistent_for_deployment(
         config,
-        pool.clone(),
+        Arc::new(
+            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+        ),
         Some(new_secret),
         Some(old_secret),
         true,
@@ -952,7 +954,7 @@ async fn overlap_keeps_previous_primary_until_retirement_is_fenced() {
     );
     let retiring = AbuseGuard::new_persistent_for_deployment(
         config,
-        pool,
+        Arc::new(crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool)),
         Some(new_secret),
         Some(old_secret),
         false,
@@ -1183,7 +1185,9 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
     .await;
     let rotated = AbuseGuard::new_persistent_for_deployment(
         guard.config,
-        pool.clone(),
+        Arc::new(
+            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+        ),
         Some(b"postgres-v2-rotated-test-key-at-least-32-bytes"),
         Some(b"postgres-v2-intent-test-key-at-least-32-bytes"),
         false,
@@ -1432,7 +1436,9 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
         .unwrap();
     let rotated = AbuseGuard::new_persistent_for_deployment(
         config,
-        pool.clone(),
+        Arc::new(
+            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+        ),
         Some(new_secret),
         Some(secret),
         true,
@@ -1523,7 +1529,9 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
     }
     let rotated_issue_guard = AbuseGuard::new_persistent_for_deployment(
         config,
-        pool.clone(),
+        Arc::new(
+            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+        ),
         Some(new_secret),
         Some(secret),
         true,
@@ -2253,7 +2261,9 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
     let new_secret = b"message-admission-new-secret-00000002";
     let rotated = AbuseGuard::new_persistent_for_deployment(
         config,
-        pool.clone(),
+        Arc::new(
+            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+        ),
         Some(new_secret),
         Some(old_secret),
         true,

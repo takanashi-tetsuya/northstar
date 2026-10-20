@@ -105,7 +105,7 @@ fn xep_0077_errors_include_legacy_and_modern_conditions() {
 
 #[tokio::test]
 async fn metered_registration_error_carries_a_parseable_bound_v2_challenge() {
-    let guard = crate::security::abuse::AbuseGuard::new(crate::security::abuse::AbuseConfig {
+    let guard = crate::services::abuse::AbuseGuard::new(crate::services::abuse::AbuseConfig {
         base_work_factor: 2,
         max_work_factor: 256,
         window: Duration::from_secs(300),

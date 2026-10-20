@@ -1,5 +1,5 @@
 //! Atomic account registration, credential mutation and deletion persistence.
-use crate::{db, security::abuse::AbuseGuard, services::account::*};
+use crate::{db, services::abuse::AbuseGuard, services::account::*};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -304,7 +304,7 @@ impl AccountRepository for PostgresAccountRepository {
         let outcome = db::abuse_transaction_repository::verify_in_tx(
             &mut transaction,
             &self.abuse,
-            crate::security::abuse::AbuseAction::Registration,
+            crate::services::abuse::AbuseAction::Registration,
             request.subject,
             request.actors,
             request.proof,
@@ -312,7 +312,7 @@ impl AccountRepository for PostgresAccountRepository {
         )
         .await?;
         match outcome {
-            crate::security::abuse::TransactionalGuardOutcome::Allowed => {
+            crate::services::abuse::TransactionalGuardOutcome::Allowed => {
                 if !db::api_control::mark_idempotency_guard_verified_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
@@ -326,7 +326,7 @@ impl AccountRepository for PostgresAccountRepository {
                 transaction.commit().await?;
                 Ok(RegistrationGuardOutcome::Verified)
             }
-            crate::security::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
+            crate::services::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
                 if !db::api_control::abandon_idempotency_lease_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
@@ -357,7 +357,7 @@ impl AccountRepository for PostgresAccountRepository {
         let admission_outcome = db::abuse_transaction_repository::verify_in_tx(
             &mut transaction,
             &self.abuse,
-            crate::security::abuse::AbuseAction::Registration,
+            crate::services::abuse::AbuseAction::Registration,
             request.subject,
             request.actors,
             request.proof,
@@ -366,8 +366,8 @@ impl AccountRepository for PostgresAccountRepository {
         .await
         .context("registration anti-abuse admission failed")?;
         match admission_outcome {
-            crate::security::abuse::TransactionalGuardOutcome::Allowed => {}
-            crate::security::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
+            crate::services::abuse::TransactionalGuardOutcome::Allowed => {}
+            crate::services::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
                 let requirement = error.requirement().clone();
                 transaction
                     .commit()
@@ -558,7 +558,7 @@ impl AccountRepository for PostgresAccountRepository {
 #[cfg(test)]
 mod registration_guard_tests {
     use super::*;
-    use crate::security::abuse::{AbuseAction, AbuseConfig, PowChallenge, PowIntent, PowProof};
+    use crate::services::abuse::{AbuseAction, AbuseConfig, PowChallenge, PowIntent, PowProof};
     use crate::services::api_mutations::{
         api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
     };
@@ -1120,7 +1120,7 @@ mod registration_guard_tests {
                 })
                 .await
                 .unwrap(),
-            RegistrationGuardOutcome::Denied(crate::security::abuse::GuardError::Invalid(..))
+            RegistrationGuardOutcome::Denied(crate::services::abuse::GuardError::Invalid(..))
         ));
         let retained: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM api_idempotency_records WHERE id=$1")

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::db;
-use crate::security::abuse::{
+use crate::services::abuse::{
     AbuseConfig, AbuseGuard, MessageDedupeCandidate, MessageDedupeIdentity,
 };
 use std::sync::Arc;

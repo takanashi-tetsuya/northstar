@@ -306,7 +306,7 @@ impl AbuseGuard {
         actors: &[String],
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<PowChallenge> {
-        use crate::security::abuse::records::{IssueRecord, IssueRequest};
+        use crate::services::abuse::records::{IssueRecord, IssueRequest};
 
         let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
@@ -484,9 +484,9 @@ impl AbuseGuard {
         input: PersistentVerificationInput<'_>,
         states: &mut [DbActorState],
         now: chrono::DateTime<chrono::Utc>,
-        challenge: Option<crate::security::abuse::records::ConsumedChallenge>,
-    ) -> anyhow::Result<crate::security::abuse::records::VerificationDecision> {
-        use crate::security::abuse::records::VerificationDecision;
+        challenge: Option<crate::services::abuse::records::ConsumedChallenge>,
+    ) -> anyhow::Result<crate::services::abuse::records::VerificationDecision> {
+        use crate::services::abuse::records::VerificationDecision;
         let PersistentVerificationInput {
             action,
             subject,

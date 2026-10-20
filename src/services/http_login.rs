@@ -1,6 +1,6 @@
 //! REST login application port. Transport builds the canonical request identity;
 //! persistence owns the guard, credential verification, and session transaction.
-use crate::security::abuse::{GuardError, PowIntent, PowProof};
+use crate::services::abuse::{GuardError, PowIntent, PowProof};
 use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse, StoredApiResponse};
 use anyhow::Result;
 

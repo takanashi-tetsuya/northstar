@@ -8,7 +8,7 @@ const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
 const [abuseSources, abuseTransaction, abuseVerification, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
-    readModuleParts('src/security/abuse.rs', { includeTests: false }).map(({ source }) => source),
+    readModuleParts('src/services/abuse.rs', { includeTests: false }).map(({ source }) => source),
     read('crates/northstar-abuse-policy/src/lib.rs'),
     read('crates/northstar-abuse-policy/src/model.rs'),
     read('crates/northstar-abuse-policy/src/escalation.rs'),

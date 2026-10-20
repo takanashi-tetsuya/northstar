@@ -231,16 +231,14 @@ impl AbuseGuard {
 
     pub(crate) fn new_persistent_for_deployment(
         config: AbuseConfig,
-        pool: PgPool,
+        persistence: Arc<dyn AbusePersistence>,
         shared_secret: Option<&[u8]>,
         previous_shared_secret: Option<&[u8]>,
         write_with_previous_actor_key: bool,
         legacy_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
         let mut guard = Self::new(config);
-        guard.persistence = Some(Arc::new(
-            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool),
-        ));
+        guard.persistence = Some(persistence);
         if let Some(secret) = shared_secret {
             guard.actor_key_secret = Zeroizing::new(derive_actor_key_secret(secret));
         } else {

@@ -263,7 +263,7 @@ impl MixRepository for PostgresMixRepository {
     async fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
-        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         let StoreMixMessageRequest {
             channel_id,
@@ -325,7 +325,7 @@ impl MixRepository for PostgresMixRepository {
     async fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
-        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         let identity = request.command().identity.as_ref().zip(authenticators).map(
             |(identity, authenticators)| {
@@ -370,7 +370,7 @@ impl MixRepository for PostgresMixRepository {
     async fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
-        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let ingress = request.ingress();
         let identity = ingress
@@ -407,7 +407,7 @@ impl MixRepository for PostgresMixRepository {
         channel_id: Uuid,
         actor: &str,
         identity: &MixReplayIdentity,
-        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let existing = db::lookup_mix_business_intent(
             &self.pool,
@@ -435,7 +435,7 @@ impl MixRepository for PostgresMixRepository {
         actor: &str,
         target_id: Uuid,
         identity: &MixReplayIdentity,
-        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let existing = db::lookup_mix_business_intent(
             &self.pool,
@@ -783,7 +783,7 @@ impl MixRepository for PostgresMixRepository {
     async fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
-        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
     ) -> Result<RetractMixMessageAdmission> {
         let RetractMixMessageRequest {
             channel_id,

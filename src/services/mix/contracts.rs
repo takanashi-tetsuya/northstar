@@ -560,24 +560,24 @@ pub(crate) trait MixRepository: Send + Sync {
     fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
-        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
     fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
-        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
     fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
-        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,
         actor: &str,
         identity: &MixReplayIdentity,
-        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn lookup_mix_retraction_replay(
         &self,
@@ -585,7 +585,7 @@ pub(crate) trait MixRepository: Send + Sync {
         actor: &str,
         target_id: Uuid,
         identity: &MixReplayIdentity,
-        authenticators: &crate::security::abuse::ContentIdentityAuthenticators,
+        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
     fn authorized_mix_event_page(
         &self,
@@ -697,7 +697,7 @@ pub(crate) trait MixRepository: Send + Sync {
     fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
-        authenticators: Option<&crate::security::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<RetractMixMessageAdmission>> + Send;
     fn begin_remote_pam_join(
         &self,

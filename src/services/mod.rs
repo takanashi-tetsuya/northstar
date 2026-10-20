@@ -1,3 +1,4 @@
+pub(crate) mod abuse;
 pub(crate) mod account;
 pub(crate) mod account_admin;
 pub(crate) mod account_revocation_consumer;

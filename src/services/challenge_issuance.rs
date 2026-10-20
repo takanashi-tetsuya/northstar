@@ -1,6 +1,6 @@
 //! Narrow capabilities for issuing and retiring anti-abuse challenges.
 
-use crate::security::abuse::{AbuseAction, PowChallenge, PowIntent};
+use crate::services::abuse::{AbuseAction, PowChallenge, PowIntent};
 use anyhow::Result;
 use std::future::Future;
 

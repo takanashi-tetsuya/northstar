@@ -1,6 +1,6 @@
 use super::*;
 
-fn solve_pow(challenge: &crate::security::abuse::PowChallenge) -> crate::security::abuse::PowProof {
+fn solve_pow(challenge: &crate::services::abuse::PowChallenge) -> crate::services::abuse::PowProof {
     let target = u64::MAX / challenge.requirement.work_factor.max(1);
     for nonce in 0_u64.. {
         let nonce = nonce.to_string();
@@ -9,7 +9,7 @@ fn solve_pow(challenge: &crate::security::abuse::PowChallenge) -> crate::securit
         hasher.update(nonce.as_bytes());
         let digest = hasher.finalize();
         if u64::from_be_bytes(digest[..8].try_into().unwrap()) <= target {
-            return crate::security::abuse::PowProof {
+            return crate::services::abuse::PowProof {
                 challenge_id: challenge.challenge_id,
                 nonce,
             };
@@ -300,7 +300,7 @@ async fn report_evidence_is_owned_peer_bound_atomic_and_moderation_is_serialized
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized() {
-    use crate::security::abuse::{AbuseAction, AbuseConfig, AbuseGuard, TransactionalGuardOutcome};
+    use crate::services::abuse::{AbuseAction, AbuseConfig, AbuseGuard, TransactionalGuardOutcome};
     use std::time::Duration;
 
     let url = std::env::var("TEST_DATABASE_URL")

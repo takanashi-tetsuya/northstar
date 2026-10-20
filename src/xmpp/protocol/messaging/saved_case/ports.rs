@@ -40,11 +40,11 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         else {
             anyhow::bail!("unexpected rated admission call");
         };
-        let lease = crate::security::abuse::MessageAdmissionLease::new(
+        let lease = crate::services::abuse::MessageAdmissionLease::new(
             wire::unhex(&fence.admission_key_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             wire::unhex(&fence.payload_mac_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             fence.lease_token.0,
-            crate::security::abuse::MessageDedupeIdentity {
+            crate::services::abuse::MessageDedupeIdentity {
                 identity_digest: wire::unhex(&fence.dedupe_digest_hex)
                     .map_err(|_| anyhow::anyhow!("invalid dedupe binding"))?,
                 candidates: vec![],
@@ -70,7 +70,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         self.log.prefix();
         Ok(MessageAdmissionStart::Proceed {
             lease: Some(lease),
-            requirement: crate::security::abuse::WorkRequirement {
+            requirement: crate::services::abuse::WorkRequirement {
                 action: requirement.action.clone(),
                 step: requirement.step,
                 work_factor: requirement.work_factor,
@@ -85,7 +85,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
     }
     async fn accept(
         &self,
-        acceptance: &crate::security::abuse::MessageAdmissionAcceptance<'_>,
+        acceptance: &crate::services::abuse::MessageAdmissionAcceptance<'_>,
         observation: &AdmissionWitness,
     ) -> Result<FinalizeDecision> {
         let wire::Admission::Reserved {

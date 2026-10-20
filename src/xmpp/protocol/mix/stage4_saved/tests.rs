@@ -291,7 +291,7 @@ async fn actual_foreground_projection_is_the_retained_claim_row() {
 #[tokio::test]
 async fn authenticated_foreground_replay_does_not_invoke_a_fresh_store_or_wake() {
     let canonical = "<body>ordinary</body>";
-    let authenticators = crate::security::abuse::test_mix_message_content_keyring()
+    let authenticators = crate::services::abuse::test_mix_message_content_keyring()
         .authenticators(canonical.as_bytes());
     let primary = authenticators.primary();
     for corrupt in [false, true] {
@@ -758,7 +758,7 @@ fn claim_observation(bridge: &Bridge) -> mix_worker::ClaimObservation {
 }
 fn replay_input() -> wire::ReplayForeground {
     let canonical = "<body>ordinary</body>";
-    let authenticators = crate::security::abuse::test_mix_message_content_keyring()
+    let authenticators = crate::services::abuse::test_mix_message_content_keyring()
         .authenticators(canonical.as_bytes());
     let primary = authenticators.primary();
     wire::ReplayForeground {
@@ -1279,7 +1279,7 @@ async fn production_binary_replay_authenticates_and_old_mac_rejects_changed_cano
         );
         assert!(canonical.contains(&0));
         let authenticators =
-            crate::security::abuse::test_mix_message_content_keyring().authenticators(&canonical);
+            crate::services::abuse::test_mix_message_content_keyring().authenticators(&canonical);
         let primary = authenticators.primary();
         input.existing.semantic_key_id = text(primary.key_id());
         input.existing.semantic_mac = wire::Bytes::of(primary.mac()).unwrap();

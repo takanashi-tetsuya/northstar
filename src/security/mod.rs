@@ -1,7 +1,6 @@
-//! Security mechanisms: abuse control, address scope checks, cluster bus signing and key records, TLS
-//! with CRL and OCSP checks, DANE and lab DNSSEC anchors, and password work.
+//! Security mechanisms: address scope checks, cluster bus signing and key records, TLS with CRL and OCSP checks,
+//! DANE and lab DNSSEC anchors, and password work.
 
-pub(crate) mod abuse;
 pub(crate) mod address_scope;
 pub(crate) mod cluster_bus;
 pub(crate) mod cluster_keys;

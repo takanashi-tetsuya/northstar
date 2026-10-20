@@ -2,7 +2,7 @@
 //! session publication. Password work occurs outside SQL transactions.
 use crate::{
     auth, db,
-    security::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
+    services::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{json_replay_headers, StoredApiResponse},
         http_login::{
@@ -185,7 +185,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                     }
                     guard_tx.commit().await?;
                     return Ok(Outcome::AbuseDenied(
-                        crate::security::abuse::GuardError::Required(requirement),
+                        crate::services::abuse::GuardError::Required(requirement),
                     ));
                 }
                 match db::abuse_transaction_repository::verify_in_tx(

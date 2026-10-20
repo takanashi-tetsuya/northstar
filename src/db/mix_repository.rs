@@ -20,8 +20,8 @@ impl MixService<PostgresMixRepository> {
     pub(crate) fn new_with_test_keyrings(pool: PgPool) -> Self {
         Self::new(
             PostgresMixRepository::new(pool),
-            crate::security::abuse::test_mix_message_content_keyring(),
-            crate::security::abuse::test_mix_retraction_content_keyring(),
+            crate::services::abuse::test_mix_message_content_keyring(),
+            crate::services::abuse::test_mix_retraction_content_keyring(),
             32,
             "public".to_owned(),
         )

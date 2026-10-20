@@ -423,7 +423,7 @@ impl AppState {
                 message_free_burst: config.abuse_message_free_burst,
                 approximate_max_device_seconds: config.pow_max_device_seconds,
             },
-            pool.clone(),
+            Arc::new(db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone())),
             abuse_state_hmac_key
                 .as_ref()
                 .map(|secret| secret.as_bytes()),
@@ -438,7 +438,7 @@ impl AppState {
         // every Redis/non-loopback deployment, participate in DB authority.
         let abuse_key_deployment = config.abuse_state_hmac_key_file.as_ref().map(|_| {
             let (current_key_id, previous_key_id) = abuse.deployment_key_ids();
-            crate::security::abuse::records::AbuseKeyDeploymentIdentity {
+            crate::services::abuse::records::AbuseKeyDeploymentIdentity {
                 xmpp_domain: config.domain.clone(),
                 epoch: config.abuse_state_hmac_key_epoch,
                 current_key_id: current_key_id.to_owned(),

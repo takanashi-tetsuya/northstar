@@ -3,7 +3,7 @@
 use super::AppState;
 use crate::{
     db::challenge_issuance_repository::PostgresChallengeRepository,
-    security::abuse::PowChallenge,
+    services::abuse::PowChallenge,
     services::challenge_issuance::{ChallengeIssueRequest, ChallengeIssueService},
 };
 use axum::extract::FromRef;

@@ -4,7 +4,7 @@ use super::super::{
 };
 use super::*;
 use crate::{
-    security::abuse::{MessageAdmissionLease, MessageAdmissionStart},
+    services::abuse::{MessageAdmissionLease, MessageAdmissionStart},
     services::message_admission::continuation_fixture::{
         self as admission_fixture, Admission, Events, FinalizeCut,
     },

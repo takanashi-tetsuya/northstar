@@ -16,7 +16,7 @@ use crate::auth;
 #[cfg(test)]
 use crate::db;
 use crate::platform::error::{AppError, Result};
-use crate::security::abuse::AbuseAction;
+use crate::services::abuse::AbuseAction;
 use crate::services::challenge_issuance::ChallengeIssueRequest;
 use crate::state::{
     api_session_http::ApiSessionHttpContext, http_challenge_endpoint::HttpChallengeEndpointContext,
@@ -264,7 +264,7 @@ pub async fn anti_abuse_challenge(
     let intent = body
         .intent
         .as_ref()
-        .map(|requested| crate::security::abuse::PowIntent::from_request(action, requested))
+        .map(|requested| crate::services::abuse::PowIntent::from_request(action, requested))
         .transpose()
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     let issued = context
@@ -279,7 +279,7 @@ pub async fn anti_abuse_challenge(
         Ok(challenge) => challenge,
         Err(error) => {
             if let Some(capacity) =
-                error.downcast_ref::<crate::security::abuse::ChallengeCapacityExceeded>()
+                error.downcast_ref::<crate::services::abuse::ChallengeCapacityExceeded>()
             {
                 context.capacity_exhausted();
                 return Err(AppError::TooManyRequests {
@@ -288,7 +288,7 @@ pub async fn anti_abuse_challenge(
                 });
             }
             if error
-                .downcast_ref::<crate::security::abuse::LegacyPowV1Disabled>()
+                .downcast_ref::<crate::services::abuse::LegacyPowV1Disabled>()
                 .is_some()
             {
                 return Err(AppError::BadRequest(

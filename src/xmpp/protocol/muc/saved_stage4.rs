@@ -4,7 +4,7 @@
 //! pending cfg(test) SessionExecutions::for_saved_frame constructor.
 //! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
-use crate::security::abuse::{
+use crate::services::abuse::{
     MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
     MessageAdmissionStart, MessageDedupeIdentity, WorkRequirement,
 };

@@ -268,7 +268,7 @@ use crate::{
     },
     platform::metrics::Metrics,
     s2s::FederationRouter,
-    security::abuse::{AbuseConfig, AbuseGuard},
+    services::abuse::{AbuseConfig, AbuseGuard},
     services::upload_safety::{UploadAuthorityGeneration, UploadSafetyGate},
     storage::{GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore},
 };
@@ -587,7 +587,7 @@ pub struct AppState {
     >,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
-    abuse_key_deployment: Option<crate::security::abuse::records::AbuseKeyDeploymentIdentity>,
+    abuse_key_deployment: Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: crate::security::tls::TlsContext,

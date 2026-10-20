@@ -90,7 +90,7 @@ pub async fn store_offline_idempotent(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::services::abuse::MessageDedupeIdentity>,
 ) -> Result<OfflineStoreOutcome> {
     store_offline_idempotent_inner(
         pool,
@@ -119,7 +119,7 @@ pub async fn store_offline_idempotent_for_recipient(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::services::abuse::MessageDedupeIdentity>,
 ) -> Result<OfflineStoreOutcome> {
     store_offline_idempotent_inner(
         pool,
@@ -144,7 +144,7 @@ pub(crate) async fn store_offline_idempotent_for_recipient_with_direct_fence(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::services::abuse::MessageDedupeIdentity>,
     cluster: Option<&crate::cluster::ClusterAdmission>,
 ) -> Result<OfflineStoreOutcome> {
     let Some(cluster) = cluster else {
@@ -183,7 +183,7 @@ pub(super) async fn store_offline_idempotent_inner(
     stanza: &str,
     encrypted: bool,
     policy: OfflineStorePolicy,
-    identity: Option<&crate::security::abuse::MessageDedupeIdentity>,
+    identity: Option<&crate::services::abuse::MessageDedupeIdentity>,
     cluster: Option<&crate::cluster::ClusterAdmission>,
 ) -> Result<OfflineStoreOutcome> {
     let (recipient_authority, target_resource) =

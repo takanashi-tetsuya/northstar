@@ -295,7 +295,7 @@ mod tests {
         let messaging = crate::services::messaging::MessageService::new(
             crate::db::messaging::PostgresMessageRepository::new(
                 pool.clone(),
-                crate::security::abuse::test_personal_message_content_keyring(),
+                crate::services::abuse::test_personal_message_content_keyring(),
                 "example.test",
                 100,
                 8_000_000,

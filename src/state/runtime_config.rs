@@ -12,7 +12,7 @@ pub(crate) struct ReadinessContext {
     pub(super) cluster: crate::cluster::ClusterReadinessProbe,
     pub(super) workers: crate::platform::workers::WorkerReadinessProbe,
     pub(super) abuse_key_deployment:
-        Option<crate::security::abuse::records::AbuseKeyDeploymentIdentity>,
+        Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
     pub(super) persistence: crate::services::readiness::ReadinessService<
         db::readiness_repository::PostgresReadinessRepository,
     >,

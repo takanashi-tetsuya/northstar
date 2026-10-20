@@ -19,7 +19,7 @@ impl MessageAdmissionRepository for MemoryGuard {
     ) -> Result<MessageAdmissionStart> {
         Ok(MessageAdmissionStart::Proceed {
             lease: None,
-            requirement: crate::security::abuse::WorkRequirement {
+            requirement: crate::services::abuse::WorkRequirement {
                 action: "message".into(),
                 step: 0,
                 work_factor: 1,
@@ -34,7 +34,7 @@ impl MessageAdmissionRepository for MemoryGuard {
     }
     async fn accept(
         &self,
-        _: &crate::security::abuse::MessageAdmissionAcceptance<'_>,
+        _: &crate::services::abuse::MessageAdmissionAcceptance<'_>,
         _: &AdmissionWitness,
     ) -> Result<FinalizeDecision> {
         panic!("preparation does not finalize")

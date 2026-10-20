@@ -12,7 +12,7 @@ use super::{
     privacy::PrivacyStanzaKind,
     retractions::FederationOutboxPolicy,
 };
-use crate::security::abuse::MessageDedupeIdentity;
+use crate::services::abuse::MessageDedupeIdentity;
 use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
 use anyhow::Result;
 use northstar_delivery_core::DurableDelivery;

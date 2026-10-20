@@ -3,7 +3,7 @@
 use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    security::abuse::PersonalMessageContentKeyring,
+    services::abuse::PersonalMessageContentKeyring,
     services::{messaging::*, muc::DurableMucInviteOutcome, privacy::PrivacyStanzaKind},
 };
 use anyhow::Result;

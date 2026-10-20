@@ -3,7 +3,7 @@
 use super::{AppState, PasskeyService};
 use crate::{
     db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
-    security::abuse::{GuardError, PowIntent, PowProof, WorkRequirement},
+    services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement},
     services::{
         login_abuse::PasskeyLoginAbuseService,
         passkeys::{PasskeyActor, PasskeyError, PasskeyOptions, PasskeySummary},

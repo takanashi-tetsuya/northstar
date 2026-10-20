@@ -6,7 +6,7 @@ use crate::{
         abuse_actor_state_repository, abuse_challenge_issuance_repository,
         abuse_verification_repository, challenge_cleanup_repository, message_admission_repository,
     },
-    security::abuse::{
+    services::abuse::{
         AbuseGuard, AbusePersistence, AbusePersistenceFuture, FailurePolicy, IssueDecision,
         MessageAdmissionCandidate, MessageAdmissionRequest, MessageAdmissionStart,
         MessageDedupeIdentity, RequirementPolicy, VerificationPolicy,
@@ -28,9 +28,9 @@ impl PostgresAbusePersistence {
 impl AbusePersistence for PostgresAbusePersistence {
     fn issue<'a>(
         &'a self,
-        request: crate::security::abuse::records::IssueRequest,
+        request: crate::services::abuse::records::IssueRequest,
         decide: IssueDecision<'a>,
-    ) -> AbusePersistenceFuture<'a, crate::security::abuse::PowChallenge> {
+    ) -> AbusePersistenceFuture<'a, crate::services::abuse::PowChallenge> {
         Box::pin(async move {
             abuse_challenge_issuance_repository::issue(&self.pool, request, decide).await
         })
@@ -45,8 +45,8 @@ impl AbusePersistence for PostgresAbusePersistence {
     ) -> AbusePersistenceFuture<
         'a,
         std::result::Result<
-            crate::security::abuse::WorkRequirement,
-            crate::security::abuse::GuardError,
+            crate::services::abuse::WorkRequirement,
+            crate::services::abuse::GuardError,
         >,
     > {
         Box::pin(async move {
@@ -65,7 +65,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         &'a self,
         actor_state_keys: &'a [String],
         decide: RequirementPolicy<'a>,
-    ) -> AbusePersistenceFuture<'a, crate::security::abuse::WorkRequirement> {
+    ) -> AbusePersistenceFuture<'a, crate::services::abuse::WorkRequirement> {
         Box::pin(async move {
             abuse_actor_state_repository::current_requirement(&self.pool, actor_state_keys, decide)
                 .await

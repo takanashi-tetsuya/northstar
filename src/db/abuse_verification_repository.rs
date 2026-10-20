@@ -4,7 +4,7 @@
 use crate::services::message_admission::witness::{commit_observed, AdmissionWitness};
 use crate::{
     db::abuse_actor_state_repository::{lock_db_states, persist_db_states},
-    security::abuse::{
+    services::abuse::{
         records::{ConsumedChallenge, DbActorState, VerificationDecision},
         GuardError, WorkRequirement,
     },

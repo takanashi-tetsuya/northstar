@@ -695,7 +695,7 @@ pub async fn change_password_guarded_v2(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::security::abuse::PowIntent,
+    intent: &crate::services::abuse::PowIntent,
     user_id: Uuid,
     expected_auth_generation: i64,
     new_password: &str,

@@ -3,7 +3,7 @@
 
 use crate::{
     db,
-    security::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
+    services::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{self, StoredApiResponse},
         password_change::{
@@ -362,7 +362,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
 mod tests {
     use super::*;
     use crate::{
-        security::abuse::{AbuseConfig, PowIntent},
+        services::abuse::{AbuseConfig, PowIntent},
         services::{
             api_mutations::{api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest},
             password_change::PasswordChangeService,

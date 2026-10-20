@@ -4,7 +4,7 @@
 //! requesting persistence. Each repository mutation owns its complete PoW,
 //! invitation, credential or deletion transaction.
 
-use crate::security::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
+use crate::services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
 use anyhow::Result;
 use std::sync::{
     atomic::{AtomicBool, Ordering},

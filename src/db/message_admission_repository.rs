@@ -1,7 +1,7 @@
 //! PostgreSQL-backed adapter for exact rated-message proof admission leases.
 use crate::{
     db::{abuse_actor_state_repository, abuse_verification_repository},
-    security::abuse::{
+    services::abuse::{
         AbuseAction, AbuseGuard, MessageAdmissionAcceptance, MessageAdmissionCandidate,
         MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart,
         MessageDedupeIdentity, PersistentVerificationInput, PowIntent,

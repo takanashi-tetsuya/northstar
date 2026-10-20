@@ -4,7 +4,7 @@ use crate::xmpp::xml_util::*;
 use crate::{
     auth,
     platform::jid_text::bare_jid,
-    security::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
+    services::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::{
         account::{
             DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome,
@@ -368,7 +368,7 @@ impl ProtocolSession {
             format!("behavior:{}", user.id),
         ];
         let subject = format!("password_change:{}", user.id);
-        let intent = crate::security::abuse::PowIntent::xmpp(
+        let intent = crate::services::abuse::PowIntent::xmpp(
             AbuseAction::PasswordChange,
             "/xmpp/password-change",
             powless_query.as_bytes(),
@@ -442,7 +442,7 @@ impl ProtocolSession {
             format!("user:{}", user.id),
             format!("behavior:{}", user.id),
         ];
-        let intent = crate::security::abuse::PowIntent::xmpp(
+        let intent = crate::services::abuse::PowIntent::xmpp(
             AbuseAction::PasswordChange,
             "/xmpp/account-remove",
             powless_query.as_bytes(),

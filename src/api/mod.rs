@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::auth;
 use crate::platform::error::{AppError, Result};
-use crate::security::abuse::AbuseAction;
+use crate::services::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
@@ -27,7 +27,7 @@ use crate::state::{
     RetentionPolicyContext, UploadHttpReadContext,
 };
 
-use crate::security::abuse::GuardError;
+use crate::services::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
 use axum::routing::{delete, options, patch};

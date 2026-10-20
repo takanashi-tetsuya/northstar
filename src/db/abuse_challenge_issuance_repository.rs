@@ -2,7 +2,7 @@
 
 use crate::{
     db::abuse_actor_state_repository::{lock_db_states, persist_db_states},
-    security::abuse::{
+    services::abuse::{
         records::{DbActorState, IssueRecord, IssueRequest},
         ChallengeCapacityExceeded, PowChallenge,
     },

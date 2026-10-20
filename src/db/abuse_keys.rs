@@ -1,4 +1,4 @@
-use crate::security::abuse::records::AbuseKeyDeploymentIdentity;
+use crate::services::abuse::records::AbuseKeyDeploymentIdentity;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};

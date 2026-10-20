@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::platform::error::{AppError, Result};
-use crate::security::abuse::AbuseAction;
+use crate::services::abuse::AbuseAction;
 use crate::services::{
     api_mutations::*,
     reports::{ReportCommit, ReportEvidenceInput, ReportInput},

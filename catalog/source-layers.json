@@ -162,12 +162,6 @@
     "src/s2s/tls.rs": [
       "state"
     ],
-    "src/security/abuse.rs": [
-      "services"
-    ],
-    "src/security/abuse/key_management.rs": [
-      "db"
-    ],
     "src/services/messaging.rs": [
       "xmpp"
     ],

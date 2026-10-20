@@ -11,6 +11,7 @@ pub use northstar_abuse_policy::{
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
 use sqlx::PgPool;
 use std::{
     collections::{HashSet, VecDeque},
@@ -540,7 +541,7 @@ pub(crate) type IssueDecision<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
             chrono::DateTime<chrono::Utc>,
-        ) -> anyhow::Result<crate::security::abuse::records::IssueRecord>
+        ) -> anyhow::Result<crate::services::abuse::records::IssueRecord>
         + Send
         + 'a,
 >;
@@ -548,8 +549,8 @@ pub(crate) type VerificationPolicy<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
             chrono::DateTime<chrono::Utc>,
-            Option<crate::security::abuse::records::ConsumedChallenge>,
-        ) -> anyhow::Result<crate::security::abuse::records::VerificationDecision>
+            Option<crate::services::abuse::records::ConsumedChallenge>,
+        ) -> anyhow::Result<crate::services::abuse::records::VerificationDecision>
         + Send
         + 'a,
 >;
@@ -565,7 +566,7 @@ pub(crate) type FailurePolicy<'a> =
 pub(crate) trait AbusePersistence: Send + Sync {
     fn issue<'a>(
         &'a self,
-        request: crate::security::abuse::records::IssueRequest,
+        request: crate::services::abuse::records::IssueRequest,
         decide: IssueDecision<'a>,
     ) -> AbusePersistenceFuture<'a, PowChallenge>;
 
@@ -690,7 +691,7 @@ impl AbuseGuard {
     ) -> Self {
         Self::new_persistent_for_deployment(
             config,
-            pool,
+            Arc::new(crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool)),
             shared_secret,
             previous_shared_secret,
             false,

@@ -198,7 +198,7 @@ mod tests {
             .collect::<Vec<_>>();
         RetractionService::new(
             crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
-            crate::security::abuse::test_personal_retraction_content_keyring(),
+            crate::services::abuse::test_personal_retraction_content_keyring(),
             "local.test",
         )
         .apply(

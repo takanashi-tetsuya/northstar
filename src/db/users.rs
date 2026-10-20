@@ -1,7 +1,7 @@
 use crate::platform::config::Config;
 use crate::{
     auth,
-    security::abuse::{AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome},
+    services::abuse::{AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -727,7 +727,7 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::security::abuse::PowIntent,
+    intent: &crate::services::abuse::PowIntent,
     user_id: Uuid,
     expected_auth_generation: i64,
 ) -> Result<std::result::Result<bool, GuardError>> {

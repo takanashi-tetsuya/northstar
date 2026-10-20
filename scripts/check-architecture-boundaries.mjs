@@ -3039,7 +3039,7 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
   throw new Error('new personal admission writes must never use legacy/plaintext evidence columns');
 }
 
-const abuseSource = readProductionModule('src/security/abuse.rs', { root });
+const abuseSource = readProductionModule('src/services/abuse.rs', { root });
 const abuseProductionSource = productionWithoutCfgTestModules(abuseSource, 'abuse.rs production');
 if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
   throw new Error('message admission acceptance must remain behind its issued service/repository fence');
@@ -3073,6 +3073,8 @@ if (!/\bpersistent_actor_key_candidates\s*\(\s*\)/.test(contentGenerationBody)) 
 if (/\bapi_control\b|ApiControlKeyring/.test(contentGenerationBody)) {
   throw new Error('API control secrets must never be reused for durable content identity');
 }
+// The abuse module owns the private purpose selector; its callers must not name it.
+const abuseModuleFiles = new Set(moduleFiles('src/services/abuse.rs', { root }));
 const sourceFilesNamingContentPurpose = [];
 for (const directory of ['src/services', 'src/xmpp/protocol', 'src/db']) {
   const pending = [path.join(root, directory)];
@@ -3082,9 +3084,11 @@ for (const directory of ['src/services', 'src/xmpp/protocol', 'src/db']) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) pending.push(full);
       else if (entry.isFile() && entry.name.endsWith('.rs')) {
+        const relative = path.relative(root, full).replaceAll('\\', '/');
+        if (abuseModuleFiles.has(relative)) continue;
         const source = fs.readFileSync(full, 'utf8');
         if (/\bContentIdentityPurpose\b/.test(source)) {
-          sourceFilesNamingContentPurpose.push(path.relative(root, full));
+          sourceFilesNamingContentPurpose.push(relative);
         }
       }
     }

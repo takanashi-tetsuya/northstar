@@ -1,6 +1,6 @@
 //! Login-specific anti-abuse capabilities for SASL and Passkeys.
 
-use crate::security::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
+use crate::services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
 use anyhow::Result;
 use std::future::Future;
 

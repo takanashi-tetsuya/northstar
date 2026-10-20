@@ -16,11 +16,11 @@ async fn owner(mode: DirectPostCommitMode, finish: bool) -> DirectOperationHandl
         actors: &[],
         proof: None,
     };
-    let lease = crate::security::abuse::MessageAdmissionLease::new(
+    let lease = crate::services::abuse::MessageAdmissionLease::new(
         vec![1; 32],
         vec![2; 32],
         Uuid::from_u128(6),
-        crate::security::abuse::MessageDedupeIdentity {
+        crate::services::abuse::MessageDedupeIdentity {
             identity_digest: vec![3; 32],
             candidates: vec![],
         },

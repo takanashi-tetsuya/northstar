@@ -1,7 +1,7 @@
 //! Persistence-backed anti-abuse challenge adapter.
 
 use crate::{
-    security::abuse::{AbuseGuard, PowChallenge},
+    services::abuse::{AbuseGuard, PowChallenge},
     services::challenge_issuance::{
         ChallengeCleanupRepository, ChallengeIssueRepository, ChallengeIssueRequest,
     },

@@ -1,7 +1,7 @@
 //! PostgreSQL-backed login abuse adapters with distinct SASL and Passkey grants.
 
 use crate::{
-    security::abuse::{AbuseAction, AbuseGuard, GuardError, PowIntent, PowProof, WorkRequirement},
+    services::abuse::{AbuseAction, AbuseGuard, GuardError, PowIntent, PowProof, WorkRequirement},
     services::login_abuse::{PasskeyLoginAbuseRepository, SaslLoginAbuseRepository},
 };
 use anyhow::Result;

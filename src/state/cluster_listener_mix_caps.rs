@@ -1,6 +1,7 @@
 //! Live, verified MIX capability admission for the cluster listener.
 
 use super::{local_caps_route_epoch_matches, AppState, OnlineSession};
+use crate::cluster::ClusterMixCapability;
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use std::sync::{atomic::Ordering, Arc};
@@ -9,12 +10,6 @@ pub(crate) struct ClusterListenerMixCaps {
     sessions: Arc<DashMap<String, OnlineSession>>,
     verified: Arc<CapsResourceIndex>,
     pending: Arc<PendingCapsIndex>,
-}
-
-pub(crate) enum ClusterMixCapability {
-    Supported,
-    Unsupported,
-    Unknown,
 }
 
 impl AppState {

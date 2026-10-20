@@ -123,12 +123,6 @@
     "src/cluster.rs": [
       "state"
     ],
-    "src/cluster/listener.rs": [
-      "state"
-    ],
-    "src/cluster/listener/responses.rs": [
-      "state"
-    ],
     "src/cluster/muc_outbox.rs": [
       "state"
     ],

@@ -418,8 +418,7 @@ pub(super) async fn maintenance_once(
 /// Listener capabilities are assembled once; the receive loop never retains
 /// the application state or a general cluster manager.
 pub(super) struct ClusterListenerRuntime {
-    pub(super) message_policy:
-        Arc<crate::state::cluster_listener_message::ClusterListenerMessagePolicy>,
+    pub(super) message_policy: Arc<ClusterListenerMessagePolicy>,
     pub(super) dispatch: crate::state::cluster_listener_dispatch::ClusterListenerDispatch,
     pub(super) muc_endpoints:
         crate::state::cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints,

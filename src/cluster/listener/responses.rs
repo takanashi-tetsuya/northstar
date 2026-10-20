@@ -114,8 +114,7 @@ pub(super) async fn publish_listener_ack(
 pub(super) struct ListenerResponseContext {
     pub(super) admission: Arc<ClusterListenerAdmission>,
     pub(super) security: Arc<ClusterListenerSecurity>,
-    pub(super) message_policy:
-        Arc<crate::state::cluster_listener_message::ClusterListenerMessagePolicy>,
+    pub(super) message_policy: Arc<ClusterListenerMessagePolicy>,
     pub(super) sender: Arc<ClusterNodeDelivery>,
 }
 

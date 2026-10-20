@@ -9,6 +9,14 @@ pub(super) use self::responses::{
     ListenerResponse, ListenerResponses,
 };
 
+/// The session's selected XEP-0016 list, cloned so no lock is held across an await.
+fn active_privacy_list(active: &std::sync::RwLock<Option<String>>) -> Option<String> {
+    active
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
 #[cfg(test)]
 pub(super) fn validate_listener_generation(
     cluster: &ClusterManager,
@@ -261,15 +269,15 @@ pub(super) async fn listen_once(
                 (crate::jid::canonical_session_key(target), instance)
             {
                 match dispatch.terminate_exact_session(&target, instance).await? {
-                    crate::state::cluster_listener_dispatch::SessionTerminationEffect::Absent => {
+                    SessionTerminationEffect::Absent => {
                         control_processed = Some(true);
                         control_outcome = Some(ClusterControlOutcome::AuthoritativelyAbsent);
                     }
-                    crate::state::cluster_listener_dispatch::SessionTerminationEffect::WrongOwner => {
+                    SessionTerminationEffect::WrongOwner => {
                         control_processed = Some(false);
                         control_outcome = Some(ClusterControlOutcome::WrongOwner);
                     }
-                    crate::state::cluster_listener_dispatch::SessionTerminationEffect::Matched => {
+                    SessionTerminationEffect::Matched => {
                         delivered = 1;
                         control_processed = Some(true);
                         control_outcome = Some(ClusterControlOutcome::Matched);
@@ -386,7 +394,9 @@ pub(super) async fn listen_once(
                         || !session.available.load(Ordering::Acquire)
                         || !message_policy
                             .privacy_allows_session(
-                                &session,
+                                session.user_id,
+                                session.connection_id,
+                                active_privacy_list(&session.privacy_active).as_deref(),
                                 &recipient,
                                 crate::db::PrivacyStanzaKind::PresenceOut,
                             )
@@ -468,7 +478,9 @@ pub(super) async fn listen_once(
                     {
                         if message_policy
                             .privacy_allows_session(
-                                &recipient_session,
+                                recipient_session.user_id,
+                                recipient_session.connection_id,
+                                active_privacy_list(&recipient_session.privacy_active).as_deref(),
                                 &owner,
                                 crate::db::PrivacyStanzaKind::PresenceIn,
                             )
@@ -1210,7 +1222,13 @@ pub(super) async fn listen_once(
                     {
                         if let Some((peer, kind)) = privacy_peer_kind.as_ref() {
                             match message_policy
-                                .privacy_allows_session(&session, peer, *kind)
+                                .privacy_allows_session(
+                                    session.user_id,
+                                    session.connection_id,
+                                    active_privacy_list(&session.privacy_active).as_deref(),
+                                    peer,
+                                    *kind,
+                                )
                                 .await
                             {
                                 Ok(true) => {}
@@ -1227,14 +1245,14 @@ pub(super) async fn listen_once(
                     }
                     if mix_capable_only {
                         match mix_caps.capability(&jid) {
-                            crate::state::cluster_listener_mix_caps::ClusterMixCapability::Supported => {
+                            ClusterMixCapability::Supported => {
                                 mix_supported = mix_supported.saturating_add(1);
                             }
-                            crate::state::cluster_listener_mix_caps::ClusterMixCapability::Unsupported => {
+                            ClusterMixCapability::Unsupported => {
                                 mix_unsupported = mix_unsupported.saturating_add(1);
                                 continue;
                             }
-                            crate::state::cluster_listener_mix_caps::ClusterMixCapability::Unknown => {
+                            ClusterMixCapability::Unknown => {
                                 mix_unknown = mix_unknown.saturating_add(1);
                                 continue;
                             }

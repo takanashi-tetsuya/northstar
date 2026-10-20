@@ -7,7 +7,7 @@ use super::{
 use crate::{
     cluster::{
         ClusterListenerMucProjection, ClusterListenerPresenceRoutes, ClusterMucOutboxSignal,
-        ClusterSessionTerminationIdentity,
+        ClusterSessionTerminationIdentity, SessionTerminationEffect,
     },
     db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
     services::session_termination_authority::{
@@ -25,12 +25,6 @@ pub(crate) struct ClusterListenerDispatch {
     session_identity: ClusterSessionTerminationIdentity,
     session_authority:
         SessionTerminationAuthorityService<PostgresSessionTerminationAuthorityRepository>,
-}
-
-pub(crate) enum SessionTerminationEffect {
-    Absent,
-    WrongOwner,
-    Matched,
 }
 
 impl AppState {

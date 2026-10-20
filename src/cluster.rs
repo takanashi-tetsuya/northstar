@@ -26,6 +26,7 @@ mod authority;
 mod delivery_contract;
 mod health;
 mod listener;
+mod listener_policy;
 mod maintenance_redis;
 mod muc_fanout;
 mod muc_occupancy;
@@ -44,6 +45,9 @@ use listener::*;
 use self::authority::*;
 pub use self::delivery_contract::*;
 pub use self::health::*;
+pub(crate) use self::listener_policy::{
+    ClusterListenerMessagePolicy, ClusterMixCapability, SessionTerminationEffect,
+};
 pub(crate) use self::maintenance_redis::*;
 pub use self::muc_occupancy::*;
 use self::muc_outbox::*;

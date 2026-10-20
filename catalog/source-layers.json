@@ -174,9 +174,6 @@
     "src/security/abuse/key_management.rs": [
       "db"
     ],
-    "src/services/federation_outbox.rs": [
-      "s2s"
-    ],
     "src/services/messaging.rs": [
       "xmpp"
     ],

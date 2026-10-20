@@ -4,7 +4,6 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use tokio::sync::mpsc;
 
-use crate::s2s::components::{ComponentRegistry, ComponentRoute};
 use northstar_federation_core::S2sOutboxPolicy;
 
 pub(crate) trait FederationOutboxRepository: Clone + Send + Sync {
@@ -27,12 +26,25 @@ pub(crate) trait FederationOutboxAdmission: Send + Sync {
     ) -> impl Future<Output = bool> + Send + 'a;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ComponentRoute {
+    NotConfigured,
+    Delivered,
+    Unavailable,
+}
+
+/// Wakes the current socket owner of a configured component domain after a durable enqueue commits.
+/// The owner claims its own rows; `NotConfigured` leaves delivery to the generic federation dispatcher.
+pub(crate) trait ComponentWake: Send + Sync {
+    fn wake_route(&self, configured_domains: &HashSet<String>, target: &str) -> ComponentRoute;
+}
+
 #[derive(Clone)]
 pub(crate) struct FederationOutboxService<R> {
     repository: R,
     wake: mpsc::Sender<()>,
     policy: S2sOutboxPolicy,
-    components: ComponentRegistry,
+    components: Arc<dyn ComponentWake>,
     component_domains: Arc<HashSet<String>>,
 }
 
@@ -40,7 +52,7 @@ impl<R: FederationOutboxRepository> FederationOutboxService<R> {
     pub(crate) fn channel(
         repository: R,
         policy: S2sOutboxPolicy,
-        components: ComponentRegistry,
+        components: Arc<dyn ComponentWake>,
         component_domains: HashSet<String>,
     ) -> (Self, mpsc::Receiver<()>) {
         // Only PostgreSQL owns delivery. A coalesced wake-up never loses a row.
@@ -153,7 +165,7 @@ mod tests {
         let (service, wake) = FederationOutboxService::channel(
             repository,
             S2sOutboxPolicy::new(300, 100, 1_000_000, 100),
-            crate::s2s::components::registry(),
+            Arc::new(crate::s2s::components::registry()),
             HashSet::new(),
         );
         (service, wake, entered, send)

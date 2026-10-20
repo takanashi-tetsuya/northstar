@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::federation_outbox::ComponentRoute;
 use std::{
     pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize},

@@ -2,6 +2,7 @@ use crate::{
     platform::config::{ComponentConnectionMode, ComponentCredential},
     platform::metrics::{DurationHistogram, DurationTimer},
     s2s,
+    services::federation_outbox::ComponentRoute,
     state::AppState,
     xmpp::xml_builder::XmlElement,
 };
@@ -287,11 +288,10 @@ impl ComponentRegistry {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ComponentRoute {
-    NotConfigured,
-    Delivered,
-    Unavailable,
+impl crate::services::federation_outbox::ComponentWake for ComponentRegistry {
+    fn wake_route(&self, configured_domains: &HashSet<String>, target: &str) -> ComponentRoute {
+        ComponentRegistry::wake_route(self, configured_domains, target)
+    }
 }
 
 pub(crate) fn registry() -> ComponentRegistry {

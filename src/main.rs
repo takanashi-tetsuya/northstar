@@ -347,7 +347,7 @@ async fn run() -> Result<()> {
             config.s2s_outbox_max_bytes,
             config.s2s_outbox_max_per_domain,
         ),
-        components.clone(),
+        Arc::new(components.clone()),
         config
             .components
             .iter()

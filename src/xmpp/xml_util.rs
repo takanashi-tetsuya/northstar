@@ -252,7 +252,7 @@ pub(crate) fn validate_no_client_carbon(root: Node<'_, '_>) -> Result<(), &'stat
 /// controls merely because they entered through different transports.
 pub(crate) fn validate_routed_message(
     root: Node<'_, '_>,
-    extensions: &crate::xmpp::extensions::ExtensionRuntime,
+    extensions: &crate::platform::extensions::ExtensionRuntime,
 ) -> Result<(), &'static str> {
     validate_enabled_message_extensions(root, extensions)?;
     validate_delivery_receipts(root)?;
@@ -266,7 +266,7 @@ pub(crate) fn validate_routed_message(
 /// federated MUC or federated MIX instead of C2S.
 fn validate_enabled_message_extensions(
     root: Node<'_, '_>,
-    extensions: &crate::xmpp::extensions::ExtensionRuntime,
+    extensions: &crate::platform::extensions::ExtensionRuntime,
 ) -> Result<(), &'static str> {
     for (id, namespace) in [
         (northstar_xep_0085::XEP_ID, northstar_xep_0085::NAMESPACE),

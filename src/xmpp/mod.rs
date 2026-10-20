@@ -1,7 +1,6 @@
 pub(crate) mod auth_publication;
 pub(crate) mod capabilities;
 mod direct_delivery;
-pub(crate) mod extensions;
 pub(crate) mod frame_execution;
 pub(crate) mod framing;
 pub(crate) mod mam_pubsub_parsing;

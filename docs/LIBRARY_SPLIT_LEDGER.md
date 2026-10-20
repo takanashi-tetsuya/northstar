@@ -95,7 +95,7 @@ Test counts include crate unit and crate-local integration tests marked with
 
 ## 3. Runtime composition
 
-`src/xmpp/extensions.rs` is the single built-in XEP registry. It resolves
+`src/platform/extensions.rs` is the single built-in XEP registry. It resolves
 operator selection before listeners start. The resolved projection owns:
 
 - whether an extension is effective;

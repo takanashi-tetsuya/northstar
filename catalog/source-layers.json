@@ -146,14 +146,12 @@
     ],
     "src/platform/config.rs": [
       "cluster",
-      "s2s",
-      "xmpp"
+      "s2s"
     ],
     "src/platform/config/loading.rs": [
       "cluster",
       "db",
-      "s2s",
-      "xmpp"
+      "s2s"
     ],
     "src/platform/config/parsing.rs": [
       "s2s"

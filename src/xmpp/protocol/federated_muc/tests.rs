@@ -187,9 +187,9 @@ fn federated_affiliation_lists_follow_shared_muc_permissions() {
     }
 }
 
-fn extension_runtime() -> crate::xmpp::extensions::ExtensionRuntime {
-    crate::xmpp::extensions::ExtensionRuntime::resolve(
-        crate::xmpp::extensions::ExtensionSwitches::default(),
+fn extension_runtime() -> crate::platform::extensions::ExtensionRuntime {
+    crate::platform::extensions::ExtensionRuntime::resolve(
+        crate::platform::extensions::ExtensionSwitches::default(),
     )
 }
 

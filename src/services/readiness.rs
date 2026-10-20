@@ -2,10 +2,8 @@
 //! The HTTP adapter owns the short cache and live process checks; this service
 //! orders the database checks and evaluates the cleanup convergence policy.
 
-use crate::cluster::ClusterReadinessAuthority;
-use crate::db::{
-    AbuseKeyDeploymentIdentity, AdminSessionCleanupSnapshot, ClusterKeyDeploymentIdentity,
-};
+use crate::db::{AbuseKeyDeploymentIdentity, AdminSessionCleanupSnapshot};
+use crate::security::cluster_keys::{ClusterKeyDeploymentIdentity, ClusterReadinessAuthority};
 use anyhow::{ensure, Result};
 use std::future::Future;
 

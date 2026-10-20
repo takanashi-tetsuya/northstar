@@ -3,10 +3,9 @@
 //! Peer key and instance caches are installed at separate points: a failed
 //! instance read must not undo an already successful peer-key refresh.
 
-use crate::cluster::ClusterReadinessAuthority;
-use crate::db::{
+use crate::security::cluster_keys::{
     ClusterKeyDeploymentIdentity, ClusterNodeInstance, ClusterPeerKeyAuthority,
-    ExpectedClusterPeerKey,
+    ClusterReadinessAuthority, ExpectedClusterPeerKey,
 };
 use anyhow::{ensure, Result};
 use std::{future::Future, time::Duration};

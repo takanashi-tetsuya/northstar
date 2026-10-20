@@ -49,7 +49,7 @@ pub(super) fn authoritative_instance_matches(
 pub(super) async fn refresh_peer_authority_with<R: ClusterAuthorityRepository>(
     service: &ClusterAuthorityService<R>,
     domain: &str,
-    expected: &[crate::db::ExpectedClusterPeerKey],
+    expected: &[crate::security::cluster_keys::ExpectedClusterPeerKey],
     nodes: &[String],
     authorized_peer_keys: &dashmap::DashMap<String, AuthorizedPeerKeys>,
     authorized_instances: &dashmap::DashMap<String, AuthorizedClusterInstance>,
@@ -109,19 +109,23 @@ pub(super) async fn refresh_peer_authority_with<R: ClusterAuthorityRepository>(
 }
 
 impl ClusterManager {
-    pub fn key_authority_identity(&self) -> Option<crate::db::ClusterKeyDeploymentIdentity> {
+    pub fn key_authority_identity(
+        &self,
+    ) -> Option<crate::security::cluster_keys::ClusterKeyDeploymentIdentity> {
         let security = self.security.as_ref()?;
-        Some(crate::db::ClusterKeyDeploymentIdentity {
-            xmpp_domain: self.namespace.clone(),
-            node_id: security.node_id.clone(),
-            epoch: security.key_epoch,
-            current_key_id: security.current_key_id.clone(),
-            current_public_key_sha256: security.current_public_key_sha256.clone(),
-            previous_key_id: security.previous_key_id.clone(),
-            previous_public_key_sha256: security.previous_public_key_sha256.clone(),
-            staged_next_key_id: security.staged_next_key_id.clone(),
-            staged_next_public_key_sha256: security.staged_next_public_key_sha256.clone(),
-        })
+        Some(
+            crate::security::cluster_keys::ClusterKeyDeploymentIdentity {
+                xmpp_domain: self.namespace.clone(),
+                node_id: security.node_id.clone(),
+                epoch: security.key_epoch,
+                current_key_id: security.current_key_id.clone(),
+                current_public_key_sha256: security.current_public_key_sha256.clone(),
+                previous_key_id: security.previous_key_id.clone(),
+                previous_public_key_sha256: security.previous_public_key_sha256.clone(),
+                staged_next_key_id: security.staged_next_key_id.clone(),
+                staged_next_public_key_sha256: security.staged_next_public_key_sha256.clone(),
+            },
+        )
     }
 
     pub(crate) fn readiness_authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
@@ -144,24 +148,28 @@ impl ClusterManager {
         }
     }
 
-    pub fn peer_key_authority_identities(&self) -> Vec<crate::db::ClusterKeyDeploymentIdentity> {
+    pub fn peer_key_authority_identities(
+        &self,
+    ) -> Vec<crate::security::cluster_keys::ClusterKeyDeploymentIdentity> {
         self.security
             .as_ref()
             .map(|security| {
                 security
                     .peer_key_authorities()
                     .into_iter()
-                    .map(|peer| crate::db::ClusterKeyDeploymentIdentity {
-                        xmpp_domain: self.namespace.clone(),
-                        node_id: peer.node_id,
-                        epoch: peer.epoch,
-                        current_key_id: peer.current_key_id,
-                        current_public_key_sha256: peer.current_public_key_sha256,
-                        previous_key_id: peer.previous_key_id,
-                        previous_public_key_sha256: peer.previous_public_key_sha256,
-                        staged_next_key_id: peer.staged_next_key_id,
-                        staged_next_public_key_sha256: peer.staged_next_public_key_sha256,
-                    })
+                    .map(
+                        |peer| crate::security::cluster_keys::ClusterKeyDeploymentIdentity {
+                            xmpp_domain: self.namespace.clone(),
+                            node_id: peer.node_id,
+                            epoch: peer.epoch,
+                            current_key_id: peer.current_key_id,
+                            current_public_key_sha256: peer.current_public_key_sha256,
+                            previous_key_id: peer.previous_key_id,
+                            previous_public_key_sha256: peer.previous_public_key_sha256,
+                            staged_next_key_id: peer.staged_next_key_id,
+                            staged_next_public_key_sha256: peer.staged_next_public_key_sha256,
+                        },
+                    )
                     .collect()
             })
             .unwrap_or_default()

@@ -4,8 +4,9 @@
 
 use super::{cluster_recovery_replay::RecoveryReplayStatus, AppState};
 use crate::{
-    cluster::{ClusterReadinessAuthority, DirectPostCommitMode},
+    cluster::DirectPostCommitMode,
     db::direct_spool_wake_repository::PostgresDirectSpoolWakeRepository,
+    security::cluster_keys::ClusterReadinessAuthority,
     services::direct_spool_wake::{
         ClaimedDirectSpoolWake, DirectSpoolWakeRoute, DirectSpoolWakeService,
         DIRECT_SPOOL_WAKE_PAGE,

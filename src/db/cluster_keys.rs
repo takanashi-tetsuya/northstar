@@ -1,3 +1,7 @@
+use crate::security::cluster_keys::{
+    ClusterKeyDeploymentIdentity, ClusterNodeInstance, ClusterPeerKeyAuthority,
+    ExpectedClusterPeerKey,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
@@ -34,7 +38,7 @@ fn replay_validation_rejection_fields(code: Option<&str>, message: &str) -> bool
 /// decides whether this process still owns the instance.
 pub(crate) async fn fence_direct_message_authority_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    authority: &crate::cluster::ClusterReadinessAuthority,
+    authority: &crate::security::cluster_keys::ClusterReadinessAuthority,
 ) -> Result<()> {
     let key: Option<bool> = sqlx::query_scalar(
         "SELECT TRUE FROM cluster_key_deployments
@@ -82,7 +86,7 @@ pub(crate) async fn fence_direct_message_authority_in_transaction(
 /// cutoff for one bounded recovery replay pass, never a claim on live routes.
 pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
     pool: &PgPool,
-    authority: &crate::cluster::ClusterReadinessAuthority,
+    authority: &crate::security::cluster_keys::ClusterReadinessAuthority,
 ) -> Result<DateTime<Utc>> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut tx = pool.begin().await?;
@@ -143,7 +147,7 @@ pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
 pub async fn admit_cluster_envelope_replay(
     pool: &PgPool,
     namespace: &str,
-    envelope: &crate::cluster::security::SignedClusterEnvelope,
+    envelope: &crate::security::cluster_bus::SignedClusterEnvelope,
 ) -> Result<bool> {
     let event_id = Uuid::parse_str(&envelope.event_id)?;
     let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.expires_at, 0)
@@ -189,19 +193,6 @@ pub(crate) async fn lock_direct_spool_instance_claims_in_transaction(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClusterKeyDeploymentIdentity {
-    pub xmpp_domain: String,
-    pub node_id: String,
-    pub epoch: i64,
-    pub current_key_id: String,
-    pub current_public_key_sha256: String,
-    pub previous_key_id: Option<String>,
-    pub previous_public_key_sha256: Option<String>,
-    pub staged_next_key_id: Option<String>,
-    pub staged_next_public_key_sha256: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 struct ClusterKeyRecord {
     epoch: i64,
     current_key_id: String,
@@ -242,40 +233,6 @@ enum Reconciliation {
     Prepare,
     Activate,
     Retire,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClusterNodeInstance {
-    pub node_id: String,
-    pub instance_uuid: uuid::Uuid,
-    pub instance_epoch: i64,
-    pub signing_key_id: String,
-    pub signing_key_epoch: i64,
-    /// Remaining lifetime measured by PostgreSQL's clock at snapshot time.
-    /// Callers convert this duration to a monotonic local deadline and never
-    /// compare a database timestamp with the host wall clock.
-    pub lease_remaining: Duration,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExpectedClusterPeerKey {
-    pub node_id: String,
-    pub epoch: i64,
-    pub current_key_id: String,
-    pub current_public_key_sha256: String,
-    pub previous_key_id: Option<String>,
-    pub previous_public_key_sha256: Option<String>,
-    pub staged_next_key_id: Option<String>,
-    pub staged_next_public_key_sha256: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClusterPeerKeyAuthority {
-    pub node_id: String,
-    pub epoch: i64,
-    pub current_key_id: String,
-    pub previous_key_id: Option<String>,
-    pub staged_next_key_id: Option<String>,
 }
 
 const MAX_INSTANCE_LEASE_SECONDS: u64 = 3_600;

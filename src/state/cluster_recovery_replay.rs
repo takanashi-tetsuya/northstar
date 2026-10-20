@@ -4,9 +4,10 @@
 
 use super::{AppState, OnlineSession};
 use crate::{
-    cluster::{ClusterAdmission, ClusterReadinessAuthority, DirectPostCommitMode},
+    cluster::{ClusterAdmission, DirectPostCommitMode},
     db,
     platform::metrics::Metrics,
+    security::cluster_keys::ClusterReadinessAuthority,
     services::replay::{RecoveryReplayAuthority, ReplayService},
     xmpp::{capabilities::PostActionTelemetry, protocol::replay},
 };

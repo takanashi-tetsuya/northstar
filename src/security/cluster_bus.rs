@@ -97,26 +97,30 @@ impl ClusterSecurityConfig {
         nodes
     }
 
-    pub fn peer_key_authorities(&self) -> Vec<crate::db::ExpectedClusterPeerKey> {
+    pub fn peer_key_authorities(
+        &self,
+    ) -> Vec<crate::security::cluster_keys::ExpectedClusterPeerKey> {
         let mut peers = self
             .peers
             .values()
-            .map(|peer| crate::db::ExpectedClusterPeerKey {
-                node_id: peer.node_id.clone(),
-                epoch: peer.key_epoch,
-                current_key_id: peer.current.key_id.clone(),
-                current_public_key_sha256: public_key_digest(&peer.current.public_key),
-                previous_key_id: peer.previous.as_ref().map(|key| key.key_id.clone()),
-                previous_public_key_sha256: peer
-                    .previous
-                    .as_ref()
-                    .map(|key| public_key_digest(&key.public_key)),
-                staged_next_key_id: peer.staged_next.as_ref().map(|key| key.key_id.clone()),
-                staged_next_public_key_sha256: peer
-                    .staged_next
-                    .as_ref()
-                    .map(|key| public_key_digest(&key.public_key)),
-            })
+            .map(
+                |peer| crate::security::cluster_keys::ExpectedClusterPeerKey {
+                    node_id: peer.node_id.clone(),
+                    epoch: peer.key_epoch,
+                    current_key_id: peer.current.key_id.clone(),
+                    current_public_key_sha256: public_key_digest(&peer.current.public_key),
+                    previous_key_id: peer.previous.as_ref().map(|key| key.key_id.clone()),
+                    previous_public_key_sha256: peer
+                        .previous
+                        .as_ref()
+                        .map(|key| public_key_digest(&key.public_key)),
+                    staged_next_key_id: peer.staged_next.as_ref().map(|key| key.key_id.clone()),
+                    staged_next_public_key_sha256: peer
+                        .staged_next
+                        .as_ref()
+                        .map(|key| public_key_digest(&key.public_key)),
+                },
+            )
             .collect::<Vec<_>>();
         peers.sort_by(|left, right| left.node_id.cmp(&right.node_id));
         peers

@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for committed local direct-spool revision wakes.
 
 use crate::{
-    cluster::ClusterReadinessAuthority,
+    security::cluster_keys::ClusterReadinessAuthority,
     services::direct_spool_wake::{
         ClaimedDirectSpoolWake, DirectSpoolWakeRepository, DirectSpoolWakeRoute,
     },
@@ -170,8 +170,9 @@ mod tests {
     use super::*;
     use crate::db::cluster_keys::{
         claim_cluster_node_instance, reconcile_cluster_key_deployment_before_instance_claim,
-        release_cluster_node_instance, ClusterKeyDeploymentIdentity, CLUSTER_KEY_AUTHORITY_LOCK,
+        release_cluster_node_instance, CLUSTER_KEY_AUTHORITY_LOCK,
     };
+    use crate::security::cluster_keys::ClusterKeyDeploymentIdentity;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires disposable TEST_DATABASE_URL; migrates and removes an isolated schema"]

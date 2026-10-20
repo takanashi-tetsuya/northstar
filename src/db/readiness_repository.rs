@@ -1,9 +1,8 @@
 //! PostgreSQL adapter for the private readiness persistence probe.
 
-use crate::cluster::ClusterReadinessAuthority;
-use crate::db::{
-    self, AbuseKeyDeploymentIdentity, AdminSessionCleanupSnapshot, ClusterKeyDeploymentIdentity,
-    ClusterNodeInstance,
+use crate::db::{self, AbuseKeyDeploymentIdentity, AdminSessionCleanupSnapshot};
+use crate::security::cluster_keys::{
+    ClusterKeyDeploymentIdentity, ClusterNodeInstance, ClusterReadinessAuthority,
 };
 use crate::services::readiness::ReadinessRepository;
 use anyhow::{ensure, Result};

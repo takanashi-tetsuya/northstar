@@ -62,7 +62,7 @@ impl ListenerResponses {
 pub(in crate::cluster) struct ListenerCommandAuthority {
     pub(in crate::cluster) generation: u64,
     pub(in crate::cluster) rotation_epoch: u64,
-    pub(in crate::cluster) envelope: crate::cluster::security::SignedClusterEnvelope,
+    pub(in crate::cluster) envelope: crate::security::cluster_bus::SignedClusterEnvelope,
 }
 
 impl ListenerCommandAuthority {

@@ -144,11 +144,7 @@
     "src/cluster/workers.rs": [
       "state"
     ],
-    "src/platform/config.rs": [
-      "cluster"
-    ],
     "src/platform/config/loading.rs": [
-      "cluster",
       "db"
     ],
     "src/platform/metrics.rs": [
@@ -196,13 +192,6 @@
     "src/services/admin_session_cleanup_worker.rs": [
       "db"
     ],
-    "src/services/cluster_authority.rs": [
-      "cluster",
-      "db"
-    ],
-    "src/services/direct_spool_wake.rs": [
-      "cluster"
-    ],
     "src/services/federation_outbox.rs": [
       "s2s"
     ],
@@ -225,7 +214,6 @@
       "xmpp"
     ],
     "src/services/readiness.rs": [
-      "cluster",
       "db"
     ],
     "src/services/retractions.rs": [

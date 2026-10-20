@@ -1,3 +1,4 @@
+use crate::security::cluster_keys::ClusterReadinessAuthority;
 use crate::services::cluster_authority::{ClusterAuthorityRepository, ClusterAuthorityService};
 use crate::services::cluster_instance_release::{
     ClusterInstanceReleaseIdentity, ClusterInstanceReleaseRepository, ClusterInstanceReleaseService,
@@ -34,7 +35,6 @@ mod pool;
 mod publisher;
 mod recovery_replay;
 mod routing;
-pub(crate) mod security;
 mod teardown;
 mod worker_capabilities;
 mod workers;
@@ -121,7 +121,7 @@ pub struct ClusterManager {
     key_prefix: String,
     pool: Option<Pool<RedisConnectionManager>>,
     client: Option<redis::Client>,
-    security: Option<Arc<crate::cluster::security::ClusterSecurityConfig>>,
+    security: Option<Arc<crate::security::cluster_bus::ClusterSecurityConfig>>,
     connection_uuid: uuid::Uuid,
     instance_epoch: Arc<AtomicI64>,
     authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
@@ -152,7 +152,7 @@ impl ClusterManager {
         tls_ca_cert_path: Option<&std::path::Path>,
         tls_client_cert_path: Option<&std::path::Path>,
         tls_client_key_path: Option<&std::path::Path>,
-        security: Option<Arc<crate::cluster::security::ClusterSecurityConfig>>,
+        security: Option<Arc<crate::security::cluster_bus::ClusterSecurityConfig>>,
     ) -> Result<Self> {
         let namespace = crate::jid::prepare_domainpart(namespace)
             .context("cluster namespace must be a valid XMPP domain")?;

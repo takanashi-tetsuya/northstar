@@ -147,9 +147,6 @@
     "src/db/pie.rs": [
       "tools"
     ],
-    "src/db/retention.rs": [
-      "runtime"
-    ],
     "src/platform/config.rs": [
       "cluster",
       "s2s",

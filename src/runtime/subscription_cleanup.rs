@@ -7,6 +7,7 @@
 use crate::{
     platform::metrics::SubscriptionCleanupMetrics, platform::workers::WorkerHeartbeat,
     runtime::retention::RetentionReadiness,
+    services::maintenance_repositories::SubscriptionCleanupRepository,
 };
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
@@ -20,13 +21,6 @@ pub(crate) const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 // without borrowing the delivery worker's unrelated five-second heartbeat.
 pub(crate) const CLEANUP_BUDGET: Duration = Duration::from_secs(40);
 pub(crate) const MAX_SILENCE: Duration = Duration::from_secs(110);
-
-pub(crate) trait SubscriptionCleanupRepository: Send + Sync {
-    fn cleanup_expired_subscriptions(
-        &self,
-        batch_size: i64,
-    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
-}
 
 pub(crate) struct SubscriptionCleanupContext<R> {
     repository: R,

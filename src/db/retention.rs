@@ -13,7 +13,9 @@ impl PostgresMaintenanceRepository {
     }
 }
 
-impl crate::runtime::retention::RetentionRepository for PostgresMaintenanceRepository {
+impl crate::services::maintenance_repositories::RetentionRepository
+    for PostgresMaintenanceRepository
+{
     async fn purge_resolved_retention_batch(
         &self,
         store: RetentionStore,
@@ -44,7 +46,7 @@ impl crate::runtime::retention::RetentionRepository for PostgresMaintenanceRepos
     }
 }
 
-impl crate::runtime::subscription_cleanup::SubscriptionCleanupRepository
+impl crate::services::maintenance_repositories::SubscriptionCleanupRepository
     for PostgresMaintenanceRepository
 {
     async fn cleanup_expired_subscriptions(&self, batch_size: i64) -> Result<u64> {
@@ -82,7 +84,7 @@ pub(crate) async fn purge_expired_retraction_intents(
     .rows_affected())
 }
 
-pub use crate::runtime::retention::RetentionStore;
+pub use crate::services::maintenance_repositories::RetentionStore;
 
 /// `0` deliberately means that automated deletion is disabled. It never
 /// means "delete everything now", which keeps a missing/zero configuration

@@ -29,6 +29,7 @@ pub(crate) mod governance;
 pub(crate) mod invitation_admin;
 pub(crate) mod locked_muc_expiry;
 pub(crate) mod login_abuse;
+pub(crate) mod maintenance_repositories;
 pub(crate) mod mam;
 pub(crate) mod message_admission;
 pub(crate) mod message_carbons;

@@ -4,13 +4,13 @@
 //! in one serializable transaction. A dry run follows the same write path and
 //! rolls the complete transaction back.
 
-use crate::{
-    jid,
-    tools::pie::{ConflictPolicy, PieUser, PreparedUser},
-};
+use self::model::{ConflictPolicy, PieUser, PreparedUser};
+use crate::jid;
 use anyhow::{bail, Context, Result};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
+
+pub(crate) mod model;
 
 struct StagedUser {
     id: Uuid,

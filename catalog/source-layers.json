@@ -144,9 +144,6 @@
     "src/cluster/workers.rs": [
       "state"
     ],
-    "src/db/pie.rs": [
-      "tools"
-    ],
     "src/platform/config.rs": [
       "cluster",
       "s2s",

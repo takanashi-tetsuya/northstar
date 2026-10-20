@@ -2523,6 +2523,7 @@ const accountGenerationTeardown = read('src/state/account_generation_teardown.rs
 const teardownSequence = structBody(accountGenerationTeardown, 'pub(crate) struct AccountGenerationTeardownSequence');
 const accountTeardownRuntime = read('src/state/account_teardown_runtime.rs');
 const fullTeardownContext = structBody(accountTeardownRuntime, 'pub(crate) struct AccountTeardownRuntime');
+const accountTeardownPorts = read('src/api/contexts/account_teardown.rs');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(fullTeardownContext)
     || !teardownSequence.includes('SmTeardownService<PostgresSmTeardownRepository>')
@@ -2532,9 +2533,12 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/notifier\.send_account_generation_teardown\(/.test(accountGenerationTeardown)
     || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)
     || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
-    || !/pub\(super\) async fn remove\(\s*State\(teardown\): State<AccountGenerationTeardownSequence>/.test(passkeyApiSource)
-    || !/pub async fn consume_omemo_recovery\(\s*State\(context\): State<OmemoRecoveryHttpContext>,\s*State\(teardown\): State<AccountGenerationTeardownSequence>/.test(recoveryApiSource)
-    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>,\s*State\(teardown\): State<Arc<AccountTeardownRuntime>>/.test(read('src/api/users.rs'))
+    || !/pub\(super\) async fn remove\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
+    || !/pub async fn consume_omemo_recovery\(\s*State\(context\): State<OmemoRecoveryHttpContext>,\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(recoveryApiSource)
+    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('src/api/users.rs'))
+    || /\b(?:AppState|ClusterManager|PgPool)\b|crate::state\b/.test(accountTeardownPorts)
+    || !accountTeardownPorts.includes('teardown: Arc<dyn AccountSessionTeardown>')
+    || !accountTeardownPorts.includes('teardown: Arc<dyn AccountGenerationTeardown>')
     || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('src/api/users.rs'))) {
   throw new Error('post-commit account teardown must use scoped HTTP contexts and ordered effects');
 }

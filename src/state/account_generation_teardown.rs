@@ -1,10 +1,14 @@
 //! Ordered post-commit account revocation.
 
 use super::{sm_teardown_runtime::SmTeardownRuntime, AccountRevocationRoutes, AppState};
+use crate::api::contexts::account_teardown::{
+    AccountGenerationTeardown, AccountGenerationTeardownContext,
+};
 use crate::cluster::ClusterAccountTeardownNotifier;
 use crate::db::sm_teardown_repository::PostgresSmTeardownRepository;
 use crate::services::sm_teardown::SmTeardownService;
 use axum::extract::FromRef;
+use futures::future::BoxFuture;
 use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -17,9 +21,27 @@ pub(crate) struct AccountGenerationTeardownSequence {
     notifier: ClusterAccountTeardownNotifier,
 }
 
-impl FromRef<Arc<AppState>> for AccountGenerationTeardownSequence {
+impl FromRef<Arc<AppState>> for AccountGenerationTeardownContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.account_generation_teardown_sequence()
+        AccountGenerationTeardownContext::new(Arc::new(
+            state.account_generation_teardown_sequence(),
+        ))
+    }
+}
+
+impl AccountGenerationTeardown for AccountGenerationTeardownSequence {
+    fn run<'a>(
+        &'a self,
+        user_id: Uuid,
+        bare_account_jid: &'a str,
+        auth_generation_exclusive: i64,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(AccountGenerationTeardownSequence::run(
+            self,
+            user_id,
+            bare_account_jid,
+            auth_generation_exclusive,
+        ))
     }
 }
 

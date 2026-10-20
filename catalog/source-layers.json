@@ -78,19 +78,10 @@
     "src/api/mod.rs": [
       "state"
     ],
-    "src/api/omemo_recovery.rs": [
-      "state"
-    ],
-    "src/api/passkeys.rs": [
-      "state"
-    ],
     "src/api/route_composition.rs": [
       "state"
     ],
     "src/api/system.rs": [
-      "state"
-    ],
-    "src/api/users.rs": [
       "state"
     ],
     "src/bosh.rs": [

@@ -4,11 +4,13 @@ use super::{
     session_cleanup_sm_revoker::SessionCleanupSmRevoker, AccountRevocationRoutes, AppState,
 };
 use crate::{
+    api::contexts::account_teardown::{AccountSessionTeardown, AccountTeardownContext},
     cluster::ClusterAccountTeardownNotifier,
     db::account_teardown_repository::PostgresAccountGenerationRepository,
     services::account_teardown::AccountGenerationService,
 };
 use axum::extract::FromRef;
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -19,9 +21,23 @@ pub(crate) struct AccountTeardownRuntime {
     notifier: ClusterAccountTeardownNotifier,
 }
 
-impl FromRef<Arc<AppState>> for AccountTeardownRuntime {
+impl FromRef<Arc<AppState>> for AccountTeardownContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.account_teardown_runtime()
+        AccountTeardownContext::new(Arc::new(state.account_teardown_runtime()))
+    }
+}
+
+impl AccountSessionTeardown for AccountTeardownRuntime {
+    fn disconnect_account<'a>(
+        &'a self,
+        user_id: Uuid,
+        bare_account_jid: &'a str,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(AccountTeardownRuntime::disconnect_account(
+            self,
+            user_id,
+            bare_account_jid,
+        ))
     }
 }
 

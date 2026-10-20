@@ -1,3 +1,4 @@
+use crate::api::contexts::account_teardown::AccountTeardownContext;
 use crate::api::*;
 use axum::{
     extract::{ConnectInfo, State},
@@ -10,12 +11,10 @@ use serde_json::json;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::api::contexts::password_change_http::PasswordChangeHttpContext;
 use crate::platform::error::{AppError, Result};
-use crate::state::account_teardown_runtime::AccountTeardownRuntime;
 
 pub async fn me(
     State(state): State<crate::api::contexts::ApiQueryContext>,
@@ -29,7 +28,7 @@ pub async fn me(
 
 pub async fn change_password(
     State(state): State<PasswordChangeHttpContext>,
-    State(teardown): State<Arc<AccountTeardownRuntime>>,
+    State(teardown): State<AccountTeardownContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<PasswordChange>,

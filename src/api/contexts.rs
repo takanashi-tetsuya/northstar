@@ -1,6 +1,7 @@
 //! REST extractor contexts: the query, governance, retention, report and HTTP entry contexts, and the
 //! service bindings handlers receive. The composition root constructs them and implements FromRef.
 
+pub(crate) mod account_teardown;
 pub(crate) mod api_queries;
 pub(crate) mod api_session_http;
 pub(crate) mod governance;

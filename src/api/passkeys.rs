@@ -1,10 +1,10 @@
 use super::*;
 use crate::api::contexts::{
+    account_teardown::AccountGenerationTeardownContext,
     passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
     PasskeyLoginFinishContext,
 };
 use crate::services::passkeys::{PasskeyActor, PasskeyError};
-use crate::state::account_generation_teardown::AccountGenerationTeardownSequence;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -195,7 +195,7 @@ pub(super) struct Remove {
 }
 
 pub(super) async fn remove(
-    State(teardown): State<AccountGenerationTeardownSequence>,
+    State(teardown): State<AccountGenerationTeardownContext>,
     State(start): State<PasskeyStartHttpContext>,
     State(account): State<PasskeyAccountHttpContext>,
     State(queries): State<crate::api::contexts::ApiQueryContext>,

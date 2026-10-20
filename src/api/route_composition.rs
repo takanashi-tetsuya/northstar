@@ -298,11 +298,11 @@ macro_rules! route_pair_contexts {
 
 route_pair_contexts!(
     crate::api::contexts::password_change_http::PasswordChangeHttpContext,
-    Arc<crate::state::account_teardown_runtime::AccountTeardownRuntime>
+    crate::api::contexts::account_teardown::AccountTeardownContext
 );
 route_pair_contexts!(
     OmemoRecoveryHttpContext,
-    crate::state::account_generation_teardown::AccountGenerationTeardownSequence
+    crate::api::contexts::account_teardown::AccountGenerationTeardownContext
 );
 
 #[derive(Clone)]
@@ -310,8 +310,7 @@ pub(super) struct PasskeyRemovalRoute {
     pub(super) queries: ApiQueryContext,
     pub(super) account: crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
     pub(super) start: PasskeyStartHttpContext,
-    pub(super) teardown:
-        crate::state::account_generation_teardown::AccountGenerationTeardownSequence,
+    pub(super) teardown: crate::api::contexts::account_teardown::AccountGenerationTeardownContext,
 }
 
 impl FromRef<PasskeyRemovalRoute> for ApiQueryContext {
@@ -335,7 +334,7 @@ impl FromRef<PasskeyRemovalRoute> for PasskeyStartHttpContext {
 }
 
 impl FromRef<PasskeyRemovalRoute>
-    for crate::state::account_generation_teardown::AccountGenerationTeardownSequence
+    for crate::api::contexts::account_teardown::AccountGenerationTeardownContext
 {
     fn from_ref(state: &PasskeyRemovalRoute) -> Self {
         state.teardown.clone()
@@ -438,7 +437,7 @@ pub(super) fn personal_credential_routes(state: &Arc<AppState>) -> Router {
                 .route("/api/v1/me/password", patch(change_password))
                 .with_state(RoutePair {
                     first: FromRef::from_ref(state),
-                    second: Arc::new(FromRef::from_ref(state)),
+                    second: FromRef::from_ref(state),
                 }),
         )
         .merge(

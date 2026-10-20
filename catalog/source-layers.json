@@ -87,12 +87,6 @@
     "src/cluster/recovery_replay.rs": [
       "state"
     ],
-    "src/cluster/teardown.rs": [
-      "state"
-    ],
-    "src/cluster/worker_capabilities.rs": [
-      "state"
-    ],
     "src/cluster/workers.rs": [
       "state"
     ],
@@ -141,15 +135,6 @@
     "src/xmpp/protocol/federated_muc.rs": [
       "state"
     ],
-    "src/xmpp/protocol/federated_muc/admin.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/federated_muc/owner.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/federated_muc/presence.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/misc.rs": [
       "state"
     ],
@@ -160,18 +145,6 @@
       "state"
     ],
     "src/xmpp/protocol/muc.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/admin_batch.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/discussion.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/join.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc/message.rs": [
       "state"
     ],
     "src/xmpp/protocol/pep.rs": [
@@ -190,9 +163,6 @@
       "state"
     ],
     "src/xmpp/protocol/roster.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/sm.rs": [
       "state"
     ]
   }

@@ -5,7 +5,8 @@ use crate::{
     services::messaging::{
         DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
     },
-    state::{AppState, OnlineSession},
+    state::AppState,
+    xmpp::local_routes::session::OnlineSession,
     xmpp::outbound::DurableDelivery,
 };
 use anyhow::Result;

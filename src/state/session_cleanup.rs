@@ -68,15 +68,15 @@ pub(crate) struct SessionCleanupPlan {
 
 struct MucDeparture {
     room_jid: String,
-    departed: crate::state::MucOccupant,
-    remaining: Vec<(String, crate::state::MucOccupant)>,
+    departed: crate::xmpp::local_routes::muc::MucOccupant,
+    remaining: Vec<(String, crate::xmpp::local_routes::muc::MucOccupant)>,
 }
 
 struct DurableSuspension {
     session_id: Uuid,
     snapshot: crate::services::sm::SmSessionSnapshot,
     ttl_seconds: u64,
-    endpoints: Vec<Arc<crate::state::SuspendedMucEndpoint>>,
+    endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
     capacity: crate::services::sm_capacity::SmCapacityLease,
 }
 
@@ -94,7 +94,7 @@ enum SuspensionRecoveryWork {
 struct PendingSuspensionRecovery {
     connection_id: Uuid,
     session_id: Uuid,
-    endpoints: Vec<Arc<crate::state::SuspendedMucEndpoint>>,
+    endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
     work: SuspensionRecoveryWork,
     capacity: crate::services::sm_capacity::SmCapacityLease,
     _recovery: crate::services::sm_capacity::SmRecoveryLease,
@@ -210,7 +210,7 @@ impl SmSuspensionRecoveryQueue {
         session_id: Uuid,
         snapshot: crate::services::sm::SmSessionSnapshot,
         ttl_seconds: u64,
-        endpoints: Vec<Arc<crate::state::SuspendedMucEndpoint>>,
+        endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
         capacity: crate::services::sm_capacity::SmCapacityLease,
     ) -> bool {
         let charged_bytes = snapshot.resident_bytes().unwrap_or(usize::MAX);
@@ -237,7 +237,7 @@ impl SmSuspensionRecoveryQueue {
         &self,
         connection_id: Uuid,
         session_id: Uuid,
-        endpoints: Vec<Arc<crate::state::SuspendedMucEndpoint>>,
+        endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
         capacity: crate::services::sm_capacity::SmCapacityLease,
     ) -> bool {
         let charged_bytes = capacity.reserved_bytes();

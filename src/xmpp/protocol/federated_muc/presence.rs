@@ -254,9 +254,11 @@ async fn federated_muc_presence_owned(
                     connection_id,
                 };
                 match state.publish_local_muc_join_if_vacant(&replacement) {
-                    crate::state::LocalMucJoinPublication::Published
-                    | crate::state::LocalMucJoinPublication::AlreadyPublished => replacement,
-                    crate::state::LocalMucJoinPublication::Occupied => {
+                    crate::xmpp::local_routes::muc::LocalMucJoinPublication::Published
+                    | crate::xmpp::local_routes::muc::LocalMucJoinPublication::AlreadyPublished => {
+                        replacement
+                    }
+                    crate::xmpp::local_routes::muc::LocalMucJoinPublication::Occupied => {
                         tracing::warn!(room=%room_jid, %nick,
                             "committed federated MUC rebind found a different local projection");
                         return Ok(None);
@@ -413,17 +415,17 @@ async fn federated_muc_presence_owned(
                 cluster_operation.is_some(),
             );
             match move_outcome {
-                crate::state::LocalMucNicknameMove::Published
-                | crate::state::LocalMucNicknameMove::AlreadyPublished => {}
-                crate::state::LocalMucNicknameMove::DeferredToReconciliation
+                crate::xmpp::local_routes::muc::LocalMucNicknameMove::Published
+                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::AlreadyPublished => {}
+                crate::xmpp::local_routes::muc::LocalMucNicknameMove::DeferredToReconciliation
                     if cluster_operation.is_some() =>
                 {
                     tracing::warn!(room=%room_jid, %nick,
                         "PG-authoritative federated MUC rename found another local incarnation; reconciliation will repair the cache");
                 }
-                crate::state::LocalMucNicknameMove::CollisionRestored
-                | crate::state::LocalMucNicknameMove::CollisionRestoreFailed => {
-                    if move_outcome == crate::state::LocalMucNicknameMove::CollisionRestoreFailed {
+                crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestored
+                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed => {
+                    if move_outcome == crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed {
                         tracing::error!(room=%room_jid, old_nick=%old_nick,
                             "could not restore federated MUC actor after nickname collision");
                     }
@@ -1073,11 +1075,11 @@ async fn federated_muc_presence_owned(
     // PostgreSQL event handles durable audience delivery.
     let local_existing = state.muc_occupants_for(&room_jid);
     let publication = state.publish_local_muc_join_if_vacant(&occupant);
-    if publication != crate::state::LocalMucJoinPublication::Published {
+    if publication != crate::xmpp::local_routes::muc::LocalMucJoinPublication::Published {
         if !state.federated_muc_pg_authority_enabled() {
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         }
-        if publication == crate::state::LocalMucJoinPublication::Occupied {
+        if publication == crate::xmpp::local_routes::muc::LocalMucJoinPublication::Occupied {
             tracing::error!(room=%room_jid, %nick,
                 "committed federated MUC join found another local incarnation; preserving it and compensating this claim");
             drop(local_join_guard);

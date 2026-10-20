@@ -750,17 +750,17 @@ impl ProtocolSession {
                 cluster_operation.is_some(),
             );
             match move_outcome {
-                crate::state::LocalMucNicknameMove::Published
-                | crate::state::LocalMucNicknameMove::AlreadyPublished => {}
-                crate::state::LocalMucNicknameMove::DeferredToReconciliation
+                crate::xmpp::local_routes::muc::LocalMucNicknameMove::Published
+                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::AlreadyPublished => {}
+                crate::xmpp::local_routes::muc::LocalMucNicknameMove::DeferredToReconciliation
                     if cluster_operation.is_some() =>
                 {
                     tracing::warn!(room=%room_jid, %nick,
                         "PG-authoritative MUC rename found another local incarnation; reconciliation will repair the cache");
                 }
-                crate::state::LocalMucNicknameMove::CollisionRestored
-                | crate::state::LocalMucNicknameMove::CollisionRestoreFailed => {
-                    if move_outcome == crate::state::LocalMucNicknameMove::CollisionRestoreFailed {
+                crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestored
+                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed => {
+                    if move_outcome == crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed {
                         tracing::error!(room=%room_jid, old_nick=%joined_nick,
                             "could not restore local MUC actor after nickname collision");
                     }
@@ -795,7 +795,7 @@ impl ProtocolSession {
             }
             self.joined_rooms.insert(
                 room_jid.clone(),
-                crate::state::JoinedMucMembership {
+                northstar_session_core::JoinedMucMembership {
                     nick: nick.to_owned(),
                     cluster_epoch: occupant.cluster_epoch,
                 },
@@ -1134,11 +1134,13 @@ impl ProtocolSession {
 
         let payload = muc_presence_payload(root, raw);
 
-        let occupant = crate::state::MucOccupant {
+        let occupant = crate::xmpp::local_routes::muc::MucOccupant {
             full_jid: full_jid.clone(),
             room_jid: room_jid.clone(),
             nick: nick.to_owned(),
-            endpoint: crate::state::MucOccupantEndpoint::Local(self.outbound.clone()),
+            endpoint: crate::xmpp::local_routes::muc::MucOccupantEndpoint::Local(
+                self.outbound.clone(),
+            ),
             affiliation,
             role,
             room_non_anonymous: room.non_anonymous,
@@ -1263,13 +1265,13 @@ impl ProtocolSession {
         // The committed PostgreSQL event handles durable audience delivery.
         let local_existing = self.state.muc_occupants_for(&room_jid);
         let publication = self.state.publish_local_muc_join_if_vacant(&occupant);
-        if publication != crate::state::LocalMucJoinPublication::Published {
+        if publication != crate::xmpp::local_routes::muc::LocalMucJoinPublication::Published {
             if !self.state.muc_pg_authority_enabled() {
                 return Ok(Action::Send(muc_stanza_error(
                     root, &full_jid, "cancel", "conflict",
                 )));
             }
-            if publication == crate::state::LocalMucJoinPublication::Occupied {
+            if publication == crate::xmpp::local_routes::muc::LocalMucJoinPublication::Occupied {
                 tracing::error!(%room_jid, %nick,
                     "committed MUC join found another local incarnation; preserving it and compensating this claim");
                 drop(local_join_guard);
@@ -1281,7 +1283,7 @@ impl ProtocolSession {
         }
         self.joined_rooms.insert(
             room_jid.clone(),
-            crate::state::JoinedMucMembership {
+            northstar_session_core::JoinedMucMembership {
                 nick: nick.to_owned(),
                 cluster_epoch: occupant.cluster_epoch,
             },

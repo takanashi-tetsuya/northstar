@@ -116,7 +116,7 @@ pub(super) struct ClusterMucPolicyRender<'a> {
         &'a crate::state::cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
     pub(super) context: &'a crate::db::ClusterMucEventContext,
     pub(super) room_jid: &'a str,
-    pub(super) recipient: &'a crate::state::MucOccupant,
+    pub(super) recipient: &'a crate::xmpp::local_routes::muc::MucOccupant,
     pub(super) event_id: &'a str,
     pub(super) change: &'a serde_json::Value,
     pub(super) configuration_change: bool,

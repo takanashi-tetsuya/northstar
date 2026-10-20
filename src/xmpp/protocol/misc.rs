@@ -626,12 +626,14 @@ impl ProtocolSession {
         let available = Arc::new(AtomicBool::new(false));
         let locally_reserved = self.state.try_stage_bound_session(
             key.clone(),
-            crate::state::OnlineSession {
+            crate::xmpp::local_routes::session::OnlineSession {
                 user_id: user.id,
                 auth_generation: user.auth_generation,
                 user_agent_epoch: None,
                 connection_id: self.connection_id,
-                route_incarnation: crate::state::RouteIncarnationSignal::new(self.connection_id),
+                route_incarnation: northstar_session_application::RouteIncarnationSignal::new(
+                    self.connection_id,
+                ),
                 lifecycle: Arc::clone(&self.route_lifecycle),
                 metrics_counted: Arc::new(AtomicBool::new(true)),
                 routable: Arc::new(AtomicBool::new(false)),

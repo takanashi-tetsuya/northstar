@@ -141,7 +141,7 @@ pub(super) struct MucMessageFanout<'a> {
 }
 
 impl MucFanoutPort for MucMessageFanout<'_> {
-    type Recipient = crate::state::MucOccupant;
+    type Recipient = crate::xmpp::local_routes::muc::MucOccupant;
     type Blocked = std::collections::HashSet<String>;
 
     fn enter(&self, stage: MucFanoutStage) {

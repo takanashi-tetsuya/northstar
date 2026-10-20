@@ -85,7 +85,7 @@ pub(super) struct SmMetadata {
     pub(super) roster: AtomicBool,
     pub(super) privacy: std::sync::RwLock<Option<String>>,
     pub(super) privacy_requested: AtomicBool,
-    pub(super) rooms: dashmap::DashMap<String, crate::state::JoinedMucMembership>,
+    pub(super) rooms: dashmap::DashMap<String, northstar_session_core::JoinedMucMembership>,
     pub(super) directed: dashmap::DashSet<String>,
     pub(super) presence: std::sync::RwLock<Option<String>>,
 }

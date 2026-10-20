@@ -1,6 +1,8 @@
 //! Tests of the local session route helpers.
 
 use super::*;
+use northstar_session_application::RouteIncarnationSignal;
+use std::sync::atomic::AtomicU64;
 
 const KEY: &str = "alice@example.test/fixture";
 

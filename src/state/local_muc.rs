@@ -18,41 +18,6 @@ where
         .await
 }
 
-#[derive(Clone)]
-pub struct MucOccupant {
-    pub full_jid: String,
-    pub room_jid: String,
-    pub nick: String,
-    pub endpoint: MucOccupantEndpoint,
-    pub affiliation: String,
-    pub role: String,
-    pub room_non_anonymous: bool,
-    pub occupant_id: String,
-    /// Per-occupancy ABA guard used for atomic nickname changes in Redis.
-    /// This value is internal and is never exposed in XMPP stanzas.
-    pub cluster_epoch: uuid::Uuid,
-    /// Exact transport incarnation which owns this occupancy.  A resumed SM
-    /// stream updates this value while preserving the occupancy epoch; a
-    /// recreated post-crash occupancy receives a fresh epoch.
-    pub connection_id: uuid::Uuid,
-    /// Durable stream epoch owning this local occupant, when XEP-0198
-    /// resumption is enabled.
-    pub sm_session_id: Option<uuid::Uuid>,
-    pub payload: String,
-}
-
-impl<'a> From<&'a MucOccupant> for LocalMucOccupantIdentity<'a> {
-    fn from(occupant: &'a MucOccupant) -> Self {
-        Self {
-            room_jid: &occupant.room_jid,
-            nick: &occupant.nick,
-            full_jid: &occupant.full_jid,
-            connection_id: occupant.connection_id,
-            cluster_epoch: occupant.cluster_epoch,
-        }
-    }
-}
-
 pub(crate) fn remove_local_muc_occupant_exact_from(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
@@ -244,23 +209,6 @@ pub(super) fn rebind_local_federated_muc_occupant_exact_in(
     .flatten()
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LocalMucNicknameMove {
-    Published,
-    AlreadyPublished,
-    DeferredToReconciliation,
-    OldMissing,
-    CollisionRestored,
-    CollisionRestoreFailed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LocalMucJoinPublication {
-    Published,
-    AlreadyPublished,
-    Occupied,
-}
-
 pub(super) fn publish_local_muc_join_if_vacant_in(
     occupants: &DashMap<String, MucOccupant>,
     joining: &MucOccupant,
@@ -352,31 +300,6 @@ pub(super) fn move_local_muc_nickname_exact_in(
             LocalMucNicknameMove::CollisionRestored
         }
         dashmap::mapref::entry::Entry::Occupied(_) => LocalMucNicknameMove::CollisionRestoreFailed,
-    }
-}
-
-impl From<&MucOccupant> for SerializableMucOccupant {
-    fn from(occ: &MucOccupant) -> Self {
-        Self {
-            full_jid: occ.full_jid.clone(),
-            room_jid: occ.room_jid.clone(),
-            nick: occ.nick.clone(),
-            affiliation: occ.affiliation.clone(),
-            role: occ.role.clone(),
-            room_non_anonymous: occ.room_non_anonymous,
-            occupant_id: occ.occupant_id.clone(),
-            cluster_epoch: occ.cluster_epoch,
-            connection_id: occ.connection_id,
-            federated_domain: match &occ.endpoint {
-                MucOccupantEndpoint::Local(_) | MucOccupantEndpoint::Suspended(_) => None,
-                MucOccupantEndpoint::Federated {
-                    authenticated_domain,
-                    ..
-                } => Some(authenticated_domain.clone()),
-            },
-            sm_session_id: occ.sm_session_id,
-            payload: occ.payload.clone(),
-        }
     }
 }
 

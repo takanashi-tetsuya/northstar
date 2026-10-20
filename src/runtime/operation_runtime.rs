@@ -406,20 +406,20 @@ async fn lease_heartbeat(
 /// the underlying session map to callers.
 #[derive(Clone)]
 pub(crate) struct LocalBroadcastRoutes {
-    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
     domain: String,
     node_id: String,
 }
 
 /// Claim-time route snapshot only; it cannot deliver an administrator message.
 pub(crate) struct LocalBroadcastTargetSnapshot {
-    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
     node_id: String,
 }
 
 impl LocalBroadcastRoutes {
     pub(crate) fn new(
-        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+        sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
         domain: String,
         node_id: String,
     ) -> Self {
@@ -489,12 +489,12 @@ impl LocalBroadcastTargetSnapshot {
 /// An administrator operation may cancel only a session with the exact
 /// committed user, credential generation, and connection incarnation.
 pub(crate) struct LocalSessionKickRoutes {
-    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
 }
 
 impl LocalSessionKickRoutes {
     pub(crate) fn new(
-        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+        sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
     ) -> Self {
         Self { sessions }
     }
@@ -523,12 +523,12 @@ impl LocalSessionKickRoutes {
 /// Committed account cleanup can disconnect every resource of one exact
 /// credential generation, without gaining route admission or removal access.
 pub(crate) struct LocalGenerationCleanupRoutes {
-    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
 }
 
 impl LocalGenerationCleanupRoutes {
     pub(crate) fn new(
-        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+        sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
     ) -> Self {
         Self { sessions }
     }
@@ -548,12 +548,12 @@ impl LocalGenerationCleanupRoutes {
 /// Process-wide emergency cancellation. This handle only signals local
 /// transports; durable SM teardown remains a separate, ordered effect.
 pub(crate) struct LocalPanicDisconnectRoutes {
-    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
 }
 
 impl LocalPanicDisconnectRoutes {
     pub(crate) fn new(
-        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+        sessions: Arc<dashmap::DashMap<String, crate::xmpp::local_routes::session::OnlineSession>>,
     ) -> Self {
         Self { sessions }
     }

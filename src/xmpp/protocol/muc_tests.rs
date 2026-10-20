@@ -428,12 +428,12 @@ fn role_kick_excludes_only_the_exact_target_from_room_delivery() {
         full_jid: &str,
         connection_id: uuid::Uuid,
         cluster_epoch: uuid::Uuid,
-    ) -> crate::state::MucOccupant {
-        crate::state::MucOccupant {
+    ) -> crate::xmpp::local_routes::muc::MucOccupant {
+        crate::xmpp::local_routes::muc::MucOccupant {
             full_jid: full_jid.to_owned(),
             room_jid: "room@conference.example.test".to_owned(),
             nick: "RemoteBob".to_owned(),
-            endpoint: crate::state::MucOccupantEndpoint::Federated {
+            endpoint: crate::xmpp::local_routes::muc::MucOccupantEndpoint::Federated {
                 authenticated_domain: "remote.example.test".to_owned(),
                 connection_id,
             },

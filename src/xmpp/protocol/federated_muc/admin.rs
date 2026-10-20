@@ -676,7 +676,7 @@ pub(super) async fn federated_muc_admin_set(
         if state.federated_muc_pg_authority_enabled() && !durable_changes.is_empty() {
             state.federated_muc_admit_mutation()?;
             let authenticated_domain = match &requester.endpoint {
-                crate::state::MucOccupantEndpoint::Federated {
+                crate::xmpp::local_routes::muc::MucOccupantEndpoint::Federated {
                     authenticated_domain,
                     ..
                 } => authenticated_domain.clone(),

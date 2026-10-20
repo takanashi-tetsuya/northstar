@@ -1,4 +1,5 @@
 use super::*;
+use northstar_session_application::RouteIncarnationSignal;
 use std::time::Instant;
 
 fn session(user_id: uuid::Uuid, generation: i64, routable: bool) -> OnlineSession {

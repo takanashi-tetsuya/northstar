@@ -14,16 +14,6 @@ pub struct RestoredLocalMucOccupants {
     pub(super) actors: Vec<RestoredMucActor>,
 }
 
-pub(crate) struct RestoreLocalMucOccupantsRequest<'a> {
-    pub(crate) user: &'a crate::services::authentication::AuthenticatedAccount,
-    pub(crate) full_jid: &'a str,
-    pub(crate) connection_id: uuid::Uuid,
-    pub(crate) sm_session_id: uuid::Uuid,
-    pub(crate) memberships: &'a [crate::services::sm::SmMucMembership],
-    pub(crate) base_stanzas: usize,
-    pub(crate) base_bytes: usize,
-}
-
 #[derive(Clone)]
 pub(super) struct RestoredMucActor {
     pub(super) key: String,

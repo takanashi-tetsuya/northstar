@@ -117,7 +117,7 @@ use crate::services::xml_util::{
 use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
 use crate::state::mix_outbox::MixOutboxContext;
 use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
-use crate::state::{AppState, MixIqRelayStage, PendingMixIqRelay};
+use crate::state::AppState;
 use crate::xmpp::frame_execution::{SessionExecutions, Stage};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
@@ -129,6 +129,7 @@ use forms::{
     preference_template_form,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
+use northstar_protocol_runtime::mix::{MixIqRelayStage, PendingMixIqRelay};
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;

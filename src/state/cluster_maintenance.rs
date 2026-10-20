@@ -122,7 +122,8 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{MucOccupantEndpoint, RouteIncarnationSignal};
+    use crate::state::MucOccupantEndpoint;
+    use northstar_session_application::RouteIncarnationSignal;
     use std::{sync::atomic::AtomicBool, time::Instant};
 
     fn session(connection_id: uuid::Uuid) -> OnlineSession {

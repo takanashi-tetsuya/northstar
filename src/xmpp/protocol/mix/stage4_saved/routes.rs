@@ -2,8 +2,8 @@
 //! No AppState, SQL, workers, discovery or transport is constructed here.
 use super::{driver, map, observed, Recorder};
 use crate::{
-    stage4_replay as wire,
-    state::{self, OnlineSession},
+    stage4_replay as wire, state,
+    xmpp::local_routes::session::OnlineSession,
     xmpp::outbound::{OutboundItem, OutboundSender},
 };
 use anyhow::{ensure, Result};
@@ -109,7 +109,9 @@ impl RouteMap {
             auth_generation: input.auth_generation,
             user_agent_epoch: None,
             connection_id: input.connection_id.0,
-            route_incarnation: state::RouteIncarnationSignal::new(input.connection_id.0),
+            route_incarnation: northstar_session_application::RouteIncarnationSignal::new(
+                input.connection_id.0,
+            ),
             lifecycle: Arc::new(AtomicU8::new(0)),
             metrics_counted: Arc::default(),
             routable: Arc::new(AtomicBool::new(input.routable)),

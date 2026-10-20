@@ -16,7 +16,8 @@ use crate::services::muc::{
     MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
 };
 use crate::services::xml_util::*;
-use crate::state::{AppState, MucOccupant, MucOccupantEndpoint};
+use crate::state::AppState;
+use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use northstar_room_core::MucJoinSnapshotError;

@@ -638,10 +638,10 @@ impl ProtocolSession {
         loop {
             match self.state.stage_sm_resumed_session(
                 key.clone(),
-                crate::state::OnlineSession {
+                crate::xmpp::local_routes::session::OnlineSession {
                     user_id: current_user.id,
                     auth_generation: current_user.auth_generation,
-                    route_incarnation: crate::state::RouteIncarnationSignal::new(
+                    route_incarnation: northstar_session_application::RouteIncarnationSignal::new(
                         self.connection_id,
                     ),
                     sender: self.outbound.clone(),
@@ -683,18 +683,20 @@ impl ProtocolSession {
                 claim.session_id,
                 &mix_presence_gate,
             ) {
-                crate::state::SmStagedRouteClaim::Inserted => {
+                crate::xmpp::local_routes::session::SmStagedRouteClaim::Inserted => {
                     self.state.sm_session_telemetry().staged_route_installed();
                     break;
                 }
-                crate::state::SmStagedRouteClaim::Conflict => {
+                crate::xmpp::local_routes::session::SmStagedRouteClaim::Conflict => {
                     self.state
                         .sm_service()
                         .release_claim(claim.session_id, claim.claim_token)
                         .await?;
                     return Ok((Action::Send(sm_failed("conflict")), None));
                 }
-                crate::state::SmStagedRouteClaim::AdoptPresenceEpoch(epoch) => {
+                crate::xmpp::local_routes::session::SmStagedRouteClaim::AdoptPresenceEpoch(
+                    epoch,
+                ) => {
                     drop(mix_presence_epoch);
                     mix_presence_gate = epoch.gate;
                     mix_presence_fallback_suppressed = epoch.fallback_suppressed;
@@ -723,7 +725,7 @@ impl ProtocolSession {
                     };
                     continue;
                 }
-                crate::state::SmStagedRouteClaim::Replace {
+                crate::xmpp::local_routes::session::SmStagedRouteClaim::Replace {
                     connection_id: old_connection_id,
                     lifecycle: old_lifecycle,
                     disconnect: old_disconnect,
@@ -1107,15 +1109,17 @@ impl ProtocolSession {
         self.sm.unacked = remaining;
         let restored_muc = self
             .state
-            .restore_local_muc_occupants(crate::state::RestoreLocalMucOccupantsRequest {
-                user: &current_user,
-                full_jid: &key,
-                connection_id: self.connection_id,
-                sm_session_id: claim.session_id,
-                memberships: &claim.joined_rooms,
-                base_stanzas: self.sm.unacked.len(),
-                base_bytes: self.sm.unacked.iter().map(|entry| entry.stanza.len()).sum(),
-            })
+            .restore_local_muc_occupants(
+                crate::xmpp::local_routes::muc::RestoreLocalMucOccupantsRequest {
+                    user: &current_user,
+                    full_jid: &key,
+                    connection_id: self.connection_id,
+                    sm_session_id: claim.session_id,
+                    memberships: &claim.joined_rooms,
+                    base_stanzas: self.sm.unacked.len(),
+                    base_bytes: self.sm.unacked.iter().map(|entry| entry.stanza.len()).sum(),
+                },
+            )
             .await;
         let planned_muc = restored_muc.planned_memberships();
         let planned_joined_rooms = restored_muc.planned_joined_rooms();

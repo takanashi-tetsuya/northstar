@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::services::operation_muc_destroy::MucDestroyAudience;
-use crate::state::{remove_local_muc_occupant_exact_from, MucOccupant, MucOccupantEndpoint};
+use crate::state::remove_local_muc_occupant_exact_from;
+use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::Notify;
@@ -12,13 +13,15 @@ fn session(
     generation: i64,
     connection_id: Uuid,
     sender: tokio::sync::mpsc::Sender<crate::xmpp::outbound::OutboundItem>,
-) -> crate::state::OnlineSession {
-    crate::state::OnlineSession {
+) -> crate::xmpp::local_routes::session::OnlineSession {
+    crate::xmpp::local_routes::session::OnlineSession {
         user_id,
         auth_generation: generation,
         user_agent_epoch: None,
         connection_id,
-        route_incarnation: crate::state::RouteIncarnationSignal::new(connection_id),
+        route_incarnation: northstar_session_application::RouteIncarnationSignal::new(
+            connection_id,
+        ),
         lifecycle: Arc::default(),
         metrics_counted: Arc::default(),
         routable: Arc::new(AtomicBool::new(true)),

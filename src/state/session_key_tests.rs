@@ -13,14 +13,15 @@ use super::{
     suspended_muc_resume_actor_matches, suspended_occupant_is_created,
     transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
     LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant,
-    MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
-    StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
-    SuspendedMucPhase, SuspendedMucRoute,
+    MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck,
+    StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase,
+    SuspendedMucRoute,
 };
 use crate::api::contexts::omemo_poll::{
     admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, OMEMO_POLL_IP_REQUESTS_PER_MINUTE,
 };
 use dashmap::DashMap;
+use northstar_session_application::RouteIncarnationSignal;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

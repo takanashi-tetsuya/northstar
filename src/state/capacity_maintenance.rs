@@ -130,7 +130,7 @@ impl<R: CapacityMaintenanceRepository> CapacityLeaseReaperContext<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::RouteIncarnationSignal;
+    use northstar_session_application::RouteIncarnationSignal;
     use std::{
         collections::HashSet,
         sync::{atomic::AtomicBool, Mutex},

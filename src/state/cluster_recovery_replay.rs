@@ -436,7 +436,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::RouteIncarnationSignal;
+    use northstar_session_application::RouteIncarnationSignal;
     use std::sync::atomic::{AtomicBool, AtomicI16};
     use tokio_util::sync::CancellationToken;
 

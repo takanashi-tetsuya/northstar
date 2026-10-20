@@ -397,7 +397,8 @@ pub struct ProtocolSession {
     pub(crate) privacy_requested: Arc<AtomicBool>,
     pub(crate) directed_presence: Arc<DashSet<String>>,
     pub(crate) last_presence: Arc<std::sync::RwLock<Option<String>>>,
-    pub(crate) joined_rooms: Arc<dashmap::DashMap<String, crate::state::JoinedMucMembership>>,
+    pub(crate) joined_rooms:
+        Arc<dashmap::DashMap<String, northstar_session_core::JoinedMucMembership>>,
     csi: csi::CsiSubstate,
     /// Bind 2 clients catch up through MAM metadata and must never receive the
     /// legacy offline queue again on their initial presence.

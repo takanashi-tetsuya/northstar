@@ -191,7 +191,7 @@ impl ProtocolSession {
         from: &str,
         to_jid: &CanonicalJid,
         room_jid: String,
-        own: &crate::state::MucOccupant,
+        own: &crate::xmpp::local_routes::muc::MucOccupant,
         voice_form: MucVoiceForm,
     ) -> Result<Action> {
         if to_jid.resourcepart().is_some()
@@ -463,7 +463,7 @@ impl ProtocolSession {
         from: &str,
         room_jid: String,
         to_jid: &CanonicalJid,
-        own: &crate::state::MucOccupant,
+        own: &crate::xmpp::local_routes::muc::MucOccupant,
     ) -> Result<Action> {
         let Some(room) = self
             .state
@@ -572,7 +572,7 @@ impl ProtocolSession {
         raw: &str,
         from: &str,
         room_jid: String,
-        own: &crate::state::MucOccupant,
+        own: &crate::xmpp::local_routes::muc::MucOccupant,
     ) -> Result<Action> {
         let mut has_invites = false;
         if let Some(room) = self

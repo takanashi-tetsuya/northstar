@@ -186,7 +186,9 @@ fn exact_suspension_retry_cannot_be_downgraded_to_promotion_only() {
     let queue = queue();
     let session_id = Uuid::new_v4();
     let connection_id = Uuid::new_v4();
-    let endpoint = Arc::new(crate::state::SuspendedMucEndpoint::new(session_id));
+    let endpoint = Arc::new(crate::xmpp::local_routes::muc::SuspendedMucEndpoint::new(
+        session_id,
+    ));
     let exact = snapshot();
     assert!(queue.enqueue(
         SessionCleanupAccount {

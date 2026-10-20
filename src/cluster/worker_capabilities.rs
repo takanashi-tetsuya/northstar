@@ -638,7 +638,7 @@ impl ClusterRevocationAuthority {
 pub(crate) struct AccountRevocationWorkerContext<R> {
     pub(super) service:
         crate::services::account_revocation_consumer::AccountRevocationConsumerService<R>,
-    pub(super) routes: crate::state::AccountRevocationRoutes,
+    pub(super) routes: crate::xmpp::local_routes::session::AccountRevocationRoutes,
     pub(super) authority: ClusterRevocationAuthority,
 }
 
@@ -647,7 +647,7 @@ impl<R: crate::services::account_revocation_consumer::AccountRevocationRepositor
 {
     pub(crate) fn new(
         service: crate::services::account_revocation_consumer::AccountRevocationConsumerService<R>,
-        routes: crate::state::AccountRevocationRoutes,
+        routes: crate::xmpp::local_routes::session::AccountRevocationRoutes,
         authority: ClusterRevocationAuthority,
     ) -> Self {
         Self {

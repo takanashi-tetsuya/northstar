@@ -318,7 +318,9 @@ mod tests {
                 "connection" => {
                     route.connection_id = Uuid::from_u128(3);
                     route.route_incarnation =
-                        crate::state::RouteIncarnationSignal::new(route.connection_id);
+                        northstar_session_application::RouteIncarnationSignal::new(
+                            route.connection_id,
+                        );
                 }
                 "generation" => route
                     .caps_observation_generation

@@ -78,7 +78,7 @@ pub(super) fn temporary_muc_offline_policy(state: &crate::state::AppState) -> Of
 pub(super) async fn compensate_unpublished_cluster_muc_join(
     state: &crate::state::AppState,
     room: &MucRoom,
-    occupant: &crate::state::MucOccupant,
+    occupant: &crate::xmpp::local_routes::muc::MucOccupant,
 ) {
     match state
         .muc_service()
@@ -900,7 +900,7 @@ impl ProtocolSession {
     pub(crate) fn validated_muc_occupant(
         &self,
         room_jid: &str,
-    ) -> Option<crate::state::MucOccupant> {
+    ) -> Option<crate::xmpp::local_routes::muc::MucOccupant> {
         let full_jid = self.full_jid.as_deref()?;
         let membership = self
             .joined_rooms
@@ -915,7 +915,7 @@ impl ProtocolSession {
     pub(crate) async fn authorized_muc_occupant(
         &self,
         room_jid: &str,
-    ) -> Result<Option<crate::state::MucOccupant>> {
+    ) -> Result<Option<crate::xmpp::local_routes::muc::MucOccupant>> {
         let Some(occupant) = self.validated_muc_occupant(room_jid) else {
             return Ok(None);
         };

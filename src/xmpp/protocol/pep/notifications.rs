@@ -260,7 +260,7 @@ pub(crate) async fn send_pep_last_item(
     node: &str,
     recipient: &str,
     on_presence: bool,
-    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
+    expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
 ) -> Result<()> {
     send_pep_last_item_for_owner(
         context,
@@ -318,7 +318,7 @@ pub(super) async fn send_pep_last_item_for_owner(
     node: &str,
     recipient: &str,
     on_presence: bool,
-    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
+    expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
 ) -> Result<()> {
     let Some(config) = context.pubsub_service().pep_node(owner_id, node).await? else {
         return Ok(());
@@ -364,7 +364,7 @@ pub(super) async fn send_pep_last_item_for_owner(
 pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
     context: &PepLastItemsContext,
     full_jid: &str,
-    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
+    expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
 ) -> Result<()> {
     let full_jid = crate::jid::canonical_session_key(full_jid)?;
     for subscription in context
@@ -400,7 +400,7 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
 pub(crate) async fn deliver_pep_last_items_for_resource(
     context: &PepLastItemsContext,
     full_jid: &str,
-    expected_local_epoch: crate::state::LocalCapsEpoch,
+    expected_local_epoch: northstar_session_core::LocalCapsEpoch,
 ) -> Result<()> {
     let wanted = context.pep_notify_nodes(full_jid);
     if wanted.is_empty() {

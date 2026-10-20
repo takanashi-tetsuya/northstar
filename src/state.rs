@@ -208,7 +208,7 @@ use sqlx::{
 use std::{
     collections::{HashSet, VecDeque},
     sync::{
-        atomic::{AtomicBool, AtomicI16, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -238,15 +238,22 @@ pub use self::admission_guards::*;
 #[cfg(test)]
 use self::construction::*;
 use self::federation_policy::*;
-pub use self::local_muc::*;
-pub use self::local_session::*;
-pub use self::muc_resume::*;
+pub(crate) use self::local_muc::*;
+pub(crate) use self::local_session::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
-pub use self::suspended_muc::*;
+pub(crate) use self::suspended_muc::*;
 use self::upload_runtime::*;
 use crate::platform::jid_text::*;
 use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
+use crate::xmpp::local_routes::{
+    muc::{
+        muc_departure_identity_matches, LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant,
+        MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucBuffer,
+        SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute, SuspendedMucStanza,
+    },
+    session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
+};
 
 #[cfg(test)]
 #[path = "state/runtime_control_startup_tests.rs"]
@@ -259,15 +266,12 @@ mod runtime_control_health_tests;
 #[allow(unused_imports)]
 pub use northstar_protocol_runtime::caps::CapsKey;
 
-pub use northstar_session_application::RouteIncarnationSignal;
 pub use northstar_session_core::LocalCapsEpoch;
 
 pub use northstar_session_core::{
     staged_route_activation_allowed, JoinedMucMembership, StagedRouteActivationCheck,
     StagedRouteIdentity,
 };
-
-pub use northstar_protocol_runtime::mix::{MixIqRelayStage, PendingMixIqRelay};
 
 #[cfg(test)]
 mod muc_membership_snapshot_tests;

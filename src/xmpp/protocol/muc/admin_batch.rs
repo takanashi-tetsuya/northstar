@@ -238,10 +238,10 @@ pub(super) fn classify_muc_admin_items(items: &[Node<'_, '_>]) -> Result<MucAdmi
 /// like the removed actor.  The removal paths use this when they deliver the
 /// target's self-presence separately from the room audience.
 pub(super) fn is_exact_muc_removal_target(
-    recipient: &crate::state::MucOccupant,
-    target: &crate::state::MucOccupant,
+    recipient: &crate::xmpp::local_routes::muc::MucOccupant,
+    target: &crate::xmpp::local_routes::muc::MucOccupant,
 ) -> bool {
-    crate::state::muc_departure_identity_matches(
+    crate::xmpp::local_routes::muc::muc_departure_identity_matches(
         recipient,
         &target.full_jid,
         target.connection_id,

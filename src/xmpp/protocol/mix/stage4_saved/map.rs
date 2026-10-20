@@ -333,7 +333,7 @@ pub(super) fn worker(v: &c::Snapshot) -> Result<w::WorkerSnapshot<w::EvidenceId>
 }
 pub(super) fn route_session(
     key: &str,
-    v: &crate::state::OnlineSession,
+    v: &crate::xmpp::local_routes::session::OnlineSession,
 ) -> Result<w::RouteSession<w::EvidenceId>> {
     Ok(w::RouteSession {
         full_jid: w::Text::new(key)?,

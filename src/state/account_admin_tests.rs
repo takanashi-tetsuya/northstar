@@ -1,5 +1,5 @@
 use super::*;
-use crate::state::RouteIncarnationSignal;
+use northstar_session_application::RouteIncarnationSignal;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 

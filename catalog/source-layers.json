@@ -176,21 +176,14 @@
       "state"
     ],
     "src/security/abuse.rs": [
-      "db",
       "services"
     ],
     "src/security/abuse/key_management.rs": [
       "db"
     ],
-    "src/security/abuse/persistence.rs": [
-      "db"
-    ],
     "src/security/account_recovery.rs": [
       "state",
       "xmpp"
-    ],
-    "src/services/admin_session_cleanup_worker.rs": [
-      "db"
     ],
     "src/services/federation_outbox.rs": [
       "s2s"
@@ -201,9 +194,6 @@
     "src/services/messaging/direct_workflow.rs": [
       "xmpp"
     ],
-    "src/services/metrics_snapshot.rs": [
-      "cluster"
-    ],
     "src/services/mix/operations.rs": [
       "cluster"
     ],
@@ -212,9 +202,6 @@
     ],
     "src/services/node_message_contract_verifier.rs": [
       "xmpp"
-    ],
-    "src/services/readiness.rs": [
-      "db"
     ],
     "src/services/retractions.rs": [
       "xmpp"

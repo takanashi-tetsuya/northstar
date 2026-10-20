@@ -11,7 +11,8 @@ pub(crate) struct ReadinessContext {
     pub(super) upload: crate::services::upload_safety::UploadSafetyReadiness,
     pub(super) cluster: crate::cluster::ClusterReadinessProbe,
     pub(super) workers: crate::platform::workers::WorkerReadinessProbe,
-    pub(super) abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
+    pub(super) abuse_key_deployment:
+        Option<crate::security::abuse::records::AbuseKeyDeploymentIdentity>,
     pub(super) persistence: crate::services::readiness::ReadinessService<
         db::readiness_repository::PostgresReadinessRepository,
     >,

@@ -28,7 +28,7 @@ impl PostgresAbusePersistence {
 impl AbusePersistence for PostgresAbusePersistence {
     fn issue<'a>(
         &'a self,
-        request: abuse_challenge_issuance_repository::IssueRequest,
+        request: crate::security::abuse::records::IssueRequest,
         decide: IssueDecision<'a>,
     ) -> AbusePersistenceFuture<'a, crate::security::abuse::PowChallenge> {
         Box::pin(async move {

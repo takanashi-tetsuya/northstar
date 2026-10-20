@@ -3,37 +3,17 @@
 
 use crate::services::message_admission::witness::{commit_observed, AdmissionWitness};
 use crate::{
-    db::abuse_actor_state_repository::{lock_db_states, persist_db_states, DbActorState},
-    security::abuse::{GuardError, WorkRequirement},
+    db::abuse_actor_state_repository::{lock_db_states, persist_db_states},
+    security::abuse::{
+        records::{ConsumedChallenge, DbActorState, VerificationDecision},
+        GuardError, WorkRequirement,
+    },
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_abuse_policy::admission_execution::{CommitFact, GuardDecision, TransactionScope};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
-
-pub(crate) struct ConsumedChallenge {
-    pub(crate) action: String,
-    pub(crate) subject_hash: Vec<u8>,
-    pub(crate) key_id: String,
-    pub(crate) prefix: String,
-    pub(crate) work_factor: i64,
-    pub(crate) not_before: DateTime<Utc>,
-    pub(crate) expires_at: DateTime<Utc>,
-    pub(crate) actor_sequences: serde_json::Value,
-    pub(crate) requirement: serde_json::Value,
-    pub(crate) protocol_version: i16,
-    pub(crate) intent_method: Option<String>,
-    pub(crate) intent_path: Option<String>,
-    pub(crate) body_sha256: Option<Vec<u8>>,
-    pub(crate) server_nonce: Option<String>,
-    pub(crate) issued_at: Option<DateTime<Utc>>,
-}
-
-pub(crate) struct VerificationDecision {
-    pub(crate) outcome: std::result::Result<WorkRequirement, GuardError>,
-    pub(crate) persist_states: bool,
-}
 
 pub(crate) async fn verify(
     pool: &PgPool,

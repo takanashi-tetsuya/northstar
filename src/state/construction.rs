@@ -438,7 +438,7 @@ impl AppState {
         // every Redis/non-loopback deployment, participate in DB authority.
         let abuse_key_deployment = config.abuse_state_hmac_key_file.as_ref().map(|_| {
             let (current_key_id, previous_key_id) = abuse.deployment_key_ids();
-            db::AbuseKeyDeploymentIdentity {
+            crate::security::abuse::records::AbuseKeyDeploymentIdentity {
                 xmpp_domain: config.domain.clone(),
                 epoch: config.abuse_state_hmac_key_epoch,
                 current_key_id: current_key_id.to_owned(),

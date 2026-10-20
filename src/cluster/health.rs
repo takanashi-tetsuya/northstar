@@ -1,6 +1,7 @@
 //! Cluster health state machine: admission, failure recording, reconciliation, readiness and metrics.
 
 use super::*;
+use crate::services::metrics_snapshot::ClusterMetricsSnapshot;
 
 /// Admission decisions share the live health state without Redis or publication authority.
 #[derive(Clone)]
@@ -594,16 +595,6 @@ pub enum ClusterOperation {
     AdminMutation,
     VolatileDelivery,
     DurableDirect,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClusterMetricsSnapshot {
-    pub state: u8,
-    pub listener_generation: u64,
-    pub authentication_failures: u64,
-    pub replay_rejections: u64,
-    pub degraded_transitions: u64,
-    pub incompatible_peer_versions: u64,
 }
 
 /// Read-only process gauges without Redis, signing, or authority mutation.

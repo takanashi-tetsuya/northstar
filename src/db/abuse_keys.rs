@@ -1,3 +1,4 @@
+use crate::security::abuse::records::AbuseKeyDeploymentIdentity;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -7,18 +8,6 @@ use std::time::Duration;
 // row lock across an absent-row race.  The table remains partitioned by domain;
 // this process-wide lock is held for one short startup transaction only.
 const ABUSE_KEY_DEPLOYMENT_ADVISORY_LOCK: i64 = 4_741_070_036_074_865_761;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AbuseKeyDeploymentIdentity {
-    pub xmpp_domain: String,
-    pub epoch: i64,
-    pub current_key_id: String,
-    pub previous_key_id: Option<String>,
-    /// Set only after every node has been rolled to current=new/previous=old.
-    /// This fences the old generation and starts the complete expiry horizon.
-    pub retire_previous: bool,
-    pub minimum_overlap: Duration,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeploymentPhase {

@@ -1,4 +1,4 @@
-use crate::db::abuse_actor_state_repository::DbActorState;
+use self::records::DbActorState;
 use crate::services::message_admission::witness::AdmissionWitness;
 #[cfg(test)]
 use crate::services::message_admission::{begin_command, operation};
@@ -26,6 +26,7 @@ use zeroize::Zeroizing;
 mod challenges;
 mod key_management;
 mod persistence;
+pub(crate) mod records;
 
 use self::challenges::{build_requirement, decayed_penalty, max_penalty_decay_horizon};
 #[cfg(test)]
@@ -539,8 +540,7 @@ pub(crate) type IssueDecision<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
             chrono::DateTime<chrono::Utc>,
-        )
-            -> anyhow::Result<crate::db::abuse_challenge_issuance_repository::IssueRecord>
+        ) -> anyhow::Result<crate::security::abuse::records::IssueRecord>
         + Send
         + 'a,
 >;
@@ -548,9 +548,8 @@ pub(crate) type VerificationPolicy<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
             chrono::DateTime<chrono::Utc>,
-            Option<crate::db::abuse_verification_repository::ConsumedChallenge>,
-        )
-            -> anyhow::Result<crate::db::abuse_verification_repository::VerificationDecision>
+            Option<crate::security::abuse::records::ConsumedChallenge>,
+        ) -> anyhow::Result<crate::security::abuse::records::VerificationDecision>
         + Send
         + 'a,
 >;
@@ -566,7 +565,7 @@ pub(crate) type FailurePolicy<'a> =
 pub(crate) trait AbusePersistence: Send + Sync {
     fn issue<'a>(
         &'a self,
-        request: crate::db::abuse_challenge_issuance_repository::IssueRequest,
+        request: crate::security::abuse::records::IssueRequest,
         decide: IssueDecision<'a>,
     ) -> AbusePersistenceFuture<'a, PowChallenge>;
 

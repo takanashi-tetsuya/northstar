@@ -585,7 +585,7 @@ pub struct AppState {
     >,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
-    abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
+    abuse_key_deployment: Option<crate::security::abuse::records::AbuseKeyDeploymentIdentity>,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: crate::security::tls::TlsContext,

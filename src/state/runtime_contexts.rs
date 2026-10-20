@@ -284,7 +284,9 @@ impl AppState {
         &self.federated_caps_gates
     }
 
-    pub(crate) fn abuse_key_deployment(&self) -> Option<&db::AbuseKeyDeploymentIdentity> {
+    pub(crate) fn abuse_key_deployment(
+        &self,
+    ) -> Option<&crate::security::abuse::records::AbuseKeyDeploymentIdentity> {
         self.abuse_key_deployment.as_ref()
     }
 

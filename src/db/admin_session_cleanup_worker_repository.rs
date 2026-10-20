@@ -1,8 +1,10 @@
 //! PostgreSQL adapter for the administrator session-cleanup worker's exact
 //! claim token and worker identity fences.
 
-use crate::db::{self, AdminSessionCleanupLease};
-use crate::services::admin_session_cleanup_worker::AdminSessionCleanupRepository;
+use crate::db;
+use crate::services::admin_session_cleanup_worker::{
+    AdminSessionCleanupLease, AdminSessionCleanupRepository,
+};
 use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;

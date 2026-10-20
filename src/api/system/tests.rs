@@ -120,7 +120,7 @@ fn upload_readiness_is_fail_closed_but_allows_bounded_recovery_drain() {
 
 #[test]
 fn admin_cleanup_readiness_requires_capacity_and_convergence() {
-    let healthy = crate::db::AdminSessionCleanupSnapshot {
+    let healthy = crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
         pending: 1,
         running: 0,
         oldest_age_seconds: ADMIN_CLEANUP_MAX_READY_AGE_SECONDS,
@@ -131,32 +131,32 @@ fn admin_cleanup_readiness_requires_capacity_and_convergence() {
     assert!(admin_session_cleanup_ready(&healthy));
 
     assert!(!admin_session_cleanup_ready(
-        &crate::db::AdminSessionCleanupSnapshot {
+        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             oldest_age_seconds: ADMIN_CLEANUP_MAX_READY_AGE_SECONDS + 0.001,
             ..healthy
         }
     ));
     assert!(!admin_session_cleanup_ready(
-        &crate::db::AdminSessionCleanupSnapshot {
+        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             maximum_attempts: ADMIN_CLEANUP_MAX_READY_ATTEMPTS,
             ..healthy
         }
     ));
     assert!(!admin_session_cleanup_ready(
-        &crate::db::AdminSessionCleanupSnapshot {
+        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             pending: 100_000,
             queued: 100_000,
             ..healthy
         }
     ));
     assert!(!admin_session_cleanup_ready(
-        &crate::db::AdminSessionCleanupSnapshot {
+        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             running: 1,
             ..healthy
         }
     ));
     assert!(admin_session_cleanup_ready(
-        &crate::db::AdminSessionCleanupSnapshot {
+        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             pending: 0,
             oldest_age_seconds: 0.0,
             maximum_attempts: 0,

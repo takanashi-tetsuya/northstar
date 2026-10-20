@@ -1,19 +1,10 @@
 //! PostgreSQL row locking and persistence for anti-abuse actor state.
 
+use crate::security::abuse::records::DbActorState;
 use crate::security::abuse::AbuseStateBusy;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
-
-#[derive(Debug)]
-pub(crate) struct DbActorState {
-    pub(crate) key: String,
-    pub(crate) events: Vec<DateTime<Utc>>,
-    pub(crate) penalty_level: u32,
-    pub(crate) last_activity: DateTime<Utc>,
-    pub(crate) blocked_until: DateTime<Utc>,
-    pub(crate) sequence: i64,
-}
 
 pub(crate) async fn lock_db_states(
     tx: &mut Transaction<'_, Postgres>,

@@ -1,8 +1,11 @@
 //! Atomic issuance-window, capacity, actor-state, and challenge persistence.
 
 use crate::{
-    db::abuse_actor_state_repository::{lock_db_states, persist_db_states, DbActorState},
-    security::abuse::{AbuseAction, ChallengeCapacityExceeded, PowChallenge},
+    db::abuse_actor_state_repository::{lock_db_states, persist_db_states},
+    security::abuse::{
+        records::{DbActorState, IssueRecord, IssueRequest},
+        ChallengeCapacityExceeded, PowChallenge,
+    },
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -11,25 +14,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     time::Duration,
 };
-
-pub(crate) struct IssueRequest {
-    pub(crate) issue_groups: Vec<(Vec<String>, usize)>,
-    pub(crate) capacity_groups: Vec<(Vec<String>, usize)>,
-    pub(crate) actor_state_keys: Vec<String>,
-    pub(crate) window: Duration,
-}
-
-/// The application signs this record after the repository has locked the
-/// actor state. All cryptographic and rotation decisions stay with the guard.
-pub(crate) struct IssueRecord {
-    pub(crate) action: AbuseAction,
-    pub(crate) challenge: PowChallenge,
-    pub(crate) subject_hash: Vec<u8>,
-    pub(crate) actor_sequences: serde_json::Value,
-    pub(crate) intent_method: Option<String>,
-    pub(crate) intent_path: Option<String>,
-    pub(crate) body_sha256: Option<Vec<u8>>,
-}
 
 pub(crate) async fn issue(
     pool: &PgPool,

@@ -65,6 +65,16 @@ pub(crate) struct DatabasePoolStatus {
     pub(crate) idle_connections: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClusterMetricsSnapshot {
+    pub state: u8,
+    pub listener_generation: u64,
+    pub authentication_failures: u64,
+    pub replay_rejections: u64,
+    pub degraded_transitions: u64,
+    pub incompatible_peer_versions: u64,
+}
+
 /// Copy-only process gauges. Neither the HTTP adapter nor this renderer owns
 /// the live config, cluster, MUC map, metrics registry, or SM governor.
 pub(crate) struct ProcessGaugeSnapshot {
@@ -80,7 +90,7 @@ pub(crate) struct ProcessGaugeSnapshot {
     pub(crate) tls_seconds_remaining: i64,
     pub(crate) tls_generation: u64,
     pub(crate) certificate_sessions: crate::security::tls::CertificateSessionMetrics,
-    pub(crate) cluster: crate::cluster::ClusterMetricsSnapshot,
+    pub(crate) cluster: ClusterMetricsSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,7 +288,7 @@ mod tests {
                 inbound_s2s_external: 6,
                 outbound_s2s_external: 7,
             },
-            cluster: crate::cluster::ClusterMetricsSnapshot {
+            cluster: ClusterMetricsSnapshot {
                 state: 2,
                 listener_generation: 12,
                 authentication_failures: 13,

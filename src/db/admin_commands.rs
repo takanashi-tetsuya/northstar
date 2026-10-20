@@ -1,3 +1,6 @@
+use crate::services::admin_session_cleanup_worker::{
+    AdminSessionCleanupKind, AdminSessionCleanupLease, AdminSessionCleanupSnapshot,
+};
 use anyhow::{Context, Result};
 use sqlx::{Acquire, PgConnection, PgPool, Row};
 use std::collections::HashMap;
@@ -114,36 +117,6 @@ pub enum AdminBatchAccountWriteOutcome {
     TargetChanged,
     SelfMutation,
     LastAdministrator,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdminSessionCleanupKind {
-    AccountGeneration,
-    ExactConnection,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdminSessionCleanupLease {
-    pub id: Uuid,
-    pub command_operation_id: Uuid,
-    pub kind: AdminSessionCleanupKind,
-    pub user_id: Uuid,
-    pub auth_generation: i64,
-    pub bare_jid: Option<String>,
-    pub full_jid: Option<String>,
-    pub connection_id: Option<Uuid>,
-    pub lease_token: Uuid,
-    pub attempts: i64,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct AdminSessionCleanupSnapshot {
-    pub pending: i64,
-    pub running: i64,
-    pub oldest_age_seconds: f64,
-    pub maximum_attempts: i64,
-    pub queued: i64,
-    pub capacity: i64,
 }
 
 #[cfg(test)]

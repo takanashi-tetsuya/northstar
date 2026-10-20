@@ -708,7 +708,7 @@ async fn apply_cluster_muc_admin_batch_once(
                     "invalid MUC role"
                 );
                 anyhow::ensure!(
-                    crate::xmpp::xml_util::prepare_muc_nick(target_nick)? == *target_nick,
+                    crate::services::xml_util::prepare_muc_nick(target_nick)? == *target_nick,
                     "noncanonical MUC role target nick"
                 );
                 if !keys.insert(format!("nick:{target_nick}")) {

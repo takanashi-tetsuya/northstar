@@ -4,8 +4,8 @@ use crate::services::sm::{
     SmResumeFinalizationRequest, SmSessionCreationOutcome, SmSessionCreationRequest,
     SmSessionSnapshot,
 };
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use northstar_xep_0198::{

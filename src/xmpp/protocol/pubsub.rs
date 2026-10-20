@@ -15,10 +15,10 @@ use crate::services::pubsub::{
     PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PubSubUpdateSubscriptionOptionsCommand,
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
+use crate::services::xml_util::*;
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::Node;
 use std::{

@@ -3,7 +3,7 @@ use super::{
     missing_full_jid_iq_needs_error, pre_auth_registration_iq, resource_binding_iq, tls_failure,
     valid_bind_payload, valid_client_stanza_namespace, valid_empty_iq_payload, xmpp_version_os,
 };
-use crate::xmpp::stanza_validation::validate_client_stanza;
+use crate::services::stanza_validation::validate_client_stanza;
 use roxmltree::Document;
 
 fn with_root(xml: &str, check: impl FnOnce(roxmltree::Node<'_, '_>)) {

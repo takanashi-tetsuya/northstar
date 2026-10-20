@@ -1,8 +1,8 @@
 use crate::platform::jid_text::bare_jid;
 use crate::services::privacy::PrivacyStanzaKind;
+use crate::services::xml_util::*;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::{Document, Node};
 
@@ -177,7 +177,8 @@ impl ProtocolSession {
             if !valid_client_stanza_namespace(root, self.uses_websocket_framing(), xml) {
                 return Ok(Action::CloseWith(stream_error("invalid-namespace")));
             }
-            if let Err(condition) = crate::xmpp::stanza_validation::validate_client_stanza(root) {
+            if let Err(condition) = crate::services::stanza_validation::validate_client_stanza(root)
+            {
                 if root.attribute("type") == Some("error") {
                     return Ok(Action::None);
                 }
@@ -411,14 +412,13 @@ impl ProtocolSession {
         if kind == "set"
             && child.is_some_and(|child| {
                 child.tag_name().name() == "jingle"
-                    && child.tag_name().namespace()
-                        == Some(crate::xmpp::protocol::jingle::JINGLE_NS)
+                    && child.tag_name().namespace() == Some(crate::services::jingle::JINGLE_NS)
             })
         {
             let Some(full_jid) = self.full_jid.as_deref() else {
                 return Ok(Action::Send(iq_error(id, "not-authorized")));
             };
-            if let Err(condition) = crate::xmpp::protocol::jingle::validate_jingle_iq(
+            if let Err(condition) = crate::services::jingle::validate_jingle_iq(
                 root,
                 child.expect("checked above"),
                 Some(full_jid),

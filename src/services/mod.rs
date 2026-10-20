@@ -28,6 +28,7 @@ pub(crate) mod extdisco;
 pub(crate) mod federation_outbox;
 pub(crate) mod governance;
 pub(crate) mod invitation_admin;
+pub(crate) mod jingle;
 pub(crate) mod locked_muc_expiry;
 pub(crate) mod login_abuse;
 pub(crate) mod maintenance_repositories;
@@ -67,9 +68,11 @@ pub(crate) mod sm_capacity;
 pub(crate) mod sm_teardown;
 pub(crate) mod sm_teardown_muc;
 pub(crate) mod sm_teardown_presence;
+pub(crate) mod stanza_validation;
 pub(crate) mod upload;
 pub(crate) mod upload_admin;
 pub(crate) mod upload_safety;
+pub(crate) mod xml_util;
 
 pub(crate) mod upload_maintenance;
 

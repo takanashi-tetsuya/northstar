@@ -7,7 +7,6 @@ pub(crate) mod dispatch;
 pub(crate) mod extdisco;
 pub(crate) mod federated_muc;
 pub(crate) mod ibr;
-pub(crate) mod jingle;
 pub(crate) mod mam;
 pub(crate) mod messaging;
 pub(crate) mod misc;
@@ -30,7 +29,7 @@ pub(crate) mod vcard;
 
 use super::capabilities::PostActionTelemetry;
 use super::xml_builder::XmlElement;
-use super::xml_util::*;
+use crate::services::xml_util::*;
 use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
 use anyhow::{Context, Result};
 use dashmap::DashSet;

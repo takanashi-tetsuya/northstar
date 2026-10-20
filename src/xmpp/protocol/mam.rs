@@ -4,8 +4,8 @@ use crate::services::mam::{
     MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand,
     MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRsmPage,
 };
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 #[cfg(test)]

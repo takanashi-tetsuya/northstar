@@ -5,7 +5,7 @@ use northstar_xml_framing as framing;
 use northstar_xmpp_types::jid;
 use roxmltree::Document;
 
-#[path = "../../src/xmpp/stanza_validation.rs"]
+#[path = "../../src/services/stanza_validation.rs"]
 mod stanza_validation;
 
 const MAX_INPUT: usize = 1_048_576;

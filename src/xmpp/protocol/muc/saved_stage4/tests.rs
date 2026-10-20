@@ -731,8 +731,10 @@ async fn actual_set_to_expansion_drives_preflight_and_keeps_actual_frame_cancell
     native.write.chunk_limit = chunk;
     let mut recipients = i.recipients.as_slice().to_vec();
     recipients[0].full_jid = text(&format!("a@example.test/{}", "r".repeat(700)));
-    let actual =
-        crate::xmpp::xml_util::set_to(i.command.stanza.as_str(), recipients[0].full_jid.as_str());
+    let actual = crate::services::xml_util::set_to(
+        i.command.stanza.as_str(),
+        recipients[0].full_jid.as_str(),
+    );
     assert!(required_write_calls(original_len, &script(chunk, None)).unwrap() <= 32);
     assert!(required_write_calls(actual.len(), &script(chunk, None)).unwrap() > 32);
     i.recipients = list(recipients);
@@ -996,8 +998,10 @@ async fn expanded_native_item_above_4096_within_call_budget_retains_real_success
     assert_eq!(i.command.stanza.as_str().len(), 4090);
     let mut recipients = i.recipients.as_slice().to_vec();
     recipients[0].full_jid = text(&format!("a@example.test/{}", "r".repeat(700)));
-    let materialized =
-        crate::xmpp::xml_util::set_to(i.command.stanza.as_str(), recipients[0].full_jid.as_str());
+    let materialized = crate::services::xml_util::set_to(
+        i.command.stanza.as_str(),
+        recipients[0].full_jid.as_str(),
+    );
     assert!(materialized.len() > 4096);
     assert!(required_write_calls(materialized.len(), &script(512, None)).unwrap() <= 32);
     i.recipients = list(recipients);

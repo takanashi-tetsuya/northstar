@@ -4,8 +4,8 @@ use crate::{
         PrivacyAction, PrivacyItem, PrivacyList, PrivacyListMutationOutcome, PrivacyMatchType,
         PrivacySelectionOutcome, MAX_PRIVACY_ITEMS,
     },
+    services::xml_util::{iq_error, iq_result},
     xmpp::xml_builder::XmlElement,
-    xmpp::xml_util::{iq_error, iq_result},
 };
 use anyhow::Result;
 use roxmltree::Node;
@@ -217,7 +217,7 @@ impl ProtocolSession {
             if !session.privacy_requested.load(Ordering::Acquire) {
                 continue;
             }
-            let push = crate::xmpp::xml_util::set_to(&base, &jid);
+            let push = crate::services::xml_util::set_to(&base, &jid);
             if session.connection_id == self.connection_id {
                 current_push = Some(push);
             } else if let Err(error) = session.sender.try_send(push) {

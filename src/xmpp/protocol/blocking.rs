@@ -1,8 +1,8 @@
 use super::{Action, ProtocolSession};
 use crate::services::blocking::{BlockUpdateOutcome, UnblockUpdateOutcome};
+use crate::services::xml_util::*;
 use crate::state::AppState;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use northstar_xep_0191::{
     BlockPattern, BlockingCommand, BlockingMutation, PresencePeer, Subscription,

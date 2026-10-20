@@ -363,7 +363,7 @@ pub(super) fn parse_node_config_form(
         }
     }
     if let Some(value) = first_field(&fields, "pubsub#language") {
-        if !value.is_empty() && !crate::xmpp::xml_util::valid_language_tag(value) {
+        if !value.is_empty() && !crate::services::xml_util::valid_language_tag(value) {
             return Err("not-acceptable");
         }
         config.language = (!value.is_empty()).then(|| value.to_owned());

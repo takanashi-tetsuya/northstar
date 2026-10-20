@@ -10,12 +10,10 @@ pub(crate) mod protocol;
 mod stage4_frame_capture;
 #[cfg(test)]
 pub(crate) mod stage4_native;
-pub(crate) mod stanza_validation;
 mod tcp_action;
 pub(crate) mod transport_parsing;
 mod websocket_action;
 pub(crate) mod xml_builder;
-pub(crate) mod xml_util;
 
 use crate::platform::metrics::C2sBackpressureTelemetry;
 use crate::state::AppState;
@@ -479,7 +477,7 @@ where
                     &mut io,
                     &domain,
                     opening,
-                    &crate::xmpp::xml_util::stream_error("policy-violation"),
+                    &crate::services::xml_util::stream_error("policy-violation"),
                 ).await;
                 return Ok(DriveOutcome::Done);
             }
@@ -508,7 +506,7 @@ where
                     &mut io,
                     &domain,
                     !session.is_stream_open(),
-                    &crate::xmpp::xml_util::stream_error("policy-violation"),
+                    &crate::services::xml_util::stream_error("policy-violation"),
                 ).await;
                 return Ok(DriveOutcome::Done);
             }
@@ -531,7 +529,7 @@ where
                         &mut io,
                         session.local_domain(),
                         opening,
-                        &crate::xmpp::xml_util::stream_error("unsupported-encoding"),
+                        &crate::services::xml_util::stream_error("unsupported-encoding"),
                     )
                     .await?;
                     return Ok(DriveOutcome::Done);
@@ -556,7 +554,7 @@ where
                                     &mut io,
                                     session.local_domain(),
                                     opening,
-                                    &crate::xmpp::xml_util::stream_error("policy-violation"),
+                                    &crate::services::xml_util::stream_error("policy-violation"),
                                 )
                                 .await?;
                                 return Ok(DriveOutcome::Done);
@@ -575,7 +573,7 @@ where
                                     &mut io,
                                     session.local_domain(),
                                     opening,
-                                    &crate::xmpp::xml_util::stream_error("policy-violation"),
+                                    &crate::services::xml_util::stream_error("policy-violation"),
                                 )
                                 .await?;
                                 return Ok(DriveOutcome::Done);
@@ -591,7 +589,7 @@ where
                                 &mut io,
                                 session.local_domain(),
                                 opening,
-                                &crate::xmpp::xml_util::stream_error(condition),
+                                &crate::services::xml_util::stream_error(condition),
                             )
                             .await?;
                             return Ok(DriveOutcome::Done);
@@ -608,7 +606,7 @@ where
                                 &mut io,
                                 session.local_domain(),
                                 opening,
-                                &crate::xmpp::xml_util::stream_error("internal-server-error"),
+                                &crate::services::xml_util::stream_error("internal-server-error"),
                             )
                             .await?;
                             return Ok(DriveOutcome::Done);
@@ -696,7 +694,7 @@ fn websocket_server_open(domain: &str) -> String {
     xml_builder::XmlElement::new("open")
         .attr("xmlns", WEBSOCKET_FRAMING_NS)
         .attr("from", domain)
-        .attr("id", crate::xmpp::xml_util::stream_id())
+        .attr("id", crate::services::xml_util::stream_id())
         .attr("version", "1.0")
         .attr("xml:lang", "en")
         .finish()
@@ -862,7 +860,7 @@ async fn send<S: AsyncWrite + Unpin>(io: &mut S, stanza: &str) -> Result<()> {
 fn tcp_server_open(domain: &str) -> String {
     crate::xmpp::xml_builder::XmlElement::new("stream:stream")
         .attr("from", domain)
-        .attr("id", crate::xmpp::xml_util::stream_id())
+        .attr("id", crate::services::xml_util::stream_id())
         .attr("version", "1.0")
         .attr("xml:lang", "en")
         .attr("xmlns", "jabber:client")
@@ -975,7 +973,7 @@ async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
         io,
         &domain,
         opening,
-        &crate::xmpp::xml_util::stream_error("internal-server-error"),
+        &crate::services::xml_util::stream_error("internal-server-error"),
     )
     .await;
 }
@@ -1055,7 +1053,7 @@ pub async fn websocket_connection(
                     &mut socket,
                     &domain,
                     opening,
-                    crate::xmpp::xml_util::stream_error("policy-violation"),
+                    crate::services::xml_util::stream_error("policy-violation"),
                     &mut terminal_sequence,
                 ).await;
                 break;
@@ -1070,7 +1068,7 @@ pub async fn websocket_connection(
                         &mut socket,
                         &domain,
                         opening,
-                        crate::xmpp::xml_util::stream_error("policy-violation"),
+                        crate::services::xml_util::stream_error("policy-violation"),
                         &mut terminal_sequence,
                     ).await;
                     break;
@@ -1085,7 +1083,7 @@ pub async fn websocket_connection(
                         &mut socket,
                         &domain,
                         opening,
-                        crate::xmpp::xml_util::stream_error("internal-server-error"),
+                        crate::services::xml_util::stream_error("internal-server-error"),
                         &mut terminal_sequence,
                     ).await;
                     break;
@@ -1099,7 +1097,7 @@ pub async fn websocket_connection(
                     &mut socket,
                     &domain,
                     opening,
-                    crate::xmpp::xml_util::stream_error("policy-violation"),
+                    crate::services::xml_util::stream_error("policy-violation"),
                     &mut terminal_sequence,
                 ).await;
                 break;
@@ -1129,7 +1127,7 @@ pub async fn websocket_connection(
                                     &mut socket,
                                     &domain,
                                     opening,
-                                    crate::xmpp::xml_util::stream_error(condition),
+                                    crate::services::xml_util::stream_error(condition),
                                     &mut terminal_sequence,
                                 ).await;
                                 break;
@@ -1143,7 +1141,7 @@ pub async fn websocket_connection(
                                 &mut socket,
                                 &domain,
                                 opening,
-                                crate::xmpp::xml_util::stream_error("invalid-namespace"),
+                                crate::services::xml_util::stream_error("invalid-namespace"),
                                 &mut terminal_sequence,
                             ).await;
                             break;
@@ -1156,7 +1154,7 @@ pub async fn websocket_connection(
                                 &mut socket,
                                 &domain,
                                 opening,
-                                crate::xmpp::xml_util::stream_error("not-well-formed"),
+                                crate::services::xml_util::stream_error("not-well-formed"),
                                 &mut terminal_sequence,
                             ).await;
                             break;
@@ -1224,7 +1222,7 @@ pub async fn websocket_connection(
                             &mut socket,
                             &domain,
                             opening,
-                            crate::xmpp::xml_util::stream_error("unsupported-stanza-type"),
+                            crate::services::xml_util::stream_error("unsupported-stanza-type"),
                             &mut terminal_sequence,
                         ).await;
                         break;
@@ -1305,7 +1303,7 @@ async fn websocket_record_and_send_item(
                         socket,
                         &domain,
                         opening,
-                        crate::xmpp::xml_util::stream_error("internal-server-error"),
+                        crate::services::xml_util::stream_error("internal-server-error"),
                         terminal,
                     )
                     .await;

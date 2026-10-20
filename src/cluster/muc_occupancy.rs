@@ -55,7 +55,7 @@ impl ClusterManager {
         self.admit(ClusterOperation::MucMutation)?;
         let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
         let canonical_room = crate::jid::canonicalize_bare(room_jid)?;
-        let prepared_nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let prepared_nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         anyhow::ensure!(
             incoming.room_jid == canonical_room
                 && incoming.nick == prepared_nick
@@ -169,8 +169,8 @@ impl ClusterManager {
     ) -> Result<MucRename> {
         self.admit(ClusterOperation::MucMutation)?;
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let old_nick = crate::xmpp::xml_util::prepare_muc_nick(old_nick)?;
-        let new_nick = crate::xmpp::xml_util::prepare_muc_nick(new_nick)?;
+        let old_nick = crate::services::xml_util::prepare_muc_nick(old_nick)?;
+        let new_nick = crate::services::xml_util::prepare_muc_nick(new_nick)?;
         anyhow::ensure!(
             old_nick != new_nick,
             "MUC nickname rename must change the nickname"
@@ -276,7 +276,7 @@ impl ClusterManager {
             "clustered role changes require moderator, participant, or visitor role"
         );
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&occupant.nick)?;
         anyhow::ensure!(
             occupant.room_jid == room && !occupant.cluster_epoch.is_nil(),
             "clustered voice change requires the exact non-nil occupancy epoch"
@@ -345,7 +345,7 @@ impl ClusterManager {
             "invalid live MUC affiliation transition"
         );
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&occupant.nick)?;
         anyhow::ensure!(
             occupant.room_jid == room
                 && !occupant.cluster_epoch.is_nil()
@@ -417,7 +417,7 @@ impl ClusterManager {
             "invalid room-derived MUC role"
         );
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&occupant.nick)?;
         anyhow::ensure!(
             occupant.room_jid == room
                 && !occupant.cluster_epoch.is_nil()
@@ -506,7 +506,7 @@ impl ClusterManager {
             return Ok(true);
         };
         let room = crate::jid::canonicalize_bare(&resumed.room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&resumed.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&resumed.nick)?;
         let process_instance = self.process_instance_token()?;
         let mut conn = pool.get().await?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
@@ -586,7 +586,7 @@ impl ClusterManager {
             return Ok(true);
         };
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.process_instance_token()?;
         let mut conn = pool.get().await?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
@@ -670,7 +670,7 @@ impl ClusterManager {
             return Ok(true);
         };
         let room = crate::jid::canonicalize_bare(&occupant.room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&occupant.nick)?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
         let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
         let nodes_key = self.key(format!("muc_nodes:{room}"));

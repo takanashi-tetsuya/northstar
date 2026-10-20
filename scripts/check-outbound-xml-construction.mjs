@@ -11,7 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // boundaries and therefore has a zero raw-literal budget. Static parser
 // literals still require the exact allowlist below.
 const BASELINE = new Map([
-  ['src/xmpp/xml_util.rs', 0],
+  ['src/services/xml_util.rs', 0],
   ['src/xmpp/protocol.rs', 0],
   ['src/xmpp/protocol/blocking.rs', 0],
   ['src/xmpp/protocol/caps.rs', 0],
@@ -19,7 +19,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/commands.rs', 0],
   ['src/xmpp/protocol/discovery.rs', 0],
   ['src/xmpp/protocol/extdisco.rs', 0],
-  ['src/xmpp/protocol/jingle.rs', 0],
+  ['src/services/jingle.rs', 0],
   ['src/xmpp/protocol/mam.rs', 0],
   ['src/xmpp/protocol/mix_muc.rs', 0],
   ['src/xmpp/protocol/private.rs', 0],

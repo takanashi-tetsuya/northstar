@@ -3,8 +3,8 @@ use crate::services::mix::{
     CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
     NODE_JIDMAP,
 };
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 
 const DISCO_INFO_NS: &str = "http://jabber.org/protocol/disco#info";

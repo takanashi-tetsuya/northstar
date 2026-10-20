@@ -194,10 +194,9 @@ pub(crate) async fn route_inbound_iq(
     };
     if kind == "set"
         && child.tag_name().name() == "jingle"
-        && child.tag_name().namespace() == Some(crate::xmpp::protocol::jingle::JINGLE_NS)
+        && child.tag_name().namespace() == Some(crate::services::jingle::JINGLE_NS)
     {
-        if let Err(condition) = crate::xmpp::protocol::jingle::validate_jingle_iq(root, child, None)
-        {
+        if let Err(condition) = crate::services::jingle::validate_jingle_iq(root, child, None) {
             return Ok(Some(s2s_iq_error(id, to, from, condition)));
         }
     }
@@ -209,7 +208,7 @@ pub(crate) async fn route_inbound_iq(
         if let Some(result) =
             crate::xmpp::protocol::caps::cached_disco_result(state, id, to, child.attribute("node"))
         {
-            return Ok(Some(crate::xmpp::xml_util::set_to(&result, from)));
+            return Ok(Some(crate::services::xml_util::set_to(&result, from)));
         }
     }
     if to_jid.localpart().is_none()

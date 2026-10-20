@@ -83,7 +83,10 @@ impl<R: SmTeardownMucRepository> SmTeardownMucService<R> {
             occupant_id: room
                 .as_ref()
                 .map(|room| {
-                    crate::xmpp::xml_util::muc_occupant_id(&room.occupant_id_secret, actor_bare_jid)
+                    crate::services::xml_util::muc_occupant_id(
+                        &room.occupant_id_secret,
+                        actor_bare_jid,
+                    )
                 })
                 .unwrap_or_default(),
         })

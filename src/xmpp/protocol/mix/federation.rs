@@ -760,7 +760,7 @@ pub(crate) async fn federated_mix_message(
         }
         let validation_error = state.validate_routed_message(root).err().map(|condition| {
             (
-                crate::xmpp::xml_util::stanza_error_type(condition),
+                crate::services::xml_util::stanza_error_type(condition),
                 condition,
             )
         });

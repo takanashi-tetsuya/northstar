@@ -66,7 +66,7 @@ impl SmTeardownMucProjection {
         room_jid: &str,
         nick: &str,
     ) -> Option<SerializableMucOccupant> {
-        let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, nick);
+        let key = crate::services::xml_util::muc_occupant_key(room_jid, nick);
         self.occupants
             .get(&key)
             .filter(|occupant| {

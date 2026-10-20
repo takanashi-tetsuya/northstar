@@ -205,7 +205,7 @@ pub(crate) mod fixture {
     pub(crate) fn live_input() -> (MucDiscussion, String, String) {
         let mut command = command(true, true);
         let room_jid = "room@conference.local.test".to_owned();
-        let stanza = crate::xmpp::xml_util::add_stanza_id(
+        let stanza = crate::services::xml_util::add_stanza_id(
             "<message xmlns='jabber:client' from='room@conference.local.test/Alice' to='room@conference.local.test' type='groupchat'><body>hello</body></message>",
             &room_jid,
             command.id,

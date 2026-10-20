@@ -251,7 +251,7 @@ impl MixEventPayloadRenderer for MixPayloads {
             identity.push_child(XmlElement::new("jid").text(jid));
         }
         stanza.push_child(identity);
-        Ok(crate::xmpp::xml_util::add_stanza_id(
+        Ok(crate::services::xml_util::add_stanza_id(
             &stanza.finish(),
             &channel.jid(),
             authoritative_id,

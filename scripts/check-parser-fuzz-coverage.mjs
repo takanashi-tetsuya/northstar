@@ -51,7 +51,7 @@ const targets = new Map([
     "semantic_stanza",
     {
       modules: [
-        ["stanza_validation", "../../src/xmpp/stanza_validation.rs"],
+        ["stanza_validation", "../../src/services/stanza_validation.rs"],
       ],
       crates: [
         ["northstar-xml-framing", /\buse\s+northstar_xml_framing\s+as\s+framing\s*;/],

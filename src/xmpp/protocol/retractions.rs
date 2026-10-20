@@ -84,7 +84,7 @@ pub(crate) fn retraction_target(root: Node<'_, '_>) -> std::result::Result<Optio
 /// sanitizer. The sanitizer removes plaintext fallback content; this restores
 /// only the bounded XEP-0424 target required to replay the action itself.
 pub(crate) fn encrypted_retraction_archive(stanza: &str, target_id: &str) -> String {
-    crate::xmpp::xml_util::encrypted_retraction_archive_stanza(stanza, target_id)
+    crate::services::xml_util::encrypted_retraction_archive_stanza(stanza, target_id)
 }
 
 impl ProtocolSession {

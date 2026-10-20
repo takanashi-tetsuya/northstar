@@ -211,7 +211,7 @@ impl ClusterSmMucTeardown {
             return Ok(());
         };
         let room_jid = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&occupant.nick)?;
         let nodes = self.sender.publisher.active_muc_nodes(&room_jid).await?;
         let occupants_key = self
             .sender
@@ -338,7 +338,7 @@ impl ClusterSmSuspension {
         };
         let mut conn = pool.get().await?;
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.publisher.process_instance_token()?;
         let occupants_key = self.publisher.key(format!("muc_occupants:{room}"));
         let owners_key = self.publisher.key(format!("muc_occupant_nodes:{room}"));

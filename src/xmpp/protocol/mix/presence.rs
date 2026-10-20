@@ -124,7 +124,7 @@ pub(crate) async fn publish_verified_mix_presence_with(
             continue;
         };
         let domain = channel.domainpart();
-        let directed = crate::xmpp::xml_util::set_to(&available, &membership.channel_jid);
+        let directed = crate::services::xml_util::set_to(&available, &membership.channel_jid);
         // Hold the epoch for only one durable projection. User/membership
         // discovery above is intentionally outside it. Explicit presence or
         // teardown can therefore make progress between channels, and every

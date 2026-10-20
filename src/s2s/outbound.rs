@@ -805,9 +805,9 @@ pub(crate) fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<S
         // another stanza error.
         return None;
     }
-    Some(crate::xmpp::xml_util::stanza_error(
+    Some(crate::services::xml_util::stanza_error(
         root,
-        crate::xmpp::xml_util::stanza_error_type(condition),
+        crate::services::xml_util::stanza_error_type(condition),
         condition,
     ))
 }

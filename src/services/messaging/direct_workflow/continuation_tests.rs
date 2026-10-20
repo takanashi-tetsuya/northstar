@@ -67,7 +67,7 @@ fn prepared<'command>(
     let live = live_for(mode);
     let parsed = roxmltree::Document::parse(live).unwrap();
     assert_eq!(
-        crate::xmpp::xml_util::is_abuse_rated_message(parsed.root_element()),
+        crate::services::xml_util::is_abuse_rated_message(parsed.root_element()),
         mode != Admission::NotRated,
     );
     let command = ValidatedPersonalMessage {

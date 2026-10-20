@@ -45,10 +45,10 @@ use crate::services::muc::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectCommand,
     MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
+use crate::services::xml_util::*;
 use crate::state::muc_cluster_effects::MucPresencePublication;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use crate::{
     jid::{canonical_bare_key, prepare_domainpart, CanonicalJid},
     platform::jid_text::{bare_jid, localpart},

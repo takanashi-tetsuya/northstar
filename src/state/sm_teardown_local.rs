@@ -34,7 +34,7 @@ impl SmTeardownLocalEffects {
         sm_session_id: Uuid,
         occupant: &SerializableMucOccupant,
     ) -> bool {
-        let key = crate::xmpp::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
+        let key = crate::services::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
         self.occupants
             .remove_if(&key, |_, current| {
                 muc_suspended_teardown_identity_matches(current, sm_session_id, occupant)

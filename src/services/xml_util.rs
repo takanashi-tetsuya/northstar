@@ -1,8 +1,8 @@
 use crate::platform::jid_text::{attr_escape, bare_jid};
 use crate::services::abuse::WorkRequirement;
-use crate::xmpp::xml_builder::{ValidatedXmlFragment, XmlElement};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
+use northstar_xml_builder::{ValidatedXmlFragment, XmlElement};
 use roxmltree::{Document, Node};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
@@ -194,7 +194,7 @@ pub(crate) fn bool_value(value: bool) -> &'static str {
 /// registered subtags remain valid, while malformed/duplicate extensions and
 /// variants are rejected.
 pub(crate) fn valid_language_tag(value: &str) -> bool {
-    crate::xmpp::stanza_validation::valid_language_tag(value)
+    crate::services::stanza_validation::valid_language_tag(value)
 }
 
 pub(crate) fn mam_extended_form() -> &'static str {
@@ -923,7 +923,7 @@ pub(crate) fn validate_modern_message_payloads(root: Node<'_, '_>) -> Result<(),
     validate_processing_hints(root)?;
     validate_private_carbon_marker(root)?;
     validate_stanza_ids(root)?;
-    crate::xmpp::protocol::jingle::validate_jmi_message(root)?;
+    crate::services::jingle::validate_jmi_message(root)?;
     validate_chat_states(root)?;
     validate_omemo2_envelope(root)?;
     validate_explicit_encryption(root)?;

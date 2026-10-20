@@ -21,7 +21,7 @@ pub async fn remove_live_sm_muc_memberships(
     let mut rooms = std::collections::BTreeSet::new();
     for membership in memberships {
         let room_jid = crate::jid::canonicalize_bare(&membership.room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&membership.nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(&membership.nick)?;
         anyhow::ensure!(
             rooms.insert((room_jid.clone(), nick.clone())),
             "duplicate SM MUC membership"
@@ -633,7 +633,7 @@ pub(super) fn validate_snapshot(
     }
     if snapshot.joined_rooms.iter().any(|membership| {
         crate::jid::CanonicalJid::parse_bare(&membership.room_jid).is_err()
-            || crate::xmpp::xml_util::prepare_muc_nick(&membership.nick).is_err()
+            || crate::services::xml_util::prepare_muc_nick(&membership.nick).is_err()
     }) {
         anyhow::bail!("SM MUC membership snapshot is invalid");
     }

@@ -1,8 +1,8 @@
 use super::ProtocolSession;
+use crate::services::xml_util::{iq_result_from, stream_id};
 use crate::state::{caps_effect_dispatch::CapsEffectDispatchContext, AppState};
 use crate::xmpp::capabilities::CapsEffectTelemetry;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::{iq_result_from, stream_id};
 use futures::{stream::FuturesUnordered, StreamExt};
 pub(crate) use northstar_protocol_runtime::caps::*;
 use northstar_session_core::LocalCapsEpoch;

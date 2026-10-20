@@ -460,7 +460,7 @@ fn control_xml(control: &wire::ControlInput) -> Result<String> {
                     .text(control.full_jid.as_str().to_owned()),
             )
             .finish();
-            Ok(crate::xmpp::xml_util::iq_result(
+            Ok(crate::services::xml_util::iq_result(
                 control.iq_id.as_str(),
                 &payload,
             ))

@@ -6,6 +6,7 @@ use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
     jid::{prepare_domainpart, CanonicalJid},
+    services::xml_util::*,
     services::{
         messaging::{
             DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
@@ -20,7 +21,6 @@ use crate::{
     },
     state::AppState,
     xmpp::xml_builder::XmlElement,
-    xmpp::xml_util::*,
 };
 use anyhow::{Context, Result};
 use futures::FutureExt;

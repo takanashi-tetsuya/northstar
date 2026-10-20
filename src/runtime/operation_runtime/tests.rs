@@ -83,7 +83,7 @@ fn committed_muc_destroy_only_removes_the_captured_occupant_generation() {
     let room_jid = "room@conference.example.test";
     let full_jid = "alice@example.test/phone";
     let nick = "Alice";
-    let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, nick);
+    let key = crate::services::xml_util::muc_occupant_key(room_jid, nick);
     let old_incarnation = Uuid::new_v4();
     let old_connection = Uuid::new_v4();
     let committed = MucDestroyCommit {
@@ -147,7 +147,7 @@ fn committed_muc_destroy_only_removes_the_captured_occupant_generation() {
     assert!(!occupants.contains_key(&key));
 
     let unrelated_room = "other@conference.example.test";
-    let unrelated_key = crate::xmpp::xml_util::muc_occupant_key(unrelated_room, nick);
+    let unrelated_key = crate::services::xml_util::muc_occupant_key(unrelated_room, nick);
     occupants.insert(
         unrelated_key.clone(),
         muc_occupant(

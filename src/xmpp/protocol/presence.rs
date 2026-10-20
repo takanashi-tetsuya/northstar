@@ -5,8 +5,8 @@ use crate::services::presence::{
     RemoteSubscriptionTransition,
 };
 use crate::services::privacy::PrivacyStanzaKind;
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::Node;
 use std::sync::{atomic::Ordering, Arc};

@@ -1,6 +1,6 @@
 use super::{Action, ProtocolSession};
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use crate::{
     services::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::account::{RegistrationOutcome, RegistrationRequest},

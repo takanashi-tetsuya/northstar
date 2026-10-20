@@ -85,7 +85,8 @@ impl SessionCleanupMix {
                         .await?;
                 }
             } else if self.federation_domain_allowed(domain) {
-                let directed = crate::xmpp::xml_util::set_to(&unavailable, &membership.channel_jid);
+                let directed =
+                    crate::services::xml_util::set_to(&unavailable, &membership.channel_jid);
                 let _ = self
                     .federation
                     .send(domain, directed, Some(actor_bare.to_owned()))

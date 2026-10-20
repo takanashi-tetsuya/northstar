@@ -620,5 +620,5 @@ pub(super) fn node_delivery_stanza(stanza: &str, carbons_only: bool, session_key
     let Ok(exact_full_jid) = crate::jid::canonical_session_key(session_key) else {
         return stanza.to_owned();
     };
-    crate::xmpp::xml_util::set_to(stanza, &exact_full_jid)
+    crate::services::xml_util::set_to(stanza, &exact_full_jid)
 }

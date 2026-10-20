@@ -45,7 +45,7 @@ impl SessionCleanupPresence {
         {
             let _ = target
                 .sender
-                .try_send(crate::xmpp::xml_util::set_to(presence, &jid));
+                .try_send(crate::services::xml_util::set_to(presence, &jid));
         }
     }
 }

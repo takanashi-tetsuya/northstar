@@ -1,6 +1,6 @@
 use super::{Action, ProtocolSession};
 use crate::services::privacy::PrivacyStanzaKind;
-use crate::xmpp::xml_util::*;
+use crate::services::xml_util::*;
 use anyhow::Result;
 use northstar_roster_application::{
     BeginRosterSyncError, RemoteRemovalPolicy, RosterFlushBatch, RosterGetCommand,

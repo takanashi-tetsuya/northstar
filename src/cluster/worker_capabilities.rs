@@ -450,7 +450,7 @@ impl ClusterSmMucTeardownProjection {
         };
         let mut conn = pool.get().await?;
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.process_instance_token()?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
         let owners_key = self.key(format!("muc_occupant_nodes:{room}"));

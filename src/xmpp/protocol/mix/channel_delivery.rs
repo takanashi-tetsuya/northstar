@@ -579,7 +579,7 @@ pub(super) async fn deliver_channel_stanza_inner(
 }
 
 pub(super) fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
-    let stanza = crate::xmpp::xml_util::set_to(template, recipient);
+    let stanza = crate::services::xml_util::set_to(template, recipient);
     let document = Document::parse(&stanza).context("invalid durable MIX stanza template")?;
     anyhow::ensure!(
         document.root_element().attribute("to") == Some(recipient),

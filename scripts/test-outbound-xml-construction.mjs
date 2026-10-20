@@ -109,7 +109,7 @@ test('file-scoped entries leave independently owned siblings outside their budge
 });
 
 for (const entry of [
-  'src/xmpp/xml_util.rs',
+  'src/services/xml_util.rs',
   'src/xmpp/protocol/commands.rs',
   'src/xmpp/protocol/presence.rs',
   'src/xmpp/protocol/sasl2.rs',

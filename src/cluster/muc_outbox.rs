@@ -261,7 +261,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
         affiliation: snapshot.affiliation.clone(),
         role: snapshot.role.clone(),
         room_non_anonymous,
-        occupant_id: crate::xmpp::xml_util::muc_occupant_id(
+        occupant_id: crate::services::xml_util::muc_occupant_id(
             &context.occupant_id_secret,
             &snapshot.bare_jid,
         ),
@@ -287,7 +287,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
             .as_u64()
             .and_then(|value| u16::try_from(value).ok())
             .or(Some(fallback));
-        stanzas.push(crate::xmpp::xml_util::muc_presence_stanza_with_status(
+        stanzas.push(crate::services::xml_util::muc_presence_stanza_with_status(
             &subject,
             &recipient.full_jid,
             true,
@@ -309,7 +309,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
         if subject_is_recipient {
             endpoints.apply_policy_projection_exact(&subject);
         }
-        stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
+        stanzas.push(crate::services::xml_util::muc_presence_stanza(
             &subject,
             &recipient.full_jid,
             false,
@@ -344,7 +344,7 @@ pub(super) fn render_cluster_muc_departure_presence(
         None
     };
     let self_presence = target.full_jid == recipient.full_jid;
-    Ok(crate::xmpp::xml_util::muc_presence_stanza_with_status(
+    Ok(crate::services::xml_util::muc_presence_stanza_with_status(
         target,
         &recipient.full_jid,
         true,
@@ -443,7 +443,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 &snapshot,
                 &room_jid,
                 room_non_anonymous,
-                crate::xmpp::xml_util::muc_occupant_id(
+                crate::services::xml_util::muc_occupant_id(
                     &context.occupant_id_secret,
                     &snapshot.bare_jid,
                 ),
@@ -501,7 +501,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 affiliation: target.affiliation.clone(),
                 role: target.role.clone(),
                 room_non_anonymous: context.room_non_anonymous,
-                occupant_id: crate::xmpp::xml_util::muc_occupant_id(
+                occupant_id: crate::services::xml_util::muc_occupant_id(
                     &context.occupant_id_secret,
                     &target.bare_jid,
                 ),
@@ -521,7 +521,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 endpoints.apply_role_projection_exact(&target);
             }
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
+            stanzas.push(crate::services::xml_util::muc_presence_stanza(
                 &target,
                 &recipient.full_jid,
                 false,
@@ -541,14 +541,14 @@ pub(super) async fn deliver_cluster_muc_event(
                 .context("MUC rename event has no new nickname")?;
             let mut old = target.clone();
             old.nick = old_nick.to_owned();
-            stanzas.push(crate::xmpp::xml_util::muc_nickname_change_presence(
+            stanzas.push(crate::services::xml_util::muc_nickname_change_presence(
                 &old,
                 &recipient_serializable,
                 new_nick,
                 Some(&event_id),
             ));
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
+            stanzas.push(crate::services::xml_util::muc_presence_stanza(
                 &target,
                 &recipient.full_jid,
                 false,
@@ -593,7 +593,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 .as_deref()
                 .and_then(|full| endpoints.actor_nick(&room_jid, full));
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::xmpp::xml_util::muc_presence_stanza_with_status(
+            stanzas.push(crate::services::xml_util::muc_presence_stanza_with_status(
                 &target,
                 &recipient.full_jid,
                 true,
@@ -612,12 +612,12 @@ pub(super) async fn deliver_cluster_muc_event(
         "destroy" | "locked_expiry" => {
             let alternate = context.details["alternate_jid"].as_str();
             let reason = context.details["reason"].as_str();
-            let stanza = crate::xmpp::xml_util::muc_destroy_presence(
+            let stanza = crate::services::xml_util::muc_destroy_presence(
                 &recipient_serializable,
                 alternate,
                 reason,
             );
-            stanzas.push(crate::xmpp::xml_util::set_root_attribute(
+            stanzas.push(crate::services::xml_util::set_root_attribute(
                 &stanza, "id", &event_id,
             ));
         }
@@ -625,9 +625,9 @@ pub(super) async fn deliver_cluster_muc_event(
             let stanza = context.details["stanza"]
                 .as_str()
                 .context("cluster MUC subject event has no committed stanza")?;
-            let stanza = crate::xmpp::xml_util::set_to(stanza, &recipient.full_jid);
-            let stanza = crate::xmpp::xml_util::set_from(&stanza, &room_jid);
-            stanzas.push(crate::xmpp::xml_util::add_stanza_id(
+            let stanza = crate::services::xml_util::set_to(stanza, &recipient.full_jid);
+            let stanza = crate::services::xml_util::set_from(&stanza, &room_jid);
+            stanzas.push(crate::services::xml_util::add_stanza_id(
                 &stanza,
                 &room_jid,
                 delivery.event_id,
@@ -673,8 +673,8 @@ pub(super) async fn deliver_cluster_muc_event(
                         nick,
                         reason,
                     );
-                    let notice = crate::xmpp::xml_util::set_to(&notice, &recipient.full_jid);
-                    stanzas.push(crate::xmpp::xml_util::set_root_attribute(
+                    let notice = crate::services::xml_util::set_to(&notice, &recipient.full_jid);
+                    stanzas.push(crate::services::xml_util::set_root_attribute(
                         &notice, "id", &event_id,
                     ));
                 }
@@ -734,8 +734,9 @@ pub(super) async fn deliver_cluster_muc_event(
                                 nick,
                                 reason,
                             );
-                        let notice = crate::xmpp::xml_util::set_to(&notice, &recipient.full_jid);
-                        stanzas.push(crate::xmpp::xml_util::set_root_attribute(
+                        let notice =
+                            crate::services::xml_util::set_to(&notice, &recipient.full_jid);
+                        stanzas.push(crate::services::xml_util::set_root_attribute(
                             &notice, "id", &event_id,
                         ));
                     }
@@ -750,7 +751,7 @@ pub(super) async fn deliver_cluster_muc_event(
             i32::try_from(ordinal).context("MUC event has too many stanza projections")?;
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
         let stanza = if context.operation_kind == "admin_batch" {
-            crate::xmpp::xml_util::set_root_attribute(&stanza, "id", &stable_item_id)
+            crate::services::xml_util::set_root_attribute(&stanza, "id", &stable_item_id)
         } else {
             stanza
         };

@@ -26,7 +26,7 @@ pub(super) async fn apply(
                     socket,
                     &domain,
                     opening,
-                    crate::xmpp::xml_util::stream_error("internal-server-error"),
+                    crate::services::xml_util::stream_error("internal-server-error"),
                     terminal_sequence,
                 )
                 .await;
@@ -46,7 +46,7 @@ pub(super) async fn apply(
                         socket,
                         &domain,
                         opening,
-                        crate::xmpp::xml_util::stream_error("internal-server-error"),
+                        crate::services::xml_util::stream_error("internal-server-error"),
                         terminal_sequence,
                     )
                     .await;
@@ -163,7 +163,7 @@ pub(super) async fn apply(
                     socket,
                     &domain,
                     opening,
-                    crate::xmpp::xml_util::stream_error("internal-server-error"),
+                    crate::services::xml_util::stream_error("internal-server-error"),
                     terminal_sequence,
                 )
                 .await;
@@ -236,7 +236,7 @@ pub(super) async fn apply(
                 socket,
                 &domain,
                 opening,
-                crate::xmpp::xml_util::stream_error("internal-server-error"),
+                crate::services::xml_util::stream_error("internal-server-error"),
                 terminal_sequence,
             )
             .await;

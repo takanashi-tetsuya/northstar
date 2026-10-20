@@ -3,8 +3,8 @@ use crate::services::profile::{
     detected_media_type, sha1_hex, AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot,
     ProfilePublishStatus, PublicVCard,
 };
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use roxmltree::Node;

@@ -1159,7 +1159,7 @@ impl SessionCleanupService {
             // sending these local presences as well would duplicate delivery.
             if !pg_authoritative {
                 for (_, target) in &departure.remaining {
-                    let presence = crate::xmpp::xml_util::muc_presence_stanza(
+                    let presence = crate::services::xml_util::muc_presence_stanza(
                         &crate::services::muc::SerializableMucOccupant::from(&departure.departed),
                         &target.full_jid,
                         true,

@@ -37,7 +37,7 @@ impl ClusterMucDeliveryEndpoints {
 
     pub(crate) fn cached_recipient(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
         let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
-        let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, nick);
+        let key = crate::services::xml_util::muc_occupant_key(&room_jid, nick);
         self.occupants
             .get(&key)
             .filter(|occupant| occupant.room_jid == room_jid)

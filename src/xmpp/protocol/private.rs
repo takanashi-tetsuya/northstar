@@ -6,8 +6,8 @@ use crate::services::private_storage::{
 use crate::services::pubsub::{
     PepAudienceSnapshot, PepBookmarkMutationOutcome, PepOutboxFactory, PepQuotas, PubSubAccount,
 };
+use crate::services::xml_util::{iq_error, iq_result};
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::{iq_error, iq_result};
 use anyhow::Result;
 use northstar_pubsub_application::{
     plan_pep_bookmark_event, PepBookmarkEventPlan, PepCommitLegacyBookmarksCommand,

@@ -92,7 +92,7 @@ impl SessionCleanupUnavailable {
             anyhow::bail!("invalid SM teardown presence target");
         };
         let canonical_target = target_jid.to_string();
-        let delivery = crate::xmpp::xml_util::set_to(unavailable, &canonical_target);
+        let delivery = crate::services::xml_util::set_to(unavailable, &canonical_target);
         if target_jid.domainpart() == self.local_domain {
             let mut recipients = session_entries_for_in(&self.recipients, &canonical_target);
             if target_jid.resourcepart().is_none() {
@@ -122,7 +122,7 @@ impl SessionCleanupUnavailable {
                 }
                 if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = recipient
                     .sender
-                    .try_send(crate::xmpp::xml_util::set_to(unavailable, &jid))
+                    .try_send(crate::services::xml_util::set_to(unavailable, &jid))
                 {
                     anyhow::bail!("local SM unavailable recipient queue is full");
                 }

@@ -587,7 +587,7 @@ pub(crate) async fn replay_newly_available_resource(
                         attr_escape(&full_jid),
                     )
                 },
-                |stanza| crate::xmpp::xml_util::set_to(&stanza, &full_jid),
+                |stanza| crate::services::xml_util::set_to(&stanza, &full_jid),
             );
             if outbound.send(request).await.is_err() {
                 return;

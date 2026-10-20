@@ -592,7 +592,7 @@ impl AppState {
         let _endpoint =
             canonical_suspended_muc_endpoint(&self.suspended_muc_sessions, sm_session_id, proposed);
         for (room_jid, membership) in local_muc_membership_snapshots(memberships) {
-            let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &membership.nick);
+            let key = crate::services::xml_util::muc_occupant_key(&room_jid, &membership.nick);
             let serializable = {
                 let Some(mut occupant) = self.muc_occupants.get_mut(&key) else {
                     continue;

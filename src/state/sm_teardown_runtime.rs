@@ -109,7 +109,7 @@ impl SmTeardownRuntime {
             let Ok(room_jid) = crate::jid::canonicalize_bare(&membership.room_jid) else {
                 continue;
             };
-            let Ok(nick) = crate::xmpp::xml_util::prepare_muc_nick(&membership.nick) else {
+            let Ok(nick) = crate::services::xml_util::prepare_muc_nick(&membership.nick) else {
                 continue;
             };
             if !memberships.insert((room_jid.clone(), nick.clone())) {

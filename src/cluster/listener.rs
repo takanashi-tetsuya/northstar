@@ -443,14 +443,14 @@ pub(super) async fn listen_once(
                                     .and_then(|hash| {
                                         let document =
                                             roxmltree::Document::parse(&presence).ok()?;
-                                        Some(crate::xmpp::xml_util::inject_vcard_avatar_hash(
+                                        Some(crate::services::xml_util::inject_vcard_avatar_hash(
                                             &presence,
                                             document.root_element(),
                                             hash.as_deref(),
                                         ))
                                     })
                                     .unwrap_or(presence);
-                                crate::xmpp::xml_util::set_to(&presence, &recipient)
+                                crate::services::xml_util::set_to(&presence, &recipient)
                             })
                             .unwrap_or_else(|| {
                                 crate::xmpp::xml_builder::XmlElement::namespaced(
@@ -603,18 +603,19 @@ pub(super) async fn listen_once(
                     if let Some(removed) =
                         muc_endpoints.revoke_exact_recipient_returning_local(&occupant)
                     {
-                        let self_presence = crate::xmpp::xml_util::muc_presence_stanza_with_status(
-                            &occupant,
-                            &removed.full_jid,
-                            true,
-                            true,
-                            false,
-                            None,
-                            true,
-                            status,
-                            actor_nick,
-                            reason,
-                        );
+                        let self_presence =
+                            crate::services::xml_util::muc_presence_stanza_with_status(
+                                &occupant,
+                                &removed.full_jid,
+                                true,
+                                true,
+                                false,
+                                None,
+                                true,
+                                status,
+                                actor_nick,
+                                reason,
+                            );
                         delivered += usize::from(
                             muc_delivery
                                 .deliver_to_muc_occupant(&removed, self_presence)
@@ -658,7 +659,7 @@ pub(super) async fn listen_once(
                             let serializable =
                                 crate::services::muc::SerializableMucOccupant::from(&occupant);
                             muc_endpoints.remove_live_membership_exact(&serializable);
-                            let presence = crate::xmpp::xml_util::muc_destroy_presence(
+                            let presence = crate::services::xml_util::muc_destroy_presence(
                                 &serializable,
                                 alternate.as_deref(),
                                 reason,
@@ -688,7 +689,7 @@ pub(super) async fn listen_once(
                     muc_endpoints.apply_policy_projection_exact(&occupant);
                     for session in muc_endpoints.room_occupants(target) {
                         let self_presence = session.full_jid == occupant.full_jid;
-                        let presence = crate::xmpp::xml_util::muc_presence_stanza(
+                        let presence = crate::services::xml_util::muc_presence_stanza(
                             &occupant,
                             &session.full_jid,
                             false,
@@ -725,7 +726,7 @@ pub(super) async fn listen_once(
                 {
                     let id = json["id"].as_str();
                     for session in muc_endpoints.room_occupants(target) {
-                        let unavailable = crate::xmpp::xml_util::muc_nickname_change_presence(
+                        let unavailable = crate::services::xml_util::muc_nickname_change_presence(
                             &old_occupant,
                             &crate::services::muc::SerializableMucOccupant::from(&session),
                             &new_occupant.nick,
@@ -736,7 +737,7 @@ pub(super) async fn listen_once(
                                 .deliver_to_muc_occupant(&session, unavailable)
                                 .await,
                         );
-                        let available = crate::xmpp::xml_util::muc_presence_stanza(
+                        let available = crate::services::xml_util::muc_presence_stanza(
                             &new_occupant,
                             &session.full_jid,
                             false,
@@ -771,7 +772,7 @@ pub(super) async fn listen_once(
                 for session in muc_endpoints.room_occupants(target) {
                     let disclose = occupant.room_non_anonymous || session.role == "moderator";
                     let self_presence = session.full_jid == occupant.full_jid;
-                    let presence = crate::xmpp::xml_util::muc_presence_stanza_with_status(
+                    let presence = crate::services::xml_util::muc_presence_stanza_with_status(
                         &occupant,
                         &session.full_jid,
                         unavailable,
@@ -946,7 +947,7 @@ pub(super) async fn listen_once(
             if is_muc_private {
                 if let Some(nick) = json["target_nick"].as_str() {
                     if let Some(session) = muc_endpoints.cached_recipient(target, nick) {
-                        let delivery = crate::xmpp::xml_util::set_to(stanza, &session.full_jid);
+                        let delivery = crate::services::xml_util::set_to(stanza, &session.full_jid);
                         let blocked = muc_delivery
                             .blocked_muc_recipient_accounts(
                                 std::slice::from_ref(&session),
@@ -975,7 +976,7 @@ pub(super) async fn listen_once(
                     {
                         continue;
                     }
-                    let delivery = crate::xmpp::xml_util::set_to(stanza, &session.full_jid);
+                    let delivery = crate::services::xml_util::set_to(stanza, &session.full_jid);
                     delivered += usize::from(
                         muc_delivery
                             .deliver_to_muc_occupant_unchecked(&session, delivery)
@@ -1262,7 +1263,7 @@ pub(super) async fn listen_once(
                         || roster_requested_only
                         || privacy_requested_only
                     {
-                        crate::xmpp::xml_util::set_to(stanza, &jid)
+                        crate::services::xml_util::set_to(stanza, &jid)
                     } else {
                         node_delivery_stanza(stanza, carbons_only, &jid)
                     };
@@ -1295,7 +1296,7 @@ pub(super) async fn listen_once(
                         let version = roster_version
                             .expect("cluster roster shape validated before session fanout");
                         let annotated = roster_annotated_stanza
-                            .map(|stanza| crate::xmpp::xml_util::set_to(stanza, &jid));
+                            .map(|stanza| crate::services::xml_util::set_to(stanza, &jid));
                         match session.roster_sync.route(
                             &session.roster_requested,
                             &session.mix_roster_annotations,

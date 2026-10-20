@@ -1,7 +1,7 @@
 use super::{Action, ProtocolSession};
 use crate::services::upload::{UploadSlotAdmission, UploadSlotRequestCommand};
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::Node;
 

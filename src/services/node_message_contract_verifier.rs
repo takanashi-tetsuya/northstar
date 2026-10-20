@@ -125,7 +125,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                     "cluster durable MIX recipient does not match the target"
                 );
                 anyhow::ensure!(
-                    crate::xmpp::xml_util::set_to(&projection.stanza_template, target_jid)
+                    crate::services::xml_util::set_to(&projection.stanza_template, target_jid)
                         == stanza,
                     "cluster durable MIX payload does not match its PostgreSQL projection"
                 );
@@ -171,7 +171,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
 pub(crate) fn durable_projection_matches(stored_stanza: &str, routed_stanza: &str) -> bool {
     // Durable rows add a direct server delay marker before routing. Only
     // direct delays may differ; the remaining XML bytes must match exactly.
-    crate::xmpp::xml_util::strip_untrusted_direct_delays(stored_stanza, None) == routed_stanza
+    crate::services::xml_util::strip_untrusted_direct_delays(stored_stanza, None) == routed_stanza
 }
 
 #[cfg(test)]
@@ -305,7 +305,7 @@ mod tests {
         let message_id = Uuid::from_u128(5);
         let recipient_id = Uuid::from_u128(6);
         let routed = stanza(message_id);
-        let stored = crate::xmpp::xml_util::add_delay_from(
+        let stored = crate::services::xml_util::add_delay_from(
             &routed,
             chrono::Utc::now(),
             Some("example.test"),
@@ -356,7 +356,7 @@ mod tests {
             lease_token,
         };
         let template = "<message to='placeholder@example.test'><body>hello</body></message>";
-        let routed = crate::xmpp::xml_util::set_to(template, "bob@example.test");
+        let routed = crate::services::xml_util::set_to(template, "bob@example.test");
         let repository = StubRepository {
             mix: Some(MixDeliveryProjection {
                 recipient_jid: "bob@example.test".to_owned(),

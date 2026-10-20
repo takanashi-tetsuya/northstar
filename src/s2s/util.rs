@@ -310,7 +310,7 @@ pub(crate) fn stream_attribute(xml: &str, name: &str) -> Option<String> {
                 None => !matches!(attribute.name(), "from" | "to" | "id" | "version"),
                 Some("http://www.w3.org/XML/1998/namespace") => {
                     attribute.name() != "lang"
-                        || !crate::xmpp::xml_util::valid_language_tag(attribute.value())
+                        || !crate::services::xml_util::valid_language_tag(attribute.value())
                 }
                 Some(_) => false,
             })
@@ -392,7 +392,7 @@ pub(crate) fn parse_s2s_stream_opening(
             None => matches!(attribute.name(), "from" | "to" | "id" | "version"),
             Some("http://www.w3.org/XML/1998/namespace") => {
                 attribute.name() == "lang"
-                    && crate::xmpp::xml_util::valid_language_tag(attribute.value())
+                    && crate::services::xml_util::valid_language_tag(attribute.value())
             }
             // RFC 6120 permits stream-header extension attributes only when
             // they are namespace-qualified, preventing collisions with core
@@ -1000,7 +1000,7 @@ pub(crate) fn s2s_stanza_error(
         _ => "cancel",
     };
     let condition = stanza_error_element(condition);
-    crate::xmpp::xml_util::reflected_stanza_error(
+    crate::services::xml_util::reflected_stanza_error(
         root,
         &crate::xmpp::xml_builder::XmlElement::new("error")
             .attr("xmlns", "jabber:server")

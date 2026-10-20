@@ -1,6 +1,6 @@
 use crate::auth;
+use crate::services::xml_util::valid_language_tag;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::valid_language_tag;
 use anyhow::{Context, Result};
 use roxmltree::{Document, Node};
 use uuid::{Uuid, Variant};
@@ -147,7 +147,7 @@ impl ProtocolSession {
             return Ok(Action::Send(failure_xml("encryption-required", None)));
         }
         if self.authenticated.is_some() {
-            return Ok(Action::Send(crate::xmpp::xml_util::stream_error(
+            return Ok(Action::Send(crate::services::xml_util::stream_error(
                 "not-authorized",
             )));
         }
@@ -573,7 +573,7 @@ impl ProtocolSession {
                     self.sasl_state = None;
                     return Ok(Action::Close);
                 }
-                Ok(_) => resume_xml = crate::xmpp::xml_util::sm_failed("undefined-condition"),
+                Ok(_) => resume_xml = crate::services::xml_util::sm_failed("undefined-condition"),
                 Err(error)
                     if self.pending_credential_commit.is_some()
                         || crate::xmpp::auth_publication::credential_handoff_failed(&error) =>
@@ -594,7 +594,7 @@ impl ProtocolSession {
                 }
                 Err(error) => {
                     tracing::error!(?error, user_id = %user.id, "inline SM resumption backend failed");
-                    resume_xml = crate::xmpp::xml_util::sm_failed("internal-server-error");
+                    resume_xml = crate::services::xml_util::sm_failed("internal-server-error");
                 }
             }
         }

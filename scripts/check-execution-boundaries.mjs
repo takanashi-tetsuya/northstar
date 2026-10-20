@@ -933,7 +933,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     'credential contradictory returned success must close through the existing internal error branch');
   requireBoundary(inline.includes('ifbind_plan.is_none()&&!unbound_state_committed{') &&
     count(inline, '.commit_sasl2_unbound_state(&fast_plan,&user,expected_auth_generation).await?') === 2 &&
-    inline.includes('Err(error)=>{tracing::error!(?error,user_id=%user.id);resume_xml=crate::xmpp::xml_util::sm_failed();}'),
+    inline.includes('Err(error)=>{tracing::error!(?error,user_id=%user.id);resume_xml=crate::services::xml_util::sm_failed();}'),
     'credential resume Unknown must preserve the existing separate fallback attempt');
   // Read-only test observations must retain actual private association facts.
   const testOnlyItem = (source, declaration) => new RegExp(

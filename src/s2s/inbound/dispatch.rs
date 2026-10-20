@@ -450,7 +450,7 @@ pub(super) fn validate_inbound_core_stanza(root: roxmltree::Node<'_, '_>) -> Inb
         // An IQ error cannot be correlated without the request ID.
         return InboundCoreValidation::Drop;
     }
-    match crate::xmpp::stanza_validation::validate_client_stanza(root) {
+    match crate::services::stanza_validation::validate_client_stanza(root) {
         Ok(()) => InboundCoreValidation::Valid,
         Err(_) if root.attribute("type") == Some("error") => InboundCoreValidation::Drop,
         Err(condition) => InboundCoreValidation::Error(condition),

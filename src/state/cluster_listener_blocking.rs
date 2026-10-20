@@ -75,7 +75,7 @@ impl ClusterListenerBlocking {
                 let Ok(target_jid) = crate::jid::CanonicalJid::parse(&target) else {
                     continue;
                 };
-                let delivery = crate::xmpp::xml_util::set_to(&base_presence, &target);
+                let delivery = crate::services::xml_util::set_to(&base_presence, &target);
                 if target_jid.domainpart() == self.local_domain {
                     let mut recipients = session_entries_for_in(&self.sessions, &target);
                     if target_jid.resourcepart().is_none() {

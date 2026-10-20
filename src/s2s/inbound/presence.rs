@@ -437,5 +437,5 @@ pub(super) fn presence_probe_status_response(
 }
 
 pub(super) fn canonical_subscription_stanza(raw: &str, from: &str, to: &str) -> String {
-    crate::xmpp::xml_util::set_client_namespace(&set_to(&set_from(raw, from), to))
+    crate::services::xml_util::set_client_namespace(&set_to(&set_from(raw, from), to))
 }

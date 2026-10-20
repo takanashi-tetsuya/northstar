@@ -802,7 +802,7 @@ impl MucFanoutPort for FanoutPort {
             })
             .await;
         }
-        let stanza = crate::xmpp::xml_util::set_to(&self.live.stanza, &recipient.jid);
+        let stanza = crate::services::xml_util::set_to(&self.live.stanza, &recipient.jid);
         let item = OutboundItem::plain(stanza.clone());
         let actual_item = queued_item(&item, recipient);
         // No durable permit is fabricated. The real sender inserts this exact

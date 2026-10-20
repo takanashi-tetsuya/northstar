@@ -13,6 +13,7 @@ use crate::services::messaging::{
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
+use crate::services::xml_util::*;
 use crate::services::{
     message_admission::witness::DirectOperationHandle,
     messaging::direct_workflow::{
@@ -21,7 +22,6 @@ use crate::services::{
     },
 };
 use crate::xmpp::frame_execution::Stage;
-use crate::xmpp::xml_util::*;
 use crate::{
     platform::jid_text::bare_jid,
     services::abuse::{

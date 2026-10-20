@@ -1,6 +1,6 @@
 use super::{Action, ProtocolSession};
 use crate::services::extdisco::CredentialIssueError;
-use crate::xmpp::xml_util::{iq_error_from, iq_result_from};
+use crate::services::xml_util::{iq_error_from, iq_result_from};
 use anyhow::Result;
 use northstar_xep_0215::{CredentialedService, ExtDiscoRequest, SecretText, ServiceCredentials};
 use roxmltree::Node;

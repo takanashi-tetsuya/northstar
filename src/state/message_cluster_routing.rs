@@ -8,8 +8,8 @@ use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
 use crate::services::privacy::PrivacyStanzaKind;
+use crate::services::xml_util::carbon_message;
 use crate::xmpp::outbound::DurableDelivery;
-use crate::xmpp::xml_util::carbon_message;
 use anyhow::Result;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;

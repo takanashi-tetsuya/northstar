@@ -134,7 +134,7 @@ pub(super) fn suspend_local_muc_occupants_in(
     for membership in memberships {
         let room_jid = membership.key();
         let membership = membership.value();
-        let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, &membership.nick);
+        let key = crate::services::xml_util::muc_occupant_key(room_jid, &membership.nick);
         let Some(mut occupant) = occupants.get_mut(&key) else {
             continue;
         };

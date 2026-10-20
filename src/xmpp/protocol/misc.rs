@@ -1,6 +1,6 @@
 use super::{Action, ProtocolSession};
+use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use crate::{
     auth,
     platform::jid_text::bare_jid,

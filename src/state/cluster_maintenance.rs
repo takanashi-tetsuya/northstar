@@ -203,7 +203,7 @@ mod tests {
             JoinedMucMembership::new(replacement.nick.clone(), replacement.cluster_epoch),
         );
         sessions.insert(old.full_jid.clone(), live);
-        let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+        let key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
         occupants.insert(key.clone(), replacement.clone());
         let locals = ClusterMaintenanceLocals {
             sessions,

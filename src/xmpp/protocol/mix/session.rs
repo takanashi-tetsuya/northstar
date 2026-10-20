@@ -764,8 +764,8 @@ impl ProtocolSession {
                 continue;
             };
             let domain = channel.domainpart();
-            let directed = crate::xmpp::xml_util::set_to(
-                &crate::xmpp::xml_util::set_from(projected, full_jid),
+            let directed = crate::services::xml_util::set_to(
+                &crate::services::xml_util::set_from(projected, full_jid),
                 &membership.channel_jid,
             );
             if domain == self.mix_domain() {

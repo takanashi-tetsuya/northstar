@@ -15,9 +15,9 @@ use crate::services::muc::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
     MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
 };
+use crate::services::xml_util::*;
 use crate::state::{AppState, MucOccupant, MucOccupantEndpoint};
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};
 use northstar_room_core::MucJoinSnapshotError;
 use roxmltree::Node;

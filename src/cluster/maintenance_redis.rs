@@ -212,7 +212,7 @@ impl ClusterMaintenanceRedis {
             !incoming.cluster_epoch.is_nil()
                 && !incoming.connection_id.is_nil()
                 && incoming.room_jid == crate::jid::canonicalize_bare(room_jid)?
-                && incoming.nick == crate::xmpp::xml_util::prepare_muc_nick(nick)?,
+                && incoming.nick == crate::services::xml_util::prepare_muc_nick(nick)?,
             "MUC refresh requires the exact non-nil occupancy identity"
         );
         let Some(pool) = &self.pool else {
@@ -220,7 +220,7 @@ impl ClusterMaintenanceRedis {
         };
         let mut conn = pool.get().await?;
         let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.process_instance_token()?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
         let owners_key = self.key(format!("muc_occupant_nodes:{room}"));

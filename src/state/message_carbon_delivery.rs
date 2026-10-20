@@ -31,7 +31,7 @@ impl CarbonDeliveryPort for AppState {
     }
 
     fn wrap(&self, direction: Direction, from: &str, to: &str, forwarded: &str) -> Option<String> {
-        crate::xmpp::xml_util::carbon_message(direction.as_str(), from, to, forwarded)
+        crate::services::xml_util::carbon_message(direction.as_str(), from, to, forwarded)
     }
 
     async fn privacy_allows(

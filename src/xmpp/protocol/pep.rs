@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::services::xml_util::*;
 use crate::services::{
     profile::{
         detected_media_type as detected_avatar_media_type, AvatarPresenceUpdate,
@@ -18,7 +19,6 @@ use crate::services::{
 };
 use crate::state::pep_last_items::PepLastItemsContext;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::PepPublishItemsCommand;

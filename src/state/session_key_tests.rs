@@ -947,7 +947,7 @@ fn exact_muc_removal_preserves_a_reused_nickname() {
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
     );
-    let key = crate::xmpp::xml_util::muc_occupant_key(&replacement.room_jid, &replacement.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&replacement.room_jid, &replacement.nick);
     let occupants = DashMap::new();
     occupants.insert(key.clone(), replacement.clone());
 
@@ -987,7 +987,7 @@ fn joining_again_cannot_overwrite_a_reused_nickname() {
     let mut replacement = old.clone();
     replacement.connection_id = uuid::Uuid::new_v4();
     replacement.cluster_epoch = uuid::Uuid::new_v4();
-    let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
     let occupants = DashMap::new();
 
     assert_eq!(
@@ -1050,7 +1050,7 @@ fn delayed_committed_join_does_not_evict_a_later_published_incarnation() {
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
     );
-    let key = crate::xmpp::xml_util::muc_occupant_key(&join_a.room_jid, &join_a.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&join_a.room_jid, &join_a.nick);
     let occupants = DashMap::new();
 
     assert_eq!(
@@ -1078,7 +1078,7 @@ fn exact_muc_profile_updates_reject_a_reused_nickname() {
         test_muc_occupant(&old.full_jid, uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     replacement.affiliation = "none".to_owned();
     replacement.role = "visitor".to_owned();
-    let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
     let occupants = DashMap::new();
     occupants.insert(key.clone(), replacement.clone());
 
@@ -1111,7 +1111,7 @@ fn exact_muc_updates_preserve_registration_and_presence_fields() {
     occupant.payload = "<show>away</show>".to_owned();
     let suspended = Arc::new(SuspendedMucEndpoint::new(uuid::Uuid::new_v4()));
     occupant.endpoint = MucOccupantEndpoint::Suspended(Arc::clone(&suspended));
-    let key = crate::xmpp::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
     let occupants = DashMap::new();
     occupants.insert(key.clone(), occupant.clone());
     let identity = LocalMucOccupantIdentity::from(&occupant);
@@ -1163,7 +1163,7 @@ fn presence_refresh_rejects_reused_or_suspended_transport() {
     let mut replacement =
         test_muc_occupant(&old.full_jid, uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     replacement.payload = "<show>away</show>".to_owned();
-    let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
     let occupants = DashMap::new();
     occupants.insert(key.clone(), replacement.clone());
     assert!(refresh_local_muc_presence_exact_in(&occupants, &prepared, true).is_none());
@@ -1193,7 +1193,7 @@ fn federated_rebind_fences_old_disconnect_and_reused_nickname() {
         authenticated_domain: "remote.example.test".to_owned(),
         connection_id: old_connection,
     };
-    let key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
     let occupants = DashMap::new();
     occupants.insert(key.clone(), old.clone());
 
@@ -1236,8 +1236,8 @@ fn nickname_move_restores_local_actor_and_defers_cluster_collision() {
         uuid::Uuid::new_v4(),
     );
     other.nick = renamed.nick.clone();
-    let old_key = crate::xmpp::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
-    let new_key = crate::xmpp::xml_util::muc_occupant_key(&renamed.room_jid, &renamed.nick);
+    let old_key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+    let new_key = crate::services::xml_util::muc_occupant_key(&renamed.room_jid, &renamed.nick);
     let occupants = DashMap::new();
     occupants.insert(old_key.clone(), old.clone());
     occupants.insert(new_key.clone(), other.clone());

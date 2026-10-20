@@ -71,9 +71,9 @@ impl Case {
             {
                 return Err(Rejection::IdentityBinding);
             }
-            if crate::xmpp::xml_util::is_abuse_rated_message(root)
+            if crate::services::xml_util::is_abuse_rated_message(root)
                 != matches!(self.admission[index], Admission::Reserved { .. })
-                || crate::xmpp::xml_util::is_encrypted(root) != policy.encrypted
+                || crate::services::xml_util::is_encrypted(root) != policy.encrypted
             {
                 return Err(Rejection::IdentityBinding);
             }

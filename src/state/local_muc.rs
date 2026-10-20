@@ -61,7 +61,7 @@ pub(crate) fn remove_local_muc_occupant_exact_from(
         return None;
     }
     let room_jid = crate::jid::canonicalize_bare(identity.room_jid).ok()?;
-    let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, identity.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&room_jid, identity.nick);
     occupants
         .remove_if(&key, |_, current| {
             current.room_jid == room_jid
@@ -84,7 +84,7 @@ pub(super) fn with_local_muc_occupant_exact<R>(
         return None;
     }
     let room_jid = crate::jid::canonicalize_bare(identity.room_jid).ok()?;
-    let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, identity.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&room_jid, identity.nick);
     let mut occupant = occupants.get_mut(&key)?;
     if occupant.room_jid != room_jid
         || !muc_departure_identity_matches(
@@ -271,7 +271,7 @@ pub(super) fn publish_local_muc_join_if_vacant_in(
     if joining.connection_id.is_nil() || joining.cluster_epoch.is_nil() {
         return LocalMucJoinPublication::Occupied;
     }
-    let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &joining.nick);
+    let key = crate::services::xml_util::muc_occupant_key(&room_jid, &joining.nick);
     match occupants.entry(key) {
         dashmap::mapref::entry::Entry::Vacant(entry) => {
             entry.insert(joining.clone());
@@ -312,7 +312,7 @@ pub(super) fn move_local_muc_nickname_exact_in(
     {
         return LocalMucNicknameMove::OldMissing;
     }
-    let old_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, old.nick);
+    let old_key = crate::services::xml_util::muc_occupant_key(&room_jid, old.nick);
     let removed_old = remove_local_muc_occupant_exact_from(occupants, old);
     if removed_old.is_none() {
         return if cluster_committed {
@@ -321,7 +321,7 @@ pub(super) fn move_local_muc_nickname_exact_in(
             LocalMucNicknameMove::OldMissing
         };
     }
-    let new_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &renamed.nick);
+    let new_key = crate::services::xml_util::muc_occupant_key(&room_jid, &renamed.nick);
     let destination = match occupants.entry(new_key) {
         dashmap::mapref::entry::Entry::Vacant(entry) => {
             entry.insert(renamed.clone());
@@ -414,7 +414,7 @@ impl AppState {
         nick: &str,
     ) -> Option<MucOccupant> {
         let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
-        let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, nick);
+        let key = crate::services::xml_util::muc_occupant_key(&room_jid, nick);
         self.muc_occupants
             .get(&key)
             .filter(|occupant| occupant.room_jid == room_jid)
@@ -559,7 +559,7 @@ impl AppState {
             return None;
         }
         drop(session);
-        let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &membership.nick);
+        let key = crate::services::xml_util::muc_occupant_key(&room_jid, &membership.nick);
         self.muc_occupants
             .get(&key)
             .filter(|occupant| {
@@ -625,7 +625,7 @@ impl AppState {
             .collect::<Vec<_>>();
         count_shutdown_notification_completions(occupants.into_iter().map(|occupant| async move {
             let serialized = SerializableMucOccupant::from(&occupant);
-            let stanza = crate::xmpp::xml_util::muc_presence_stanza_with_status(
+            let stanza = crate::services::xml_util::muc_presence_stanza_with_status(
                 &serialized,
                 &occupant.full_jid,
                 true,

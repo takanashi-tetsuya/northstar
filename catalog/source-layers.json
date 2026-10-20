@@ -126,10 +126,6 @@
     "src/services/messaging/direct_workflow.rs": [
       "xmpp"
     ],
-    "src/services/session_cleanup.rs": [
-      "cluster",
-      "state"
-    ],
     "src/xmpp/mod.rs": [
       "state"
     ],

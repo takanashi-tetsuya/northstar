@@ -9,6 +9,7 @@
 
 use crate::cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
 use crate::services::muc::ClusterMucTransitionOutcome;
+use crate::services::sm_suspension;
 use crate::state::AppState;
 use crate::state::{
     muc_delivery::MucDeliveryContext, session_cleanup_bookkeeping::SessionCleanupBookkeeping,
@@ -546,7 +547,7 @@ pub(crate) struct SessionCleanupService {
     bookkeeping: SessionCleanupBookkeeping,
 }
 
-async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionRepository>(
+async fn run_sm_suspension_recovery<R: sm_suspension::SmSuspensionRepository>(
     context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
@@ -565,7 +566,7 @@ async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionReposit
             let outcome = match &job.work {
                 SuspensionRecoveryWork::Suspend(payload) => tokio::time::timeout(
                     CLEANUP_STEP_BUDGET,
-                    context.suspend_exact_session(super::sm_suspension::SmSuspensionRequest {
+                    context.suspend_exact_session(sm_suspension::SmSuspensionRequest {
                         session_id: job.session_id,
                         connection_id: job.connection_id,
                         user_id: payload.account.user_id,
@@ -622,9 +623,7 @@ async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionReposit
     }
 }
 
-pub(crate) fn start_sm_suspension_recovery<
-    R: super::sm_suspension::SmSuspensionRepository + 'static,
->(
+pub(crate) fn start_sm_suspension_recovery<R: sm_suspension::SmSuspensionRepository + 'static>(
     context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
     registry: Arc<crate::platform::workers::WorkerRegistry>,
     queue: Arc<SmSuspensionRecoveryQueue>,

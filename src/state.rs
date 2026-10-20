@@ -147,6 +147,7 @@ pub(crate) mod pubsub_notification_delivery;
 mod runtime_control_refresh;
 mod s2s_cluster_routing;
 pub(crate) mod s2s_outbox_dispatch;
+pub(crate) mod session_cleanup;
 pub(crate) mod session_cleanup_bookkeeping;
 pub(crate) mod session_cleanup_local;
 pub(crate) mod session_cleanup_mix;
@@ -381,7 +382,7 @@ pub struct AppState {
     /// Supervised retry ownership for an exact SM suspension whose database
     /// outcome was an error or timeout. The corresponding MUC FIFO remains
     /// sealed until this queue proves a durable handoff.
-    sm_suspension_recovery: Arc<crate::services::session_cleanup::SmSuspensionRecoveryQueue>,
+    sm_suspension_recovery: Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>,
     sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
     metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers

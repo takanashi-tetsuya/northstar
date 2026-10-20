@@ -1026,7 +1026,7 @@ impl ProtocolSession {
                 Err(error) => {
                     self.state.seal_suspended_muc_endpoints(&paused_muc).await;
                     let queued = self.state.sm_suspension_recovery_queue().enqueue(
-                        crate::services::session_cleanup::SessionCleanupAccount {
+                        northstar_session_application::SessionCleanupAccount {
                             user_id: current_user.id,
                             username: current_user.username.clone(),
                             auth_generation: current_user.auth_generation,

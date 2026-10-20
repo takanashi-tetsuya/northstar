@@ -1193,13 +1193,12 @@ impl AppState {
             sessions,
             muc_occupants,
             suspended_muc_sessions: Arc::new(DashMap::new()),
-            sm_suspension_recovery:
-                crate::services::session_cleanup::SmSuspensionRecoveryQueue::new(
-                    sm_recovery_max_jobs,
-                    sm_recovery_max_bytes,
-                    Arc::clone(&sm_capacity_metrics),
-                    Arc::clone(&sm_memory_governor),
-                ),
+            sm_suspension_recovery: crate::state::session_cleanup::SmSuspensionRecoveryQueue::new(
+                sm_recovery_max_jobs,
+                sm_recovery_max_bytes,
+                Arc::clone(&sm_capacity_metrics),
+                Arc::clone(&sm_memory_governor),
+            ),
             sm_memory_governor,
             metrics,
             metrics_bearer_token,
@@ -1318,7 +1317,7 @@ impl AppState {
                 worker_cancel.clone(),
             );
         }
-        crate::services::session_cleanup::start_sm_suspension_recovery(
+        crate::state::session_cleanup::start_sm_suspension_recovery(
             Arc::new(state.sm_suspension_context()),
             Arc::clone(state.worker_registry()),
             Arc::clone(&state.sm_suspension_recovery),

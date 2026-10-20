@@ -60,7 +60,6 @@ pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod s2s_roster_authorization;
 pub(crate) mod s2s_sm_outbox;
 pub(crate) mod session_authority_sweep;
-pub(crate) mod session_cleanup;
 pub(crate) mod session_route_maintenance;
 pub(crate) mod session_termination_authority;
 pub(crate) mod sm;

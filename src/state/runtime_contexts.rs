@@ -241,7 +241,7 @@ impl AppState {
 
     pub(crate) fn sm_suspension_recovery_queue(
         &self,
-    ) -> &Arc<crate::services::session_cleanup::SmSuspensionRecoveryQueue> {
+    ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue> {
         &self.sm_suspension_recovery
     }
 

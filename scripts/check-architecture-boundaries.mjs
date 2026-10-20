@@ -2410,7 +2410,7 @@ if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
 if (/begin_authorized_read/.test(readRoleSplitFile('src/api/mod.rs', { root }))) {
   throw new Error('HTTP principals must not expose database read transactions');
 }
-const cleanupServiceSource = productionWithoutCfgTestModules(read('src/services/session_cleanup.rs'), 'Session cleanup');
+const cleanupServiceSource = productionWithoutCfgTestModules(read('src/state/session_cleanup.rs'), 'Session cleanup');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/]) {
   if (forbidden.test(cleanupServiceSource)) throw new Error('Session cleanup regained direct persistence authority');
 }
@@ -3432,7 +3432,7 @@ const workerResponsibilityEvidence = {
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['src/db/authority_listener.rs', 'AppState database listener startup', '15 s'],
-  'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
+  'sm-suspension-recovery': ['src/state/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['src/xmpp/protocol/mix.rs', 'MIX protocol capability startup', '10 s'],
   'mix-delivery-outbox': ['src/xmpp/protocol/mix/worker.rs', 'MIX capability startup', '30 s'],

@@ -5,10 +5,10 @@ use crate::db::{
     sm_repository::PostgresSmRepository, sm_suspension::PostgresSmSuspensionRepository,
 };
 use crate::services::{
-    session_cleanup::{SessionCleanupAccount, SmSuspensionRecoveryQueue},
     sm::{SmService, SmSessionSnapshot},
     sm_capacity::{SmCapacityLease, SmMemoryGovernor},
 };
+use crate::state::session_cleanup::{SessionCleanupAccount, SmSuspensionRecoveryQueue};
 use anyhow::Result;
 use std::sync::Arc;
 use uuid::Uuid;

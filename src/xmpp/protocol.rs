@@ -804,9 +804,9 @@ fn begin_owned_session_cleanup(
 
 #[derive(Debug)]
 pub(crate) enum SessionFinalizationOutcome {
-    Completed(crate::services::session_cleanup::CleanupReport),
+    Completed(crate::state::session_cleanup::CleanupReport),
     AlreadyFinalized,
-    SupersededBySm(crate::services::session_cleanup::CleanupReport),
+    SupersededBySm(crate::state::session_cleanup::CleanupReport),
 }
 
 impl SessionFinalizationOutcome {
@@ -831,9 +831,9 @@ impl SessionFinalizationOutcome {
 }
 
 impl ProtocolSession {
-    fn cleanup_account(&self) -> Option<crate::services::session_cleanup::SessionCleanupAccount> {
+    fn cleanup_account(&self) -> Option<northstar_session_application::SessionCleanupAccount> {
         self.authenticated.as_ref().map(|user| {
-            crate::services::session_cleanup::SessionCleanupAccount {
+            northstar_session_application::SessionCleanupAccount {
                 user_id: user.id,
                 username: user.username.clone(),
                 auth_generation: user.auth_generation,
@@ -851,7 +851,7 @@ impl ProtocolSession {
     pub(crate) async fn finalize(&mut self) -> SessionFinalizationOutcome {
         let account = self.cleanup_account();
         let service =
-            crate::services::session_cleanup::SessionCleanupService::new(Arc::clone(&self.state));
+            crate::state::session_cleanup::SessionCleanupService::new(Arc::clone(&self.state));
         match claim_session_cleanup(&self.route_lifecycle) {
             SessionCleanupOwnership::AlreadyFinalizing => {
                 return SessionFinalizationOutcome::AlreadyFinalized.observed();
@@ -903,7 +903,7 @@ impl ProtocolSession {
             && self.sm.capacity.is_some();
         let sm = if resumable {
             let snapshot = self.take_sm_snapshot();
-            crate::services::session_cleanup::SessionSmCleanup::Suspend {
+            crate::state::session_cleanup::SessionSmCleanup::Suspend {
                 session_id: sm_session_id.expect("resumable session has an SM id"),
                 snapshot,
                 ttl_seconds: self.sm.resume_timeout_seconds.max(1),
@@ -914,16 +914,16 @@ impl ProtocolSession {
                     .expect("resumable session owns its SM capacity lease"),
             }
         } else if let Some(session_id) = sm_session_id {
-            crate::services::session_cleanup::SessionSmCleanup::Revoke { session_id }
+            crate::state::session_cleanup::SessionSmCleanup::Revoke { session_id }
         } else {
-            crate::services::session_cleanup::SessionSmCleanup::None
+            crate::state::session_cleanup::SessionSmCleanup::None
         };
         self.sm.resume_allowed = false;
         if !resumable {
             self.sm.capacity = None;
         }
 
-        let plan = crate::services::session_cleanup::SessionCleanupPlan {
+        let plan = crate::state::session_cleanup::SessionCleanupPlan {
             connection_id: self.connection_id,
             may_own_live_session: self.live_session_ownership.may_own(),
             mix_presence_gate: Arc::clone(&self.presence.mix_presence_gate),

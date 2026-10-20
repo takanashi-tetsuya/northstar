@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 struct SmRecoveryMetricsProbe {
     governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
-    recovery: Arc<crate::services::session_cleanup::SmSuspensionRecoveryQueue>,
+    recovery: Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>,
 }
 
 impl SmRecoveryMetricsProbe {

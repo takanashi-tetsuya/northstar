@@ -94,7 +94,7 @@ pub(super) fn administrator_command_routes(
                     post(admin_toggle_registration),
                 )
                 .with_state(authorized_route_state::<
-                    crate::state::RegistrationAdminContext,
+                    crate::api::contexts::RegistrationAdminContext,
                 >(state)),
         )
         .merge(
@@ -103,9 +103,9 @@ pub(super) fn administrator_command_routes(
                     "/api/v1/admin/sessions/{connection_id}",
                     delete(admin_kick_session),
                 )
-                .with_state(authorized_route_state::<crate::state::SessionAdminContext>(
-                    state,
-                )),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::SessionAdminContext,
+                >(state)),
         )
         .merge(
             Router::new()
@@ -256,10 +256,10 @@ authorized_command_context!(
     crate::api::contexts::OperationAdminContext,
     crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
     crate::api::contexts::passkey_http::PasskeyStartHttpContext,
-    crate::state::RegistrationAdminContext,
+    crate::api::contexts::RegistrationAdminContext,
     crate::api::contexts::ReportContext,
     crate::api::contexts::ReportModerationContext,
-    crate::state::SessionAdminContext,
+    crate::api::contexts::SessionAdminContext,
     crate::api::contexts::UploadAdminContext,
     crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
 );

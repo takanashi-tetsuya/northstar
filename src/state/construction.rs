@@ -991,16 +991,18 @@ impl AppState {
                     ),
                     pool.clone(),
                 ),
-                account_admin::LocalRegistrationCache::new(
+                Arc::new(account_admin::LocalRegistrationCache::new(
                     config.registration_dependency_locked(),
                     Arc::clone(&registration_closed),
-                ),
+                )) as Arc<dyn crate::services::account_admin::RegistrationCache>,
             );
         let session_admin_service = crate::services::account_admin::SessionAdminService::new(
             db::account_admin_repository::PostgresSessionAdminRepository::new(
                 admin_mutations.clone(),
             ),
-            account_admin::LocalAdminSessions::new(Arc::clone(&sessions)),
+            Arc::new(account_admin::LocalAdminSessions::new(Arc::clone(
+                &sessions,
+            ))) as Arc<dyn crate::services::account_admin::AdminSessionLookup>,
         );
         let operation_admin_service = crate::services::operations::OperationAdminService::new(
             db::operation_admin_repository::PostgresOperationAdminRepository::new(

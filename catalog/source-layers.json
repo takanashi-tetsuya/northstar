@@ -72,13 +72,7 @@
     "outbound": "xmpp"
   },
   "baseline": {
-    "src/api/admin.rs": [
-      "state"
-    ],
     "src/api/mod.rs": [
-      "state"
-    ],
-    "src/api/route_composition.rs": [
       "state"
     ],
     "src/bosh.rs": [

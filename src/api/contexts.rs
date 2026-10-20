@@ -1,6 +1,8 @@
 //! REST extractor contexts: the query, governance, retention, report and HTTP entry contexts, and the
 //! service bindings handlers receive. The composition root constructs them and implements FromRef.
 
+use std::sync::Arc;
+
 pub(crate) mod account_teardown;
 pub(crate) mod api_queries;
 pub(crate) mod api_session_http;
@@ -84,3 +86,13 @@ pub(crate) type PasskeyService =
     crate::services::passkeys::PasskeyService<crate::db::passkeys::PostgresPasskeyRepository>;
 pub(crate) type UploadService =
     crate::services::upload::UploadService<crate::db::upload::PostgresUploadRepository>;
+
+pub(crate) type RegistrationAdminContext = crate::services::account_admin::RegistrationAdminService<
+    crate::db::account_admin_repository::PostgresRegistrationAdminRepository,
+    Arc<dyn crate::services::account_admin::RegistrationCache>,
+>;
+
+pub(crate) type SessionAdminContext = crate::services::account_admin::SessionAdminService<
+    crate::db::account_admin_repository::PostgresSessionAdminRepository,
+    Arc<dyn crate::services::account_admin::AdminSessionLookup>,
+>;

@@ -5,14 +5,6 @@ pub(crate) type BoshReplayService =
 pub(crate) type BoshMixService =
     crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>;
 
-pub(crate) type RegistrationAdminContext = crate::services::account_admin::RegistrationAdminService<
-    db::account_admin_repository::PostgresRegistrationAdminRepository,
-    account_admin::LocalRegistrationCache,
->;
-pub(crate) type SessionAdminContext = crate::services::account_admin::SessionAdminService<
-    db::account_admin_repository::PostgresSessionAdminRepository,
-    account_admin::LocalAdminSessions,
->;
 impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.account_admin_service.clone()
@@ -184,8 +176,8 @@ use crate::api::contexts::{
     retention_policy, AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier,
     ApiQueryContext, GovernanceContext, HttpTransportPolicy, InvitationAdminContext,
     OmemoRecoveryPollContext, OperationAdminContext, PasskeyService, PublicDiscoveryContext,
-    ReportContext, ReportModerationContext, RetentionPolicyContext, UploadAdminContext,
-    UploadService,
+    RegistrationAdminContext, ReportContext, ReportModerationContext, RetentionPolicyContext,
+    SessionAdminContext, UploadAdminContext, UploadService,
 };
 use crate::{
     db,

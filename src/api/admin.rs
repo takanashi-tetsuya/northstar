@@ -351,7 +351,7 @@ pub async fn admin_toggle_island_mode(
 }
 
 pub async fn admin_toggle_registration(
-    State(state): State<crate::state::RegistrationAdminContext>,
+    State(state): State<crate::api::contexts::RegistrationAdminContext>,
     actor: ApiAdmin,
     request: ApiJson<BooleanToggle>,
 ) -> Result<Response, AppError> {
@@ -405,7 +405,7 @@ pub async fn admin_sessions(
 }
 
 pub async fn admin_kick_session(
-    State(state): State<crate::state::SessionAdminContext>,
+    State(state): State<crate::api::contexts::SessionAdminContext>,
     actor: ApiAdmin,
     ApiPath(connection_id): ApiPath<Uuid>,
     request: ApiEmpty,

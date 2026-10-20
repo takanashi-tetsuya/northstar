@@ -3,6 +3,7 @@ use crate::services::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
 };
 use anyhow::Result;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -68,6 +69,15 @@ pub(crate) trait RegistrationCache: Send + Sync {
     fn apply_current_closed(&self, closed: bool);
 }
 
+impl<T: RegistrationCache + ?Sized> RegistrationCache for Arc<T> {
+    fn dependency_locked(&self) -> bool {
+        (**self).dependency_locked()
+    }
+    fn apply_current_closed(&self, closed: bool) {
+        (**self).apply_current_closed(closed)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RegistrationAdminService<R, C> {
     repository: R,
@@ -118,6 +128,12 @@ pub(crate) trait AdminSessionLookup: Send + Sync {
     /// Called only after admission and replay lookup. The returned value owns
     /// its identity; no live-session map guard can cross a database await.
     fn exact_connection(&self, connection_id: Uuid) -> Option<SessionKickSnapshot>;
+}
+
+impl<T: AdminSessionLookup + ?Sized> AdminSessionLookup for Arc<T> {
+    fn exact_connection(&self, connection_id: Uuid) -> Option<SessionKickSnapshot> {
+        (**self).exact_connection(connection_id)
+    }
 }
 
 pub(crate) trait SessionAdminRepository: Send + Sync {

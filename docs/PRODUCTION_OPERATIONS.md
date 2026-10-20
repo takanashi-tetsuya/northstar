@@ -95,26 +95,31 @@ The shipped Caddy policy explicitly sets a 10-second header deadline, 64 KB
 header ceiling, one-minute idle connection timeout, and a 20-second default
 body deadline that also bounds unmatched routes. Ordinary REST reads retain
 that deadline and a 256 KiB limit; only upload PUT extends it to 15 minutes
-and BOSH body reads to 30 seconds, without applying a
-short response-write deadline to long polling. Responses with status 408, 413,
-or 429 close HTTP/1 connections. The route-specific `request_body read_timeout`
-option is supported by the Compose-pinned Caddy 2.11.4; it is experimental in
-that version, so image changes must rerun the adapter and socket regression.
+and BOSH body reads to 30 seconds, without applying a short response-write
+deadline to long polling. Responses with status 408, 413, or 429 send
+`Connection: close` on HTTP/1. Caddy usually closes at once, but its Go server
+may first read up to 256 KiB of an unfinished declared body. That read ends
+when the client closes or at the body deadline; after a rare race it has no
+deadline and ends only when the client sends data or closes. The route-specific
+`request_body read_timeout` option is supported by the Compose-pinned Caddy
+2.11.4; it is experimental in that version, so image changes must rerun the
+adapter and socket regression.
 See the [pinned Caddy request-body implementation](https://github.com/caddyserver/caddy/blob/v2.11.4/modules/caddyhttp/requestbody/requestbody.go)
 and [server timeout documentation](https://caddyserver.com/docs/caddyfile/options#timeouts).
 
 `scripts/test-caddy-ingress.py` uses private loopback TLS listeners and the exact
-Caddy binary extracted from the Compose image. CI verifies early error delivery,
-EOF, fragmented REST/BOSH/upload bodies and the actual header deadline. The
-HTTP/2 probe verifies that an unfinished rejected stream closes and another
-request on the same TLS connection still succeeds. Slow-upload, BOSH long-poll
-and WebSocket fixtures outlive the ordinary body deadline. The
-protocol integration job also repeats the eight-connection unauthenticated
-slow-body regression through TLS Caddy against the real application, including
-the shared public/admin budget and capacity recovery. These are bounded fixture
-checks, not public deployment or HTTP/2/3 saturation qualification. Keep the
-backend private and validate the same policies at any additional ingress;
-body-read admission does not cap idle sockets before headers are received.
+Caddy binary extracted from the Compose image. CI verifies complete early error
+delivery with `Connection: close`, Caddy's prompt close once the client closes,
+fragmented REST/BOSH/upload bodies and the actual header deadline. The HTTP/2
+probe verifies that an unfinished rejected stream closes and another request on
+the same TLS connection still succeeds. Slow-upload, BOSH long-poll and WebSocket
+fixtures outlive the ordinary body deadline. The protocol integration job also
+repeats the eight-connection unauthenticated slow-body regression through TLS
+Caddy against the real application, including the shared public/admin budget
+and capacity recovery. These are bounded fixture checks, not public deployment
+or HTTP/2/3 saturation qualification. Keep the backend private and validate the
+same policies at any additional ingress; body-read admission does not cap idle
+sockets before headers are received.
 
 ## Console log delivery
 

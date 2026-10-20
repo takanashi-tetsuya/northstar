@@ -100,7 +100,8 @@
 | S8 角色拆分 | WP-81a–f、WP-82a–i、WP-83a–z、WP-84a–c | 其餘 35 個超標生產檔依角色拆為「`foo.rs`＋`foo/子模組.rs`」（R3）；以單檔讀取原始碼的門禁先改讀正式模組（R4），模組目錄另有獨立模組的三檔改讀角色拆分清單（WP-82g）。盤點見 5.4 | 只移動檢查通過；全部門禁與完整 CI 通過；基線刪除降到上限內的條目。已完成：基線只剩被釘住的 3 個生產檔（R5）與 2 個超過測試上限的測試檔（`db/pubsub_integration_tests.rs` 6,108 行、`db/upload_tests.rs` 3,429 行），由 S9 拆分 |
 | S9 測試檔拆分 | WP-91、WP-92a–b、WP-93 | 超過測試上限的兩個測試檔拆為「`x_tests.rs`＋`x_tests/角色_tests.rs`」，子檔是原測試模組的子模組；只移動檢查先改為依所在檔案解析 `include_str!`／`include_bytes!` 的路徑（WP-91）。盤點見 5.5 | 只移動檢查通過；去掉子模組一段後測試名稱與 ignored 測試集合不變；WSL 腳本的每個選擇器恰好對應一個測試；全部門禁與完整 CI 通過。已完成：基線只剩被釘住的 3 個生產檔（R5） |
 | S10 層級方向 | WP-101–104 | 依頂層模組定義五層並以門禁執行（R9，WP-101）；被下層使用、本身不依賴上層的程式往下搬：worker 與連線 actor 監督（WP-102）、JID 文字工具（WP-103）移到 `platform`，MUC 占用者紀錄移到 `services::muc`（WP-104）。盤點見 5.6 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 139 條降到 104 條，其餘見 5.6、5.7 |
-| S11 層級搬移第二批 | WP-110–118 | 逐條核對 5.6 剩下的 104 條，不需新 port 的 33 條以搬移定義或改寫路徑處理：`services` 經轉出引用的 crate 型別改為直接引用 crate（WP-111）；retention repository port 移到 `services`、PIE 匯入紀錄移到 `db`（WP-112、113）；DANE 與 lab DNSSEC、XEP 擴充註冊表、`SmIpPolicy` 與遞送佇列計數器、叢集匯流排簽章與金鑰紀錄移到平台層（WP-114–117）；被下層使用的純資料紀錄移到使用它的那一層（WP-118）。盤點見 5.7 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 104 條降到 71 條（68 檔），其餘依 5.7 交給模組化執行計劃 |
+| S11 層級搬移第二批 | WP-110–118 | 逐條核對 5.6 剩下的 104 條，不需新 port 的 33 條以搬移定義或改寫路徑處理：`services` 經轉出引用的 crate 型別改為直接引用 crate（WP-111）；retention repository port 移到 `services`、PIE 匯入紀錄移到 `db`（WP-112、113）；DANE 與 lab DNSSEC、XEP 擴充註冊表、`SmIpPolicy` 與遞送佇列計數器、叢集匯流排簽章與金鑰紀錄移到平台層（WP-114–117）；被下層使用的純資料紀錄移到使用它的那一層（WP-118）。盤點見 5.7 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 104 條降到 71 條（68 檔），其中 20 條由 S12 處理（見 5.8） |
+| S12 層級搬移第三批 | WP-120–128 | 核對 5.7 剩下的 71 條，20 條只需搬到使用者所在的層，或加一個只委派既有方法的小 port：abuse guard、帳號刪除復原與 standalone MUC 維護 worker 移到使用它們的層（WP-121、122、126）；XML 工具與 stanza 驗證移到 `services`（WP-123）；`services` 對 `cluster`、`s2s` 各一處的呼叫改經自己擁有的 port（WP-124、125）；REST 處理器的 context 與服務綁定移到 `api::contexts`，即時 session 與 MUC 占用者經 port 讀取（WP-127）；叢集監聽器的訊息政策移到 `cluster`（WP-128）。盤點見 5.8 | 搬移只改路徑，新 port 只委派原有方法；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 71 條降到 51 條（50 檔），平台層不再向上引用，其餘依 5.8 交給模組化執行計劃 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -320,10 +321,17 @@ S11 逐條檢查 5.6 剩下的 104 條引用指向什麼：被引用的若是型
 | WP-116 | 3 | `SmIpPolicy` 由 `services::sm` 移到 `platform::config`；PubSub、MIX、S2S 遞送佇列的 10 個計數器由 `db` 移到 `platform::delivery_counters`；指標登錄直接讀 `northstar_pubsub_application` 的 PubSub 准入計數 |
 | WP-117 | 6 | 叢集匯流排簽章由 `cluster::security` 移到 `security::cluster_bus`；叢集金鑰紀錄與就緒探測身分由 `db`、`cluster` 移到 `security::cluster_keys` |
 | WP-118 | 5 | 管理者 session 清理紀錄移到 `services::admin_session_cleanup_worker`；abuse guard 與 repository 交換的紀錄移到 `security::abuse::records`；叢集指標快照移到 `services::metrics_snapshot` |
+| WP-121 | 完成：`security/abuse.rs` 與 4 個子模組以 `git mv` 移到 `services/`；77 個 Rust 檔中 166 行的路徑、兩個門禁與 3 份文件隨之改寫；`new_persistent_for_deployment` 改收 `Arc<dyn AbusePersistence>`，PostgreSQL 實作由 `state/construction.rs` 建立；架構門禁掃描 `src/services` 時略過 abuse 模組自己的檔案。32 個測試的路徑由 `security::abuse` 改為 `services::abuse`。基線減少 2 條 | 見 `git log --grep '\[WP-121\]'` |
+| WP-122 | 完成：`security/account_recovery.rs` 以 `git mv` 原樣移到 `state/`；`main.rs`、XEP-0077 帳號刪除路徑、刪除復原 context 與兩個門禁改用新路徑。基線減少 2 條 | 見 `git log --grep '\[WP-122\]'` |
+| WP-123 | 完成：`xmpp/xml_util.rs`（含 3 個子模組與 3 個測試檔）、`xmpp/stanza_validation.rs` 與 `xmpp/protocol/jingle.rs` 以 `git mv` 移到 `services/`；92 個 Rust 檔、語意 stanza fuzz target 與 5 個門禁改用新路徑，對外 XML 門禁的基線鍵改名、預算不變；`xmpp::xml_builder` 只再轉出 `XmlElement`。74 個測試的路徑由 `xmpp::` 改為 `services::`。基線減少 5 條 | 見 `git log --grep '\[WP-123\]'` |
+| WP-124 | 完成：`services::mix` 新增 `MixClusterRouteLookup`，`outbox_lookup_cluster_nodes` 改收 `&impl MixClusterRouteLookup`，`ClusterMixRouteLookup` 實作時委派原有方法。基線減少 1 條 | 見 `git log --grep '\[WP-124\]'` |
+| WP-125 | 完成：`ComponentRoute` 逐字移到 `services::federation_outbox`，新增 `ComponentWake`；`FederationOutboxService` 持有 `Arc<dyn ComponentWake>`，`ComponentRegistry` 實作時委派原有的 `wake_route`。基線減少 1 條 | 見 `git log --grep '\[WP-125\]'` |
+| WP-126 | 完成：`services/standalone_muc_maintenance.rs` 以 `git mv` 原樣移到 `state/`；4 個測試的路徑由 `services::` 改為 `state::`。基線減少 1 條 | 見 `git log --grep '\[WP-126\]'` |
+| WP-127 | 完成：6 個 context 模組由 `state/` 移到新的 `api/contexts/`，10 個服務綁定別名與 HTTP 政策的轉出移到 `api::contexts`，`state` 建構的欄位與建構子改為 `pub(crate)`；`ApiQueryContext` 經 `LocalPresenceDirectory` 讀取 session 與 MUC 占用者，`state::api_query_presence` 以原本的程式碼實作；`FromRef` 留在 `state.rs`，處理器與架構門禁改寫為 `crate::api::contexts`。4 個測試的路徑由 `state::http_policy` 改為 `api::contexts::http_policy`。基線減少 6 條 | 見 `git log --grep '\[WP-127\]'` |
+| WP-128 | 完成：`ClusterListenerMessagePolicy`、`SessionTerminationEffect` 與 `ClusterMixCapability` 移到新的 `cluster::listener_policy`，政策的 `AppState` 建構子逐字留在 `state`；`privacy_allows_session` 改收 user id、connection id 與選定的隱私清單，監聽器先由 session 的鎖複製清單再呼叫。基線減少 2 條。WP-121–128 由 codex 平行執行，依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 71 條降到 51 條（50 檔） | 見 `git log --grep '\[WP-128\]'` |
 
-S11 後剩 71 條，分布在 68 個檔案，都需要先有 port 或窄化的 context，交給
-[模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md)（Phase D 的 session／傳輸 port、Phase E 的基礎設施 port 與
-8.1 的 D1）；之後每減少一條，都由 R9 的基線 ratchet 記錄：
+S11 後剩 71 條，分布在 68 個檔案。S11 判斷它們都要先有 port 或窄化的 context；S12 逐條核對後，其中 20 條只需搬移
+或一個委派既有方法的小 port（見 5.8）。S11 結束時的分布：
 
 - 介面卡經組合層取得狀態（55）：`xmpp` 23、`api` 15、`cluster` 8、`s2s` 8、`bosh` 1 引用 `AppState` 與 `state` 中
   定義的窄化 context。
@@ -332,6 +340,35 @@ S11 後剩 71 條，分布在 68 個檔案，都需要先有 port 或窄化的 c
   使用的 `AppState`、`MucOccupant` 與 standalone MUC 維護 context）、`s2s` 1（元件註冊表）。
 - 平台層向上（4）：`security::abuse` 使用 `services` 的訊息准入見證，`security::abuse::key_management` 建立 `db` 的
   abuse persistence，`security::account_recovery` 使用 `state` 與 `xmpp`。
+
+### 5.8 S12 盤點：第三批層級搬移（`366f507`）
+
+S12 逐條核對 5.7 的 71 條引用。依賴上層、也只有上層在用的程式往上搬（WP-121、122、126）；只依賴下層、被下層使用的
+程式往下搬（WP-123、127、128）；下層若只呼叫上層物件的一個方法，就由下層定義只含該方法的 port，上層實作時委派原有
+方法，呼叫端不變（WP-124、125，WP-121、127 也各用一個）。這類共 20 條，分為 8 個 WP，由 codex 平行執行（減少數以
+依序整合時的基線重寫為準）：
+
+| WP | 減少 | 內容 |
+| --- | ---: | --- |
+| WP-121 | 2 | abuse guard 由 `security::abuse` 移到 `services::abuse`：平台層沒有使用者，guard 本身依賴訊息准入服務。guard 改收既有的 `AbusePersistence` port，PostgreSQL 實作由組合層建立 |
+| WP-122 | 2 | 帳號刪除復原由 `security::account_recovery` 移到 `state::account_recovery`，它完全依賴 `AppState` 與 `AccountDeletionRecoveryContext` |
+| WP-123 | 5 | XML 工具（含三個子模組與三個測試檔）、client stanza 驗證與 Jingle 驗證由 `xmpp` 移到 `services`；三者只依賴 `jid`、`platform`、`security`、`services` 與 workspace crate |
+| WP-124 | 1 | `services::mix` 定義 `MixClusterRouteLookup` port，叢集介面卡實作時委派原有的 `lookup_nodes` |
+| WP-125 | 1 | `ComponentRoute` 移到 `services::federation_outbox`，該模組新增 `ComponentWake` port，由 s2s 元件註冊表實作 |
+| WP-126 | 1 | standalone MUC 占用維護 worker 由 `services` 移到 `state`，與它的 context 以及叢集版 worker 放在一起 |
+| WP-127 | 6 | REST 的查詢、治理、保留、檢舉與 HTTP 入口 context，以及 10 個服務綁定別名，由 `state` 移到 `api::contexts`；查詢 context 經 `LocalPresenceDirectory` port 讀取本節點的 session 與 MUC 占用者，由 `state::api_query_presence` 實作；`FromRef` 實作留在 `state.rs` |
+| WP-128 | 2 | 叢集監聽器的訊息政策與兩個命令結果 enum 由 `state` 移到 `cluster::listener_policy`；`privacy_allows_session` 改收 session 的三個值，不再收 `OnlineSession` |
+
+S12 後剩 51 條，分布在 50 個檔案，平台層已沒有向上引用。這些都要先有 session／傳輸 port，或把 context 從組合層拆出，
+交給[模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md)（Phase D 的 session／傳輸 port、Phase E 的基礎設施 port 與
+8.1 的 D1）；之後每減少一條，都由 R9 的基線 ratchet 記錄：
+
+- 介面卡經組合層取得狀態（47）：`xmpp` 23、`api` 9、`s2s` 8、`cluster` 6、`bosh` 1 引用 `AppState` 與 `state` 中
+  需要 `AppState` 的 context（例如帳號管理的 `RegistrationAdminContext`、`SessionAdminContext`）。
+- 應用服務直接使用介面卡或組合層（4）：`services::messaging` 與 `services::messaging::direct_workflow` 使用 `xmpp`
+  對外佇列的 `OutboundItem`、`RouteEnqueue` 與 `RouteSendError`；`services::session_cleanup` 使用 `state` 的
+  `AppState`、`MucOccupant`、`SuspendedMucEndpoint`，以及 `cluster` 的 `ClusterMucDeparture`、
+  `ClusterSessionRouteRelease`。
 
 ## 6. 委派與驗收協議
 
@@ -434,6 +471,12 @@ S11 後剩 71 條，分布在 68 個檔案，都需要先有 port 或窄化的 c
      門禁自測，因此改寫路徑的規格要求先搜尋 `scripts/` 中的舊路徑。多個 WP 修改同一組匯入時（`security/mod.rs`、
      readiness 的兩個檔案）依序 cherry-pick 並手動合併；有些條目要相關 WP 都整合後才消失（`services/readiness.rs`
      對 `db` 的引用在 WP-117、118 都整合後才去掉）。
+   - 層級搬移（S12）：小 port 只定義下層實際呼叫的方法；trait 方法與 inherent 方法同名時，實作以
+     `Type::method(self, …)` 委派，避免遞迴（WP-124、125）。繞過一個轉出點後，要檢查它是否還有使用者：WP-123 讓
+     `xml_util` 直接引用 `northstar_xml_builder`，`xmpp::xml_builder` 對 `ValidatedXmlFragment` 的轉出因此沒有使用者，
+     在 clippy `-D warnings` 下失敗，由架構負責人移除。兩個大範圍路徑改名（WP-121 的 `security::abuse`、WP-123 的
+     `xmpp::xml_util`）修改同一批匯入行，整合時取一邊再套用另一邊的改名；`check-abuse.mjs` 的同一行被三個 WP 修改。
+     測試名稱的路徑對應要涵蓋每個搬移的模組（WP-126 的 4 個測試漏列，由人工比對確認）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。

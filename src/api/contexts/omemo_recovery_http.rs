@@ -1,6 +1,5 @@
 //! Bearer identity and recovery transfer authority for authenticated REST routes.
 
-use super::AppState;
 use crate::{
     api::bearer_token,
     db::{
@@ -14,17 +13,17 @@ use crate::{
         omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService},
     },
 };
-use axum::{extract::FromRef, http::HeaderMap};
+use axum::http::HeaderMap;
 use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
 pub(crate) struct OmemoRecoveryHttpContext {
-    queries: ApiQueryService<PostgresApiQueryRepository>,
-    recovery: OmemoRecoveryService<PostgresOmemoRecoveryRepository>,
-    domain: String,
-    metrics: Arc<Metrics>,
+    pub(crate) queries: ApiQueryService<PostgresApiQueryRepository>,
+    pub(crate) recovery: OmemoRecoveryService<PostgresOmemoRecoveryRepository>,
+    pub(crate) domain: String,
+    pub(crate) metrics: Arc<Metrics>,
 }
 
 pub(crate) struct OmemoRecoveryHttpUser {
@@ -44,17 +43,6 @@ impl OmemoRecoveryHttpUser {
             user_id: self.id,
             auth_generation: self.auth_generation,
             session_token: self.session_token(),
-        }
-    }
-}
-
-impl FromRef<Arc<AppState>> for OmemoRecoveryHttpContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            queries: state.api_query_service().clone(),
-            recovery: state.omemo_recovery_service().clone(),
-            domain: state.public_discovery_context().policy().domain.clone(),
-            metrics: Arc::clone(&state.metrics),
         }
     }
 }

@@ -1,7 +1,8 @@
 //! PUT upload authority: request admission, lifecycle service, guarded object
 //! writes, and the immutable transport and retention settings it needs.
 
-use super::{AppState, UploadAdmission, UploadRequestGuard, UploadService};
+use super::upload_admission::{UploadAdmission, UploadRequestGuard};
+use super::UploadService;
 use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload_safety::{
     UploadIoClass, UploadIoPermit, UploadSafetyError, UploadSafetyGate,
@@ -12,28 +13,13 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct UploadHttpWriteContext {
-    service: Option<UploadService>,
-    guarded_store: Option<Arc<dyn UploadStore>>,
-    admission: Option<UploadAdmission>,
-    safety_gate: Arc<UploadSafetyGate>,
-    trusted_proxies: Arc<[IpAddr]>,
-    operation_duration: Arc<DurationHistogram>,
-    retention_seconds: u64,
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for UploadHttpWriteContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            service: state.upload_service.clone(),
-            // AppState stores only GuardedUploadStore implementations here.
-            guarded_store: state.upload_store.as_ref().map(Arc::clone),
-            admission: state.upload_runtime.request_admission().cloned(),
-            safety_gate: Arc::clone(&state.upload_safety_gate),
-            trusted_proxies: state.config.trusted_proxy_ips.clone().into(),
-            operation_duration: Arc::clone(&state.metrics.upload_operation_duration_seconds),
-            retention_seconds: state.config.upload_retention_seconds,
-        }
-    }
+    pub(crate) service: Option<UploadService>,
+    pub(crate) guarded_store: Option<Arc<dyn UploadStore>>,
+    pub(crate) admission: Option<UploadAdmission>,
+    pub(crate) safety_gate: Arc<UploadSafetyGate>,
+    pub(crate) trusted_proxies: Arc<[IpAddr]>,
+    pub(crate) operation_duration: Arc<DurationHistogram>,
+    pub(crate) retention_seconds: u64,
 }
 
 impl UploadHttpWriteContext {

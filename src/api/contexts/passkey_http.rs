@@ -1,6 +1,6 @@
 //! Passkey HTTP capabilities. Bearer lookup remains with the API query context.
 
-use super::{AppState, PasskeyService};
+use super::PasskeyService;
 use crate::{
     db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
     services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement},
@@ -18,15 +18,7 @@ use webauthn_rs::prelude::{
 
 #[derive(Clone)]
 pub(crate) struct PasskeyAccountHttpContext {
-    service: Arc<PasskeyService>,
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for PasskeyAccountHttpContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            service: Arc::clone(&state.passkey_service),
-        }
-    }
+    pub(crate) service: Arc<PasskeyService>,
 }
 
 impl PasskeyAccountHttpContext {
@@ -64,23 +56,9 @@ impl PasskeyAccountHttpContext {
 
 #[derive(Clone)]
 pub(crate) struct PasskeyStartHttpContext {
-    service: Arc<PasskeyService>,
-    abuse: Arc<PasskeyLoginAbuseService<PostgresPasskeyLoginAbuseRepository>>,
-    trusted_proxies: Arc<[IpAddr]>,
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for PasskeyStartHttpContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            service: Arc::clone(&state.passkey_service),
-            abuse: Arc::clone(&state.passkey_login_abuse_service),
-            trusted_proxies: state
-                .http_transport_policy()
-                .trusted_proxies()
-                .to_vec()
-                .into(),
-        }
-    }
+    pub(crate) service: Arc<PasskeyService>,
+    pub(crate) abuse: Arc<PasskeyLoginAbuseService<PostgresPasskeyLoginAbuseRepository>>,
+    pub(crate) trusted_proxies: Arc<[IpAddr]>,
 }
 
 impl PasskeyStartHttpContext {

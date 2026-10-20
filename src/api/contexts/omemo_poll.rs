@@ -1,5 +1,4 @@
 //! Bounded public completion polling, independent of account session authority.
-use super::{admit_bounded_omemo_poll_ip, OMEMO_POLL_CONCURRENCY, OMEMO_POLL_MAX_ACTIVE_IPS};
 use crate::{
     platform::metrics::Metrics,
     services::omemo_recovery::{
@@ -14,10 +13,53 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
+
+pub(crate) const OMEMO_POLL_CONCURRENCY: usize = 4;
+pub(crate) const OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30;
+pub(crate) const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
+
+pub(crate) fn admit_omemo_poll_ip_window(window: &mut VecDeque<Instant>, now: Instant) -> bool {
+    let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
+    while window.front().is_some_and(|seen| *seen <= cutoff) {
+        window.pop_front();
+    }
+    if window.len() >= OMEMO_POLL_IP_REQUESTS_PER_MINUTE {
+        return false;
+    }
+    window.push_back(now);
+    true
+}
+
+pub(crate) fn admit_bounded_omemo_poll_ip(
+    windows: &DashMap<std::net::IpAddr, VecDeque<Instant>>,
+    admission: &std::sync::Mutex<()>,
+    ip: std::net::IpAddr,
+    now: Instant,
+    sweep: bool,
+    max_active_ips: usize,
+) -> bool {
+    let _admission = admission
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if sweep {
+        let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
+        windows.retain(|_, window| {
+            while window.front().is_some_and(|seen| *seen <= cutoff) {
+                window.pop_front();
+            }
+            !window.is_empty()
+        });
+    }
+    if !windows.contains_key(&ip) && windows.len() >= max_active_ips {
+        return false;
+    }
+    let mut window = windows.entry(ip).or_default();
+    admit_omemo_poll_ip_window(&mut window, now)
+}
 
 #[derive(Clone)]
 pub(crate) struct OmemoRecoveryPollContext<R> {
@@ -57,7 +99,7 @@ impl OmemoRecoveryPollCounters {
 }
 
 impl<R: OmemoRecoveryPollRepository> OmemoRecoveryPollContext<R> {
-    pub(super) fn new(
+    pub(crate) fn new(
         service: OmemoRecoveryPollService<R>,
         domain: String,
         trusted_proxies: Vec<IpAddr>,
@@ -165,7 +207,7 @@ mod tests {
         assert!(extracted.acquire(caller).is_some());
         drop(permits);
         let caller = IpAddr::from([198, 51, 100, 2]);
-        for index in 0..super::super::OMEMO_POLL_IP_REQUESTS_PER_MINUTE {
+        for index in 0..super::OMEMO_POLL_IP_REQUESTS_PER_MINUTE {
             let active = if index % 2 == 0 { &context } else { &extracted };
             assert!(active.acquire(caller).is_some());
         }

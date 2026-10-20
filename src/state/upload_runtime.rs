@@ -1,6 +1,7 @@
 //! Upload storage namespace, request admission and storage runtime selection.
 
 use super::*;
+use crate::api::contexts::upload_admission::UploadAdmission;
 
 /// Stable, non-secret identity for the physical upload namespace shared by
 /// every node. PostgreSQL stores this digest so a node configured for a
@@ -32,35 +33,6 @@ pub(super) fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8
         &config.upload_dir,
         s3.as_ref(),
     )
-}
-
-#[derive(Clone)]
-pub(super) struct UploadAdmission {
-    pub(super) semaphore: Arc<Semaphore>,
-    pub(super) by_ip: Arc<DashMap<std::net::IpAddr, usize>>,
-    pub(super) max_per_ip: usize,
-}
-
-impl UploadAdmission {
-    pub(super) fn try_acquire_download(&self, ip: std::net::IpAddr) -> Option<UploadDownloadGuard> {
-        let permit = Arc::clone(&self.semaphore).try_acquire_owned().ok()?;
-        let mut count = self.by_ip.entry(ip).or_insert(0);
-        if *count >= self.max_per_ip {
-            let remove_zero = *count == 0;
-            drop(count);
-            if remove_zero {
-                self.by_ip.remove(&ip);
-            }
-            return None;
-        }
-        *count += 1;
-        drop(count);
-        Some(UploadDownloadGuard {
-            counts: Arc::clone(&self.by_ip),
-            ip,
-            _permit: permit,
-        })
-    }
 }
 
 pub(super) enum UploadRuntime {

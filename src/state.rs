@@ -94,30 +94,10 @@ impl axum::extract::FromRef<Arc<AppState>> for ReportContext {
         )
     }
 }
-pub(crate) mod omemo_poll;
-mod push_notification_delivery;
-pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
-    db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
->;
-impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.omemo_recovery_poll_context()
-    }
-}
 mod api_query_presence;
-pub(crate) mod api_session_http;
-pub(crate) mod http_challenge_endpoint;
-mod http_login_endpoint;
-pub(crate) mod http_registration_endpoint;
-pub(crate) use http_login_endpoint::HttpLoginEndpointContext;
-mod passkey_login_finish;
-pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
-pub(crate) mod upload_http_delete;
-mod upload_http_read;
-pub(crate) mod upload_http_write;
-pub(crate) use upload_http_read::UploadHttpReadContext;
-pub(crate) use upload_http_read::UploadHttpReplayReadContext;
 mod metrics_context;
+mod push_notification_delivery;
+mod rest_endpoint_contexts;
 pub(crate) use metrics_context::MetricsContext;
 pub(crate) mod account_deletion_recovery;
 pub(crate) mod account_generation_teardown;
@@ -169,9 +149,6 @@ pub(crate) use operation_tls_reload_effects::OperationTlsReloadEffects;
 pub(crate) mod operation_tls_reload_effects;
 mod operation_worker_control;
 pub(crate) use operation_worker_control::OperationWorkerControl;
-pub(crate) mod omemo_recovery_http;
-pub(crate) mod passkey_http;
-pub(crate) mod password_change_http;
 mod presence_cluster_routing;
 pub(crate) mod pubsub_digest_worker;
 pub(crate) mod pubsub_event_outbox_worker;
@@ -203,30 +180,13 @@ impl axum::extract::FromRef<Arc<AppState>> for ApiQueryContext {
     }
 }
 
-impl axum::extract::FromRef<Arc<AppState>> for HttpLoginEndpointContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        HttpLoginEndpointContext::from_state(state)
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for PasskeyLoginFinishContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self::new(Arc::clone(&state.passkey_service))
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReadContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self::from_state(state)
-    }
-}
-
 use crate::api::contexts::{
-    api_queries, governance, http_body_admission, http_policy, reports, retention_policy,
-    AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier, ApiQueryContext,
-    GovernanceContext, HttpTransportPolicy, InvitationAdminContext, OperationAdminContext,
-    PublicDiscoveryContext, ReportContext, ReportModerationContext, RetentionPolicyContext,
-    UploadAdminContext,
+    api_queries, governance, http_body_admission, http_policy, omemo_poll, reports,
+    retention_policy, AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier,
+    ApiQueryContext, GovernanceContext, HttpTransportPolicy, InvitationAdminContext,
+    OmemoRecoveryPollContext, OperationAdminContext, PasskeyService, PublicDiscoveryContext,
+    ReportContext, ReportModerationContext, RetentionPolicyContext, UploadAdminContext,
+    UploadService,
 };
 use crate::{
     db,
@@ -289,7 +249,6 @@ use self::federation_policy::*;
 pub use self::local_muc::*;
 pub use self::local_session::*;
 pub use self::muc_resume::*;
-use self::omemo_poll_admission::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 pub use self::suspended_muc::*;
@@ -321,10 +280,7 @@ pub use northstar_protocol_runtime::mix::{MixIqRelayStage, PendingMixIqRelay};
 #[cfg(test)]
 mod muc_membership_snapshot_tests;
 
-type PasskeyService =
-    crate::services::passkeys::PasskeyService<db::passkeys::PostgresPasskeyRepository>;
 type RosterService = crate::services::roster::RosterService<db::roster::PostgresRosterRepository>;
-type UploadService = crate::services::upload::UploadService<db::upload::PostgresUploadRepository>;
 
 #[cfg(test)]
 #[path = "state/account_revocation_route_tests.rs"]

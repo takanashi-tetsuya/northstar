@@ -1,6 +1,6 @@
 //! Authenticated upload deletion can queue an authorized removal and time the request.
 
-use super::{AppState, UploadService};
+use super::UploadService;
 use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload::UserUploadDeleteOutcome;
 use std::sync::Arc;
@@ -8,17 +8,8 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct UploadHttpDeleteContext {
-    service: Option<UploadService>,
-    operation_duration: Arc<DurationHistogram>,
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for UploadHttpDeleteContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            service: state.upload_service.clone(),
-            operation_duration: Arc::clone(&state.metrics.upload_operation_duration_seconds),
-        }
-    }
+    pub(crate) service: Option<UploadService>,
+    pub(crate) operation_duration: Arc<DurationHistogram>,
 }
 
 impl UploadHttpDeleteContext {

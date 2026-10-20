@@ -1,10 +1,10 @@
 use super::*;
-use crate::services::passkeys::{PasskeyActor, PasskeyError};
-use crate::state::{
-    account_generation_teardown::AccountGenerationTeardownSequence,
+use crate::api::contexts::{
     passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
     PasskeyLoginFinishContext,
 };
+use crate::services::passkeys::{PasskeyActor, PasskeyError};
+use crate::state::account_generation_teardown::AccountGenerationTeardownSequence;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;

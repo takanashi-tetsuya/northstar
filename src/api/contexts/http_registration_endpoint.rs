@@ -1,11 +1,9 @@
 //! REST registration capability: account admission, proxy policy and outcome counters.
 
-use super::AppState;
 use crate::{
     db::account_repository::PostgresAccountRepository,
     services::account::{AccountService, HttpRegistrationAvailability},
 };
-use axum::extract::FromRef;
 use std::{
     net::IpAddr,
     sync::{
@@ -16,25 +14,12 @@ use std::{
 
 #[derive(Clone)]
 pub(crate) struct HttpRegistrationEndpointContext {
-    service: AccountService<PostgresAccountRepository>,
-    availability: HttpRegistrationAvailability,
-    trusted_proxies: Vec<IpAddr>,
-    registrations: Arc<AtomicU64>,
-    rate_limited: Arc<AtomicU64>,
-    capacity_rejected: Arc<AtomicU64>,
-}
-
-impl FromRef<Arc<AppState>> for HttpRegistrationEndpointContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            service: state.account_service.clone(),
-            availability: state.http_registration_availability(),
-            trusted_proxies: state.config.trusted_proxy_ips.clone(),
-            registrations: Arc::clone(&state.metrics.registrations_total),
-            rate_limited: Arc::clone(&state.metrics.rate_limited_total),
-            capacity_rejected: Arc::clone(&state.metrics.capacity_reservations_rejected_total),
-        }
-    }
+    pub(crate) service: AccountService<PostgresAccountRepository>,
+    pub(crate) availability: HttpRegistrationAvailability,
+    pub(crate) trusted_proxies: Vec<IpAddr>,
+    pub(crate) registrations: Arc<AtomicU64>,
+    pub(crate) rate_limited: Arc<AtomicU64>,
+    pub(crate) capacity_rejected: Arc<AtomicU64>,
 }
 
 impl HttpRegistrationEndpointContext {

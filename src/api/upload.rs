@@ -14,6 +14,10 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
+use crate::api::contexts::{
+    upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
+    UploadHttpReadContext, UploadHttpReplayReadContext,
+};
 use crate::auth;
 use crate::platform::error::{AppError, Result};
 use crate::services::upload::{
@@ -21,10 +25,6 @@ use crate::services::upload::{
     PromotedUploadProjection, PromotionClaim, UploadClaimOutcome, UploadRenewOutcome,
     UploadReplayCommand, UploadReplayOutcome, UploadSlot, UploadStageCleanup,
     UploadStageHandoffOutcome, UploadStageProjection, UserUploadDeleteOutcome,
-};
-use crate::state::{
-    upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
-    UploadHttpReadContext, UploadHttpReplayReadContext,
 };
 
 const UPLOAD_LEASE_SECONDS: i64 = 90;

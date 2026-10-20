@@ -13,7 +13,7 @@ pub(crate) struct PasskeyLoginFinishContext {
 }
 
 impl PasskeyLoginFinishContext {
-    pub(super) fn new(service: Arc<PasskeyService>) -> Self {
+    pub(crate) fn new(service: Arc<PasskeyService>) -> Self {
         Self { service }
     }
 

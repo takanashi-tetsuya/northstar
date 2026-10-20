@@ -12,16 +12,16 @@ use serde_json::Value;
 use std::net::SocketAddr;
 use zeroize::Zeroizing;
 
+use crate::api::contexts::{
+    api_session_http::ApiSessionHttpContext, http_challenge_endpoint::HttpChallengeEndpointContext,
+    http_registration_endpoint::HttpRegistrationEndpointContext, HttpLoginEndpointContext,
+};
 use crate::auth;
 #[cfg(test)]
 use crate::db;
 use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
 use crate::services::challenge_issuance::ChallengeIssueRequest;
-use crate::state::{
-    api_session_http::ApiSessionHttpContext, http_challenge_endpoint::HttpChallengeEndpointContext,
-    http_registration_endpoint::HttpRegistrationEndpointContext, HttpLoginEndpointContext,
-};
 
 pub async fn register(
     State(context): State<HttpRegistrationEndpointContext>,

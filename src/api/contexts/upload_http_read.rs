@@ -1,7 +1,8 @@
 //! Public upload reads receive only download admission, a guarded object read,
 //! the public-file projection, immutable transport policy, and one timer.
 
-use super::{AppState, UploadAdmission, UploadDownloadGuard, UploadService};
+use super::upload_admission::{UploadAdmission, UploadDownloadGuard};
+use super::UploadService;
 use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload::UploadSlot;
 use crate::storage::{StoredUploadReader, UploadStore};
@@ -12,29 +13,16 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct UploadHttpReadContext {
-    service: Option<UploadService>,
-    guarded_store: Option<Arc<dyn UploadStore>>,
-    admission: Option<UploadAdmission>,
-    trusted_proxies: Arc<[IpAddr]>,
-    operation_duration: Arc<DurationHistogram>,
-    read_timeout: Duration,
-    max_duration: Duration,
+    pub(crate) service: Option<UploadService>,
+    pub(crate) guarded_store: Option<Arc<dyn UploadStore>>,
+    pub(crate) admission: Option<UploadAdmission>,
+    pub(crate) trusted_proxies: Arc<[IpAddr]>,
+    pub(crate) operation_duration: Arc<DurationHistogram>,
+    pub(crate) read_timeout: Duration,
+    pub(crate) max_duration: Duration,
 }
 
 impl UploadHttpReadContext {
-    pub(super) fn from_state(state: &AppState) -> Self {
-        Self {
-            service: state.upload_service.clone(),
-            // AppState stores only GuardedUploadStore implementations here.
-            guarded_store: state.upload_store.as_ref().map(Arc::clone),
-            admission: state.upload_runtime.download_admission().cloned(),
-            trusted_proxies: state.config.trusted_proxy_ips.clone().into(),
-            operation_duration: Arc::clone(&state.metrics.upload_operation_duration_seconds),
-            read_timeout: Duration::from_secs(state.config.upload_download_read_timeout_seconds),
-            max_duration: Duration::from_secs(state.config.upload_download_max_seconds),
-        }
-    }
-
     pub(crate) fn operation_timer(&self) -> DurationTimer<'_> {
         self.operation_duration.start_timer()
     }
@@ -88,20 +76,9 @@ impl UploadHttpReadContext {
 /// file lookup or independent download admission.
 #[derive(Clone)]
 pub(crate) struct UploadHttpReplayReadContext {
-    guarded_store: Option<Arc<dyn UploadStore>>,
-    read_timeout: Duration,
-    max_duration: Duration,
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReplayReadContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            // AppState stores only GuardedUploadStore implementations here.
-            guarded_store: state.upload_store.as_ref().map(Arc::clone),
-            read_timeout: Duration::from_secs(state.config.upload_download_read_timeout_seconds),
-            max_duration: Duration::from_secs(state.config.upload_download_max_seconds),
-        }
-    }
+    pub(crate) guarded_store: Option<Arc<dyn UploadStore>>,
+    pub(crate) read_timeout: Duration,
+    pub(crate) max_duration: Duration,
 }
 
 impl UploadHttpReplayReadContext {

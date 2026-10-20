@@ -1,4 +1,4 @@
-//! Client connection and upload request guards.
+//! Client connection admission guard.
 
 use super::*;
 
@@ -6,38 +6,6 @@ pub struct ClientConnectionGuard {
     pub(super) state: Arc<AppState>,
     pub(super) ip: std::net::IpAddr,
     pub(super) _permit: OwnedSemaphorePermit,
-}
-
-pub struct UploadRequestGuard {
-    pub(super) counts: Arc<DashMap<std::net::IpAddr, usize>>,
-    pub(super) ip: std::net::IpAddr,
-    pub(super) _permit: OwnedSemaphorePermit,
-}
-
-pub struct UploadDownloadGuard {
-    pub(super) counts: Arc<DashMap<std::net::IpAddr, usize>>,
-    pub(super) ip: std::net::IpAddr,
-    pub(super) _permit: OwnedSemaphorePermit,
-}
-
-impl Drop for UploadDownloadGuard {
-    fn drop(&mut self) {
-        if let Some(mut count) = self.counts.get_mut(&self.ip) {
-            *count = count.saturating_sub(1);
-            drop(count);
-            self.counts.remove_if(&self.ip, |_, count| *count == 0);
-        }
-    }
-}
-
-impl Drop for UploadRequestGuard {
-    fn drop(&mut self) {
-        if let Some(mut count) = self.counts.get_mut(&self.ip) {
-            *count = count.saturating_sub(1);
-            drop(count);
-            self.counts.remove_if(&self.ip, |_, count| *count == 0);
-        }
-    }
 }
 
 impl Drop for ClientConnectionGuard {

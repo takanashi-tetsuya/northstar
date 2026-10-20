@@ -42,7 +42,7 @@ pub(super) fn upload_http_routes(
         Router::new()
             .route("/api/v1/upload/{id}", delete(upload_delete))
             .with_state(authorized_route_state::<
-                crate::state::upload_http_delete::UploadHttpDeleteContext,
+                crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
             >(state))
     }
 }
@@ -251,17 +251,17 @@ authorized_command_context!(
     crate::api::contexts::AccountAdminContext,
     crate::api::contexts::AdminDispatchContext,
     crate::api::contexts::GovernanceContext,
-    crate::state::http_challenge_endpoint::HttpChallengeEndpointContext,
+    crate::api::contexts::http_challenge_endpoint::HttpChallengeEndpointContext,
     crate::api::contexts::InvitationAdminContext,
     crate::api::contexts::OperationAdminContext,
-    crate::state::passkey_http::PasskeyAccountHttpContext,
-    crate::state::passkey_http::PasskeyStartHttpContext,
+    crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
+    crate::api::contexts::passkey_http::PasskeyStartHttpContext,
     crate::state::RegistrationAdminContext,
     crate::api::contexts::ReportContext,
     crate::api::contexts::ReportModerationContext,
     crate::state::SessionAdminContext,
     crate::api::contexts::UploadAdminContext,
-    crate::state::upload_http_delete::UploadHttpDeleteContext,
+    crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
 );
 
 pub(super) fn authorized_route_state<C>(state: &Arc<AppState>) -> AuthorizedRoute<C>
@@ -297,7 +297,7 @@ macro_rules! route_pair_contexts {
 }
 
 route_pair_contexts!(
-    crate::state::password_change_http::PasswordChangeHttpContext,
+    crate::api::contexts::password_change_http::PasswordChangeHttpContext,
     Arc<crate::state::account_teardown_runtime::AccountTeardownRuntime>
 );
 route_pair_contexts!(
@@ -308,7 +308,7 @@ route_pair_contexts!(
 #[derive(Clone)]
 pub(super) struct PasskeyRemovalRoute {
     pub(super) queries: ApiQueryContext,
-    pub(super) account: crate::state::passkey_http::PasskeyAccountHttpContext,
+    pub(super) account: crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
     pub(super) start: PasskeyStartHttpContext,
     pub(super) teardown:
         crate::state::account_generation_teardown::AccountGenerationTeardownSequence,
@@ -320,7 +320,9 @@ impl FromRef<PasskeyRemovalRoute> for ApiQueryContext {
     }
 }
 
-impl FromRef<PasskeyRemovalRoute> for crate::state::passkey_http::PasskeyAccountHttpContext {
+impl FromRef<PasskeyRemovalRoute>
+    for crate::api::contexts::passkey_http::PasskeyAccountHttpContext
+{
     fn from_ref(state: &PasskeyRemovalRoute) -> Self {
         state.account.clone()
     }
@@ -343,9 +345,9 @@ impl FromRef<PasskeyRemovalRoute>
 #[derive(Clone)]
 pub(super) struct UploadEnabledRoute {
     pub(super) queries: ApiQueryContext,
-    pub(super) write: crate::state::upload_http_write::UploadHttpWriteContext,
-    pub(super) replay: crate::state::UploadHttpReplayReadContext,
-    pub(super) delete: crate::state::upload_http_delete::UploadHttpDeleteContext,
+    pub(super) write: crate::api::contexts::upload_http_write::UploadHttpWriteContext,
+    pub(super) replay: crate::api::contexts::UploadHttpReplayReadContext,
+    pub(super) delete: crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
 }
 
 impl FromRef<UploadEnabledRoute> for ApiQueryContext {
@@ -354,19 +356,23 @@ impl FromRef<UploadEnabledRoute> for ApiQueryContext {
     }
 }
 
-impl FromRef<UploadEnabledRoute> for crate::state::upload_http_write::UploadHttpWriteContext {
+impl FromRef<UploadEnabledRoute>
+    for crate::api::contexts::upload_http_write::UploadHttpWriteContext
+{
     fn from_ref(state: &UploadEnabledRoute) -> Self {
         state.write.clone()
     }
 }
 
-impl FromRef<UploadEnabledRoute> for crate::state::UploadHttpReplayReadContext {
+impl FromRef<UploadEnabledRoute> for crate::api::contexts::UploadHttpReplayReadContext {
     fn from_ref(state: &UploadEnabledRoute) -> Self {
         state.replay.clone()
     }
 }
 
-impl FromRef<UploadEnabledRoute> for crate::state::upload_http_delete::UploadHttpDeleteContext {
+impl FromRef<UploadEnabledRoute>
+    for crate::api::contexts::upload_http_delete::UploadHttpDeleteContext
+{
     fn from_ref(state: &UploadEnabledRoute) -> Self {
         state.delete.clone()
     }
@@ -385,7 +391,7 @@ pub(super) fn public_authorized_routes(state: &Arc<AppState>) -> Router {
             Router::new()
                 .route("/api/v1/anti-abuse/challenge", post(anti_abuse_challenge))
                 .with_state(authorized_route_state::<
-                    crate::state::http_challenge_endpoint::HttpChallengeEndpointContext,
+                    crate::api::contexts::http_challenge_endpoint::HttpChallengeEndpointContext,
                 >(state)),
         )
         .merge(
@@ -396,7 +402,7 @@ pub(super) fn public_authorized_routes(state: &Arc<AppState>) -> Router {
                     post(passkeys::register_finish),
                 )
                 .with_state(authorized_route_state::<
-                    crate::state::passkey_http::PasskeyAccountHttpContext,
+                    crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
                 >(state)),
         )
         .merge(

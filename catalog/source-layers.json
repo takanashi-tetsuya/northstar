@@ -75,9 +75,6 @@
     "src/api/admin.rs": [
       "state"
     ],
-    "src/api/auth_routes.rs": [
-      "state"
-    ],
     "src/api/mod.rs": [
       "state"
     ],
@@ -91,9 +88,6 @@
       "state"
     ],
     "src/api/system.rs": [
-      "state"
-    ],
-    "src/api/upload.rs": [
       "state"
     ],
     "src/api/users.rs": [

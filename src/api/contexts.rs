@@ -2,15 +2,31 @@
 //! service bindings handlers receive. The composition root constructs them and implements FromRef.
 
 pub(crate) mod api_queries;
+pub(crate) mod api_session_http;
 pub(crate) mod governance;
 pub(crate) mod http_body_admission;
+pub(crate) mod http_challenge_endpoint;
+pub(crate) mod http_login_endpoint;
 pub(crate) mod http_policy;
+pub(crate) mod http_registration_endpoint;
+pub(crate) mod omemo_poll;
+pub(crate) mod omemo_recovery_http;
+pub(crate) mod passkey_http;
+pub(crate) mod passkey_login_finish;
+pub(crate) mod password_change_http;
 pub(crate) mod reports;
 pub(crate) mod retention_policy;
+pub(crate) mod upload_admission;
+pub(crate) mod upload_http_delete;
+pub(crate) mod upload_http_read;
+pub(crate) mod upload_http_write;
 
+pub(crate) use self::http_login_endpoint::HttpLoginEndpointContext;
 pub(crate) use self::http_policy::{
     AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext,
 };
+pub(crate) use self::passkey_login_finish::PasskeyLoginFinishContext;
+pub(crate) use self::upload_http_read::{UploadHttpReadContext, UploadHttpReplayReadContext};
 
 pub(crate) type AccountAdminContext = crate::services::account_admin::AccountAdminService<
     crate::db::account_admin_repository::PostgresAccountAdminRepository,
@@ -54,3 +70,12 @@ pub(crate) type ReportContext = reports::ReportContext<
 
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<crate::db::api_queries::PostgresApiQueryRepository>;
+
+pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
+    crate::db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
+>;
+
+pub(crate) type PasskeyService =
+    crate::services::passkeys::PasskeyService<crate::db::passkeys::PostgresPasskeyRepository>;
+pub(crate) type UploadService =
+    crate::services::upload::UploadService<crate::db::upload::PostgresUploadRepository>;

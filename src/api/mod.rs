@@ -13,8 +13,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::api::contexts::{
-    AdminGatewayVerifier, ApiQueryContext, HttpTransportPolicy, PublicDiscoveryContext,
-    RetentionPolicyContext,
+    api_session_http::ApiSessionHttpContext,
+    http_registration_endpoint::HttpRegistrationEndpointContext,
+    omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext,
+    AdminGatewayVerifier, ApiQueryContext, HttpLoginEndpointContext, HttpTransportPolicy,
+    OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
+    RetentionPolicyContext, UploadHttpReadContext,
 };
 use crate::auth;
 use crate::platform::error::{AppError, Result};
@@ -22,13 +26,7 @@ use crate::services::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
-use crate::state::{
-    api_session_http::ApiSessionHttpContext,
-    http_registration_endpoint::HttpRegistrationEndpointContext,
-    omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext, AppState,
-    HttpLoginEndpointContext, MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext,
-    UploadHttpReadContext,
-};
+use crate::state::{AppState, MetricsContext};
 
 use crate::services::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;

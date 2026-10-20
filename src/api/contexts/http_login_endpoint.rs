@@ -1,7 +1,6 @@
 //! REST login transport capability: credential use case, immutable proxy
 //! policy, and only the two counters this endpoint can increment.
 
-use super::AppState;
 use crate::db::http_login_repository::PostgresHttpLoginRepository;
 use crate::services::http_login::HttpLoginService;
 use std::net::IpAddr;
@@ -10,15 +9,15 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct HttpLoginEndpointContext {
-    service: HttpLoginService<PostgresHttpLoginRepository>,
-    trusted_proxies: Vec<IpAddr>,
-    counters: HttpLoginEndpointCounters,
+    pub(crate) service: HttpLoginService<PostgresHttpLoginRepository>,
+    pub(crate) trusted_proxies: Vec<IpAddr>,
+    pub(crate) counters: HttpLoginEndpointCounters,
 }
 
 #[derive(Clone)]
-struct HttpLoginEndpointCounters {
-    rate_limited: Arc<AtomicU64>,
-    backend_failures: Arc<AtomicU64>,
+pub(crate) struct HttpLoginEndpointCounters {
+    pub(crate) rate_limited: Arc<AtomicU64>,
+    pub(crate) backend_failures: Arc<AtomicU64>,
 }
 
 impl HttpLoginEndpointCounters {
@@ -32,17 +31,6 @@ impl HttpLoginEndpointCounters {
 }
 
 impl HttpLoginEndpointContext {
-    pub(super) fn from_state(state: &AppState) -> Self {
-        Self {
-            service: state.login_service.clone(),
-            trusted_proxies: state.config.trusted_proxy_ips.clone(),
-            counters: HttpLoginEndpointCounters {
-                rate_limited: Arc::clone(&state.metrics.rate_limited_total),
-                backend_failures: Arc::clone(&state.metrics.authentication_backend_failures_total),
-            },
-        }
-    }
-
     pub(crate) fn service(&self) -> &HttpLoginService<PostgresHttpLoginRepository> {
         &self.service
     }

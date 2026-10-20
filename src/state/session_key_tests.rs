@@ -1,6 +1,5 @@
 use super::{
-    admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, api_keyrings,
-    append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
+    api_keyrings, append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
     canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff, encode_api_control_entropy,
     ephemeral_api_control_secret, federation_rule_matches, insert_restored_muc_occupant,
     move_local_muc_nickname_exact_in, muc_actor_identity_matches, muc_departure_identity_matches,
@@ -17,6 +16,9 @@ use super::{
     MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
     StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
     SuspendedMucPhase, SuspendedMucRoute,
+};
+use crate::api::contexts::omemo_poll::{
+    admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, OMEMO_POLL_IP_REQUESTS_PER_MINUTE,
 };
 use dashmap::DashMap;
 use std::collections::{BTreeSet, VecDeque};
@@ -842,7 +844,7 @@ fn staged_route_cannot_reactivate_after_identity_or_revocation_fence_changes() {
 fn omemo_poll_ip_window_is_sliding_and_bounded() {
     let started = Instant::now();
     let mut window = VecDeque::new();
-    for offset in 0..super::OMEMO_POLL_IP_REQUESTS_PER_MINUTE {
+    for offset in 0..OMEMO_POLL_IP_REQUESTS_PER_MINUTE {
         assert!(admit_omemo_poll_ip_window(
             &mut window,
             started + Duration::from_millis(offset as u64),

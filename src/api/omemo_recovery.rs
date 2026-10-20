@@ -14,15 +14,13 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     api::{
-        ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
-        OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
+        contexts::omemo_recovery_http::OmemoRecoveryHttpContext, ApiJson, ApiPath,
+        OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest, OmemoRecoveryPrepareRequest,
+        OmemoRecoverySealRequest,
     },
     platform::error::AppError,
     services::omemo_recovery::*,
-    state::{
-        account_generation_teardown::AccountGenerationTeardownSequence,
-        omemo_recovery_http::OmemoRecoveryHttpContext,
-    },
+    state::account_generation_teardown::AccountGenerationTeardownSequence,
 };
 
 fn parse_sha256(value: &str) -> Result<[u8; 32], AppError> {
@@ -282,7 +280,7 @@ pub async fn consume_omemo_recovery(
 }
 
 pub async fn poll_omemo_recovery(
-    State(state): State<crate::state::OmemoRecoveryPollContext>,
+    State(state): State<crate::api::contexts::OmemoRecoveryPollContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,

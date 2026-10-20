@@ -1,6 +1,6 @@
 use crate::{
     jid::prepare_domainpart,
-    s2s::dane::{DaneMatch, DanePolicy},
+    security::dane::{DaneMatch, DanePolicy},
     state::AppState,
 };
 use anyhow::{Context, Result};

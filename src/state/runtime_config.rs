@@ -196,10 +196,10 @@ impl AppState {
     }
 
     pub(crate) fn s2s_dane_required(&self) -> bool {
-        self.config.federation_dane_mode == crate::s2s::dane::DaneMode::Required
+        self.config.federation_dane_mode == crate::security::dane::DaneMode::Required
     }
 
-    pub(crate) fn s2s_dane_mode(&self) -> crate::s2s::dane::DaneMode {
+    pub(crate) fn s2s_dane_mode(&self) -> crate::security::dane::DaneMode {
         self.config.federation_dane_mode
     }
 

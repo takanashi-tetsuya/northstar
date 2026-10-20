@@ -145,16 +145,11 @@
       "state"
     ],
     "src/platform/config.rs": [
-      "cluster",
-      "s2s"
+      "cluster"
     ],
     "src/platform/config/loading.rs": [
       "cluster",
-      "db",
-      "s2s"
-    ],
-    "src/platform/config/parsing.rs": [
-      "s2s"
+      "db"
     ],
     "src/platform/metrics.rs": [
       "db",

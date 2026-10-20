@@ -1,6 +1,6 @@
 //! Explicit trust anchor for the isolated `lab.test` federation fixture.
 
-use crate::{platform::config::read_secret_file, s2s::dane::DaneMode};
+use crate::{platform::config::read_secret_file, security::dane::DaneMode};
 use anyhow::{Context, Result};
 use hickory_resolver::proto::dnssec::TrustAnchors;
 use std::path::Path;

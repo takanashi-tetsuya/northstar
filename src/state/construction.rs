@@ -557,9 +557,10 @@ impl AppState {
         let lab_dnssec_anchor = config
             .federation_dnssec_lab_trust_anchor_path
             .as_deref()
-            .map(crate::s2s::lab_dnssec::load_anchor)
+            .map(crate::security::lab_dnssec::load_anchor)
             .transpose()?;
-        let s2s_dnssec_resolver = (config.federation_dane_mode != crate::s2s::dane::DaneMode::Off)
+        let s2s_dnssec_resolver = (config.federation_dane_mode
+            != crate::security::dane::DaneMode::Off)
             .then(|| {
                 let mut builder = TokioResolver::builder_with_config(
                     resolver_config,

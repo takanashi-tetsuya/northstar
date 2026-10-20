@@ -204,13 +204,13 @@ pub(super) async fn connect_secure_endpoint(
     endpoint: &FederationEndpoint,
 ) -> Result<SecureS2sConnection> {
     let dane_mode = state.s2s_dane_mode();
-    let dane_policy = if dane_mode == crate::s2s::dane::DaneMode::Off {
+    let dane_policy = if dane_mode == crate::security::dane::DaneMode::Off {
         None
     } else {
         let resolver = state
             .s2s_dnssec_resolver()
             .context("DANE is enabled but the validating DNSSEC resolver is unavailable")?;
-        crate::s2s::dane::lookup_dane_policy(
+        crate::security::dane::lookup_dane_policy(
             resolver,
             dane_mode,
             endpoint
@@ -294,7 +294,8 @@ pub(super) async fn connect_secure_endpoint(
         .map(|policy| policy.matching_credentials(&peer_certificates))
         .transpose()?
         .unwrap_or_default();
-    let dane_ee_authorized = dane_matches.contains(&crate::s2s::dane::DaneMatch::DaneEndEntity);
+    let dane_ee_authorized =
+        dane_matches.contains(&crate::security::dane::DaneMatch::DaneEndEntity);
     let identity =
         verify_peer_xmpp_identity(end_entity, target_domain)?.or(if endpoint.delegated_identity {
             verify_peer_xmpp_identity(end_entity, &endpoint.tls_server_name)?

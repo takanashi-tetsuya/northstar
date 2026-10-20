@@ -64,7 +64,7 @@ pub(super) fn parse_xep_0487_ips(value: &str) -> Result<Vec<IpAddr>> {
     }
     if addresses
         .iter()
-        .any(|address| !crate::s2s::dns::is_public_ip(*address))
+        .any(|address| !crate::security::address_scope::is_public_ip(*address))
     {
         anyhow::bail!("XEP_0487_IPS must contain only public, globally routable addresses");
     }

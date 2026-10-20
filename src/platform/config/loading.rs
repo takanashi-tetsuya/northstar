@@ -1019,11 +1019,12 @@ impl Config {
             .context("federation allowlist contains an invalid domain pattern")?;
         let federation_denylist = domain_list(&raw.federation_denylist)
             .context("federation denylist contains an invalid domain pattern")?;
-        let federation_dane_mode = crate::s2s::dane::DaneMode::parse(&raw.federation_dane_mode)?;
+        let federation_dane_mode =
+            crate::security::dane::DaneMode::parse(&raw.federation_dane_mode)?;
         raw.federation_dane_mode = match federation_dane_mode {
-            crate::s2s::dane::DaneMode::Off => "off",
-            crate::s2s::dane::DaneMode::Opportunistic => "opportunistic",
-            crate::s2s::dane::DaneMode::Required => "required",
+            crate::security::dane::DaneMode::Off => "off",
+            crate::security::dane::DaneMode::Opportunistic => "opportunistic",
+            crate::security::dane::DaneMode::Required => "required",
         }
         .to_owned();
         if raw.c2s_client_crl_path.is_some() && raw.c2s_client_trust_root_cert_path.is_none() {
@@ -1055,7 +1056,7 @@ impl Config {
                 direct_tls,
             ));
         }
-        crate::s2s::lab_dnssec::validate_settings(
+        crate::security::lab_dnssec::validate_settings(
             raw.federation_dnssec_lab_trust_anchor_path.as_deref(),
             federation_dane_mode,
             &domain,

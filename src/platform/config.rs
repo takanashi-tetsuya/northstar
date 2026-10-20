@@ -197,7 +197,7 @@ pub struct Config {
     pub federation_denylist: Vec<String>,
     /// Test/private-network endpoint overrides. The boolean selects Direct TLS.
     pub federation_dns_overrides: Vec<(String, SocketAddr, bool)>,
-    pub federation_dane_mode: crate::s2s::dane::DaneMode,
+    pub federation_dane_mode: crate::security::dane::DaneMode,
     pub stun_service: Option<(String, u16)>,
     pub turn_service: Option<(String, u16)>,
     pub components: Vec<ComponentCredential>,

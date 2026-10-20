@@ -158,6 +158,7 @@ mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 pub(crate) mod account_deletion_recovery;
 pub(crate) mod account_generation_teardown;
+pub(crate) mod account_recovery;
 pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
 pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;

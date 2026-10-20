@@ -3733,7 +3733,7 @@ if (/\bstate\s*\.metrics\b/.test(mixProtocol)
     || !/self\s*\.\s*cluster_delivery\s*\.\s*send_mix\s*\(/.test(mixOutboxContext)) {
   throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
 }
-const accountRecoverySource = read('src/security/account_recovery.rs');
+const accountRecoverySource = read('src/state/account_recovery.rs');
 const accountRecoveryTelemetry = structBody(accountRecoverySource, 'pub(crate) struct AccountDeletionRecoveryTelemetry');
 if (/\.metrics\b/.test(accountRecoverySource)
     || /Arc<(?:(?:crate::)?(?:platform::)?metrics::)?Metrics>/.test(accountRecoveryTelemetry)

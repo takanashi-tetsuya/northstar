@@ -492,7 +492,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(1_200)),
         cancel.clone(),
         move |heartbeat| {
-            security::account_recovery::serve(
+            state::account_recovery::serve(
                 Arc::clone(&deletion_context),
                 deletion_cancel.clone(),
                 heartbeat,

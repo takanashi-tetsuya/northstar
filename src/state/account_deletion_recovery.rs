@@ -1,6 +1,7 @@
 //! Capabilities needed to finish a committed account deletion and retry it.
 
 use super::{
+    account_recovery::AccountDeletionRecoveryTelemetry,
     account_teardown_runtime::AccountTeardownRuntime, cluster_routing::RemoteRosterPushFailure,
     session_cleanup_sm_revoker::SessionCleanupSmRevoker, session_entries_for_in, AppState,
     OnlineSession, RuntimeFederationPolicy,
@@ -10,7 +11,6 @@ use crate::{
     db::account_repository::PostgresAccountRepository,
     platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
-    security::account_recovery::AccountDeletionRecoveryTelemetry,
     services::account::{AccountService, DeletionRecoveryJob, RemovedAccount},
     xmpp::xml_builder::XmlElement,
 };

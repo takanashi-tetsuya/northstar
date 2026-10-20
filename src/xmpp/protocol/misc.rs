@@ -488,11 +488,9 @@ impl ProtocolSession {
                 )));
             }
         }
-        match crate::security::account_recovery::finalize(&self.state, user.id, &user.username)
-            .await
-        {
-            Ok(crate::security::account_recovery::FinalizeAccountDeletion::Deleted) => {}
-            Ok(crate::security::account_recovery::FinalizeAccountDeletion::Missing) => {
+        match crate::state::account_recovery::finalize(&self.state, user.id, &user.username).await {
+            Ok(crate::state::account_recovery::FinalizeAccountDeletion::Deleted) => {}
+            Ok(crate::state::account_recovery::FinalizeAccountDeletion::Missing) => {
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "registration-required",

@@ -174,10 +174,6 @@
     "src/security/abuse/key_management.rs": [
       "db"
     ],
-    "src/security/account_recovery.rs": [
-      "state",
-      "xmpp"
-    ],
     "src/services/federation_outbox.rs": [
       "s2s"
     ],

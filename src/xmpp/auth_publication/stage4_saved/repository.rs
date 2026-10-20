@@ -1,6 +1,7 @@
 //! Finite repository replies only. No SQL, executor, timer or bearer issue.
 use super::*;
 use crate::auth;
+use crate::platform::config::SmIpPolicy;
 use crate::services::authentication::publication::{
     self as observation, CredentialInvocation, CredentialPreparation, PreparationResult,
 };

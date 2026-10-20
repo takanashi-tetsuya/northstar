@@ -387,7 +387,8 @@ async fn mutation_admission_waits_before_database_capacity_and_fails_bounded() {
         .acquire_with_timeout(&["alice@example.test"], false, Duration::from_millis(50))
         .await
         .unwrap();
-    let rejected_before = pubsub_mutation_admission_rejections_total();
+    let rejected_before =
+        northstar_pubsub_application::pubsub_mutation_admission_rejections_total();
     let error = admission
         .acquire_with_timeout(&["alice@example.test"], false, Duration::from_millis(20))
         .await
@@ -395,7 +396,10 @@ async fn mutation_admission_waits_before_database_capacity_and_fails_bounded() {
     assert!(error
         .downcast_ref::<northstar_pubsub_application::PubSubMutationBusy>()
         .is_some());
-    assert!(pubsub_mutation_admission_rejections_total() > rejected_before);
+    assert!(
+        northstar_pubsub_application::pubsub_mutation_admission_rejections_total()
+            > rejected_before
+    );
     drop(first);
 
     admission

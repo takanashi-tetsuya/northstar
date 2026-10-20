@@ -2,6 +2,7 @@
 
 pub(crate) mod ownership;
 
+use crate::platform::config::SmIpPolicy;
 use crate::services::authentication::publication::{CredentialInvocation, PreparedCredential};
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
@@ -218,24 +219,6 @@ pub(crate) enum SmSessionCreationOutcome {
 pub(crate) struct SmCheckpointOutcome {
     pub(crate) updated: bool,
     pub(crate) ownership: SmQueueOwnershipResolution,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SmIpPolicy {
-    None,
-    Exact,
-    Subnet,
-}
-
-impl SmIpPolicy {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "none" => Some(Self::None),
-            "exact" => Some(Self::Exact),
-            "subnet" => Some(Self::Subnet),
-            _ => None,
-        }
-    }
 }
 
 pub(crate) struct SmResumeClaimRequest<'a> {

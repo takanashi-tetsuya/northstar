@@ -1,13 +1,13 @@
+use crate::platform::delivery_counters::S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL;
 use anyhow::{Context, Result};
 
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use sqlx::{Postgres, Transaction};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 const OUTBOX_ADVISORY_LOCK: i64 = 0x4e53_5332_534f_5554;
-static OUTBOX_CAPACITY_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub use northstar_federation_core::{
     ExpiredS2sOutboxItem, S2sOutboxItem, S2sOutboxPolicy, MAX_S2S_STANZA_BYTES,
 };
@@ -27,10 +27,6 @@ pub struct S2sOutboxSnapshot {
     pub due_rows: i64,
     pub locked_rows: i64,
     pub component_pending_rows: i64,
-}
-
-pub fn s2s_outbox_capacity_rejections_total() -> u64 {
-    OUTBOX_CAPACITY_REJECTIONS_TOTAL.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -261,7 +257,7 @@ pub(crate) async fn enqueue_s2s_outbox_with_id_in_transaction(
     let byte_count: i64 = totals.try_get("byte_count")?;
     let stanza_bytes = i64::try_from(stanza.len()).context("federation stanza is too large")?;
     if row_count >= policy.max_rows || byte_count.saturating_add(stanza_bytes) > policy.max_bytes {
-        OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
+        S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
         anyhow::bail!("durable federation outbox reached its global capacity");
     }
 
@@ -272,7 +268,7 @@ pub(crate) async fn enqueue_s2s_outbox_with_id_in_transaction(
     .fetch_one(&mut **transaction)
     .await?;
     if domain_count >= policy.max_per_domain {
-        OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
+        S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
         anyhow::bail!("durable federation outbox reached its per-domain capacity");
     }
 

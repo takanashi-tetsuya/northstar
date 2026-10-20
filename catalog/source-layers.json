@@ -144,13 +144,6 @@
     "src/cluster/workers.rs": [
       "state"
     ],
-    "src/platform/config/loading.rs": [
-      "db"
-    ],
-    "src/platform/metrics.rs": [
-      "db",
-      "services"
-    ],
     "src/s2s/components.rs": [
       "state"
     ],

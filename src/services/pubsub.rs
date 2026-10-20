@@ -6,9 +6,6 @@ use anyhow::Result;
 pub(crate) use northstar_pubsub_application::{
     authorization_precheck, existing_node_publish_admission_outcome,
     is_pubsub_mutation_busy as is_pubsub_mutation_busy_core, publish_validation_outcome,
-    pubsub_mutation_admission_active as pubsub_mutation_admission_active_core,
-    pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
-    pubsub_mutation_admission_waiters as pubsub_mutation_admission_waiters_core,
     subscription_options_precheck, validate_pep_commit_legacy_bookmarks_command,
     validate_pep_configure_node_command, validate_pep_create_node_command,
     validate_pep_delete_node_command, validate_pep_publish_command,
@@ -86,18 +83,6 @@ mod repository_access;
 
 pub(crate) type PubSubMutationAdmission = northstar_pubsub_application::PubSubMutationAdmission;
 pub(crate) type PubSubMutationPermit = ApplicationPubSubMutationPermit;
-
-pub(crate) fn pubsub_mutation_admission_rejections_total() -> u64 {
-    pubsub_mutation_admission_rejections_total_core()
-}
-
-pub(crate) fn pubsub_mutation_admission_waiters() -> u64 {
-    pubsub_mutation_admission_waiters_core()
-}
-
-pub(crate) fn pubsub_mutation_admission_active() -> u64 {
-    pubsub_mutation_admission_active_core()
-}
 
 pub(crate) fn is_pubsub_mutation_busy(error: &anyhow::Error) -> bool {
     is_pubsub_mutation_busy_core(error)

@@ -1,3 +1,7 @@
+use crate::platform::delivery_counters::{
+    MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL, MIX_DELIVERY_DEAD_LETTERS_TOTAL,
+    MIX_DELIVERY_LEASE_LOST_TOTAL, MIX_DELIVERY_RETRIES_TOTAL,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
@@ -9,7 +13,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::Ordering,
 };
 use uuid::Uuid;
 
@@ -235,11 +239,6 @@ const MIX_DELIVERY_LEASE_SECONDS: i64 = 90;
 // the transport write deadline and shorter than a normal worker lease; a
 // failed process therefore recovers through the same ordered claim path.
 const MIX_SOCKET_WRITE_FENCE_SECONDS: i64 = 30;
-
-static MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static MIX_DELIVERY_LEASE_LOST_TOTAL: AtomicU64 = AtomicU64::new(0);
-static MIX_DELIVERY_DEAD_LETTERS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static MIX_DELIVERY_RETRIES_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// MIX recommends the RFC 7700 nickname profile of PRECIS OpaqueString. The
 /// resourcepart preparation used by RFC 7622 has the same case-preserving

@@ -2,22 +2,6 @@
 
 use super::*;
 
-pub(crate) fn mix_delivery_capacity_rejections_total() -> u64 {
-    MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL.load(Ordering::Relaxed)
-}
-
-pub(crate) fn mix_delivery_lease_lost_total() -> u64 {
-    MIX_DELIVERY_LEASE_LOST_TOTAL.load(Ordering::Relaxed)
-}
-
-pub(crate) fn mix_delivery_dead_letters_total() -> u64 {
-    MIX_DELIVERY_DEAD_LETTERS_TOTAL.load(Ordering::Relaxed)
-}
-
-pub(crate) fn mix_delivery_retries_total() -> u64 {
-    MIX_DELIVERY_RETRIES_TOTAL.load(Ordering::Relaxed)
-}
-
 /// Fail-closed startup proof for the MIX delivery capacity protocol. Pending
 /// release facts are still charged to the ledger until the next admission
 /// folds them, so the invariant is exact without mutating recovery state.

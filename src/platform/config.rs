@@ -280,6 +280,24 @@ impl Config {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SmIpPolicy {
+    None,
+    Exact,
+    Subnet,
+}
+
+impl SmIpPolicy {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "exact" => Some(Self::Exact),
+            "subnet" => Some(Self::Subnet),
+            _ => None,
+        }
+    }
+}
+
 // Forward raw fields for convenience
 impl std::ops::Deref for Config {
     type Target = RawConfig;

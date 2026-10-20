@@ -3,7 +3,7 @@ use crate::services::authentication::publication::{
     credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
     PreparationResult,
 };
-use crate::{db, services::sm::*};
+use crate::{db, platform::config::SmIpPolicy, services::sm::*};
 use anyhow::Result;
 use sqlx::PgPool;
 use std::sync::Arc;

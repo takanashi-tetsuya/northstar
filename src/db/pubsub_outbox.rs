@@ -1,3 +1,7 @@
+use crate::platform::delivery_counters::{
+    PUBSUB_OUTBOX_CAPACITY_REJECTIONS_TOTAL, PUBSUB_OUTBOX_DEAD_LETTERS_TOTAL,
+    PUBSUB_OUTBOX_LEASE_LOST_TOTAL, PUBSUB_OUTBOX_RETRIES_TOTAL,
+};
 use anyhow::{Context, Result};
 use chrono::Utc;
 pub use northstar_pubsub_core::{
@@ -6,20 +10,11 @@ pub use northstar_pubsub_core::{
     PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::{
-    collections::HashMap,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{collections::HashMap, sync::atomic::Ordering};
 use uuid::Uuid;
 
 pub const PUBSUB_OUTBOX_MAX_ATTEMPTS: i32 = 20;
 const PUBSUB_OUTBOX_LEASE_SECONDS: i64 = 30;
-
-static CAPACITY_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static DEAD_LETTERS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static LEASE_LOST_TOTAL: AtomicU64 = AtomicU64::new(0);
-static RETRIES_TOTAL: AtomicU64 = AtomicU64::new(0);
-static UNVERIFIABLE_PEP_DROPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// Insert an immutable audience snapshot inside the caller's mutation
 /// transaction. A capacity error aborts the mutation: accepting a state change
@@ -143,7 +138,7 @@ pub async fn enqueue_pubsub_outbox_in_transaction(
                 || error.to_string().contains("queued_rows")
                 || error.to_string().contains("queued_bytes")
             {
-                CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                PUBSUB_OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
             }
             return Err(error).context("failed to atomically project PubSub notification outbox");
         }
@@ -348,10 +343,10 @@ pub async fn retry_pubsub_outbox(
     .await?
     .rows_affected();
     if updated == 1 {
-        RETRIES_TOTAL.fetch_add(1, Ordering::Relaxed);
+        PUBSUB_OUTBOX_RETRIES_TOTAL.fetch_add(1, Ordering::Relaxed);
         Ok(PubSubOutboxFailureDisposition::Retry)
     } else {
-        LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
+        PUBSUB_OUTBOX_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
         Ok(PubSubOutboxFailureDisposition::LeaseLost)
     }
 }
@@ -402,10 +397,10 @@ pub async fn dead_letter_pubsub_outbox(
     .rows_affected();
     transaction.commit().await?;
     if inserted == 1 {
-        DEAD_LETTERS_TOTAL.fetch_add(1, Ordering::Relaxed);
+        PUBSUB_OUTBOX_DEAD_LETTERS_TOTAL.fetch_add(1, Ordering::Relaxed);
         Ok(PubSubOutboxFailureDisposition::DeadLettered)
     } else {
-        LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
+        PUBSUB_OUTBOX_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
         Ok(PubSubOutboxFailureDisposition::LeaseLost)
     }
 }
@@ -446,7 +441,7 @@ pub async fn expire_pubsub_outbox(pool: &PgPool, limit: i64) -> Result<u64> {
     .bind(limit)
     .execute(pool)
     .await?;
-    DEAD_LETTERS_TOTAL.fetch_add(result.rows_affected(), Ordering::Relaxed);
+    PUBSUB_OUTBOX_DEAD_LETTERS_TOTAL.fetch_add(result.rows_affected(), Ordering::Relaxed);
     Ok(result.rows_affected())
 }
 
@@ -510,30 +505,6 @@ pub async fn pubsub_outbox_snapshot(pool: &PgPool) -> Result<PubSubOutboxSnapsho
         due_rows: row.get("due_rows"),
         dead_letter_rows,
     })
-}
-
-pub fn pubsub_outbox_capacity_rejections_total() -> u64 {
-    CAPACITY_REJECTIONS_TOTAL.load(Ordering::Relaxed)
-}
-
-pub fn pubsub_outbox_dead_letters_total() -> u64 {
-    DEAD_LETTERS_TOTAL.load(Ordering::Relaxed)
-}
-
-pub fn pubsub_outbox_lease_lost_total() -> u64 {
-    LEASE_LOST_TOTAL.load(Ordering::Relaxed)
-}
-
-pub fn pubsub_outbox_retries_total() -> u64 {
-    RETRIES_TOTAL.load(Ordering::Relaxed)
-}
-
-pub fn record_unverifiable_pep_drop() {
-    UNVERIFIABLE_PEP_DROPS_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-
-pub fn pubsub_outbox_unverifiable_pep_drops_total() -> u64 {
-    UNVERIFIABLE_PEP_DROPS_TOTAL.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

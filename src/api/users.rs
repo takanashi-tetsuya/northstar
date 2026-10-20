@@ -20,7 +20,7 @@ use crate::state::{
 };
 
 pub async fn me(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let user = current_user_with_queries(&state, &headers).await?;
@@ -293,7 +293,7 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
 }
 
 pub async fn history(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<HistoryQuery>,
 ) -> Result<Json<Value>, AppError> {

@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
+use crate::api::contexts::ReportContext;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
@@ -17,7 +18,6 @@ use crate::services::{
     api_mutations::*,
     reports::{ReportCommit, ReportEvidenceInput, ReportInput},
 };
-use crate::state::ReportContext;
 
 async fn report_user(state: &ReportContext, headers: &HeaderMap) -> Result<ApiUser, AppError> {
     let token = bearer_token(headers)?;
@@ -93,7 +93,7 @@ pub async fn create_report(
 }
 
 pub async fn my_reports(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<ReportPageQuery>,
 ) -> Result<Json<Value>, AppError> {

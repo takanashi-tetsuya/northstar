@@ -12,7 +12,7 @@ pub(crate) struct GovernanceContext<R> {
     metrics: Arc<Metrics>,
 }
 impl<R: GovernanceRepository> GovernanceContext<R> {
-    pub(super) fn new(service: GovernanceService<R>, metrics: Arc<Metrics>) -> Self {
+    pub(crate) fn new(service: GovernanceService<R>, metrics: Arc<Metrics>) -> Self {
         Self { service, metrics }
     }
     fn record(

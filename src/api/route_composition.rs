@@ -66,9 +66,9 @@ pub(super) fn administrator_command_routes(
                     "/api/v1/admin/offline_messages",
                     get(admin_offline_messages_stats).delete(admin_clear_offline_messages),
                 )
-                .with_state(authorized_route_state::<crate::state::AccountAdminContext>(
-                    state,
-                )),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::AccountAdminContext,
+                >(state)),
         )
         .merge(
             Router::new()
@@ -83,7 +83,9 @@ pub(super) fn administrator_command_routes(
                 )
                 .route("/api/v1/admin/broadcast", post(admin_broadcast))
                 .route("/api/v1/admin/tls/reload", post(admin_tls_reload))
-                .with_state(authorized_route_state::<crate::state::AdminDispatchContext>(state)),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::AdminDispatchContext,
+                >(state)),
         )
         .merge(
             Router::new()
@@ -110,7 +112,7 @@ pub(super) fn administrator_command_routes(
                 .route("/api/v1/admin/reports/{id}", patch(admin_update_report))
                 .route("/api/v1/admin/appeals/{id}", patch(admin_update_appeal))
                 .with_state(authorized_route_state::<
-                    crate::state::ReportModerationContext,
+                    crate::api::contexts::ReportModerationContext,
                 >(state)),
         )
         .merge(
@@ -127,7 +129,9 @@ pub(super) fn administrator_command_routes(
                     "/api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile",
                     post(reconcile_target),
                 )
-                .with_state(authorized_route_state::<crate::state::OperationAdminContext>(state)),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::OperationAdminContext,
+                >(state)),
         )
         .merge(
             Router::new()
@@ -144,9 +148,9 @@ pub(super) fn administrator_command_routes(
                     post(export_legal_hold),
                 )
                 .route("/api/v1/admin/audit/export", post(export_audit))
-                .with_state(authorized_route_state::<crate::state::GovernanceContext>(
-                    state,
-                )),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::GovernanceContext,
+                >(state)),
         );
     if upload_runtime_enabled {
         router = router.merge(
@@ -155,9 +159,9 @@ pub(super) fn administrator_command_routes(
                     "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
                     post(admin_retry_upload_dead_letter),
                 )
-                .with_state(authorized_route_state::<crate::state::UploadAdminContext>(
-                    state,
-                )),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::UploadAdminContext,
+                >(state)),
         );
     }
     if invitation_enabled {
@@ -171,7 +175,9 @@ pub(super) fn administrator_command_routes(
                     "/api/v1/admin/invitations/{id}",
                     delete(admin_revoke_invitation),
                 )
-                .with_state(authorized_route_state::<crate::state::InvitationAdminContext>(state)),
+                .with_state(authorized_route_state::<
+                    crate::api::contexts::InvitationAdminContext,
+                >(state)),
         );
     }
     router
@@ -242,19 +248,19 @@ macro_rules! authorized_command_context {
 }
 
 authorized_command_context!(
-    crate::state::AccountAdminContext,
-    crate::state::AdminDispatchContext,
-    crate::state::GovernanceContext,
+    crate::api::contexts::AccountAdminContext,
+    crate::api::contexts::AdminDispatchContext,
+    crate::api::contexts::GovernanceContext,
     crate::state::http_challenge_endpoint::HttpChallengeEndpointContext,
-    crate::state::InvitationAdminContext,
-    crate::state::OperationAdminContext,
+    crate::api::contexts::InvitationAdminContext,
+    crate::api::contexts::OperationAdminContext,
     crate::state::passkey_http::PasskeyAccountHttpContext,
     crate::state::passkey_http::PasskeyStartHttpContext,
     crate::state::RegistrationAdminContext,
-    crate::state::ReportContext,
-    crate::state::ReportModerationContext,
+    crate::api::contexts::ReportContext,
+    crate::api::contexts::ReportModerationContext,
     crate::state::SessionAdminContext,
-    crate::state::UploadAdminContext,
+    crate::api::contexts::UploadAdminContext,
     crate::state::upload_http_delete::UploadHttpDeleteContext,
 );
 
@@ -405,7 +411,7 @@ pub(super) fn public_authorized_routes(state: &Arc<AppState>) -> Router {
             Router::new()
                 .route("/api/v1/reports", get(my_reports).post(create_report))
                 .route("/api/v1/reports/{id}/appeals", post(create_appeal))
-                .with_state(authorized_route_state::<crate::state::ReportContext>(state)),
+                .with_state(authorized_route_state::<crate::api::contexts::ReportContext>(state)),
         )
 }
 

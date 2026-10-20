@@ -1,7 +1,7 @@
 //! Shared REST keyset-pagination policy.
 
 use crate::{
-    platform::error::AppError, services::api_queries::PageBoundary, state::ApiQueryContext,
+    api::contexts::ApiQueryContext, platform::error::AppError, services::api_queries::PageBoundary,
 };
 use chrono::{DateTime, Utc};
 use uuid::Uuid;

@@ -9,7 +9,7 @@ use axum::{
 };
 use std::net::SocketAddr;
 
-use crate::{platform::error::AppError, state::HttpTransportPolicy};
+use crate::{api::contexts::HttpTransportPolicy, platform::error::AppError};
 
 pub(super) async fn read_rest_body(
     State(policy): State<HttpTransportPolicy>,

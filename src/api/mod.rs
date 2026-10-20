@@ -12,6 +12,10 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::api::contexts::{
+    AdminGatewayVerifier, ApiQueryContext, HttpTransportPolicy, PublicDiscoveryContext,
+    RetentionPolicyContext,
+};
 use crate::auth;
 use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
@@ -21,10 +25,9 @@ use crate::services::api_mutations::{
 use crate::state::{
     api_session_http::ApiSessionHttpContext,
     http_registration_endpoint::HttpRegistrationEndpointContext,
-    omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext,
-    AdminGatewayVerifier, ApiQueryContext, AppState, HttpLoginEndpointContext, HttpTransportPolicy,
-    MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
-    RetentionPolicyContext, UploadHttpReadContext,
+    omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext, AppState,
+    HttpLoginEndpointContext, MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext,
+    UploadHttpReadContext,
 };
 
 use crate::services::abuse::GuardError;
@@ -50,6 +53,7 @@ use self::route_composition::{
 };
 
 mod body_limits;
+pub(crate) mod contexts;
 pub mod extract;
 pub(crate) mod governance_cursor;
 pub use extract::{ApiPath, ApiQuery};
@@ -822,7 +826,7 @@ impl Deref for ApiUser {
 }
 
 pub(crate) async fn current_user_with_queries(
-    state: &crate::state::ApiQueryContext,
+    state: &crate::api::contexts::ApiQueryContext,
     headers: &HeaderMap,
 ) -> Result<ApiUser, AppError> {
     let _authentication_timer = state.authentication_timer();
@@ -861,12 +865,13 @@ impl Deref for ApiAdmin {
 impl<S> FromRequestParts<S> for ApiAdmin
 where
     S: Send + Sync,
-    crate::state::ApiQueryContext: axum::extract::FromRef<S>,
+    crate::api::contexts::ApiQueryContext: axum::extract::FromRef<S>,
 {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let state = <crate::state::ApiQueryContext as axum::extract::FromRef<S>>::from_ref(state);
+        let state =
+            <crate::api::contexts::ApiQueryContext as axum::extract::FromRef<S>>::from_ref(state);
         let token = bearer_token(&parts.headers)?;
         let user = state
             .api_query_service()

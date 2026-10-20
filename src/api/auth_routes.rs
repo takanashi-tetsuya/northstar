@@ -228,7 +228,7 @@ pub async fn logout(
 
 pub async fn anti_abuse_challenge(
     State(context): State<HttpChallengeEndpointContext>,
-    State(queries): State<crate::state::ApiQueryContext>,
+    State(queries): State<crate::api::contexts::ApiQueryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<ChallengeRequest>,

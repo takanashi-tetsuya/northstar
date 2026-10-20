@@ -15,10 +15,10 @@ pub(crate) struct PublicDiscoveryPolicy {
     pub(crate) public_url: String,
     pub(crate) trusted_proxy_ips: Vec<IpAddr>,
     pub(crate) websocket_allowed_origins: Vec<String>,
-    pub(super) configured_registration_mode: RegistrationMode,
-    pub(super) registration_dependency_locked: bool,
+    pub(crate) configured_registration_mode: RegistrationMode,
+    pub(crate) registration_dependency_locked: bool,
     pub(crate) require_encrypted_archive: bool,
-    pub(super) federation_configured: bool,
+    pub(crate) federation_configured: bool,
     pub(crate) rest_api_enabled: bool,
     pub(crate) websocket_enabled: bool,
     pub(crate) bosh_enabled: bool,
@@ -46,7 +46,7 @@ pub(crate) struct PublicDiscoveryContext {
 }
 
 impl PublicDiscoveryContext {
-    pub(super) fn new(
+    pub(crate) fn new(
         policy: PublicDiscoveryPolicy,
         registration_closed: Arc<AtomicBool>,
         island_mode: Arc<AtomicBool>,

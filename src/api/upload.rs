@@ -650,7 +650,7 @@ pub async fn upload_get(
 
 pub async fn upload_delete(
     State(state): State<UploadHttpDeleteContext>,
-    State(queries): State<crate::state::ApiQueryContext>,
+    State(queries): State<crate::api::contexts::ApiQueryContext>,
     axum::Extension(request_id): axum::Extension<crate::api::ApiRequestId>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,

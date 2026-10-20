@@ -5,9 +5,6 @@ pub(crate) type BoshReplayService =
 pub(crate) type BoshMixService =
     crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>;
 
-pub(crate) type AccountAdminContext = crate::services::account_admin::AccountAdminService<
-    db::account_admin_repository::PostgresAccountAdminRepository,
->;
 pub(crate) type RegistrationAdminContext = crate::services::account_admin::RegistrationAdminService<
     db::account_admin_repository::PostgresRegistrationAdminRepository,
     account_admin::LocalRegistrationCache,
@@ -32,12 +29,6 @@ impl axum::extract::FromRef<Arc<AppState>> for SessionAdminContext {
     }
 }
 
-pub(crate) mod http_body_admission;
-pub(crate) mod http_policy;
-pub(crate) use http_policy::{AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext};
-pub(crate) type AdminDispatchContext = crate::services::admin_dispatch::AdminDispatchService<
-    db::admin_dispatch_repository::PostgresAdminDispatchRepository,
->;
 impl axum::extract::FromRef<Arc<AppState>> for AdminDispatchContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.admin_dispatch_service.clone()
@@ -57,70 +48,42 @@ pub(crate) type CapacityLeaseReaperContext = capacity_maintenance::CapacityLease
     db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
 >;
 
-pub(crate) type InvitationAdminContext = crate::services::invitation_admin::InvitationAdminService<
-    db::invitation_admin_repository::PostgresInvitationAdminRepository,
->;
 impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.invitation_admin_service.clone()
     }
 }
 
-pub(crate) mod governance;
-pub(crate) type GovernanceContext = governance::GovernanceContext<
-    db::governance_repository::PostgresGovernanceRepository<
-        crate::api::governance_cursor::SignedGovernanceCursors,
-    >,
->;
 impl axum::extract::FromRef<Arc<AppState>> for GovernanceContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.governance_context.clone()
     }
 }
 
-pub(crate) mod retention_policy;
-pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContext<
-    db::retention_policy_repository::PostgresRetentionPolicyRepository,
->;
 impl axum::extract::FromRef<Arc<AppState>> for RetentionPolicyContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.retention_policy_context.clone()
     }
 }
 
-pub(crate) type ReportModerationContext =
-    crate::services::report_moderation::ReportModerationService<
-        db::report_moderation_repository::PostgresReportModerationRepository,
-    >;
 impl axum::extract::FromRef<Arc<AppState>> for ReportModerationContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.report_moderation_service.clone()
     }
 }
 
-pub(crate) type UploadAdminContext = crate::services::upload_admin::UploadAdminService<
-    db::upload_admin_repository::PostgresUploadAdminRepository,
->;
 impl axum::extract::FromRef<Arc<AppState>> for UploadAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.upload_admin_service.clone()
     }
 }
 
-pub(crate) type OperationAdminContext = crate::services::operations::OperationAdminService<
-    db::operation_admin_repository::PostgresOperationAdminRepository,
->;
 impl axum::extract::FromRef<Arc<AppState>> for OperationAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.operation_admin_service.clone()
     }
 }
 
-pub(crate) mod reports;
-pub(crate) type ReportContext = reports::ReportContext<
-    db::report_repository::PostgresReportRepository,
-    db::api_queries::PostgresApiQueryRepository,
->;
 impl axum::extract::FromRef<Arc<AppState>> for ReportContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         reports::ReportContext::new(
@@ -141,7 +104,7 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
         state.omemo_recovery_poll_context()
     }
 }
-pub(crate) mod api_queries;
+mod api_query_presence;
 pub(crate) mod api_session_http;
 pub(crate) mod http_challenge_endpoint;
 mod http_login_endpoint;
@@ -233,8 +196,6 @@ pub(crate) mod sm_teardown_runtime;
 mod sm_teardown_session;
 pub(crate) mod standalone_muc_maintenance;
 pub(crate) mod suspension;
-pub(crate) type ApiQueryContext =
-    api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;
 
 impl axum::extract::FromRef<Arc<AppState>> for ApiQueryContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
@@ -260,6 +221,13 @@ impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReadContext {
     }
 }
 
+use crate::api::contexts::{
+    api_queries, governance, http_body_admission, http_policy, reports, retention_policy,
+    AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier, ApiQueryContext,
+    GovernanceContext, HttpTransportPolicy, InvitationAdminContext, OperationAdminContext,
+    PublicDiscoveryContext, ReportContext, ReportModerationContext, RetentionPolicyContext,
+    UploadAdminContext,
+};
 use crate::{
     db,
     platform::config::{

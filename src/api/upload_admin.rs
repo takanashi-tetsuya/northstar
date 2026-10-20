@@ -110,7 +110,7 @@ fn boundary_from_position(
 }
 
 async fn dead_letter_boundary(
-    state: &crate::state::ApiQueryContext,
+    state: &crate::api::contexts::ApiQueryContext,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
     kind: UploadDeadLetterKind,
@@ -127,7 +127,7 @@ async fn dead_letter_boundary(
 }
 
 fn issue_dead_letter_cursor(
-    state: &crate::state::ApiQueryContext,
+    state: &crate::api::contexts::ApiQueryContext,
     binding: &CursorBinding<'_>,
     next: Option<UploadDeadLetterBoundary>,
     database_now: DateTime<Utc>,
@@ -290,7 +290,7 @@ fn view(kind: UploadDeadLetterKind, row: UploadDeadLetterRecord) -> UploadDeadLe
 }
 
 pub async fn admin_upload_dead_letters(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<UploadDeadLetterPageQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -319,7 +319,7 @@ pub async fn admin_upload_dead_letters(
 }
 
 pub async fn admin_retry_upload_dead_letter(
-    State(service): State<crate::state::UploadAdminContext>,
+    State(service): State<crate::api::contexts::UploadAdminContext>,
     actor: ApiAdmin,
     ApiPath((kind, id)): ApiPath<(String, String)>,
     headers: HeaderMap,

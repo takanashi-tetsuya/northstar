@@ -953,8 +953,10 @@ impl AppState {
                 registration_dependency_locked: config.registration_dependency_locked(),
                 registration_closed: Arc::clone(&registration_closed),
                 island_mode: Arc::clone(&federation_write_policy.island_mode),
-                sessions: Arc::clone(&sessions),
-                occupants: Arc::clone(&muc_occupants),
+                presence: Arc::new(api_query_presence::LocalApiQueryPresence {
+                    sessions: Arc::clone(&sessions),
+                    occupants: Arc::clone(&muc_occupants),
+                }),
                 metrics: Arc::clone(&metrics),
                 started_at,
             },

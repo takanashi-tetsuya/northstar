@@ -2343,17 +2343,17 @@ for (const [name, source] of [
   ['SmSuspensionContext', read('src/state/suspension.rs')],
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
   ['ApiQueryService', read('src/services/api_queries.rs')],
-  ['ApiQueryContext', read('src/state/api_queries.rs')],
-  ['HTTP entry and public discovery policies', read('src/state/http_policy.rs')],
+  ['ApiQueryContext', read('src/api/contexts/api_queries.rs')],
+  ['HTTP entry and public discovery policies', read('src/api/contexts/http_policy.rs')],
   ['API mutation values', read('src/services/api_mutations.rs')],
   ['ReportService', read('src/services/reports.rs')],
-  ['ReportContext', read('src/state/reports.rs')],
+  ['ReportContext', read('src/api/contexts/reports.rs')],
   ['AccountAdminServices', read('src/services/account_admin.rs')],
   ['AccountAdminRuntime', read('src/state/account_admin.rs')],
   ['OperationAdminService', read('src/services/operations.rs')],
   ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
   ['GovernanceService', read('src/services/governance.rs')],
-  ['GovernanceContext', read('src/state/governance.rs')],
+  ['GovernanceContext', read('src/api/contexts/governance.rs')],
   ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
   ['FederationOutboxService', read('src/services/federation_outbox.rs')],
   ['TlsContext', readProductionModule('src/security/tls.rs', { root })],
@@ -2361,7 +2361,7 @@ for (const [name, source] of [
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],
   ['RetentionPolicyService', read('src/services/retention_policy.rs')],
-  ['RetentionPolicyContext', read('src/state/retention_policy.rs')],
+  ['RetentionPolicyContext', read('src/api/contexts/retention_policy.rs')],
   ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
   ['OmemoRecoveryPollContext', read('src/state/omemo_poll.rs')],
 ]) {
@@ -2386,7 +2386,7 @@ for (const [path, name] of [
 ]) {
   const body = structBody(read(path), `pub async fn ${name}(`);
   const signature = read(path).slice(read(path).indexOf(`pub async fn ${name}(`)).split(') ->')[0];
-  if (!signature.includes('State<crate::state::ApiQueryContext>')) {
+  if (!signature.includes('State<crate::api::contexts::ApiQueryContext>')) {
     throw new Error(`${name} must receive the narrow REST query context`);
   }
 
@@ -2422,21 +2422,21 @@ if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\
   throw new Error('SM suspension recovery must retain its narrow context');
 }
 for (const [path, names, context] of [
-  ['src/api/operations.rs', ['cancel_operation', 'reconcile_operation', 'reconcile_target'], 'OperationAdminContext'],
-  ['src/api/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'ReportModerationContext'],
-  ['src/api/admin.rs', ['admin_update_user', 'admin_clear_offline_messages'], 'AccountAdminContext'],
-  ['src/api/admin.rs', ['admin_toggle_registration'], 'RegistrationAdminContext'],
-  ['src/api/admin.rs', ['admin_kick_session'], 'SessionAdminContext'],
-  ['src/api/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'UploadAdminContext'],
-  ['src/api/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'InvitationAdminContext'],
-  ['src/api/admin.rs', ['admin_tls_reload', 'admin_panic_disconnect', 'admin_toggle_island_mode', 'admin_destroy_muc_room', 'admin_broadcast'], 'AdminDispatchContext'],
-  ['src/api/data_lifecycle.rs', ['get_my_retention', 'update_my_retention', 'get_muc_retention', 'update_muc_retention'], 'RetentionPolicyContext'],
+  ['src/api/operations.rs', ['cancel_operation', 'reconcile_operation', 'reconcile_target'], 'api::contexts::OperationAdminContext'],
+  ['src/api/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'api::contexts::ReportModerationContext'],
+  ['src/api/admin.rs', ['admin_update_user', 'admin_clear_offline_messages'], 'api::contexts::AccountAdminContext'],
+  ['src/api/admin.rs', ['admin_toggle_registration'], 'state::RegistrationAdminContext'],
+  ['src/api/admin.rs', ['admin_kick_session'], 'state::SessionAdminContext'],
+  ['src/api/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'api::contexts::UploadAdminContext'],
+  ['src/api/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'api::contexts::InvitationAdminContext'],
+  ['src/api/admin.rs', ['admin_tls_reload', 'admin_panic_disconnect', 'admin_toggle_island_mode', 'admin_destroy_muc_room', 'admin_broadcast'], 'api::contexts::AdminDispatchContext'],
+  ['src/api/data_lifecycle.rs', ['get_my_retention', 'update_my_retention', 'get_muc_retention', 'update_muc_retention'], 'api::contexts::RetentionPolicyContext'],
 ]) {
   const source = read(path);
   for (const name of names) {
     const body = structBody(source, `pub async fn ${name}(`);
     const signature = source.slice(source.indexOf(`pub async fn ${name}(`)).split(') ->')[0];
-    if (!signature.includes(`State<crate::state::${context}>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+    if (!signature.includes(`State<crate::${context}>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
       throw new Error(`${name} must retain its command service and narrow context`);
     }
   }
@@ -2495,12 +2495,12 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(registrationHttpContext)
 }
 const challengeHttpContext = structBody(read('src/state/http_challenge_endpoint.rs'), 'pub(crate) struct HttpChallengeEndpointContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(challengeHttpContext)
-    || !/pub async fn anti_abuse_challenge\(\s*State\(context\): State<HttpChallengeEndpointContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn anti_abuse_challenge\(\s*State\(context\): State<HttpChallengeEndpointContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/.test(read('src/api/auth_routes.rs'))) {
   throw new Error('anti-abuse challenge issuance must use scoped HTTP authority');
 }
 const uploadDeleteContext = structBody(read('src/state/upload_http_delete.rs'), 'pub(crate) struct UploadHttpDeleteContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
-    || !/pub async fn upload_delete\(\s*State\(state\): State<UploadHttpDeleteContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/.test(read('src/api/upload.rs'))) {
+    || !/pub async fn upload_delete\(\s*State\(state\): State<UploadHttpDeleteContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/.test(read('src/api/upload.rs'))) {
   throw new Error('upload deletion must use scoped lifecycle and bearer authority');
 }
 const uploadReplayReadContext = structBody(read('src/state/upload_http_read.rs'), 'pub(crate) struct UploadHttpReplayReadContext');
@@ -2572,8 +2572,8 @@ if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('src/api/admin.rs'
   throw new Error('disabled factory reset must authenticate without broad application state');
 }
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
-    || !/pub\(super\) async fn list\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)
-    || !/pub\(super\) async fn register_finish\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)) {
+    || !/pub\(super\) async fn list\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/s.test(passkeyApiSource)
+    || !/pub\(super\) async fn register_finish\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/s.test(passkeyApiSource)) {
   throw new Error('account Passkeys reads and registration completion must use scoped HTTP authority');
 }
 const omemoRecoveryApi = read('src/api/omemo_recovery.rs');

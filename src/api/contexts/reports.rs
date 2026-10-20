@@ -20,7 +20,7 @@ pub(crate) struct ReportContext<R, Q> {
 }
 
 impl<R: ReportRepository, Q: ApiQueryRepository> ReportContext<R, Q> {
-    pub(super) fn new(
+    pub(crate) fn new(
         reports: ReportService<R>,
         queries: ApiQueryService<Q>,
         metrics: Arc<Metrics>,

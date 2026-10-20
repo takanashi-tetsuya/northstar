@@ -1,9 +1,7 @@
 //! Read-only runtime capabilities used by REST collection handlers.
-use super::{MucOccupant, OnlineSession};
 use crate::services::api_queries::{
     ApiQueryRepository, ApiQueryService, LiveAdminStats, SessionView,
 };
-use dashmap::DashMap;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,19 +10,27 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) struct ApiQueryRuntime {
-    pub(super) domain: String,
-    pub(super) node_id: String,
-    pub(super) require_encrypted_archive: bool,
-    pub(super) federation_configured: bool,
-    pub(super) configured_registration_mode: crate::platform::config::RegistrationMode,
-    pub(super) registration_dependency_locked: bool,
-    pub(super) registration_closed: Arc<AtomicBool>,
-    pub(super) island_mode: Arc<AtomicBool>,
-    pub(super) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(super) occupants: Arc<DashMap<String, MucOccupant>>,
-    pub(super) metrics: Arc<crate::platform::metrics::Metrics>,
-    pub(super) started_at: Instant,
+/// This node's live sessions and MUC occupants, read without session or room authority.
+pub(crate) trait LocalPresenceDirectory: Send + Sync {
+    fn online_session_count(&self) -> usize;
+    fn room_occupant_total(&self) -> usize;
+    /// Routable local sessions as REST views, each stamped with `node`.
+    fn routable_sessions(&self, node: &str) -> Vec<SessionView>;
+    fn room_occupant_count(&self, room_jid: &str) -> usize;
+}
+
+pub(crate) struct ApiQueryRuntime {
+    pub(crate) domain: String,
+    pub(crate) node_id: String,
+    pub(crate) require_encrypted_archive: bool,
+    pub(crate) federation_configured: bool,
+    pub(crate) configured_registration_mode: crate::platform::config::RegistrationMode,
+    pub(crate) registration_dependency_locked: bool,
+    pub(crate) registration_closed: Arc<AtomicBool>,
+    pub(crate) island_mode: Arc<AtomicBool>,
+    pub(crate) presence: Arc<dyn LocalPresenceDirectory>,
+    pub(crate) metrics: Arc<crate::platform::metrics::Metrics>,
+    pub(crate) started_at: Instant,
 }
 
 #[derive(Clone)]
@@ -45,7 +51,7 @@ pub(crate) struct ApiQueryCounters {
 }
 
 impl<R: ApiQueryRepository> ApiQueryContext<R> {
-    pub(super) fn new(
+    pub(crate) fn new(
         queries: ApiQueryService<R>,
         cursor: Arc<crate::api::cursor::CursorKeyring>,
         runtime: ApiQueryRuntime,
@@ -94,41 +100,18 @@ impl<R: ApiQueryRepository> ApiQueryContext<R> {
         LiveAdminStats {
             island_mode: self.runtime.island_mode.load(Ordering::Acquire),
             registration_open: !self.registration_is_closed(),
-            online_sessions: self.runtime.sessions.len(),
-            room_occupants: self.runtime.occupants.len(),
+            online_sessions: self.runtime.presence.online_session_count(),
+            room_occupants: self.runtime.presence.room_occupant_total(),
         }
     }
     pub(crate) fn local_sessions(&self) -> Vec<SessionView> {
-        let now = Instant::now();
         self.runtime
-            .sessions
-            .iter()
-            .filter_map(|entry| {
-                let session = entry.value();
-                if !session.routable.load(Ordering::Acquire) {
-                    return None;
-                }
-                Some(SessionView {
-                    connection_id: session.connection_id,
-                    node: self.runtime.node_id.clone(),
-                    jid: entry.key().clone(),
-                    ip: session.ip.map(|ip| ip.to_string()),
-                    resource: session.resource.clone(),
-                    carbons_enabled: session.carbons.load(Ordering::Acquire),
-                    connected_duration_seconds: now
-                        .saturating_duration_since(session.connected_at)
-                        .as_secs(),
-                })
-            })
-            .collect()
+            .presence
+            .routable_sessions(&self.runtime.node_id)
     }
     pub(crate) fn room_occupant_count(&self, localpart: &str) -> usize {
         let room_jid = format!("{}@conference.{}", localpart, self.runtime.domain);
-        self.runtime
-            .occupants
-            .iter()
-            .filter(|occupant| occupant.room_jid == room_jid)
-            .count()
+        self.runtime.presence.room_occupant_count(&room_jid)
     }
     pub(crate) fn authentication_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
         self.runtime

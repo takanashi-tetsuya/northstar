@@ -670,7 +670,7 @@ fn offers_xmpp_subprotocol(headers: &HeaderMap) -> bool {
 }
 
 pub async fn public_config(
-    State(state): State<crate::state::PublicDiscoveryContext>,
+    State(state): State<crate::api::contexts::PublicDiscoveryContext>,
 ) -> Json<Value> {
     let policy = state.policy();
     let registration_mode = state.registration_mode();
@@ -718,7 +718,7 @@ pub async fn public_config(
 }
 
 pub async fn host_meta_xml(
-    State(state): State<crate::state::PublicDiscoveryContext>,
+    State(state): State<crate::api::contexts::PublicDiscoveryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -766,7 +766,7 @@ pub async fn host_meta_xml(
 }
 
 pub async fn host_meta_json(
-    State(state): State<crate::state::PublicDiscoveryContext>,
+    State(state): State<crate::api::contexts::PublicDiscoveryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {

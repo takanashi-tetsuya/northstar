@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
+    api::contexts::http_body_admission::HttpBodyAdmission,
     api::{ApiEmpty, ApiJson},
-    state::http_body_admission::HttpBodyAdmission,
 };
 use axum::{
     routing::{delete, post, put},

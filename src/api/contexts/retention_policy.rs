@@ -16,7 +16,7 @@ pub(crate) struct RetentionPolicyContext<R> {
 }
 
 impl<R: RetentionPolicyRepository> RetentionPolicyContext<R> {
-    pub(super) fn new(service: RetentionPolicyService<R>, metrics: Arc<Metrics>) -> Self {
+    pub(crate) fn new(service: RetentionPolicyService<R>, metrics: Arc<Metrics>) -> Self {
         Self { service, metrics }
     }
 

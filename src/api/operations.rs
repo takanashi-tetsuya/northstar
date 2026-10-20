@@ -408,7 +408,7 @@ mod read_tests {
 }
 
 pub async fn list_operations(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<OperationListQuery>,
 ) -> Result<Json<Page<OperationSummary>>, AppError> {
@@ -445,7 +445,7 @@ pub async fn list_operations(
 }
 
 pub async fn get_operation(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<Json<OperationView>, AppError> {
@@ -463,7 +463,7 @@ pub async fn get_operation(
 }
 
 pub async fn list_targets(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<TargetListQuery>,
@@ -503,7 +503,7 @@ pub async fn list_targets(
 }
 
 pub async fn get_target(
-    State(state): State<crate::state::ApiQueryContext>,
+    State(state): State<crate::api::contexts::ApiQueryContext>,
     actor: ApiAdmin,
     ApiPath((operation_id, target_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<TargetView>, AppError> {
@@ -551,7 +551,7 @@ fn mutation_response(result: ApiMutationOutcome<StoredApiResponse>) -> Result<Re
 }
 
 pub async fn cancel_operation(
-    State(service): State<crate::state::OperationAdminContext>,
+    State(service): State<crate::api::contexts::OperationAdminContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiEmpty,
@@ -578,7 +578,7 @@ pub async fn cancel_operation(
 }
 
 pub async fn reconcile_operation(
-    State(service): State<crate::state::OperationAdminContext>,
+    State(service): State<crate::api::contexts::OperationAdminContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ReconcileRequest>,
@@ -606,7 +606,7 @@ pub async fn reconcile_operation(
 }
 
 pub async fn reconcile_target(
-    State(service): State<crate::state::OperationAdminContext>,
+    State(service): State<crate::api::contexts::OperationAdminContext>,
     actor: ApiAdmin,
     ApiPath((operation_id, target_id)): ApiPath<(Uuid, Uuid)>,
     request: ApiJson<ReconcileRequest>,

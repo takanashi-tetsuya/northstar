@@ -78,28 +78,13 @@
     "src/api/auth_routes.rs": [
       "state"
     ],
-    "src/api/body_limits.rs": [
-      "state"
-    ],
-    "src/api/data_lifecycle.rs": [
-      "state"
-    ],
     "src/api/mod.rs": [
       "state"
     ],
     "src/api/omemo_recovery.rs": [
       "state"
     ],
-    "src/api/operations.rs": [
-      "state"
-    ],
-    "src/api/pagination.rs": [
-      "state"
-    ],
     "src/api/passkeys.rs": [
-      "state"
-    ],
-    "src/api/reports.rs": [
       "state"
     ],
     "src/api/route_composition.rs": [
@@ -109,9 +94,6 @@
       "state"
     ],
     "src/api/upload.rs": [
-      "state"
-    ],
-    "src/api/upload_admin.rs": [
       "state"
     ],
     "src/api/users.rs": [

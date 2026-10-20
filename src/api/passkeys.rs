@@ -69,7 +69,7 @@ async fn guard_start(
 
 pub(super) async fn list(
     State(state): State<PasskeyAccountHttpContext>,
-    State(queries): State<crate::state::ApiQueryContext>,
+    State(queries): State<crate::api::contexts::ApiQueryContext>,
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     let user = current_user_with_queries(&queries, &headers).await?;
@@ -87,7 +87,7 @@ pub(super) struct RegisterStart {
 
 pub(super) async fn register_start(
     State(state): State<PasskeyStartHttpContext>,
-    State(queries): State<crate::state::ApiQueryContext>,
+    State(queries): State<crate::api::contexts::ApiQueryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(mut body): Json<RegisterStart>,
@@ -122,7 +122,7 @@ pub(super) struct RegisterFinish {
 
 pub(super) async fn register_finish(
     State(state): State<PasskeyAccountHttpContext>,
-    State(queries): State<crate::state::ApiQueryContext>,
+    State(queries): State<crate::api::contexts::ApiQueryContext>,
     headers: HeaderMap,
     Json(body): Json<RegisterFinish>,
 ) -> Result<Json<Value>> {
@@ -198,7 +198,7 @@ pub(super) async fn remove(
     State(teardown): State<AccountGenerationTeardownSequence>,
     State(start): State<PasskeyStartHttpContext>,
     State(account): State<PasskeyAccountHttpContext>,
-    State(queries): State<crate::state::ApiQueryContext>,
+    State(queries): State<crate::api::contexts::ApiQueryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(mut body): Json<Remove>,

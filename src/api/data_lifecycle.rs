@@ -1,3 +1,4 @@
+use crate::api::contexts::GovernanceContext;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::*;
 use crate::platform::error::AppError;
@@ -8,7 +9,6 @@ use crate::services::{
     governance::*,
     retention_policy::{RetentionMutationAdmission, RetentionPolicyError, UserRetentionPolicy},
 };
-use crate::state::GovernanceContext;
 use axum::{extract::State, http::HeaderMap, response::Response, Json};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -106,7 +106,7 @@ fn governance_export_rows(
 }
 
 pub async fn get_my_retention(
-    State(state): State<crate::state::RetentionPolicyContext>,
+    State(state): State<crate::api::contexts::RetentionPolicyContext>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let policy = state
@@ -121,7 +121,7 @@ pub async fn get_my_retention(
 }
 
 pub async fn update_my_retention(
-    State(state): State<crate::state::RetentionPolicyContext>,
+    State(state): State<crate::api::contexts::RetentionPolicyContext>,
     headers: HeaderMap,
     request: ApiJson<UserRetentionPolicyRequest>,
 ) -> Result<Response, AppError> {
@@ -152,7 +152,7 @@ pub async fn update_my_retention(
 }
 
 pub async fn get_muc_retention(
-    State(state): State<crate::state::RetentionPolicyContext>,
+    State(state): State<crate::api::contexts::RetentionPolicyContext>,
     headers: HeaderMap,
     ApiPath(room_id): ApiPath<Uuid>,
 ) -> Result<Json<Value>, AppError> {
@@ -168,7 +168,7 @@ pub async fn get_muc_retention(
 }
 
 pub async fn update_muc_retention(
-    State(state): State<crate::state::RetentionPolicyContext>,
+    State(state): State<crate::api::contexts::RetentionPolicyContext>,
     headers: HeaderMap,
     ApiPath(room_id): ApiPath<Uuid>,
     request: ApiJson<MucRetentionPolicyRequest>,

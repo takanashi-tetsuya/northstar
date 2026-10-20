@@ -10,11 +10,13 @@ pub(crate) mod http_challenge_endpoint;
 pub(crate) mod http_login_endpoint;
 pub(crate) mod http_policy;
 pub(crate) mod http_registration_endpoint;
+pub(crate) mod metrics;
 pub(crate) mod omemo_poll;
 pub(crate) mod omemo_recovery_http;
 pub(crate) mod passkey_http;
 pub(crate) mod passkey_login_finish;
 pub(crate) mod password_change_http;
+pub(crate) mod readiness;
 pub(crate) mod reports;
 pub(crate) mod retention_policy;
 pub(crate) mod upload_admission;
@@ -26,7 +28,9 @@ pub(crate) use self::http_login_endpoint::HttpLoginEndpointContext;
 pub(crate) use self::http_policy::{
     AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext,
 };
+pub(crate) use self::metrics::MetricsContext;
 pub(crate) use self::passkey_login_finish::PasskeyLoginFinishContext;
+pub(crate) use self::readiness::ReadinessContext;
 pub(crate) use self::upload_http_read::{UploadHttpReadContext, UploadHttpReplayReadContext};
 
 pub(crate) type AccountAdminContext = crate::services::account_admin::AccountAdminService<

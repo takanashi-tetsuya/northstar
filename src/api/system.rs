@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, Semaphore};
 
+use crate::api::contexts::{MetricsContext, ReadinessContext};
 use crate::platform::error::{AppError, Result};
-use crate::state::{MetricsContext, ReadinessContext};
 use crate::xmpp;
 
 use crate::services::metrics_snapshot::DatabaseMetricsSnapshot;

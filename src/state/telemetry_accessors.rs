@@ -1,6 +1,7 @@
 //! AppState metrics recorders, telemetry handles, broadcast routes and cluster runtime handles.
 
 use super::*;
+use crate::api::contexts::MetricsContext;
 
 impl AppState {
     pub(crate) fn record_bosh_session_opened(&self) {
@@ -93,7 +94,7 @@ impl AppState {
     }
 
     pub(crate) fn metrics_context(&self) -> MetricsContext {
-        MetricsContext::from_state(self)
+        metrics_context::metrics_context(self)
     }
 
     pub(crate) fn broadcast_routes(

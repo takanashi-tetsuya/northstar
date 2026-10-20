@@ -81,9 +81,6 @@
     "src/api/route_composition.rs": [
       "state"
     ],
-    "src/api/system.rs": [
-      "state"
-    ],
     "src/bosh.rs": [
       "state"
     ],

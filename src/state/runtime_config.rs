@@ -1,59 +1,6 @@
-//! Runtime configuration views: readiness context, policy value types and configuration accessors.
+//! Runtime configuration views: policy value types and configuration accessors.
 
 use super::*;
-
-/// Private observability capability. It contains only read-only live probes
-/// and the existing typed persistence service, never AppState or a mutable
-/// cluster, worker, connection, upload, or SM owner.
-pub(crate) struct ReadinessContext {
-    pub(super) connection: crate::platform::connection_actors::ConnectionAdmissionReadiness,
-    pub(super) sm: crate::services::sm_capacity::SmMemoryReadiness,
-    pub(super) upload: crate::services::upload_safety::UploadSafetyReadiness,
-    pub(super) cluster: crate::cluster::ClusterReadinessProbe,
-    pub(super) workers: crate::platform::workers::WorkerReadinessProbe,
-    pub(super) abuse_key_deployment:
-        Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
-    pub(super) persistence: crate::services::readiness::ReadinessService<
-        db::readiness_repository::PostgresReadinessRepository,
-    >,
-}
-
-impl ReadinessContext {
-    pub(crate) fn connection_accepting(&self) -> bool {
-        self.connection.is_accepting()
-    }
-
-    pub(crate) fn sm_ready(&self) -> bool {
-        self.sm.is_ready()
-    }
-
-    pub(crate) fn upload_state(&self) -> crate::services::upload_safety::UploadSafetyState {
-        self.upload.state()
-    }
-
-    pub(crate) fn cluster_error(&self) -> Option<String> {
-        self.cluster.readiness_error()
-    }
-
-    pub(crate) fn worker_error(&self) -> Option<String> {
-        self.workers.readiness_error()
-    }
-
-    pub(crate) fn cluster_authority_snapshot(
-        &self,
-    ) -> Option<crate::security::cluster_keys::ClusterReadinessAuthority> {
-        self.cluster.authority_snapshot()
-    }
-
-    pub(crate) async fn validate_persistence(
-        &self,
-        cluster_authority: Option<&crate::security::cluster_keys::ClusterReadinessAuthority>,
-    ) -> anyhow::Result<()> {
-        self.persistence
-            .validate_persistence(self.abuse_key_deployment.as_ref(), cluster_authority)
-            .await
-    }
-}
 
 #[derive(Clone, Copy)]
 pub(crate) struct OfflineDeliveryLimits {

@@ -17,7 +17,7 @@ use crate::api::contexts::{
     http_registration_endpoint::HttpRegistrationEndpointContext,
     omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext,
     AdminGatewayVerifier, ApiQueryContext, HttpLoginEndpointContext, HttpTransportPolicy,
-    OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
+    MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
     RetentionPolicyContext, UploadHttpReadContext,
 };
 use crate::auth;
@@ -26,7 +26,7 @@ use crate::services::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
-use crate::state::{AppState, MetricsContext};
+use crate::state::AppState;
 
 use crate::services::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;

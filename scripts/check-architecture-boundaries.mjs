@@ -3755,7 +3755,9 @@ if (/\.metrics\b/.test(accountRecoverySource)
 }
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
-const metricsContext = structBody(read('src/state/metrics_context.rs'), 'pub(crate) struct MetricsContext');
+const metricsContextSource = read('src/api/contexts/metrics.rs');
+const metricsContextProduction = productionWithoutCfgTestModules(metricsContextSource, 'metrics context production');
+const metricsContext = structBody(metricsContextSource, 'pub(crate) struct MetricsContext');
 const metricsServe = structBody(readRoleSplitFile('src/api/mod.rs', { root }), 'pub async fn serve_metrics(');
 if (!metricsEndpoint.includes('context: MetricsContext')
     || /Arc<AppState>/.test(metricsEndpoint)
@@ -3763,12 +3765,14 @@ if (!metricsEndpoint.includes('context: MetricsContext')
     || !metricsContext.includes('cluster: ClusterMetricsProbe')
     || !metricsContext.includes('tls: TlsMetricsProbe')
     || !metricsContext.includes('muc_occupant_count: MucOccupancyCountProbe')
+    || !metricsContext.includes('sm: Arc<dyn SmRecoveryGauges>')
+    || /\bAppState\b|crate::state\b/.test(metricsContextProduction)
     || !metricsServe.includes('MetricsEndpointState::new(context)')
     || !readinessEndpointSource.includes('context.authorized(peer, metrics_bearer_candidate(headers))')) {
   throw new Error('private metrics endpoint must use a narrow live, read-only observability context');
 }
 const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
-const readinessContext = rustItemBody(state, 'pub(crate) struct ReadinessContext');
+const readinessContext = rustItemBody(read('src/api/contexts/readiness.rs'), 'pub(crate) struct ReadinessContext');
 if (!readinessEndpoint.includes('context: ReadinessContext')
     || /Arc<AppState>|(?:AppState|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
     || countMatches(readRoleSplitFile('src/api/mod.rs', { root }), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {

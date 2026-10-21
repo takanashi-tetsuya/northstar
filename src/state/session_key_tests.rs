@@ -2,26 +2,28 @@ use super::{
     api_keyrings, append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
     canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff, encode_api_control_entropy,
     ephemeral_api_control_secret, federation_rule_matches, insert_restored_muc_occupant,
-    move_local_muc_nickname_exact_in, muc_actor_identity_matches, muc_departure_identity_matches,
+    move_local_muc_nickname_exact_in, muc_actor_identity_matches,
     muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
     publish_local_muc_join_if_vacant_in, rebind_local_federated_muc_occupant_exact_in,
     refresh_local_muc_policy_exact_in, refresh_local_muc_presence_exact_in,
     remove_local_muc_occupant_exact_from, runtime_control_startup_retry_delay,
     seal_suspended_muc_buffer, service_control_applies, session_lookup,
     set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
-    snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
-    suspended_muc_resume_actor_matches, suspended_occupant_is_created,
-    transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
-    LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant,
-    MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck,
-    StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase,
-    SuspendedMucRoute,
+    snapshot_suspended_muc_buffer_for_resume, suspended_muc_resume_actor_matches,
+    suspended_occupant_is_created, transfer_muc_suffix_to_checkpoint, FederationWritePolicy,
+    JoinedMucMembership, LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity,
+    MucOccupant, MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, SuspendedMucEndpoint,
+    SuspendedMucPhase, SuspendedMucRoute,
 };
 use crate::api::contexts::omemo_poll::{
     admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, OMEMO_POLL_IP_REQUESTS_PER_MINUTE,
 };
+use crate::xmpp::local_routes::muc::{muc_departure_identity_matches, SuspendedMucBuffer};
 use dashmap::DashMap;
 use northstar_session_application::RouteIncarnationSignal;
+use northstar_session_core::{
+    staged_route_activation_allowed, StagedRouteActivationCheck, StagedRouteIdentity,
+};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

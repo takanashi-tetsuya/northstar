@@ -1,5 +1,8 @@
-//! This node's local route records: C2S sessions and MUC occupants, including suspended SM endpoints.
-//! The composition root owns the live maps and every operation on them.
+//! This node's local route records and the operations on its live route tables: C2S sessions, MUC occupants and
+//! suspended SM endpoints. The composition root owns the tables themselves.
 
 pub(crate) mod muc;
+pub(crate) mod muc_table;
 pub(crate) mod session;
+pub(crate) mod session_table;
+pub(crate) mod suspended_muc;

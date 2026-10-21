@@ -193,7 +193,7 @@ use crate::{
     storage::{GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore},
 };
 use anyhow::Context;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use hickory_resolver::{
     config::{ResolveHosts, ServerOrderingStrategy},
     net::runtime::TokioRuntimeProvider,
@@ -206,7 +206,7 @@ use sqlx::{
     PgPool, Postgres,
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
@@ -238,22 +238,22 @@ pub use self::admission_guards::*;
 #[cfg(test)]
 use self::construction::*;
 use self::federation_policy::*;
-pub(crate) use self::local_muc::*;
-pub(crate) use self::local_session::*;
+#[cfg(test)]
+pub(crate) use self::local_muc::count_shutdown_notification_completions;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
-pub(crate) use self::suspended_muc::*;
 use self::upload_runtime::*;
 use crate::platform::jid_text::*;
 use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use crate::xmpp::local_routes::{
     muc::{
-        muc_departure_identity_matches, LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant,
-        MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucBuffer,
-        SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute, SuspendedMucStanza,
+        LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant, MucOccupantEndpoint,
+        RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint, SuspendedMucPhase,
+        SuspendedMucRoute, SuspendedMucStanza,
     },
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };
+use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
 
 #[cfg(test)]
 #[path = "state/runtime_control_startup_tests.rs"]
@@ -268,10 +268,7 @@ pub use northstar_protocol_runtime::caps::CapsKey;
 
 pub use northstar_session_core::LocalCapsEpoch;
 
-pub use northstar_session_core::{
-    staged_route_activation_allowed, JoinedMucMembership, StagedRouteActivationCheck,
-    StagedRouteIdentity,
-};
+pub use northstar_session_core::JoinedMucMembership;
 
 #[cfg(test)]
 mod muc_membership_snapshot_tests;

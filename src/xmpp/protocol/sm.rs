@@ -21,7 +21,7 @@ use std::{
 use zeroize::Zeroizing;
 
 #[cfg(test)]
-use crate::state::matching_sm_route;
+use crate::xmpp::local_routes::session_table::matching_sm_route;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SmRouteTakeover {

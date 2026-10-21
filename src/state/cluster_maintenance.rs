@@ -2,11 +2,11 @@
 //! No database pool, Redis client, or signing authority crosses this boundary.
 
 use super::{
-    cluster_muc_projection::local_cluster_muc_projection_snapshot_in,
-    local_session_authority_snapshots_in, local_session_lease_snapshots_in,
-    remove_live_muc_membership_in, remove_local_muc_occupant_exact_from, AppState,
-    JoinedMucMembership, LocalSessionAuthoritySnapshot, LocalSessionLeaseSnapshot, MucOccupant,
-    OnlineSession, SerializableMucOccupant,
+    local_cluster_muc_projection_snapshot_in, local_session_authority_snapshots_in,
+    local_session_lease_snapshots_in, remove_live_muc_membership_in,
+    remove_local_muc_occupant_exact_from, AppState, JoinedMucMembership,
+    LocalSessionAuthoritySnapshot, LocalSessionLeaseSnapshot, MucOccupant, OnlineSession,
+    SerializableMucOccupant,
 };
 use crate::platform::metrics::{DurationTimer, Metrics};
 use dashmap::DashMap;

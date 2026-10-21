@@ -4,6 +4,7 @@ use super::{driver, map, observed, Recorder};
 use crate::{
     stage4_replay as wire, state,
     xmpp::local_routes::session::OnlineSession,
+    xmpp::local_routes::session_table,
     xmpp::outbound::{OutboundItem, OutboundSender},
 };
 use anyhow::{ensure, Result};
@@ -205,7 +206,7 @@ impl RouteMap {
         owner: wire::RouteLookupOwner<wire::EvidenceId>,
         key: &str,
     ) -> Vec<(String, OnlineSession)> {
-        let entries = state::session_entries_for_in(&self.0.sessions, key);
+        let entries = session_table::session_entries_for_in(&self.0.sessions, key);
         observed(&self.0.recorder, || {
             Ok(wire::Fact::Worker(wire::WorkerFact::Lookup(
                 wire::RouteLookup {
@@ -305,7 +306,7 @@ impl RouteHandle {
         })
     }
     pub(crate) fn epoch_and_mapping(&self, epoch: Option<i64>) -> bool {
-        state::publish_user_agent_epoch_if_current_in(
+        session_table::publish_user_agent_epoch_if_current_in(
             &self.map.0.sessions,
             &self.key,
             self.original.connection_id,
@@ -316,7 +317,7 @@ impl RouteHandle {
         )
     }
     pub(crate) fn activate(&self) -> bool {
-        state::activate_session_if_current_in(
+        session_table::activate_session_if_current_in(
             &self.map.0.sessions,
             &self.key,
             self.original.connection_id,

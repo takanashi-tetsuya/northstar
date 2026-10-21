@@ -138,7 +138,9 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[cfg(test)]
-use crate::state::{mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed};
+use crate::xmpp::local_routes::session_table::{
+    mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed,
+};
 
 pub(crate) const CORE_NS: &str = "urn:xmpp:mix:core:1";
 pub(crate) const PAM_NS: &str = "urn:xmpp:mix:pam:2";

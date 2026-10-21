@@ -1461,19 +1461,19 @@ function rejectsRoute(name, file, before, after, complete = false) {
     if (complete) assert.throws(() => verifyExecutionBoundaries(mutant), /execution boundary: route helper/);
   });
 }
-rejectsRoute("route epoch helper cannot become test-only", "state",
+rejectsRoute("route epoch helper cannot become test-only", "sessionTable",
   "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool",
   "#[cfg(test)] pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool");
-rejectsRoute("route activation helper cannot become test-only", "state",
+rejectsRoute("route activation helper cannot become test-only", "sessionTable",
   "pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool",
   "#[cfg(test)] pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool");
 rejectsRoute("route caps helper cannot become test-only", "mixOutboxState",
   "pub(crate) fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability",
   "#[cfg(test)] pub(crate) fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability");
-rejectsRoute("route epoch helper cannot be replaced by a test-module shadow", "state",
+rejectsRoute("route epoch helper cannot be replaced by a test-module shadow", "sessionTable",
   "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n",
   "#[cfg(test)] mod shadow_route { pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n }");
-rejectsRoute("route epoch helper rejects duplicate test-module shadow", "state",
+rejectsRoute("route epoch helper rejects duplicate test-module shadow", "sessionTable",
   "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n",
   "pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n\n#[cfg(test)] mod shadow_route { pub(crate) fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n }");
 rejectsRoute("route epoch delegate cannot become test-only", "state",
@@ -1503,61 +1503,61 @@ rejectsRoute("route CAPS delegate preserves the pending index", "mixOutboxState"
 rejectsRoute("route CAPS delegate preserves the queried key", "mixOutboxState",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, full_jid)",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, other_jid)");
-rejectsRoute("route epoch assignment retains the map write guard", "state",
+rejectsRoute("route epoch assignment retains the map write guard", "sessionTable",
   "let Some(mut session) = sessions.get_mut(key) else { return false; };",
   "let Some(mut session) = sessions.get(key).map(|entry| entry.value().clone()) else { return false; };");
-rejectsRoute("route epoch assignment preserves connection rejection", "state",
+rejectsRoute("route epoch assignment preserves connection rejection", "sessionTable",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
   "if session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves user rejection", "state",
+rejectsRoute("route epoch assignment preserves user rejection", "sessionTable",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
   "if session.connection_id != connection_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves generation rejection", "state",
+rejectsRoute("route epoch assignment preserves generation rejection", "sessionTable",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
   "if session.connection_id != connection_id || session.user_id != user_id || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves lifecycle pointer rejection", "state",
+rejectsRoute("route epoch assignment preserves lifecycle pointer rejection", "sessionTable",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves session cancellation rejection", "state",
+rejectsRoute("route epoch assignment preserves session cancellation rejection", "sessionTable",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves lifecycle state rejection", "state",
+rejectsRoute("route epoch assignment preserves lifecycle state rejection", "sessionTable",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
   "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled()");
-rejectsRoute("route epoch assignment uses the actual Option", "state",
+rejectsRoute("route epoch assignment uses the actual Option", "sessionTable",
   "session.user_agent_epoch = user_agent_epoch;",
   "session.user_agent_epoch = Some(43);");
-rejectsRoute("route epoch missing key cannot return success", "state",
+rejectsRoute("route epoch missing key cannot return success", "sessionTable",
   "let Some(mut session) = sessions.get_mut(key) else { return false; };",
   "let Some(mut session) = sessions.get_mut(key) else { return true; };");
-rejectsRoute("route activation must call the actual shared predicate", "state",
+rejectsRoute("route activation must call the actual shared predicate", "sessionTable",
   "if !staged_route_activation_allowed(StagedRouteActivationCheck {\n        session: StagedRouteIdentity {\n            connection_id: session.connection_id,\n            user_id: session.user_id,\n            auth_generation: session.auth_generation,\n        },\n        expected: StagedRouteIdentity {\n            connection_id,\n            user_id,\n            auth_generation,\n        },\n        same_lifecycle: Arc::ptr_eq(&session.lifecycle, lifecycle),\n        lifecycle_state: session.lifecycle.load(Ordering::Acquire),\n        session_cancelled: session.disconnect.is_cancelled(),\n        owner_cancelled: disconnect.is_cancelled(),\n    }) {\n        return false;\n    }",
   "if false { return false; }", true);
-rejectsRoute("route activation passes actual staged identity", "state",
+rejectsRoute("route activation passes actual staged identity", "sessionTable",
   "session: StagedRouteIdentity { connection_id: session.connection_id, user_id: session.user_id, auth_generation: session.auth_generation, }",
   "session: StagedRouteIdentity { connection_id, user_id, auth_generation, }");
-rejectsRoute("route activation passes actual lifecycle identity", "state",
+rejectsRoute("route activation passes actual lifecycle identity", "sessionTable",
   "same_lifecycle: Arc::ptr_eq(&session.lifecycle, lifecycle),",
   "same_lifecycle: true,");
-rejectsRoute("route activation passes actual owner cancellation", "state",
+rejectsRoute("route activation passes actual owner cancellation", "sessionTable",
   "owner_cancelled: disconnect.is_cancelled(), }) {",
   "owner_cancelled: false, }) {");
-rejectsRoute("route activation retains its map write guard", "state",
+rejectsRoute("route activation retains its map write guard", "sessionTable",
   "pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool {\n    let Some(session) = sessions.get_mut(full_jid) else {\n        return false;\n    };\n",
   "pub(crate) fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool {\n    let Some(session) = sessions.get(full_jid).map(|entry| entry.value().clone()) else {\n        return false;\n    };\n");
-rejectsRoute("route activation must publish true before rechecking", "state",
+rejectsRoute("route activation must publish true before rechecking", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   " if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
-rejectsRoute("route activation rechecks the lifecycle after publication", "state",
+rejectsRoute("route activation rechecks the lifecycle after publication", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
-rejectsRoute("route activation rechecks the session token after publication", "state",
+rejectsRoute("route activation rechecks the session token after publication", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
-rejectsRoute("route activation rechecks the owner token after publication", "state",
+rejectsRoute("route activation rechecks the owner token after publication", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true");
-rejectsRoute("route activation must roll back false on a failed recheck", "state",
+rejectsRoute("route activation must roll back false on a failed recheck", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() {  return false; } true");
 rejectsRoute("route CAPS lookup must canonicalize the queried key", "mixOutboxState",

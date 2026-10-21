@@ -1,7 +1,10 @@
 //! Exact process-local projections of committed cluster MUC policy events.
 
 #[cfg(test)]
-use super::{with_local_muc_occupant_exact, LocalMucOccupantIdentity, SerializableMucOccupant};
+use super::{
+    local_cluster_muc_projection_snapshot_in, with_local_muc_occupant_exact,
+    LocalMucOccupantIdentity, SerializableMucOccupant,
+};
 use super::{AppState, MucOccupant, MucOccupantEndpoint};
 use dashmap::DashMap;
 
@@ -20,15 +23,6 @@ impl AppState {
             connection_id,
         )
     }
-}
-
-pub(super) fn local_cluster_muc_projection_snapshot_in(
-    occupants: &DashMap<String, MucOccupant>,
-) -> Vec<MucOccupant> {
-    occupants
-        .iter()
-        .map(|entry| entry.value().clone())
-        .collect()
 }
 
 fn federated_muc_occupants_for_closed_connection_in(

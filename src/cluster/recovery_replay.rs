@@ -87,11 +87,11 @@ pub(super) enum RecoveryRouteProgress {
 
 pub(super) fn recovery_route_progress(
     route: &mut RecoveryReplayRoute,
-    status: crate::state::cluster_recovery_replay::RecoveryReplayStatus,
+    status: super::recovery_replay_wake::RecoveryReplayStatus,
     now: Instant,
     schedule: impl FnOnce(),
 ) -> RecoveryRouteProgress {
-    use crate::state::cluster_recovery_replay::RecoveryReplayStatus;
+    use super::recovery_replay_wake::RecoveryReplayStatus;
     match status {
         RecoveryReplayStatus::Complete
         | RecoveryReplayStatus::Ineligible
@@ -131,7 +131,7 @@ pub(super) fn recovery_retry_delay(attempts: u8) -> Duration {
 }
 
 pub(super) async fn drive_recovery_replay_plan(
-    context: &crate::state::cluster_maintenance_context::ClusterMaintenanceContext,
+    context: &super::maintenance_context::ClusterMaintenanceContext,
 ) {
     let control = &context.control;
     let Some(mut plan) = control

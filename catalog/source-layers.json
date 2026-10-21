@@ -78,9 +78,6 @@
     "src/bosh.rs": [
       "state"
     ],
-    "src/cluster/recovery_replay.rs": [
-      "state"
-    ],
     "src/cluster/workers.rs": [
       "state"
     ],

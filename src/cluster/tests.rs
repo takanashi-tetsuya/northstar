@@ -899,7 +899,7 @@ async fn failure_overrides_queued_reconciliation_before_direct_commit_finishes()
 
 #[test]
 fn recovery_plan_advances_past_busy_first_page_and_rescans_only_when_incomplete() {
-    use crate::state::cluster_recovery_replay::RecoveryReplayStatus;
+    use crate::cluster::recovery_replay_wake::RecoveryReplayStatus;
 
     let routes = (0..300_u128)
         .map(|index| {

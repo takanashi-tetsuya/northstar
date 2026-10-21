@@ -71,7 +71,7 @@ pub(crate) async fn run_account_revocations<
 }
 
 pub(crate) async fn run_maintenance(
-    context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
+    context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
     heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -85,7 +85,7 @@ pub(crate) async fn run_maintenance(
 }
 
 pub(super) async fn run_direct_spool_wake_loop(
-    context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
+    context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -145,7 +145,7 @@ pub(super) async fn run_direct_spool_wake_loop(
 }
 
 pub(super) async fn run_maintenance_passes(
-    context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
+    context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
     heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -180,7 +180,7 @@ pub(super) async fn run_maintenance_passes(
 }
 
 pub(super) async fn maintenance_once(
-    context: &crate::state::cluster_maintenance_context::ClusterMaintenanceContext,
+    context: &super::maintenance_context::ClusterMaintenanceContext,
 ) -> Result<()> {
     let control = &context.control;
     let redis = &context.redis;

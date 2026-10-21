@@ -2,11 +2,12 @@
 //! after this renderer has completed every required post-commit effect.
 
 use super::{
-    attr_escape, cluster_listener_sm_muc_teardown::ClusterListenerSmMucTeardown,
-    session_cleanup_unavailable::SessionCleanupUnavailable,
-    sm_teardown_local::SmTeardownLocalEffects, sm_teardown_muc_projection::SmTeardownMucProjection,
+    attr_escape, session_cleanup_unavailable::SessionCleanupUnavailable,
+    sm_teardown_muc_projection::SmTeardownMucProjection,
     sm_teardown_session::SmTeardownSessionEffects, AppState,
 };
+use crate::cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
+use crate::xmpp::local_routes::sm_teardown::SmTeardownLocalEffects;
 use crate::{cluster::ClusterSmMucTeardown, db};
 use std::collections::HashSet;
 

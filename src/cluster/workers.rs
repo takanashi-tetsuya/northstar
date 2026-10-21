@@ -1,7 +1,6 @@
 //! Cluster maintenance, account revocation, direct spool wake, pubsub listener and failure supervisor loops.
 
 use super::*;
-use crate::state::AppState;
 
 /// Read committed account fences independently of Redis and cluster maintenance.
 /// Notifications reduce latency; polling recovers missed notifications.
@@ -418,47 +417,28 @@ pub(super) async fn maintenance_once(
 
 /// Listener capabilities are assembled once; the receive loop never retains
 /// the application state or a general cluster manager.
-pub(super) struct ClusterListenerRuntime {
-    pub(super) message_policy: Arc<ClusterListenerMessagePolicy>,
-    pub(super) dispatch: crate::state::cluster_listener_dispatch::ClusterListenerDispatch,
-    pub(super) muc_endpoints: super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
-    pub(super) muc_delivery: crate::xmpp::muc_delivery::MucDeliveryContext,
-    pub(super) mix_caps: crate::state::cluster_listener_mix_caps::ClusterListenerMixCaps,
-    pub(super) blocking: crate::state::cluster_listener_blocking::ClusterListenerBlocking,
-    pub(super) sm_muc_teardown:
-        crate::state::cluster_listener_sm_muc_teardown::ClusterListenerSmMucTeardown,
-    pub(super) presence_sender: Arc<ClusterNodeDelivery>,
-    pub(super) security: Arc<ClusterListenerSecurity>,
-}
-
-impl ClusterListenerRuntime {
-    pub(super) fn from_state(state: &AppState) -> Self {
-        Self {
-            message_policy: Arc::new(state.cluster_listener_message_policy()),
-            dispatch: state.cluster_listener_dispatch(),
-            muc_endpoints: state.cluster_muc_delivery_endpoints(),
-            muc_delivery: state.muc_delivery_context(),
-            mix_caps: state.cluster_listener_mix_caps(),
-            blocking: state.cluster_listener_blocking(),
-            sm_muc_teardown: state.cluster_listener_sm_muc_teardown(),
-            presence_sender: Arc::new(state.cluster_listener_presence_sender()),
-            security: Arc::new(state.cluster_listener_security()),
-        }
-    }
+pub(crate) struct ClusterListenerRuntime {
+    pub(crate) message_policy: Arc<ClusterListenerMessagePolicy>,
+    pub(crate) dispatch: super::listener_dispatch::ClusterListenerDispatch,
+    pub(crate) muc_endpoints: super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
+    pub(crate) muc_delivery: crate::xmpp::muc_delivery::MucDeliveryContext,
+    pub(crate) mix_caps: super::listener_mix_caps::ClusterListenerMixCaps,
+    pub(crate) blocking: super::listener_blocking::ClusterListenerBlocking,
+    pub(crate) sm_muc_teardown: super::listener_sm_muc_teardown::ClusterListenerSmMucTeardown,
+    pub(crate) presence_sender: Arc<ClusterNodeDelivery>,
+    pub(crate) security: Arc<ClusterListenerSecurity>,
 }
 
 pub(crate) async fn run_pubsub_listener(
     transport: Arc<ClusterPubsubListenerTransport>,
     admission: Arc<ClusterListenerAdmission>,
-    state: Arc<AppState>,
+    runtime: ClusterListenerRuntime,
     cancel: CancellationToken,
     heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
     if !transport.is_enabled() {
         return Ok(());
     }
-    let runtime = ClusterListenerRuntime::from_state(&state);
-    drop(state);
     let result = listen_once(
         Arc::clone(&transport),
         Arc::clone(&admission),
@@ -484,7 +464,7 @@ pub(crate) async fn run_pubsub_listener(
 /// degraded-mode shutdown deadline. This worker never makes Redis healthy;
 /// only full lease/occupant/listener reconciliation in maintenance can do so.
 pub async fn run_failure_supervisor(
-    context: Arc<crate::state::cluster_failure_supervisor::ClusterFailureSupervisorContext>,
+    context: Arc<super::failure_supervisor_context::ClusterFailureSupervisorContext>,
     cancel: CancellationToken,
     heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {

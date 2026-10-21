@@ -78,9 +78,6 @@
     "src/bosh.rs": [
       "state"
     ],
-    "src/cluster/workers.rs": [
-      "state"
-    ],
     "src/s2s/components.rs": [
       "state"
     ],

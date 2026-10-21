@@ -669,7 +669,7 @@ async fn run() -> Result<()> {
                 cluster::run_pubsub_listener(
                     Arc::clone(&pubsub_transport),
                     Arc::clone(&listener_admission),
-                    Arc::clone(&state_pubsub),
+                    state_pubsub.cluster_listener_runtime(),
                     pubsub_cancel.clone(),
                     heartbeat,
                 )

@@ -3833,10 +3833,11 @@ if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterL
     || !clusterListener.includes('publish_listener_probe(&transport,')) {
   throw new Error('PubSub listener setup and generation must use scoped transport authority');
 }
-const listenerDispatch = read('src/state/cluster_listener_dispatch.rs');
+const listenerDispatch = read('src/cluster/listener_dispatch.rs');
+const listenerDispatchConstructor = read('src/state/cluster_listener_dispatch.rs');
 if (clusterListener.includes('db::cluster_session_route_authority(')
     || !clusterListener.includes('dispatch.terminate_exact_session(')
-    || !listenerDispatch.includes('SessionTerminationAuthorityService::new(')
+    || !listenerDispatchConstructor.includes('SessionTerminationAuthorityService::new(')
     || !listenerDispatch.includes('fence_local_session_in(')) {
   throw new Error('signed session termination must re-read exact route authority through its service');
 }
@@ -3868,7 +3869,7 @@ const clusterFailureSupervisor = rustItemBody(
   'pub async fn run_failure_supervisor(',
 );
 const clusterFailureContext = structBody(
-  read('src/state/cluster_failure_supervisor.rs'),
+  read('src/cluster/failure_supervisor_context.rs'),
   'pub(crate) struct ClusterFailureSupervisorContext',
 );
 const clusterFailureAuthority = rustItemBody(

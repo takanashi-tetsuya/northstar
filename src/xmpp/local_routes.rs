@@ -5,4 +5,5 @@ pub(crate) mod muc;
 pub(crate) mod muc_table;
 pub(crate) mod session;
 pub(crate) mod session_table;
+pub(crate) mod sm_teardown;
 pub(crate) mod suspended_muc;

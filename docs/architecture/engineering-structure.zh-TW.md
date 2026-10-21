@@ -104,6 +104,7 @@
 | S12 層級搬移第三批 | WP-120–128 | 核對 5.7 剩下的 71 條，20 條只需搬到使用者所在的層，或加一個只委派既有方法的小 port：abuse guard、帳號刪除復原與 standalone MUC 維護 worker 移到使用它們的層（WP-121、122、126）；XML 工具與 stanza 驗證移到 `services`（WP-123）；`services` 對 `cluster`、`s2s` 各一處的呼叫改經自己擁有的 port（WP-124、125）；REST 處理器的 context 與服務綁定移到 `api::contexts`，即時 session 與 MUC 占用者經 port 讀取（WP-127）；叢集監聽器的訊息政策移到 `cluster`（WP-128）。盤點見 5.8 | 搬移只改路徑，新 port 只委派原有方法；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 71 條降到 51 條（50 檔），平台層不再向上引用，其中 20 條由 S13 處理（見 5.9） |
 | S13 層級搬移第四批 | WP-130–136 | 核對 5.8 剩下的 51 條，20 條只需把 context 的定義與組合層的建構分開，或加一個只委派既有方法的小 port：REST 端點與上傳 context 移到 `api::contexts`，建構子留在 `state`（WP-131）；帳號拆除、MUC 占用計數、SM 指標與帳號管理快取改經 port 讀取（WP-132–134）；本節點的 session 與 MUC 占用者紀錄移到 `xmpp::local_routes`，即時路由表與其操作留在 `state`（WP-135）；session 清理流程移到它依賴的 `state`（WP-136）。盤點見 5.9 | 搬移只改路徑，新 port 只委派原有方法；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 51 條降到 31 條（31 檔），`services` 只剩對 `xmpp` 對外佇列的 2 條，其餘依 5.9 交給模組化執行計劃 |
 | S14 叢集介面卡解耦 | WP-140–144 | 核對 5.9 中 `cluster` 的 4 條：它們不持有組合根做事，只是 worker 與監聽器的 context 定義在 `state`，或 worker 啟動時以 `AppState` 建構 context。先把 S13 留在 `state`、不碰 `AppState` 的即時路由表操作移到 `xmpp::local_routes`（WP-141），再依 S13 的做法把 context 的定義移到 `cluster`／`xmpp`、建構子留在 `state`：MUC 遞送與 outbox worker（WP-142）、叢集維護（WP-143）、監聽器與故障監督（WP-144）；`cluster` 的 worker 改收組合根建好的 context。盤點見 5.10 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 31 條降到 27 條，`cluster` 不再引用組合層 |
+| S15 介面卡參數收窄 | WP-150–154 | 核對 5.10 剩下的 27 條中只讀少數設定或句柄的介面卡函式：不再收整個組合根，改收實際用到的值，或收介面卡定義、`state` 建構的小 context。S2S 的 TLS 函式改收 `&TlsContext`，DNS 函式改收 `FederationDnsContext`（WP-151）；dialback 的 stream features 改收 `S2sFeaturePolicy`，向權威伺服器驗證金鑰的 `verify_remote` 移到 `s2s::outbound`（WP-152）；S2S 直送路由的 port 介面卡移到 `state`（WP-153）；MIX／MUC 鏡像連結改收 MIX 服務（WP-154）。盤點見 5.11 | 函式行為不變，複製的只有固定設定，共享狀態仍以借用在原處讀取；測試名稱不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 27 條降到 22 條，`s2s` 只剩持有組合根的 4 個檔案 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -411,6 +412,24 @@ S14 核對 5.9 中 `cluster` 的 4 條（`cluster.rs`、`cluster/muc_outbox.rs`�
 S14 後剩 27 條，分布在 27 個檔案：介面卡經組合層取得狀態 25 條（`xmpp` 15、`s2s` 8、`api` 1、`bosh` 1），應用服務
 直接使用 `xmpp` 對外佇列 2 條，都持有或傳遞組合根本身，依 5.9 交給模組化執行計劃。
 
+### 5.11 S15 盤點：介面卡參數收窄（`5c16fed`）
+
+S15 核對 5.10 剩下的 27 條，找出只向 `AppState` 讀幾個設定值或句柄、不持有組合根做事的檔案。`s2s` 的 8 條中，
+`tls.rs`、`dns.rs` 只讀聯邦 TLS 素材、一個 OCSP 旗標、解析器、DNS 覆寫與兩個位址政策；`dialback.rs` 讀三個旗標，
+另有一個向權威伺服器開連線的函式；`inbound/direct_route.rs` 是包住 `&AppState` 實作傳訊服務 port 的組合接線。
+`xmpp` 的 15 條中只有 `protocol/mix_muc.rs` 屬於這一類。四個 WP 平行執行、依序整合：
+
+| WP | 減少 | 內容 |
+| --- | ---: | --- |
+| WP-151 | 2 | TLS 函式改收 `&TlsContext`，`s2s_client_config` 另收 OCSP 旗標；DNS 函式改收 `s2s::dns` 定義、`state` 建構的 `FederationDnsContext`（`Copy`，解析器、覆寫與 TLS 素材以借用傳入）；`AppState::s2s_dns_override` 移為 context 的方法 |
+| WP-152 | 1 | `features` 改收 `S2sFeaturePolicy`；`verify_remote` 逐位元組移到 `s2s/outbound/dialback_verify.rs`，由 `s2s::outbound` 轉出 |
+| WP-153 | 1 | `S2sDirectRoutePort` 以 `git mv` 移到 `state/s2s_direct_route.rs`；`check-federated-route-boundaries` 改讀新路徑，並要求 `state.rs` 註冊該模組 |
+| WP-154 | 1 | `maybe_link_local_mirror` 改收鏡像旗標、本地網域與 `&MixService<R>`，對 `MixRepository` 泛型，不點名 `db` 型別；架構門禁改為要求這個參數與其上的 `link_local_muc_mirror` 呼叫 |
+
+S15 後剩 22 條，分布在 22 個檔案：介面卡經組合層取得狀態 20 條（`xmpp` 14、`s2s` 4、`api` 1、`bosh` 1），應用服務
+直接使用 `xmpp` 對外佇列 2 條。`s2s` 剩下的 `components.rs`、`inbound.rs`、`outbound.rs`、`sm.rs` 以及 `xmpp` 的
+協定處理器都持有或傳遞組合根本身，依 5.9 交給模組化執行計劃。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -542,6 +561,11 @@ S14 後剩 27 條，分布在 27 個檔案：介面卡經組合層取得狀態 2
      有的只在 bin 目標下未使用、在測試目標下仍被使用，所以兩個目標都要檢查，測試模組經 `super::` 取用的名稱
      （`state/session_key_tests.rs`）改為直接引用新路徑。父模組刪除 `use crate::state::AppState;` 後，經
      `use super::*;` 取得它的子模組（`cluster/workers.rs`）會失去該名稱：WP-142 先在子模組補上匯入，WP-144 再刪除。
+   - 參數收窄（S15）：介面卡只讀少數設定或句柄時，改收那些值或一個介面卡定義、`state` 建構的小 context，
+     比搬移定義更直接；`Copy` 的 context 只複製固定設定，解析器、TLS 素材等共享狀態仍以借用在原處讀取。規格除了
+     列出呼叫端，也要搜尋門禁中被收窄函式原本使用的 accessor 名稱：WP-154 讓 `mix_muc.rs` 不再呼叫
+     `.mix_service()`，架構門禁因此失敗，匯入它的三個門禁也一併失敗；由架構負責人把規則改為要求新的參數與呼叫，
+     並以變異確認仍會拒絕。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -693,3 +717,8 @@ Stage 證據仍綁定其原提交。
 | WP-142 | 完成：`state/muc_delivery.rs` 以 `git mv` 移到 `xmpp/muc_delivery.rs`，`state/cluster_muc_delivery_endpoints.rs`、`cluster_muc_outbox_worker.rs` 移到 `cluster/`，三個建構子切回 `state` 中原名的檔案；`start_muc_outbox_delivery` 改收 worker registry 與 context，`cluster.rs` 不再匯入 `AppState`；架構門禁改讀新檔。基線減少 2 條 | 見 `git log --grep '\[WP-142\]'` |
 | WP-143 | 完成：`state/cluster_recovery_replay.rs`、`direct_spool_wake.rs`、`cluster_maintenance.rs` 連同內嵌測試以 `git mv` 移到 `cluster/{recovery_replay_wake,direct_spool_wake,maintenance_locals}.rs`，`ClusterMaintenanceContext` 移到 `cluster/maintenance_context.rs`，建構子留在 `state`；11 個測試的路徑由 `state::` 改為 `cluster::`。基線減少 1 條 | 見 `git log --grep '\[WP-143\]'` |
 | WP-144 | 完成：四個監聽器 context 以 `git mv` 移到 `cluster/listener_{dispatch,mix_caps,blocking,sm_muc_teardown}.rs`，故障監督 context 移到 `cluster/failure_supervisor_context.rs`，`SmTeardownLocalEffects` 移到 `xmpp/local_routes/sm_teardown.rs`，建構子留在 `state`；`ClusterListenerRuntime::from_state` 改為 `state` 的 `cluster_listener_runtime()`，`run_pubsub_listener` 改收 runtime；架構門禁分別讀 dispatch 的邏輯與建構子。基線減少 1 條。WP-141–144 依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 31 條降到 27 條（27 檔） | 見 `git log --grep '\[WP-144\]'` |
+| WP-150 | 完成：記錄 S15 的階段、盤點（5.11）、委派經驗與 WP 狀態 | 見 `git log --grep '\[WP-150\]'` |
+| WP-151 | 完成：`s2s/tls.rs` 的五個函式改收 `&TlsContext`，`s2s_client_config` 另收 `ocsp_staple_required`；`s2s/dns.rs` 新增 `FederationDnsContext`，八個函式改收它，`state/federation_dns.rs` 的 `federation_dns_context()` 建構；`s2s_dns_override` 移為 context 的私有方法。基線減少 2 條 | 見 `git log --grep '\[WP-151\]'` |
+| WP-152 | 完成：`features` 改收 `S2sFeaturePolicy`，由 `state` 的 `s2s_feature_policy()` 建構；`verify_remote` 由架構負責人逐位元組移到 `s2s/outbound/dialback_verify.rs`，`parse_verify_response` 改為 `pub(crate)`，inbound 的呼叫不變。基線減少 1 條 | 見 `git log --grep '\[WP-152\]'` |
+| WP-153 | 完成：`s2s/inbound/direct_route.rs` 以 `git mv` 移到 `state/s2s_direct_route.rs`，型別與欄位改為 `pub(crate)`；inbound 改由新路徑匯入並自 `MODULE_SOURCE` 移除；`check-federated-route-boundaries` 改讀新檔、要求 `state.rs` 註冊模組，兩個變異自測改指新行；`message-execution.md` 改用新路徑。基線減少 1 條 | 見 `git log --grep '\[WP-153\]'` |
+| WP-154 | 完成：`maybe_link_local_mirror` 改收鏡像旗標、`&MixService<R>` 與本地網域，三個呼叫端傳入同樣的 `AppState` accessor；架構門禁對 `mix_muc.rs` 改為要求該參數與 `link_local_muc_mirror` 呼叫，仍拒絕 `db::link_mix_muc_by_localpart`。基線減少 1 條。WP-151–154 依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 27 條降到 22 條（22 檔） | 見 `git log --grep '\[WP-154\]'` |

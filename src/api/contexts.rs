@@ -1,5 +1,6 @@
-//! REST extractor contexts: the query, governance, retention, report and HTTP entry contexts, and the
-//! service bindings handlers receive. The composition root constructs them and implements FromRef.
+//! REST and private listener extractor contexts: query, governance, retention, report, HTTP entry,
+//! upload, account teardown, readiness and metrics contexts, and the service bindings handlers
+//! receive. The composition root constructs them, implements FromRef and the ports they hold.
 
 use std::sync::Arc;
 

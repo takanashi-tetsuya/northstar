@@ -523,7 +523,8 @@ pub(crate) async fn connect_secure_stream_from(
     if state.island_mode_enabled() || !state.federation_domain_allowed(&target_domain) {
         anyhow::bail!("target domain is denied by federation policy");
     }
-    let endpoints = resolve_federation_endpoints(state, &target_domain).await?;
+    let endpoints =
+        resolve_federation_endpoints(state.federation_dns_context(), &target_domain).await?;
     let mut last_error = None;
     let mut group_start = 0;
     while group_start < endpoints.len() {

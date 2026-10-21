@@ -1,7 +1,4 @@
-use crate::{
-    security::{address_scope::is_public_ip, dane::DaneSrvBinding},
-    state::AppState,
-};
+use crate::security::{address_scope::is_public_ip, dane::DaneSrvBinding, tls::TlsContext};
 use anyhow::{Context, Result};
 use hickory_resolver::{
     net::{DnsError, NetError},
@@ -22,6 +19,29 @@ use std::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::{rustls::pki_types::ServerName, TlsConnector};
+
+/// What federation endpoint discovery reads from the composition root: the
+/// S2S resolver, the configured DNS overrides, the DANE and private-address
+/// policies and the federation TLS material for XEP-0487 HTTPS lookups.
+#[derive(Clone, Copy)]
+pub(crate) struct FederationDnsContext<'a> {
+    pub(crate) resolver: &'a TokioResolver,
+    pub(crate) overrides: &'a [(String, SocketAddr, bool)],
+    pub(crate) dane_required: bool,
+    pub(crate) private_addresses_allowed: bool,
+    pub(crate) tls: &'a TlsContext,
+}
+
+impl FederationDnsContext<'_> {
+    fn dns_override(&self, domain: &str) -> Option<(SocketAddr, bool)> {
+        self.overrides
+            .iter()
+            .find(|(candidate, _, _)| {
+                crate::jid::prepare_domainpart(candidate).is_ok_and(|candidate| candidate == domain)
+            })
+            .map(|(_, address, direct_tls)| (*address, *direct_tls))
+    }
+}
 
 const HOST_META_PATH: &str = "/.well-known/host-meta.json";
 const HOST_META_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -175,18 +195,18 @@ struct SrvRecord {
 /// and negative caches, honors record TTLs, follows CNAMEs, tries all system
 /// name servers, and falls back to TCP for truncated/failed UDP responses.
 pub(crate) async fn resolve_federation_endpoints(
-    state: &AppState,
+    dns: FederationDnsContext<'_>,
     domain: &str,
 ) -> Result<Vec<FederationEndpoint>> {
     let domain = crate::jid::prepare_domainpart(domain)
         .context("federation target is not a valid RFC 7622 domain")?;
     let dns_domain = crate::jid::domain_to_ascii(&domain)
         .context("federation target cannot be represented as a DNS name")?;
-    if state.s2s_dane_required() {
-        return resolve_dns_endpoints(state, &domain).await;
+    if dns.dane_required {
+        return resolve_dns_endpoints(dns, &domain).await;
     }
-    if let Some((address, direct_tls)) = state.s2s_dns_override(&domain) {
-        validate_endpoint(state, address)?;
+    if let Some((address, direct_tls)) = dns.dns_override(&domain) {
+        validate_endpoint(dns, address)?;
         return Ok(vec![FederationEndpoint {
             address,
             direct_tls,
@@ -210,17 +230,16 @@ pub(crate) async fn resolve_federation_endpoints(
     if let Some(expires_at) = host_meta_negative_cache().get(&domain).map(|entry| *entry) {
         if expires_at > Instant::now() {
             if let Some(cached) = cached {
-                return stale_host_meta_with_dns(state, &domain, cached.endpoints).await;
+                return stale_host_meta_with_dns(dns, &domain, cached.endpoints).await;
             }
-            return resolve_dns_endpoints(state, &domain).await;
+            return resolve_dns_endpoints(dns, &domain).await;
         }
         host_meta_negative_cache().remove(&domain);
     }
-    let host_meta =
-        tokio::time::timeout(HOST_META_DISCOVERY_TIMEOUT, fetch_xep_0487(state, &domain))
-            .await
-            .context("XEP-0487 discovery exceeded its total time limit")
-            .and_then(|result| result);
+    let host_meta = tokio::time::timeout(HOST_META_DISCOVERY_TIMEOUT, fetch_xep_0487(dns, &domain))
+        .await
+        .context("XEP-0487 discovery exceeded its total time limit")
+        .and_then(|result| result);
     match host_meta {
         Ok(HostMetaDiscovery::Authoritative {
             ttl_seconds,
@@ -280,20 +299,20 @@ pub(crate) async fn resolve_federation_endpoints(
                 // XEP-0487 explicitly requires expired metadata to remain a
                 // fallback when refresh fails. DNS candidates are appended
                 // below, so every available method can still be attempted.
-                return stale_host_meta_with_dns(state, &domain, cached.endpoints).await;
+                return stale_host_meta_with_dns(dns, &domain, cached.endpoints).await;
             }
         }
     }
 
-    resolve_dns_endpoints(state, &domain).await
+    resolve_dns_endpoints(dns, &domain).await
 }
 
 async fn stale_host_meta_with_dns(
-    state: &AppState,
+    dns: FederationDnsContext<'_>,
     domain: &str,
     mut endpoints: Vec<FederationEndpoint>,
 ) -> Result<Vec<FederationEndpoint>> {
-    match resolve_dns_endpoints(state, domain).await {
+    match resolve_dns_endpoints(dns, domain).await {
         Ok(dns) => endpoints.extend(dns),
         Err(error) => {
             tracing::debug!(%domain, ?error, "DNS fallback after stale XEP-0487 metadata failed")
@@ -306,7 +325,10 @@ async fn stale_host_meta_with_dns(
     Ok(endpoints)
 }
 
-async fn resolve_dns_endpoints(state: &AppState, domain: &str) -> Result<Vec<FederationEndpoint>> {
+async fn resolve_dns_endpoints(
+    dns: FederationDnsContext<'_>,
+    domain: &str,
+) -> Result<Vec<FederationEndpoint>> {
     let dns_domain = crate::jid::domain_to_ascii(domain)
         .context("federation target cannot be represented as a DNS name")?;
     // XEP-0368 defines Direct TLS and STARTTLS as two connection methods for
@@ -314,8 +336,8 @@ async fn resolve_dns_endpoints(state: &AppState, domain: &str) -> Result<Vec<Fed
     // only its sibling lookup fails; a transient DNS error must not prevent a
     // successfully published SRV method from being attempted.
     let (direct_result, starttls_result) = tokio::join!(
-        lookup_srv(state.s2s_dns_resolver(), &dns_domain, "_xmpps-server"),
-        lookup_srv(state.s2s_dns_resolver(), &dns_domain, "_xmpp-server")
+        lookup_srv(dns.resolver, &dns_domain, "_xmpps-server"),
+        lookup_srv(dns.resolver, &dns_domain, "_xmpp-server")
     );
     let srv_lookup_failed = direct_result.is_err() || starttls_result.is_err();
     if let Err(error) = &direct_result {
@@ -338,7 +360,7 @@ async fn resolve_dns_endpoints(state: &AppState, domain: &str) -> Result<Vec<Fed
     let mut endpoints = Vec::new();
     if direct_records.iter().any(|record| record.target != ".") {
         endpoints.extend(
-            resolve_srv_records(state, direct_records, "_xmpps-server", domain)
+            resolve_srv_records(dns, direct_records, "_xmpps-server", domain)
                 .await?
                 .into_iter()
                 .map(
@@ -356,7 +378,7 @@ async fn resolve_dns_endpoints(state: &AppState, domain: &str) -> Result<Vec<Fed
     }
     if starttls_records.iter().any(|record| record.target != ".") {
         endpoints.extend(
-            resolve_srv_records(state, starttls_records, "_xmpp-server", domain)
+            resolve_srv_records(dns, starttls_records, "_xmpp-server", domain)
                 .await?
                 .into_iter()
                 .map(
@@ -385,22 +407,19 @@ async fn resolve_dns_endpoints(state: &AppState, domain: &str) -> Result<Vec<Fed
             "remote domain published no usable federation endpoint or SRV discovery was incomplete"
         );
     }
-    if state.s2s_dane_required() {
+    if dns.dane_required {
         anyhow::bail!("DANE is required but no XMPP SRV relationship was published");
     }
 
-    let lookup = tokio::time::timeout(
-        DNS_LOOKUP_TIMEOUT,
-        state.s2s_dns_resolver().lookup_ip(&dns_domain),
-    )
-    .await
-    .context("federation address lookup timed out")?
-    .context("federation address lookup failed")?;
+    let lookup = tokio::time::timeout(DNS_LOOKUP_TIMEOUT, dns.resolver.lookup_ip(&dns_domain))
+        .await
+        .context("federation address lookup timed out")?
+        .context("federation address lookup failed")?;
     let addresses = interleave_ip_families(lookup.iter())
         .into_iter()
         .take(DNS_MAX_ENDPOINTS)
         .map(|ip| SocketAddr::new(ip, 5269))
-        .filter(|address| validate_endpoint(state, *address).is_ok())
+        .filter(|address| validate_endpoint(dns, *address).is_ok())
         .map(|address| FederationEndpoint {
             address,
             direct_tls: false,
@@ -543,7 +562,7 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
     }
 }
 
-async fn fetch_xep_0487(state: &AppState, domain: &str) -> Result<HostMetaDiscovery> {
+async fn fetch_xep_0487(dns: FederationDnsContext<'_>, domain: &str) -> Result<HostMetaDiscovery> {
     let mut location = HttpsLocation {
         host: crate::jid::domain_to_ascii(domain)?,
         port: 443,
@@ -555,7 +574,7 @@ async fn fetch_xep_0487(state: &AppState, domain: &str) -> Result<HostMetaDiscov
         if !visited.insert(location.clone()) {
             anyhow::bail!("XEP-0487 host-meta redirect loop detected");
         }
-        let response = fetch_https_location(state, &location).await?;
+        let response = fetch_https_location(dns, &location).await?;
         match response.status {
             200 => {
                 let content_type = response
@@ -567,10 +586,7 @@ async fn fetch_xep_0487(state: &AppState, domain: &str) -> Result<HostMetaDiscov
                 if !matches!(content_type, "application/json" | "application/jrd+json") {
                     anyhow::bail!("XEP-0487 host-meta response has an unsupported media type");
                 }
-                return parse_xep_0487_document(
-                    state.s2s_private_addresses_allowed(),
-                    &response.body,
-                );
+                return parse_xep_0487_document(dns.private_addresses_allowed, &response.body);
             }
             301 | 302 | 307 | 308 => {
                 if redirect_count == HOST_META_MAX_REDIRECTS {
@@ -637,19 +653,19 @@ fn parse_https_redirect(current: &HttpsLocation, value: &str) -> Result<HttpsLoc
     })
 }
 
-async fn fetch_https_location(state: &AppState, location: &HttpsLocation) -> Result<HttpResponse> {
-    let lookup = tokio::time::timeout(
-        DNS_LOOKUP_TIMEOUT,
-        state.s2s_dns_resolver().lookup_ip(&location.host),
-    )
-    .await
-    .context("XEP-0487 HTTPS host address lookup timed out")?
-    .context("XEP-0487 HTTPS host address lookup failed")?;
+async fn fetch_https_location(
+    dns: FederationDnsContext<'_>,
+    location: &HttpsLocation,
+) -> Result<HttpResponse> {
+    let lookup = tokio::time::timeout(DNS_LOOKUP_TIMEOUT, dns.resolver.lookup_ip(&location.host))
+        .await
+        .context("XEP-0487 HTTPS host address lookup timed out")?
+        .context("XEP-0487 HTTPS host address lookup failed")?;
     let addresses = interleave_ip_families(lookup.iter())
         .into_iter()
         .take(HOST_META_MAX_HTTPS_ADDRESSES)
         .map(|ip| SocketAddr::new(ip, location.port))
-        .filter(|address| validate_endpoint(state, *address).is_ok())
+        .filter(|address| validate_endpoint(dns, *address).is_ok())
         .collect::<Vec<_>>();
     if addresses.is_empty() {
         anyhow::bail!("XEP-0487 HTTPS host has no policy-compliant address");
@@ -657,7 +673,7 @@ async fn fetch_https_location(state: &AppState, location: &HttpsLocation) -> Res
 
     let mut last_error = None;
     for address in addresses {
-        match fetch_https_address(state, location, address).await {
+        match fetch_https_address(dns, location, address).await {
             Ok(response) => return Ok(response),
             Err(error) => {
                 tracing::debug!(host = %location.host, %address, ?error, "XEP-0487 HTTPS endpoint failed");
@@ -669,7 +685,7 @@ async fn fetch_https_location(state: &AppState, location: &HttpsLocation) -> Res
 }
 
 async fn fetch_https_address(
-    state: &AppState,
+    dns: FederationDnsContext<'_>,
     location: &HttpsLocation,
     address: SocketAddr,
 ) -> Result<HttpResponse> {
@@ -682,7 +698,7 @@ async fn fetch_https_address(
     stream.set_nodelay(true)?;
     let server_name =
         ServerName::try_from(location.host.clone()).context("XEP-0487 HTTPS SNI is invalid")?;
-    let connector = TlsConnector::from(crate::s2s::tls::host_meta_https_client_config(state)?);
+    let connector = TlsConnector::from(crate::s2s::tls::host_meta_https_client_config(dns.tls)?);
     let mut secure =
         tokio::time::timeout(HOST_META_IO_TIMEOUT, connector.connect(server_name, stream))
             .await
@@ -1059,7 +1075,7 @@ fn deduplicate_endpoints(endpoints: &mut Vec<FederationEndpoint>) {
 }
 
 async fn resolve_srv_records(
-    state: &AppState,
+    dns: FederationDnsContext<'_>,
     records: Vec<SrvRecord>,
     service: &str,
     xmpp_domain: &str,
@@ -1071,11 +1087,8 @@ async fn resolve_srv_records(
         }
         let target = record.target.trim_end_matches('.');
         let dane_srv_binding = DaneSrvBinding::new(service, xmpp_domain, target, record.port)?;
-        let lookup = match tokio::time::timeout(
-            DNS_LOOKUP_TIMEOUT,
-            state.s2s_dns_resolver().lookup_ip(target),
-        )
-        .await
+        let lookup = match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, dns.resolver.lookup_ip(target))
+            .await
         {
             Err(_) => {
                 tracing::debug!(%target, "federation SRV target address lookup timed out");
@@ -1095,7 +1108,7 @@ async fn resolve_srv_records(
             .take(DNS_MAX_IPS_PER_SRV_TARGET)
         {
             let address = SocketAddr::new(ip, record.port);
-            if validate_endpoint(state, address).is_ok()
+            if validate_endpoint(dns, address).is_ok()
                 && !addresses
                     .iter()
                     .any(|(candidate, _, _)| *candidate == address)
@@ -1222,8 +1235,8 @@ fn no_records(error: &NetError) -> bool {
     )
 }
 
-pub(crate) fn validate_endpoint(state: &AppState, address: SocketAddr) -> Result<()> {
-    validate_address_policy(state.s2s_private_addresses_allowed(), address)
+pub(crate) fn validate_endpoint(dns: FederationDnsContext<'_>, address: SocketAddr) -> Result<()> {
+    validate_address_policy(dns.private_addresses_allowed, address)
 }
 
 fn validate_address_policy(federation_allow_private_ips: bool, address: SocketAddr) -> Result<()> {

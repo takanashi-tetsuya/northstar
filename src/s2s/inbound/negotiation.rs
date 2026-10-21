@@ -398,7 +398,7 @@ pub(super) async fn authenticate_secure_inbound(
     input: &mut S2sInputState,
 ) -> Result<Option<InboundAuthentication>> {
     let certificate_identity = if state.s2s_sasl_external_enabled() {
-        match verify_peer_domain(&state, &peer_certificates, &asserted_domain) {
+        match verify_peer_domain(state.tls_context(), &peer_certificates, &asserted_domain) {
             Ok(identity) => identity,
             Err(error) => {
                 tracing::warn!(

@@ -29,7 +29,7 @@ pub async fn serve_s2s_tls(
                     tracing::debug!(%peer, "rejected XMPPS federation connection at the configured capacity limit");
                     continue;
                 };
-                let (tls_config, tls_generation) = s2s_server_config(&state, true)?;
+                let (tls_config, tls_generation) = s2s_server_config(state.tls_context(), true)?;
                 let acceptor = TlsAcceptor::from(tls_config);
                 let state = Arc::clone(&state);
                 let actors = state.connection_actors().clone();
@@ -87,7 +87,7 @@ pub async fn serve(
                     tracing::debug!(%peer, "rejected federation connection at the configured capacity limit");
                     continue;
                 };
-                let (tls_config, tls_generation) = s2s_server_config(&state, false)?;
+                let (tls_config, tls_generation) = s2s_server_config(state.tls_context(), false)?;
                 let acceptor = TlsAcceptor::from(tls_config);
                 let state = Arc::clone(&state);
                 let actors = state.connection_actors().clone();

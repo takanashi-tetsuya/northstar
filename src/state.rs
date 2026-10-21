@@ -221,6 +221,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod admission_guards;
 mod construction;
+mod federation_dns;
 mod federation_policy;
 mod local_muc;
 mod local_session;

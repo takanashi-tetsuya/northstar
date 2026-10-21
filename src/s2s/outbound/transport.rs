@@ -114,7 +114,7 @@ pub(super) async fn connect_secure_endpoint_group(
                     .context("global S2S connection-attempt limiter closed")?;
             // Revalidate immediately before connect so resolver/cache changes
             // cannot bypass the DNS-rebinding and private-network boundary.
-            validate_endpoint(state, endpoint.address)?;
+            validate_endpoint(state.federation_dns_context(), endpoint.address)?;
             connect_secure_endpoint(state, source_domain, target_domain, &endpoint).await
         }
     })
@@ -234,8 +234,13 @@ pub(super) async fn connect_secure_endpoint(
     let server_name = ServerName::try_from(endpoint.tls_server_name.clone())
         .context("invalid federation TLS SNI domain")?;
     let (secure, tls_generation) = if endpoint.direct_tls {
-        let (config, tls_generation) =
-            s2s_client_config(state, true, &endpoint.public_key_pins, dane_policy.as_ref())?;
+        let (config, tls_generation) = s2s_client_config(
+            state.tls_context(),
+            state.s2s_ocsp_staple_required(),
+            true,
+            &endpoint.public_key_pins,
+            dane_policy.as_ref(),
+        )?;
         let connector = TlsConnector::from(config);
         let secure = tokio::time::timeout(IO_TIMEOUT, connector.connect(server_name, stream))
             .await
@@ -259,7 +264,8 @@ pub(super) async fn connect_secure_endpoint(
             anyhow::bail!("remote server rejected STARTTLS");
         }
         let (config, tls_generation) = s2s_client_config(
-            state,
+            state.tls_context(),
+            state.s2s_ocsp_staple_required(),
             false,
             &endpoint.public_key_pins,
             dane_policy.as_ref(),

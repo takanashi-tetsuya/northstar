@@ -1,7 +1,9 @@
 use crate::{
     jid::prepare_domainpart,
-    security::dane::{DaneMatch, DanePolicy},
-    state::AppState,
+    security::{
+        dane::{DaneMatch, DanePolicy},
+        tls::TlsContext,
+    },
 };
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -186,12 +188,13 @@ fn pin_fallback_permitted(revocation_policy_configured: bool) -> bool {
 }
 
 pub(crate) fn s2s_client_config(
-    state: &AppState,
+    tls: &TlsContext,
+    ocsp_staple_required: bool,
     direct_tls: bool,
     public_key_pins: &[[u8; 32]],
     dane_policy: Option<&DanePolicy>,
 ) -> Result<(Arc<tokio_rustls::rustls::ClientConfig>, u64)> {
-    let material = state.tls_context().federation_snapshot();
+    let material = tls.federation_snapshot();
     let mut config = if direct_tls {
         material.s2s_client_direct.as_ref().clone()
     } else {
@@ -208,7 +211,7 @@ pub(crate) fn s2s_client_config(
             public_key_pins,
             dane_policy,
             material.crls.clone(),
-            state.s2s_ocsp_staple_required(),
+            ocsp_staple_required,
         )));
     Ok((Arc::new(config), material.generation))
 }
@@ -242,10 +245,10 @@ pub(crate) fn peer_public_key_pin(certificate: &CertificateDer<'_>) -> Result<[u
 }
 
 pub(crate) fn s2s_server_config(
-    state: &AppState,
+    tls: &TlsContext,
     direct_tls: bool,
 ) -> Result<(Arc<tokio_rustls::rustls::ServerConfig>, u64)> {
-    let material = state.tls_context().federation_snapshot();
+    let material = tls.federation_snapshot();
     let config = if direct_tls {
         Arc::clone(&material.s2s_direct)
     } else {
@@ -258,9 +261,9 @@ pub(crate) fn s2s_server_config(
 /// TLS connection it does not present Northstar's server certificate. Normal
 /// WebPKI hostname verification authenticates every origin and redirect.
 pub(crate) fn host_meta_https_client_config(
-    state: &AppState,
+    tls: &TlsContext,
 ) -> Result<Arc<tokio_rustls::rustls::ClientConfig>> {
-    let material = state.tls_context().federation_snapshot();
+    let material = tls.federation_snapshot();
     let provider = Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
     let mut verifier = tokio_rustls::rustls::client::WebPkiServerVerifier::builder_with_provider(
         Arc::clone(&material.roots),
@@ -287,13 +290,13 @@ pub(crate) fn host_meta_https_client_config(
 /// separate from XMPP identity matching so callers cannot accidentally treat
 /// an SRV target hostname as the authenticated XMPP domain.
 pub(crate) fn verify_peer_certificate_chain(
-    state: &AppState,
+    tls: &TlsContext,
     certificates: &[CertificateDer<'static>],
 ) -> Result<bool> {
     let Some(end_entity) = certificates.first() else {
         return Ok(false);
     };
-    let material = state.tls_context().federation_snapshot();
+    let material = tls.federation_snapshot();
     let algorithms = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
         .signature_verification_algorithms;
     if let Some(crls) = &material.crls {
@@ -369,11 +372,11 @@ pub(crate) fn verify_peer_xmpp_identity(
 }
 
 pub(crate) fn verify_peer_domain(
-    state: &AppState,
+    tls: &TlsContext,
     certificates: &[CertificateDer<'static>],
     domain: &str,
 ) -> Result<Option<XmppCertificateIdentity>> {
-    if !verify_peer_certificate_chain(state, certificates)? {
+    if !verify_peer_certificate_chain(tls, certificates)? {
         return Ok(None);
     }
     let Some(end_entity) = certificates.first() else {

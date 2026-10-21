@@ -155,16 +155,6 @@ impl AppState {
         self.config.federation_ocsp_staple_required
     }
 
-    pub(crate) fn s2s_dns_override(&self, domain: &str) -> Option<(std::net::SocketAddr, bool)> {
-        self.config
-            .federation_dns_overrides
-            .iter()
-            .find(|(candidate, _, _)| {
-                crate::jid::prepare_domainpart(candidate).is_ok_and(|candidate| candidate == domain)
-            })
-            .map(|(_, address, direct_tls)| (*address, *direct_tls))
-    }
-
     pub(crate) fn s2s_private_addresses_allowed(&self) -> bool {
         self.config.federation_allow_private_ips
     }

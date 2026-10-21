@@ -84,9 +84,6 @@
     "src/s2s/dialback.rs": [
       "state"
     ],
-    "src/s2s/dns.rs": [
-      "state"
-    ],
     "src/s2s/inbound.rs": [
       "state"
     ],
@@ -97,9 +94,6 @@
       "state"
     ],
     "src/s2s/sm.rs": [
-      "state"
-    ],
-    "src/s2s/tls.rs": [
       "state"
     ],
     "src/services/messaging.rs": [

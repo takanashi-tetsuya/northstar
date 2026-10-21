@@ -208,7 +208,7 @@ It shares local/remote/fallback phase helpers while explicitly retaining extra
 health checkpoints after local routing, after fallback privacy awaits and before
 remote fallback. Its final health gate runs only after acceptance; unrouted
 results return to the original caller's offline policy. The dedicated
-`src/s2s/inbound/direct_route.rs` adapter retains S2S telemetry and remote
+`src/state/s2s_direct_route.rs` adapter retains S2S telemetry and remote
 methods. `history_committed` stays separate from delivery commitment.
 No C2S frame timeout was added to S2S application handling.
 

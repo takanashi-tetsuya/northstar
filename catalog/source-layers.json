@@ -84,9 +84,6 @@
     "src/s2s/inbound.rs": [
       "state"
     ],
-    "src/s2s/inbound/direct_route.rs": [
-      "state"
-    ],
     "src/s2s/outbound.rs": [
       "state"
     ],

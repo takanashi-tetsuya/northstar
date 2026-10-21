@@ -10,7 +10,8 @@ export function readFederatedRouteSources() {
   const read = file => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   return {
     inbound: readProductionModule('src/s2s/inbound.rs'),
-    adapter: read('src/s2s/inbound/direct_route.rs'),
+    adapter: read('src/state/s2s_direct_route.rs'),
+    state: read('src/state.rs'),
   };
 }
 
@@ -81,8 +82,8 @@ function requireMatch(code, pattern, message) {
 export function verifyFederatedRouteBoundaries(sources) {
   const inbound = maskRust(sources.inbound);
   const adapter = maskRust(sources.adapter);
-  requireMatch(inbound, /\bmod\s+direct_route\s*;/, 'S2S route adapter module must stay registered');
-  requireMatch(inbound, /\buse\s+direct_route::S2sDirectRoutePort\s*;/, 'S2S caller must import its origin-specific adapter');
+  requireMatch(maskRust(sources.state), /\bpub\(crate\)\s+mod\s+s2s_direct_route\s*;/, 'S2S route adapter module must stay registered');
+  requireMatch(inbound, /\buse\s+crate::state::s2s_direct_route::S2sDirectRoutePort\s*;/, 'S2S caller must import its origin-specific adapter');
   const caller = functionBody(inbound, 'route_inbound_message');
   const invocation = /\bDirectMessageRouter::route_federated\s*\(\s*&S2sDirectRoutePort\s*\(\s*state\s*\)\s*,/.exec(caller);
   if (!invocation || (caller.match(/\bDirectMessageRouter::route_federated\s*\(/g) ?? []).length !== 1) {

@@ -1,17 +1,18 @@
 //! Federation-origin transport and telemetry capability for the shared direct
-//! route owner. Admission, XML errors, history, Push and Carbons stay inbound.
+//! route owner. Admission, XML errors, history, Push and Carbons stay in
+//! `s2s::inbound`.
 
+use super::AppState;
 use crate::{
     services::messaging::{
         DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
     },
-    state::AppState,
     xmpp::local_routes::session::OnlineSession,
     xmpp::outbound::DurableDelivery,
 };
 use anyhow::Result;
 
-pub(super) struct S2sDirectRoutePort<'a>(pub(super) &'a AppState);
+pub(crate) struct S2sDirectRoutePort<'a>(pub(crate) &'a AppState);
 
 impl OnlineRoutePort for S2sDirectRoutePort<'_> {
     type Session = OnlineSession;

@@ -1,6 +1,4 @@
-mod direct_route;
-
-use direct_route::S2sDirectRoutePort;
+use crate::state::s2s_direct_route::S2sDirectRoutePort;
 
 use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
@@ -928,7 +926,6 @@ const MODULE_SOURCE: &[(&str, &str)] = &[
     ("dispatch", include_str!("inbound/dispatch.rs")),
     ("presence", include_str!("inbound/presence.rs")),
     ("iq", include_str!("inbound/iq.rs")),
-    ("direct_route", include_str!("inbound/direct_route.rs")),
 ];
 
 #[cfg(test)]

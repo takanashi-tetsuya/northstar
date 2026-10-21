@@ -146,6 +146,7 @@ pub(crate) mod pubsub_event_outbox_worker;
 pub(crate) mod pubsub_notification_delivery;
 mod runtime_control_refresh;
 mod s2s_cluster_routing;
+pub(crate) mod s2s_direct_route;
 pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod session_cleanup;
 pub(crate) mod session_cleanup_bookkeeping;

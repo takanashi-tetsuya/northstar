@@ -40,8 +40,8 @@ test('an unrelated declaration cannot spoof the owned entry signature', () => {
   assert.throws(() => verifyFederatedRouteBoundaries({ ...baseline, adapter: changed }), /owned local enqueue and preserve its refusal type/);
 });
 
-rejectsMutation('adapter module cannot disappear', 'inbound', 'mod direct_route;', '// mod direct_route;', /module must stay registered/);
-rejectsMutation('adapter import cannot disappear', 'inbound', 'use direct_route::S2sDirectRoutePort;', '// use direct_route::S2sDirectRoutePort;', /import its origin-specific adapter/);
+rejectsMutation('adapter module cannot disappear', 'state', 'pub(crate) mod s2s_direct_route;', '// pub(crate) mod s2s_direct_route;', /module must stay registered/);
+rejectsMutation('adapter import cannot disappear', 'inbound', 'use crate::state::s2s_direct_route::S2sDirectRoutePort;', '// use crate::state::s2s_direct_route::S2sDirectRoutePort;', /import its origin-specific adapter/);
 rejectsMutation('caller cannot switch to C2S checkpoint policy', 'inbound', 'DirectMessageRouter::route_federated(', 'DirectMessageRouter::route(', /caller must invoke/);
 rejectsMutation('caller cannot use unwrapped AppState', 'inbound', '&S2sDirectRoutePort(state)', '&state', /caller must invoke/);
 rejectsMutation('caller cannot substitute a different state', 'inbound', '&S2sDirectRoutePort(state)', '&S2sDirectRoutePort(other_state)', /caller must invoke/);

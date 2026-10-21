@@ -103,6 +103,7 @@
 | S11 層級搬移第二批 | WP-110–118 | 逐條核對 5.6 剩下的 104 條，不需新 port 的 33 條以搬移定義或改寫路徑處理：`services` 經轉出引用的 crate 型別改為直接引用 crate（WP-111）；retention repository port 移到 `services`、PIE 匯入紀錄移到 `db`（WP-112、113）；DANE 與 lab DNSSEC、XEP 擴充註冊表、`SmIpPolicy` 與遞送佇列計數器、叢集匯流排簽章與金鑰紀錄移到平台層（WP-114–117）；被下層使用的純資料紀錄移到使用它的那一層（WP-118）。盤點見 5.7 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 104 條降到 71 條（68 檔），其中 20 條由 S12 處理（見 5.8） |
 | S12 層級搬移第三批 | WP-120–128 | 核對 5.7 剩下的 71 條，20 條只需搬到使用者所在的層，或加一個只委派既有方法的小 port：abuse guard、帳號刪除復原與 standalone MUC 維護 worker 移到使用它們的層（WP-121、122、126）；XML 工具與 stanza 驗證移到 `services`（WP-123）；`services` 對 `cluster`、`s2s` 各一處的呼叫改經自己擁有的 port（WP-124、125）；REST 處理器的 context 與服務綁定移到 `api::contexts`，即時 session 與 MUC 占用者經 port 讀取（WP-127）；叢集監聽器的訊息政策移到 `cluster`（WP-128）。盤點見 5.8 | 搬移只改路徑，新 port 只委派原有方法；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 71 條降到 51 條（50 檔），平台層不再向上引用，其中 20 條由 S13 處理（見 5.9） |
 | S13 層級搬移第四批 | WP-130–136 | 核對 5.8 剩下的 51 條，20 條只需把 context 的定義與組合層的建構分開，或加一個只委派既有方法的小 port：REST 端點與上傳 context 移到 `api::contexts`，建構子留在 `state`（WP-131）；帳號拆除、MUC 占用計數、SM 指標與帳號管理快取改經 port 讀取（WP-132–134）；本節點的 session 與 MUC 占用者紀錄移到 `xmpp::local_routes`，即時路由表與其操作留在 `state`（WP-135）；session 清理流程移到它依賴的 `state`（WP-136）。盤點見 5.9 | 搬移只改路徑，新 port 只委派原有方法；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 51 條降到 31 條（31 檔），`services` 只剩對 `xmpp` 對外佇列的 2 條，其餘依 5.9 交給模組化執行計劃 |
+| S14 叢集介面卡解耦 | WP-140–144 | 核對 5.9 中 `cluster` 的 4 條：它們不持有組合根做事，只是 worker 與監聽器的 context 定義在 `state`，或 worker 啟動時以 `AppState` 建構 context。先把 S13 留在 `state`、不碰 `AppState` 的即時路由表操作移到 `xmpp::local_routes`（WP-141），再依 S13 的做法把 context 的定義移到 `cluster`／`xmpp`、建構子留在 `state`：MUC 遞送與 outbox worker（WP-142）、叢集維護（WP-143）、監聽器與故障監督（WP-144）；`cluster` 的 worker 改收組合根建好的 context。盤點見 5.10 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 31 條降到 27 條，`cluster` 不再引用組合層 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -322,20 +323,6 @@ S11 逐條檢查 5.6 剩下的 104 條引用指向什麼：被引用的若是型
 | WP-116 | 3 | `SmIpPolicy` 由 `services::sm` 移到 `platform::config`；PubSub、MIX、S2S 遞送佇列的 10 個計數器由 `db` 移到 `platform::delivery_counters`；指標登錄直接讀 `northstar_pubsub_application` 的 PubSub 准入計數 |
 | WP-117 | 6 | 叢集匯流排簽章由 `cluster::security` 移到 `security::cluster_bus`；叢集金鑰紀錄與就緒探測身分由 `db`、`cluster` 移到 `security::cluster_keys` |
 | WP-118 | 5 | 管理者 session 清理紀錄移到 `services::admin_session_cleanup_worker`；abuse guard 與 repository 交換的紀錄移到 `security::abuse::records`；叢集指標快照移到 `services::metrics_snapshot` |
-| WP-121 | 完成：`security/abuse.rs` 與 4 個子模組以 `git mv` 移到 `services/`；77 個 Rust 檔中 166 行的路徑、兩個門禁與 3 份文件隨之改寫；`new_persistent_for_deployment` 改收 `Arc<dyn AbusePersistence>`，PostgreSQL 實作由 `state/construction.rs` 建立；架構門禁掃描 `src/services` 時略過 abuse 模組自己的檔案。32 個測試的路徑由 `security::abuse` 改為 `services::abuse`。基線減少 2 條 | 見 `git log --grep '\[WP-121\]'` |
-| WP-122 | 完成：`security/account_recovery.rs` 以 `git mv` 原樣移到 `state/`；`main.rs`、XEP-0077 帳號刪除路徑、刪除復原 context 與兩個門禁改用新路徑。基線減少 2 條 | 見 `git log --grep '\[WP-122\]'` |
-| WP-123 | 完成：`xmpp/xml_util.rs`（含 3 個子模組與 3 個測試檔）、`xmpp/stanza_validation.rs` 與 `xmpp/protocol/jingle.rs` 以 `git mv` 移到 `services/`；92 個 Rust 檔、語意 stanza fuzz target 與 5 個門禁改用新路徑，對外 XML 門禁的基線鍵改名、預算不變；`xmpp::xml_builder` 只再轉出 `XmlElement`。74 個測試的路徑由 `xmpp::` 改為 `services::`。基線減少 5 條 | 見 `git log --grep '\[WP-123\]'` |
-| WP-124 | 完成：`services::mix` 新增 `MixClusterRouteLookup`，`outbox_lookup_cluster_nodes` 改收 `&impl MixClusterRouteLookup`，`ClusterMixRouteLookup` 實作時委派原有方法。基線減少 1 條 | 見 `git log --grep '\[WP-124\]'` |
-| WP-125 | 完成：`ComponentRoute` 逐字移到 `services::federation_outbox`，新增 `ComponentWake`；`FederationOutboxService` 持有 `Arc<dyn ComponentWake>`，`ComponentRegistry` 實作時委派原有的 `wake_route`。基線減少 1 條 | 見 `git log --grep '\[WP-125\]'` |
-| WP-126 | 完成：`services/standalone_muc_maintenance.rs` 以 `git mv` 原樣移到 `state/`；4 個測試的路徑由 `services::` 改為 `state::`。基線減少 1 條 | 見 `git log --grep '\[WP-126\]'` |
-| WP-127 | 完成：6 個 context 模組由 `state/` 移到新的 `api/contexts/`，10 個服務綁定別名與 HTTP 政策的轉出移到 `api::contexts`，`state` 建構的欄位與建構子改為 `pub(crate)`；`ApiQueryContext` 經 `LocalPresenceDirectory` 讀取 session 與 MUC 占用者，`state::api_query_presence` 以原本的程式碼實作；`FromRef` 留在 `state.rs`，處理器與架構門禁改寫為 `crate::api::contexts`。4 個測試的路徑由 `state::http_policy` 改為 `api::contexts::http_policy`。基線減少 6 條 | 見 `git log --grep '\[WP-127\]'` |
-| WP-128 | 完成：`ClusterListenerMessagePolicy`、`SessionTerminationEffect` 與 `ClusterMixCapability` 移到新的 `cluster::listener_policy`，政策的 `AppState` 建構子逐字留在 `state`；`privacy_allows_session` 改收 user id、connection id 與選定的隱私清單，監聽器先由 session 的鎖複製清單再呼叫。基線減少 2 條。WP-121–128 由 codex 平行執行，依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 71 條降到 51 條（50 檔） | 見 `git log --grep '\[WP-128\]'` |
-| WP-131 | 完成：12 個 context 模組由 `state/` 以 `git mv` 移到 `api/contexts/`，連同 `OmemoRecoveryPollContext`、`PasskeyService`、`UploadService` 別名；建構子與 `FromRef` 移到新的 `state/rest_endpoint_contexts.rs`，`state` 建構的欄位改為 `pub(crate)`；OMEMO 輪詢的准入常數與視窗函式移到 `api::contexts::omemo_poll`，`UploadAdmission` 與上傳守衛移到新的 `api::contexts::upload_admission`；架構與 OMEMO 門禁改讀新路徑。3 個測試的路徑由 `state::` 改為 `api::contexts::`。基線減少 2 條 | 見 `git log --grep '\[WP-131\]'` |
-| WP-132 | 完成：新的 `api/contexts/account_teardown.rs` 定義兩個拆除 port 與 `AccountTeardownContext`、`AccountGenerationTeardownContext`；`AccountTeardownRuntime`、`AccountGenerationTeardownSequence` 實作 port 時以 `Type::method(self, …)` 委派，`FromRef` 改為建構 handle；三個處理器與路由組裝改收 handle，架構門禁要求 port 檔不提 `AppState` 與 `crate::state`。基線減少 3 條 | 見 `git log --grep '\[WP-132\]'` |
-| WP-133 | 完成：`ReadinessContext` 逐字移到新的 `api/contexts/readiness.rs`；`state/metrics_context.rs` 以 `git mv` 移到 `api/contexts/metrics.rs`，MUC 占用探針改收 `Arc<dyn OccupancyCount>`，SM 指標改經 `SmRecoveryGauges`；新的 `state/metrics_context.rs` 保留 SM 探針與原 `from_state` 的建構。2 個測試的路徑由 `state::metrics_context` 改為 `api::contexts::metrics`。基線減少 1 條 | 見 `git log --grep '\[WP-133\]'` |
-| WP-134 | 完成：`services::account_admin` 為 `RegistrationCache`、`AdminSessionLookup` 加上 `Arc<T>` 實作；兩個管理 context 別名移到 `api::contexts`，`state/construction.rs` 以 trait object 傳入本機快取與 session 查詢，`FromRef` 留在 `state.rs`。基線減少 2 條 | 見 `git log --grep '\[WP-134\]'` |
-| WP-135 | 完成：新的 `xmpp/local_routes/{session,muc}.rs` 收下由 `state/local_session.rs`、`local_muc.rs`、`suspended_muc.rs`、`muc_resume.rs` 逐字剪出的紀錄型別與方法，`pub(super)` 改為 `pub(crate)`；`state.rs` 以一行私有匯入使用；其他 27 個檔案改用新路徑，經 `state` 轉出取得的 workspace crate 型別改為直接引用 crate；整合後由架構負責人收斂 `state.rs` 失去使用者的轉出。基線減少 10 條 | 見 `git log --grep '\[WP-135\]'` |
-| WP-136 | 完成：`services/session_cleanup.rs` 與其測試以 `git mv` 移到 `state/`，`sm_suspension` 改以 `crate::services` 匯入；協議 actor 以 workspace crate 引用 `SessionCleanupAccount`；架構門禁與 runtime 實驗目錄改讀新路徑。6 個測試的路徑由 `services::session_cleanup` 改為 `state::session_cleanup`。基線減少 2 條。WP-131–136 由 codex 平行執行，依 131、132、133、134、136、135 的順序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 51 條降到 31 條（31 檔） | 見 `git log --grep '\[WP-136\]'` |
 
 S11 後剩 71 條，分布在 68 個檔案。S11 判斷它們都要先有 port 或窄化的 context；S12 逐條核對後，其中 20 條只需搬移
 或一個委派既有方法的小 port（見 5.8）。S11 結束時的分布：
@@ -405,9 +392,28 @@ S13 後剩 31 條，分布在 31 個檔案。R9 的門禁只計算具名路徑�
   `OutboundItem`、`RouteEnqueue` 與 `RouteSendError`，這些型別另有 `crate::outbound::…` 路徑的使用者，要等對外佇列
   有 port 後一起處理。
 
+### 5.10 S14 盤點：叢集介面卡解耦（`4d63ba7`）
+
+S14 核對 5.9 中 `cluster` 的 4 條（`cluster.rs`、`cluster/muc_outbox.rs`、`cluster/recovery_replay.rs`、
+`cluster/workers.rs`）。這幾個檔案不持有 `AppState` 做事：`cluster.rs` 與 `workers.rs` 只在 worker 啟動時以
+`AppState` 建構 context，其餘是 context 型別定義在 `state`。這些 context 的邏輯呼叫 S13 留在 `state` 的即時路由表
+操作（`session_entries_for_in`、`fence_local_session_in` 等），所以先把這些只接 `&DashMap`、不碰 `AppState` 的自由
+函式移到介面卡層，再依 S13 的做法把 context 的定義與建構分開。WP-142、143 平行執行，WP-144 要用 WP-142 搬出的
+型別，在兩者整合後才開始（減少數以依序整合時的基線重寫為準）：
+
+| WP | 減少 | 內容 |
+| --- | ---: | --- |
+| WP-141 | 0 | `state/local_session.rs`、`local_muc.rs`、`suspended_muc.rs` 中只操作即時路由表的自由函式與快照紀錄移到 `xmpp::local_routes::{session_table, muc_table, suspended_muc}`；`AppState` 仍擁有路由表與全部方法 |
+| WP-142 | 2 | `MucDeliveryContext` 移到 `xmpp::muc_delivery`，`ClusterMucDeliveryEndpoints`、`ClusterMucOutboxWorkerContext` 移到 `cluster`；`start_muc_outbox_delivery` 改收 worker registry 與建好的 context |
+| WP-143 | 1 | 復原重播喚醒、直送 spool 喚醒、維護用的本地投影與 `ClusterMaintenanceContext` 移到 `cluster` |
+| WP-144 | 1 | 監聽器的 dispatch、MIX caps、封鎖出席、SM MUC 拆除與故障監督 context 移到 `cluster`，`SmTeardownLocalEffects` 移到 `xmpp::local_routes::sm_teardown`；`ClusterListenerRuntime` 由 `state` 建構，`run_pubsub_listener` 改收 runtime |
+
+S14 後剩 27 條，分布在 27 個檔案：介面卡經組合層取得狀態 25 條（`xmpp` 15、`s2s` 8、`api` 1、`bosh` 1），應用服務
+直接使用 `xmpp` 對外佇列 2 條，都持有或傳遞組合根本身，依 5.9 交給模組化執行計劃。
+
 ## 6. 委派與驗收協議
 
-角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8 起改由 Codex CLI 執行（第 8 點）。
+角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
 
 1. 由 `dev` HEAD 建立獨立 git worktree（只含受追蹤檔案，不含 `.env` 等本機秘密）。
 2. 以 `agy -p --mode accept-edits` 交付 WP 規格。agy 只能改檔，不執行 shell；不授予
@@ -522,6 +528,20 @@ S13 後剩 31 條，分布在 31 個檔案。R9 的門禁只計算具名路徑�
      `mod` 與匯入行時幾乎都會衝突，整合時取兩邊的聯集再格式化。WP-135 單獨驗證時通過 clippy，整合後 `state.rs` 的三個
      glob 轉出已沒有 `pub` 項目，`muc_resume` 的 glob 與兩個 workspace crate 型別的轉出失去最後的使用者，在 clippy
      `-D warnings` 下失敗；由架構負責人把 glob 改為 `pub(crate)`、刪除無人使用的轉出，`state` 的測試改為直接引用 crate。
+
+9. agy（S14 起，2026-10-21）：程式修改回到 Antigravity CLI，預設模型 `gemini-3.8-flash-high`，小任務可用
+   `claude-opus-5-5-high`；第 1–7 點照舊，第 8 點中與工具無關的經驗仍適用。
+   - 機械搬移由架構負責人先做並提交：整檔以 `git mv` 移到新位置，`impl AppState` 建構子再以腳本依行號逐位元組
+     切回 `state` 中原名的檔案；agy 只補匯入、可見性、路徑與門禁，不重新輸出搬移的程式碼。規格以 worktree 中的
+     確切檔名與匯入清單交付，平行執行時各自一個 worktree，cargo 由架構負責人依序執行。
+   - 層級搬移（S14）：S13 把即時路由表的操作留在 `state`（WP-135），S14 推翻這個決定：介面卡的 context 要呼叫它們，
+     留在組合層會讓 context 也離不開組合層。這些函式只接路由表，移到 `xmpp::local_routes` 後 `state.rs` 以私有 glob
+     匯入，`state` 的子模組經 `use super::*;` 照舊使用。worker 不再收 `Arc<AppState>`：組合根在 supervisor 的
+     closure 內建構 context 或 runtime，重啟時每次重建，與原本在 worker 內建構相同。
+   - agy 會補上規格漏列的匯入（WP-141 的 `anyhow::Context`），但搬移後失去使用者的匯入與 glob 轉出由 clippy 抓到：
+     有的只在 bin 目標下未使用、在測試目標下仍被使用，所以兩個目標都要檢查，測試模組經 `super::` 取用的名稱
+     （`state/session_key_tests.rs`）改為直接引用新路徑。父模組刪除 `use crate::state::AppState;` 後，經
+     `use super::*;` 取得它的子模組（`cluster/workers.rs`）會失去該名稱：WP-142 先在子模組補上匯入，WP-144 再刪除。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -655,3 +675,21 @@ Stage 證據仍綁定其原提交。
 | WP-116 | 完成：`SmIpPolicy` 逐字移到 `platform::config`，`db` 照舊轉出；10 個遞送佇列計數器與其讀取函式移到新的 `platform::delivery_counters`（PubSub 與 S2S 的 static 加上佇列前綴，MIX 的名稱與遞增敘述逐字不變）；`services::pubsub` 的三個准入計數 wrapper 刪除，指標登錄改呼叫 `northstar_pubsub_application`。基線減少 3 條 | 見 `git log --grep '\[WP-116\]'` |
 | WP-117 | 完成：`cluster/security.rs` 以 `git mv` 移到 `security/cluster_bus.rs`，檔內只改兩處 `ExpectedClusterPeerKey` 路徑；四個叢集金鑰紀錄與 `ClusterReadinessAuthority` 逐字移到新的 `security::cluster_keys`；12 個檔案的 59 處 `cluster::security` 路徑、`catalog/runtime-experiments.json` 的 2 個路徑與 3 份文件隨之改寫；5 個測試的路徑由 `cluster::security` 改為 `security::cluster_bus`。基線減少 6 條 | 見 `git log --grep '\[WP-117\]'` |
 | WP-118 | 完成：三個管理者 session 清理紀錄由 `db::admin_commands` 移到 `services::admin_session_cleanup_worker`，六個 abuse 紀錄移到新的 `security::abuse::records`，`ClusterMetricsSnapshot` 由 `cluster::health` 移到 `services::metrics_snapshot`，全部逐字搬移。基線減少 5 條。WP-111–118 由 codex 平行執行，依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 104 條降到 71 條（68 檔） | 見 `git log --grep '\[WP-118\]'` |
+| WP-121 | 完成：`security/abuse.rs` 與 4 個子模組以 `git mv` 移到 `services/`；77 個 Rust 檔中 166 行的路徑、兩個門禁與 3 份文件隨之改寫；`new_persistent_for_deployment` 改收 `Arc<dyn AbusePersistence>`，PostgreSQL 實作由 `state/construction.rs` 建立；架構門禁掃描 `src/services` 時略過 abuse 模組自己的檔案。32 個測試的路徑由 `security::abuse` 改為 `services::abuse`。基線減少 2 條 | 見 `git log --grep '\[WP-121\]'` |
+| WP-122 | 完成：`security/account_recovery.rs` 以 `git mv` 原樣移到 `state/`；`main.rs`、XEP-0077 帳號刪除路徑、刪除復原 context 與兩個門禁改用新路徑。基線減少 2 條 | 見 `git log --grep '\[WP-122\]'` |
+| WP-123 | 完成：`xmpp/xml_util.rs`（含 3 個子模組與 3 個測試檔）、`xmpp/stanza_validation.rs` 與 `xmpp/protocol/jingle.rs` 以 `git mv` 移到 `services/`；92 個 Rust 檔、語意 stanza fuzz target 與 5 個門禁改用新路徑，對外 XML 門禁的基線鍵改名、預算不變；`xmpp::xml_builder` 只再轉出 `XmlElement`。74 個測試的路徑由 `xmpp::` 改為 `services::`。基線減少 5 條 | 見 `git log --grep '\[WP-123\]'` |
+| WP-124 | 完成：`services::mix` 新增 `MixClusterRouteLookup`，`outbox_lookup_cluster_nodes` 改收 `&impl MixClusterRouteLookup`，`ClusterMixRouteLookup` 實作時委派原有方法。基線減少 1 條 | 見 `git log --grep '\[WP-124\]'` |
+| WP-125 | 完成：`ComponentRoute` 逐字移到 `services::federation_outbox`，新增 `ComponentWake`；`FederationOutboxService` 持有 `Arc<dyn ComponentWake>`，`ComponentRegistry` 實作時委派原有的 `wake_route`。基線減少 1 條 | 見 `git log --grep '\[WP-125\]'` |
+| WP-126 | 完成：`services/standalone_muc_maintenance.rs` 以 `git mv` 原樣移到 `state/`；4 個測試的路徑由 `services::` 改為 `state::`。基線減少 1 條 | 見 `git log --grep '\[WP-126\]'` |
+| WP-127 | 完成：6 個 context 模組由 `state/` 移到新的 `api/contexts/`，10 個服務綁定別名與 HTTP 政策的轉出移到 `api::contexts`，`state` 建構的欄位與建構子改為 `pub(crate)`；`ApiQueryContext` 經 `LocalPresenceDirectory` 讀取 session 與 MUC 占用者，`state::api_query_presence` 以原本的程式碼實作；`FromRef` 留在 `state.rs`，處理器與架構門禁改寫為 `crate::api::contexts`。4 個測試的路徑由 `state::http_policy` 改為 `api::contexts::http_policy`。基線減少 6 條 | 見 `git log --grep '\[WP-127\]'` |
+| WP-128 | 完成：`ClusterListenerMessagePolicy`、`SessionTerminationEffect` 與 `ClusterMixCapability` 移到新的 `cluster::listener_policy`，政策的 `AppState` 建構子逐字留在 `state`；`privacy_allows_session` 改收 user id、connection id 與選定的隱私清單，監聽器先由 session 的鎖複製清單再呼叫。基線減少 2 條。WP-121–128 由 codex 平行執行，依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 71 條降到 51 條（50 檔） | 見 `git log --grep '\[WP-128\]'` |
+| WP-131 | 完成：12 個 context 模組由 `state/` 以 `git mv` 移到 `api/contexts/`，連同 `OmemoRecoveryPollContext`、`PasskeyService`、`UploadService` 別名；建構子與 `FromRef` 移到新的 `state/rest_endpoint_contexts.rs`，`state` 建構的欄位改為 `pub(crate)`；OMEMO 輪詢的准入常數與視窗函式移到 `api::contexts::omemo_poll`，`UploadAdmission` 與上傳守衛移到新的 `api::contexts::upload_admission`；架構與 OMEMO 門禁改讀新路徑。3 個測試的路徑由 `state::` 改為 `api::contexts::`。基線減少 2 條 | 見 `git log --grep '\[WP-131\]'` |
+| WP-132 | 完成：新的 `api/contexts/account_teardown.rs` 定義兩個拆除 port 與 `AccountTeardownContext`、`AccountGenerationTeardownContext`；`AccountTeardownRuntime`、`AccountGenerationTeardownSequence` 實作 port 時以 `Type::method(self, …)` 委派，`FromRef` 改為建構 handle；三個處理器與路由組裝改收 handle，架構門禁要求 port 檔不提 `AppState` 與 `crate::state`。基線減少 3 條 | 見 `git log --grep '\[WP-132\]'` |
+| WP-133 | 完成：`ReadinessContext` 逐字移到新的 `api/contexts/readiness.rs`；`state/metrics_context.rs` 以 `git mv` 移到 `api/contexts/metrics.rs`，MUC 占用探針改收 `Arc<dyn OccupancyCount>`，SM 指標改經 `SmRecoveryGauges`；新的 `state/metrics_context.rs` 保留 SM 探針與原 `from_state` 的建構。2 個測試的路徑由 `state::metrics_context` 改為 `api::contexts::metrics`。基線減少 1 條 | 見 `git log --grep '\[WP-133\]'` |
+| WP-134 | 完成：`services::account_admin` 為 `RegistrationCache`、`AdminSessionLookup` 加上 `Arc<T>` 實作；兩個管理 context 別名移到 `api::contexts`，`state/construction.rs` 以 trait object 傳入本機快取與 session 查詢，`FromRef` 留在 `state.rs`。基線減少 2 條 | 見 `git log --grep '\[WP-134\]'` |
+| WP-135 | 完成：新的 `xmpp/local_routes/{session,muc}.rs` 收下由 `state/local_session.rs`、`local_muc.rs`、`suspended_muc.rs`、`muc_resume.rs` 逐字剪出的紀錄型別與方法，`pub(super)` 改為 `pub(crate)`；`state.rs` 以一行私有匯入使用；其他 27 個檔案改用新路徑，經 `state` 轉出取得的 workspace crate 型別改為直接引用 crate；整合後由架構負責人收斂 `state.rs` 失去使用者的轉出。基線減少 10 條 | 見 `git log --grep '\[WP-135\]'` |
+| WP-136 | 完成：`services/session_cleanup.rs` 與其測試以 `git mv` 移到 `state/`，`sm_suspension` 改以 `crate::services` 匯入；協議 actor 以 workspace crate 引用 `SessionCleanupAccount`；架構門禁與 runtime 實驗目錄改讀新路徑。6 個測試的路徑由 `services::session_cleanup` 改為 `state::session_cleanup`。基線減少 2 條。WP-131–136 由 codex 平行執行，依 131、132、133、134、136、135 的順序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 51 條降到 31 條（31 檔） | 見 `git log --grep '\[WP-136\]'` |
+| WP-141 | 完成：新的 `xmpp/local_routes/{session_table,muc_table,suspended_muc}.rs` 逐位元組收下 `state/local_session.rs`、`local_muc.rs`、`suspended_muc.rs` 中只操作即時路由表的函式與快照紀錄，以及 `state/cluster_muc_projection.rs` 的 `local_cluster_muc_projection_snapshot_in`；`pub(super)` 改為 `pub(crate)`，`state.rs` 以私有 glob 匯入；`check-execution-boundaries.mjs` 改從 `session_table.rs` 讀兩個路由輔助函式，23 個變異自測隨之改指 `sessionTable`。基線不變 | 見 `git log --grep '\[WP-141\]'` |
+| WP-142 | 完成：`state/muc_delivery.rs` 以 `git mv` 移到 `xmpp/muc_delivery.rs`，`state/cluster_muc_delivery_endpoints.rs`、`cluster_muc_outbox_worker.rs` 移到 `cluster/`，三個建構子切回 `state` 中原名的檔案；`start_muc_outbox_delivery` 改收 worker registry 與 context，`cluster.rs` 不再匯入 `AppState`；架構門禁改讀新檔。基線減少 2 條 | 見 `git log --grep '\[WP-142\]'` |
+| WP-143 | 完成：`state/cluster_recovery_replay.rs`、`direct_spool_wake.rs`、`cluster_maintenance.rs` 連同內嵌測試以 `git mv` 移到 `cluster/{recovery_replay_wake,direct_spool_wake,maintenance_locals}.rs`，`ClusterMaintenanceContext` 移到 `cluster/maintenance_context.rs`，建構子留在 `state`；11 個測試的路徑由 `state::` 改為 `cluster::`。基線減少 1 條 | 見 `git log --grep '\[WP-143\]'` |
+| WP-144 | 完成：四個監聽器 context 以 `git mv` 移到 `cluster/listener_{dispatch,mix_caps,blocking,sm_muc_teardown}.rs`，故障監督 context 移到 `cluster/failure_supervisor_context.rs`，`SmTeardownLocalEffects` 移到 `xmpp/local_routes/sm_teardown.rs`，建構子留在 `state`；`ClusterListenerRuntime::from_state` 改為 `state` 的 `cluster_listener_runtime()`，`run_pubsub_listener` 改收 runtime；架構門禁分別讀 dispatch 的邏輯與建構子。基線減少 1 條。WP-141–144 依序整合，每步以 `--write` 重寫基線且只刪不增；整合後 fmt、clippy、單元測試、全部門禁與完整 CI 通過，基線由 31 條降到 27 條（27 檔） | 見 `git log --grep '\[WP-144\]'` |

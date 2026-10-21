@@ -1809,6 +1809,7 @@ digraph compile_time {
   "sqlx-core" -> "once_cell";
   "sqlx-core" -> "percent-encoding";
   "sqlx-core" -> "rustls";
+  "sqlx-core" -> "rustls-native-certs";
   "sqlx-core" -> "serde";
   "sqlx-core" -> "serde_json";
   "sqlx-core" -> "sha2";
@@ -1819,7 +1820,6 @@ digraph compile_time {
   "sqlx-core" -> "tracing";
   "sqlx-core" -> "url";
   "sqlx-core" -> "uuid";
-  "sqlx-core" -> "webpki-roots";
   "sqlx-macros" -> "proc-macro2";
   "sqlx-macros" -> "quote";
   "sqlx-macros" -> "sqlx-core";
@@ -2158,7 +2158,6 @@ digraph compile_time {
   "webauthn-rs-proto" -> "url";
   "webpki-root-certs" -> "rustls-pki-types";
   "webpki-roots" -> "rustls-pki-types";
-  "webpki-roots" -> "webpki-roots";
   "whoami" -> "libredox";
   "whoami" -> "wasite";
   "winapi-util" -> "windows-sys";

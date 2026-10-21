@@ -9,6 +9,6 @@ publish = false
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 foundation-eventing = { path = "../foundation-eventing" }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono"] }
 thiserror = "2.0"
 uuid = { version = "1.12", features = ["v4", "serde"] }

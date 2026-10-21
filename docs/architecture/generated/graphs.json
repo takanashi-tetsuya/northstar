@@ -5395,6 +5395,10 @@
       ],
       [
         "sqlx-core",
+        "rustls-native-certs"
+      ],
+      [
+        "sqlx-core",
         "serde"
       ],
       [
@@ -5432,10 +5436,6 @@
       [
         "sqlx-core",
         "uuid"
-      ],
-      [
-        "sqlx-core",
-        "webpki-roots"
       ],
       [
         "sqlx-macros",
@@ -6788,10 +6788,6 @@
       [
         "webpki-roots",
         "rustls-pki-types"
-      ],
-      [
-        "webpki-roots",
-        "webpki-roots"
       ],
       [
         "whoami",

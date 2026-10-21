@@ -575,6 +575,7 @@ WP 規格固定包含：目標、允許修改的檔案、不得改變的語義�
 | 文件 | 權威範圍 |
 | --- | --- |
 | 本文 | 檔案位置、模組邊界、行數預算、門禁定位方式、結構 WP 狀態 |
+| [目標架構](target-architecture.zh-TW.md) | S16 起的目標 workspace 架構、層級與上下文邊界、全面重構的階段順序 |
 | [模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md) | 領域邏輯由根 crate 收斂到 crates 的順序與退出證據 |
 | [重建帳本](experimental-rebuild-plan.zh-TW.md) | Stage 0–6 受控驗證；結構 WP 不改寫其證據，未來 record 須用新來源契約 |
 | [已知問題](../KNOWN_ISSUES.md) | 產品限制與發布門禁 |

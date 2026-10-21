@@ -16,6 +16,7 @@ to it instead of restating it.
 | Database schema version | The newest file in [`migrations/`](../migrations/) |
 | Published releases and their dates | [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) |
 | Source layout, module ownership, line budgets and structural work packages | [Engineering structure](architecture/engineering-structure.zh-TW.md) |
+| Target workspace architecture and the restructure from S16 on | [Target architecture](architecture/target-architecture.zh-TW.md) |
 | Moving domain logic from the server into `crates/` | [Modularization execution plan](MODULARIZATION_EXECUTION_PLAN.md) |
 | Experimental architecture rebuild, Stages 0–6 | [Experimental rebuild ledger](architecture/experimental-rebuild-plan.zh-TW.md) |
 | Branches, pushes and the local VM lab | [Development handoff](HANDOFF.md) |

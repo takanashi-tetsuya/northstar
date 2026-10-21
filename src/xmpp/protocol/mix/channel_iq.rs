@@ -53,7 +53,11 @@ pub(super) async fn handle_channel_iq(
                 {
                     (CreateChannelOutcome::Created(_), localpart) => {
                         let _ = super::super::mix_muc::maybe_link_local_mirror(
-                            state, &localpart, actor_bare,
+                            state.mix_muc_mirror_enabled(),
+                            state.mix_service(),
+                            state.local_domain(),
+                            &localpart,
+                            actor_bare,
                         )
                         .await?;
                         let payload = XmlElement::namespaced("create", CORE_NS)

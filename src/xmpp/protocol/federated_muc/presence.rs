@@ -791,9 +791,14 @@ async fn federated_muc_presence_owned(
         ));
     }
     if created {
-        let _ =
-            super::super::mix_muc::maybe_link_local_mirror(state, &room.localpart, &actor_bare_jid)
-                .await?;
+        let _ = super::super::mix_muc::maybe_link_local_mirror(
+            state.mix_muc_mirror_enabled(),
+            state.mix_service(),
+            state.local_domain(),
+            &room.localpart,
+            &actor_bare_jid,
+        )
+        .await?;
     }
     let affiliation = state
         .muc_service()

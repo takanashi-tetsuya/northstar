@@ -117,9 +117,6 @@
     "src/xmpp/protocol/mix.rs": [
       "state"
     ],
-    "src/xmpp/protocol/mix_muc.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/muc.rs": [
       "state"
     ],

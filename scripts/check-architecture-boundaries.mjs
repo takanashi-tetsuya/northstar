@@ -2289,21 +2289,22 @@ for (const invariant of [
   previousFederatedMamAdmissionStep = position;
 }
 
-for (const [name, accessor, forbiddenAuthority] of [
-  ['mix_muc.rs', 'mix_service', 'link_mix_muc_by_localpart'],
-  ['presence.rs', 'presence_service', 'claim_admin_service_messages'],
-  ['presence.rs', 'presence_service', 'complete_admin_service_message_claim'],
-  ['upload.rs', 'upload_service', 'create_upload_slot_bounded'],
+// mix_muc.rs receives the MIX service from its callers instead of AppState.
+for (const [name, accessor, forbiddenAuthority, route] of [
+  ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/],
+  ['presence.rs', 'presence_service()', 'claim_admin_service_messages', /\.presence_service\s*\(\s*\)/],
+  ['presence.rs', 'presence_service()', 'complete_admin_service_message_claim', /\.presence_service\s*\(\s*\)/],
+  ['upload.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/],
 ]) {
   const production = productionWithoutCfgTestModules(
     readProtocolSource(name),
     `${name} production`,
   );
   if (new RegExp(`\\bdb\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
-    throw new Error(`${name} bypasses ${accessor}() via db::${forbiddenAuthority}`);
+    throw new Error(`${name} bypasses ${accessor} via db::${forbiddenAuthority}`);
   }
-  if (!new RegExp(`\\.${accessor}\\s*\\(\\s*\\)`).test(production)) {
-    throw new Error(`${name} no longer routes persistence through ${accessor}()`);
+  if (!route.test(production)) {
+    throw new Error(`${name} no longer routes persistence through ${accessor}`);
   }
 }
 

@@ -919,7 +919,9 @@ impl ProtocolSession {
         if created {
             let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
             let _ = super::super::mix_muc::maybe_link_local_mirror(
-                &self.state,
+                self.state.mix_muc_mirror_enabled(),
+                self.state.mix_service(),
+                self.state.local_domain(),
                 &room.localpart,
                 &actor_bare,
             )

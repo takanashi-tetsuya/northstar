@@ -7,7 +7,10 @@
 //! not invent an unsafe message/presence relay that could loop or disclose a
 //! semi-anonymous MUC occupant's real JID.
 
-use crate::{services::mix::MixMucLinkOutcome, state::AppState, xmpp::xml_builder::XmlElement};
+use crate::{
+    services::mix::{MixMucLinkOutcome, MixRepository, MixService},
+    xmpp::xml_builder::XmlElement,
+};
 use anyhow::Result;
 
 pub(crate) const MIRROR_NS: &str = "urn:xmpp:mix:muc:0";
@@ -72,21 +75,22 @@ pub(crate) fn conditional_mirror_discovery_form(
 /// same-localpart counterpart. Failure to prove common ownership is a normal,
 /// non-mutating outcome: an attacker cannot cause two other owners' entities
 /// to become associated merely by choosing the same address.
-pub(crate) async fn maybe_link_local_mirror(
-    state: &AppState,
+pub(crate) async fn maybe_link_local_mirror<R: MixRepository>(
+    mirror_enabled: bool,
+    mix: &MixService<R>,
+    local_domain: &str,
     localpart: &str,
     actor_bare_jid: &str,
 ) -> Result<MixMucLinkOutcome> {
-    if !state.mix_muc_mirror_enabled() {
+    if !mirror_enabled {
         return Ok(MixMucLinkOutcome::MissingCounterpart);
     }
-    let outcome = state
-        .mix_service()
+    let outcome = mix
         .link_local_muc_mirror(
-            &format!("mix.{}", state.local_domain()),
+            &format!("mix.{}", local_domain),
             localpart,
             actor_bare_jid,
-            state.local_domain(),
+            local_domain,
         )
         .await?;
     if matches!(outcome, MixMucLinkOutcome::Linked) {

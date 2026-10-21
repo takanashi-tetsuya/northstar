@@ -9,7 +9,6 @@ use crate::services::node_message_contract_verifier::{
     VerifiedNodeMessageProjection,
 };
 use crate::services::session_route_maintenance::SessionRouteAuthorityToken;
-use crate::state::AppState;
 use anyhow::{Context, Result};
 use bb8::Pool;
 use futures::{future::BoxFuture, FutureExt, StreamExt};
@@ -28,9 +27,11 @@ mod health;
 mod listener;
 mod listener_policy;
 mod maintenance_redis;
+pub(crate) mod muc_delivery_endpoints;
 mod muc_fanout;
 mod muc_occupancy;
 mod muc_outbox;
+pub(crate) mod muc_outbox_worker;
 mod node_delivery;
 mod pool;
 mod publisher;
@@ -543,13 +544,15 @@ impl ClusterManager {
     }
 }
 
-pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken) {
+pub fn start_muc_outbox_delivery(
+    worker_registry: Arc<crate::platform::workers::WorkerRegistry>,
+    context: Arc<muc_outbox_worker::ClusterMucOutboxWorkerContext>,
+    cancel: CancellationToken,
+) {
     // The PostgreSQL maintenance half also runs in supported single-node
     // mode: lifecycle tombstones/operation IDs are still recorded there and
     // must obey the same bounded retention. With clustering disabled there
     // are no cross-node audience rows and no signing key is required.
-    let worker_registry = Arc::clone(state.worker_registry());
-    let context = Arc::new(state.cluster_muc_outbox_worker_context());
     worker_registry.supervise(
         "cluster-muc-outbox",
         crate::platform::workers::WorkerCriticality::Restartable,

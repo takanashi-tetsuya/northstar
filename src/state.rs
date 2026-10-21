@@ -249,7 +249,7 @@ use crate::xmpp::local_routes::{
     muc::{
         LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant, MucOccupantEndpoint,
         RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint, SuspendedMucPhase,
-        SuspendedMucRoute, SuspendedMucStanza,
+        SuspendedMucRoute,
     },
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };

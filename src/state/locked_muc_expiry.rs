@@ -1,10 +1,10 @@
 //! Expire locked rooms after the database commits their tombstones and outbox.
 
 use super::{
-    muc_delivery::MucDeliveryContext, remove_live_muc_membership_in,
-    remove_local_muc_occupant_exact_from, AppState, MucOccupant, OnlineSession,
-    SerializableMucOccupant,
+    remove_live_muc_membership_in, remove_local_muc_occupant_exact_from, AppState, MucOccupant,
+    OnlineSession, SerializableMucOccupant,
 };
+use crate::xmpp::muc_delivery::MucDeliveryContext;
 use crate::{
     db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     platform::workers::WorkerHeartbeat, services::locked_muc_expiry::LockedMucExpiryService,

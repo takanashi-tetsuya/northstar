@@ -18,7 +18,9 @@ use super::{
 use crate::api::contexts::omemo_poll::{
     admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, OMEMO_POLL_IP_REQUESTS_PER_MINUTE,
 };
-use crate::xmpp::local_routes::muc::{muc_departure_identity_matches, SuspendedMucBuffer};
+use crate::xmpp::local_routes::muc::{
+    muc_departure_identity_matches, SuspendedMucBuffer, SuspendedMucStanza,
+};
 use dashmap::DashMap;
 use northstar_session_application::RouteIncarnationSignal;
 use northstar_session_core::{
@@ -321,11 +323,11 @@ fn sm_snapshot(outbound_h: u32, unacked: &[&str]) -> crate::services::sm::SmSess
 fn disconnect_snapshot_preserves_fifo_budget_and_counter_wrap() {
     let mut snapshot = sm_snapshot(u32::MAX, &["old"]);
     let mut suffix = VecDeque::new();
-    suffix.push_back(super::SuspendedMucStanza {
+    suffix.push_back(SuspendedMucStanza {
         source_id: uuid::Uuid::new_v4(),
         xml: "room-a".to_owned(),
     });
-    suffix.push_back(super::SuspendedMucStanza {
+    suffix.push_back(SuspendedMucStanza {
         source_id: uuid::Uuid::new_v4(),
         xml: "room-b".to_owned(),
     });

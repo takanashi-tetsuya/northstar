@@ -3562,13 +3562,13 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const clusterMucOutboxWorker = rustItemBody(cluster, 'async fn run_muc_outbox_delivery(');
-const clusterMucOutboxContextSource = read('src/state/cluster_muc_outbox_worker.rs');
+const clusterMucOutboxContextSource = read('src/cluster/muc_outbox_worker.rs');
 const clusterMucOutboxContext = structBody(
   clusterMucOutboxContextSource,
   'pub(crate) struct ClusterMucOutboxWorkerContext',
 );
 if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;')
-    || !cluster.includes('state.cluster_muc_outbox_worker_context()')
+    || !state.includes('state.cluster_muc_outbox_worker_context()')
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(clusterMucOutboxContext)
     || /crate::db::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');

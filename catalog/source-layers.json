@@ -78,12 +78,6 @@
     "src/bosh.rs": [
       "state"
     ],
-    "src/cluster.rs": [
-      "state"
-    ],
-    "src/cluster/muc_outbox.rs": [
-      "state"
-    ],
     "src/cluster/recovery_replay.rs": [
       "state"
     ],

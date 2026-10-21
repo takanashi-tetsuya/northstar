@@ -1348,7 +1348,11 @@ impl AppState {
             Arc::clone(&state),
             worker_cancel.clone(),
         );
-        crate::cluster::start_muc_outbox_delivery(Arc::clone(&state), worker_cancel.clone());
+        crate::cluster::start_muc_outbox_delivery(
+            Arc::clone(state.worker_registry()),
+            Arc::new(state.cluster_muc_outbox_worker_context()),
+            worker_cancel.clone(),
+        );
         assert!(state
             .locked_muc_expiry_context
             .set(Arc::new(

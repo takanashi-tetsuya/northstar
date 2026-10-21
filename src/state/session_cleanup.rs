@@ -12,13 +12,14 @@ use crate::services::muc::ClusterMucTransitionOutcome;
 use crate::services::sm_suspension;
 use crate::state::AppState;
 use crate::state::{
-    muc_delivery::MucDeliveryContext, session_cleanup_bookkeeping::SessionCleanupBookkeeping,
+    session_cleanup_bookkeeping::SessionCleanupBookkeeping,
     session_cleanup_local::SessionCleanupLocal, session_cleanup_mix::SessionCleanupMix,
     session_cleanup_muc_departure::SessionCleanupPgMucDeparture,
     session_cleanup_presence::SessionCleanupPresence, session_cleanup_rooms::SessionCleanupRooms,
     session_cleanup_sm::SessionCleanupSm, session_cleanup_sm_revoker::SessionCleanupSmRevoker,
     session_cleanup_unavailable::SessionCleanupUnavailable,
 };
+use crate::xmpp::muc_delivery::MucDeliveryContext;
 use anyhow::Result;
 use dashmap::DashMap;
 use std::{

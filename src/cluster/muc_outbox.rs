@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) async fn run_muc_outbox_delivery(
-    context: Arc<crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext>,
+    context: Arc<super::muc_outbox_worker::ClusterMucOutboxWorkerContext>,
     cancel: CancellationToken,
     heartbeat: crate::platform::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -112,8 +112,7 @@ pub(super) async fn run_muc_outbox_delivery(
 }
 
 pub(super) struct ClusterMucPolicyRender<'a> {
-    pub(super) endpoints:
-        &'a crate::state::cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
+    pub(super) endpoints: &'a super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
     pub(super) context: &'a crate::db::ClusterMucEventContext,
     pub(super) room_jid: &'a str,
     pub(super) recipient: &'a crate::xmpp::local_routes::muc::MucOccupant,
@@ -359,7 +358,7 @@ pub(super) fn render_cluster_muc_departure_presence(
 }
 
 pub(super) async fn deliver_cluster_muc_event(
-    worker: &crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext,
+    worker: &super::muc_outbox_worker::ClusterMucOutboxWorkerContext,
     delivery: &crate::db::ClusterMucOutboxDelivery,
 ) -> Result<()> {
     let endpoints = &worker.endpoints;

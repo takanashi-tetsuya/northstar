@@ -13,7 +13,7 @@ pub(crate) struct ClusterListenerSmMucTeardown {
     local: SmTeardownLocalEffects,
     redis: ClusterSmMucTeardownProjection,
     rooms: SmTeardownMucService<PostgresSmTeardownMucRepository>,
-    delivery: super::muc_delivery::MucDeliveryContext,
+    delivery: crate::xmpp::muc_delivery::MucDeliveryContext,
     local_domain: String,
 }
 

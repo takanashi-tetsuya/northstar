@@ -1,6 +1,7 @@
 //! Cluster maintenance, account revocation, direct spool wake, pubsub listener and failure supervisor loops.
 
 use super::*;
+use crate::state::AppState;
 
 /// Read committed account fences independently of Redis and cluster maintenance.
 /// Notifications reduce latency; polling recovers missed notifications.
@@ -420,9 +421,8 @@ pub(super) async fn maintenance_once(
 pub(super) struct ClusterListenerRuntime {
     pub(super) message_policy: Arc<ClusterListenerMessagePolicy>,
     pub(super) dispatch: crate::state::cluster_listener_dispatch::ClusterListenerDispatch,
-    pub(super) muc_endpoints:
-        crate::state::cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
-    pub(super) muc_delivery: crate::state::muc_delivery::MucDeliveryContext,
+    pub(super) muc_endpoints: super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
+    pub(super) muc_delivery: crate::xmpp::muc_delivery::MucDeliveryContext,
     pub(super) mix_caps: crate::state::cluster_listener_mix_caps::ClusterListenerMixCaps,
     pub(super) blocking: crate::state::cluster_listener_blocking::ClusterListenerBlocking,
     pub(super) sm_muc_teardown:

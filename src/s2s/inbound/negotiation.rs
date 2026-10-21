@@ -412,7 +412,11 @@ pub(super) async fn authenticate_secure_inbound(
     } else {
         None
     };
-    write_xml(secure, &features(&state, certificate_identity.is_some())).await?;
+    write_xml(
+        secure,
+        &features(state.s2s_feature_policy(), certificate_identity.is_some()),
+    )
+    .await?;
     let mut authentication = read_s2s_negotiation_frame(secure, input).await?;
     let bidi_request = parse_bidi_request(&authentication);
     if bidi_request.is_some() {

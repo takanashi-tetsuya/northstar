@@ -81,9 +81,6 @@
     "src/s2s/components.rs": [
       "state"
     ],
-    "src/s2s/dialback.rs": [
-      "state"
-    ],
     "src/s2s/inbound.rs": [
       "state"
     ],

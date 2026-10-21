@@ -1,9 +1,7 @@
 use super::*;
-use crate::jid::prepare_domainpart;
-use crate::state::AppState;
 use anyhow::{Context, Result};
 use roxmltree::Document;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 pub(crate) use northstar_federation_core::{
     same_dialback_domain, AdvertisedStreamLimits, DialbackOutcome, DIALBACK_NS, STREAM_LIMITS_NS,
@@ -31,27 +29,36 @@ fn stream_limits_feature_for_idle(idle_timeout: Duration) -> String {
         .finish()
 }
 
-pub(crate) fn features(state: &AppState, external_available: bool) -> String {
+/// The configured S2S stream features: SASL EXTERNAL, dialback and
+/// bidirectional streams (XEP-0288, offered whenever federation is enabled).
+#[derive(Clone, Copy)]
+pub(crate) struct S2sFeaturePolicy {
+    pub(crate) sasl_external: bool,
+    pub(crate) dialback: bool,
+    pub(crate) bidi: bool,
+}
+
+pub(crate) fn features(policy: S2sFeaturePolicy, external_available: bool) -> String {
     // RFC 6120 section 6.3.4 ties an EXTERNAL offer to a certificate which
     // can actually authorize the asserted peer identity.  Advertising it to
     // every TLS peer makes a legitimate Dialback-only peer select a
     // mechanism that this server must then reject.
     let mut features = crate::xmpp::xml_builder::XmlElement::new("stream:features");
-    if state.s2s_sasl_external_enabled() && external_available {
+    if policy.sasl_external && external_available {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("mechanisms")
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl")
                 .child(crate::xmpp::xml_builder::XmlElement::new("mechanism").text("EXTERNAL")),
         );
     }
-    if state.s2s_dialback_enabled() {
+    if policy.dialback {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("dialback")
                 .attr("xmlns", "urn:xmpp:features:dialback")
                 .child(crate::xmpp::xml_builder::XmlElement::new("errors")),
         );
     }
-    if state.s2s_federation_enabled() {
+    if policy.bidi {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("bidi")
                 .attr("xmlns", "urn:xmpp:features:bidi"),
@@ -304,7 +311,7 @@ pub(crate) fn parse_result_response(
     parse_dialback_response(raw, "result", expected_from, expected_to, None)
 }
 
-fn parse_verify_response(
+pub(crate) fn parse_verify_response(
     raw: &str,
     expected_from: &str,
     expected_to: &str,
@@ -408,55 +415,6 @@ fn stanza_error_type(condition: &str) -> &'static str {
         "internal-server-error" | "remote-server-timeout" | "resource-constraint" => "wait",
         _ => "cancel",
     }
-}
-
-pub(crate) async fn verify_remote(
-    state: Arc<AppState>,
-    originating_domain: &str,
-    receiving_domain: &str,
-    stream_id: &str,
-    supplied_key: &str,
-) -> Result<DialbackOutcome> {
-    if !valid_key(supplied_key) {
-        return Ok(DialbackOutcome::Invalid);
-    }
-    let originating_domain =
-        prepare_domainpart(originating_domain).context("invalid dialback originating domain")?;
-    let receiving_domain =
-        prepare_domainpart(receiving_domain).context("invalid dialback receiving domain")?;
-    let permit = state
-        .try_acquire_dialback_verification()
-        .context("too many concurrent dialback verification requests")?;
-    let _connection_permit = state
-        .try_acquire_s2s_connection()
-        .context("S2S connection capacity is exhausted during dialback verification")?;
-    let (mut stream, opening, _features, mut input, _peer_certificates, _tls_generation) =
-        crate::s2s::outbound::connect_secure_stream_from(
-            &state,
-            &receiving_domain,
-            &originating_domain,
-        )
-        .await?;
-    if stream_attribute(&opening, "from")
-        .is_none_or(|domain| !same_dialback_domain(&domain, &originating_domain))
-        || stream_attribute(&opening, "to")
-            .is_none_or(|domain| !same_dialback_domain(&domain, &receiving_domain))
-    {
-        anyhow::bail!("authoritative dialback endpoint returned an invalid stream identity");
-    }
-    write_xml(
-        &mut stream,
-        &verify_request(
-            &receiving_domain,
-            &originating_domain,
-            stream_id,
-            supplied_key,
-        ),
-    )
-    .await?;
-    let response = timed_read_frame(&mut stream, &mut input).await?;
-    drop(permit);
-    parse_verify_response(&response, &originating_domain, &receiving_domain, stream_id)
 }
 
 #[cfg(test)]

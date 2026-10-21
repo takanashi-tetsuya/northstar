@@ -8,9 +8,11 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsConnector;
 
 mod connection;
+mod dialback_verify;
 mod transport;
 
 use self::connection::run_outbound_connection;
+pub(crate) use self::dialback_verify::verify_remote;
 use self::transport::{
     authenticate_transport, connect_secure_endpoint_group, AuthenticatedTransport,
 };

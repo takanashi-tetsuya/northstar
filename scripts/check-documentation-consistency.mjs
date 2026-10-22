@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { workspaceMemberDirectories } from './lib/workspace-members.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const currentDocuments = [
@@ -546,9 +547,8 @@ const retiredRootModules = [
 const retiredRootPath = new RegExp(
   `(?<![\\w/.-])src/(?:${retiredRootModules.join('|')})(?:\\.rs\\b|/)`,
 );
-const crateMigrationNotes = fs
-  .readdirSync(path.join(root, 'crates'))
-  .map((name) => `crates/${name}/MIGRATION.md`)
+const crateMigrationNotes = workspaceMemberDirectories(root)
+  .map((directory) => `${directory}/MIGRATION.md`)
   .filter((relativePath) => fs.existsSync(path.join(root, relativePath)));
 let currentPathDocuments = 0;
 for (const relativePath of [...markdownDocuments, ...crateMigrationNotes]) {

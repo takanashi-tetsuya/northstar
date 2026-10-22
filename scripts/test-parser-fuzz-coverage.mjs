@@ -22,16 +22,16 @@ rejects((model) => {
 
 rejects((model) => {
   model.cargoManifest = model.cargoManifest.replace(/^northstar-auth-core = .+$/m, "");
-}, /must directly depend on the production crate ..\/crates\/northstar-auth-core/);
+}, /must directly depend on the production crate ..\/crates\/contexts\/auth\/northstar-auth-core/);
 
 rejects((model) => {
   model.cargoManifest = model.cargoManifest.replace(
-    'path = "../crates/northstar-xep-0198"', 'path = "shadow-stream-management"',
+    'path = "../crates/kernel/northstar-xep-0198"', 'path = "shadow-stream-management"',
   );
-}, /must directly depend on the production crate ..\/crates\/northstar-xep-0198/);
+}, /must directly depend on the production crate ..\/crates\/kernel\/northstar-xep-0198/);
 
 rejects((model) => {
-  model.existingPaths.delete(path.join(model.root, "crates", "northstar-xep-0198", "src", "lib.rs"));
+  model.existingPaths.delete(path.join(model.root, model.crateDirectories.get("northstar-xep-0198"), "src", "lib.rs"));
 }, /northstar-xep-0198: production crate manifest or library is missing/);
 
 rejects((model) => {

@@ -6,7 +6,7 @@ support claim. Protocol coverage remains documented in `XEP_MATRIX.md`.
 
 ## 1. Boundary rules
 
-Every crate under `crates/northstar-*` is a leaf library. A leaf library may
+Every `northstar-*` crate under `crates/` (in any tier directory) is a leaf library. A leaf library may
 own bounded parsing, validation, serialization, value types, pure state
 machines, immutable extension metadata and deterministic policy calculation.
 It must not own or import:

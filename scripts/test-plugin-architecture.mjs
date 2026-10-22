@@ -6,7 +6,7 @@ import { validatePluginArchitecture } from './check-plugin-architecture.mjs';
 const root = path.resolve('synthetic-northstar');
 
 function cargoPackage(name, dependencyNames = [], pluginMetadata = undefined) {
-  const packageDirectory = path.join(root, 'crates', name);
+  const packageDirectory = path.join(root, 'crates', 'kernel', name);
   return {
     name,
     manifest_path: path.join(packageDirectory, 'Cargo.toml'),
@@ -17,7 +17,7 @@ function cargoPackage(name, dependencyNames = [], pluginMetadata = undefined) {
 }
 
 function rustCrate(name, source) {
-  const file = path.join(root, 'crates', name, 'src', 'lib.rs');
+  const file = path.join(root, 'crates', 'kernel', name, 'src', 'lib.rs');
   return {
     name,
     rustFiles: [file],
@@ -47,8 +47,8 @@ pub static DESCRIPTOR: ExtensionDescriptor = ExtensionDescriptor {
 function cleanModel() {
   const coreName = 'northstar-xep-core';
   const pluginName = 'northstar-xep-0184';
-  const coreDirectory = path.join(root, 'crates', coreName);
-  const pluginDirectory = path.join(root, 'crates', pluginName);
+  const coreDirectory = path.join(root, 'crates', 'kernel', coreName);
+  const pluginDirectory = path.join(root, 'crates', 'kernel', pluginName);
   return {
     root,
     rootPackageName: 'rust-xmpp-server',
@@ -98,7 +98,7 @@ assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
   const model = cleanModel();
   model.packages[1].dependencies.push({
     name: 'server-capability-wrapper',
-    path: path.join(root, 'crates', 'server-capability-wrapper'),
+    path: path.join(root, 'crates', 'platform', 'server-capability-wrapper'),
   });
   const result = validatePluginArchitecture(model).violations.join('\n');
   assert.match(result, /outside the isolated XEP crate graph/);
@@ -107,7 +107,7 @@ assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
 {
   const model = cleanModel();
   const duplicateName = 'northstar-xep-0184-copy';
-  const duplicateDirectory = path.join(root, 'crates', duplicateName);
+  const duplicateDirectory = path.join(root, 'crates', 'kernel', duplicateName);
   model.xepDirectories.push(duplicateDirectory);
   model.packages.push({
     ...cargoPackage(duplicateName, ['northstar-xep-core'], {

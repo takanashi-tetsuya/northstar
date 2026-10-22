@@ -324,7 +324,7 @@ export function validatePluginArchitecture(model) {
     if (!model.xepDirectories.some((entry) => normalized(entry) === normalized(directory))) {
       recordViolation(
         violations,
-        `${packageRecord.name} is outside crates/${XEP_CRATE_PREFIX}* and bypasses the XEP crate boundary`,
+        `${packageRecord.name} is outside crates/kernel/${XEP_CRATE_PREFIX}* and bypasses the XEP crate boundary`,
       );
     }
     const expectedName = path.basename(directory);
@@ -533,11 +533,11 @@ function loadRepositoryModel(root) {
   );
   if (!rootPackage) throw new Error('Cargo metadata does not contain the root server package');
   const rootRustFiles = filesBelow(path.join(root, 'src'), '.rs');
-  const cratesDirectory = path.join(root, 'crates');
+  const kernelDirectory = path.join(root, 'crates', 'kernel');
   const xepDirectories = fs
-    .readdirSync(cratesDirectory, { withFileTypes: true })
+    .readdirSync(kernelDirectory, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(XEP_CRATE_PREFIX))
-    .map((entry) => path.join(cratesDirectory, entry.name));
+    .map((entry) => path.join(kernelDirectory, entry.name));
   const crates = new Map();
   for (const directory of xepDirectories) {
     const name = path.basename(directory);

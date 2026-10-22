@@ -2111,7 +2111,7 @@ const registrationAccountBody = structBody(
 if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b)/.test(registrationAccountBody)) {
   throw new Error('AccountService RegistrationAccount regained credential or authority fields');
 }
-const authCorePasswordSource = read('crates/northstar-auth-core/src/password.rs');
+const authCorePasswordSource = read('crates/contexts/auth/northstar-auth-core/src/password.rs');
 const usersSource = readProductionModule('src/db/users.rs', { root });
 for (const [name, source, typeName] of [
   ['PasswordCredentials', authCorePasswordSource, 'PasswordCredentials'],
@@ -3246,7 +3246,7 @@ if (/Deliver\s*\(\s*db::User\s*\)/.test(messageServiceSource)) {
 // commit in the same chosen cross-stream order. Participant RAII makes a
 // waiter cancellation remove the registry entry without a background sweep.
 const capsProtocolSource =
-  read('crates/northstar-protocol-runtime/src/caps.rs') +
+  read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
   read('src/xmpp/protocol/caps.rs');
 const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root });
 if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
@@ -3256,7 +3256,7 @@ if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sIn
 }
 const s2sOutboundSource = readProductionModule('src/s2s/outbound.rs', { root });
 const componentsSource = readProductionModule('src/s2s/components.rs', { root });
-const federationCoreSource = read('crates/northstar-federation-core/src/lib.rs');
+const federationCoreSource = read('crates/contexts/federation/northstar-federation-core/src/lib.rs');
 if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
     || !federationCoreSource.includes('pub const fn accepts_s2s_stream_target(')
     || !componentsSource.includes('classify_hosted_domain(local_domain, target)')

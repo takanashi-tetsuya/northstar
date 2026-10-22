@@ -1503,7 +1503,7 @@
       "lease_us": 60000000
     },
     "policy_source": {
-      "path": "crates/northstar-abuse-policy/src/model.rs",
+      "path": "crates/contexts/abuse/northstar-abuse-policy/src/model.rs",
       "anchor": "pub const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 = 4_096;"
     },
     "clock": {
@@ -1570,7 +1570,7 @@
       "anchor": "def evaluate(value, output, *, expected_failure=None):"
     },
     "runner": {
-      "path": "crates/northstar-test-harness/src/controlled_admission/execution.rs",
+      "path": "tools/northstar-test-harness/src/controlled_admission/execution.rs",
       "anchor": "pub fn execute(input: &Envelope, hash: &str) -> Result<Value, InputError> {"
     },
     "fixtures": {

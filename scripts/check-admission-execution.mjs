@@ -5,9 +5,9 @@ import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const paths = {
-  execution: 'crates/northstar-abuse-policy/src/admission_execution.rs',
-  transaction: 'crates/northstar-abuse-policy/src/admission_transaction.rs',
-  lifecycle: 'crates/northstar-message-application/src/direct_lifecycle.rs',
+  execution: 'crates/contexts/abuse/northstar-abuse-policy/src/admission_execution.rs',
+  transaction: 'crates/contexts/abuse/northstar-abuse-policy/src/admission_transaction.rs',
+  lifecycle: 'crates/contexts/message/northstar-message-application/src/direct_lifecycle.rs',
   service: 'src/services/message_admission.rs',
   witness: 'src/services/message_admission/witness.rs',
   frame: 'src/xmpp/frame_execution.rs',

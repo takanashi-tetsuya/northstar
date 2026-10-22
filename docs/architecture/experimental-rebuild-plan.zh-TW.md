@@ -20,8 +20,8 @@
 
 ## Stage2：實際共用與驗證
 
-[Coordinator](../../crates/northstar-abuse-policy/src/admission_execution.rs)與
-[純交易決策](../../crates/northstar-abuse-policy/src/admission_transaction.rs)由正式
+[Coordinator](../../crates/contexts/abuse/northstar-abuse-policy/src/admission_execution.rs)與
+[純交易決策](../../crates/contexts/abuse/northstar-abuse-policy/src/admission_transaction.rs)由正式
 [service](../../src/services/message_admission.rs)及[SQL repository](../../src/db/message_admission_repository.rs)使用。
 SQL原有交易、鎖、authority及fence檢查保留。準備中的prospective fence與已確認receipt分開；
 completion不能替換獨立witness，取消可留下Waiting，多個Unknown不能偷用隱藏world消除不確定性。

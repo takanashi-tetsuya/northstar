@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { workspaceCrateDirectories } from "./lib/workspace-members.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -121,25 +122,27 @@ export function loadParserFuzzModel(root = repositoryRoot) {
     .map((entry) => [entry.name, fs.readFileSync(path.join(targetDirectory, entry.name), "utf8")]));
   const existingPaths = new Set();
   const crateManifests = new Map();
+  const crateDirectories = workspaceCrateDirectories(root);
   const productionPaths = [...targets.values()].flatMap((requirement) =>
     requirement.modules.map(([, modulePath]) => path.resolve(targetDirectory, modulePath)));
   for (const name of productionCrates) {
-    const directory = path.join(root, "crates", name);
-    const manifest = path.join(directory, "Cargo.toml");
+    const directory = crateDirectories.get(name);
+    if (!directory) continue;
+    const manifest = path.join(root, directory, "Cargo.toml");
     if (fs.existsSync(manifest)) crateManifests.set(name, fs.readFileSync(manifest, "utf8"));
-    productionPaths.push(path.join(directory, "src", "lib.rs"));
+    productionPaths.push(path.join(root, directory, "src", "lib.rs"));
   }
   for (const file of productionPaths) {
     if (fs.existsSync(file) && fs.statSync(file).isFile()) existingPaths.add(file);
   }
   return {
-    root, sources, existingPaths, crateManifests,
+    root, sources, existingPaths, crateManifests, crateDirectories,
     cargoManifest: fs.readFileSync(path.join(root, "fuzz", "Cargo.toml"), "utf8"),
   };
 }
 
 export function validateParserFuzzCoverage(model) {
-  const { root, cargoManifest, sources, existingPaths, crateManifests } = model;
+  const { root, cargoManifest, sources, existingPaths, crateManifests, crateDirectories } = model;
   const targetDirectory = path.join(root, "fuzz", "fuzz_targets");
   const violations = [];
   const expectedFiles = [...targets.keys()].map((name) => `${name}.rs`).sort();
@@ -150,15 +153,20 @@ export function validateParserFuzzCoverage(model) {
   }
   const dependencySection = cargoManifest.split(/^\s*\[dependencies\]\s*$/m)[1]?.split(/^\s*\[/m)[0] ?? "";
   for (const name of productionCrates) {
+    const directory = crateDirectories?.get(name);
+    if (directory === undefined) {
+      violations.push(`${name}: production crate manifest or library is missing`);
+      continue;
+    }
     const declaration = new RegExp(
-      `^\\s*${escaped(name)}\\s*=\\s*\\{\\s*path\\s*=\\s*"\\.\\./crates/${escaped(name)}"\\s*\\}\\s*$`, "m",
+      `^\\s*${escaped(name)}\\s*=\\s*\\{\\s*path\\s*=\\s*"\\.\\./${escaped(directory)}"\\s*\\}\\s*$`, "m",
     );
     if (!declaration.test(dependencySection)) {
-      violations.push(`fuzz/Cargo.toml must directly depend on the production crate ../crates/${name}`);
+      violations.push(`fuzz/Cargo.toml must directly depend on the production crate ../${directory}`);
     }
     const manifest = crateManifests.get(name) ?? "";
     if (!new RegExp(`^\\s*name\\s*=\\s*"${escaped(name)}"\\s*$`, "m").test(manifest)
-        || !existingPaths.has(path.join(root, "crates", name, "src", "lib.rs"))) {
+        || !existingPaths.has(path.join(root, directory, "src", "lib.rs"))) {
       violations.push(`${name}: production crate manifest or library is missing`);
     }
   }

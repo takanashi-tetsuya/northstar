@@ -27,7 +27,7 @@ SOURCE_PATHS = (
     'scripts/mixed-traffic-soak.py', 'scripts/check-runtime-experiments.mjs',
     'scripts/test-runtime-experiments.mjs', 'catalog/runtime-experiments.json',
     'catalog/runtime-experiments.schema.json', '.github/workflows/ci.yml',
-    'src/db/message_admission_repository.rs', 'crates/northstar-abuse-policy/src/model.rs',
+    'src/db/message_admission_repository.rs', 'crates/contexts/abuse/northstar-abuse-policy/src/model.rs',
 )
 S = contract.SECOND
 

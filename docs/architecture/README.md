@@ -8,8 +8,9 @@ The [target architecture](target-architecture.zh-TW.md) defines the workspace
 structure that the restructure from S16 on moves toward. The current structure
 is described by two machine-readable catalogs:
 
-- `catalog/crates.yaml` — every workspace crate with its layer, owner, stability
-  and dependency budget, generated from Cargo metadata.
+- `catalog/crates.yaml` — every workspace crate with its tier (from its
+  directory), owner and stability, generated from Cargo metadata; the
+  [crate policy](crate-policy.md) lists the dependencies each tier may have.
 - `catalog/data-ownership.yaml` — exclusive logical database and table
   ownership, privacy, retention and recovery metadata.
 

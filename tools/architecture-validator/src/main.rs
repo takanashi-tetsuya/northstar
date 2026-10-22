@@ -11,6 +11,8 @@ use std::{
 #[derive(Debug, Deserialize)]
 struct CargoMetadata {
     packages: Vec<Package>,
+    #[serde(default)]
+    workspace_members: Vec<String>,
     resolve: Option<Resolve>,
 }
 #[derive(Debug, Deserialize)]
@@ -23,6 +25,8 @@ struct Package {
 #[derive(Debug, Deserialize)]
 struct PackageDependency {
     name: String,
+    #[serde(default)]
+    kind: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct Resolve {
@@ -53,16 +57,19 @@ struct OwnerGroup {
 struct CrateCatalog {
     crates: Vec<CrateRecord>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct CrateRecord {
     crate_id: String,
     package: String,
     path: String,
-    layer: String,
+    tier: String,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
     owner_team: String,
     api_stability: String,
     publish_policy: String,
-    allowed_dependencies: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -132,6 +139,7 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, CargoMe
                 empty("data-access"),
                 CargoMetadata {
                     packages: Vec::new(),
+                    workspace_members: Vec::new(),
                     resolve: None,
                 },
             );
@@ -143,6 +151,7 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, CargoMe
                 empty("data-access"),
                 CargoMetadata {
                     packages: Vec::new(),
+                    workspace_members: Vec::new(),
                     resolve: None,
                 },
             );
@@ -157,6 +166,7 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, CargoMe
                 empty("data-access"),
                 CargoMetadata {
                     packages: Vec::new(),
+                    workspace_members: Vec::new(),
                     resolve: None,
                 },
             );
@@ -288,20 +298,18 @@ fn check_crate_catalog(root: &Path, metadata: &CargoMetadata, errors: &mut Vec<S
             return;
         }
     };
+    let records = catalog.crates;
     let mut ids = BTreeSet::new();
-    for record in catalog.crates {
+    for record in &records {
         if !ids.insert(record.crate_id.clone()) {
             errors.push(format!(
                 "catalog/crates.yaml.{}: duplicate crate_id",
                 record.crate_id
             ));
         }
-        if record.owner_team.trim().is_empty()
-            || record.api_stability.trim().is_empty()
-            || record.allowed_dependencies.is_empty()
-        {
+        if record.owner_team.trim().is_empty() || record.api_stability.trim().is_empty() {
             errors.push(format!(
-                "catalog/crates.yaml.{}: owner, stability, and dependency budget are required",
+                "catalog/crates.yaml.{}: owner and stability are required",
                 record.crate_id
             ));
         }
@@ -311,33 +319,282 @@ fn check_crate_catalog(root: &Path, metadata: &CargoMetadata, errors: &mut Vec<S
                 record.crate_id
             ));
         }
-        let Some(package) = metadata
+        const VALID_TIERS: &[&str] = &[
+            "kernel",
+            "platform",
+            "context",
+            "edge",
+            "composition",
+            "tooling",
+        ];
+        if !VALID_TIERS.contains(&record.tier.as_str()) {
+            errors.push(format!(
+                "catalog/crates.yaml.{}.tier: unknown tier '{}'",
+                record.crate_id, record.tier
+            ));
+        }
+        let expected = expected_tier(&record.path, &record.package);
+        let matches = match &expected {
+            Some((exp_tier, exp_context, exp_role)) => {
+                &record.tier == exp_tier
+                    && &record.context == exp_context
+                    && &record.role == exp_role
+            }
+            None => false,
+        };
+        if !matches {
+            let expected_str = match expected {
+                Some((tier, context, role)) => {
+                    format_tier(&tier, context.as_deref(), role.as_deref())
+                }
+                None => "the path is outside the tier directories".to_string(),
+            };
+            errors.push(format!(
+                "catalog/crates.yaml.{}: path '{}' requires tier {expected_str}",
+                record.crate_id, record.path
+            ));
+        }
+        if !metadata
             .packages
             .iter()
-            .find(|package| package.name == record.package)
-        else {
+            .any(|package| package.name == record.package)
+        {
             errors.push(format!(
                 "catalog/crates.yaml.{}.package: '{}' is not in cargo metadata",
                 record.crate_id, record.package
             ));
-            continue;
-        };
+        }
         if !root.join(&record.path).join("Cargo.toml").is_file() {
             errors.push(format!(
                 "catalog/crates.yaml.{}.path: '{}' does not contain Cargo.toml",
                 record.crate_id, record.path
             ));
         }
-        if package
-            .dependencies
+    }
+    for member_id in &metadata.workspace_members {
+        let name = metadata
+            .packages
             .iter()
-            .any(|dependency| dependency.name == "sqlx")
-            && ["foundation", "domain"].contains(&record.layer.as_str())
-        {
+            .find(|p| &p.id == member_id || &p.name == member_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or(member_id.as_str());
+        if !records.iter().any(|r| r.package == name) {
             errors.push(format!(
-                "catalog/crates.yaml.{}.layer: {} crate directly depends on sqlx",
-                record.crate_id, record.layer
+                "catalog/crates.yaml: workspace crate '{name}' has no record"
             ));
+        }
+    }
+    check_tiers(
+        &records,
+        &metadata.packages,
+        &metadata.workspace_members,
+        errors,
+    );
+}
+
+const ASYNC_RUNTIME: &[&str] = &[
+    "tokio",
+    "tokio-util",
+    "tokio-stream",
+    "futures",
+    "futures-util",
+    "async-std",
+    "mio",
+    "socket2",
+];
+
+const SQL: &[&str] = &[
+    "sqlx",
+    "postgres",
+    "tokio-postgres",
+    "redis",
+    "deadpool-postgres",
+];
+
+const NETWORK: &[&str] = &[
+    "axum",
+    "hyper",
+    "hyper-util",
+    "reqwest",
+    "tonic",
+    "tower",
+    "tower-http",
+    "tokio-rustls",
+    "rustls",
+    "hickory-resolver",
+    "hickory-proto",
+];
+
+fn expected_tier(path: &str, package: &str) -> Option<(String, Option<String>, Option<String>)> {
+    let normalized = path.replace('\\', "/");
+    if normalized == "." {
+        return Some(("composition".to_string(), None, None));
+    }
+    let parts: Vec<&str> = normalized.split('/').collect();
+    if parts.len() == 3 && parts[0] == "crates" && !parts[2].is_empty() {
+        match parts[1] {
+            "kernel" => return Some(("kernel".to_string(), None, None)),
+            "platform" => return Some(("platform".to_string(), None, None)),
+            "edges" => return Some(("edge".to_string(), None, None)),
+            _ => return None,
+        }
+    }
+    if parts.len() == 2 && parts[0] == "tools" && !parts[1].is_empty() {
+        return Some(("tooling".to_string(), None, None));
+    }
+    if parts.len() == 4
+        && parts[0] == "crates"
+        && parts[1] == "contexts"
+        && !parts[2].is_empty()
+        && !parts[3].is_empty()
+    {
+        let context = parts[2].to_string();
+        let name = if !package.is_empty() {
+            package
+        } else {
+            parts[3]
+        };
+        let role = if name.ends_with("-application") || name == "northstar-protocol-runtime" {
+            "application"
+        } else if name.ends_with("-postgres") || name.ends_with("-xmpp") || name.ends_with("-http")
+        {
+            "adapter"
+        } else {
+            "core"
+        };
+        return Some(("context".to_string(), Some(context), Some(role.to_string())));
+    }
+    None
+}
+
+fn tier_text(record: &CrateRecord) -> String {
+    format_tier(
+        &record.tier,
+        record.context.as_deref(),
+        record.role.as_deref(),
+    )
+}
+
+fn format_tier(tier: &str, context: Option<&str>, role: Option<&str>) -> String {
+    if tier == "context" {
+        format!(
+            "context {} {}",
+            context.unwrap_or_default(),
+            role.unwrap_or_default()
+        )
+    } else {
+        tier.to_string()
+    }
+}
+
+fn internal_allowed(from: &CrateRecord, to: &CrateRecord) -> bool {
+    if to.tier == "tooling" {
+        return from.tier == "tooling";
+    }
+    match from.tier.as_str() {
+        "kernel" => to.tier == "kernel",
+        "platform" => to.tier == "kernel" || to.tier == "platform",
+        "context" => match from.role.as_deref() {
+            Some("core") => {
+                to.tier == "kernel" || (to.tier == "context" && to.role.as_deref() == Some("core"))
+            }
+            Some("application") => {
+                to.tier == "kernel"
+                    || to.tier == "platform"
+                    || (to.tier == "context" && to.role.as_deref() == Some("core"))
+                    || (to.tier == "context"
+                        && to.role.as_deref() == Some("application")
+                        && from.context.is_some()
+                        && from.context == to.context)
+            }
+            Some("adapter") => {
+                to.tier == "kernel"
+                    || to.tier == "platform"
+                    || (to.tier == "context" && to.role.as_deref() == Some("core"))
+                    || (to.tier == "context"
+                        && to.role.as_deref() == Some("application")
+                        && from.context.is_some()
+                        && from.context == to.context)
+                    || (to.tier == "edge" && to.package == "northstar-stream")
+            }
+            _ => false,
+        },
+        "edge" => {
+            to.tier == "kernel"
+                || to.tier == "platform"
+                || (to.tier == "context"
+                    && (to.role.as_deref() == Some("core")
+                        || to.role.as_deref() == Some("application")))
+                || (to.tier == "edge"
+                    && to.package == "northstar-stream"
+                    && from.package != to.package)
+        }
+        "composition" => true,
+        "tooling" => true,
+        _ => false,
+    }
+}
+
+fn external_allowed(from: &CrateRecord, to: &str) -> bool {
+    let in_async = ASYNC_RUNTIME.contains(&to);
+    let in_sql = SQL.contains(&to);
+    let in_network = NETWORK.contains(&to);
+
+    match from.tier.as_str() {
+        "kernel" => !in_async && !in_sql && !in_network,
+        "platform" => true,
+        "context" => match from.role.as_deref() {
+            Some("core") => !in_async && !in_sql && !in_network,
+            Some("application") => !in_sql && !in_network,
+            Some("adapter") => true,
+            _ => false,
+        },
+        "edge" => !in_sql,
+        "composition" => true,
+        "tooling" => true,
+        _ => false,
+    }
+}
+
+fn check_tiers(
+    records: &[CrateRecord],
+    packages: &[Package],
+    workspace_members: &[String],
+    errors: &mut Vec<String>,
+) {
+    for package in packages {
+        if !workspace_members.is_empty()
+            && !workspace_members.contains(&package.id)
+            && !workspace_members.contains(&package.name)
+        {
+            continue;
+        }
+        let Some(from) = records.iter().find(|r| r.package == package.name) else {
+            continue;
+        };
+        for dep in &package.dependencies {
+            let is_checked = matches!(dep.kind.as_deref(), None | Some("build"));
+            if !is_checked {
+                continue;
+            }
+            if let Some(to) = records.iter().find(|r| r.package == dep.name) {
+                if !internal_allowed(from, to) {
+                    errors.push(format!(
+                        "crate graph: {} ({}) must not depend on {} ({})",
+                        from.package,
+                        tier_text(from),
+                        to.package,
+                        tier_text(to)
+                    ));
+                }
+            } else if !external_allowed(from, &dep.name) {
+                errors.push(format!(
+                    "crate graph: {} ({}) must not depend on external crate {}",
+                    from.package,
+                    tier_text(from),
+                    dep.name
+                ));
+            }
         }
     }
 }
@@ -417,5 +674,289 @@ mod tests {
         let mut errors = Vec::new();
         check_boundaries(&graph, Path::new("."), &mut errors);
         assert!(errors.is_empty());
+    }
+
+    fn record(package: &str, path: &str) -> CrateRecord {
+        let (tier, context, role) = expected_tier(path, package)
+            .unwrap_or_else(|| panic!("invalid path for test record: {path}"));
+        let stability = if tier == "kernel"
+            || (tier == "context"
+                && (role.as_deref() == Some("core") || role.as_deref() == Some("application")))
+        {
+            "internal-stable"
+        } else {
+            "internal"
+        };
+        CrateRecord {
+            crate_id: package.to_string(),
+            package: package.to_string(),
+            path: path.to_string(),
+            tier,
+            context,
+            role,
+            owner_team: "platform".to_string(),
+            api_stability: stability.to_string(),
+            publish_policy: "never".to_string(),
+        }
+    }
+
+    #[test]
+    fn kernel_depending_on_context_core_is_reported() {
+        let kernel = record("northstar-xep-0045", "crates/kernel/northstar-xep-0045");
+        let context_core = record(
+            "northstar-message-core",
+            "crates/contexts/message/northstar-message-core",
+        );
+        let records = vec![kernel.clone(), context_core.clone()];
+        let packages = vec![
+            Package {
+                id: kernel.package.clone(),
+                name: kernel.package.clone(),
+                dependencies: vec![PackageDependency {
+                    name: context_core.package.clone(),
+                    kind: None,
+                }],
+            },
+            Package {
+                id: context_core.package.clone(),
+                name: context_core.package.clone(),
+                dependencies: vec![],
+            },
+        ];
+        let workspace_members = vec![kernel.package.clone(), context_core.package.clone()];
+        let mut errors = Vec::new();
+        check_tiers(&records, &packages, &workspace_members, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0],
+            "crate graph: northstar-xep-0045 (kernel) must not depend on northstar-message-core (context message core)"
+        );
+    }
+
+    #[test]
+    fn context_core_depending_on_another_context_core_is_accepted() {
+        let core1 = record(
+            "northstar-message-core",
+            "crates/contexts/message/northstar-message-core",
+        );
+        let core2 = record(
+            "northstar-auth-core",
+            "crates/contexts/auth/northstar-auth-core",
+        );
+        let records = vec![core1.clone(), core2.clone()];
+        let packages = vec![
+            Package {
+                id: core1.package.clone(),
+                name: core1.package.clone(),
+                dependencies: vec![PackageDependency {
+                    name: core2.package.clone(),
+                    kind: None,
+                }],
+            },
+            Package {
+                id: core2.package.clone(),
+                name: core2.package.clone(),
+                dependencies: vec![],
+            },
+        ];
+        let workspace_members = vec![core1.package.clone(), core2.package.clone()];
+        let mut errors = Vec::new();
+        check_tiers(&records, &packages, &workspace_members, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn context_application_depending_on_sqlx_is_reported_and_on_tokio_is_accepted() {
+        let app = record(
+            "northstar-message-application",
+            "crates/contexts/message/northstar-message-application",
+        );
+        let records = vec![app.clone()];
+        let workspace_members = vec![app.package.clone()];
+
+        let packages_sqlx = vec![Package {
+            id: app.package.clone(),
+            name: app.package.clone(),
+            dependencies: vec![PackageDependency {
+                name: "sqlx".to_string(),
+                kind: None,
+            }],
+        }];
+        let mut errors_sqlx = Vec::new();
+        check_tiers(
+            &records,
+            &packages_sqlx,
+            &workspace_members,
+            &mut errors_sqlx,
+        );
+        assert_eq!(errors_sqlx.len(), 1);
+        assert_eq!(
+            errors_sqlx[0],
+            "crate graph: northstar-message-application (context message application) must not depend on external crate sqlx"
+        );
+
+        let packages_tokio = vec![Package {
+            id: app.package.clone(),
+            name: app.package.clone(),
+            dependencies: vec![PackageDependency {
+                name: "tokio".to_string(),
+                kind: None,
+            }],
+        }];
+        let mut errors_tokio = Vec::new();
+        check_tiers(
+            &records,
+            &packages_tokio,
+            &workspace_members,
+            &mut errors_tokio,
+        );
+        assert!(errors_tokio.is_empty());
+    }
+
+    #[test]
+    fn context_core_depending_on_tokio_is_reported() {
+        let core = record(
+            "northstar-message-core",
+            "crates/contexts/message/northstar-message-core",
+        );
+        let records = vec![core.clone()];
+        let packages = vec![Package {
+            id: core.package.clone(),
+            name: core.package.clone(),
+            dependencies: vec![PackageDependency {
+                name: "tokio".to_string(),
+                kind: None,
+            }],
+        }];
+        let workspace_members = vec![core.package.clone()];
+        let mut errors = Vec::new();
+        check_tiers(&records, &packages, &workspace_members, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0],
+            "crate graph: northstar-message-core (context message core) must not depend on external crate tokio"
+        );
+    }
+
+    #[test]
+    fn composition_with_normal_dependency_on_tooling_is_reported_and_dev_dependency_is_accepted() {
+        let comp = record("rust-xmpp-server", ".");
+        let tool = record("architecture-validator", "tools/architecture-validator");
+        let records = vec![comp.clone(), tool.clone()];
+        let workspace_members = vec![comp.package.clone(), tool.package.clone()];
+
+        let packages_normal = vec![
+            Package {
+                id: comp.package.clone(),
+                name: comp.package.clone(),
+                dependencies: vec![PackageDependency {
+                    name: tool.package.clone(),
+                    kind: None,
+                }],
+            },
+            Package {
+                id: tool.package.clone(),
+                name: tool.package.clone(),
+                dependencies: vec![],
+            },
+        ];
+        let mut errors_normal = Vec::new();
+        check_tiers(
+            &records,
+            &packages_normal,
+            &workspace_members,
+            &mut errors_normal,
+        );
+        assert_eq!(errors_normal.len(), 1);
+        assert_eq!(
+            errors_normal[0],
+            "crate graph: rust-xmpp-server (composition) must not depend on architecture-validator (tooling)"
+        );
+
+        let packages_dev = vec![
+            Package {
+                id: comp.package.clone(),
+                name: comp.package.clone(),
+                dependencies: vec![PackageDependency {
+                    name: tool.package.clone(),
+                    kind: Some("dev".to_string()),
+                }],
+            },
+            Package {
+                id: tool.package.clone(),
+                name: tool.package.clone(),
+                dependencies: vec![],
+            },
+        ];
+        let mut errors_dev = Vec::new();
+        check_tiers(&records, &packages_dev, &workspace_members, &mut errors_dev);
+        assert!(errors_dev.is_empty());
+    }
+
+    #[test]
+    fn context_application_depending_on_another_context_application_is_reported() {
+        let app1 = record(
+            "northstar-message-application",
+            "crates/contexts/message/northstar-message-application",
+        );
+        let app2 = record(
+            "northstar-session-application",
+            "crates/contexts/session/northstar-session-application",
+        );
+        let records = vec![app1.clone(), app2.clone()];
+        let packages = vec![
+            Package {
+                id: app1.package.clone(),
+                name: app1.package.clone(),
+                dependencies: vec![PackageDependency {
+                    name: app2.package.clone(),
+                    kind: None,
+                }],
+            },
+            Package {
+                id: app2.package.clone(),
+                name: app2.package.clone(),
+                dependencies: vec![],
+            },
+        ];
+        let workspace_members = vec![app1.package.clone(), app2.package.clone()];
+        let mut errors = Vec::new();
+        check_tiers(&records, &packages, &workspace_members, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0],
+            "crate graph: northstar-message-application (context message application) must not depend on northstar-session-application (context session application)"
+        );
+    }
+
+    #[test]
+    fn expected_tier_mapping() {
+        assert_eq!(
+            expected_tier(
+                "crates/contexts/session/northstar-protocol-runtime",
+                "northstar-protocol-runtime"
+            ),
+            Some((
+                "context".to_string(),
+                Some("session".to_string()),
+                Some("application".to_string())
+            ))
+        );
+        assert_eq!(
+            expected_tier("crates/kernel/northstar-xep-0045", "northstar-xep-0045"),
+            Some(("kernel".to_string(), None, None))
+        );
+        assert_eq!(
+            expected_tier("tools/northstar-test-harness", "northstar-test-harness"),
+            Some(("tooling".to_string(), None, None))
+        );
+        assert_eq!(
+            expected_tier(".", "rust-xmpp-server"),
+            Some(("composition".to_string(), None, None))
+        );
+        assert_eq!(
+            expected_tier("crates/northstar-xep-0045", "northstar-xep-0045"),
+            None
+        );
     }
 }

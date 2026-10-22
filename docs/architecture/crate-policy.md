@@ -1,27 +1,54 @@
-# Crate ownership and dependency policy
+# Crate tiers and dependency policy
 
 `catalog/crates.yaml` is generated from `cargo metadata` by
-`scripts/generate-crate-catalog.mjs`. It records why each workspace crate
-exists, who owns it, and the dependency budget that applies to its layer.
+`scripts/generate-crate-catalog.mjs`; CI regenerates it and rejects drift.
+Each record names the crate's tier (and, for a context crate, its context and
+role), its owner and its API stability. The tier comes from the crate
+directory, so moving a crate is the only way to change it. `architecture-validator`
+checks every record against its path and rejects every normal or build
+dependency that the rules below forbid; dev-dependencies are not checked. The
+tiers are those of the [target architecture](target-architecture.zh-TW.md),
+section 4.1.
 
-## Layers
+## Tiers
 
-- `foundation`: shared contracts, security, eventing, telemetry, and runtime
-  primitives. Foundation code must not depend on SQL, network clients, or an
-  asynchronous runtime implementation.
-- `domain`: deterministic XMPP and business rules. Domain crates may depend on
-  foundation and protocol types, but never on a database or transport adapter.
-- `application`: use cases and ports. Application crates may compose domain
-  crates and foundation contracts; adapters are injected through ports.
-- `xep`: one semantic owner per XEP. XEP crates contain parsing, validation,
-  and policy mapping, not direct database access.
-- `adapter`: network, persistence, web, and process integration boundaries.
-- `service`: executable deployment units that wire application ports to
-  adapters.
-- `tooling`: validators and migration tools; they are never runtime
-  dependencies.
+| Directory | Tier | May depend on (workspace crates) |
+| --- | --- | --- |
+| `crates/kernel/<crate>` | kernel | kernel |
+| `crates/platform/<crate>` | platform | kernel, platform |
+| `crates/contexts/<context>/<crate>` | context | see the roles below |
+| `crates/edges/<crate>` | edge | kernel, platform, any context's core or application, the edge `northstar-stream` |
+| `.` (`rust-xmpp-server`) | composition | any runtime crate |
+| `tools/<crate>` | tooling | anything; only tooling may depend on tooling |
 
-The catalog is intentionally conservative: all crates are private to this
-repository (`publish_policy: never`) until a stable public API and semver
-compatibility process is approved. New crates require a catalog entry and a
-clear layer/owner; extracting a small DTO alone is not sufficient justification.
+A context crate's role follows its name: `application` for `*-application` and
+`northstar-protocol-runtime`, `adapter` for `*-postgres`, `*-xmpp` and
+`*-http`, `core` otherwise.
+
+| Role | May depend on (workspace crates) |
+| --- | --- |
+| core | kernel; any context's core |
+| application | kernel, platform; any context's core; an application of the same context |
+| adapter | kernel, platform; any context's core; the same context's application; the edge `northstar-stream` |
+
+No runtime crate may depend on a tooling crate.
+
+## External crates
+
+The validator keeps three lists of exact crate names: asynchronous runtimes
+(`tokio`, `futures` and their kin), SQL and storage clients (`sqlx`,
+`redis`, ...) and network stacks (`axum`, `hyper`, `reqwest`, `rustls`, ...).
+
+- kernel and context core crates use none of them: they stay deterministic
+  and synchronous;
+- context application crates may use an asynchronous runtime, but no SQL or
+  network crate; adapters are injected through ports;
+- edge crates may not use SQL;
+- platform, adapter, composition and tooling crates may use any external crate.
+
+## Publishing
+
+All crates are private to this repository (`publish_policy: never`) until a
+stable public API and semver compatibility process is approved. A new crate
+needs a tier directory and an owner; extracting a small DTO alone is not a
+reason for a new crate.

@@ -1,660 +1,533 @@
-version: "2.0.0"
+version: "3.0.0"
 
-# Generated from cargo metadata. Layer and dependency policy are validated in CI.
+# Generated from cargo metadata. Tiers come from the crate directory; architecture-validator enforces them.
 crates:
   - crate_id: architecture-validator
     package: architecture-validator
     path: tools/architecture-validator
-    layer: tooling
+    tier: tooling
     owner_team: platform
     api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: db-bootstrap
     package: db-bootstrap
     path: tools/db-bootstrap
-    layer: support
+    tier: tooling
     owner_team: platform
     api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: foundation-db-test
     package: foundation-db-test
     path: crates/platform/foundation-db-test
-    layer: foundation
+    tier: platform
     owner_team: platform
-    api_stability: internal-stable
+    api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - serde
-      - thiserror
-      - uuid
 
   - crate_id: foundation-eventing
     package: foundation-eventing
     path: crates/platform/foundation-eventing
-    layer: foundation
+    tier: platform
     owner_team: platform
-    api_stability: internal-stable
+    api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - serde
-      - thiserror
-      - uuid
 
   - crate_id: foundation-eventing-postgres
     package: foundation-eventing-postgres
     path: crates/platform/foundation-eventing-postgres
-    layer: infrastructure
+    tier: platform
     owner_team: platform
-    api_stability: internal-stable
+    api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - serde
-      - sqlx
-      - thiserror
-      - tokio
 
   - crate_id: foundation-kms
     package: foundation-kms
     path: crates/platform/foundation-kms
-    layer: foundation
+    tier: platform
     owner_team: platform
-    api_stability: internal-stable
+    api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - serde
-      - thiserror
-      - uuid
 
   - crate_id: foundation-postgres
     package: foundation-postgres
     path: crates/platform/foundation-postgres
-    layer: infrastructure
+    tier: platform
     owner_team: platform
-    api_stability: internal-stable
+    api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - serde
-      - sqlx
-      - thiserror
-      - tokio
 
   - crate_id: kafka-policy-generator
     package: kafka-policy-generator
     path: tools/kafka-policy-generator
-    layer: support
+    tier: tooling
     owner_team: platform
     api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-abuse-policy
     package: northstar-abuse-policy
     path: crates/contexts/abuse/northstar-abuse-policy
-    layer: support
+    tier: context
+    context: abuse
+    role: core
     owner_team: platform
-    api_stability: internal
+    api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-archive-application
     package: northstar-archive-application
     path: crates/contexts/archive/northstar-archive-application
-    layer: application
+    tier: context
+    context: archive
+    role: application
     owner_team: messaging
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-archive-core
     package: northstar-archive-core
     path: crates/contexts/archive/northstar-archive-core
-    layer: domain
+    tier: context
+    context: archive
+    role: core
     owner_team: messaging
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-auth-core
     package: northstar-auth-core
     path: crates/contexts/auth/northstar-auth-core
-    layer: domain
+    tier: context
+    context: auth
+    role: core
     owner_team: identity-session
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-delivery-core
     package: northstar-delivery-core
     path: crates/contexts/message/northstar-delivery-core
-    layer: domain
+    tier: context
+    context: message
+    role: core
     owner_team: messaging
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-federation-application
     package: northstar-federation-application
     path: crates/contexts/federation/northstar-federation-application
-    layer: application
+    tier: context
+    context: federation
+    role: application
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-federation-core
     package: northstar-federation-core
     path: crates/contexts/federation/northstar-federation-core
-    layer: domain
+    tier: context
+    context: federation
+    role: core
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-message-application
     package: northstar-message-application
     path: crates/contexts/message/northstar-message-application
-    layer: application
+    tier: context
+    context: message
+    role: application
     owner_team: messaging
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-message-core
     package: northstar-message-core
     path: crates/contexts/message/northstar-message-core
-    layer: domain
+    tier: context
+    context: message
+    role: core
     owner_team: messaging
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-presence-core
     package: northstar-presence-core
     path: crates/contexts/roster/northstar-presence-core
-    layer: domain
+    tier: context
+    context: roster
+    role: core
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-protocol-runtime
     package: northstar-protocol-runtime
     path: crates/contexts/session/northstar-protocol-runtime
-    layer: adapter
+    tier: context
+    context: session
+    role: application
     owner_team: platform
-    api_stability: internal
+    api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-pubsub-application
     package: northstar-pubsub-application
     path: crates/contexts/pubsub/northstar-pubsub-application
-    layer: application
+    tier: context
+    context: pubsub
+    role: application
     owner_team: realtime
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-pubsub-core
     package: northstar-pubsub-core
     path: crates/contexts/pubsub/northstar-pubsub-core
-    layer: domain
+    tier: context
+    context: pubsub
+    role: core
     owner_team: realtime
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-room-application
     package: northstar-room-application
     path: crates/contexts/room/northstar-room-application
-    layer: application
+    tier: context
+    context: room
+    role: application
     owner_team: realtime
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-room-core
     package: northstar-room-core
     path: crates/contexts/room/northstar-room-core
-    layer: domain
+    tier: context
+    context: room
+    role: core
     owner_team: realtime
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-roster-application
     package: northstar-roster-application
     path: crates/contexts/roster/northstar-roster-application
-    layer: application
+    tier: context
+    context: roster
+    role: application
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-roster-core
     package: northstar-roster-core
     path: crates/contexts/roster/northstar-roster-core
-    layer: domain
+    tier: context
+    context: roster
+    role: core
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-session-application
     package: northstar-session-application
     path: crates/contexts/session/northstar-session-application
-    layer: application
+    tier: context
+    context: session
+    role: application
     owner_team: identity-session
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-session-core
     package: northstar-session-core
     path: crates/contexts/session/northstar-session-core
-    layer: domain
+    tier: context
+    context: session
+    role: core
     owner_team: identity-session
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-test-harness
     package: northstar-test-harness
     path: tools/northstar-test-harness
-    layer: support
+    tier: tooling
     owner_team: platform
     api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-upload-application
     package: northstar-upload-application
     path: crates/contexts/upload/northstar-upload-application
-    layer: application
+    tier: context
+    context: upload
+    role: application
     owner_team: storage
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - northstar-*-core
-      - foundation-*
-      - northstar-*-contracts
 
   - crate_id: northstar-upload-core
     package: northstar-upload-core
     path: crates/contexts/upload/northstar-upload-core
-    layer: domain
+    tier: context
+    context: upload
+    role: core
     owner_team: storage
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-web-surface
     package: northstar-web-surface
     path: crates/platform/northstar-web-surface
-    layer: adapter
+    tier: platform
     owner_team: platform
     api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0016
     package: northstar-xep-0016
     path: crates/kernel/northstar-xep-0016
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0045
     package: northstar-xep-0045
     path: crates/kernel/northstar-xep-0045
-    layer: xep
+    tier: kernel
     owner_team: realtime
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0059
     package: northstar-xep-0059
     path: crates/kernel/northstar-xep-0059
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0060
     package: northstar-xep-0060
     path: crates/kernel/northstar-xep-0060
-    layer: xep
+    tier: kernel
     owner_team: realtime
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0085
     package: northstar-xep-0085
     path: crates/kernel/northstar-xep-0085
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0092
     package: northstar-xep-0092
     path: crates/kernel/northstar-xep-0092
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0115
     package: northstar-xep-0115
     path: crates/kernel/northstar-xep-0115
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0184
     package: northstar-xep-0184
     path: crates/kernel/northstar-xep-0184
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0191
     package: northstar-xep-0191
     path: crates/kernel/northstar-xep-0191
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0198
     package: northstar-xep-0198
     path: crates/kernel/northstar-xep-0198
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0199
     package: northstar-xep-0199
     path: crates/kernel/northstar-xep-0199
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0202
     package: northstar-xep-0202
     path: crates/kernel/northstar-xep-0202
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0215
     package: northstar-xep-0215
     path: crates/kernel/northstar-xep-0215
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0280
     package: northstar-xep-0280
     path: crates/kernel/northstar-xep-0280
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0308
     package: northstar-xep-0308
     path: crates/kernel/northstar-xep-0308
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0313
     package: northstar-xep-0313
     path: crates/kernel/northstar-xep-0313
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0333
     package: northstar-xep-0333
     path: crates/kernel/northstar-xep-0333
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0352
     package: northstar-xep-0352
     path: crates/kernel/northstar-xep-0352
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0357
     package: northstar-xep-0357
     path: crates/kernel/northstar-xep-0357
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0359
     package: northstar-xep-0359
     path: crates/kernel/northstar-xep-0359
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0363
     package: northstar-xep-0363
     path: crates/kernel/northstar-xep-0363
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0380
     package: northstar-xep-0380
     path: crates/kernel/northstar-xep-0380
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0444
     package: northstar-xep-0444
     path: crates/kernel/northstar-xep-0444
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-0461
     package: northstar-xep-0461
     path: crates/kernel/northstar-xep-0461
-    layer: xep
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xep-core
     package: northstar-xep-core
     path: crates/kernel/northstar-xep-core
-    layer: domain
+    tier: kernel
     owner_team: platform
     api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - foundation-*
-      - northstar-xmpp-types
-      - northstar-xep-*
 
   - crate_id: northstar-xml-builder
     package: northstar-xml-builder
     path: crates/kernel/northstar-xml-builder
-    layer: support
+    tier: kernel
     owner_team: platform
-    api_stability: internal
+    api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xml-framing
     package: northstar-xml-framing
     path: crates/kernel/northstar-xml-framing
-    layer: support
+    tier: kernel
     owner_team: platform
-    api_stability: internal
+    api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: northstar-xmpp-types
     package: northstar-xmpp-types
     path: crates/kernel/northstar-xmpp-types
-    layer: support
+    tier: kernel
     owner_team: platform
-    api_stability: internal
+    api_stability: internal-stable
     publish_policy: never
-    allowed_dependencies:
-      - "*"
 
   - crate_id: restore-verifier
     package: restore-verifier
     path: tools/restore-verifier
-    layer: support
+    tier: tooling
     owner_team: platform
     api_stability: internal
     publish_policy: never
-    allowed_dependencies:
-      - "*"
+
+  - crate_id: rust-xmpp-server
+    package: rust-xmpp-server
+    path: .
+    tier: composition
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never

@@ -154,7 +154,7 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 
 | 階段 | 內容 | 退出條件 |
 | --- | --- | --- |
-| S16 地基 | 刪除 `services/*` 原型與只被它們使用的 crate、工具與 CI 步驟（逐項列表確認）；既有 crate 依 4.1 移入 `crates/{kernel,platform,contexts,edges}` 目錄（套件名稱不變）；建立 crate 依賴圖門禁與層級目錄；解除 Stage 4 釘選；記錄建置時間基準 | workspace 全綠；crate 圖門禁通過；根 crate 行數不變 |
+| S16 地基 | 刪除 `services/*` 原型與只被它們使用的 crate、工具與 CI 步驟（逐項列表確認）；既有 crate 依 4.1 移入 `crates/{kernel,platform,contexts,edges}` 目錄（套件名稱不變）；建立 crate 依賴圖門禁與層級目錄；解除 Stage 4 釘選；記錄建置時間基準 | workspace 全綠；crate 圖門禁通過；根 crate 行數不變。已完成（WP-160–165，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.12） |
 | S17 平台 | `src/platform`、`src/security`、`src/storage`、`jid`、`auth` facade 移為 platform 與 kernel crate | 根 crate 不再含平台程式碼 |
 | S18 會話核心介面 | 建立 `northstar-stream`：`StanzaHandler`、`SessionContext`、分派註冊表；根 crate 的分派改經註冊表，處理器暫時以轉接器包住；以 `session` 路由 port 切斷協定處理器對 `bosh`、`s2s` 的依賴 | 分派只經註冊表；協定處理器不再引用傳輸模組 |
 | S19–S28 上下文 | 依序搬移：`upload` → `archive` → `pubsub` → `roster` → `abuse` → `auth` → `operations` → `room` → `message` → `federation`。每個上下文：先定義 port 與模組結構、以它取代對應的 `AppState` accessor，再把 `services`、`db`、`xmpp/protocol`、`api` 中的程式碼移入四個 crate，最後更新門禁並在組合根綁定 | 該上下文不再出現在根 crate；`AppState` 不再持有它的服務 |
@@ -181,7 +181,7 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 | --- | --- |
 | 搬移時改到交易或鎖順序 | SQL 與交易邊界逐字搬移；跨上下文交易集中在 `northstar-workflows` 並列入清單；保留既有並行與鎖順序測試 |
 | 上下文之間出現循環 | 消費者擁有 port，上下文之間只共享 core 值型別；Cargo 本身拒絕 crate 循環 |
-| 建置時間 | S16 記錄基準；拆分後可平行與增量編譯，預期改善；每個階段比較一次 |
+| 建置時間 | S16 記錄基準（[工程結構藍圖](engineering-structure.zh-TW.md) 5.12）；拆分後可平行與增量編譯，預期改善；每個階段比較一次 |
 | 門禁大量修改 | 每個 WP 列出受影響門禁；邊界一旦由 crate 圖保證就刪除對應的字面檢查 |
 | 文件與證據路徑失效 | 現行文件隨階段更新；`docs/evidence`、`docs/handoff`、`recovery` 是歷史紀錄，不改寫 |
 | 規模過大、階段拖長 | 每個階段都可獨立上線；任何時點中止，系統都是全綠且結構比前一階段清楚 |

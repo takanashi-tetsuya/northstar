@@ -20,11 +20,6 @@ mod storage;
 mod tools;
 mod xmpp;
 
-// Stage 4 evidence pins the bytes of src/bosh/response_owner.rs and src/stage4_replay.rs
-// (`pinned` in catalog/source-structure-baseline.json), and both still name crate::outbound.
-// This S4 shim stays for them only; check-source-structure.mjs rejects crate::outbound elsewhere.
-use xmpp::outbound;
-
 use anyhow::{Context, Result};
 use platform::config::Config;
 use platform::workers::{WorkerCriticality, WorkerMode};

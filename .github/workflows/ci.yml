@@ -472,12 +472,15 @@ jobs:
               scripts/lib/stage4_corpus_join.py \
               scripts/lib/stage4_saved_case.py \
               scripts/lib/stage4_shapes.json \
-              scripts/test-stage4-saved-profile.py \
-              src/bosh/response_owner.rs; do
+              scripts/test-stage4-saved-profile.py; do
               install -D -m 0644 "$relative" "$stage4_inputs/historical75/$relative"
             done
-            install -D -m 0644 "scripts/fixtures/stage4-profile-binding-v1/historical/scripts/lib/stage4_build_record.py" \
-              "$stage4_inputs/historical75/scripts/lib/stage4_build_record.py"
+            for relative in \
+              scripts/lib/stage4_build_record.py \
+              src/bosh/response_owner.rs; do
+              install -D -m 0644 "scripts/fixtures/stage4-profile-binding-v1/historical/$relative" \
+                "$stage4_inputs/historical75/$relative"
+            done
             install -D -m 0644 scripts/test-stage4-saved-profile-historical.py \
               "$stage4_inputs/historical-entry/test-stage4-saved-profile-historical.py"
             for relative in \

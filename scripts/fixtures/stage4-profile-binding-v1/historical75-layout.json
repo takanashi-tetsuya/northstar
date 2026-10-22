@@ -78,7 +78,7 @@
       "bytes": 115084,
       "destination_in_fresh_historical_root": "src/bosh/response_owner.rs",
       "mode": "0644",
-      "public_source": "src/bosh/response_owner.rs",
+      "public_source": "scripts/fixtures/stage4-profile-binding-v1/historical/src/bosh/response_owner.rs",
       "sha256": "6c346f097c60ea3cc6e50a4e931becb1f03ea2b587d32894995da692bba6fccb"
     }
   ],

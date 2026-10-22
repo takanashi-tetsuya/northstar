@@ -5,8 +5,7 @@
     "test": 3000
   },
   "oversize": {
-    "src/bosh/response_owner.rs": 2884,
-    "src/stage4_replay.rs": 7270,
+    "src/stage4_replay.rs": 4521,
     "src/stage4_replay/compact.rs": 3431
   },
   "root_rust_files": [
@@ -19,26 +18,5 @@
     "src/stage4_replay.rs",
     "src/state.rs",
     "src/storage.rs"
-  ],
-  "pinned": {
-    "src/bosh/response_owner.rs": "6c346f097c60ea3cc6e50a4e931becb1f03ea2b587d32894995da692bba6fccb",
-    "src/stage4_replay.rs": "ba4fd261eae7848745072b7ee604dc9a49850281c9ee0874d339446be1b48851",
-    "src/stage4_replay/compact.rs": "0623d1148d78d3ea3613987579e7413eaea44e5000406b7f50ab1b49188c04b8",
-    "src/stage4_replay/fixtures/S01.json": "4eb6aa0f9e09812d7dd04e1d96ab0314a47b63d9342c767a4f40ca6633402fdb",
-    "src/stage4_replay/fixtures/S02.json": "7150f774c75af25c36da649ac2197e3bf0c038f9f197a1fa332cf482e2343157",
-    "src/stage4_replay/fixtures/S03.json": "06efc3d10c422aff7a6dc938cb2c03f223fe3cdae1ddb1a3535546cde0bb181d",
-    "src/stage4_replay/fixtures/S04.json": "220773f13cb61e8f5ed8f84c05e5a928da8fadaf4a56409274d1897f3e7aeece",
-    "src/stage4_replay/fixtures/S05.json": "50b8f1c737a2bd0c4fb77ba88148e2ba4b0bcbd775ed7a624f87d331eacb234f",
-    "src/stage4_replay/fixtures/S06.json": "c609da10e108c0d5023f4b102d31b73e4d39de534703b915ad40e53cefb2d150",
-    "src/stage4_replay/fixtures/S07.json": "4475bc05d216de84318962eb39a2cd0589dcb8c35cba2c238d7893f36bc18a3f",
-    "src/stage4_replay/fixtures/S08.json": "3eaef97d5754331a61dd70995e359d1596069960ccb7fed1f2e0f86af11d00ee",
-    "src/stage4_replay/fixtures/S09.json": "fceae61bcc15dd3a9648bf7e6dd149f46e13799ca27a022f26c07a33b9bde77e",
-    "src/stage4_replay/fixtures/S10.json": "79d59093f0eabf929856566f8377c322ab91ec164c9885d3f13012625eea44c6",
-    "src/stage4_replay/fixtures/S11.json": "9f9b0c57a629b910a03c723bea8480139613bf9572e7e5c17e9f94b202880931",
-    "src/stage4_replay/fixtures/S12.json": "8c2a05acd8909c7d00e0def329ca500d4d87c85febda9bace4224523b06688cc",
-    "src/stage4_replay/fixtures/S13.json": "e49d45ca5970b7aa84cd9004faffe0aad55d34142758ba9649c6d7bea73ed987",
-    "src/stage4_replay/fixtures/S14.json": "56149c2ff03195230fd466528ccb3312a17be660b10b57c51e635ab95cd129a2",
-    "src/stage4_replay/fixtures/S15.json": "b7bffb4202bf75f207c16e2b7353b0a12b6c6224380d69dd7fe02a72f17d17a5",
-    "src/stage4_replay/fixtures/S16.json": "6de2c80e32b93803f42df74b16ed055ba7d0d13e41198c1411219e0e0791b84e"
-  }
+  ]
 }

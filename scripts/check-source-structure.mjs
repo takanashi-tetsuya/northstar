@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
@@ -27,38 +26,6 @@ export function classify(p) {
 }
 
 /**
- * Counts the uses of crate::outbound outside line comments, written directly or as an entry of a
- * `crate::{...}` group. main.rs keeps that one S4 shim (`use xmpp::outbound;`) only for the pinned
- * Stage 4 files; all other code writes crate::xmpp::outbound.
- * @param {string} text Rust source
- * @returns {number}
- */
-export function countOutboundShimUses(text) {
-  const code = text.replace(/\/\/.*$/gm, '');
-  let count = (code.match(/\bcrate::outbound\b/g) || []).length;
-  const groups = /\bcrate::\{/g;
-  while (groups.exec(code) !== null) {
-    let depth = 1;
-    let entryStart = groups.lastIndex;
-    for (let i = groups.lastIndex; i < code.length && depth > 0; i++) {
-      const c = code[i];
-      if (c === '{') {
-        depth++;
-      } else if (c === '}') {
-        depth--;
-      }
-      if ((c === ',' && depth === 1) || depth === 0) {
-        if (/^outbound\b/.test(code.slice(entryStart, i).trim())) {
-          count++;
-        }
-        entryStart = i + 1;
-      }
-    }
-  }
-  return count;
-}
-
-/**
  * Counts the top-level inline test modules of a Rust file: a `mod name {` line without indentation
  * whose attributes include #[cfg(test)]. An oversize production file moves such modules into child
  * files (R1, WP-71), so only its production code counts against the budget.
@@ -83,10 +50,9 @@ export function countInlineTestModules(text) {
 }
 
 /**
- * Scans the source directory and returns files with line counts, crate::outbound uses and inline
- * test modules.
+ * Scans the source directory and returns files with line counts and inline test modules.
  * @param {string} root
- * @returns {Array<{path: string, lines: number, outboundShimUses: number, inlineTestModules: number}>}
+ * @returns {Array<{path: string, lines: number, inlineTestModules: number}>}
  */
 export function scanSource(root) {
   root = path.resolve(root);
@@ -115,7 +81,6 @@ export function scanSource(root) {
         results.push({
           path: relPath,
           lines,
-          outboundShimUses: countOutboundShimUses(text),
           inlineTestModules: countInlineTestModules(text),
         });
       }
@@ -128,37 +93,13 @@ export function scanSource(root) {
 }
 
 /**
- * Reads the SHA-256 digest of each pinned file.
- * @param {string} root
- * @param {object} pinned Repository-relative paths mapped to their recorded digests
- * @returns {Map<string, string|null>} null for a file that cannot be read
- */
-export function digestPinned(root, pinned) {
-  root = path.resolve(root);
-  const digests = new Map();
-  if (!pinned || typeof pinned !== 'object' || Array.isArray(pinned)) {
-    return digests;
-  }
-  for (const relPath of Object.keys(pinned)) {
-    try {
-      const buf = fs.readFileSync(path.join(root, relPath));
-      digests.set(relPath, crypto.createHash('sha256').update(buf).digest('hex'));
-    } catch (e) {
-      digests.set(relPath, null);
-    }
-  }
-  return digests;
-}
-
-/**
  * Evaluates the current source files against the baseline.
  * @param {object} params
  * @param {Array<{path: string, lines: number}>} params.files
  * @param {object} params.baseline
- * @param {Map<string, string|null>} [params.digests] Digests of the pinned files (see digestPinned)
  * @returns {{violations: string[], notices: string[]}}
  */
-export function evaluateStructure({ files, baseline, digests = new Map() }) {
+export function evaluateStructure({ files, baseline }) {
   const violations = [];
   const notices = [];
 
@@ -172,7 +113,7 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
     !Number.isInteger(baseline.budgets.test) || baseline.budgets.test <= 0 ||
     (baseline.oversize !== undefined && !isPlainObject(baseline.oversize)) ||
     (baseline.root_rust_files !== undefined && !Array.isArray(baseline.root_rust_files)) ||
-    (baseline.pinned !== undefined && !isPlainObject(baseline.pinned))
+    baseline.pinned !== undefined
   ) {
     invalidBaseline = true;
   } else {
@@ -188,13 +129,6 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
         break;
       }
     }
-    for (const [key, val] of Object.entries(baseline.pinned || {})) {
-      if (!key.startsWith('src/') || key.split('/').includes('..') ||
-          typeof val !== 'string' || !/^[0-9a-f]{64}$/.test(val)) {
-        invalidBaseline = true;
-        break;
-      }
-    }
   }
 
   if (invalidBaseline) {
@@ -204,11 +138,10 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
 
   const oversize = baseline.oversize || {};
   const root_rust_files = baseline.root_rust_files || [];
-  const pinned = baseline.pinned || {};
   
   const currentFiles = new Map(files.map(f => [f.path, f.lines]));
   
-  for (const { path, lines, outboundShimUses, inlineTestModules = 0 } of files) {
+  for (const { path, lines, inlineTestModules = 0 } of files) {
     const cls = classify(path);
     const budget = baseline.budgets[cls];
     
@@ -218,7 +151,7 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
       } else if (lines > oversize[path]) {
         violations.push(`${path}: grew from ${oversize[path]} to ${lines} lines`);
       }
-      if (cls === 'production' && inlineTestModules > 0 && !(path in pinned)) {
+      if (cls === 'production' && inlineTestModules > 0) {
         violations.push(`${path}: oversize file keeps ${inlineTestModules} inline test module(s); move them into child files (R1)`);
       }
     }
@@ -227,19 +160,6 @@ export function evaluateStructure({ files, baseline, digests = new Map() }) {
       if (!root_rust_files.includes(path)) {
         violations.push(`${path}: new root source file`);
       }
-    }
-
-    if (outboundShimUses > 0 && !(path in pinned)) {
-      violations.push(`${path}: uses crate::outbound; write crate::xmpp::outbound (the S4 shim stays only for pinned files)`);
-    }
-  }
-
-  for (const [path, digest] of Object.entries(baseline.pinned || {})) {
-    const current = digests.get(path);
-    if (typeof current !== 'string') {
-      violations.push(`${path}: pinned file is missing`);
-    } else if (current !== digest) {
-      violations.push(`${path}: content changed, but Stage 4 evidence pins its SHA-256 (R5)`);
     }
   }
 
@@ -407,14 +327,13 @@ if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
     process.exit(1);
   }
 
-  const digests = digestPinned(root, baseline.pinned);
-  const { violations, notices } = evaluateStructure({ files, baseline, digests });
+  const { violations, notices } = evaluateStructure({ files, baseline });
   violations.push(...validateRoleSplits({ root }));
 
   if (violations.length > 0) {
     for (const v of violations) console.error(`error: ${v}`);
     for (const n of notices) console.error(`notice: ${n}`);
-    console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files, ${digests.size} pinned.`);
+    console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files.`);
     process.exit(1);
   }
 
@@ -427,15 +346,12 @@ if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
         oversize: newBaseline.oversize,
         root_rust_files: newBaseline.root_rust_files
       };
-      if (newBaseline.pinned !== undefined) {
-        sortedBaseline.pinned = newBaseline.pinned;
-      }
       fs.writeFileSync(baselinePath, JSON.stringify(sortedBaseline, null, 2) + '\n');
     }
     process.exit(0);
   }
 
   for (const n of notices) console.error(`notice: ${n}`);
-  console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files, ${digests.size} pinned.`);
+  console.log(`Scanned ${files.length} files, ${Object.keys(baseline.oversize || {}).length} oversize, ${baseline.root_rust_files?.length || 0} root files.`);
   process.exit(0);
 }

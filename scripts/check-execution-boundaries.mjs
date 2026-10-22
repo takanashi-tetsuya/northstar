@@ -1013,7 +1013,7 @@ export function verifyBoshSelectionObservations({ boshResponse }) {
     ['SelectionReadStatus', 'enum', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
       'Complete,Incomplete{omitted_items:usize,missing_auth_associations:usize,connection_changed:bool}'],
     ['SelectedItemSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pub(super)ordinal:usize,pub(super)source:Option<crate::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<crate::xmpp::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<crate::xmpp::auth_publication::ControlJoins>'],
+      'pub(super)ordinal:usize,pub(super)source:Option<crate::xmpp::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<crate::xmpp::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<crate::xmpp::auth_publication::ControlJoins>'],
     ['SelectionSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
       'pub(super)session:uuid::Uuid,pub(super)rid:u64,pub(super)fingerprint:[u8;32],pub(super)first_validated_connection:Option<uuid::Uuid>,pub(super)validated_connection:Option<uuid::Uuid>,pub(super)selected_count:usize,pub(super)status:SelectionReadStatus,pub(super)items:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
     ['SelectedItemRead', 'struct', '', '',

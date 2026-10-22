@@ -287,14 +287,18 @@ mod tests {
         ]);
         let mut process = ManagedProcess::spawn("process-group-test", command).unwrap();
         let child_pid_path = process.temp_path().join("child.pid");
+        // The shell creates the file before printf writes the PID, so wait for a parsable PID.
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !child_pid_path.exists() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        let child_pid = fs::read_to_string(&child_pid_path)
-            .unwrap()
-            .parse::<i32>()
-            .unwrap();
+        let child_pid = loop {
+            let pid = fs::read_to_string(&child_pid_path)
+                .ok()
+                .and_then(|text| text.parse::<i32>().ok());
+            match pid {
+                Some(pid) => break pid,
+                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                None => panic!("the child PID was not written within 2 s"),
+            }
+        };
 
         process.stop(Duration::from_secs(1)).unwrap();
         process

@@ -4,7 +4,6 @@ WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 COPY crates ./crates
-COPY services ./services
 COPY tools ./tools
 COPY src ./src
 COPY migrations ./migrations

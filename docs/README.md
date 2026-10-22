@@ -45,10 +45,9 @@ to it instead of restating it.
 | --- | --- |
 | `src/` | Main Rust server, in the layer directories of the [engineering structure](architecture/engineering-structure.zh-TW.md) |
 | `crates/` | Shared workspace libraries and protocol modules |
-| `services/` | Experimental service processes |
 | `web/` | Browser client, administration UI and translations |
 | `migrations/` | Versioned PostgreSQL migrations |
-| `contracts/`, `catalog/` | Protocol contracts, service definitions and data policies |
+| `catalog/` | Machine-readable catalogs: crates, data ownership, source budgets and layers, runtime experiments, topics, key classes and restore order |
 | `deploy/` | Containers, Compose overlays, proxy and monitoring configuration |
 | `scripts/` | Development, operations and validation scripts; see [the script guide](../scripts/README.md) |
 | `tools/` | Rust validation and administration tools |

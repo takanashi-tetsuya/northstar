@@ -1,8 +1,7 @@
 # Runtime ownership and experiment map
 
 Start with `catalog/runtime-experiments.json` when localizing a problem. It
-indexes the supported in-process runtime, not the service prototypes in
-`catalog/services.yaml`. Sixteen families account for all 71 identities from
+indexes the supported in-process runtime. Sixteen families account for all 71 identities from
 the already-validated production inventory: 27 role-qualified workers, two
 health observers, nine top-level tasks and 33 AppState service accessors.
 

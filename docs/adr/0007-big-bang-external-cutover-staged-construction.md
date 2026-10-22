@@ -43,5 +43,7 @@ This staged model balances continuity and safety.
 
 ## Status
 
-Accepted.
+Superseded on 2026-10-22 by the [target architecture](../architecture/target-architecture.zh-TW.md).
+The microservice prototype this decision governed was removed in S16 (WP-161); the record is kept
+for history.
 

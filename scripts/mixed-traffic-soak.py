@@ -150,8 +150,8 @@ def source_identity():
         raise
     except (OSError, subprocess.SubprocessError):
         commit = None
-    roots = ('src', 'crates', 'services', 'migrations', 'scripts', 'tests', 'web',
-             'contracts', 'catalog', 'tools', 'third_party', '.github')
+    roots = ('src', 'crates', 'migrations', 'scripts', 'tests', 'web',
+             'catalog', 'tools', 'third_party', '.github')
     excluded = {'.git', 'target', 'node_modules', '__pycache__', '.pytest_cache'}
     paths = []
     for name in roots:

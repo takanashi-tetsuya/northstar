@@ -3,8 +3,7 @@
 Northstar can run two independent processes from the same binary and source
 revision. This is the first supported implementation step toward smaller
 servers for a single maintainer. PostgreSQL remains the common schema and
-transaction authority. The `services/*` distributed prototypes are separate
-from this deployment and remain prototypes.
+transaction authority.
 
 ## Process ownership
 

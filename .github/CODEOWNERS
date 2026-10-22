@@ -7,14 +7,8 @@
 /Cargo.lock                           @takanashi-tetsuya
 /.github/**                           @takanashi-tetsuya
 /deploy/**                            @takanashi-tetsuya
-/buf*.yml                             @takanashi-tetsuya
 /Dockerfile*                           @takanashi-tetsuya
 /docker-compose*.yml                  @takanashi-tetsuya
-
-# Contracts and protocol authority
-/src/proto/**                         @takanashi-tetsuya
-/contracts/**                         @takanashi-tetsuya
-/crates/foundation-contracts/**        @takanashi-tetsuya
 
 # Security, auth, identity and session boundaries
 /src/auth.rs                          @takanashi-tetsuya
@@ -31,8 +25,7 @@
 /src/api/**                           @takanashi-tetsuya
 /src/xmpp/**                          @takanashi-tetsuya
 
-# Microservice service crates
-/services/**                          @takanashi-tetsuya
+# Workspace crates
 /crates/**                            @takanashi-tetsuya
 
 # Documentation boundaries

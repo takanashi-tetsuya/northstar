@@ -126,30 +126,6 @@
         "pin-project-lite"
       ],
       [
-        "async-stream",
-        "async-stream-impl"
-      ],
-      [
-        "async-stream",
-        "futures-core"
-      ],
-      [
-        "async-stream",
-        "pin-project-lite"
-      ],
-      [
-        "async-stream-impl",
-        "proc-macro2"
-      ],
-      [
-        "async-stream-impl",
-        "quote"
-      ],
-      [
-        "async-stream-impl",
-        "syn"
-      ],
-      [
         "async-trait",
         "proc-macro2"
       ],
@@ -196,10 +172,6 @@
       [
         "aws-lc-sys",
         "pkg-config"
-      ],
-      [
-        "axum",
-        "async-trait"
       ],
       [
         "axum",
@@ -271,14 +243,6 @@
       ],
       [
         "axum",
-        "rustversion"
-      ],
-      [
-        "axum",
-        "serde"
-      ],
-      [
-        "axum",
         "serde_core"
       ],
       [
@@ -327,19 +291,11 @@
       ],
       [
         "axum-core",
-        "async-trait"
-      ],
-      [
-        "axum-core",
         "bytes"
       ],
       [
         "axum-core",
         "futures-core"
-      ],
-      [
-        "axum-core",
-        "futures-util"
       ],
       [
         "axum-core",
@@ -360,10 +316,6 @@
       [
         "axum-core",
         "pin-project-lite"
-      ],
-      [
-        "axum-core",
-        "rustversion"
       ],
       [
         "axum-core",
@@ -424,18 +376,6 @@
       [
         "block-buffer",
         "hybrid-array"
-      ],
-      [
-        "catalog-validator",
-        "serde"
-      ],
-      [
-        "catalog-validator",
-        "serde-saphyr"
-      ],
-      [
-        "catalog-validator",
-        "serde_json"
       ],
       [
         "cc",
@@ -590,34 +530,6 @@
         "parking_lot_core"
       ],
       [
-        "data-split-migrator",
-        "foundation-security"
-      ],
-      [
-        "data-split-migrator",
-        "serde"
-      ],
-      [
-        "data-split-migrator",
-        "serde_json"
-      ],
-      [
-        "data-split-migrator",
-        "thiserror"
-      ],
-      [
-        "data-split-migrator",
-        "tokio"
-      ],
-      [
-        "data-split-migrator",
-        "tracing"
-      ],
-      [
-        "data-split-migrator",
-        "uuid"
-      ],
-      [
         "db-bootstrap",
         "serde"
       ],
@@ -766,50 +678,6 @@
         "percent-encoding"
       ],
       [
-        "foundation-contracts",
-        "chrono"
-      ],
-      [
-        "foundation-contracts",
-        "foundation-eventing"
-      ],
-      [
-        "foundation-contracts",
-        "foundation-security"
-      ],
-      [
-        "foundation-contracts",
-        "foundation-telemetry"
-      ],
-      [
-        "foundation-contracts",
-        "prost"
-      ],
-      [
-        "foundation-contracts",
-        "prost-types"
-      ],
-      [
-        "foundation-contracts",
-        "serde"
-      ],
-      [
-        "foundation-contracts",
-        "serde_json"
-      ],
-      [
-        "foundation-contracts",
-        "thiserror"
-      ],
-      [
-        "foundation-contracts",
-        "tonic"
-      ],
-      [
-        "foundation-contracts",
-        "uuid"
-      ],
-      [
         "foundation-db-test",
         "serde"
       ],
@@ -880,66 +748,6 @@
       [
         "foundation-postgres",
         "tokio"
-      ],
-      [
-        "foundation-security",
-        "chrono"
-      ],
-      [
-        "foundation-security",
-        "ring"
-      ],
-      [
-        "foundation-security",
-        "serde"
-      ],
-      [
-        "foundation-security",
-        "sha2"
-      ],
-      [
-        "foundation-security",
-        "zeroize"
-      ],
-      [
-        "foundation-service-runtime",
-        "foundation-security"
-      ],
-      [
-        "foundation-service-runtime",
-        "serde"
-      ],
-      [
-        "foundation-service-runtime",
-        "serde_json"
-      ],
-      [
-        "foundation-service-runtime",
-        "thiserror"
-      ],
-      [
-        "foundation-service-runtime",
-        "tokio"
-      ],
-      [
-        "foundation-service-runtime",
-        "tonic"
-      ],
-      [
-        "foundation-service-runtime",
-        "tracing"
-      ],
-      [
-        "foundation-telemetry",
-        "serde"
-      ],
-      [
-        "foundation-telemetry",
-        "thiserror"
-      ],
-      [
-        "foundation-telemetry",
-        "tracing"
       ],
       [
         "futures",
@@ -1530,26 +1338,6 @@
         "tower-service"
       ],
       [
-        "hyper-timeout",
-        "hyper"
-      ],
-      [
-        "hyper-timeout",
-        "hyper-util"
-      ],
-      [
-        "hyper-timeout",
-        "pin-project-lite"
-      ],
-      [
-        "hyper-timeout",
-        "tokio"
-      ],
-      [
-        "hyper-timeout",
-        "tower-service"
-      ],
-      [
         "hyper-util",
         "base64"
       ],
@@ -1780,10 +1568,6 @@
       [
         "idna_adapter",
         "icu_properties"
-      ],
-      [
-        "indexmap",
-        "autocfg"
       ],
       [
         "indexmap",
@@ -3198,22 +2982,6 @@
         "base64ct"
       ],
       [
-        "pin-project",
-        "pin-project-internal"
-      ],
-      [
-        "pin-project-internal",
-        "proc-macro2"
-      ],
-      [
-        "pin-project-internal",
-        "quote"
-      ],
-      [
-        "pin-project-internal",
-        "syn"
-      ],
-      [
         "pkcs1",
         "der"
       ],
@@ -3296,38 +3064,6 @@
       [
         "proc-macro2",
         "unicode-ident"
-      ],
-      [
-        "prost",
-        "bytes"
-      ],
-      [
-        "prost",
-        "prost-derive"
-      ],
-      [
-        "prost-derive",
-        "anyhow"
-      ],
-      [
-        "prost-derive",
-        "itertools"
-      ],
-      [
-        "prost-derive",
-        "proc-macro2"
-      ],
-      [
-        "prost-derive",
-        "quote"
-      ],
-      [
-        "prost-derive",
-        "syn"
-      ],
-      [
-        "prost-types",
-        "prost"
       ],
       [
         "quick-xml",
@@ -4478,750 +4214,6 @@
         "serde"
       ],
       [
-        "service-admin-orchestrator",
-        "chrono"
-      ],
-      [
-        "service-admin-orchestrator",
-        "foundation-contracts"
-      ],
-      [
-        "service-admin-orchestrator",
-        "foundation-eventing"
-      ],
-      [
-        "service-admin-orchestrator",
-        "foundation-security"
-      ],
-      [
-        "service-admin-orchestrator",
-        "foundation-telemetry"
-      ],
-      [
-        "service-admin-orchestrator",
-        "serde"
-      ],
-      [
-        "service-admin-orchestrator",
-        "serde_json"
-      ],
-      [
-        "service-admin-orchestrator",
-        "thiserror"
-      ],
-      [
-        "service-admin-orchestrator",
-        "tokio"
-      ],
-      [
-        "service-admin-orchestrator",
-        "tracing"
-      ],
-      [
-        "service-admin-orchestrator",
-        "uuid"
-      ],
-      [
-        "service-delivery-router",
-        "chrono"
-      ],
-      [
-        "service-delivery-router",
-        "foundation-contracts"
-      ],
-      [
-        "service-delivery-router",
-        "foundation-eventing"
-      ],
-      [
-        "service-delivery-router",
-        "foundation-security"
-      ],
-      [
-        "service-delivery-router",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-delivery-router",
-        "foundation-telemetry"
-      ],
-      [
-        "service-delivery-router",
-        "serde"
-      ],
-      [
-        "service-delivery-router",
-        "serde_json"
-      ],
-      [
-        "service-delivery-router",
-        "thiserror"
-      ],
-      [
-        "service-delivery-router",
-        "tokio"
-      ],
-      [
-        "service-delivery-router",
-        "tracing"
-      ],
-      [
-        "service-delivery-router",
-        "uuid"
-      ],
-      [
-        "service-federation-outbox",
-        "chrono"
-      ],
-      [
-        "service-federation-outbox",
-        "foundation-contracts"
-      ],
-      [
-        "service-federation-outbox",
-        "foundation-eventing"
-      ],
-      [
-        "service-federation-outbox",
-        "foundation-security"
-      ],
-      [
-        "service-federation-outbox",
-        "foundation-telemetry"
-      ],
-      [
-        "service-federation-outbox",
-        "serde"
-      ],
-      [
-        "service-federation-outbox",
-        "serde_json"
-      ],
-      [
-        "service-federation-outbox",
-        "thiserror"
-      ],
-      [
-        "service-federation-outbox",
-        "tokio"
-      ],
-      [
-        "service-federation-outbox",
-        "tracing"
-      ],
-      [
-        "service-federation-outbox",
-        "uuid"
-      ],
-      [
-        "service-identity",
-        "anyhow"
-      ],
-      [
-        "service-identity",
-        "base64"
-      ],
-      [
-        "service-identity",
-        "chrono"
-      ],
-      [
-        "service-identity",
-        "foundation-contracts"
-      ],
-      [
-        "service-identity",
-        "foundation-eventing"
-      ],
-      [
-        "service-identity",
-        "foundation-security"
-      ],
-      [
-        "service-identity",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-identity",
-        "foundation-telemetry"
-      ],
-      [
-        "service-identity",
-        "hmac"
-      ],
-      [
-        "service-identity",
-        "northstar-auth-core"
-      ],
-      [
-        "service-identity",
-        "northstar-xmpp-types"
-      ],
-      [
-        "service-identity",
-        "pbkdf2"
-      ],
-      [
-        "service-identity",
-        "serde"
-      ],
-      [
-        "service-identity",
-        "serde_json"
-      ],
-      [
-        "service-identity",
-        "sha2"
-      ],
-      [
-        "service-identity",
-        "thiserror"
-      ],
-      [
-        "service-identity",
-        "tokio"
-      ],
-      [
-        "service-identity",
-        "tracing"
-      ],
-      [
-        "service-identity",
-        "uuid"
-      ],
-      [
-        "service-message-ingress",
-        "chrono"
-      ],
-      [
-        "service-message-ingress",
-        "foundation-contracts"
-      ],
-      [
-        "service-message-ingress",
-        "foundation-eventing"
-      ],
-      [
-        "service-message-ingress",
-        "foundation-security"
-      ],
-      [
-        "service-message-ingress",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-message-ingress",
-        "foundation-telemetry"
-      ],
-      [
-        "service-message-ingress",
-        "northstar-xmpp-types"
-      ],
-      [
-        "service-message-ingress",
-        "serde"
-      ],
-      [
-        "service-message-ingress",
-        "serde_json"
-      ],
-      [
-        "service-message-ingress",
-        "sha2"
-      ],
-      [
-        "service-message-ingress",
-        "thiserror"
-      ],
-      [
-        "service-message-ingress",
-        "tokio"
-      ],
-      [
-        "service-message-ingress",
-        "tracing"
-      ],
-      [
-        "service-message-ingress",
-        "uuid"
-      ],
-      [
-        "service-protocol-registry",
-        "chrono"
-      ],
-      [
-        "service-protocol-registry",
-        "foundation-contracts"
-      ],
-      [
-        "service-protocol-registry",
-        "foundation-security"
-      ],
-      [
-        "service-protocol-registry",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-protocol-registry",
-        "foundation-telemetry"
-      ],
-      [
-        "service-protocol-registry",
-        "serde"
-      ],
-      [
-        "service-protocol-registry",
-        "serde_json"
-      ],
-      [
-        "service-protocol-registry",
-        "sha2"
-      ],
-      [
-        "service-protocol-registry",
-        "thiserror"
-      ],
-      [
-        "service-protocol-registry",
-        "tokio"
-      ],
-      [
-        "service-protocol-registry",
-        "tracing"
-      ],
-      [
-        "service-roster-authority",
-        "foundation-contracts"
-      ],
-      [
-        "service-roster-authority",
-        "foundation-eventing"
-      ],
-      [
-        "service-roster-authority",
-        "foundation-security"
-      ],
-      [
-        "service-roster-authority",
-        "foundation-telemetry"
-      ],
-      [
-        "service-roster-authority",
-        "northstar-roster-core"
-      ],
-      [
-        "service-roster-authority",
-        "serde"
-      ],
-      [
-        "service-roster-authority",
-        "serde_json"
-      ],
-      [
-        "service-roster-authority",
-        "thiserror"
-      ],
-      [
-        "service-roster-authority",
-        "tokio"
-      ],
-      [
-        "service-roster-authority",
-        "tracing"
-      ],
-      [
-        "service-roster-authority",
-        "uuid"
-      ],
-      [
-        "service-s2s-edge",
-        "foundation-contracts"
-      ],
-      [
-        "service-s2s-edge",
-        "foundation-security"
-      ],
-      [
-        "service-s2s-edge",
-        "foundation-telemetry"
-      ],
-      [
-        "service-s2s-edge",
-        "northstar-federation-core"
-      ],
-      [
-        "service-s2s-edge",
-        "northstar-xml-builder"
-      ],
-      [
-        "service-s2s-edge",
-        "northstar-xml-framing"
-      ],
-      [
-        "service-s2s-edge",
-        "serde"
-      ],
-      [
-        "service-s2s-edge",
-        "serde_json"
-      ],
-      [
-        "service-s2s-edge",
-        "thiserror"
-      ],
-      [
-        "service-s2s-edge",
-        "tokio"
-      ],
-      [
-        "service-s2s-edge",
-        "tracing"
-      ],
-      [
-        "service-s2s-edge",
-        "uuid"
-      ],
-      [
-        "service-session-directory",
-        "chrono"
-      ],
-      [
-        "service-session-directory",
-        "foundation-contracts"
-      ],
-      [
-        "service-session-directory",
-        "foundation-eventing"
-      ],
-      [
-        "service-session-directory",
-        "foundation-security"
-      ],
-      [
-        "service-session-directory",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-session-directory",
-        "foundation-telemetry"
-      ],
-      [
-        "service-session-directory",
-        "serde"
-      ],
-      [
-        "service-session-directory",
-        "serde_json"
-      ],
-      [
-        "service-session-directory",
-        "thiserror"
-      ],
-      [
-        "service-session-directory",
-        "tokio"
-      ],
-      [
-        "service-session-directory",
-        "tracing"
-      ],
-      [
-        "service-session-directory",
-        "uuid"
-      ],
-      [
-        "service-xep-0045-muc",
-        "chrono"
-      ],
-      [
-        "service-xep-0045-muc",
-        "foundation-contracts"
-      ],
-      [
-        "service-xep-0045-muc",
-        "foundation-eventing"
-      ],
-      [
-        "service-xep-0045-muc",
-        "foundation-security"
-      ],
-      [
-        "service-xep-0045-muc",
-        "foundation-telemetry"
-      ],
-      [
-        "service-xep-0045-muc",
-        "northstar-room-core"
-      ],
-      [
-        "service-xep-0045-muc",
-        "serde"
-      ],
-      [
-        "service-xep-0045-muc",
-        "serde_json"
-      ],
-      [
-        "service-xep-0045-muc",
-        "thiserror"
-      ],
-      [
-        "service-xep-0045-muc",
-        "tokio"
-      ],
-      [
-        "service-xep-0045-muc",
-        "tracing"
-      ],
-      [
-        "service-xep-0045-muc",
-        "uuid"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "chrono"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "foundation-contracts"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "foundation-eventing"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "foundation-security"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "foundation-telemetry"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "northstar-pubsub-core"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "serde"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "serde_json"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "thiserror"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "tokio"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "tracing"
-      ],
-      [
-        "service-xep-0060-pubsub",
-        "uuid"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "foundation-contracts"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "foundation-eventing"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "foundation-security"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "foundation-telemetry"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "northstar-xep-0191"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "serde"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "serde_json"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "thiserror"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "tokio"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "tracing"
-      ],
-      [
-        "service-xep-0191-blocking",
-        "uuid"
-      ],
-      [
-        "service-xep-0313-mam",
-        "chrono"
-      ],
-      [
-        "service-xep-0313-mam",
-        "foundation-contracts"
-      ],
-      [
-        "service-xep-0313-mam",
-        "foundation-eventing"
-      ],
-      [
-        "service-xep-0313-mam",
-        "foundation-security"
-      ],
-      [
-        "service-xep-0313-mam",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-xep-0313-mam",
-        "foundation-telemetry"
-      ],
-      [
-        "service-xep-0313-mam",
-        "northstar-xmpp-types"
-      ],
-      [
-        "service-xep-0313-mam",
-        "serde"
-      ],
-      [
-        "service-xep-0313-mam",
-        "serde_json"
-      ],
-      [
-        "service-xep-0313-mam",
-        "thiserror"
-      ],
-      [
-        "service-xep-0313-mam",
-        "tokio"
-      ],
-      [
-        "service-xep-0313-mam",
-        "tracing"
-      ],
-      [
-        "service-xep-0313-mam",
-        "uuid"
-      ],
-      [
-        "service-xep-0363-upload",
-        "chrono"
-      ],
-      [
-        "service-xep-0363-upload",
-        "foundation-contracts"
-      ],
-      [
-        "service-xep-0363-upload",
-        "foundation-eventing"
-      ],
-      [
-        "service-xep-0363-upload",
-        "foundation-security"
-      ],
-      [
-        "service-xep-0363-upload",
-        "foundation-telemetry"
-      ],
-      [
-        "service-xep-0363-upload",
-        "northstar-upload-core"
-      ],
-      [
-        "service-xep-0363-upload",
-        "serde"
-      ],
-      [
-        "service-xep-0363-upload",
-        "serde_json"
-      ],
-      [
-        "service-xep-0363-upload",
-        "sha2"
-      ],
-      [
-        "service-xep-0363-upload",
-        "thiserror"
-      ],
-      [
-        "service-xep-0363-upload",
-        "tokio"
-      ],
-      [
-        "service-xep-0363-upload",
-        "tracing"
-      ],
-      [
-        "service-xep-0363-upload",
-        "uuid"
-      ],
-      [
-        "service-xmpp-edge",
-        "foundation-contracts"
-      ],
-      [
-        "service-xmpp-edge",
-        "foundation-security"
-      ],
-      [
-        "service-xmpp-edge",
-        "foundation-service-runtime"
-      ],
-      [
-        "service-xmpp-edge",
-        "foundation-telemetry"
-      ],
-      [
-        "service-xmpp-edge",
-        "northstar-xml-builder"
-      ],
-      [
-        "service-xmpp-edge",
-        "northstar-xml-framing"
-      ],
-      [
-        "service-xmpp-edge",
-        "serde"
-      ],
-      [
-        "service-xmpp-edge",
-        "serde_json"
-      ],
-      [
-        "service-xmpp-edge",
-        "thiserror"
-      ],
-      [
-        "service-xmpp-edge",
-        "tokio"
-      ],
-      [
-        "service-xmpp-edge",
-        "tracing"
-      ],
-      [
-        "service-xmpp-edge",
-        "uuid"
-      ],
-      [
         "sha1",
         "cfg-if"
       ],
@@ -6102,94 +5094,6 @@
         "tokio"
       ],
       [
-        "tonic",
-        "async-stream"
-      ],
-      [
-        "tonic",
-        "async-trait"
-      ],
-      [
-        "tonic",
-        "axum"
-      ],
-      [
-        "tonic",
-        "base64"
-      ],
-      [
-        "tonic",
-        "bytes"
-      ],
-      [
-        "tonic",
-        "h2"
-      ],
-      [
-        "tonic",
-        "http"
-      ],
-      [
-        "tonic",
-        "http-body"
-      ],
-      [
-        "tonic",
-        "http-body-util"
-      ],
-      [
-        "tonic",
-        "hyper"
-      ],
-      [
-        "tonic",
-        "hyper-timeout"
-      ],
-      [
-        "tonic",
-        "hyper-util"
-      ],
-      [
-        "tonic",
-        "percent-encoding"
-      ],
-      [
-        "tonic",
-        "pin-project"
-      ],
-      [
-        "tonic",
-        "prost"
-      ],
-      [
-        "tonic",
-        "socket2"
-      ],
-      [
-        "tonic",
-        "tokio"
-      ],
-      [
-        "tonic",
-        "tokio-stream"
-      ],
-      [
-        "tonic",
-        "tower"
-      ],
-      [
-        "tonic",
-        "tower-layer"
-      ],
-      [
-        "tonic",
-        "tower-service"
-      ],
-      [
-        "tonic",
-        "tracing"
-      ],
-      [
         "tower",
         "futures-core"
       ],
@@ -6199,23 +5103,7 @@
       ],
       [
         "tower",
-        "indexmap"
-      ],
-      [
-        "tower",
-        "pin-project"
-      ],
-      [
-        "tower",
         "pin-project-lite"
-      ],
-      [
-        "tower",
-        "rand"
-      ],
-      [
-        "tower",
-        "slab"
       ],
       [
         "tower",
@@ -6224,10 +5112,6 @@
       [
         "tower",
         "tokio"
-      ],
-      [
-        "tower",
-        "tokio-util"
       ],
       [
         "tower",
@@ -7059,8 +5943,6 @@
       "asn1-rs-derive",
       "asn1-rs-impl",
       "async-lock",
-      "async-stream",
-      "async-stream-impl",
       "async-trait",
       "atoi",
       "atomic-waker",
@@ -7079,7 +5961,6 @@
       "bumpalo",
       "byteorder",
       "bytes",
-      "catalog-validator",
       "cc",
       "cfg-if",
       "cfg_aliases",
@@ -7103,7 +5984,6 @@
       "crypto-common",
       "dashmap",
       "data-encoding",
-      "data-split-migrator",
       "db-bootstrap",
       "der",
       "der-parser",
@@ -7128,15 +6008,11 @@
       "foreign-types",
       "foreign-types-shared",
       "form_urlencoded",
-      "foundation-contracts",
       "foundation-db-test",
       "foundation-eventing",
       "foundation-eventing-postgres",
       "foundation-kms",
       "foundation-postgres",
-      "foundation-security",
-      "foundation-service-runtime",
-      "foundation-telemetry",
       "fs_extra",
       "futures",
       "futures-channel",
@@ -7173,7 +6049,6 @@
       "hybrid-array",
       "hyper",
       "hyper-rustls",
-      "hyper-timeout",
       "hyper-util",
       "iana-time-zone",
       "iana-time-zone-haiku",
@@ -7295,8 +6170,6 @@
       "pbkdf2",
       "pem-rfc7468",
       "percent-encoding",
-      "pin-project",
-      "pin-project-internal",
       "pin-project-lite",
       "pkcs1",
       "pkcs8",
@@ -7311,9 +6184,6 @@
       "precis-tools",
       "prefix-trie",
       "proc-macro2",
-      "prost",
-      "prost-derive",
-      "prost-types",
       "quick-xml",
       "quinn",
       "quinn-proto",
@@ -7362,21 +6232,6 @@
       "serde_json",
       "serde_path_to_error",
       "serde_urlencoded",
-      "service-admin-orchestrator",
-      "service-delivery-router",
-      "service-federation-outbox",
-      "service-identity",
-      "service-message-ingress",
-      "service-protocol-registry",
-      "service-roster-authority",
-      "service-s2s-edge",
-      "service-session-directory",
-      "service-xep-0045-muc",
-      "service-xep-0060-pubsub",
-      "service-xep-0191-blocking",
-      "service-xep-0313-mam",
-      "service-xep-0363-upload",
-      "service-xmpp-edge",
       "sha1",
       "sha1_smol",
       "sha2",
@@ -7423,7 +6278,6 @@
       "tokio-stream",
       "tokio-tungstenite",
       "tokio-util",
-      "tonic",
       "tower",
       "tower-http",
       "tower-layer",
@@ -7879,160 +6733,6 @@
       "xep-0363-upload",
       "xep-0369-mix-core",
       "xep-0484-fast"
-    ]
-  },
-  "runtime": {
-    "edges": [
-      [
-        "identity",
-        "identity-authority"
-      ],
-      [
-        "message-ingress",
-        "messaging-authority"
-      ],
-      [
-        "presence-authority",
-        "communication-policy-authority"
-      ],
-      [
-        "protocol-registry",
-        "protocol-registry"
-      ],
-      [
-        "roster-authority",
-        "communication-policy-authority"
-      ],
-      [
-        "session-directory",
-        "session-authority"
-      ],
-      [
-        "xep-0016-privacy",
-        "communication-policy-authority"
-      ],
-      [
-        "xep-0045-muc",
-        "muc-authority"
-      ],
-      [
-        "xep-0049-private-storage",
-        "profile-authority"
-      ],
-      [
-        "xep-0050-ad-hoc-commands",
-        "admin-control-plane"
-      ],
-      [
-        "xep-0054-vcard-temp",
-        "profile-authority"
-      ],
-      [
-        "xep-0060-pubsub",
-        "pubsub-authority"
-      ],
-      [
-        "xep-0092-version",
-        "xmpp-edge"
-      ],
-      [
-        "xep-0191-blocking",
-        "communication-policy-authority"
-      ],
-      [
-        "xep-0198-sm",
-        "session-authority"
-      ],
-      [
-        "xep-0199-ping",
-        "xmpp-edge"
-      ],
-      [
-        "xep-0202-entity-time",
-        "xmpp-edge"
-      ],
-      [
-        "xep-0215-extdisco",
-        "protocol-registry"
-      ],
-      [
-        "xep-0280-carbons",
-        "messaging-authority"
-      ],
-      [
-        "xep-0313-mam",
-        "mam-authority"
-      ],
-      [
-        "xep-0352-csi",
-        "edge-gateway"
-      ],
-      [
-        "xep-0357-push",
-        "push-worker"
-      ],
-      [
-        "xep-0363-upload",
-        "upload-authority"
-      ],
-      [
-        "xep-0369-mix-core",
-        "mix-authority"
-      ],
-      [
-        "xep-0484-fast",
-        "identity-authority"
-      ],
-      [
-        "xmpp-edge",
-        "edge-gateway"
-      ]
-    ],
-    "name": "runtime",
-    "nodes": [
-      "admin-control-plane",
-      "communication-policy-authority",
-      "control-plane",
-      "edge-gateway",
-      "identity",
-      "identity-authority",
-      "local-sdk",
-      "mam-authority",
-      "message-ingress",
-      "messaging-authority",
-      "mix-authority",
-      "muc-authority",
-      "presence-authority",
-      "profile-authority",
-      "protocol-registry",
-      "pubsub-authority",
-      "push-worker",
-      "remote-authority",
-      "roster-authority",
-      "session-authority",
-      "session-directory",
-      "transport",
-      "upload-authority",
-      "xep-0016-privacy",
-      "xep-0045-muc",
-      "xep-0049-private-storage",
-      "xep-0050-ad-hoc-commands",
-      "xep-0054-vcard-temp",
-      "xep-0060-pubsub",
-      "xep-0092-version",
-      "xep-0191-blocking",
-      "xep-0198-sm",
-      "xep-0199-ping",
-      "xep-0202-entity-time",
-      "xep-0215-extdisco",
-      "xep-0280-carbons",
-      "xep-0313-mam",
-      "xep-0352-csi",
-      "xep-0357-push",
-      "xep-0363-upload",
-      "xep-0369-mix-core",
-      "xep-0484-fast",
-      "xmpp-edge"
     ]
   }
 }

@@ -85,8 +85,7 @@ authorities.
 
 The same executable supports the following explicit startup compositions. See
 [Subserver deployment](SUBSERVERS.md) for the supported one-host deployment and
-its Compose overlay. These are independent OS processes; domain services under
-`services/` remain prototypes unless their own support matrix says otherwise.
+its Compose overlay. These are independent OS processes of the same binary.
 
 | Command | Owns | Inputs and secret authority | Excluded capability |
 | --- | --- | --- | --- |

@@ -46,7 +46,7 @@
 | Cluster／worker／retention／shutdown | 已注冊 supervisor、lease、readiness、角色邊界 | 連結目前受 gate 約束的 top-level tasks 與 workers；標記外部 Redis 實驗層級 |
 | Backup／restore／security controls | 既有工具與獨立身份／受控恢復 | 索引既有證據與操作邊界，不宣稱本轮重做災難復原或安全稽核 |
 
-上述索引描述目前支援的 runtime；不混入 `catalog/services.yaml` 中的微服務 prototype 作為已部署架構。
+上述索引描述目前支援的 runtime；不混入微服務 prototype（已於 S16 刪除）作為已部署架構。
 
 ## 四、必須改動的邊界
 

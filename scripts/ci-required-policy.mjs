@@ -3,7 +3,7 @@
 export const REQUIRED_CHECK_NAME = 'CI required';
 export const ALWAYS_REQUIRED = [
   'rust-fmt', 'rust-check', 'rust-test', 'rust-clippy', 'rust-build',
-  'rust-quality', 'contracts-quality', 'contracts-compatibility',
+  'rust-quality',
   'dependency-audit', 'dependency-policy', 'web-static', 'container-build',
   'database-role-boundary', 'protocol-integration', 'stateful-database-integration',
   'mix-integration', 'federation-integration', 'listener-readiness-stress-smoke',

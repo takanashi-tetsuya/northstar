@@ -5,6 +5,9 @@ security-first execution.
 
 ## Canonical ADR List
 
+ADR 0002–0007 governed the removed microservice prototype and are superseded by the
+[target architecture](../architecture/target-architecture.zh-TW.md).
+
 - [ADR 0001 — Modular Monolith as Reference Baseline](0001-modular-monolith-reference-baseline.md)
 - [ADR 0002 — Service Boundaries and XEP Execution Modes](0002-service-boundary-and-xep-execution-modes.md)
 - [ADR 0003 — Database Per Service Logical Ownership](0003-database-per-service-logical-ownership.md)

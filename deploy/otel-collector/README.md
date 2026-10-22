@@ -14,7 +14,6 @@ The deployment must configure:
 - retry with a bounded queue and explicit drop metrics; and
 - separate exporters/credentials per environment.
 
-`foundation-telemetry` defines the service/rpc/event/db/kafka/stanza semantic
-dimensions and rejects user-derived high-cardinality labels. Production
+Telemetry dimensions stay low-cardinality and never carry user-derived labels. Production
 operators must add the backend-specific exporter and pin its image digest in
 the deployment repository.

@@ -40,17 +40,6 @@ enum ResolveDependency {
     Detailed { pkg: String },
 }
 #[derive(Debug, Deserialize)]
-struct RouteCatalog {
-    routes: Vec<Route>,
-}
-#[derive(Debug, Deserialize)]
-struct Route {
-    owner: String,
-    deployment_unit: Option<String>,
-    semantic_owner: Option<String>,
-    execution_mode: Option<String>,
-}
-#[derive(Debug, Deserialize)]
 struct OwnershipCatalog {
     ownership: BTreeMap<String, OwnerGroup>,
 }
@@ -99,7 +88,7 @@ fn main() {
         }
     }
     let mut errors = Vec::new();
-    let (compile, runtime, data, metadata) = build_graphs(&root, &mut errors);
+    let (compile, data, metadata) = build_graphs(&root, &mut errors);
     check_boundaries(&compile, &root, &mut errors);
     check_crate_catalog(&root, &metadata, &mut errors);
     if !errors.is_empty() {
@@ -109,12 +98,16 @@ fn main() {
         std::process::exit(1);
     }
     if write {
-        write_graphs(&root, &compile, &runtime, &data).unwrap_or_else(|error| {
+        write_graphs(&root, &compile, &data).unwrap_or_else(|error| {
             eprintln!("error: cannot write architecture graphs: {error}");
             std::process::exit(1)
         });
     }
-    println!("Architecture validation successful: {} compile-time edges, {} runtime edges, {} data-access edges.", compile.edges.len(), runtime.edges.len(), data.edges.len());
+    println!(
+        "Architecture validation successful: {} compile-time edges, {} data-access edges.",
+        compile.edges.len(),
+        data.edges.len()
+    );
 }
 
 fn usage() -> ! {
@@ -122,7 +115,7 @@ fn usage() -> ! {
     std::process::exit(2)
 }
 
-fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, CargoMetadata) {
+fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, CargoMetadata) {
     let output = Command::new("cargo")
         .args(["metadata", "--format-version", "1"])
         .current_dir(root)
@@ -136,7 +129,6 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, 
             ));
             return (
                 empty("compile-time"),
-                empty("runtime"),
                 empty("data-access"),
                 CargoMetadata {
                     packages: Vec::new(),
@@ -148,7 +140,6 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, 
             errors.push(format!("cannot execute cargo metadata: {error}"));
             return (
                 empty("compile-time"),
-                empty("runtime"),
                 empty("data-access"),
                 CargoMetadata {
                     packages: Vec::new(),
@@ -163,7 +154,6 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, 
             errors.push(format!("cargo metadata JSON error: {error}"));
             return (
                 empty("compile-time"),
-                empty("runtime"),
                 empty("data-access"),
                 CargoMetadata {
                     packages: Vec::new(),
@@ -196,24 +186,7 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, 
             }
         }
     }
-    let routes = read_yaml::<RouteCatalog>(root, "catalog/routes.yaml", errors);
     let ownership = read_yaml::<OwnershipCatalog>(root, "catalog/data-ownership.yaml", errors);
-    let mut runtime = empty("runtime");
-    if let Some(routes) = routes {
-        for route in routes.routes {
-            let owner = route.owner;
-            let target = route
-                .deployment_unit
-                .or(route.semantic_owner)
-                .unwrap_or_else(|| owner.clone());
-            runtime.nodes.insert(owner.clone());
-            runtime.nodes.insert(target.clone());
-            runtime.edges.push((owner, target));
-            if let Some(mode) = route.execution_mode {
-                runtime.nodes.insert(mode);
-            }
-        }
-    }
     let mut data = empty("data-access");
     if let Some(ownership) = ownership {
         for (owner, group) in ownership.ownership {
@@ -230,9 +203,8 @@ fn build_graphs(root: &Path, errors: &mut Vec<String>) -> (Graph, Graph, Graph, 
         }
     }
     dedup_edges(&mut compile);
-    dedup_edges(&mut runtime);
     dedup_edges(&mut data);
-    (compile, runtime, data, metadata)
+    (compile, data, metadata)
 }
 
 /// YAML 1.2 booleans only and `<<` as an ordinary key, preserving catalog parsing behavior.
@@ -370,15 +342,10 @@ fn check_crate_catalog(root: &Path, metadata: &CargoMetadata, errors: &mut Vec<S
     }
 }
 
-fn write_graphs(
-    root: &Path,
-    compile: &Graph,
-    runtime: &Graph,
-    data: &Graph,
-) -> std::io::Result<()> {
+fn write_graphs(root: &Path, compile: &Graph, data: &Graph) -> std::io::Result<()> {
     let dir = root.join("docs/architecture/generated");
     fs::create_dir_all(&dir)?;
-    let graphs = [compile, runtime, data];
+    let graphs = [compile, data];
     for graph in graphs {
         let stem = graph.name.as_str();
         fs::write(
@@ -388,8 +355,7 @@ fn write_graphs(
         fs::write(dir.join(format!("{stem}.dot")), dot(graph))?;
         fs::write(dir.join(format!("{stem}.mmd")), mermaid(graph))?;
     }
-    let all =
-        serde_json::json!({ "compile_time": compile, "runtime": runtime, "data_access": data });
+    let all = serde_json::json!({ "compile_time": compile, "data_access": data });
     fs::write(
         dir.join("graphs.json"),
         serde_json::to_string_pretty(&all).unwrap() + "\n",

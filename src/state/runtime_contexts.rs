@@ -72,7 +72,7 @@ impl AppState {
         ReadinessContext {
             connection: self.connection_actors.readiness_probe(),
             sm: self.sm_memory_governor.readiness_probe(),
-            upload: self.upload_safety_gate.readiness_probe(),
+            upload: self.upload.safety_gate.readiness_probe(),
             cluster: self.cluster.readiness_probe(),
             workers: self.workers.readiness_probe(),
             abuse_key_deployment: self.abuse_key_deployment.clone(),
@@ -292,7 +292,8 @@ impl AppState {
     }
 
     pub(crate) fn upload_store(&self) -> &dyn UploadStore {
-        self.upload_store
+        self.upload
+            .store
             .as_deref()
             .expect("upload routes and workers require an enabled or draining runtime")
     }
@@ -384,19 +385,19 @@ impl AppState {
         Some(
             northstar_upload_application::worker::UploadMaintenanceContext::new(
                 northstar_upload_postgres::maintenance::PostgresUploadMaintenanceRepository::new(
-                    self.upload_storage_pool.as_ref()?.clone(),
+                    self.upload.storage_pool.as_ref()?.clone(),
                 ),
-                Arc::clone(self.upload_store.as_ref()?),
+                Arc::clone(self.upload.store.as_ref()?),
                 northstar_upload_application::worker::UploadMaintenancePolicy {
                     max_pending_jobs: self.config.upload_storage_max_pending_jobs,
                     max_retained_files: self.config.upload_storage_max_retained_files,
                     max_retained_bytes: self.config.upload_storage_max_retained_bytes,
                     retention_seconds: self.config.upload_retention_seconds,
-                    namespace_sha256: self.upload_storage_namespace_sha256,
-                    generation: self.upload_authority_generation,
+                    namespace_sha256: self.upload.namespace_sha256,
+                    generation: self.upload.authority_generation,
                 },
-                Arc::clone(&self.upload_safety_gate),
-                Arc::clone(&self.upload_startup_audits),
+                Arc::clone(&self.upload.safety_gate),
+                Arc::clone(&self.upload.startup_audits),
                 Arc::clone(&self.metrics),
             ),
         )

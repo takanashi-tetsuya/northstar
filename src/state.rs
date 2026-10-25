@@ -237,7 +237,7 @@ mod runtime_control;
 mod service_accessors;
 mod suspended_muc;
 mod telemetry_accessors;
-mod upload_runtime;
+mod upload_module;
 
 pub use self::admission_guards::*;
 #[cfg(test)]
@@ -247,7 +247,7 @@ use self::federation_policy::*;
 pub(crate) use self::local_muc::count_shutdown_notification_completions;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
-use self::upload_runtime::*;
+use self::upload_module::*;
 use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use crate::xmpp::local_routes::{
     muc::{
@@ -288,9 +288,8 @@ mod account_revocation_route_tests;
 pub struct AppState {
     config: Config,
     pool: PgPool,
-    /// Upload persistence alone owns this pool. Disabled mode has no storage
-    /// connection; the loopback development exception reuses `pool`.
-    upload_storage_pool: Option<PgPool>,
+    /// The upload context; see [`UploadModule`].
+    upload: UploadModule,
     api_query_context: ApiQueryContext,
     metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
@@ -443,14 +442,6 @@ pub struct AppState {
     governance_context: GovernanceContext,
     report_service:
         crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>,
-    /// XEP-0363 bearer-token and capacity admission authority. Protocol code
-    /// receives typed slot outcomes, never the PostgreSQL pool.
-    upload_service: Option<UploadService>,
-    upload_store: Option<Arc<dyn UploadStore>>,
-    upload_storage_namespace_sha256: [u8; 32],
-    upload_authority_generation: UploadAuthorityGeneration,
-    upload_safety_gate: Arc<UploadSafetyGate>,
-    upload_startup_audits: Arc<northstar_upload_application::worker::StartupAuditHandoff>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -484,9 +475,6 @@ pub struct AppState {
     dialback_verifications: Arc<Semaphore>,
     client_connections: Arc<Semaphore>,
     client_connections_by_ip: DashMap<std::net::IpAddr, usize>,
-    /// Capability-owned upload runtime. Disabled mode contains no store,
-    /// semaphore, per-IP map or upload-specific numeric state.
-    upload_runtime: UploadRuntime,
     /// The unauthenticated OMEMO source completion capability is bounded
     /// independently from the general API and database pool. Keys are trusted-
     /// proxy-resolved IP addresses and expire from the one-minute window.

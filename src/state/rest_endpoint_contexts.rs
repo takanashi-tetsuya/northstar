@@ -122,10 +122,10 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
 impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReadContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         UploadHttpReadContext {
-            service: state.upload_service.clone(),
+            service: state.upload.service.clone(),
             // AppState stores only GuardedUploadStore implementations here.
-            guarded_store: state.upload_store.as_ref().map(Arc::clone),
-            admission: state.upload_runtime.download_admission().cloned(),
+            guarded_store: state.upload.store.as_ref().map(Arc::clone),
+            admission: state.upload.runtime.download_admission().cloned(),
             trusted_proxies: state.config.trusted_proxy_ips.clone().into(),
             operation_duration: Arc::clone(&state.metrics.upload_operation_duration_seconds),
             read_timeout: Duration::from_secs(state.config.upload_download_read_timeout_seconds),
@@ -138,7 +138,7 @@ impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReplayReadContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
             // AppState stores only GuardedUploadStore implementations here.
-            guarded_store: state.upload_store.as_ref().map(Arc::clone),
+            guarded_store: state.upload.store.as_ref().map(Arc::clone),
             read_timeout: Duration::from_secs(state.config.upload_download_read_timeout_seconds),
             max_duration: Duration::from_secs(state.config.upload_download_max_seconds),
         }
@@ -148,11 +148,11 @@ impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReplayReadContext {
 impl axum::extract::FromRef<Arc<AppState>> for UploadHttpWriteContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: state.upload_service.clone(),
+            service: state.upload.service.clone(),
             // AppState stores only GuardedUploadStore implementations here.
-            guarded_store: state.upload_store.as_ref().map(Arc::clone),
-            admission: state.upload_runtime.request_admission().cloned(),
-            safety_gate: Arc::clone(&state.upload_safety_gate),
+            guarded_store: state.upload.store.as_ref().map(Arc::clone),
+            admission: state.upload.runtime.request_admission().cloned(),
+            safety_gate: Arc::clone(&state.upload.safety_gate),
             trusted_proxies: state.config.trusted_proxy_ips.clone().into(),
             operation_duration: Arc::clone(&state.metrics.upload_operation_duration_seconds),
             retention_seconds: state.config.upload_retention_seconds,
@@ -163,7 +163,7 @@ impl axum::extract::FromRef<Arc<AppState>> for UploadHttpWriteContext {
 impl axum::extract::FromRef<Arc<AppState>> for UploadHttpDeleteContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: state.upload_service.clone(),
+            service: state.upload.service.clone(),
             operation_duration: Arc::clone(&state.metrics.upload_operation_duration_seconds),
         }
     }

@@ -4,7 +4,8 @@ use super::*;
 
 impl AppState {
     pub(crate) fn upload_service(&self) -> &UploadService {
-        self.upload_service
+        self.upload
+            .service
             .as_ref()
             .expect("upload routes require an enabled or draining storage runtime")
     }

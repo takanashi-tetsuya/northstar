@@ -330,8 +330,7 @@ for (const typeName of ['RawConfig', 'Config']) {
 }
 
 for (const field of [
-  'upload_service',
-  'upload_store',
+  'upload',
   'message_service',
   'retraction_service',
   'pubsub_service',
@@ -767,6 +766,8 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
 verifyMixOutboxLifecycle(mixProtocol);
 
 const commandPoolConstruction = rustItemBody(state, 'pub async fn new(');
+// The upload storage pool is opened by UploadModule::start, called from AppState::new.
+const uploadModuleStart = rustItemBody(state, 'pub(super) async fn start(');
 for (const invariant of [
   'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',
   'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "XEP-0133 command",',
@@ -777,7 +778,8 @@ for (const invariant of [
     throw new Error(`auxiliary pools must share bounded startup admission: ${invariant}`);
   }
 }
-if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 3
+if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g)
+      + countMatches(uploadModuleStart, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 3
     || !/const AUXILIARY_POOL_ACQUIRE_TIMEOUT:\s*Duration\s*=\s*Duration::from_secs\(2\)/.test(state)
     || !/const AUXILIARY_POOL_STARTUP_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
   throw new Error('auxiliary pools retain a 2 s acquisition policy within a shared 15 s startup window');
@@ -859,9 +861,10 @@ for (const invariant of [
   }
 }
 if (!mainSource.includes('Some("--storage-connection-budget")')
-    || !commandPoolConstruction.includes('StoragePoolMode::Disabled => None')
-    || !commandPoolConstruction.includes('StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone())')
-    || !commandPoolConstruction.includes('db::attest_storage_role(&storage_pool)')) {
+    || !uploadModuleStart.includes('StoragePoolMode::Disabled => None')
+    || !uploadModuleStart.includes('StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone())')
+    || !uploadModuleStart.includes('db::attest_storage_role(&storage_pool)')
+    || !commandPoolConstruction.includes('UploadModule::start(&config, &pool).await?')) {
   throw new Error('storage pool must be absent when disabled and attested in production');
 }
 for (const invariant of [
@@ -3702,7 +3705,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext>')
     || !uploadGet.includes('let download_guard = state.acquire_download(client_ip)')
     || !uploadGet.includes('let _download_guard = download_guard;')
     || /\b(?:AppState|Metrics|PgPool)\b/.test(uploadReadContext)
-    || !read('src/state/rest_endpoint_contexts.rs').includes('admission: state.upload_runtime.download_admission().cloned()')) {
+    || !read('src/state/rest_endpoint_contexts.rs').includes('admission: state.upload.runtime.download_admission().cloned()')) {
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');

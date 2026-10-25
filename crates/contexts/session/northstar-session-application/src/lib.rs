@@ -5,6 +5,8 @@
 pub use northstar_session_core::*;
 pub mod repository;
 pub use repository::*;
+pub mod routing;
+pub use routing::RemoteRoutePort;
 use std::sync::Arc;
 use tokio::sync::watch;
 use uuid::Uuid;

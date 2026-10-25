@@ -1,6 +1,7 @@
 //! Admits a client message stanza, archives it and delivers it to online, offline, carbon and federated recipients.
 
 use super::*;
+use northstar_session_application::RemoteRoutePort;
 
 impl ProtocolSession {
     pub(crate) async fn message(
@@ -279,13 +280,10 @@ impl ProtocolSession {
                 // writable S2S/Bidi stream may accept this stanza. The
                 // helper waits for the actual socket write and never creates
                 // a connection, database admission row, archive or retry.
-                if !crate::s2s::send_volatile_on_authenticated_route(
-                    &self.state,
-                    self.state.local_domain(),
-                    domain,
-                    routed,
-                )
-                .await
+                if !self
+                    .state
+                    .send_volatile(self.state.local_domain(), domain, routed)
+                    .await
                 {
                     tracing::debug!(
                         source_domain = %self.state.local_domain(),

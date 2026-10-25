@@ -144,6 +144,7 @@ mod presence_cluster_routing;
 pub(crate) mod pubsub_digest_worker;
 pub(crate) mod pubsub_event_outbox_worker;
 pub(crate) mod pubsub_notification_delivery;
+mod remote_route;
 mod runtime_control_refresh;
 mod s2s_cluster_routing;
 pub(crate) mod s2s_direct_route;

@@ -8,4 +8,6 @@ description = "The Northstar PostgreSQL schema migrations, embedded at build tim
 publish = false
 
 [dependencies]
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+anyhow = "1.0"
+chrono = "0.4"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "migrate", "macros"] }

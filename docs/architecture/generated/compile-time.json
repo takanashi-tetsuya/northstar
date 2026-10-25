@@ -2566,6 +2566,14 @@
     ],
     [
       "northstar-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-postgres",
+      "chrono"
+    ],
+    [
+      "northstar-postgres",
       "sqlx"
     ],
     [
@@ -2942,6 +2950,10 @@
     ],
     [
       "northstar-upload-application",
+      "chrono"
+    ],
+    [
+      "northstar-upload-application",
       "futures"
     ],
     [
@@ -2985,6 +2997,10 @@
       "uuid"
     ],
     [
+      "northstar-upload-application",
+      "zeroize"
+    ],
+    [
       "northstar-upload-core",
       "northstar-xmpp-types"
     ],
@@ -2999,6 +3015,10 @@
     [
       "northstar-upload-postgres",
       "anyhow"
+    ],
+    [
+      "northstar-upload-postgres",
+      "chrono"
     ],
     [
       "northstar-upload-postgres",
@@ -3031,6 +3051,10 @@
     [
       "northstar-upload-postgres",
       "uuid"
+    ],
+    [
+      "northstar-upload-postgres",
+      "zeroize"
     ],
     [
       "northstar-upload-storage",

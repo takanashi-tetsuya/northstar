@@ -970,6 +970,8 @@ digraph compile_time {
   "northstar-message-application" -> "uuid";
   "northstar-message-core" -> "northstar-federation-core";
   "northstar-message-core" -> "uuid";
+  "northstar-postgres" -> "anyhow";
+  "northstar-postgres" -> "chrono";
   "northstar-postgres" -> "sqlx";
   "northstar-presence-core" -> "northstar-xmpp-types";
   "northstar-protocol-runtime" -> "dashmap";
@@ -1064,6 +1066,7 @@ digraph compile_time {
   "northstar-test-harness" -> "tracing";
   "northstar-test-harness" -> "uuid";
   "northstar-upload-application" -> "anyhow";
+  "northstar-upload-application" -> "chrono";
   "northstar-upload-application" -> "futures";
   "northstar-upload-application" -> "northstar-auth-core";
   "northstar-upload-application" -> "northstar-runtime";
@@ -1075,10 +1078,12 @@ digraph compile_time {
   "northstar-upload-application" -> "tokio-util";
   "northstar-upload-application" -> "tracing";
   "northstar-upload-application" -> "uuid";
+  "northstar-upload-application" -> "zeroize";
   "northstar-upload-core" -> "northstar-xmpp-types";
   "northstar-upload-core" -> "serde";
   "northstar-upload-core" -> "uuid";
   "northstar-upload-postgres" -> "anyhow";
+  "northstar-upload-postgres" -> "chrono";
   "northstar-upload-postgres" -> "northstar-auth-core";
   "northstar-upload-postgres" -> "northstar-postgres";
   "northstar-upload-postgres" -> "northstar-upload-application";
@@ -1087,6 +1092,7 @@ digraph compile_time {
   "northstar-upload-postgres" -> "sqlx";
   "northstar-upload-postgres" -> "tokio";
   "northstar-upload-postgres" -> "uuid";
+  "northstar-upload-postgres" -> "zeroize";
   "northstar-upload-storage" -> "anyhow";
   "northstar-upload-storage" -> "axum";
   "northstar-upload-storage" -> "bytes";

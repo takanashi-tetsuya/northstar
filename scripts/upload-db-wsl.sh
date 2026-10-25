@@ -137,10 +137,10 @@ cargo test --locked --offline -p northstar-upload-postgres tests:: -- --skip mig
 cargo test --locked --offline db::upload_account_tests -- --ignored --nocapture --test-threads=1
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$admin_schema"
 cargo test --locked --offline \
-  db::upload_admin::tests::postgres_retry_idempotency_replay_target_generation_and_not_found_contract \
+  db::upload_admin_tests::postgres_retry_idempotency_replay_target_generation_and_not_found_contract \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline \
-  db::upload_admin::tests::postgres_retry_authorization_pagination_concurrency_and_fencing \
+  db::upload_admin_tests::postgres_retry_authorization_pagination_concurrency_and_fencing \
   -- --ignored --exact --nocapture --test-threads=1
 # The account-deletion fixture binds its own upload-capacity policy after
 # migration, so this invocation must not depend on a preceding test command's

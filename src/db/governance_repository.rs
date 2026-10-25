@@ -175,7 +175,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
         // Replay wins before cursor expiry checks; a fresh key must verify
         // against the clock on the connection that already owns this request.
         let continuation = if let Some(token) = command.cursor {
-            let now = db::database_cursor_clock_in_tx(&mut tx)
+            let now = northstar_postgres::database_cursor_clock_in_tx(&mut tx)
                 .await
                 .map_err(GovernanceFailure::internal)?;
             Some(
@@ -215,7 +215,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
         let continuation = if let Some(token) = command.cursor {
-            let now = db::database_cursor_clock_in_tx(&mut tx)
+            let now = northstar_postgres::database_cursor_clock_in_tx(&mut tx)
                 .await
                 .map_err(GovernanceFailure::internal)?;
             Some(

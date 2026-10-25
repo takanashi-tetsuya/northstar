@@ -6,6 +6,7 @@
 
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
+use northstar_postgres::database_cursor_clock_in_tx;
 #[cfg(test)]
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
@@ -48,14 +49,6 @@ fn checked_report_fetch_limit(limit: i64) -> Result<i64> {
 pub async fn database_cursor_clock(pool: &PgPool) -> Result<DateTime<Utc>> {
     Ok(sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(pool)
-        .await?)
-}
-
-pub async fn database_cursor_clock_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-) -> Result<DateTime<Utc>> {
-    Ok(sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut **tx)
         .await?)
 }
 

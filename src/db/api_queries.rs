@@ -215,7 +215,10 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, true).await? else {
             return Ok(None);
         };
-        let value = db::upload_dead_letters_page_in_tx(&mut tx, kind, after, limit).await?;
+        let value = northstar_upload_postgres::admin::upload_dead_letters_page_in_tx(
+            &mut tx, kind, after, limit,
+        )
+        .await?;
         tx.commit().await?;
         Ok(Some(value))
     }
@@ -228,7 +231,7 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
             return Ok(None);
         };
         let page = db::mam_user_archive_page_in_transaction(&mut tx, actor.user_id, query).await?;
-        let database_now = db::database_cursor_clock_in_tx(&mut tx).await?;
+        let database_now = northstar_postgres::database_cursor_clock_in_tx(&mut tx).await?;
         let value = TimedRead {
             value: page,
             database_now,
@@ -297,7 +300,7 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
             return Ok(None);
         };
         let (rows, next) = snapshot();
-        let database_now = db::database_cursor_clock_in_tx(&mut tx).await?;
+        let database_now = northstar_postgres::database_cursor_clock_in_tx(&mut tx).await?;
         let value = SessionPage {
             rows,
             next,

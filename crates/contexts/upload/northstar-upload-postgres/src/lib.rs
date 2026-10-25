@@ -22,6 +22,7 @@ mod lifecycle;
 mod slots;
 mod storage_jobs;
 
+pub mod admin;
 pub mod maintenance;
 pub mod migration;
 

@@ -1,9 +1,6 @@
 //! Authorized, fenced upload retries with their audit and replay committed together.
 use crate::{
-    db::{
-        self,
-        admin_mutations::{AdminMutationStart, AdminMutationStore},
-    },
+    db::admin_mutations::{AdminMutationStart, AdminMutationStore},
     services::{
         api_mutations::{
             error_response, AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection,
@@ -38,7 +35,7 @@ impl UploadAdminRepository for PostgresUploadAdminRepository {
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
         let actor = &admission.authority;
-        let outcome = db::retry_upload_dead_letter_in_tx(
+        let outcome = northstar_upload_postgres::admin::retry_upload_dead_letter_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,
@@ -48,7 +45,7 @@ impl UploadAdminRepository for PostgresUploadAdminRepository {
         )
         .await?;
         let response = match outcome {
-            db::RetryUploadDeadLetter::Retried => {
+            northstar_upload_postgres::admin::RetryUploadDeadLetter::Retried => {
                 let kind = match id {
                     UploadDeadLetterId::StorageJob(_) => UploadDeadLetterKind::StorageJob,
                     UploadDeadLetterId::Cleanup(_) => UploadDeadLetterKind::Cleanup,
@@ -58,10 +55,10 @@ impl UploadAdminRepository for PostgresUploadAdminRepository {
                     json!({"kind":kind.as_str(),"id":id.as_api_string(),"state":"queued"}),
                 )?
             }
-            db::RetryUploadDeadLetter::Unavailable => {
+            northstar_upload_postgres::admin::RetryUploadDeadLetter::Unavailable => {
                 error_response(404, "not_found", "upload dead-letter entry is unavailable")?
             }
-            db::RetryUploadDeadLetter::Unauthorized => {
+            northstar_upload_postgres::admin::RetryUploadDeadLetter::Unauthorized => {
                 tx.rollback().await?;
                 return Ok(ApiMutationOutcome::Rejected(
                     ApiMutationRejection::Forbidden,

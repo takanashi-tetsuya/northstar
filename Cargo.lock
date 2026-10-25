@@ -1956,6 +1956,8 @@ dependencies = [
 name = "northstar-postgres"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
  "sqlx",
 ]
 
@@ -2146,6 +2148,7 @@ name = "northstar-upload-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "futures",
  "northstar-auth-core",
  "northstar-runtime",
@@ -2157,6 +2160,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2173,6 +2177,7 @@ name = "northstar-upload-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "northstar-auth-core",
  "northstar-postgres",
  "northstar-upload-application",
@@ -2181,6 +2186,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

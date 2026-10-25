@@ -333,7 +333,7 @@ impl AppState {
                     _ => unreachable!("upload backend was validated by Config"),
                 };
                 upload_startup_audits =
-                    crate::runtime::upload_worker::StartupAuditHandoff::after_successful_audits(
+                    northstar_upload_application::worker::StartupAuditHandoff::after_successful_audits(
                         upload_authority_generation,
                         [
                             config.upload_storage_max_pending_jobs,
@@ -361,7 +361,7 @@ impl AppState {
                     "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
                 );
                 upload_startup_audits =
-                    crate::runtime::upload_worker::StartupAuditHandoff::default();
+                    northstar_upload_application::worker::StartupAuditHandoff::default();
                 (
                     UploadSafetyGate::disabled(),
                     [0_u8; 32],

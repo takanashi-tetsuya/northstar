@@ -377,17 +377,17 @@ impl AppState {
     pub(crate) fn upload_maintenance_context(
         &self,
     ) -> Option<
-        crate::runtime::upload_worker::UploadMaintenanceContext<
+        northstar_upload_application::worker::UploadMaintenanceContext<
             db::upload_maintenance::PostgresUploadMaintenanceRepository,
         >,
     > {
         Some(
-            crate::runtime::upload_worker::UploadMaintenanceContext::new(
+            northstar_upload_application::worker::UploadMaintenanceContext::new(
                 db::upload_maintenance::PostgresUploadMaintenanceRepository::new(
                     self.upload_storage_pool.as_ref()?.clone(),
                 ),
                 Arc::clone(self.upload_store.as_ref()?),
-                crate::runtime::upload_worker::UploadMaintenancePolicy {
+                northstar_upload_application::worker::UploadMaintenancePolicy {
                     max_pending_jobs: self.config.upload_storage_max_pending_jobs,
                     max_retained_files: self.config.upload_storage_max_retained_files,
                     max_retained_bytes: self.config.upload_storage_max_retained_bytes,

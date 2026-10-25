@@ -1,6 +1,6 @@
 //! Capability-injected HTTP upload application boundary: typed commands and
-//! validation rules, the slot service, the maintenance ports and the
-//! process-wide upload safety gate.
+//! validation rules, the slot service, the maintenance and store ports, the
+//! process-wide upload safety gate and the maintenance worker.
 
 #![forbid(unsafe_code)]
 
@@ -10,6 +10,7 @@ pub mod repository;
 pub mod safety;
 pub mod service;
 pub mod store;
+pub mod worker;
 pub use repository::*;
 use uuid::Uuid;
 

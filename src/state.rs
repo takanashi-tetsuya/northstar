@@ -450,7 +450,7 @@ pub struct AppState {
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
-    upload_startup_audits: Arc<crate::runtime::upload_worker::StartupAuditHandoff>,
+    upload_startup_audits: Arc<northstar_upload_application::worker::StartupAuditHandoff>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.

@@ -1061,11 +1061,15 @@ digraph compile_time {
   "northstar-test-harness" -> "tracing";
   "northstar-test-harness" -> "uuid";
   "northstar-upload-application" -> "anyhow";
+  "northstar-upload-application" -> "futures";
   "northstar-upload-application" -> "northstar-auth-core";
+  "northstar-upload-application" -> "northstar-runtime";
+  "northstar-upload-application" -> "northstar-telemetry";
   "northstar-upload-application" -> "northstar-upload-core";
   "northstar-upload-application" -> "northstar-xmpp-types";
   "northstar-upload-application" -> "thiserror";
   "northstar-upload-application" -> "tokio";
+  "northstar-upload-application" -> "tokio-util";
   "northstar-upload-application" -> "tracing";
   "northstar-upload-application" -> "uuid";
   "northstar-upload-core" -> "northstar-xmpp-types";

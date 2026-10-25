@@ -918,7 +918,8 @@ fn upload_runtime_health_scans_are_bounded_and_timeout_fail_closed() {
             "missing health-scan bound: {bound}"
         );
     }
-    let worker = include_str!("../../runtime/upload_worker.rs");
+    let worker =
+        include_str!("../../../crates/contexts/upload/northstar-upload-application/src/worker.rs");
     assert!(worker.contains("snapshot.dead_letter_jobs_capped"));
     assert!(worker.contains("snapshot.scrub_failures_capped"));
 }

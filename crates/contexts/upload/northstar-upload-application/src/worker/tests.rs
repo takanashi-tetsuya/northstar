@@ -1,7 +1,5 @@
 use super::{Duration, StartupAuditHandoff, UploadAuthorityGeneration, UploadSafetyGate};
-use northstar_upload_application::maintenance::{
-    UploadCapacityAuthorityAudit, UploadCapacityReconciliation,
-};
+use crate::maintenance::{UploadCapacityAuthorityAudit, UploadCapacityReconciliation};
 use tokio::time::Instant;
 
 const STARTUP_GENERATION: UploadAuthorityGeneration = UploadAuthorityGeneration {
@@ -43,8 +41,8 @@ struct AuditStep {
     calls: usize,
     worker_ready: bool,
     blocked: bool,
-    gate_before_completion: northstar_upload_application::UploadSafetyState,
-    gate_after_completion: northstar_upload_application::UploadSafetyState,
+    gate_before_completion: crate::UploadSafetyState,
+    gate_after_completion: crate::UploadSafetyState,
     next_audit: Duration,
 }
 
@@ -148,9 +146,7 @@ async fn capacity_scenario(
             async move {
                 let mut authority = super::CapacityAuthorityAuditProgress::new(start);
                 let mut ledger = super::CapacityLedgerAuditProgress::new(start);
-                let existing = gate
-                    .permit(northstar_upload_application::UploadIoClass::Promotion)
-                    .unwrap();
+                let existing = gate.permit(crate::UploadIoClass::Promotion).unwrap();
                 for &(kind, milliseconds, result, complete_safe_work) in steps.iter() {
                     let now = start + Duration::from_millis(milliseconds);
                     let mut blocked = false;
@@ -269,7 +265,7 @@ async fn capacity_scenario(
 
 #[tokio::test]
 async fn one_failed_catalog_read_stays_closed_without_recounting_wait_ticks() {
-    use northstar_upload_application::UploadSafetyState;
+    use crate::UploadSafetyState;
     let steps = [0, 0, 1000, 5000, 10000, 14999]
         .into_iter()
         .map(|at| (at, AuditResult::Unavailable, false))
@@ -319,7 +315,7 @@ async fn waiting_pulses_preserve_three_real_catalog_failures_as_terminal() {
 
 #[tokio::test]
 async fn clean_catalog_observation_requires_the_remaining_success_boundary_to_reopen() {
-    use northstar_upload_application::UploadSafetyState;
+    use crate::UploadSafetyState;
     let (observations, registry, cancel) = catalog_scenario(vec![
         (0, AuditResult::Unavailable, false),
         (15000, AuditResult::Clean, false),
@@ -382,7 +378,7 @@ async fn observed_catalog_violations_keep_the_existing_per_tick_terminal_rule() 
 
 #[tokio::test]
 async fn one_failed_ledger_read_stays_closed_without_recounting_wait_ticks() {
-    use northstar_upload_application::UploadSafetyState;
+    use crate::UploadSafetyState;
     let steps = [0, 0, 1000, 5000, 15000, 30000, 59999]
         .into_iter()
         .map(|at| (at, AuditResult::Unavailable, false))
@@ -433,7 +429,7 @@ async fn waiting_pulses_preserve_three_real_ledger_failures_as_terminal() {
 
 #[tokio::test]
 async fn clean_ledger_observation_requires_the_remaining_success_boundary_to_reopen() {
-    use northstar_upload_application::UploadSafetyState;
+    use crate::UploadSafetyState;
     let (observations, registry, cancel) = ledger_scenario(vec![
         (0, AuditResult::Unavailable, false),
         (60000, AuditResult::Clean, false),
@@ -519,7 +515,7 @@ async fn catalog_waits_preserve_a_previous_ledger_failure_and_independent_retry_
     assert_eq!(observations[5].next_audit, Duration::from_secs(60));
     assert_eq!(
         observations[4].gate_after_completion,
-        northstar_upload_application::UploadSafetyState::CapacityAuthorityUnsafe,
+        crate::UploadSafetyState::CapacityAuthorityUnsafe,
     );
     tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
         .await

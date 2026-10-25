@@ -865,7 +865,7 @@
       "budgets": {
         "contract": "Existing bounded body/slot/object policies and reconciliation watchdog; provider operations retain their own timeout.",
         "source": {
-          "path": "src/runtime/upload_worker.rs",
+          "path": "crates/contexts/upload/northstar-upload-application/src/worker.rs",
           "anchor": "const STORAGE_OPERATION_TIMEOUT: Duration = Duration::from_secs(180);"
         }
       },

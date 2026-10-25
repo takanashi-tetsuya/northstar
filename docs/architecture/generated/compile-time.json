@@ -2936,7 +2936,19 @@
     ],
     [
       "northstar-upload-application",
+      "futures"
+    ],
+    [
+      "northstar-upload-application",
       "northstar-auth-core"
+    ],
+    [
+      "northstar-upload-application",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-upload-application",
+      "northstar-telemetry"
     ],
     [
       "northstar-upload-application",
@@ -2953,6 +2965,10 @@
     [
       "northstar-upload-application",
       "tokio"
+    ],
+    [
+      "northstar-upload-application",
+      "tokio-util"
     ],
     [
       "northstar-upload-application",

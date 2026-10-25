@@ -2336,7 +2336,7 @@ for (const [name, source] of [
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/runtime/retention.rs')],
   ['SubscriptionCleanupContext', read('src/runtime/subscription_cleanup.rs')],
-  ['UploadMaintenanceContext', read('src/runtime/upload_worker.rs')],
+  ['UploadMaintenanceContext', read('crates/contexts/upload/northstar-upload-application/src/worker.rs')],
   ['UploadMaintenanceRepository', read('crates/contexts/upload/northstar-upload-application/src/maintenance.rs')],
   ['CapacityMaintenanceService', read('src/services/capacity_maintenance.rs')],
   ['CapacityMaintenanceContexts', read('src/state/capacity_maintenance.rs')],

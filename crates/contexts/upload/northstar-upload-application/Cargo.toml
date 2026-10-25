@@ -9,11 +9,15 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+futures = "0.3"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-runtime = { path = "../../../platform/northstar-runtime" }
+northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-upload-core = { path = "../northstar-upload-core" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 thiserror = "2.0"
-tokio = { version = "1.43", features = ["macros", "sync"] }
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "time"] }
+tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }
 

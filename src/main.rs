@@ -515,7 +515,12 @@ async fn run() -> Result<()> {
                 let upload_context = Arc::clone(&upload_context);
                 let upload_cancel = upload_cancel.clone();
                 async move {
-                    runtime::upload_worker::serve(upload_context, upload_cancel, heartbeat).await
+                    northstar_upload_application::worker::serve(
+                        upload_context,
+                        upload_cancel,
+                        heartbeat,
+                    )
+                    .await
                 }
             },
         );

@@ -1,9 +1,13 @@
+//! The upload maintenance worker: startup and periodic capacity audits, storage jobs, queued cleanup
+//! and stage removal, run through the maintenance repository and the store under the upload safety
+//! gate.
+
+use crate::maintenance::*;
+use crate::safety::UploadSafetyGate;
+use crate::{UploadAuthorityGeneration, UploadIoClass};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
 use northstar_runtime::workers::WorkerHeartbeat;
-use northstar_upload_application::maintenance::*;
-use northstar_upload_application::safety::UploadSafetyGate;
-use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -11,18 +15,18 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy)]
-pub(crate) struct UploadMaintenancePolicy {
-    pub(crate) max_pending_jobs: i64,
-    pub(crate) max_retained_files: i64,
-    pub(crate) max_retained_bytes: i64,
-    pub(crate) retention_seconds: u64,
-    pub(crate) namespace_sha256: [u8; 32],
-    pub(crate) generation: UploadAuthorityGeneration,
+pub struct UploadMaintenancePolicy {
+    pub max_pending_jobs: i64,
+    pub max_retained_files: i64,
+    pub max_retained_bytes: i64,
+    pub retention_seconds: u64,
+    pub namespace_sha256: [u8; 32],
+    pub generation: UploadAuthorityGeneration,
 }
 
-pub(crate) struct UploadMaintenanceContext<R> {
+pub struct UploadMaintenanceContext<R> {
     repository: R,
-    store: Arc<dyn northstar_upload_application::store::UploadStore>,
+    store: Arc<dyn crate::store::UploadStore>,
     policy: UploadMaintenancePolicy,
     safety_gate: Arc<UploadSafetyGate>,
     startup_audits: Arc<StartupAuditHandoff>,
@@ -30,9 +34,9 @@ pub(crate) struct UploadMaintenanceContext<R> {
 }
 
 impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
-    pub(crate) fn new(
+    pub fn new(
         repository: R,
-        store: Arc<dyn northstar_upload_application::store::UploadStore>,
+        store: Arc<dyn crate::store::UploadStore>,
         policy: UploadMaintenancePolicy,
         safety_gate: Arc<UploadSafetyGate>,
         startup_audits: Arc<StartupAuditHandoff>,
@@ -233,7 +237,7 @@ impl CapacityLedgerAuditProgress {
     }
 }
 
-pub(crate) struct SuccessfulStartupAudits {
+pub struct SuccessfulStartupAudits {
     generation: UploadAuthorityGeneration,
     capacity_limits: [i64; 3],
     authority_started_at: tokio::time::Instant,
@@ -244,12 +248,12 @@ pub(crate) struct SuccessfulStartupAudits {
 /// attempt. This stores no reusable health verdict: subsequent attempts and
 /// invalidated gates must perform the ordinary database audits immediately.
 #[derive(Default)]
-pub(crate) struct StartupAuditHandoff {
+pub struct StartupAuditHandoff {
     evidence: std::sync::Mutex<Option<SuccessfulStartupAudits>>,
 }
 
 impl StartupAuditHandoff {
-    pub(crate) fn after_successful_audits(
+    pub fn after_successful_audits(
         generation: UploadAuthorityGeneration,
         capacity_limits: [i64; 3],
         authority_started_at: tokio::time::Instant,
@@ -265,7 +269,7 @@ impl StartupAuditHandoff {
         }
     }
 
-    pub(crate) fn take(&self) -> Option<SuccessfulStartupAudits> {
+    pub fn take(&self) -> Option<SuccessfulStartupAudits> {
         match self.evidence.lock() {
             Ok(mut evidence) => evidence.take(),
             Err(poisoned) => {
@@ -304,7 +308,7 @@ impl SuccessfulStartupAudits {
     }
 }
 
-pub(crate) async fn serve<R: UploadMaintenanceRepository>(
+pub async fn serve<R: UploadMaintenanceRepository>(
     context: Arc<UploadMaintenanceContext<R>>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
@@ -524,7 +528,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                         }
                         Ok(StorageOutcome::Deferred) => {}
                         Err(error) => {
-                            if northstar_upload_application::store::is_upload_safety_error(&error) {
+                            if crate::store::is_upload_safety_error(&error) {
                                 if let Err(db_error) = context
                                     .repository
                                     .defer_upload_storage_job(job.id, job.claim_token)
@@ -592,7 +596,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                         }
                         Ok(CleanupOutcome::Deferred) => {}
                         Err(error) => {
-                            if northstar_upload_application::store::is_upload_safety_error(&error) {
+                            if crate::store::is_upload_safety_error(&error) {
                                 if let Err(db_error) = context
                                     .repository
                                     .defer_queued_upload_cleanup(job.object_id, job.claim_token)
@@ -610,9 +614,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                                 .metrics
                                 .upload_storage_cleanup_failures_total
                                 .fetch_add(1, Ordering::Relaxed);
-                            if northstar_upload_application::store::is_upload_integrity_error(
-                                &error,
-                            ) {
+                            if crate::store::is_upload_integrity_error(&error) {
                                 context
                                     .metrics
                                     .upload_storage_integrity_failures_total
@@ -649,9 +651,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
             credential_ticks = 0;
             match context.store.reload_credentials().await {
                 Ok(_) => {}
-                Err(error)
-                    if northstar_upload_application::store::is_upload_safety_error(&error) =>
-                {
+                Err(error) if crate::store::is_upload_safety_error(&error) => {
                     tracing::warn!(
                         ?error,
                         "upload credential refresh deferred by authority gate"
@@ -710,11 +710,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                                 }
                             }
                         }
-                        Err(error)
-                            if northstar_upload_application::store::is_upload_safety_error(
-                                &error,
-                            ) =>
-                        {
+                        Err(error) if crate::store::is_upload_safety_error(&error) => {
                             if let Err(db_error) = context
                                 .repository
                                 .defer_upload_scrub(job.object_id, job.claim_token)
@@ -899,7 +895,7 @@ fn note_storage_job_failure<R: UploadMaintenanceRepository>(
         _ => return,
     };
     counter.fetch_add(1, Ordering::Relaxed);
-    if northstar_upload_application::store::is_upload_integrity_error(error) {
+    if crate::store::is_upload_integrity_error(error) {
         context
             .metrics
             .upload_storage_integrity_failures_total

@@ -170,6 +170,7 @@ digraph compile_time {
   "northstar-abuse-policy";
   "northstar-archive-application";
   "northstar-archive-core";
+  "northstar-archive-postgres";
   "northstar-auth-core";
   "northstar-config";
   "northstar-delivery-core";
@@ -925,6 +926,14 @@ digraph compile_time {
   "northstar-archive-core" -> "northstar-xmpp-types";
   "northstar-archive-core" -> "serde";
   "northstar-archive-core" -> "uuid";
+  "northstar-archive-postgres" -> "anyhow";
+  "northstar-archive-postgres" -> "chrono";
+  "northstar-archive-postgres" -> "northstar-archive-application";
+  "northstar-archive-postgres" -> "northstar-archive-core";
+  "northstar-archive-postgres" -> "northstar-xep-0313";
+  "northstar-archive-postgres" -> "northstar-xmpp-types";
+  "northstar-archive-postgres" -> "sqlx";
+  "northstar-archive-postgres" -> "uuid";
   "northstar-auth-core" -> "anyhow";
   "northstar-auth-core" -> "argon2";
   "northstar-auth-core" -> "base64";
@@ -1488,6 +1497,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-abuse-policy";
   "rust-xmpp-server" -> "northstar-archive-application";
   "rust-xmpp-server" -> "northstar-archive-core";
+  "rust-xmpp-server" -> "northstar-archive-postgres";
   "rust-xmpp-server" -> "northstar-auth-core";
   "rust-xmpp-server" -> "northstar-config";
   "rust-xmpp-server" -> "northstar-delivery-core";

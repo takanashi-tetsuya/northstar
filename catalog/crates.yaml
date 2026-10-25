@@ -96,6 +96,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-archive-postgres
+    package: northstar-archive-postgres
+    path: crates/contexts/archive/northstar-archive-postgres
+    tier: context
+    context: archive
+    role: adapter
+    owner_team: messaging
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-auth-core
     package: northstar-auth-core
     path: crates/contexts/auth/northstar-auth-core

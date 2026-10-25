@@ -3222,7 +3222,7 @@ for (const forbidden of [
   'privacy_denies',
   'find_user',
 ]) {
-  if (new RegExp(`\\bdb::${forbidden}\\b`).test(messagingSource)) {
+  if (new RegExp(`\\b(?:db|northstar_archive_postgres)::${forbidden}\\b`).test(messagingSource)) {
     throw new Error(`messaging.rs bypasses MessageService via db::${forbidden}`);
   }
 }

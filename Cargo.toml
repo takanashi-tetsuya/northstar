@@ -51,6 +51,7 @@ members = [
     "crates/contexts/roster/northstar-roster-application",
     "crates/contexts/archive/northstar-archive-core",
     "crates/contexts/archive/northstar-archive-application",
+    "crates/contexts/archive/northstar-archive-postgres",
     "crates/contexts/upload/northstar-upload-core",
     "crates/contexts/upload/northstar-upload-application",
     "crates/contexts/upload/northstar-upload-storage",
@@ -179,6 +180,7 @@ northstar-roster-core = { path = "crates/contexts/roster/northstar-roster-core" 
 northstar-roster-application = { path = "crates/contexts/roster/northstar-roster-application" }
 northstar-archive-core = { path = "crates/contexts/archive/northstar-archive-core" }
 northstar-archive-application = { path = "crates/contexts/archive/northstar-archive-application" }
+northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres" }
 northstar-upload-core = { path = "crates/contexts/upload/northstar-upload-core" }
 northstar-upload-application = { path = "crates/contexts/upload/northstar-upload-application" }
 northstar-upload-storage = { path = "crates/contexts/upload/northstar-upload-storage" }
@@ -198,6 +200,7 @@ openssl = { version = "0.10.81", features = ["vendored"] }
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
 northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
+northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }
 # Deterministic cancellation/deadline experiments run on a paused test clock.
 tokio = { version = "1.43", features = ["test-util"] }
 

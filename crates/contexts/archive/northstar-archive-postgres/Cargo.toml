@@ -1,0 +1,24 @@
+[package]
+name = "northstar-archive-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of personal message archives, MAM preferences and MAM queries for Northstar"
+publish = false
+
+[features]
+# Test-only archive writes and room reads the root crate's cross-context history tests use.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+northstar-archive-application = { path = "../northstar-archive-application" }
+northstar-archive-core = { path = "../northstar-archive-core" }
+northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+uuid = "1.12"
+
+[dev-dependencies]
+chrono = "0.4"

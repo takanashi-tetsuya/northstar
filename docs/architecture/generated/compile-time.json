@@ -172,6 +172,7 @@
     "northstar-abuse-policy",
     "northstar-archive-application",
     "northstar-archive-core",
+    "northstar-archive-postgres",
     "northstar-auth-core",
     "northstar-config",
     "northstar-delivery-core",
@@ -2379,6 +2380,38 @@
     ],
     [
       "northstar-archive-core",
+      "uuid"
+    ],
+    [
+      "northstar-archive-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-archive-postgres",
+      "chrono"
+    ],
+    [
+      "northstar-archive-postgres",
+      "northstar-archive-application"
+    ],
+    [
+      "northstar-archive-postgres",
+      "northstar-archive-core"
+    ],
+    [
+      "northstar-archive-postgres",
+      "northstar-xep-0313"
+    ],
+    [
+      "northstar-archive-postgres",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-archive-postgres",
+      "sqlx"
+    ],
+    [
+      "northstar-archive-postgres",
       "uuid"
     ],
     [
@@ -4632,6 +4665,10 @@
     [
       "rust-xmpp-server",
       "northstar-archive-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-archive-postgres"
     ],
     [
       "rust-xmpp-server",

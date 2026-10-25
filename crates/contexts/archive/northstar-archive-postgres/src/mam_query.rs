@@ -3,33 +3,33 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(super) enum MamArchiveSource {
+pub enum MamArchiveSource {
     User(Uuid),
     Muc(Uuid),
 }
 
 impl MamArchiveSource {
-    pub(super) fn table(self) -> &'static str {
+    pub fn table(self) -> &'static str {
         match self {
             Self::User(_) => "message_archive",
             Self::Muc(_) => "muc_messages",
         }
     }
 
-    pub(super) fn owner_column(self) -> &'static str {
+    pub fn owner_column(self) -> &'static str {
         match self {
             Self::User(_) => "owner_id",
             Self::Muc(_) => "room_id",
         }
     }
 
-    pub(super) fn owner_id(self) -> Uuid {
+    pub fn owner_id(self) -> Uuid {
         match self {
             Self::User(id) | Self::Muc(id) => id,
         }
     }
 
-    pub(super) fn select_columns(self) -> &'static str {
+    pub fn select_columns(self) -> &'static str {
         match self {
             Self::User(_) => {
                 "id, peer_full_jid AS peer_jid, stanza, encrypted, stanza_id, created_at"
@@ -43,7 +43,7 @@ impl MamArchiveSource {
         }
     }
 
-    pub(super) fn visible_full_identity(self) -> &'static str {
+    pub fn visible_full_identity(self) -> &'static str {
         match self {
             Self::User(_) => "peer_full_jid",
             // A full-JID block is resource-specific. New rows retain a bare
@@ -53,14 +53,14 @@ impl MamArchiveSource {
         }
     }
 
-    pub(super) fn visible_bare_identity(self) -> &'static str {
+    pub fn visible_bare_identity(self) -> &'static str {
         match self {
             Self::User(_) => "peer_jid",
             Self::Muc(_) => "split_part(COALESCE(actor_scope, sender_jid), '/', 1)",
         }
     }
 
-    pub(super) fn visible_domain_identity(self) -> &'static str {
+    pub fn visible_domain_identity(self) -> &'static str {
         match self {
             Self::User(_) => {
                 "CASE WHEN position('@' in peer_jid) > 0 THEN split_part(peer_jid, '@', 2) ELSE peer_jid END"
@@ -72,7 +72,7 @@ impl MamArchiveSource {
     }
 }
 
-pub(super) async fn mam_blocked_patterns(
+pub async fn mam_blocked_patterns(
     transaction: &mut Transaction<'_, Postgres>,
     viewer_id: Option<Uuid>,
 ) -> Result<Vec<MamBlockedPattern>> {
@@ -91,7 +91,7 @@ pub(super) async fn mam_blocked_patterns(
     ))
 }
 
-pub(super) fn push_mam_visibility(
+pub fn push_mam_visibility(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     source: MamArchiveSource,
     blocked_patterns: &[MamBlockedPattern],
@@ -115,7 +115,7 @@ pub(super) fn push_mam_visibility(
     }
 }
 
-pub(super) async fn archive_boundaries_for(
+pub async fn archive_boundaries_for(
     pool: &PgPool,
     source: MamArchiveSource,
     viewer_id: Option<Uuid>,
@@ -130,7 +130,7 @@ pub(super) async fn archive_boundaries_for(
     Ok(boundaries)
 }
 
-pub(super) async fn archive_boundaries_for_in_transaction(
+pub async fn archive_boundaries_for_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     source: MamArchiveSource,
     viewer_id: Option<Uuid>,
@@ -168,7 +168,7 @@ pub(super) async fn archive_boundaries_for_in_transaction(
     Ok((first.map(convert), last.map(convert)))
 }
 
-pub(super) fn push_mam_archive_base(
+pub fn push_mam_archive_base(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     source: MamArchiveSource,
     blocked_patterns: &[MamBlockedPattern],
@@ -181,7 +181,7 @@ pub(super) fn push_mam_archive_base(
     push_mam_visibility(query_builder, source, blocked_patterns);
 }
 
-pub(super) fn push_mam_scope(
+pub fn push_mam_scope(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     source: MamArchiveSource,
     query: &MamArchiveQuery,
@@ -237,7 +237,7 @@ pub(super) fn push_mam_scope(
     }
 }
 
-pub(super) async fn mam_archive_page_for(
+pub async fn mam_archive_page_for(
     pool: &PgPool,
     source: MamArchiveSource,
     viewer_id: Option<Uuid>,
@@ -253,7 +253,7 @@ pub(super) async fn mam_archive_page_for(
     Ok(page)
 }
 
-pub(super) async fn mam_archive_page_for_in_transaction(
+pub async fn mam_archive_page_for_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     source: MamArchiveSource,
     viewer_id: Option<Uuid>,
@@ -374,7 +374,7 @@ pub async fn mam_user_archive_page(
 /// Personal MAM page inside a caller-owned exact-bearer authorization
 /// transaction. The API layer keeps the account and session rows locked from
 /// its authorization check through this repeatable archive snapshot.
-pub(crate) async fn mam_user_archive_page_in_transaction(
+pub async fn mam_user_archive_page_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     query: &MamArchiveQuery,
@@ -390,7 +390,7 @@ pub(crate) async fn mam_user_archive_page_in_transaction(
 
 /// MUC MAM with XEP-0191 visibility applied inside the same repeatable-read
 /// snapshot as cursor validation, count, index and page selection.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mam_muc_archive_page_visible(
     pool: &PgPool,
     room_id: Uuid,
@@ -400,7 +400,7 @@ pub async fn mam_muc_archive_page_visible(
     mam_archive_page_for(pool, MamArchiveSource::Muc(room_id), Some(viewer_id), query).await
 }
 
-pub(super) fn archive_from_row(row: &sqlx::postgres::PgRow) -> ArchiveRow {
+pub fn archive_from_row(row: &sqlx::postgres::PgRow) -> ArchiveRow {
     ArchiveRow {
         id: row.get("id"),
         peer_jid: row.get("peer_jid"),

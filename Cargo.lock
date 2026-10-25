@@ -2177,6 +2177,7 @@ dependencies = [
  "northstar-postgres",
  "northstar-upload-application",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "uuid",

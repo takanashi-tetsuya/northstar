@@ -14,7 +14,7 @@ const MAX_CLAIM_BATCH: i64 = 128;
 const MANIFEST_DOMAIN: &[u8] = b"northstar-upload-migration-manifest-v1\0";
 
 #[derive(Clone, Debug)]
-pub(crate) struct BeginRun {
+pub struct BeginRun {
     pub run_id: Uuid,
     pub source_backend: String,
     pub target_backend: String,
@@ -23,7 +23,7 @@ pub(crate) struct BeginRun {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct MigrationRun {
+pub struct MigrationRun {
     pub run_id: Uuid,
     pub source_backend: String,
     pub target_backend: String,
@@ -36,7 +36,7 @@ pub(crate) struct MigrationRun {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct MigrationItem {
+pub struct MigrationItem {
     pub run_id: Uuid,
     pub object_id: Uuid,
     pub source_backend: String,
@@ -51,7 +51,7 @@ pub(crate) struct MigrationItem {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct VerifiedItem {
+pub struct VerifiedItem {
     pub item: MigrationItem,
     pub source_sha256: [u8; 32],
     pub dest_version: Option<String>,
@@ -60,7 +60,7 @@ pub(crate) struct VerifiedItem {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct VerifiedManifestItem {
+pub struct VerifiedManifestItem {
     pub object_id: Uuid,
     pub source_backend: String,
     pub source_key: String,
@@ -77,7 +77,7 @@ pub(crate) struct VerifiedManifestItem {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Cutover {
+pub struct Cutover {
     pub run_id: Uuid,
     pub generation: i64,
     pub manifest_sha256: [u8; 32],
@@ -117,7 +117,7 @@ async fn run_by_id_tx(tx: &mut Transaction<'_, Postgres>, run_id: Uuid) -> Resul
     })
 }
 
-pub(crate) async fn find_active_run(pool: &PgPool) -> Result<Option<MigrationRun>> {
+pub async fn find_active_run(pool: &PgPool) -> Result<Option<MigrationRun>> {
     let id: Option<Uuid> = sqlx::query_scalar(
         "SELECT run_id FROM upload_storage_migration_runs WHERE state='copying'",
     )
@@ -139,14 +139,14 @@ pub async fn upload_migration_active(pool: &PgPool) -> Result<bool> {
     )
 }
 
-pub(crate) async fn has_unverified_items(pool: &PgPool, run_id: Uuid) -> Result<bool> {
+pub async fn has_unverified_items(pool: &PgPool, run_id: Uuid) -> Result<bool> {
     Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM upload_storage_migration_items WHERE run_id=$1 AND verified_at IS NULL)")
         .bind(run_id)
         .fetch_one(pool)
         .await?)
 }
 
-pub(crate) async fn get_run(pool: &PgPool, run_id: Uuid) -> Result<Option<MigrationRun>> {
+pub async fn get_run(pool: &PgPool, run_id: Uuid) -> Result<Option<MigrationRun>> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM upload_storage_migration_runs WHERE run_id=$1)",
     )
@@ -162,7 +162,7 @@ pub(crate) async fn get_run(pool: &PgPool, run_id: Uuid) -> Result<Option<Migrat
     Ok(Some(run))
 }
 
-pub(crate) async fn begin_offline_run(pool: &PgPool, input: BeginRun) -> Result<MigrationRun> {
+pub async fn begin_offline_run(pool: &PgPool, input: BeginRun) -> Result<MigrationRun> {
     backend_pair(&input.source_backend, &input.target_backend)?;
     ensure!(
         input.source_namespace_sha256 != input.target_namespace_sha256,
@@ -236,7 +236,7 @@ pub(crate) async fn begin_offline_run(pool: &PgPool, input: BeginRun) -> Result<
     Ok(run)
 }
 
-pub(crate) async fn claim_items(
+pub async fn claim_items(
     pool: &PgPool,
     run_id: Uuid,
     limit: i64,
@@ -298,7 +298,7 @@ pub(crate) async fn claim_items(
     Ok(claimed)
 }
 
-pub(crate) async fn release_or_retry_claim(
+pub async fn release_or_retry_claim(
     pool: &PgPool,
     run_id: Uuid,
     object_id: Uuid,
@@ -319,7 +319,7 @@ pub(crate) async fn release_or_retry_claim(
     Ok(true)
 }
 
-pub(crate) async fn mark_verified(pool: &PgPool, verified: &VerifiedItem) -> Result<bool> {
+pub async fn mark_verified(pool: &PgPool, verified: &VerifiedItem) -> Result<bool> {
     let item = &verified.item;
     ensure!(
         verified.dest_size == item.source_size && verified.dest_sha256 == verified.source_sha256,
@@ -394,7 +394,7 @@ async fn list_verified_items_tx(
     rows.iter().map(manifest_item).collect()
 }
 
-pub(crate) async fn list_verified_items(
+pub async fn list_verified_items(
     pool: &PgPool,
     run_id: Uuid,
     after_object_id: Option<Uuid>,
@@ -428,14 +428,14 @@ fn put_optional(hasher: &mut Sha256, value: Option<&[u8]>) {
 /// Canonical manifest v1 is domain-separated SHA-256 over length-prefixed
 /// UTF-8 fields, UUID bytes, big-endian i64 values, and tagged optionals.
 /// Rows must be supplied in ascending PostgreSQL UUID order, exactly once.
-pub(crate) struct CanonicalManifestHasher {
+pub struct CanonicalManifestHasher {
     hasher: Sha256,
     last_id: Option<Uuid>,
     count: i64,
 }
 
 impl CanonicalManifestHasher {
-    pub(crate) fn new(run: &MigrationRun) -> Self {
+    pub fn new(run: &MigrationRun) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(MANIFEST_DOMAIN);
         hasher.update(run.run_id.as_bytes());
@@ -452,7 +452,7 @@ impl CanonicalManifestHasher {
         }
     }
 
-    pub(crate) fn update(&mut self, item: &VerifiedManifestItem) -> Result<()> {
+    pub fn update(&mut self, item: &VerifiedManifestItem) -> Result<()> {
         ensure!(
             self.last_id.is_none_or(|last| last < item.object_id),
             "manifest item order or identity is invalid"
@@ -484,7 +484,7 @@ impl CanonicalManifestHasher {
         Ok(())
     }
 
-    pub(crate) fn finish(self, expected_count: i64) -> Result<[u8; 32]> {
+    pub fn finish(self, expected_count: i64) -> Result<[u8; 32]> {
         ensure!(
             self.count == expected_count,
             "manifest does not cover every source slot"
@@ -493,7 +493,7 @@ impl CanonicalManifestHasher {
     }
 }
 
-pub(crate) async fn final_cutover(
+pub async fn final_cutover(
     pool: &PgPool,
     run_id: Uuid,
     manifest_sha256: [u8; 32],
@@ -610,7 +610,7 @@ pub(crate) async fn final_cutover(
     })
 }
 
-pub(crate) async fn abort_run(pool: &PgPool, run_id: Uuid) -> Result<()> {
+pub async fn abort_run(pool: &PgPool, run_id: Uuid) -> Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_catalog.pg_advisory_xact_lock(735559096281326101)")
         .execute(&mut *tx)
@@ -692,10 +692,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(actual_schema, expected_schema);
-        crate::db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
         let mut ensure_tx = pool.begin().await.unwrap();
         sqlx::raw_sql(include_str!(
-            "../../deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql"
+            "../../../../../deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql"
         ))
         .execute(&mut *ensure_tx)
         .await
@@ -709,13 +709,13 @@ mod tests {
         .await
         .unwrap();
         assert!(sqlx::raw_sql(include_str!(
-            "../../deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql"
+            "../../../../../deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql"
         ))
         .execute(&mut *tampered_marker)
         .await
         .is_err());
         tampered_marker.rollback().await.unwrap();
-        northstar_upload_postgres::validate_upload_capacity_policy(&pool, 4096, 4096, 1 << 30)
+        crate::validate_upload_capacity_policy(&pool, 4096, 4096, 1 << 30)
             .await
             .unwrap();
         let local_namespace = [1_u8; 32];

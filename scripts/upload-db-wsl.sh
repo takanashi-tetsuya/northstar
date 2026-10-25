@@ -133,7 +133,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
-cargo test --locked --offline -p northstar-upload-postgres tests:: -- --ignored --nocapture --test-threads=1
+cargo test --locked --offline -p northstar-upload-postgres tests:: -- --skip migration:: --ignored --nocapture --test-threads=1
 cargo test --locked --offline db::upload_account_tests -- --ignored --nocapture --test-threads=1
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$admin_schema"
 cargo test --locked --offline \

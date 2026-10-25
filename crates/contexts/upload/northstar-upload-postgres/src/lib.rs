@@ -23,6 +23,7 @@ mod slots;
 mod storage_jobs;
 
 pub mod maintenance;
+pub mod migration;
 
 pub use self::capacity_audit::*;
 pub use self::deletion::*;

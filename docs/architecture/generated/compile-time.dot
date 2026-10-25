@@ -1083,6 +1083,7 @@ digraph compile_time {
   "northstar-upload-postgres" -> "northstar-postgres";
   "northstar-upload-postgres" -> "northstar-upload-application";
   "northstar-upload-postgres" -> "serde_json";
+  "northstar-upload-postgres" -> "sha2";
   "northstar-upload-postgres" -> "sqlx";
   "northstar-upload-postgres" -> "tokio";
   "northstar-upload-postgres" -> "uuid";

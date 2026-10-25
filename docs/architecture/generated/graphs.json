@@ -2575,6 +2575,10 @@
       ],
       [
         "northstar-upload-postgres",
+        "sha2"
+      ],
+      [
+        "northstar-upload-postgres",
         "sqlx"
       ],
       [

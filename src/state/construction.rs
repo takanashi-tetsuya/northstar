@@ -118,7 +118,7 @@ impl AppState {
         let upload_startup_phase =
             northstar_telemetry::logging::StartupPhase::begin("upload_storage_initialization");
         anyhow::ensure!(
-            !db::upload_migration_active(&pool).await?,
+            !northstar_upload_postgres::migration::upload_migration_active(&pool).await?,
             "offline upload migration is active; keep all nodes stopped"
         );
         let upload_storage_pool = match config.storage_pool_mode {

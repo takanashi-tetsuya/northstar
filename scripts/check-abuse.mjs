@@ -134,7 +134,7 @@ const xmppRegistration = accountRepository.slice(
   accountRepository.indexOf('async fn register('),
   accountRepository.indexOf('async fn change_password('),
 );
-assert.match(xmppRegistration, /password_work: crate::security::password_work::PasswordWorkReservation/,
+assert.match(xmppRegistration, /password_work: northstar_security::password_work::PasswordWorkReservation/,
   'the registration transaction must require the service-reserved CPU permit');
 assert.match(xmppRegistration, /\.pool\s*\.begin\(\)/,
   'the complete registration operation must have one repository-owned transaction');

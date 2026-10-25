@@ -958,7 +958,7 @@ impl ProtocolSession {
                 .unwrap_or_default();
             let password_hash = zeroize::Zeroizing::new(password_hash.to_owned());
             let supplied_password = zeroize::Zeroizing::new(supplied_password.to_owned());
-            let password_valid = match crate::security::password_work::run(move || {
+            let password_valid = match northstar_security::password_work::run(move || {
                 Ok(crate::services::muc::verify_room_password(
                     &password_hash,
                     &supplied_password,

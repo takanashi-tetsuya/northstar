@@ -1,9 +1,9 @@
-use crate::security::cluster_keys::{
-    ClusterKeyDeploymentIdentity, ClusterNodeInstance, ClusterPeerKeyAuthority,
-    ExpectedClusterPeerKey,
-};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
+use northstar_security::cluster_keys::ClusterNodeInstance;
+use northstar_security::cluster_keys::ClusterPeerKeyAuthority;
+use northstar_security::cluster_keys::ExpectedClusterPeerKey;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::time::Duration;
@@ -38,7 +38,7 @@ fn replay_validation_rejection_fields(code: Option<&str>, message: &str) -> bool
 /// decides whether this process still owns the instance.
 pub(crate) async fn fence_direct_message_authority_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    authority: &crate::security::cluster_keys::ClusterReadinessAuthority,
+    authority: &northstar_security::cluster_keys::ClusterReadinessAuthority,
 ) -> Result<()> {
     let key: Option<bool> = sqlx::query_scalar(
         "SELECT TRUE FROM cluster_key_deployments
@@ -86,7 +86,7 @@ pub(crate) async fn fence_direct_message_authority_in_transaction(
 /// cutoff for one bounded recovery replay pass, never a claim on live routes.
 pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
     pool: &PgPool,
-    authority: &crate::security::cluster_keys::ClusterReadinessAuthority,
+    authority: &northstar_security::cluster_keys::ClusterReadinessAuthority,
 ) -> Result<DateTime<Utc>> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut tx = pool.begin().await?;
@@ -147,7 +147,7 @@ pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
 pub async fn admit_cluster_envelope_replay(
     pool: &PgPool,
     namespace: &str,
-    envelope: &crate::security::cluster_bus::SignedClusterEnvelope,
+    envelope: &northstar_security::cluster_bus::SignedClusterEnvelope,
 ) -> Result<bool> {
     let event_id = Uuid::parse_str(&envelope.event_id)?;
     let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.expires_at, 0)

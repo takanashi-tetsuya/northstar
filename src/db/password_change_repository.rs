@@ -244,7 +244,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         .await
         {
             Ok(prepared) => prepared,
-            Err(error) if crate::security::password_work::is_overloaded(&error) => {
+            Err(error) if northstar_security::password_work::is_overloaded(&error) => {
                 if !self.yield_lease(&lease).await? {
                     return Ok(Outcome::LeaseLost);
                 }

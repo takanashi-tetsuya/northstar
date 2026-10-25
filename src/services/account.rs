@@ -222,7 +222,7 @@ pub(crate) trait AccountRepository: Send + Sync {
         &self,
         request: RegistrationRequest<'_>,
         policy: AccountPolicy,
-        password_work: crate::security::password_work::PasswordWorkReservation,
+        password_work: northstar_security::password_work::PasswordWorkReservation,
     ) -> impl std::future::Future<Output = Result<RegistrationOutcome>> + Send;
     fn change_password(
         &self,
@@ -287,7 +287,7 @@ impl<R: AccountRepository> AccountService<R> {
         // but proof consumption, actor advancement, invitation consumption,
         // credential creation and the account row remain one transaction. A
         // crash therefore rolls the proof back instead of burning it.
-        let password_work = match crate::security::password_work::reserve().await {
+        let password_work = match northstar_security::password_work::reserve().await {
             Ok(password_work) => password_work,
             Err(error) if error.is_overloaded() => {
                 return Ok(RegistrationOutcome::PasswordWorkOverloaded)

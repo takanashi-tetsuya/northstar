@@ -46,8 +46,7 @@
     "platform": {
       "rank": 1,
       "modules": [
-        "platform",
-        "security"
+        "platform"
       ],
       "may_use": [
         "platform"

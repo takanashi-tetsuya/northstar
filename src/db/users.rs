@@ -441,7 +441,7 @@ pub async fn change_password(
     scram_sha1_enabled: bool,
 ) -> Result<()> {
     let password = Zeroizing::new(new_password.to_owned());
-    let creds = crate::security::password_work::run(move || {
+    let creds = northstar_security::password_work::run(move || {
         auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await

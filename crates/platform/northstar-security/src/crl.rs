@@ -25,7 +25,7 @@ enum PeerRole {
 /// any other validation failure must not turn a routine TLS reload into a
 /// global connection kick.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RevocationRecheck {
+pub enum RevocationRecheck {
     Valid,
     ExplicitlyRevoked,
     OtherValidationFailure,
@@ -50,14 +50,14 @@ impl PeerRole {
 /// must not be expired. Northstar never downloads attacker-selected CRL URLs
 /// from certificate extensions.
 #[derive(Debug)]
-pub(crate) struct CrlSet {
+pub struct CrlSet {
     encoded: Vec<CertificateRevocationListDer<'static>>,
     parsed: Vec<CertRevocationList<'static>>,
     fresh_until_unix: u64,
 }
 
 impl CrlSet {
-    pub(crate) fn from_pem(bytes: &[u8], label: &str) -> Result<Self> {
+    pub fn from_pem(bytes: &[u8], label: &str) -> Result<Self> {
         let pem =
             std::str::from_utf8(bytes).with_context(|| format!("{label} is not UTF-8 PEM"))?;
         let labels = pem_begin_labels(pem).collect::<Vec<_>>();
@@ -120,7 +120,7 @@ impl CrlSet {
         })
     }
 
-    pub(crate) fn verify_server_chain(
+    pub fn verify_server_chain(
         &self,
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
@@ -143,7 +143,7 @@ impl CrlSet {
     /// TLS client. This is used by inbound S2S SASL EXTERNAL (and, when the
     /// operator enables it, C2S EXTERNAL); validating a client credential as
     /// `serverAuth` would silently bypass its EKU boundary.
-    pub(crate) fn verify_client_chain(
+    pub fn verify_client_chain(
         &self,
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
@@ -162,7 +162,7 @@ impl CrlSet {
         .with_context(|| "client certificate path, EKU, or fail-closed CRL validation failed")
     }
 
-    pub(crate) fn recheck_server_chain(
+    pub fn recheck_server_chain(
         &self,
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
@@ -180,7 +180,7 @@ impl CrlSet {
         ))
     }
 
-    pub(crate) fn recheck_client_chain(
+    pub fn recheck_client_chain(
         &self,
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
@@ -198,7 +198,7 @@ impl CrlSet {
         ))
     }
 
-    pub(crate) fn is_fresh_at(&self, now: UnixTime) -> bool {
+    pub fn is_fresh_at(&self, now: UnixTime) -> bool {
         now.as_secs() < self.fresh_until_unix
     }
 
@@ -243,7 +243,7 @@ impl CrlSet {
     /// directly. Keeping the DER from the same startup/reload parse ensures
     /// the handshake verifier and Northstar's post-handshake XMPP verifier
     /// cannot accidentally use different revocation snapshots.
-    pub(crate) fn encoded(&self) -> Vec<CertificateRevocationListDer<'static>> {
+    pub fn encoded(&self) -> Vec<CertificateRevocationListDer<'static>> {
         self.encoded.clone()
     }
 }

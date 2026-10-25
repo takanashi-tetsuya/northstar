@@ -550,7 +550,7 @@ pub(crate) async fn handle(
                 execute_form_command(session, &actor, &claim, node, submission).await;
             if command_execution
                 .as_ref()
-                .is_err_and(crate::security::password_work::is_overloaded)
+                .is_err_and(northstar_security::password_work::is_overloaded)
             {
                 if session
                     .state

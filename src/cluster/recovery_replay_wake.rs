@@ -6,12 +6,12 @@ use crate::xmpp::local_routes::session::OnlineSession;
 use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode},
     db,
-    security::cluster_keys::ClusterReadinessAuthority,
     services::replay::{RecoveryReplayAuthority, ReplayService},
     xmpp::{capabilities::PostActionTelemetry, protocol::replay},
 };
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use northstar_telemetry::metrics::Metrics;
 use sqlx::PgPool;
 use std::{

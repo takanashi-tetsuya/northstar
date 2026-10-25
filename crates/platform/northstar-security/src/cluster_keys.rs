@@ -53,11 +53,11 @@ pub struct ClusterPeerKeyAuthority {
 /// local lease epoch alongside the configured key avoids passing live cluster
 /// control-plane authority into the service or repository.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ClusterReadinessAuthority {
-    pub(crate) key_identity: crate::security::cluster_keys::ClusterKeyDeploymentIdentity,
-    pub(crate) instance_node_id: String,
-    pub(crate) instance_uuid: uuid::Uuid,
-    pub(crate) instance_epoch: i64,
-    pub(crate) signing_key_id: String,
-    pub(crate) signing_key_epoch: i64,
+pub struct ClusterReadinessAuthority {
+    pub key_identity: crate::cluster_keys::ClusterKeyDeploymentIdentity,
+    pub instance_node_id: String,
+    pub instance_uuid: uuid::Uuid,
+    pub instance_epoch: i64,
+    pub signing_key_id: String,
+    pub signing_key_epoch: i64,
 }

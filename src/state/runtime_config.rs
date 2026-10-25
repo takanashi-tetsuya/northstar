@@ -91,7 +91,7 @@ pub(crate) struct UploadSlotLimits {
 }
 
 impl AppState {
-    pub(crate) fn tls_context(&self) -> &crate::security::tls::TlsContext {
+    pub(crate) fn tls_context(&self) -> &northstar_security::tls::TlsContext {
         &self.tls_context
     }
 
@@ -152,10 +152,10 @@ impl AppState {
     }
 
     pub(crate) fn s2s_dane_required(&self) -> bool {
-        self.config.federation_dane_mode == crate::security::dane::DaneMode::Required
+        self.config.federation_dane_mode == northstar_security::dane::DaneMode::Required
     }
 
-    pub(crate) fn s2s_dane_mode(&self) -> crate::security::dane::DaneMode {
+    pub(crate) fn s2s_dane_mode(&self) -> northstar_security::dane::DaneMode {
         self.config.federation_dane_mode
     }
 

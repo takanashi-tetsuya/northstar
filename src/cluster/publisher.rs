@@ -10,13 +10,13 @@ pub(super) struct ClusterSignedPublisher {
     pub(super) namespace: String,
     pub(super) key_prefix: String,
     pub(super) node_id: String,
-    pub(super) security: Option<Arc<crate::security::cluster_bus::ClusterSecurityConfig>>,
+    pub(super) security: Option<Arc<northstar_security::cluster_bus::ClusterSecurityConfig>>,
     pub(super) connection_uuid: uuid::Uuid,
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::security::cluster_bus::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
     pub(super) publication_gate: Arc<tokio::sync::RwLock<()>>,
 }
 
@@ -78,8 +78,8 @@ impl ClusterSignedPublisher {
         let mut nodes: Vec<String> = script
             .key(key)
             .arg(self.key("node:".to_owned()))
-            .arg(crate::security::cluster_bus::MAX_PEERS + 1)
-            .arg(crate::security::cluster_bus::MAX_NODE_ID_BYTES)
+            .arg(northstar_security::cluster_bus::MAX_PEERS + 1)
+            .arg(northstar_security::cluster_bus::MAX_NODE_ID_BYTES)
             .invoke_async(&mut *conn)
             .await?;
         nodes.sort_unstable();
@@ -157,8 +157,8 @@ impl ClusterSignedPublisher {
             destination.valid_until > Instant::now() && destination.refresh_until > Instant::now(),
             "cluster destination process authority is stale"
         );
-        let kind = crate::security::cluster_bus::infer_kind(&payload)?;
-        let envelope = crate::security::cluster_bus::SignedClusterEnvelope::sign(
+        let kind = northstar_security::cluster_bus::infer_kind(&payload)?;
+        let envelope = northstar_security::cluster_bus::SignedClusterEnvelope::sign(
             &security.signer(),
             &self.namespace,
             &self.node_id,
@@ -449,7 +449,7 @@ impl ClusterManager {
         raw: &str,
         channel: &str,
         expected_source: Option<&str>,
-    ) -> Result<crate::security::cluster_bus::SignedClusterEnvelope> {
+    ) -> Result<northstar_security::cluster_bus::SignedClusterEnvelope> {
         self.verify_signed_payload_inner(raw, channel, expected_source, true)
     }
 
@@ -460,7 +460,7 @@ impl ClusterManager {
         channel: &str,
         expected_source: Option<&str>,
         remember_replay: bool,
-    ) -> Result<crate::security::cluster_bus::SignedClusterEnvelope> {
+    ) -> Result<northstar_security::cluster_bus::SignedClusterEnvelope> {
         let envelope =
             self.listener_security()
                 .verify_current_envelope(raw, channel, expected_source)?;
@@ -473,7 +473,7 @@ impl ClusterManager {
     #[cfg(test)]
     pub(super) fn remember_envelope_replay(
         &self,
-        envelope: &crate::security::cluster_bus::SignedClusterEnvelope,
+        envelope: &northstar_security::cluster_bus::SignedClusterEnvelope,
     ) -> Result<()> {
         let replay_key = format!(
             "{}:{}:{}:{}",
@@ -485,7 +485,7 @@ impl ClusterManager {
         let now = chrono::Utc::now().timestamp();
         let accept_until = envelope
             .expires_at
-            .saturating_add(crate::security::cluster_bus::CLOCK_SKEW_SECONDS);
+            .saturating_add(northstar_security::cluster_bus::CLOCK_SKEW_SECONDS);
         self.remember_replay_key(replay_key, accept_until, now, MAX_REPLAY_ENTRIES)
     }
 

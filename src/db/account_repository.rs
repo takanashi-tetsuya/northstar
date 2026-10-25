@@ -347,7 +347,7 @@ impl AccountRepository for PostgresAccountRepository {
         &self,
         request: RegistrationRequest<'_>,
         policy: AccountPolicy,
-        password_work: crate::security::password_work::PasswordWorkReservation,
+        password_work: northstar_security::password_work::PasswordWorkReservation,
     ) -> Result<RegistrationOutcome> {
         let mut transaction = self
             .pool
@@ -493,7 +493,7 @@ impl AccountRepository for PostgresAccountRepository {
             Ok(Err(error)) => Ok(PasswordChangeOutcome::AbuseDenied(
                 error.requirement().clone(),
             )),
-            Err(error) if crate::security::password_work::is_overloaded(&error) => {
+            Err(error) if northstar_security::password_work::is_overloaded(&error) => {
                 Ok(PasswordChangeOutcome::PasswordWorkOverloaded)
             }
             Err(error) => Err(error).context("guarded password change failed"),
@@ -845,7 +845,7 @@ mod registration_guard_tests {
             .unwrap();
         let proof = solve_pow(&challenge);
         let mut admissions = Vec::new();
-        while let Ok(admission) = crate::security::password_work::admit() {
+        while let Ok(admission) = northstar_security::password_work::admit() {
             admissions.push(admission);
         }
         assert!(!admissions.is_empty());

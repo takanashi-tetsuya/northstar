@@ -7,7 +7,6 @@ mod loading;
 mod parsing;
 mod raw;
 mod runtime_validation;
-mod secret_files;
 mod web_origin;
 
 pub(crate) use environment::load_dotenv;
@@ -19,16 +18,14 @@ use self::listeners::*;
 use self::parsing::*;
 pub use self::raw::*;
 use self::runtime_validation::*;
-pub(crate) use self::secret_files::*;
 pub(crate) use self::web_origin::*;
+use northstar_security::secret_files::{read_protected_utf8_file, read_secret_file};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    fs,
-    io::Read,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::Arc,
@@ -197,11 +194,11 @@ pub struct Config {
     pub federation_denylist: Vec<String>,
     /// Test/private-network endpoint overrides. The boolean selects Direct TLS.
     pub federation_dns_overrides: Vec<(String, SocketAddr, bool)>,
-    pub federation_dane_mode: crate::security::dane::DaneMode,
+    pub federation_dane_mode: northstar_security::dane::DaneMode,
     pub stun_service: Option<(String, u16)>,
     pub turn_service: Option<(String, u16)>,
     pub components: Vec<ComponentCredential>,
-    pub cluster_security: Option<Arc<crate::security::cluster_bus::ClusterSecurityConfig>>,
+    pub cluster_security: Option<Arc<northstar_security::cluster_bus::ClusterSecurityConfig>>,
     /// True only when FAST has a mounted deployment key or the explicit
     /// loopback-only ephemeral development policy was accepted.
     pub(crate) fast_token_enabled: bool,

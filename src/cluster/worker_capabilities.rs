@@ -1,7 +1,7 @@
 //! Narrow capabilities of the listener, readiness, revocation, failure-supervisor and MUC outbox workers.
 
 use super::*;
-use crate::security::cluster_keys::ClusterReadinessAuthority;
+use northstar_security::cluster_keys::ClusterReadinessAuthority;
 
 /// MIX route discovery reads current PostgreSQL session ownership without
 /// receiving publication, Redis, or session-mutation authority.
@@ -41,7 +41,7 @@ pub(crate) struct ClusterPubsubListenerTransport {
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::security::cluster_bus::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
 }
 
 impl ClusterPubsubListenerTransport {
@@ -114,7 +114,7 @@ impl ClusterListenerSecurity {
         raw: &str,
         channel: &str,
         expected_source: Option<&str>,
-    ) -> Result<crate::security::cluster_bus::SignedClusterEnvelope> {
+    ) -> Result<northstar_security::cluster_bus::SignedClusterEnvelope> {
         anyhow::ensure!(
             raw.len() <= MAX_CLUSTER_PAYLOAD_BYTES,
             "cluster envelope is oversized"
@@ -124,7 +124,7 @@ impl ClusterListenerSecurity {
             .security
             .as_ref()
             .context("cluster verifier is not configured")?;
-        let envelope: crate::security::cluster_bus::SignedClusterEnvelope =
+        let envelope: northstar_security::cluster_bus::SignedClusterEnvelope =
             serde_json::from_str(raw).context("cluster envelope is invalid JSON")?;
         envelope.verify(
             &self.publisher.namespace,
@@ -140,7 +140,7 @@ impl ClusterListenerSecurity {
 
     pub(super) fn validate_verified_envelope(
         &self,
-        envelope: &crate::security::cluster_bus::SignedClusterEnvelope,
+        envelope: &northstar_security::cluster_bus::SignedClusterEnvelope,
     ) -> Result<()> {
         let security = self
             .publisher
@@ -189,9 +189,9 @@ impl ClusterListenerSecurity {
         raw: &str,
         channel: &str,
         expected_source: Option<&str>,
-    ) -> Result<crate::security::cluster_bus::SignedClusterEnvelope> {
+    ) -> Result<northstar_security::cluster_bus::SignedClusterEnvelope> {
         let envelope = self.verify_current_envelope(raw, channel, expected_source)?;
-        if envelope.kind == crate::security::cluster_bus::ClusterCommandKind::Ack {
+        if envelope.kind == northstar_security::cluster_bus::ClusterCommandKind::Ack {
             anyhow::ensure!(
                 serde_json::to_vec(&envelope.payload)?.len() <= MAX_DELIVERY_ACK_BYTES,
                 "cluster acknowledgement payload is oversized"
@@ -295,7 +295,7 @@ pub(crate) struct ClusterRevocationAuthority {
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) notify: Arc<tokio::sync::Notify>,
     pub(super) enabled: bool,
-    pub(super) failure_policy: Option<crate::security::cluster_bus::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
 }
@@ -310,12 +310,12 @@ pub(crate) struct ClusterFailureSupervisorAuthority {
     pub(super) instance_epoch: Arc<AtomicI64>,
     pub(super) domain: String,
     pub(super) peer_nodes: Vec<String>,
-    pub(super) expected_peer_keys: Vec<crate::security::cluster_keys::ExpectedClusterPeerKey>,
+    pub(super) expected_peer_keys: Vec<northstar_security::cluster_keys::ExpectedClusterPeerKey>,
     pub(super) authorized_peer_keys: Arc<dashmap::DashMap<String, AuthorizedPeerKeys>>,
     pub(super) authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::security::cluster_bus::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
     pub(super) safety_lease_seconds: Option<u64>,
 }
 
@@ -329,7 +329,7 @@ pub(crate) struct ClusterMaintenanceControl {
     pub(super) health: Arc<ClusterHealth>,
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
     pub(super) direct_spool_notify: Arc<tokio::sync::Notify>,
-    pub(super) failure_policy: Option<crate::security::cluster_bus::ClusterFailurePolicy>,
+    pub(super) failure_policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
 }
 
 /// A MUC outbox worker needs only its node identity and committed wake signal
@@ -549,7 +549,7 @@ impl ClusterFailureSupervisorAuthority {
 
     pub(crate) fn key_identity(
         &self,
-    ) -> Option<&crate::security::cluster_keys::ClusterKeyDeploymentIdentity> {
+    ) -> Option<&northstar_security::cluster_keys::ClusterKeyDeploymentIdentity> {
         self.readiness
             .as_ref()
             .map(|readiness| &readiness.key_identity)
@@ -590,9 +590,9 @@ impl ClusterFailureSupervisorAuthority {
         );
     }
 
-    pub(crate) fn failure_policy(&self) -> crate::security::cluster_bus::ClusterFailurePolicy {
+    pub(crate) fn failure_policy(&self) -> northstar_security::cluster_bus::ClusterFailurePolicy {
         self.failure_policy
-            .unwrap_or(crate::security::cluster_bus::ClusterFailurePolicy::FailClosed)
+            .unwrap_or(northstar_security::cluster_bus::ClusterFailurePolicy::FailClosed)
     }
 
     pub(crate) fn safety_lease_expired(&self) -> bool {

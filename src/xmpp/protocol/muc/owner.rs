@@ -464,7 +464,7 @@ impl ProtocolSession {
                     // Reacquire and validate the exact room/config/owner
                     // snapshot before committing the prepared hash.
                     drop(local_room_guard.take());
-                    let password_hash = match crate::security::password_work::run(move || {
+                    let password_hash = match northstar_security::password_work::run(move || {
                         crate::services::muc::hash_room_password(&secret)
                     })
                     .await
@@ -477,7 +477,9 @@ impl ProtocolSession {
                                 "resource-constraint",
                             )));
                         }
-                        Err(crate::security::password_work::PasswordWorkError::Computation(_)) => {
+                        Err(northstar_security::password_work::PasswordWorkError::Computation(
+                            _,
+                        )) => {
                             return Ok(Action::Send(iq_error_from(id, room_jid, "not-acceptable")));
                         }
                         Err(error) => {

@@ -13,7 +13,7 @@ pub(super) struct AuthenticatedTransport {
     pub(super) limits: AdvertisedStreamLimits,
     pub(super) external: bool,
     pub(super) bidi: bool,
-    pub(super) certificate: Option<crate::security::tls::CertificateSessionGuard>,
+    pub(super) certificate: Option<northstar_security::tls::CertificateSessionGuard>,
 }
 
 pub(super) async fn authenticate_transport(
@@ -76,7 +76,7 @@ pub(super) async fn authenticate_transport(
     let certificate_session = if external {
         Some(state.tls_context().register_certificate_session(
             uuid::Uuid::new_v4(),
-            crate::security::tls::CertificateSessionKind::OutboundS2s,
+            northstar_security::tls::CertificateSessionKind::OutboundS2s,
             peer_certificates,
             tls_generation,
             disconnect.clone(),
@@ -204,13 +204,13 @@ pub(super) async fn connect_secure_endpoint(
     endpoint: &FederationEndpoint,
 ) -> Result<SecureS2sConnection> {
     let dane_mode = state.s2s_dane_mode();
-    let dane_policy = if dane_mode == crate::security::dane::DaneMode::Off {
+    let dane_policy = if dane_mode == northstar_security::dane::DaneMode::Off {
         None
     } else {
         let resolver = state
             .s2s_dnssec_resolver()
             .context("DANE is enabled but the validating DNSSEC resolver is unavailable")?;
-        crate::security::dane::lookup_dane_policy(
+        northstar_security::dane::lookup_dane_policy(
             resolver,
             dane_mode,
             endpoint
@@ -301,7 +301,7 @@ pub(super) async fn connect_secure_endpoint(
         .transpose()?
         .unwrap_or_default();
     let dane_ee_authorized =
-        dane_matches.contains(&crate::security::dane::DaneMatch::DaneEndEntity);
+        dane_matches.contains(&northstar_security::dane::DaneMatch::DaneEndEntity);
     let identity =
         verify_peer_xmpp_identity(end_entity, target_domain)?.or(if endpoint.delegated_identity {
             verify_peer_xmpp_identity(end_entity, &endpoint.tls_server_name)?

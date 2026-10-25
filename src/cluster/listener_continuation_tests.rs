@@ -341,7 +341,7 @@ async fn response_generation_is_rejected_after_rotation_replacement_and_shutdown
 fn deferred_response_revalidates_expiry_source_authority_without_readmitting_replay() {
     let namespace = "listener-authority.test";
     let (sender_security, receiver_security) =
-        crate::security::cluster_bus::test_configuration_pair(namespace);
+        northstar_security::cluster_bus::test_configuration_pair(namespace);
     let sender = super::tests::verification_manager(namespace, sender_security);
     let receiver = super::tests::verification_manager(namespace, receiver_security);
     let admission = receiver.listener_admission();
@@ -370,12 +370,12 @@ fn deferred_response_revalidates_expiry_source_authority_without_readmitting_rep
     let channel = receiver.key(format!("node:{}", receiver.node_id));
     let authority_at =
         |issued_at, historical| {
-            let envelope = crate::security::cluster_bus::SignedClusterEnvelope::sign(
+            let envelope = northstar_security::cluster_bus::SignedClusterEnvelope::sign(
             &signing.signer(), namespace, &sender.node_id, &receiver.node_id,
             receiver.connection_uuid, receiver.instance_epoch.load(Ordering::Acquire),
             &receiver.security.as_ref().unwrap().current_key_id,
             receiver.security.as_ref().unwrap().key_epoch, &channel,
-            crate::security::cluster_bus::ClusterCommandKind::DirectDelivery,
+            northstar_security::cluster_bus::ClusterCommandKind::DirectDelivery,
             sender.connection_uuid, sender.instance_epoch.load(Ordering::Acquire),
             serde_json::json!({"target": "alice@listener-authority.test", "stanza": "<presence/>"}),
             issued_at,

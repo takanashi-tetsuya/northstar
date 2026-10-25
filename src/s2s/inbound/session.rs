@@ -217,7 +217,7 @@ pub(super) async fn drive_authenticated_inbound(
     let certificate_session = if via_external {
         Some(state.tls_context().register_certificate_session(
             connection_id,
-            crate::security::tls::CertificateSessionKind::InboundS2s,
+            northstar_security::tls::CertificateSessionKind::InboundS2s,
             peer_certificates,
             tls_generation,
             disconnect.clone(),

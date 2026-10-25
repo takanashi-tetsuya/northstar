@@ -445,7 +445,7 @@ pub async fn prepare_login(
     // Bound the whole password-authentication request before its user lookup,
     // not only the Argon2 closure. Otherwise a random-username flood could
     // bypass the retained-work cap while consuming database connections.
-    let password_work = crate::security::password_work::admit()
+    let password_work = northstar_security::password_work::admit()
         .map_err(anyhow::Error::from)
         .context("password authentication admission failed")?;
     let Some(mut user) = find_user(pool, &username).await? else {
@@ -593,7 +593,7 @@ pub async fn prepare_password_change(
     let current_hash = Zeroizing::new(expected_password_hash.to_owned());
     let current_candidate = Zeroizing::new(current_password.to_owned());
     let password = Zeroizing::new(new_password.to_owned());
-    let prepared = crate::security::password_work::run(move || {
+    let prepared = northstar_security::password_work::run(move || {
         if !auth::verify_password(&current_hash, &current_candidate)
             .context("stored Argon2 verifier failed integrity validation")?
         {
@@ -705,7 +705,7 @@ pub async fn change_password_guarded_v2(
     // Reserve bounded CPU capacity before borrowing a database connection.
     // Proof consumption and the credential write remain one transaction, but
     // password-work queueing can no longer occupy the entire PgPool.
-    let password_work = crate::security::password_work::reserve()
+    let password_work = northstar_security::password_work::reserve()
         .await
         .map_err(anyhow::Error::from)
         .context("password-change work admission failed")?;

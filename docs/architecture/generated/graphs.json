@@ -2222,6 +2222,98 @@
         "uuid"
       ],
       [
+        "northstar-security",
+        "anyhow"
+      ],
+      [
+        "northstar-security",
+        "arc-swap"
+      ],
+      [
+        "northstar-security",
+        "base64"
+      ],
+      [
+        "northstar-security",
+        "chrono"
+      ],
+      [
+        "northstar-security",
+        "hickory-resolver"
+      ],
+      [
+        "northstar-security",
+        "libc"
+      ],
+      [
+        "northstar-security",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-security",
+        "openssl"
+      ],
+      [
+        "northstar-security",
+        "ring"
+      ],
+      [
+        "northstar-security",
+        "rustls-webpki"
+      ],
+      [
+        "northstar-security",
+        "serde"
+      ],
+      [
+        "northstar-security",
+        "serde_json"
+      ],
+      [
+        "northstar-security",
+        "sha2"
+      ],
+      [
+        "northstar-security",
+        "subtle"
+      ],
+      [
+        "northstar-security",
+        "thiserror"
+      ],
+      [
+        "northstar-security",
+        "tokio"
+      ],
+      [
+        "northstar-security",
+        "tokio-rustls"
+      ],
+      [
+        "northstar-security",
+        "tokio-util"
+      ],
+      [
+        "northstar-security",
+        "tracing"
+      ],
+      [
+        "northstar-security",
+        "uuid"
+      ],
+      [
+        "northstar-security",
+        "webpki-roots"
+      ],
+      [
+        "northstar-security",
+        "x509-parser"
+      ],
+      [
+        "northstar-security",
+        "zeroize"
+      ],
+      [
         "northstar-session-application",
         "northstar-session-core"
       ],
@@ -3760,6 +3852,10 @@
       [
         "rust-xmpp-server",
         "northstar-runtime"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-security"
       ],
       [
         "rust-xmpp-server",
@@ -6182,6 +6278,7 @@
       "northstar-roster-application",
       "northstar-roster-core",
       "northstar-runtime",
+      "northstar-security",
       "northstar-session-application",
       "northstar-session-core",
       "northstar-telemetry",

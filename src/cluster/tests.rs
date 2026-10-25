@@ -143,7 +143,7 @@ fn readiness_probe_keeps_configured_identity_and_reads_current_epoch() {
     let probe = ClusterReadinessProbe {
         health: Arc::new(ClusterHealth::disabled()),
         authority: Some(ClusterReadinessAuthority {
-            key_identity: crate::security::cluster_keys::ClusterKeyDeploymentIdentity {
+            key_identity: northstar_security::cluster_keys::ClusterKeyDeploymentIdentity {
                 xmpp_domain: "example.test".into(),
                 node_id: "node-a".into(),
                 epoch: 3,
@@ -244,7 +244,8 @@ async fn revocation_authority_failure_requires_immediate_shutdown() {
 
 #[tokio::test]
 async fn postgres_authority_failure_is_terminal_from_healthy_and_degraded_under_both_policies() {
-    use crate::security::cluster_bus::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
+    use northstar_security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly;
+    use northstar_security::cluster_bus::ClusterFailurePolicy::FailClosed;
 
     for policy in [FailClosed, DurableDirectOnly] {
         for already_degraded in [false, true] {
@@ -421,7 +422,7 @@ fn muc_soft_state_lease_survives_multiple_refresh_and_node_lease_windows() {
 
 pub(super) fn verification_manager(
     namespace: &str,
-    security: Arc<crate::security::cluster_bus::ClusterSecurityConfig>,
+    security: Arc<northstar_security::cluster_bus::ClusterSecurityConfig>,
 ) -> ClusterManager {
     ClusterManager {
         node_id: security.node_id.clone(),
@@ -452,7 +453,7 @@ pub(super) fn verification_manager(
 
 pub(super) fn listener_health_manager() -> ClusterManager {
     let namespace = "listener-health.test";
-    let (_, security) = crate::security::cluster_bus::test_configuration_pair(namespace);
+    let (_, security) = northstar_security::cluster_bus::test_configuration_pair(namespace);
     let mut manager = verification_manager(namespace, security);
     // A lazy, unused pool enables the health policy without opening Redis.
     let client = redis::Client::open("redis://127.0.0.1:1").unwrap();
@@ -832,7 +833,7 @@ fn disabled_cluster_direct_commit_stays_live_without_authority() {
 
 #[tokio::test]
 async fn recovery_defers_while_spooled_direct_commit_is_active() {
-    use crate::security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly;
+    use northstar_security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly;
     let manager = listener_health_manager();
     manager.note_listener_generation();
     record_cluster_failure(
@@ -864,7 +865,7 @@ async fn recovery_defers_while_spooled_direct_commit_is_active() {
 
 #[tokio::test]
 async fn failure_overrides_queued_reconciliation_before_direct_commit_finishes() {
-    use crate::security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly;
+    use northstar_security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly;
     let manager = listener_health_manager();
     manager.note_listener_generation();
     record_cluster_failure(
@@ -984,7 +985,8 @@ fn recovery_plan_advances_past_busy_first_page_and_rescans_only_when_incomplete(
 #[test]
 fn replay_cache_capacity_admission_is_linearizable() {
     let namespace = "example.test";
-    let (_, receiver_security) = crate::security::cluster_bus::test_configuration_pair(namespace);
+    let (_, receiver_security) =
+        northstar_security::cluster_bus::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, receiver_security);
     let workers = 64;
     let limit = 16;
@@ -1015,7 +1017,8 @@ fn replay_cache_capacity_admission_is_linearizable() {
 #[test]
 fn full_replay_cache_without_expiry_rejects_in_constant_time_path() {
     let namespace = "example.test";
-    let (_, receiver_security) = crate::security::cluster_bus::test_configuration_pair(namespace);
+    let (_, receiver_security) =
+        northstar_security::cluster_bus::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, receiver_security);
     manager
         .remember_replay_key("resident".to_owned(), 200, 100, 1)
@@ -1037,7 +1040,8 @@ fn full_replay_cache_without_expiry_rejects_in_constant_time_path() {
 #[test]
 fn replay_cache_preserves_the_clock_skew_boundary_and_reclaims_after_it() {
     let namespace = "example.test";
-    let (_, receiver_security) = crate::security::cluster_bus::test_configuration_pair(namespace);
+    let (_, receiver_security) =
+        northstar_security::cluster_bus::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, receiver_security);
 
     manager
@@ -1060,7 +1064,7 @@ fn replay_cache_preserves_the_clock_skew_boundary_and_reclaims_after_it() {
 fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
     let namespace = "example.test";
     let (sender_security, receiver_security) =
-        crate::security::cluster_bus::test_configuration_pair(namespace);
+        northstar_security::cluster_bus::test_configuration_pair(namespace);
     let receiver = verification_manager(namespace, receiver_security);
     let instance_uuid = uuid::Uuid::new_v4();
     let now = Instant::now();
@@ -1085,7 +1089,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
         },
     );
     let channel = format!("northstar:{namespace}:node:{}", receiver.node_id);
-    let envelope = crate::security::cluster_bus::SignedClusterEnvelope::sign(
+    let envelope = northstar_security::cluster_bus::SignedClusterEnvelope::sign(
         &sender_security.signer(),
         namespace,
         &sender_security.node_id,
@@ -1095,7 +1099,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
         &receiver.security.as_ref().unwrap().current_key_id,
         receiver.security.as_ref().unwrap().key_epoch,
         &channel,
-        crate::security::cluster_bus::ClusterCommandKind::DirectDelivery,
+        northstar_security::cluster_bus::ClusterCommandKind::DirectDelivery,
         instance_uuid,
         7,
         serde_json::json!({"target":"alice@example.test","stanza":"<message/>"}),
@@ -1115,7 +1119,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
 fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
     let namespace = "example.test";
     let (staged_sender, receiver_security, active_key_id) =
-        crate::security::cluster_bus::test_prepared_staged_pair(namespace);
+        northstar_security::cluster_bus::test_prepared_staged_pair(namespace);
     let receiver_peers = receiver_security.peers();
     let receiver = verification_manager(namespace, receiver_security);
     let copied_uuid = uuid::Uuid::new_v4();
@@ -1141,7 +1145,7 @@ fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
         },
     );
     let channel = format!("northstar:{namespace}:node:{}", receiver.node_id);
-    let envelope = crate::security::cluster_bus::SignedClusterEnvelope::sign(
+    let envelope = northstar_security::cluster_bus::SignedClusterEnvelope::sign(
         &staged_sender.signer(),
         namespace,
         &staged_sender.node_id,
@@ -1151,7 +1155,7 @@ fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
         &receiver.security.as_ref().unwrap().current_key_id,
         receiver.security.as_ref().unwrap().key_epoch,
         &channel,
-        crate::security::cluster_bus::ClusterCommandKind::DirectDelivery,
+        northstar_security::cluster_bus::ClusterCommandKind::DirectDelivery,
         copied_uuid,
         7,
         serde_json::json!({"target":"alice@example.test","stanza":"<message/>"}),
@@ -1278,7 +1282,7 @@ fn postgres_key_cache_controls_prepare_activate_and_retire_acceptance() {
 #[test]
 fn admission_capability_observes_shared_health_transitions() {
     let namespace = "admission-capability.test";
-    let (_, security) = crate::security::cluster_bus::test_configuration_pair(namespace);
+    let (_, security) = northstar_security::cluster_bus::test_configuration_pair(namespace);
     let manager = verification_manager(namespace, security);
     let admission = manager.admission();
     for state in [
@@ -1324,7 +1328,8 @@ fn cluster_failure_policy_static_matrix_is_fail_closed_by_class() {
             operation == ClusterOperation::DurableDirect
         );
     }
-    use crate::security::cluster_bus::ClusterFailurePolicy::{DurableDirectOnly, FailClosed};
+    use northstar_security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly;
+    use northstar_security::cluster_bus::ClusterFailurePolicy::FailClosed;
     assert!(!degraded_shutdown_required(FailClosed, true, false));
     assert!(degraded_shutdown_required(FailClosed, true, true));
     assert!(!degraded_shutdown_required(DurableDirectOnly, true, true));
@@ -1568,7 +1573,7 @@ async fn redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba() {
         std::env::var("TEST_REDIS_URL").expect("set TEST_REDIS_URL to a disposable Redis instance");
     let namespace = format!("muc-{}.test", uuid::Uuid::new_v4().simple());
     let (first_security, second_security) =
-        crate::security::cluster_bus::test_configuration_pair(&namespace);
+        northstar_security::cluster_bus::test_configuration_pair(&namespace);
     let first = ClusterManager::new(
         Some(&redis_url),
         &namespace,
@@ -1862,7 +1867,7 @@ async fn redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys() {
     let redis_url =
         std::env::var("TEST_REDIS_URL").expect("set TEST_REDIS_URL to a disposable Redis instance");
     let namespace = format!("muc-churn-{}.test", uuid::Uuid::new_v4().simple());
-    let (security, _) = crate::security::cluster_bus::test_configuration_pair(&namespace);
+    let (security, _) = northstar_security::cluster_bus::test_configuration_pair(&namespace);
     let cluster = ClusterManager::new(
         Some(&redis_url),
         &namespace,

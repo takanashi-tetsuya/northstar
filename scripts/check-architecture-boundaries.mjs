@@ -2357,7 +2357,7 @@ for (const [name, source] of [
   ['GovernanceContext', read('src/api/contexts/governance.rs')],
   ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
   ['FederationOutboxService', read('src/services/federation_outbox.rs')],
-  ['TlsContext', readProductionModule('src/security/tls.rs', { root })],
+  ['TlsContext', readProductionModule('crates/platform/northstar-security/src/tls.rs', { root })],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],

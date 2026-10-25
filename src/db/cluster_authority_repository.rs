@@ -1,12 +1,13 @@
 //! PostgreSQL adapter for cluster signing-key and node-instance authority.
 
 use crate::db::{self, ClusterNodeHeartbeat};
-use crate::security::cluster_keys::{
-    ClusterKeyDeploymentIdentity, ClusterNodeInstance, ClusterPeerKeyAuthority,
-    ClusterReadinessAuthority, ExpectedClusterPeerKey,
-};
 use crate::services::cluster_authority::ClusterAuthorityRepository;
 use anyhow::Result;
+use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
+use northstar_security::cluster_keys::ClusterNodeInstance;
+use northstar_security::cluster_keys::ClusterPeerKeyAuthority;
+use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_security::cluster_keys::ExpectedClusterPeerKey;
 use sqlx::PgPool;
 use std::time::Duration;
 

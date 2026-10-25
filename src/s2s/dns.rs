@@ -1,10 +1,12 @@
-use crate::security::{address_scope::is_public_ip, dane::DaneSrvBinding, tls::TlsContext};
 use anyhow::{Context, Result};
 use hickory_resolver::{
     net::{DnsError, NetError},
     proto::{op::ResponseCode, rr::RData},
     TokioResolver,
 };
+use northstar_security::address_scope::is_public_ip;
+use northstar_security::dane::DaneSrvBinding;
+use northstar_security::tls::TlsContext;
 use rand::{seq::SliceRandom, Rng};
 use serde::de::{
     Deserialize, Deserializer, Error as DeserializeError, MapAccess, SeqAccess, Visitor,

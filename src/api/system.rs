@@ -376,7 +376,7 @@ async fn collect_metrics(context: &MetricsContext) -> String {
         &process,
     );
     body.push_str(&render_password_work_metrics(
-        crate::security::password_work::rejections_total(),
+        northstar_security::password_work::rejections_total(),
     ));
     body.push_str(&northstar_telemetry::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));

@@ -1,9 +1,9 @@
 //! Bounded, PostgreSQL-authoritative wake hints for committed direct spool rows.
 //! A wake identifies an account to inspect; it never authorizes a delivery.
 
-use crate::security::cluster_keys::ClusterReadinessAuthority;
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
+use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use std::{future::Future, time::Duration};
 use uuid::Uuid;
 

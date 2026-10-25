@@ -85,9 +85,9 @@ TEST_TLS_RELOAD_KEY_PATH="$crl_fixture/valid-server.key" \
 TEST_TLS_RELOAD_ROOT_PATH="$crl_fixture/root.pem" \
 TEST_TLS_RELOAD_CRL_PATH="$crl_fixture/crl.pem" \
 TEST_TLS_RELOAD_RENEWED_CRL_PATH="$crl_fixture/renewed-crl.pem" \
-  cargo test --locked \
+  cargo test --locked -p northstar-security \
   tls::tests::generated_ \
-  -- --ignored --nocapture --skip s2s::tls::tests::generated_
+  -- --ignored --nocapture
 
 # Exercise the real OpenSSL-issued CRL fixtures as part of the normal TLS
 # runtime gate. The Rust test remains #[ignore] because it requires external
@@ -104,8 +104,8 @@ run_crl_case() {
     TEST_CRL_LEAF_PATH="$crl_fixture/$leaf" \
     TEST_CRL_ROLE="$role" \
     TEST_CRL_EXPECT_VALID="$expected" \
-      cargo test --locked \
-      security::crl::tests::validates_generated_server_or_client_revocation_fixture \
+      cargo test --locked -p northstar-security \
+      crl::tests::validates_generated_server_or_client_revocation_fixture \
       -- --ignored --exact --nocapture 2>&1
   )" || {
     printf '%s\n' "$output"

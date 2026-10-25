@@ -49,7 +49,7 @@ pub(super) fn authoritative_instance_matches(
 pub(super) async fn refresh_peer_authority_with<R: ClusterAuthorityRepository>(
     service: &ClusterAuthorityService<R>,
     domain: &str,
-    expected: &[crate::security::cluster_keys::ExpectedClusterPeerKey],
+    expected: &[northstar_security::cluster_keys::ExpectedClusterPeerKey],
     nodes: &[String],
     authorized_peer_keys: &dashmap::DashMap<String, AuthorizedPeerKeys>,
     authorized_instances: &dashmap::DashMap<String, AuthorizedClusterInstance>,
@@ -111,10 +111,10 @@ pub(super) async fn refresh_peer_authority_with<R: ClusterAuthorityRepository>(
 impl ClusterManager {
     pub fn key_authority_identity(
         &self,
-    ) -> Option<crate::security::cluster_keys::ClusterKeyDeploymentIdentity> {
+    ) -> Option<northstar_security::cluster_keys::ClusterKeyDeploymentIdentity> {
         let security = self.security.as_ref()?;
         Some(
-            crate::security::cluster_keys::ClusterKeyDeploymentIdentity {
+            northstar_security::cluster_keys::ClusterKeyDeploymentIdentity {
                 xmpp_domain: self.namespace.clone(),
                 node_id: security.node_id.clone(),
                 epoch: security.key_epoch,
@@ -150,7 +150,7 @@ impl ClusterManager {
 
     pub fn peer_key_authority_identities(
         &self,
-    ) -> Vec<crate::security::cluster_keys::ClusterKeyDeploymentIdentity> {
+    ) -> Vec<northstar_security::cluster_keys::ClusterKeyDeploymentIdentity> {
         self.security
             .as_ref()
             .map(|security| {
@@ -158,7 +158,7 @@ impl ClusterManager {
                     .peer_key_authorities()
                     .into_iter()
                     .map(
-                        |peer| crate::security::cluster_keys::ClusterKeyDeploymentIdentity {
+                        |peer| northstar_security::cluster_keys::ClusterKeyDeploymentIdentity {
                             xmpp_domain: self.namespace.clone(),
                             node_id: peer.node_id,
                             epoch: peer.epoch,

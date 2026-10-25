@@ -56,14 +56,14 @@ type ClientVerifierAndRoots = (
 );
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum CertificateSessionKind {
+pub enum CertificateSessionKind {
     C2s,
     InboundS2s,
     OutboundS2s,
 }
 
 impl CertificateSessionKind {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::C2s => "c2s_external",
             Self::InboundS2s => "inbound_s2s_external",
@@ -73,7 +73,7 @@ impl CertificateSessionKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RevokedCertificateSession {
+pub struct RevokedCertificateSession {
     pub connection_id: uuid::Uuid,
     pub kind: CertificateSessionKind,
     pub certificate_issuer: String,
@@ -83,7 +83,7 @@ pub(crate) struct RevokedCertificateSession {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CertificateSessionMetrics {
+pub struct CertificateSessionMetrics {
     pub active: u64,
     pub c2s_external: u64,
     pub inbound_s2s_external: u64,
@@ -91,7 +91,7 @@ pub(crate) struct CertificateSessionMetrics {
 }
 
 #[derive(Debug)]
-pub(crate) struct TlsReloadOutcome {
+pub struct TlsReloadOutcome {
     pub previous_generation: u64,
     pub generation: u64,
     pub evaluated_sessions: u64,
@@ -105,7 +105,7 @@ pub(crate) struct TlsReloadOutcome {
 }
 
 impl TlsReloadOutcome {
-    pub(crate) fn drained_total(&self) -> u64 {
+    pub fn drained_total(&self) -> u64 {
         self.drained_c2s_external
             .saturating_add(self.drained_inbound_s2s_external)
             .saturating_add(self.drained_outbound_s2s_external)
@@ -348,7 +348,7 @@ impl CertificateSessionRegistry {
 
 /// Exact registration ownership prevents a late Drop from unregistering a
 /// hypothetical later connection which reused the same external ID.
-pub(crate) struct CertificateSessionGuard {
+pub struct CertificateSessionGuard {
     registry: Arc<CertificateSessionRegistry>,
     connection_id: uuid::Uuid,
     registration_id: uuid::Uuid,
@@ -382,7 +382,7 @@ fn bounded_log_metadata(value: &str, max_chars: usize) -> String {
 /// XEP-0368 requires the initiating entity to send the JID domain as SNI on
 /// Direct TLS. STARTTLS has no equivalent TLS-layer name signal and therefore
 /// must not call this helper.
-pub(crate) fn direct_tls_sni_matches(presented: Option<&str>, expected_domain: &str) -> bool {
+pub fn direct_tls_sni_matches(presented: Option<&str>, expected_domain: &str) -> bool {
     matches!(
         (
             presented.and_then(|name| northstar_xmpp_types::jid::domain_to_ascii(name).ok()),
@@ -427,7 +427,7 @@ pub fn certificate_chain(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
 /// Extract C2S identities only from id-on-xmppAddr subjectAltName entries.
 /// PKIX and clientAuth EKU validation have already happened in rustls; CN,
 /// DNS-ID and unqualified localparts are intentionally never fallbacks.
-pub(crate) fn c2s_client_xmpp_identities(
+pub fn c2s_client_xmpp_identities(
     certificates: &[CertificateDer<'_>],
     domain: &str,
 ) -> Result<Vec<String>> {
@@ -472,11 +472,11 @@ pub struct TlsMaterial {
     pub s2s_client_starttls: Arc<ClientConfig>,
     pub s2s_client_direct: Arc<ClientConfig>,
     pub federation_roots: Arc<RootCertStore>,
-    pub federation_crls: Option<Arc<crate::security::crl::CrlSet>>,
+    pub federation_crls: Option<Arc<crate::crl::CrlSet>>,
     /// Retained solely for exact re-evaluation of already authenticated C2S
     /// EXTERNAL sessions after a local CRL snapshot changes.
     c2s_client_roots: Option<Arc<RootCertStore>>,
-    c2s_client_crls: Option<Arc<crate::security::crl::CrlSet>>,
+    c2s_client_crls: Option<Arc<crate::crl::CrlSet>>,
     /// RFC 5929 endpoint binding is absent for hashless certificate signature
     /// algorithms such as Ed25519.  TLS trust and every non-endpoint binding
     /// remain usable in that case.
@@ -487,7 +487,7 @@ pub struct TlsMaterial {
 
 impl TlsMaterial {
     fn revocation_decision_with_role(
-        crls: &crate::security::crl::CrlSet,
+        crls: &crate::crl::CrlSet,
         roots: &RootCertStore,
         session: &CertificateSessionEntry,
         server_role: bool,
@@ -508,26 +508,22 @@ impl TlsMaterial {
         let now = UnixTime::now();
         let current = recheck(now);
         match current {
-            crate::security::crl::RevocationRecheck::Valid => LiveRevocationDecision::NotRevoked,
-            crate::security::crl::RevocationRecheck::ExplicitlyRevoked => {
+            crate::crl::RevocationRecheck::Valid => LiveRevocationDecision::NotRevoked,
+            crate::crl::RevocationRecheck::ExplicitlyRevoked => {
                 LiveRevocationDecision::ExplicitlyRevoked
             }
-            crate::security::crl::RevocationRecheck::OtherValidationFailure
-                if crls.is_fresh_at(now) =>
-            {
+            crate::crl::RevocationRecheck::OtherValidationFailure if crls.is_fresh_at(now) => {
                 match recheck(session.authenticated_at) {
-                    crate::security::crl::RevocationRecheck::Valid => {
-                        LiveRevocationDecision::NotRevoked
-                    }
-                    crate::security::crl::RevocationRecheck::ExplicitlyRevoked => {
+                    crate::crl::RevocationRecheck::Valid => LiveRevocationDecision::NotRevoked,
+                    crate::crl::RevocationRecheck::ExplicitlyRevoked => {
                         LiveRevocationDecision::ExplicitlyRevoked
                     }
-                    crate::security::crl::RevocationRecheck::OtherValidationFailure => {
+                    crate::crl::RevocationRecheck::OtherValidationFailure => {
                         LiveRevocationDecision::Inconclusive
                     }
                 }
             }
-            crate::security::crl::RevocationRecheck::OtherValidationFailure => {
+            crate::crl::RevocationRecheck::OtherValidationFailure => {
                 LiveRevocationDecision::Inconclusive
             }
         }
@@ -572,56 +568,56 @@ impl TlsMaterial {
 /// Callers receive one immutable snapshot per handshake, never the mutable
 /// reload manager or unrelated application state.
 #[derive(Clone)]
-pub(crate) struct TlsContext {
+pub struct TlsContext {
     reloadable: Arc<ReloadableTlsConfig>,
 }
 
 /// Metrics-only TLS view; no handshake material, private key, session
 /// registration, or reload capability is available to the HTTP endpoint.
 #[derive(Clone)]
-pub(crate) struct TlsMetricsProbe {
+pub struct TlsMetricsProbe {
     reloadable: Arc<ReloadableTlsConfig>,
 }
 
 impl TlsMetricsProbe {
-    pub(crate) fn leaf_status(&self) -> (i64, u64) {
+    pub fn leaf_status(&self) -> (i64, u64) {
         let material = self.reloadable.current();
         (material.leaf_not_after_unix, material.generation)
     }
 
-    pub(crate) fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
+    pub fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
         self.reloadable.certificate_session_metrics()
     }
 }
 
-pub(crate) struct C2sTlsSnapshot {
+pub struct C2sTlsSnapshot {
     pub server_config: Arc<ServerConfig>,
     pub tls_server_end_point: Option<Vec<u8>>,
     pub generation: u64,
 }
 
-pub(crate) struct FederationTlsSnapshot {
+pub struct FederationTlsSnapshot {
     pub s2s_starttls: Arc<ServerConfig>,
     pub s2s_direct: Arc<ServerConfig>,
     pub s2s_client_starttls: Arc<ClientConfig>,
     pub s2s_client_direct: Arc<ClientConfig>,
     pub roots: Arc<RootCertStore>,
-    pub crls: Option<Arc<crate::security::crl::CrlSet>>,
+    pub crls: Option<Arc<crate::crl::CrlSet>>,
     pub generation: u64,
 }
 
 impl TlsContext {
-    pub(crate) fn new(reloadable: Arc<ReloadableTlsConfig>) -> Self {
+    pub fn new(reloadable: Arc<ReloadableTlsConfig>) -> Self {
         Self { reloadable }
     }
 
-    pub(crate) fn metrics_probe(&self) -> TlsMetricsProbe {
+    pub fn metrics_probe(&self) -> TlsMetricsProbe {
         TlsMetricsProbe {
             reloadable: Arc::clone(&self.reloadable),
         }
     }
 
-    pub(crate) fn c2s_snapshot(&self, direct_tls: bool) -> C2sTlsSnapshot {
+    pub fn c2s_snapshot(&self, direct_tls: bool) -> C2sTlsSnapshot {
         let material = self.reloadable.current();
         C2sTlsSnapshot {
             server_config: if direct_tls {
@@ -634,7 +630,7 @@ impl TlsContext {
         }
     }
 
-    pub(crate) fn federation_snapshot(&self) -> FederationTlsSnapshot {
+    pub fn federation_snapshot(&self) -> FederationTlsSnapshot {
         let material = self.reloadable.current();
         FederationTlsSnapshot {
             s2s_starttls: Arc::clone(&material.s2s_starttls),
@@ -647,7 +643,7 @@ impl TlsContext {
         }
     }
 
-    pub(crate) fn register_certificate_session(
+    pub fn register_certificate_session(
         &self,
         connection_id: uuid::Uuid,
         kind: CertificateSessionKind,
@@ -664,7 +660,7 @@ impl TlsContext {
         )
     }
 
-    pub(crate) fn reload(&self) -> Result<TlsReloadOutcome> {
+    pub fn reload(&self) -> Result<TlsReloadOutcome> {
         self.reloadable.reload()
     }
 }
@@ -738,11 +734,11 @@ impl ReloadableTlsConfig {
         self.material.load_full()
     }
 
-    pub(crate) fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
+    pub fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
         self.certificate_sessions.metrics()
     }
 
-    pub(crate) fn register_certificate_session(
+    pub fn register_certificate_session(
         self: &Arc<Self>,
         connection_id: uuid::Uuid,
         kind: CertificateSessionKind,
@@ -790,7 +786,7 @@ impl ReloadableTlsConfig {
         )
     }
 
-    pub(crate) fn reload(&self) -> Result<TlsReloadOutcome> {
+    pub fn reload(&self) -> Result<TlsReloadOutcome> {
         let _guard = self
             .reload_lock
             .lock()

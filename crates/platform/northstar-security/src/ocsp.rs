@@ -15,7 +15,7 @@ use tokio_rustls::rustls::pki_types::CertificateDer;
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 const MAX_STATUS_AGE_SECONDS: u32 = 7 * 24 * 60 * 60;
 
-pub(crate) struct ValidatedOcspResponse {
+pub struct ValidatedOcspResponse {
     der: Vec<u8>,
     this_update: DateTime<Utc>,
     next_update: DateTime<Utc>,
@@ -33,7 +33,7 @@ fn response_time(value: &openssl::asn1::Asn1GeneralizedTimeRef) -> Result<DateTi
 }
 
 impl ValidatedOcspResponse {
-    pub(crate) fn from_file(path: &Path, chain: &[CertificateDer<'static>]) -> Result<Self> {
+    pub fn from_file(path: &Path, chain: &[CertificateDer<'static>]) -> Result<Self> {
         let metadata = fs::metadata(path).context("could not inspect OCSP response file")?;
         anyhow::ensure!(
             metadata.is_file() && (1..=MAX_RESPONSE_BYTES).contains(&metadata.len()),
@@ -46,7 +46,7 @@ impl ValidatedOcspResponse {
     /// Validate a peer's handshake staple against the presented leaf and its
     /// immediately following issuer. Callers must separately establish PKIX
     /// trust; this method checks only the response and its exact subject.
-    pub(crate) fn from_staple(der: &[u8], chain: &[CertificateDer<'_>]) -> Result<Self> {
+    pub fn from_staple(der: &[u8], chain: &[CertificateDer<'_>]) -> Result<Self> {
         anyhow::ensure!(
             !der.is_empty() && der.len() as u64 <= MAX_RESPONSE_BYTES,
             "OCSP response must be nonempty and within its size limit"
@@ -155,13 +155,13 @@ impl ValidatedOcspResponse {
         Ok(response)
     }
 
-    pub(crate) fn der(&self) -> &[u8] {
+    pub fn der(&self) -> &[u8] {
         &self.der
     }
 
     /// Checked again at every new handshake, so an expired staple cannot be
     /// served indefinitely from a previously validated TLS snapshot.
-    pub(crate) fn fresh_now(&self) -> bool {
+    pub fn fresh_now(&self) -> bool {
         self.fresh_at(Utc::now())
     }
 

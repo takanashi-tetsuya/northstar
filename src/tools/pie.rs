@@ -116,7 +116,7 @@ pub async fn run(config: &Config, arguments: &[String]) -> Result<()> {
         zeroize::Zeroizing::new(match (value, file) {
             (Some(value), None) if !value.trim().is_empty() => value,
             (None, Some(path)) => {
-                crate::platform::config::read_secret_file(&path, "MIGRATOR_DATABASE_URL_FILE")?
+                northstar_security::secret_files::read_secret_file(&path, "MIGRATOR_DATABASE_URL_FILE")?
             }
             _ => anyhow::bail!(
                 "production PIE import requires MIGRATOR_DATABASE_URL_FILE (preferred) or MIGRATOR_DATABASE_URL"

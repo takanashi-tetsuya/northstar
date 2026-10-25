@@ -450,11 +450,11 @@ impl AppState {
                 minimum_overlap: abuse.minimum_key_rotation_overlap(),
             }
         });
-        let tls = crate::security::tls::ReloadableTlsConfig::new(
+        let tls = northstar_security::tls::ReloadableTlsConfig::new(
             &config.tls_cert_path,
             &config.tls_key_path,
             &config.domain,
-            crate::security::tls::TlsPolicyFiles {
+            northstar_security::tls::TlsPolicyFiles {
                 extra_root: config.federation_extra_root_cert_path.as_deref(),
                 c2s_client_trust_root: config.c2s_client_trust_root_cert_path.as_deref(),
                 federation_crl: config.federation_crl_path.as_deref(),
@@ -560,10 +560,10 @@ impl AppState {
         let lab_dnssec_anchor = config
             .federation_dnssec_lab_trust_anchor_path
             .as_deref()
-            .map(crate::security::lab_dnssec::load_anchor)
+            .map(northstar_security::lab_dnssec::load_anchor)
             .transpose()?;
         let s2s_dnssec_resolver = (config.federation_dane_mode
-            != crate::security::dane::DaneMode::Off)
+            != northstar_security::dane::DaneMode::Off)
             .then(|| {
                 let mut builder = TokioResolver::builder_with_config(
                     resolver_config,
@@ -1283,7 +1283,7 @@ impl AppState {
             abuse_key_deployment,
             started_at,
             process_started_at,
-            tls_context: crate::security::tls::TlsContext::new(tls),
+            tls_context: northstar_security::tls::TlsContext::new(tls),
             federation_write_policy,
             registration_closed,
             federation_runtime_policy: Arc::new(arc_swap::ArcSwap::from_pointee(

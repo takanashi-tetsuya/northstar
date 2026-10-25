@@ -321,8 +321,8 @@ impl Config {
             .redis_url
             .as_ref()
             .map(|_| {
-                crate::security::cluster_bus::load_configuration(
-                    crate::security::cluster_bus::ClusterSecurityConfiguration {
+                northstar_security::cluster_bus::load_configuration(
+                    northstar_security::cluster_bus::ClusterSecurityConfiguration {
                         namespace: &domain,
                         node_id: raw
                             .cluster_node_id
@@ -1023,11 +1023,11 @@ impl Config {
         let federation_denylist = domain_list(&raw.federation_denylist)
             .context("federation denylist contains an invalid domain pattern")?;
         let federation_dane_mode =
-            crate::security::dane::DaneMode::parse(&raw.federation_dane_mode)?;
+            northstar_security::dane::DaneMode::parse(&raw.federation_dane_mode)?;
         raw.federation_dane_mode = match federation_dane_mode {
-            crate::security::dane::DaneMode::Off => "off",
-            crate::security::dane::DaneMode::Opportunistic => "opportunistic",
-            crate::security::dane::DaneMode::Required => "required",
+            northstar_security::dane::DaneMode::Off => "off",
+            northstar_security::dane::DaneMode::Opportunistic => "opportunistic",
+            northstar_security::dane::DaneMode::Required => "required",
         }
         .to_owned();
         if raw.c2s_client_crl_path.is_some() && raw.c2s_client_trust_root_cert_path.is_none() {
@@ -1059,7 +1059,7 @@ impl Config {
                 direct_tls,
             ));
         }
-        crate::security::lab_dnssec::validate_settings(
+        northstar_security::lab_dnssec::validate_settings(
             raw.federation_dnssec_lab_trust_anchor_path.as_deref(),
             federation_dane_mode,
             &domain,

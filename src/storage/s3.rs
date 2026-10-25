@@ -1030,7 +1030,7 @@ fn build_client(settings: &S3UploadSettings) -> Result<(Arc<S3ClientSnapshot>, u
                 && settings.session_token_file.is_none(),
             "the atomic S3 credential bundle cannot be combined with legacy credential files"
         );
-        let bundle_json = Zeroizing::new(crate::platform::config::read_secret_file(
+        let bundle_json = Zeroizing::new(northstar_security::secret_files::read_secret_file(
             bundle_file,
             "UPLOAD_S3_CREDENTIAL_BUNDLE_FILE",
         )?);
@@ -1057,14 +1057,16 @@ fn build_client(settings: &S3UploadSettings) -> Result<(Arc<S3ClientSnapshot>, u
             settings.secret_access_key_file.as_deref(),
         ) {
             (Some(access_file), Some(secret_file)) => {
-                let mut access = Zeroizing::new(crate::platform::config::read_secret_file(
-                    access_file,
-                    "UPLOAD_S3_ACCESS_KEY_ID_FILE",
-                )?);
-                let mut secret = Zeroizing::new(crate::platform::config::read_secret_file(
-                    secret_file,
-                    "UPLOAD_S3_SECRET_ACCESS_KEY_FILE",
-                )?);
+                let mut access =
+                    Zeroizing::new(northstar_security::secret_files::read_secret_file(
+                        access_file,
+                        "UPLOAD_S3_ACCESS_KEY_ID_FILE",
+                    )?);
+                let mut secret =
+                    Zeroizing::new(northstar_security::secret_files::read_secret_file(
+                        secret_file,
+                        "UPLOAD_S3_SECRET_ACCESS_KEY_FILE",
+                    )?);
                 builder = builder
                     .with_access_key_id(access.as_str())
                     .with_secret_access_key(secret.as_str());
@@ -1077,7 +1079,7 @@ fn build_client(settings: &S3UploadSettings) -> Result<(Arc<S3ClientSnapshot>, u
     }
     if settings.credential_bundle_file.is_none() {
         if let Some(token_file) = settings.session_token_file.as_deref() {
-            let mut token = Zeroizing::new(crate::platform::config::read_secret_file(
+            let mut token = Zeroizing::new(northstar_security::secret_files::read_secret_file(
                 token_file,
                 "UPLOAD_S3_SESSION_TOKEN_FILE",
             )?);
@@ -1086,7 +1088,7 @@ fn build_client(settings: &S3UploadSettings) -> Result<(Arc<S3ClientSnapshot>, u
         }
     }
     if let Some(kms_file) = settings.sse_kms_key_id_file.as_deref() {
-        let mut kms_key = Zeroizing::new(crate::platform::config::read_secret_file(
+        let mut kms_key = Zeroizing::new(northstar_security::secret_files::read_secret_file(
             kms_file,
             "UPLOAD_S3_SSE_KMS_KEY_ID_FILE",
         )?);

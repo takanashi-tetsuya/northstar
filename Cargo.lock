@@ -2026,6 +2026,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-security"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "base64 0.22.1",
+ "chrono",
+ "hickory-resolver",
+ "libc",
+ "northstar-xmpp-types",
+ "openssl",
+ "ring",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "webpki-roots",
+ "x509-parser 0.18.1",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-session-application"
 version = "0.1.0"
 dependencies = [
@@ -3148,6 +3177,7 @@ dependencies = [
  "northstar-roster-application",
  "northstar-roster-core",
  "northstar-runtime",
+ "northstar-security",
  "northstar-session-application",
  "northstar-session-core",
  "northstar-telemetry",

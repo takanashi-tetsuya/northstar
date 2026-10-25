@@ -19,9 +19,9 @@ use zeroize::Zeroizing;
 
 pub const SIGNED_PROTOCOL_VERSION: u16 = 8;
 const ENVELOPE_LIFETIME_SECONDS: i64 = 10;
-pub(crate) const CLOCK_SKEW_SECONDS: i64 = 5;
-pub(crate) const MAX_PEERS: usize = 128;
-pub(crate) const MAX_NODE_ID_BYTES: usize = 128;
+pub const CLOCK_SKEW_SECONDS: i64 = 5;
+pub const MAX_PEERS: usize = 128;
+pub const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_ALLOWED_KINDS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -97,30 +97,26 @@ impl ClusterSecurityConfig {
         nodes
     }
 
-    pub fn peer_key_authorities(
-        &self,
-    ) -> Vec<crate::security::cluster_keys::ExpectedClusterPeerKey> {
+    pub fn peer_key_authorities(&self) -> Vec<crate::cluster_keys::ExpectedClusterPeerKey> {
         let mut peers = self
             .peers
             .values()
-            .map(
-                |peer| crate::security::cluster_keys::ExpectedClusterPeerKey {
-                    node_id: peer.node_id.clone(),
-                    epoch: peer.key_epoch,
-                    current_key_id: peer.current.key_id.clone(),
-                    current_public_key_sha256: public_key_digest(&peer.current.public_key),
-                    previous_key_id: peer.previous.as_ref().map(|key| key.key_id.clone()),
-                    previous_public_key_sha256: peer
-                        .previous
-                        .as_ref()
-                        .map(|key| public_key_digest(&key.public_key)),
-                    staged_next_key_id: peer.staged_next.as_ref().map(|key| key.key_id.clone()),
-                    staged_next_public_key_sha256: peer
-                        .staged_next
-                        .as_ref()
-                        .map(|key| public_key_digest(&key.public_key)),
-                },
-            )
+            .map(|peer| crate::cluster_keys::ExpectedClusterPeerKey {
+                node_id: peer.node_id.clone(),
+                epoch: peer.key_epoch,
+                current_key_id: peer.current.key_id.clone(),
+                current_public_key_sha256: public_key_digest(&peer.current.public_key),
+                previous_key_id: peer.previous.as_ref().map(|key| key.key_id.clone()),
+                previous_public_key_sha256: peer
+                    .previous
+                    .as_ref()
+                    .map(|key| public_key_digest(&key.public_key)),
+                staged_next_key_id: peer.staged_next.as_ref().map(|key| key.key_id.clone()),
+                staged_next_public_key_sha256: peer
+                    .staged_next
+                    .as_ref()
+                    .map(|key| public_key_digest(&key.public_key)),
+            })
             .collect::<Vec<_>>();
         peers.sort_by(|left, right| left.node_id.cmp(&right.node_id));
         peers
@@ -248,7 +244,7 @@ pub fn load_configuration(
     // The secret-file helper returns an owned String.  Wrap it before doing
     // any fallible decode/parse work so every error path wipes the base64
     // private key rather than leaving a second ordinary heap allocation.
-    let encoded = Zeroizing::new(crate::platform::config::read_secret_file(
+    let encoded = Zeroizing::new(crate::secret_files::read_secret_file(
         private_key_file,
         "CLUSTER_SIGNING_PRIVATE_KEY_FILE",
     )?);
@@ -405,7 +401,7 @@ fn load_peers(
 }
 
 fn read_public_key(path: &Path, variable: &str) -> Result<[u8; 32]> {
-    let value = crate::platform::config::read_secret_file(path, variable)?;
+    let value = crate::secret_files::read_secret_file(path, variable)?;
     decode_public_key(value.trim())
 }
 
@@ -622,7 +618,7 @@ impl SignedClusterEnvelope {
 
     /// Recheck mutable authorization for an envelope whose immutable contents
     /// and signature have already passed `verify`. Key IDs bind the public key.
-    pub(crate) fn current_verification_key(
+    pub fn current_verification_key(
         &self,
         peers: &HashMap<String, PeerVerifier>,
         now: i64,
@@ -752,8 +748,8 @@ fn payload_digest(payload: &Value) -> Result<String> {
     )))
 }
 
-#[cfg(test)]
-pub(crate) fn test_configuration_pair(
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_configuration_pair(
     _namespace: &str,
 ) -> (Arc<ClusterSecurityConfig>, Arc<ClusterSecurityConfig>) {
     use ring::rand::SystemRandom;
@@ -841,8 +837,8 @@ pub(crate) fn test_configuration_pair(
     )
 }
 
-#[cfg(test)]
-pub(crate) fn test_prepared_staged_pair(
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_prepared_staged_pair(
     _namespace: &str,
 ) -> (
     Arc<ClusterSecurityConfig>,

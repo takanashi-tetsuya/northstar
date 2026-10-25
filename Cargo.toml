@@ -32,6 +32,7 @@ members = [
     "crates/kernel/northstar-xep-0444",
     "crates/kernel/northstar-xep-0461",
     "crates/platform/northstar-runtime",
+    "crates/platform/northstar-security",
     "crates/platform/northstar-telemetry",
     "crates/platform/northstar-web-surface",
     "crates/contexts/message/northstar-message-core",
@@ -153,6 +154,7 @@ northstar-xep-0357 = { path = "crates/kernel/northstar-xep-0357" }
 northstar-xep-0359 = { path = "crates/kernel/northstar-xep-0359" }
 northstar-xep-0363 = { path = "crates/kernel/northstar-xep-0363" }
 northstar-runtime = { path = "crates/platform/northstar-runtime" }
+northstar-security = { path = "crates/platform/northstar-security" }
 northstar-telemetry = { path = "crates/platform/northstar-telemetry" }
 northstar-web-surface = { path = "crates/platform/northstar-web-surface" }
 northstar-message-core = { path = "crates/contexts/message/northstar-message-core" }
@@ -181,6 +183,7 @@ openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
+northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
 # Deterministic cancellation/deadline experiments run on a paused test clock.
 tokio = { version = "1.43", features = ["test-util"] }
 

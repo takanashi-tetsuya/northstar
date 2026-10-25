@@ -13,7 +13,7 @@ pub async fn create_user(
 ) -> Result<User> {
     let username = auth::normalize_username(username)?;
     let password = Zeroizing::new(password.to_owned());
-    let creds = crate::security::password_work::run(move || {
+    let creds = northstar_security::password_work::run(move || {
         auth::hash_password(&password, !force, scram_iterations, scram_sha1_enabled)
     })
     .await
@@ -102,7 +102,7 @@ pub async fn prepare_registration(
     let username =
         auth::normalize_username(username).map_err(RegistrationError::InvalidUsername)?;
     let password = Zeroizing::new(password.to_owned());
-    let creds = crate::security::password_work::run(move || {
+    let creds = northstar_security::password_work::run(move || {
         auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await
@@ -129,7 +129,7 @@ pub async fn prepare_registration_with_reservation(
     password: &str,
     scram_iterations: u32,
     scram_sha1_enabled: bool,
-    password_work: crate::security::password_work::PasswordWorkReservation,
+    password_work: northstar_security::password_work::PasswordWorkReservation,
 ) -> std::result::Result<PreparedRegistration, RegistrationError> {
     let username =
         auth::normalize_username(username).map_err(RegistrationError::InvalidUsername)?;

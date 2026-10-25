@@ -27,10 +27,10 @@ impl ProtocolSession {
 
     pub(super) fn external_certificate_session(
         &self,
-    ) -> Result<crate::security::tls::CertificateSessionGuard> {
+    ) -> Result<northstar_security::tls::CertificateSessionGuard> {
         self.state.tls_context().register_certificate_session(
             self.connection_id,
-            crate::security::tls::CertificateSessionKind::C2s,
+            northstar_security::tls::CertificateSessionKind::C2s,
             self.client_certificate_chain.clone(),
             self.tls_generation,
             self.disconnect.clone(),

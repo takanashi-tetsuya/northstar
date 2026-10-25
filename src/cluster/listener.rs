@@ -188,7 +188,7 @@ pub(super) async fn listen_once(
         let envelope_kind = envelope.kind;
         let source_node = envelope.source_node.clone();
         admission.validate_generation(candidate_generation, rotation_epoch)?;
-        if envelope_kind == crate::security::cluster_bus::ClusterCommandKind::Ack {
+        if envelope_kind == northstar_security::cluster_bus::ClusterCommandKind::Ack {
             if !admission.dispatch_pending_ack(&source_node, envelope.payload) {
                 admission.note_authentication_failure(&anyhow::anyhow!(
                     "cluster acknowledgement had no exact pending request"
@@ -229,7 +229,7 @@ pub(super) async fn listen_once(
             json["blocking_presence_change"].as_bool().unwrap_or(false);
         let is_presence_probe = json["presence_probe"].as_bool().unwrap_or(false);
 
-        if protocol_version >= crate::security::cluster_bus::SIGNED_PROTOCOL_VERSION
+        if protocol_version >= northstar_security::cluster_bus::SIGNED_PROTOCOL_VERSION
             && (is_muc_nickname_change || is_muc_role_change || is_muc_evict || is_muc_destroy)
         {
             // Protocol-v9 MUC controls are wake-only. A signed Redis payload

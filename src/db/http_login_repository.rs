@@ -232,7 +232,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         .await
         {
             Ok(prepared) => prepared,
-            Err(error) if crate::security::password_work::is_overloaded(&error) => {
+            Err(error) if northstar_security::password_work::is_overloaded(&error) => {
                 if let Some(lease) = lease.as_ref() {
                     if !db::yield_idempotency_lease(&self.pool, lease).await? {
                         return Ok(Outcome::LeaseLost);

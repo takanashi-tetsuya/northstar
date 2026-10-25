@@ -89,7 +89,7 @@ pub(crate) struct ProcessGaugeSnapshot {
     pub(crate) tls_not_after: i64,
     pub(crate) tls_seconds_remaining: i64,
     pub(crate) tls_generation: u64,
-    pub(crate) certificate_sessions: crate::security::tls::CertificateSessionMetrics,
+    pub(crate) certificate_sessions: northstar_security::tls::CertificateSessionMetrics,
     pub(crate) cluster: ClusterMetricsSnapshot,
 }
 
@@ -282,7 +282,7 @@ mod tests {
             tls_not_after: 400,
             tls_seconds_remaining: 20,
             tls_generation: 3,
-            certificate_sessions: crate::security::tls::CertificateSessionMetrics {
+            certificate_sessions: northstar_security::tls::CertificateSessionMetrics {
                 active: 4,
                 c2s_external: 5,
                 inbound_s2s_external: 6,

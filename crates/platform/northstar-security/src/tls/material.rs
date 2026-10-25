@@ -21,7 +21,7 @@ pub(super) fn federation_root_store(extra_root_path: Option<&Path>) -> Result<Ro
 
 pub(super) fn c2s_client_verifier(
     trust_root_path: Option<&Path>,
-    crls: Option<&crate::security::crl::CrlSet>,
+    crls: Option<&crate::crl::CrlSet>,
 ) -> Result<ClientVerifierAndRoots> {
     let Some(path) = trust_root_path else {
         return Ok((None, None));
@@ -51,20 +51,17 @@ pub(super) fn c2s_client_verifier(
     Ok((Some(verifier), Some(roots)))
 }
 
-pub(super) fn crl_set(
-    path: Option<&Path>,
-    label: &str,
-) -> Result<Option<Arc<crate::security::crl::CrlSet>>> {
+pub(super) fn crl_set(path: Option<&Path>, label: &str) -> Result<Option<Arc<crate::crl::CrlSet>>> {
     path.map(|path| {
         let bytes = read_stable_regular_file(path, label, MAX_CRL_FILE_BYTES, false)?;
-        crate::security::crl::CrlSet::from_pem(&bytes, label).map(Arc::new)
+        crate::crl::CrlSet::from_pem(&bytes, label).map(Arc::new)
     })
     .transpose()
 }
 
 pub(super) struct FreshOcspResolver {
     pub(super) key: Arc<CertifiedKey>,
-    pub(super) response: Arc<crate::security::ocsp::ValidatedOcspResponse>,
+    pub(super) response: Arc<crate::ocsp::ValidatedOcspResponse>,
 }
 
 impl std::fmt::Debug for FreshOcspResolver {
@@ -83,7 +80,7 @@ pub(super) fn server_config(
     chain: &[CertificateDer<'static>],
     key: &PrivateKeyDer<'static>,
     client_verifier: Option<Arc<dyn ClientCertVerifier>>,
-    ocsp: Option<&Arc<crate::security::ocsp::ValidatedOcspResponse>>,
+    ocsp: Option<&Arc<crate::ocsp::ValidatedOcspResponse>>,
     alpn: Option<&'static [u8]>,
 ) -> Result<Arc<ServerConfig>> {
     let builder = ServerConfig::builder_with_provider(crypto_provider())
@@ -184,9 +181,7 @@ pub(super) fn tls_material(input: TlsMaterialInput<'_>) -> Result<Arc<TlsMateria
     let federation_crls = crl_set(federation_crl_path, "federation CRL file")?;
     let c2s_client_crls = crl_set(c2s_client_crl_path, "C2S client CRL file")?;
     let ocsp = ocsp_response_path
-        .map(|path| {
-            crate::security::ocsp::ValidatedOcspResponse::from_file(path, &chain).map(Arc::new)
-        })
+        .map(|path| crate::ocsp::ValidatedOcspResponse::from_file(path, &chain).map(Arc::new))
         .transpose()?;
     let s2s_verifier: Arc<dyn ClientCertVerifier> = Arc::new(PresentedServerCertificate::new());
     let (c2s_verifier, c2s_client_roots) =
@@ -232,7 +227,7 @@ pub(super) fn tls_material(input: TlsMaterialInput<'_>) -> Result<Arc<TlsMateria
 /// the peer has asserted its XMPP domain. Keeping client certificates optional
 /// preserves TLS-protected Dialback interoperability.
 #[derive(Debug)]
-pub(crate) struct PresentedServerCertificate {
+pub struct PresentedServerCertificate {
     pub(super) algorithms: tokio_rustls::rustls::crypto::WebPkiSupportedAlgorithms,
 }
 

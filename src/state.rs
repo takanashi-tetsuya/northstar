@@ -509,7 +509,7 @@ pub struct AppState {
     abuse_key_deployment: Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
-    tls_context: crate::security::tls::TlsContext,
+    tls_context: northstar_security::tls::TlsContext,
     /// Linearization gate for the federation kill switch. Application
     /// stanza writes hold a read guard only across the socket write; island
     /// mode transitions take the exclusive guard.

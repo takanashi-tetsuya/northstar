@@ -436,7 +436,7 @@ pub struct ProtocolSession {
     /// because the client happened to present a certificate.
     client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
     tls_generation: u64,
-    _certificate_session: Option<crate::security::tls::CertificateSessionGuard>,
+    _certificate_session: Option<northstar_security::tls::CertificateSessionGuard>,
     disconnect: tokio_util::sync::CancellationToken,
     /// Stable owner of the durable stream row.  A resumed transport gets a
     /// fresh value so a late checkpoint from the old connection cannot win.

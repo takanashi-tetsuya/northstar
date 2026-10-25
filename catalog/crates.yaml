@@ -244,6 +244,14 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-security
+    package: northstar-security
+    path: crates/platform/northstar-security
+    tier: platform
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-session-application
     package: northstar-session-application
     path: crates/contexts/session/northstar-session-application

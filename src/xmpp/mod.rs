@@ -199,7 +199,7 @@ async fn xmpps_tcp_connection(
             result.context("Direct TLS handshake timed out")?.context("Direct TLS handshake failed")?
         }
     };
-    if !crate::security::tls::direct_tls_sni_matches(
+    if !northstar_security::tls::direct_tls_sni_matches(
         secure.get_ref().1.server_name(),
         state.local_domain(),
     ) {
@@ -346,7 +346,9 @@ fn tls_session_evidence(
     let channel_bindings = channel_bindings(secure, tls_server_end_point)?;
     let client_certificate_identities = connection
         .peer_certificates()
-        .map(|certificates| crate::security::tls::c2s_client_xmpp_identities(certificates, domain))
+        .map(|certificates| {
+            northstar_security::tls::c2s_client_xmpp_identities(certificates, domain)
+        })
         .transpose()?
         .unwrap_or_default();
     let client_certificate_chain = connection

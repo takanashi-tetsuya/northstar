@@ -37,14 +37,14 @@ const MIN_RSA_BITS: usize = 2048;
 const MIN_EC_BITS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DaneMode {
+pub enum DaneMode {
     Off,
     Opportunistic,
     Required,
 }
 
 impl DaneMode {
-    pub(crate) fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "off" => Ok(Self::Off),
             "opportunistic" => Ok(Self::Opportunistic),
@@ -59,14 +59,14 @@ impl DaneMode {
 /// selected port; authenticating TLSA while trusting an attacker-selected SRV
 /// target would not authenticate the original XMPP service.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DaneSrvBinding {
+pub struct DaneSrvBinding {
     owner: String,
     target: String,
     port: u16,
 }
 
 impl DaneSrvBinding {
-    pub(crate) fn new(service: &str, xmpp_domain: &str, target: &str, port: u16) -> Result<Self> {
+    pub fn new(service: &str, xmpp_domain: &str, target: &str, port: u16) -> Result<Self> {
         if !matches!(service, "_xmpp-server" | "_xmpps-server") {
             anyhow::bail!("DANE SRV service must be _xmpp-server or _xmpps-server");
         }
@@ -82,7 +82,7 @@ impl DaneSrvBinding {
         })
     }
 
-    pub(crate) fn target(&self) -> &str {
+    pub fn target(&self) -> &str {
         &self.target
     }
 }
@@ -180,13 +180,13 @@ impl DaneAssociation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DanePolicy {
+pub struct DanePolicy {
     owner: String,
     associations: Vec<DaneAssociation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DaneMatch {
+pub enum DaneMatch {
     /// The TLSA constraint matched, but normal RFC 5280 path, time, EKU and
     /// XMPP reference-identity validation remains mandatory.
     PkixEndEntity,
@@ -198,11 +198,11 @@ pub(crate) enum DaneMatch {
 }
 
 impl DanePolicy {
-    pub(crate) fn owner(&self) -> &str {
+    pub fn owner(&self) -> &str {
         &self.owner
     }
 
-    pub(crate) fn matching_credentials(
+    pub fn matching_credentials(
         &self,
         certificates: &[CertificateDer<'_>],
     ) -> Result<Vec<DaneMatch>> {
@@ -235,7 +235,7 @@ impl DanePolicy {
 /// positive RRset is authoritative even when all its records use unsupported
 /// parameters: in that case the connection fails rather than downgrading to
 /// PKIX. DNSSEC bogus/indeterminate responses are propagated as errors.
-pub(crate) async fn lookup_dane_policy(
+pub async fn lookup_dane_policy(
     resolver: &TokioResolver,
     mode: DaneMode,
     tls_host: &str,

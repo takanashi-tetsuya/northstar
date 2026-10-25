@@ -52,7 +52,7 @@ fn record_overload(active_limit: usize, total_limit: usize) {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PasswordWorkError {
+pub enum PasswordWorkError {
     #[error("password work capacity is temporarily exhausted")]
     Overloaded,
     #[error("password work scheduler is unavailable")]
@@ -64,7 +64,7 @@ pub(crate) enum PasswordWorkError {
 }
 
 impl PasswordWorkError {
-    pub(crate) fn is_overloaded(&self) -> bool {
+    pub fn is_overloaded(&self) -> bool {
         matches!(self, Self::Overloaded)
     }
 }
@@ -76,20 +76,18 @@ struct PasswordWorkGate {
     total_limit: usize,
 }
 
-pub(crate) struct PasswordWorkReservation {
+pub struct PasswordWorkReservation {
     active: tokio::sync::OwnedSemaphorePermit,
     admitted: tokio::sync::OwnedSemaphorePermit,
 }
 
-pub(crate) struct PasswordWorkAdmission {
+pub struct PasswordWorkAdmission {
     active: Arc<Semaphore>,
     admitted: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl PasswordWorkAdmission {
-    pub(crate) async fn reserve(
-        self,
-    ) -> std::result::Result<PasswordWorkReservation, PasswordWorkError> {
+    pub async fn reserve(self) -> std::result::Result<PasswordWorkReservation, PasswordWorkError> {
         let active = self
             .active
             .acquire_owned()
@@ -101,7 +99,7 @@ impl PasswordWorkAdmission {
         })
     }
 
-    pub(crate) async fn run<T, F>(self, work: F) -> std::result::Result<T, PasswordWorkError>
+    pub async fn run<T, F>(self, work: F) -> std::result::Result<T, PasswordWorkError>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
@@ -111,7 +109,7 @@ impl PasswordWorkAdmission {
 }
 
 impl PasswordWorkReservation {
-    pub(crate) async fn run<T, F>(self, work: F) -> std::result::Result<T, PasswordWorkError>
+    pub async fn run<T, F>(self, work: F) -> std::result::Result<T, PasswordWorkError>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
@@ -181,7 +179,7 @@ impl PasswordWorkGate {
     }
 }
 
-pub(crate) async fn run<T, F>(work: F) -> std::result::Result<T, PasswordWorkError>
+pub async fn run<T, F>(work: F) -> std::result::Result<T, PasswordWorkError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
@@ -192,7 +190,7 @@ where
 /// Acquire total admission without waiting for a CPU slot.  Login uses this
 /// before its account lookup so random-username floods cannot bypass the hard
 /// request-retention bound by stopping immediately before Argon2.
-pub(crate) fn admit() -> std::result::Result<PasswordWorkAdmission, PasswordWorkError> {
+pub fn admit() -> std::result::Result<PasswordWorkAdmission, PasswordWorkError> {
     PASSWORD_WORK.admit()
 }
 
@@ -200,12 +198,12 @@ pub(crate) fn admit() -> std::result::Result<PasswordWorkAdmission, PasswordWork
 /// is used by the XMPP password-change flow, whose proof and credential update
 /// must commit atomically without making database connections wait in the
 /// password-work queue.
-pub(crate) async fn reserve() -> std::result::Result<PasswordWorkReservation, PasswordWorkError> {
+pub async fn reserve() -> std::result::Result<PasswordWorkReservation, PasswordWorkError> {
     PASSWORD_WORK.reserve().await
 }
 
 /// Recognize overload through `anyhow::Context` layers at protocol boundaries.
-pub(crate) fn is_overloaded(error: &anyhow::Error) -> bool {
+pub fn is_overloaded(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<PasswordWorkError>()
@@ -213,7 +211,7 @@ pub(crate) fn is_overloaded(error: &anyhow::Error) -> bool {
     })
 }
 
-pub(crate) fn rejections_total() -> u64 {
+pub fn rejections_total() -> u64 {
     PASSWORD_WORK_REJECTIONS_TOTAL.load(Ordering::Relaxed)
 }
 

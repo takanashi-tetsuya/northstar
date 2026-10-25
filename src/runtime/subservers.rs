@@ -187,7 +187,9 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         "set only one of DATABASE_URL and DATABASE_URL_FILE"
     );
     let url = zeroize::Zeroizing::new(match config.database_url_file.as_ref() {
-        Some(path) => crate::platform::config::read_secret_file(path, "DATABASE_URL_FILE")?,
+        Some(path) => {
+            northstar_security::secret_files::read_secret_file(path, "DATABASE_URL_FILE")?
+        }
         None => std::mem::take(&mut config.database_url),
     });
     anyhow::ensure!(

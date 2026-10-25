@@ -196,7 +196,7 @@ async fn direct_message_fence_locks_exact_key_and_instance_through_commit() {
     )
     .await
     .unwrap();
-    let authority = crate::security::cluster_keys::ClusterReadinessAuthority {
+    let authority = northstar_security::cluster_keys::ClusterReadinessAuthority {
         key_identity: key_identity.clone(),
         instance_node_id: node_id.clone(),
         instance_uuid,

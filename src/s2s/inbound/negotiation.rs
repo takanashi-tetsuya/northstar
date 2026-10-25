@@ -183,7 +183,7 @@ pub(crate) async fn inbound_xmpps_connection(
         .await?;
         anyhow::bail!("inbound S2S stream asserted a locally hosted source domain");
     }
-    if !crate::security::tls::direct_tls_sni_matches(direct_tls_sni.as_deref(), &target) {
+    if !northstar_security::tls::direct_tls_sni_matches(direct_tls_sni.as_deref(), &target) {
         send_initial_stream_error(
             &mut secure,
             state.local_domain(),

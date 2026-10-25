@@ -39,13 +39,13 @@ impl ReadinessContext {
 
     pub(crate) fn cluster_authority_snapshot(
         &self,
-    ) -> Option<crate::security::cluster_keys::ClusterReadinessAuthority> {
+    ) -> Option<northstar_security::cluster_keys::ClusterReadinessAuthority> {
         self.cluster.authority_snapshot()
     }
 
     pub(crate) async fn validate_persistence(
         &self,
-        cluster_authority: Option<&crate::security::cluster_keys::ClusterReadinessAuthority>,
+        cluster_authority: Option<&northstar_security::cluster_keys::ClusterReadinessAuthority>,
     ) -> anyhow::Result<()> {
         self.persistence
             .validate_persistence(self.abuse_key_deployment.as_ref(), cluster_authority)

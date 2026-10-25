@@ -9,7 +9,6 @@ mod direct_replay;
 mod platform;
 mod runtime;
 mod s2s;
-mod security;
 mod services;
 #[cfg(test)]
 mod stage4_replay;
@@ -58,7 +57,7 @@ fn migration_environment_from_values(
     );
     let database_url = match (database_url, database_url_file) {
         (Some(value), None) => Zeroizing::new(value),
-        (None, Some(path)) => Zeroizing::new(platform::config::read_secret_file(
+        (None, Some(path)) => Zeroizing::new(northstar_security::secret_files::read_secret_file(
             &path,
             "MIGRATOR_DATABASE_URL_FILE",
         )?),

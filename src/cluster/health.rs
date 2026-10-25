@@ -185,7 +185,7 @@ pub(super) fn record_cluster_failure(
     health: &ClusterHealth,
     listener_rotation: &tokio::sync::Notify,
     enabled: bool,
-    policy: Option<crate::security::cluster_bus::ClusterFailurePolicy>,
+    policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
     class: ClusterFailureClass,
     error: &anyhow::Error,
 ) {
@@ -205,7 +205,7 @@ pub(super) fn record_cluster_failure(
         CLUSTER_SHUTDOWN_REQUIRED
     } else {
         match policy {
-            Some(crate::security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly) => {
+            Some(northstar_security::cluster_bus::ClusterFailurePolicy::DurableDirectOnly) => {
                 CLUSTER_DURABLE_DIRECT_ONLY
             }
             _ => CLUSTER_FAIL_CLOSED,
@@ -626,12 +626,12 @@ pub(super) fn operation_allowed(state: u8, operation: ClusterOperation) -> bool 
 }
 
 pub(super) fn degraded_shutdown_required(
-    policy: crate::security::cluster_bus::ClusterFailurePolicy,
+    policy: northstar_security::cluster_bus::ClusterFailurePolicy,
     postgres_authority_healthy: bool,
     safety_lease_expired: bool,
 ) -> bool {
     !postgres_authority_healthy
-        || (policy == crate::security::cluster_bus::ClusterFailurePolicy::FailClosed
+        || (policy == northstar_security::cluster_bus::ClusterFailurePolicy::FailClosed
             && safety_lease_expired)
 }
 
@@ -647,7 +647,7 @@ impl ClusterManager {
         self.publication_gate.write().await
     }
 
-    pub fn failure_policy(&self) -> Option<crate::security::cluster_bus::ClusterFailurePolicy> {
+    pub fn failure_policy(&self) -> Option<northstar_security::cluster_bus::ClusterFailurePolicy> {
         self.security
             .as_ref()
             .map(|security| security.failure_policy)

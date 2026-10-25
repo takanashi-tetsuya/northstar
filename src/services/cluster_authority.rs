@@ -3,11 +3,12 @@
 //! Peer key and instance caches are installed at separate points: a failed
 //! instance read must not undo an already successful peer-key refresh.
 
-use crate::security::cluster_keys::{
-    ClusterKeyDeploymentIdentity, ClusterNodeInstance, ClusterPeerKeyAuthority,
-    ClusterReadinessAuthority, ExpectedClusterPeerKey,
-};
 use anyhow::{ensure, Result};
+use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
+use northstar_security::cluster_keys::ClusterNodeInstance;
+use northstar_security::cluster_keys::ClusterPeerKeyAuthority;
+use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_security::cluster_keys::ExpectedClusterPeerKey;
 use std::{future::Future, time::Duration};
 
 pub(crate) trait ClusterAuthorityRepository: Send + Sync {

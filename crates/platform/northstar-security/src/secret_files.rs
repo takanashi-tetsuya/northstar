@@ -1,12 +1,14 @@
 //! Protected secret file reading and secret file permission and metadata checks.
 
-use super::*;
+use anyhow::{Context, Result};
+use std::{fs, io::Read};
+use zeroize::Zeroize;
 
-pub(crate) fn read_secret_file(path: &std::path::Path, variable: &str) -> Result<String> {
+pub fn read_secret_file(path: &std::path::Path, variable: &str) -> Result<String> {
     read_protected_utf8_file(path, variable, 64 * 1024, true)
 }
 
-pub(super) fn read_protected_utf8_file(
+pub fn read_protected_utf8_file(
     path: &std::path::Path,
     variable: &str,
     max_bytes: u64,
@@ -95,7 +97,7 @@ pub(super) fn read_protected_utf8_file(
 }
 
 #[cfg(unix)]
-pub(super) fn validate_secret_permissions(metadata: &fs::Metadata, variable: &str) -> Result<()> {
+fn validate_secret_permissions(metadata: &fs::Metadata, variable: &str) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = metadata.permissions().mode() & 0o777;
     if mode != 0o400 && mode != 0o600 {
@@ -105,14 +107,14 @@ pub(super) fn validate_secret_permissions(metadata: &fs::Metadata, variable: &st
 }
 
 #[cfg(not(unix))]
-pub(super) fn validate_secret_permissions(_metadata: &fs::Metadata, _variable: &str) -> Result<()> {
+fn validate_secret_permissions(_metadata: &fs::Metadata, _variable: &str) -> Result<()> {
     // Linux production preflight is authoritative. Windows ACLs do not have a
     // sound one-to-one mapping to Unix owner-only permission bits.
     Ok(())
 }
 
 #[cfg(unix)]
-pub(super) fn validate_secret_metadata(
+fn validate_secret_metadata(
     before: &fs::Metadata,
     after: &fs::Metadata,
     variable: &str,
@@ -132,7 +134,7 @@ pub(super) fn validate_secret_metadata(
 }
 
 #[cfg(not(unix))]
-pub(super) fn validate_secret_metadata(
+fn validate_secret_metadata(
     before: &fs::Metadata,
     after: &fs::Metadata,
     variable: &str,

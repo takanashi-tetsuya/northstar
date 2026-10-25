@@ -1,6 +1,7 @@
 //! Explicit trust anchor for the isolated `lab.test` federation fixture.
 
-use crate::{platform::config::read_secret_file, security::dane::DaneMode};
+use crate::dane::DaneMode;
+use crate::secret_files::read_secret_file;
 use anyhow::{Context, Result};
 use hickory_resolver::proto::dnssec::TrustAnchors;
 use std::path::Path;
@@ -13,7 +14,7 @@ const MAX_LAB_PEERS: usize = 32;
 /// A custom anchor is only usable by an explicitly isolated required-DANE
 /// server. An unrestricted allowlist would let the extra key authenticate a
 /// DNS answer for a public target because Hickory stores key bytes, not owner.
-pub(crate) fn validate_settings(
+pub fn validate_settings(
     path: Option<&Path>,
     mode: DaneMode,
     local_domain: &str,
@@ -103,7 +104,7 @@ fn parse_anchor(input: &str) -> Result<TrustAnchors> {
     Ok(anchors)
 }
 
-pub(crate) fn load_anchor(path: &Path) -> Result<TrustAnchors> {
+pub fn load_anchor(path: &Path) -> Result<TrustAnchors> {
     let content = read_secret_file(path, VARIABLE)?;
     parse_anchor(&content)
 }

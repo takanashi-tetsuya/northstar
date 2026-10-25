@@ -1970,6 +1970,42 @@
         "uuid"
       ],
       [
+        "northstar-archive-xmpp",
+        "anyhow"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "chrono"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "northstar-archive-application"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "northstar-xep-0313"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "northstar-xep-0359"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "roxmltree"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "uuid"
+      ],
+      [
         "northstar-auth-core",
         "anyhow"
       ],
@@ -4224,6 +4260,10 @@
       [
         "rust-xmpp-server",
         "northstar-archive-postgres"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-archive-xmpp"
       ],
       [
         "rust-xmpp-server",
@@ -6720,6 +6760,7 @@
       "northstar-archive-application",
       "northstar-archive-core",
       "northstar-archive-postgres",
+      "northstar-archive-xmpp",
       "northstar-auth-core",
       "northstar-config",
       "northstar-delivery-core",

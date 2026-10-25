@@ -1879,6 +1879,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-archive-xmpp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-archive-application",
+ "northstar-xep-0313",
+ "northstar-xep-0359",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-auth-core"
 version = "0.1.0"
 dependencies = [
@@ -3318,6 +3333,7 @@ dependencies = [
  "northstar-archive-application",
  "northstar-archive-core",
  "northstar-archive-postgres",
+ "northstar-archive-xmpp",
  "northstar-auth-core",
  "northstar-config",
  "northstar-delivery-core",

@@ -21,6 +21,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/extdisco.rs', 0],
   ['src/services/jingle.rs', 0],
   ['src/xmpp/protocol/mam.rs', 0],
+  ['crates/contexts/archive/northstar-archive-xmpp/src/lib.rs', 0],
   ['src/xmpp/protocol/mix_muc.rs', 0],
   ['src/xmpp/protocol/private.rs', 0],
   ['src/xmpp/protocol/privacy.rs', 0],

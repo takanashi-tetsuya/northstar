@@ -106,6 +106,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-archive-xmpp
+    package: northstar-archive-xmpp
+    path: crates/contexts/archive/northstar-archive-xmpp
+    tier: context
+    context: archive
+    role: adapter
+    owner_team: messaging
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-auth-core
     package: northstar-auth-core
     path: crates/contexts/auth/northstar-auth-core

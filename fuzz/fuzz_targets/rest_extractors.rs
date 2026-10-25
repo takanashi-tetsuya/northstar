@@ -14,7 +14,7 @@ use uuid::Uuid;
 // tiny rejection stub lets this target compile and execute the production
 // extractor implementation without pulling the database/server graph into the
 // libFuzzer process.
-mod platform {
+mod api {
     pub mod error {
         use axum::{
             http::StatusCode,

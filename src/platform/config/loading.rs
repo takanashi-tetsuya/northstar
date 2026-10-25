@@ -1,6 +1,7 @@
 //! Loading the validated configuration from the environment (Config::from_env).
 
 use super::*;
+use subtle::ConstantTimeEq;
 
 impl Config {
     pub fn from_env() -> Result<Self> {
@@ -228,12 +229,8 @@ impl Config {
                     raw.bootstrap_admin_password.as_deref(),
                 ),
             ] {
-                if other.is_some_and(|other| {
-                    northstar_auth_core::constant_time_bytes_eq(
-                        gateway.as_bytes(),
-                        other.as_bytes(),
-                    )
-                }) {
+                if other.is_some_and(|other| bool::from(gateway.as_bytes().ct_eq(other.as_bytes())))
+                {
                     anyhow::bail!(
                         "WEB_ADMIN_GATEWAY_TOKEN_FILE must not reuse {name} key material"
                     );
@@ -637,13 +634,11 @@ impl Config {
             }
         }
         validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;
-        if !(northstar_auth_core::MIN_SCRAM_ITERATIONS..=northstar_auth_core::MAX_SCRAM_ITERATIONS)
-            .contains(&raw.scram_iterations)
-        {
+        if !(MIN_SCRAM_ITERATIONS..=MAX_SCRAM_ITERATIONS).contains(&raw.scram_iterations) {
             anyhow::bail!(
                 "SCRAM_ITERATIONS must be between {} and {}",
-                northstar_auth_core::MIN_SCRAM_ITERATIONS,
-                northstar_auth_core::MAX_SCRAM_ITERATIONS
+                MIN_SCRAM_ITERATIONS,
+                MAX_SCRAM_ITERATIONS
             );
         }
         validate_shared_runtime_secret("FAST_TOKEN_SECRET", raw.fast_token_secret.as_deref())?;

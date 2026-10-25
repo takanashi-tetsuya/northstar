@@ -1,6 +1,7 @@
 //! Runtime pool budget, Redis transport and shared cluster and authentication secret validation.
 
 use super::*;
+use subtle::ConstantTimeEq;
 
 pub(super) fn validate_runtime_pool_budget(
     max_connections: u32,
@@ -141,8 +142,6 @@ pub(super) fn authentication_master_secrets_are_independent(
     dummy_scram: Option<&str>,
 ) -> bool {
     !fast.is_some_and(|fast| {
-        dummy_scram.is_some_and(|dummy| {
-            northstar_auth_core::constant_time_bytes_eq(fast.as_bytes(), dummy.as_bytes())
-        })
+        dummy_scram.is_some_and(|dummy| bool::from(fast.as_bytes().ct_eq(dummy.as_bytes())))
     })
 }

@@ -13,6 +13,11 @@ pub(crate) use environment::load_dotenv;
 
 pub use self::components::*;
 use self::defaults::*;
+// The authentication service tests compare these with the auth core.
+#[cfg(test)]
+pub(crate) use self::defaults::{
+    DEFAULT_SCRAM_ITERATIONS, MAX_SCRAM_ITERATIONS, MIN_SCRAM_ITERATIONS,
+};
 pub(crate) use self::domain_policy::*;
 use self::listeners::*;
 use self::parsing::*;

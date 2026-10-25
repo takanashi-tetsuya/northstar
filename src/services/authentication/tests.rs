@@ -1276,3 +1276,20 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
         .await
         .unwrap();
 }
+
+#[test]
+fn configuration_scram_iteration_bounds_match_the_authentication_core() {
+    // The configuration crate cannot depend on the auth context, so it keeps its own copies.
+    assert_eq!(
+        crate::platform::config::MIN_SCRAM_ITERATIONS,
+        auth::MIN_SCRAM_ITERATIONS
+    );
+    assert_eq!(
+        crate::platform::config::DEFAULT_SCRAM_ITERATIONS,
+        auth::DEFAULT_SCRAM_ITERATIONS
+    );
+    assert_eq!(
+        crate::platform::config::MAX_SCRAM_ITERATIONS,
+        auth::MAX_SCRAM_ITERATIONS
+    );
+}

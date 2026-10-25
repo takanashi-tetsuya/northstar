@@ -25,8 +25,14 @@ pub(super) fn default_cluster_safety_lease_seconds() -> u64 {
 pub(super) fn default_db_min_connections() -> u32 {
     2
 }
+/// Lowest accepted `SCRAM_ITERATIONS`; equal to `northstar_auth_core::MIN_SCRAM_ITERATIONS`.
+pub(crate) const MIN_SCRAM_ITERATIONS: u32 = 4_096;
+/// Default `SCRAM_ITERATIONS`; equal to `northstar_auth_core::DEFAULT_SCRAM_ITERATIONS`.
+pub(crate) const DEFAULT_SCRAM_ITERATIONS: u32 = 600_000;
+/// Highest accepted `SCRAM_ITERATIONS`; equal to `northstar_auth_core::MAX_SCRAM_ITERATIONS`.
+pub(crate) const MAX_SCRAM_ITERATIONS: u32 = 10_000_000;
 pub(super) fn default_scram_iterations() -> u32 {
-    northstar_auth_core::DEFAULT_SCRAM_ITERATIONS
+    DEFAULT_SCRAM_ITERATIONS
 }
 pub(super) fn default_fast_token_ttl() -> i64 {
     30

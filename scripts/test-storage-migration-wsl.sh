@@ -121,8 +121,8 @@ NORTHSTAR_MINIO_TEST_ENDPOINT="$NORTHSTAR_MINIO_ENDPOINT" \
 NORTHSTAR_MINIO_TEST_BUCKET=northstar-migrate-it \
 NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \
 NORTHSTAR_MINIO_TEST_SECRET_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE" \
-  cargo test --locked --offline \
-    storage::s3::tests::minio_exact_version_cleanup_preserves_newer_version_without_marker \
+  cargo test --locked --offline -p northstar-upload-storage \
+    s3::tests::minio_exact_version_cleanup_preserves_newer_version_without_marker \
     -- --ignored --exact --nocapture
 NORTHSTAR_MINIO_TEST_ENDPOINT="$NORTHSTAR_MINIO_ENDPOINT" \
 NORTHSTAR_MINIO_TEST_BUCKET=northstar-migrate-it \
@@ -130,8 +130,8 @@ NORTHSTAR_MINIO_TEST_UNVERSIONED_BUCKET=northstar-unversioned-it \
 NORTHSTAR_MINIO_TEST_SUSPENDED_BUCKET=northstar-suspended-it \
 NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \
 NORTHSTAR_MINIO_TEST_SECRET_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE" \
-  cargo test --locked --offline \
-    storage::s3::tests::minio_unversioned_provider_without_conditional_delete_fails_closed \
+  cargo test --locked --offline -p northstar-upload-storage \
+    s3::tests::minio_unversioned_provider_without_conditional_delete_fails_closed \
     -- --ignored --exact --nocapture
 "$binary" migrate >"$work_dir/migrate.log" 2>&1
 psql_fixture -q -c 'SELECT northstar_upload_bind_capacity_policy(100000,1000000,1099511627776)' >/dev/null

@@ -196,6 +196,7 @@
     "northstar-test-harness",
     "northstar-upload-application",
     "northstar-upload-core",
+    "northstar-upload-storage",
     "northstar-web-surface",
     "northstar-xep-0016",
     "northstar-xep-0045",
@@ -2970,6 +2971,74 @@
       "uuid"
     ],
     [
+      "northstar-upload-storage",
+      "anyhow"
+    ],
+    [
+      "northstar-upload-storage",
+      "axum"
+    ],
+    [
+      "northstar-upload-storage",
+      "bytes"
+    ],
+    [
+      "northstar-upload-storage",
+      "futures"
+    ],
+    [
+      "northstar-upload-storage",
+      "northstar-security"
+    ],
+    [
+      "northstar-upload-storage",
+      "northstar-upload-application"
+    ],
+    [
+      "northstar-upload-storage",
+      "object_store"
+    ],
+    [
+      "northstar-upload-storage",
+      "roxmltree"
+    ],
+    [
+      "northstar-upload-storage",
+      "serde"
+    ],
+    [
+      "northstar-upload-storage",
+      "serde_json"
+    ],
+    [
+      "northstar-upload-storage",
+      "sha2"
+    ],
+    [
+      "northstar-upload-storage",
+      "thiserror"
+    ],
+    [
+      "northstar-upload-storage",
+      "tokio"
+    ],
+    [
+      "northstar-upload-storage",
+      "tokio-util"
+    ],
+    [
+      "northstar-upload-storage",
+      "tracing"
+    ],
+    [
+      "northstar-upload-storage",
+      "uuid"
+    ],
+    [
+      "northstar-upload-storage",
+      "zeroize"
+    ],
+    [
       "northstar-web-surface",
       "serde"
     ],
@@ -4519,6 +4588,10 @@
     ],
     [
       "rust-xmpp-server",
+      "northstar-upload-storage"
+    ],
+    [
+      "rust-xmpp-server",
       "northstar-web-surface"
     ],
     [
@@ -4636,10 +4709,6 @@
     [
       "rust-xmpp-server",
       "northstar-xmpp-types"
-    ],
-    [
-      "rust-xmpp-server",
-      "object_store"
     ],
     [
       "rust-xmpp-server",

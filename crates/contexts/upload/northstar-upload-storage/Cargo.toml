@@ -1,0 +1,27 @@
+[package]
+name = "northstar-upload-storage"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Local-disk and S3 upload object storage for Northstar"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", default-features = false }
+bytes = "1"
+futures = "0.3"
+northstar-security = { path = "../../../platform/northstar-security" }
+northstar-upload-application = { path = "../northstar-upload-application" }
+object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
+roxmltree = "0.20"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }
+zeroize = "1.8"

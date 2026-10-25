@@ -311,7 +311,7 @@ async fn import(
     Ok(())
 }
 
-pub(crate) async fn run_cli(args: &[String]) -> Result<()> {
+pub async fn run_cli(args: &[String]) -> Result<()> {
     if args == ["namespace"] {
         let settings = super::s3_settings_from_env()?;
         println!(

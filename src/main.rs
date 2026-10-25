@@ -12,7 +12,6 @@ mod services;
 #[cfg(test)]
 mod stage4_replay;
 mod state;
-mod storage;
 mod tools;
 mod xmpp;
 
@@ -229,11 +228,13 @@ async fn run() -> Result<()> {
             Some("migrate") => {
                 let environment = migration_environment()?;
                 let pool = connect_migrator_pool(&environment).await?;
-                let result = storage::migrate::run_cli(&pool, &arguments[2..]).await;
+                let result = tools::storage_migration::run_cli(&pool, &arguments[2..]).await;
                 pool.close().await;
                 return result;
             }
-            Some("backup-object") => return storage::backup::run_cli(&arguments[2..]).await,
+            Some("backup-object") => {
+                return northstar_upload_storage::backup::run_cli(&arguments[2..]).await
+            }
             _ => anyhow::bail!("usage: xmpp-server storage migrate|backup-object ..."),
         }
     }

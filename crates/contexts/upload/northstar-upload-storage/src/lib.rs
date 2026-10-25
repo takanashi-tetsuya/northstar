@@ -1,3 +1,9 @@
+//! Upload object storage adapter: the local-disk and S3 upload stores, the guard that
+//! admits their I/O through the upload safety gate, object integrity checks and the
+//! offline object backup tool.
+
+#![forbid(unsafe_code)]
+
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -18,7 +24,7 @@ use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 pub struct UploadIntegrityError(&'static str);
 
 impl UploadIntegrityError {
-    pub(crate) fn new(kind: &'static str) -> Self {
+    pub fn new(kind: &'static str) -> Self {
         Self(kind)
     }
 }
@@ -31,8 +37,7 @@ pub fn is_upload_safety_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<UploadSafetyError>().is_some()
 }
 
-pub(crate) mod backup;
-pub(crate) mod migrate;
+pub mod backup;
 mod s3;
 
 pub use s3::{S3CleanupMode, S3UploadSettings, S3UploadStore};
@@ -40,7 +45,7 @@ pub use s3::{S3CleanupMode, S3UploadSettings, S3UploadStore};
 /// Parse the one S3 namespace used by offline storage tools. This intentionally
 /// does not load the server configuration: during local-to-S3 migration both
 /// endpoint sets must be available while the live server still names local.
-pub(crate) fn s3_settings_from_env() -> Result<S3UploadSettings> {
+pub fn s3_settings_from_env() -> Result<S3UploadSettings> {
     let optional = |name| std::env::var(name).ok().filter(|value| !value.is_empty());
     let flag = |name| -> Result<bool> {
         match std::env::var(name).as_deref() {
@@ -201,7 +206,7 @@ pub(crate) fn s3_settings_from_env() -> Result<S3UploadSettings> {
 /// Non-secret identity of the exact upload namespace. The migration tool uses
 /// this same encoder as server startup, so a cutover cannot bind a different
 /// bucket, prefix or filesystem root to an otherwise valid journal.
-pub(crate) fn upload_storage_namespace_id(
+pub fn upload_storage_namespace_id(
     backend: &str,
     local_root: &Path,
     s3: Option<&S3UploadSettings>,
@@ -470,13 +475,13 @@ pub trait UploadStore: Send + Sync {
 /// canceled when the proof changes, and checked again before its result is
 /// released. Returned readers and staged-upload Drop cleanup remain guarded
 /// after the initial future has completed.
-pub(crate) struct GuardedUploadStore {
+pub struct GuardedUploadStore {
     inner: Arc<dyn UploadStore>,
     gate: Arc<UploadSafetyGate>,
 }
 
 impl GuardedUploadStore {
-    pub(crate) fn new(inner: Arc<dyn UploadStore>, gate: Arc<UploadSafetyGate>) -> Self {
+    pub fn new(inner: Arc<dyn UploadStore>, gate: Arc<UploadSafetyGate>) -> Self {
         Self { inner, gate }
     }
 
@@ -760,7 +765,7 @@ impl LocalUploadStore {
         }
     }
 
-    pub(crate) fn with_safety_gate(mut self, gate: Arc<UploadSafetyGate>) -> Self {
+    pub fn with_safety_gate(mut self, gate: Arc<UploadSafetyGate>) -> Self {
         self.safety_gate = Some(gate);
         self
     }

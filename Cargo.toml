@@ -52,6 +52,7 @@ members = [
     "crates/contexts/archive/northstar-archive-application",
     "crates/contexts/upload/northstar-upload-core",
     "crates/contexts/upload/northstar-upload-application",
+    "crates/contexts/upload/northstar-upload-storage",
     "crates/contexts/session/northstar-session-application",
     "crates/contexts/federation/northstar-federation-core",
     "crates/contexts/federation/northstar-federation-application",
@@ -126,7 +127,6 @@ tracing-appender = "0.2.5"
 envy = "0.4.2"
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 bb8 = "0.9.1"
-object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
 northstar-xep-0184 = { path = "crates/kernel/northstar-xep-0184" }
 northstar-xep-0085 = { path = "crates/kernel/northstar-xep-0085" }
 northstar-xep-0092 = { path = "crates/kernel/northstar-xep-0092" }
@@ -177,6 +177,7 @@ northstar-archive-core = { path = "crates/contexts/archive/northstar-archive-cor
 northstar-archive-application = { path = "crates/contexts/archive/northstar-archive-application" }
 northstar-upload-core = { path = "crates/contexts/upload/northstar-upload-core" }
 northstar-upload-application = { path = "crates/contexts/upload/northstar-upload-application" }
+northstar-upload-storage = { path = "crates/contexts/upload/northstar-upload-storage" }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application" }
 northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }

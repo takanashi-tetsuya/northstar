@@ -202,7 +202,7 @@ impl S3UploadStore {
         })
     }
 
-    pub(crate) fn with_safety_gate(mut self, gate: Arc<UploadSafetyGate>) -> Self {
+    pub fn with_safety_gate(mut self, gate: Arc<UploadSafetyGate>) -> Self {
         self.safety_gate = Some(gate);
         self
     }

@@ -188,7 +188,7 @@ pub async fn upload_put(
         Some(Ok(Ok(staged))) => staged,
         Some(Ok(Err(error))) => {
             release_claim_best_effort(&state, slot.id, lease.claim_token).await;
-            return if crate::storage::is_upload_safety_error(&error) {
+            return if northstar_upload_storage::is_upload_safety_error(&error) {
                 Err(AppError::Unavailable(
                     "upload storage authority changed; the attempt was quarantined".into(),
                 ))
@@ -285,7 +285,7 @@ pub async fn upload_put(
     .map_err(|_| AppError::Internal(anyhow::anyhow!("upload promotion timed out")))?;
     let promoted = match promoted_result {
         Ok(promoted) => promoted,
-        Err(error) if crate::storage::is_upload_safety_error(&error) => {
+        Err(error) if northstar_upload_storage::is_upload_safety_error(&error) => {
             state
                 .service()
                 .defer_promotion(PromotionClaim {

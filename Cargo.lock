@@ -2157,6 +2157,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-upload-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "futures",
+ "northstar-security",
+ "northstar-upload-application",
+ "object_store",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-web-surface"
 version = "0.1.0"
 dependencies = [
@@ -3251,6 +3274,7 @@ dependencies = [
  "northstar-telemetry",
  "northstar-upload-application",
  "northstar-upload-core",
+ "northstar-upload-storage",
  "northstar-web-surface",
  "northstar-xep-0016",
  "northstar-xep-0045",
@@ -3281,7 +3305,6 @@ dependencies = [
  "northstar-xml-builder",
  "northstar-xml-framing",
  "northstar-xmpp-types",
- "object_store",
  "openssl",
  "pbkdf2",
  "precis-profiles",

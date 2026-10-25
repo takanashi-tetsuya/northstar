@@ -186,7 +186,6 @@ use crate::{
     db,
     s2s::FederationRouter,
     services::abuse::{AbuseConfig, AbuseGuard},
-    storage::{GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore},
 };
 use anyhow::Context;
 use dashmap::DashMap;
@@ -203,6 +202,9 @@ use northstar_config::{
 use northstar_telemetry::metrics::Metrics;
 use northstar_upload_application::safety::UploadSafetyGate;
 use northstar_upload_application::UploadAuthorityGeneration;
+use northstar_upload_storage::{
+    GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore,
+};
 use sqlx::{
     pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},

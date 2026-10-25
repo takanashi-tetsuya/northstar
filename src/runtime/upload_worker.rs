@@ -22,7 +22,7 @@ pub(crate) struct UploadMaintenancePolicy {
 
 pub(crate) struct UploadMaintenanceContext<R> {
     repository: R,
-    store: Arc<dyn crate::storage::UploadStore>,
+    store: Arc<dyn northstar_upload_storage::UploadStore>,
     policy: UploadMaintenancePolicy,
     safety_gate: Arc<UploadSafetyGate>,
     startup_audits: Arc<StartupAuditHandoff>,
@@ -32,7 +32,7 @@ pub(crate) struct UploadMaintenanceContext<R> {
 impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
     pub(crate) fn new(
         repository: R,
-        store: Arc<dyn crate::storage::UploadStore>,
+        store: Arc<dyn northstar_upload_storage::UploadStore>,
         policy: UploadMaintenancePolicy,
         safety_gate: Arc<UploadSafetyGate>,
         startup_audits: Arc<StartupAuditHandoff>,
@@ -524,7 +524,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                         }
                         Ok(StorageOutcome::Deferred) => {}
                         Err(error) => {
-                            if crate::storage::is_upload_safety_error(&error) {
+                            if northstar_upload_storage::is_upload_safety_error(&error) {
                                 if let Err(db_error) = context
                                     .repository
                                     .defer_upload_storage_job(job.id, job.claim_token)
@@ -592,7 +592,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                         }
                         Ok(CleanupOutcome::Deferred) => {}
                         Err(error) => {
-                            if crate::storage::is_upload_safety_error(&error) {
+                            if northstar_upload_storage::is_upload_safety_error(&error) {
                                 if let Err(db_error) = context
                                     .repository
                                     .defer_queued_upload_cleanup(job.object_id, job.claim_token)
@@ -610,7 +610,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                                 .metrics
                                 .upload_storage_cleanup_failures_total
                                 .fetch_add(1, Ordering::Relaxed);
-                            if crate::storage::is_upload_integrity_error(&error) {
+                            if northstar_upload_storage::is_upload_integrity_error(&error) {
                                 context
                                     .metrics
                                     .upload_storage_integrity_failures_total
@@ -647,7 +647,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
             credential_ticks = 0;
             match context.store.reload_credentials().await {
                 Ok(_) => {}
-                Err(error) if crate::storage::is_upload_safety_error(&error) => {
+                Err(error) if northstar_upload_storage::is_upload_safety_error(&error) => {
                     tracing::warn!(
                         ?error,
                         "upload credential refresh deferred by authority gate"
@@ -706,7 +706,7 @@ pub(crate) async fn serve<R: UploadMaintenanceRepository>(
                                 }
                             }
                         }
-                        Err(error) if crate::storage::is_upload_safety_error(&error) => {
+                        Err(error) if northstar_upload_storage::is_upload_safety_error(&error) => {
                             if let Err(db_error) = context
                                 .repository
                                 .defer_upload_scrub(job.object_id, job.claim_token)
@@ -891,7 +891,7 @@ fn note_storage_job_failure<R: UploadMaintenanceRepository>(
         _ => return,
     };
     counter.fetch_add(1, Ordering::Relaxed);
-    if crate::storage::is_upload_integrity_error(error) {
+    if northstar_upload_storage::is_upload_integrity_error(error) {
         context
             .metrics
             .upload_storage_integrity_failures_total

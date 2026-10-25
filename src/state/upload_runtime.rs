@@ -19,7 +19,9 @@ pub(super) fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8
                 path_style: config.upload_s3_path_style,
                 allow_http: config.upload_s3_allow_http,
                 ambient_credentials: config.upload_s3_credential_mode == "ambient",
-                cleanup_mode: crate::storage::S3CleanupMode::parse(&config.upload_s3_cleanup_mode)?,
+                cleanup_mode: northstar_upload_storage::S3CleanupMode::parse(
+                    &config.upload_s3_cleanup_mode,
+                )?,
                 credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
                 access_key_id_file: config.upload_s3_access_key_id_file.clone(),
                 secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
@@ -28,7 +30,7 @@ pub(super) fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8
             })
         })
         .transpose()?;
-    crate::storage::upload_storage_namespace_id(
+    northstar_upload_storage::upload_storage_namespace_id(
         &config.upload_storage_backend,
         &config.upload_dir,
         s3.as_ref(),

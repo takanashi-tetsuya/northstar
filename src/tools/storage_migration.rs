@@ -12,11 +12,11 @@ use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
-use super::{
-    s3_settings_from_env, upload_storage_namespace_id, LocalUploadStore, S3UploadStore, UploadStore,
-};
 use crate::db::upload_migration::{
     self, BeginRun, CanonicalManifestHasher, MigrationItem, VerifiedItem,
+};
+use northstar_upload_storage::{
+    s3_settings_from_env, upload_storage_namespace_id, LocalUploadStore, S3UploadStore, UploadStore,
 };
 
 const OBJECT_IO_DEADLINE: Duration = Duration::from_secs(180);

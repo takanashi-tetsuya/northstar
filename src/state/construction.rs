@@ -310,7 +310,7 @@ impl AppState {
                                 path_style: config.upload_s3_path_style,
                                 allow_http: config.upload_s3_allow_http,
                                 ambient_credentials: config.upload_s3_credential_mode == "ambient",
-                                cleanup_mode: crate::storage::S3CleanupMode::parse(
+                                cleanup_mode: northstar_upload_storage::S3CleanupMode::parse(
                                     &config.upload_s3_cleanup_mode,
                                 )?,
                                 credential_bundle_file: config

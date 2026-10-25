@@ -23,7 +23,6 @@
         "cluster",
         "db",
         "s2s",
-        "storage",
         "xmpp"
       ],
       "may_use": [

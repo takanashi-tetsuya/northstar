@@ -14,7 +14,6 @@
     "src/direct_replay.rs",
     "src/main.rs",
     "src/stage4_replay.rs",
-    "src/state.rs",
-    "src/storage.rs"
+    "src/state.rs"
   ]
 }

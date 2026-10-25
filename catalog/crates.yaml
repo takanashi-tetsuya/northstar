@@ -324,6 +324,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-upload-storage
+    package: northstar-upload-storage
+    path: crates/contexts/upload/northstar-upload-storage
+    tier: context
+    context: upload
+    role: adapter
+    owner_team: storage
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-web-surface
     package: northstar-web-surface
     path: crates/platform/northstar-web-surface

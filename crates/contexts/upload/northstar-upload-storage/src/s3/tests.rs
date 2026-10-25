@@ -1,5 +1,5 @@
 use super::{validate_relative_key, S3UploadSettings, S3UploadStore};
-use crate::storage::UploadStore;
+use crate::UploadStore;
 use object_store::{memory::InMemory, ObjectStore};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -165,7 +165,7 @@ fn minio_versions(settings: &S3UploadSettings, key: &str) -> (Vec<String>, Vec<S
     let output = Command::new("python3")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/scripts/lib/s3-fixture.py"
+            "/../../../../scripts/lib/s3-fixture.py"
         ))
         .arg("--endpoint")
         .arg(settings.endpoint.as_deref().unwrap())

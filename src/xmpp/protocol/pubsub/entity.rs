@@ -801,7 +801,7 @@ pub(super) async fn handle_entity_set(
                     Err(error) => return Ok(error),
                 };
                 if !northstar_xep_0060::subscription_show_values_allowed(
-                    crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
+                    northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
                     state.local_domain(),
                     &parsed.show_values,
                 ) {

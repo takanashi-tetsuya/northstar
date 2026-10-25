@@ -73,7 +73,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
         changes,
     } = batch;
     actor.validate()?;
-    let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
         muc_principal_owns_address(&actor_full_jid, actor)?,
         "MUC affiliation actor does not own the authenticated full JID"
@@ -216,7 +216,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
                 )
             }
             super::super::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
-                let jid = crate::jid::CanonicalJid::parse_bare(jid)?;
+                let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid)?;
                 anyhow::ensure!(
                     jid.localpart().is_some(),
                     "federated MUC target must be a user JID"
@@ -503,13 +503,13 @@ async fn apply_cluster_muc_admin_batch_once(
         "MUC admin batch must contain 1 to 63 items"
     );
     batch.actor.validate()?;
-    let actor_full_jid = crate::jid::canonicalize(batch.actor_full_jid)?;
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(batch.actor_full_jid)?;
     anyhow::ensure!(
         actor_full_jid == batch.actor_full_jid
             && muc_principal_owns_address(&actor_full_jid, batch.actor)?,
         "MUC admin actor does not own the canonical authenticated full JID"
     );
-    let local_domain = crate::jid::prepare_domainpart(batch.local_domain)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(batch.local_domain)?;
     anyhow::ensure!(
         local_domain == batch.local_domain,
         "noncanonical local domain"
@@ -632,7 +632,7 @@ async fn apply_cluster_muc_admin_batch_once(
                 let (key, subject, bare_jid) = match target {
                     super::super::muc::MucAffiliationTarget::LocalUsername(username) => {
                         anyhow::ensure!(
-                            crate::jid::prepare_localpart(username)? == *username,
+                            northstar_xmpp_types::jid::prepare_localpart(username)? == *username,
                             "noncanonical MUC local affiliation target"
                         );
                         let Some(user_id) =
@@ -651,7 +651,7 @@ async fn apply_cluster_muc_admin_batch_once(
                         )
                     }
                     super::super::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
-                        let canonical = crate::jid::CanonicalJid::parse_bare(jid)?;
+                        let canonical = northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid)?;
                         anyhow::ensure!(
                             canonical.localpart().is_some()
                                 && canonical.to_string() == *jid

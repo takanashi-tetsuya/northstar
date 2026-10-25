@@ -103,10 +103,13 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                 return Ok(drop_unverifiable());
             }
 
-            let Ok(sender) = crate::jid::CanonicalJid::parse_bare(&subject.sender_bare_jid) else {
+            let Ok(sender) =
+                northstar_xmpp_types::jid::CanonicalJid::parse_bare(&subject.sender_bare_jid)
+            else {
                 return Ok(drop_unverifiable());
             };
-            let Ok(recipient) = crate::jid::CanonicalJid::parse(&item.recipient_jid) else {
+            let Ok(recipient) = northstar_xmpp_types::jid::CanonicalJid::parse(&item.recipient_jid)
+            else {
                 return Ok(drop_unverifiable());
             };
             if sender.to_string() != subject.sender_bare_jid
@@ -158,7 +161,7 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                     .get(&subject.sender_account_id)
                     .is_some_and(|(username, disabled)| {
                         !*disabled
-                            && crate::jid::CanonicalJid::parse_bare(&format!(
+                            && northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
                                 "{username}@{}",
                                 self.domain
                             ))
@@ -335,7 +338,7 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                             .try_get::<Vec<String>, _>("access_whitelist")?
                             .iter()
                             .any(|jid| {
-                                crate::jid::canonical_bare_key(jid)
+                                northstar_xmpp_types::jid::canonical_bare_key(jid)
                                     .is_ok_and(|jid| jid == recipient_bare)
                             }),
                         "presence" => automatic,

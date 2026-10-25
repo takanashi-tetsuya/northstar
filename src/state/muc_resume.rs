@@ -75,7 +75,7 @@ impl AppState {
             base_stanzas,
             base_bytes,
         } = request;
-        let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
+        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
             return RestoredLocalMucOccupants {
                 failures: memberships.to_vec(),
                 replay_suffix: Vec::new(),
@@ -91,9 +91,11 @@ impl AppState {
                 actors: Vec::new(),
             };
         }
-        let muc_domain =
-            crate::jid::prepare_domainpart(&format!("conference.{}", self.config.domain))
-                .expect("configured XMPP domain must form a valid MUC domain");
+        let muc_domain = northstar_xmpp_types::jid::prepare_domainpart(&format!(
+            "conference.{}",
+            self.config.domain
+        ))
+        .expect("configured XMPP domain must form a valid MUC domain");
         let mut failures = Vec::new();
         let mut actors = Vec::new();
         let mut resume_gate = self
@@ -102,7 +104,7 @@ impl AppState {
             .map(|endpoint| Arc::clone(&endpoint));
         for membership in memberships {
             let (Ok(room_jid), Ok(nick)) = (
-                crate::jid::canonicalize_bare(&membership.room_jid),
+                northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid),
                 crate::services::xml_util::prepare_muc_nick(&membership.nick),
             ) else {
                 failures.push(membership.clone());

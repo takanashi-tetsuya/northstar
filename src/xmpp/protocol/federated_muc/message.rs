@@ -50,14 +50,14 @@ async fn federated_muc_message_owned(
             "not-authorized",
         ));
     }
-    let actor_full_jid = crate::jid::canonicalize(from)
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(from)
         .expect("authenticated_remote_actor already validated the full JID");
     // The clustered invitation authority is account scoped, while the exact
     // full JID remains independently bound to the authenticated occupancy.
     // Derive both from the already authenticated S2S actor; never reuse the
     // room JID, invitee JID or an unprepared `from` value as the principal.
-    let actor_bare_jid = crate::jid::canonical_bare_key(&actor_full_jid)?;
-    let Ok(to_jid) = crate::jid::CanonicalJid::parse(to) else {
+    let actor_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;
+    let Ok(to_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
         return Ok(federated_error(
             &request.stanza,
             from,
@@ -109,7 +109,7 @@ async fn federated_muc_message_owned(
                 "item-not-found",
             ));
         }
-        let Ok(target) = crate::jid::CanonicalJid::parse(&target_raw) else {
+        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(&target_raw) else {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -575,7 +575,7 @@ async fn federated_muc_message_owned(
                     &[format!("{room_jid}/{}", own.nick), actor_full_jid.clone()],
                 )
                 .await;
-            if !crate::jid::canonical_bare_key(&target.full_jid)
+            if !northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
                 .is_ok_and(|owner| blocked.contains(&owner))
             {
                 let _ = state
@@ -603,7 +603,7 @@ async fn federated_muc_message_owned(
                     "bad-request",
                 ));
             };
-            let Ok(invitee) = crate::jid::CanonicalJid::parse(invitee_raw) else {
+            let Ok(invitee) = northstar_xmpp_types::jid::CanonicalJid::parse(invitee_raw) else {
                 return Ok(federated_error(
                     &request.stanza,
                     from,
@@ -1200,7 +1200,7 @@ async fn federated_muc_message_owned(
     } else {
         reflected.clone()
     };
-    let actor_scope = crate::jid::canonical_bare_key(&actor_full_jid)?;
+    let actor_scope = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;
     let actor_authority = MucActorAuthority {
         clustered: state.federated_muc_pg_authority_enabled(),
         expected_room_epoch: room.room_epoch,
@@ -1230,7 +1230,7 @@ async fn federated_muc_message_owned(
                 "item-not-found",
             ));
         };
-        if crate::jid::canonical_bare_key(&original.sender_jid)
+        if northstar_xmpp_types::jid::canonical_bare_key(&original.sender_jid)
             .ok()
             .as_deref()
             != Some(actor_scope.as_str())
@@ -1430,7 +1430,7 @@ async fn federated_muc_message_owned(
         )
         .await;
     for occupant in occupants {
-        if crate::jid::canonical_bare_key(&occupant.full_jid)
+        if northstar_xmpp_types::jid::canonical_bare_key(&occupant.full_jid)
             .is_ok_and(|owner| blocked.contains(&owner))
         {
             continue;

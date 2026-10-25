@@ -41,77 +41,13 @@ No I/O, async runtime, database, network, logging framework, or global mutable s
 
 ---
 
-## 4. Temporary Duplication
-During this phase of parallel modularization:
-- `crates/kernel/northstar-xmpp-types` has been created in isolation.
-- `src/jid.rs` in the root crate is left untouched to prevent build disruption while parallel workers edit other workspace crates.
-- The two implementations are algorithmically identical and functionally interchangeable.
+## 4. Root Integration
+S17 (WP-171) removed the `src/jid.rs` compatibility facade. Root modules import
+`northstar_xmpp_types::jid` directly; the crate is the only JID implementation.
 
 ---
 
-## 5. Exact Future Root Adapter
-Once workspace-wide lock synchronization is completed, integration requires two steps:
-
-### A. Add dependency and workspace member to root `Cargo.toml`
-```toml
-[workspace]
-members = [
-    ".",
-    "crates/kernel/northstar-xmpp-types",
-    # ... other crates
-]
-
-[dependencies]
-northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
-```
-
-### B. Replace `src/jid.rs` with the thin re-export adapter
-```rust
-//! RFC 7622 JID parsing, preparation, and canonical comparison.
-//!
-//! Re-exported from `northstar-xmpp-types`.
-
-pub use northstar_xmpp_types::{
-    canonical_bare_key, canonical_session_key, canonicalize, canonicalize_bare, domain_to_ascii,
-    prepare_domainpart, prepare_localpart, prepare_resourcepart, CanonicalJid,
-};
-```
-
----
-
-## 6. Consumers to Migrate
-The following modules and crates directly depend on JID canonicalization and parsing:
-
-1. **Authentication & Identity**:
-   - `src/auth.rs`: SASL PLAIN / SCRAM authorization identity (`authzid`) and authentication identity (`authcid`) normalization.
-   - `src/security/account_recovery.rs`: Address validation for recovery tokens.
-   - `src/db/authorization_identity.rs`: Canonical bare JID extraction.
-
-2. **Cluster & Routing**:
-   - `src/cluster.rs`: Inter-node packet routing and session targets.
-   - `src/s2s/components.rs`: External component domain routing.
-
-3. **HTTP API Surfaces**:
-   - `src/api/admin.rs`: MUC room destroy/query JID normalization.
-   - `src/api/auth_routes.rs`: Registration / login response JID serialization.
-   - `src/api/models.rs`: Admin / user report models.
-   - `src/api/reports.rs`: Reported account bare JID canonicalization.
-   - `src/api/users.rs`: MAM query `with` filter canonicalization.
-
-4. **Database Repositories**:
-   - `src/db/archive.rs`: MAM archive queries (viewer bare JID, target JID).
-   - `src/db/admin_commands.rs`: Ad-hoc command account lookups.
-   - `src/db/cluster_muc.rs`: MUC room and participant JID keys.
-   - `src/db/mix.rs`: MIX channel and participant JID resolution.
-   - `src/db/api_operations.rs`: Idempotency keys by account bare JID.
-
-5. **Existing & Future XEP Crates**:
-   - `crates/kernel/northstar-xep-0461`: Message fast replies routing.
-   - `crates/kernel/northstar-xep-core`: Future core type sharing.
-
----
-
-## 7. Behavior Invariants
+## 5. Behavior Invariants
 The extracted crate strictly preserves the following invariants:
 1. **Separator Discovery Precedes Normalization (RFC 7622 §3.1)**:
    - Resource delimiter `/` is matched before localpart delimiter `@`.
@@ -138,7 +74,7 @@ The extracted crate strictly preserves the following invariants:
 
 ---
 
-## 8. Known Risks & Mitigation
+## 6. Known Risks & Mitigation
 - **Case Preservation Pitfall**:
   - *Risk*: Upstream code lowercasing full JIDs (e.g. `jid.to_lowercase()`) destroys case sensitivity of resourceparts.
   - *Mitigation*: Enforce use of `CanonicalJid::parse` and `canonical_bare_key` vs `canonical_session_key`.

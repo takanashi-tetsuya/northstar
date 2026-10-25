@@ -322,7 +322,7 @@ pub(crate) fn stream_attribute(xml: &str, name: &str) -> Option<String> {
         return None;
     }
     match name {
-        "from" | "to" => crate::jid::prepare_domainpart(value).ok(),
+        "from" | "to" => northstar_xmpp_types::jid::prepare_domainpart(value).ok(),
         // Stream IDs are opaque and case-sensitive. The previous textual
         // scanner lowercased every attribute, breaking Dialback correlation
         // against peers that use uppercase or mixed-case IDs.
@@ -408,7 +408,7 @@ pub(crate) fn parse_s2s_stream_opening(
             .filter(|value| {
                 !value.is_empty() && value.len() <= 1_024 && !value.chars().any(char::is_control)
             })
-            .and_then(|value| crate::jid::prepare_domainpart(value).ok())
+            .and_then(|value| northstar_xmpp_types::jid::prepare_domainpart(value).ok())
             .ok_or("improper-addressing")
     };
     let from = parse_domain("from")?;
@@ -433,7 +433,7 @@ pub(crate) fn stream_opening_remote_domain(xml: &str) -> Option<String> {
         .filter(|value| {
             !value.is_empty() && value.len() <= 1_024 && !value.chars().any(char::is_control)
         })
-        .and_then(|value| crate::jid::prepare_domainpart(value).ok())
+        .and_then(|value| northstar_xmpp_types::jid::prepare_domainpart(value).ok())
 }
 
 pub(crate) async fn send_initial_stream_error<S: AsyncWrite + Unpin>(

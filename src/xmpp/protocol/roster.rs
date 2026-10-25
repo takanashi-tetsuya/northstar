@@ -246,7 +246,7 @@ impl ProtocolSession {
         };
         if parsed.remove {
             let owner_jid = format!("{}@{}", user.username, self.state.local_domain());
-            let contact_jid = crate::jid::CanonicalJid::parse_bare(&parsed.contact)?;
+            let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&parsed.contact)?;
             let hosted_service = contact_jid.domainpart() == self.muc_domain()
                 || contact_jid.domainpart() == self.upload_domain()
                 || contact_jid.domainpart() == self.pubsub_domain();
@@ -467,7 +467,7 @@ async fn deliver_roster_removal_presence(
             document
                 .root_element()
                 .attribute("from")
-                .and_then(|value| crate::jid::canonicalize_bare(value).ok())
+                .and_then(|value| northstar_xmpp_types::jid::canonicalize_bare(value).ok())
         })
     else {
         // This is an internally constructed stanza. A malformed source must
@@ -605,7 +605,7 @@ pub(crate) async fn deliver_roster_change_with(
 
 fn roster_target_allowed(target: Option<&str>, username: &str, domain: &str) -> bool {
     target.is_none_or(|target| {
-        crate::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
+        northstar_xmpp_types::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
             jid.localpart() == Some(username)
                 && jid.domainpart() == domain
                 && jid.resourcepart().is_none()
@@ -695,7 +695,7 @@ fn parse_roster_set_item(
     if !valid_bare_jid(jid) {
         return Err("jid-malformed");
     }
-    let contact = crate::jid::canonicalize_bare(jid)
+    let contact = northstar_xmpp_types::jid::canonicalize_bare(jid)
         .expect("valid_bare_jid and canonicalize_bare use the same parser");
     let name = item.attribute("name");
     if name.is_some_and(|name| name.chars().count() > 128 || name.len() > 1_024) {

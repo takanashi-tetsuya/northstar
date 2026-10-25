@@ -9,11 +9,9 @@
     "src/stage4_replay/compact.rs": 3431
   },
   "root_rust_files": [
-    "src/auth.rs",
     "src/bosh.rs",
     "src/cluster.rs",
     "src/direct_replay.rs",
-    "src/jid.rs",
     "src/main.rs",
     "src/stage4_replay.rs",
     "src/state.rs",

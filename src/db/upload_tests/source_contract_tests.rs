@@ -518,7 +518,7 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
         .find("presented_session.len() != 64")
         .expect("authorized upload-delete bearer validation");
     let session_hash = authorized_delete
-        .find("crate::auth::token_hash(presented_session)")
+        .find("northstar_auth_core::token_hash(presented_session)")
         .expect("authorized upload-delete bearer hashing");
     let capability = authorized_delete
         .find("northstar_upload_delete_owned")

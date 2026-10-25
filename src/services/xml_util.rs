@@ -329,7 +329,7 @@ pub(crate) fn sm_failed(condition: &str) -> String {
 
 /// Validate and prepare an RFC 7622 bare JID.
 pub(crate) fn valid_bare_jid(value: &str) -> bool {
-    crate::jid::CanonicalJid::parse_bare(value).is_ok()
+    northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()
 }
 
 pub(crate) fn add_delay_from(
@@ -366,8 +366,8 @@ pub(crate) fn add_delay_from(
 /// authority to assert a server delay, while an S2S peer may assert one only
 /// from the exact domain authenticated on that stream.
 pub(crate) fn strip_untrusted_direct_delays(stanza: &str, trusted_domain: Option<&str>) -> String {
-    let trusted_domain =
-        trusted_domain.and_then(|domain| crate::jid::prepare_domainpart(domain).ok());
+    let trusted_domain = trusted_domain
+        .and_then(|domain| northstar_xmpp_types::jid::prepare_domainpart(domain).ok());
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };
@@ -405,7 +405,7 @@ pub(crate) fn strip_untrusted_direct_delays(stanza: &str, trusted_domain: Option
             direct_delays[0]
                 .attribute("from")
                 .map(|from| {
-                    crate::jid::CanonicalJid::parse(from)
+                    northstar_xmpp_types::jid::CanonicalJid::parse(from)
                         .is_ok_and(|from| from.domainpart() == trusted)
                 })
                 // `from` is only RECOMMENDED, not required. The authenticated
@@ -828,7 +828,7 @@ pub(crate) fn add_stanza_id(stanza: &str, by: &str, id: uuid::Uuid) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };
-    let Ok(canonical_by) = crate::jid::CanonicalJid::parse(by) else {
+    let Ok(canonical_by) = northstar_xmpp_types::jid::CanonicalJid::parse(by) else {
         return stanza.to_owned();
     };
     let mut ranges = document
@@ -862,7 +862,7 @@ pub(crate) fn strip_stanza_ids_by_domain(stanza: &str, domain: &str) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };
-    let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+    let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
         return stanza.to_owned();
     };
     let mut ranges = document

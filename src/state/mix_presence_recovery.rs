@@ -109,12 +109,12 @@ impl MixPresenceRecoveryContext {
     }
 
     pub(crate) fn local_mix_domain(&self) -> String {
-        crate::jid::prepare_domainpart(&format!("mix.{}", self.local_domain))
+        northstar_xmpp_types::jid::prepare_domainpart(&format!("mix.{}", self.local_domain))
             .expect("configured XMPP domain must form a valid MIX service domain")
     }
 
     pub(crate) fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
         self.static_policy.federation_domain_allowed(&domain)

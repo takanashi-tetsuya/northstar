@@ -3,7 +3,7 @@
 //! SQL `LOWER()` is not a JID canonicalizer: it neither applies the
 //! UsernameCaseMapped/OpaqueString PRECIS profiles nor IDNA processing, and it
 //! would corrupt case-sensitive resourceparts.  This migration therefore runs
-//! through `crate::jid` while all affected tables are locked.  Every key-space
+//! through `northstar_xmpp_types::jid` while all affected tables are locked.  Every key-space
 //! is checked for canonical collisions before the first row is changed.
 
 use anyhow::{Context, Result};
@@ -24,7 +24,7 @@ struct TextIdentity {
 }
 
 fn canonical_bare(table: &str, row_key: &str, value: &str) -> Result<String> {
-    crate::jid::canonical_bare_key(value).with_context(|| {
+    northstar_xmpp_types::jid::canonical_bare_key(value).with_context(|| {
         format!(
             "JID identity migration rejected invalid bare JID in {table} row {row_key}: {value:?}; correct or remove this row and restart"
         )
@@ -32,7 +32,7 @@ fn canonical_bare(table: &str, row_key: &str, value: &str) -> Result<String> {
 }
 
 fn canonical_full(table: &str, row_key: &str, value: &str) -> Result<String> {
-    crate::jid::canonicalize(value).with_context(|| {
+    northstar_xmpp_types::jid::canonicalize(value).with_context(|| {
         format!(
             "JID identity migration rejected invalid JID in {table} row {row_key}: {value:?}; correct or remove this row and restart"
         )

@@ -346,7 +346,7 @@ impl ProtocolSession {
             self.full_jid.as_deref(),
             root.attribute("to"),
         ) {
-            let target = crate::jid::CanonicalJid::parse(to)
+            let target = northstar_xmpp_types::jid::CanonicalJid::parse(to)
                 .expect("validated client stanza target must be canonicalizable");
             let target_domain = target.domainpart();
             let owner = format!("{}@{}", user.username, self.state.local_domain());
@@ -433,7 +433,7 @@ impl ProtocolSession {
             .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
             && is_caps_disco_get(root);
         if let Some(to) = root.attribute("to") {
-            if let Ok(target_jid) = crate::jid::CanonicalJid::parse(to) {
+            if let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) {
                 let domain = target_jid.domainpart();
                 if domain == self.state.local_domain()
                     && target_jid.localpart().is_some()
@@ -486,8 +486,9 @@ impl ProtocolSession {
                             )));
                         };
                         let requester = self.full_jid.as_deref().unwrap_or_default();
-                        let requester_bare = crate::jid::canonical_bare_key(requester)
-                            .expect("authenticated full JIDs are canonical");
+                        let requester_bare =
+                            northstar_xmpp_types::jid::canonical_bare_key(requester)
+                                .expect("authenticated full JIDs are canonical");
                         let same_account = requester_bare
                             == format!("{}@{}", target_user.username, self.state.local_domain());
                         let subscribed = self
@@ -655,7 +656,7 @@ impl ProtocolSession {
                             &blocking_candidates,
                         )
                         .await;
-                    if crate::jid::canonical_bare_key(&target.full_jid)
+                    if northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
                         .is_ok_and(|owner| blocked.contains(&owner))
                     {
                         if kind == "get" || kind == "set" {
@@ -676,7 +677,7 @@ impl ProtocolSession {
         }
 
         let remote_iq_domain = root.attribute("to").and_then(|to| {
-            let target = crate::jid::CanonicalJid::parse(to).ok()?;
+            let target = northstar_xmpp_types::jid::CanonicalJid::parse(to).ok()?;
             let domain = target.domainpart();
             (domain != self.state.local_domain()
                 && domain != muc_domain
@@ -733,7 +734,8 @@ impl ProtocolSession {
             .attribute("to")
             .is_some_and(|to| super::muc::canonical_local_muc_room(to, &muc_domain).is_some());
         let targets_local_muc = root.attribute("to").is_some_and(|to| {
-            crate::jid::CanonicalJid::parse(to).is_ok_and(|jid| jid.domainpart() == muc_domain)
+            northstar_xmpp_types::jid::CanonicalJid::parse(to)
+                .is_ok_and(|jid| jid.domainpart() == muc_domain)
         });
         let is_muc_operation = matches!(
             ns,
@@ -1119,7 +1121,7 @@ impl ProtocolSession {
 }
 
 fn is_service_jid(value: &str, service_domain: &str) -> bool {
-    crate::jid::CanonicalJid::parse(value).is_ok_and(|jid| {
+    northstar_xmpp_types::jid::CanonicalJid::parse(value).is_ok_and(|jid| {
         jid.localpart().is_none()
             && jid.resourcepart().is_none()
             && jid.domainpart() == service_domain

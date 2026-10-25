@@ -136,12 +136,12 @@ pub(crate) fn mix_presence_item_id(
     participant_id: Uuid,
     public_resource: &str,
 ) -> Result<String> {
-    let resource = crate::jid::prepare_resourcepart(public_resource)?;
+    let resource = northstar_xmpp_types::jid::prepare_resourcepart(public_resource)?;
     let encoded = format!(
         "{}#{}@{}/{}",
         participant_id, channel.localpart, channel.service_domain, resource
     );
-    let canonical = crate::jid::CanonicalJid::parse(&encoded)?;
+    let canonical = northstar_xmpp_types::jid::CanonicalJid::parse(&encoded)?;
     anyhow::ensure!(
         canonical.to_string() == encoded,
         "encoded MIX presence item is not canonical"
@@ -150,7 +150,7 @@ pub(crate) fn mix_presence_item_id(
 }
 
 pub(super) fn canonical_user_bare(jid: &str) -> Result<String> {
-    let jid = crate::jid::CanonicalJid::parse(jid)?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid)?;
     anyhow::ensure!(
         jid.localpart().is_some(),
         "MIX participants require a user bare JID"
@@ -163,7 +163,7 @@ pub(super) async fn pam_account_matches_actor_tx(
     user_id: Uuid,
     actor_jid: &str,
 ) -> Result<bool> {
-    let actor_username = crate::jid::CanonicalJid::parse_bare(actor_jid)?
+    let actor_username = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_jid)?
         .localpart()
         .context("MIX-PAM actor requires a localpart")?
         .to_owned();
@@ -178,11 +178,11 @@ pub(super) async fn pam_account_matches_actor_tx(
 }
 
 pub(super) fn canonical_service_domain(domain: &str) -> Result<String> {
-    crate::jid::prepare_domainpart(domain)
+    northstar_xmpp_types::jid::prepare_domainpart(domain)
 }
 
 pub(super) fn canonical_channel_localpart(localpart: &str) -> Result<String> {
-    let value = crate::jid::prepare_localpart(localpart)?;
+    let value = northstar_xmpp_types::jid::prepare_localpart(localpart)?;
     anyhow::ensure!(value.len() <= 1023, "MIX channel localpart is too large");
     Ok(value)
 }
@@ -368,7 +368,7 @@ pub async fn discoverable_mix_channel_page(
     );
     let service_domain = canonical_service_domain(service_domain)?;
     let requester = canonical_user_bare(requester)?;
-    let requester_domain = crate::jid::CanonicalJid::parse_bare(&requester)?
+    let requester_domain = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?
         .domainpart()
         .to_owned();
     let after = after.map(canonical_channel_localpart).transpose()?;
@@ -487,7 +487,7 @@ pub async fn mix_channel_discoverable_to(
     channel: &MixChannel,
     actor: &str,
 ) -> Result<bool> {
-    let actor = crate::jid::CanonicalJid::parse(actor)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(actor)?;
     anyhow::ensure!(
         actor.resourcepart().is_none(),
         "MIX disco requester must be a bare JID or authenticated domain"

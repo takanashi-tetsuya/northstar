@@ -85,7 +85,7 @@ pub async fn lookup_remote_pam_operation(
     client_request_id: &str,
     request_digest: &[u8; 32],
 ) -> Result<PamOperationReplay> {
-    let requester = crate::jid::canonical_session_key(requester_full_jid)?;
+    let requester = northstar_xmpp_types::jid::canonical_session_key(requester_full_jid)?;
     anyhow::ensure!(
         !client_request_id.is_empty() && client_request_id.len() <= 1_024,
         "invalid PAM client request id"
@@ -136,7 +136,7 @@ pub(super) async fn remote_pam_account_matches_actor_tx(
     user_id: Uuid,
     actor_jid: &str,
 ) -> Result<bool> {
-    let actor_username = crate::jid::CanonicalJid::parse_bare(actor_jid)?
+    let actor_username = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_jid)?
         .localpart()
         .context("MIX-PAM actor requires a localpart")?
         .to_owned();
@@ -210,7 +210,7 @@ pub(super) async fn insert_pam_operation_and_outbox_tx(
     prior_subscriptions: &[String],
     policy: super::super::S2sOutboxPolicy,
 ) -> Result<()> {
-    let expected_username = crate::jid::CanonicalJid::parse(requester_full_jid)?
+    let expected_username = northstar_xmpp_types::jid::CanonicalJid::parse(requester_full_jid)?
         .localpart()
         .context("MIX-PAM requester requires a localpart")?
         .to_owned();
@@ -258,7 +258,7 @@ pub async fn begin_remote_pam_join(
     request: BeginRemotePamJoin<'_>,
 ) -> Result<PamOperationReplay> {
     let actor_jid = canonical_user_bare(request.actor_jid)?;
-    let channel_jid = crate::jid::canonicalize_bare(request.channel_jid)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(request.channel_jid)?;
     let nodes = valid_join_nodes(request.nodes)?;
     let nick = request.nick.map(prepare_mix_nick).transpose()?;
     anyhow::ensure!(
@@ -269,14 +269,16 @@ pub async fn begin_remote_pam_join(
         !request.client_request_id.is_empty() && request.client_request_id.len() <= 1_024,
         "invalid PAM client request id"
     );
-    let requester_full_jid = crate::jid::canonical_session_key(request.requester_full_jid)?;
-    let remote_domain = crate::jid::prepare_domainpart(request.remote_domain)?;
+    let requester_full_jid =
+        northstar_xmpp_types::jid::canonical_session_key(request.requester_full_jid)?;
+    let remote_domain = northstar_xmpp_types::jid::prepare_domainpart(request.remote_domain)?;
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(&requester_full_jid)? == actor_jid,
+        northstar_xmpp_types::jid::canonical_bare_key(&requester_full_jid)? == actor_jid,
         "MIX-PAM requester resource does not belong to authenticated actor"
     );
     anyhow::ensure!(
-        crate::jid::CanonicalJid::parse_bare(&channel_jid)?.domainpart() == remote_domain,
+        northstar_xmpp_types::jid::CanonicalJid::parse_bare(&channel_jid)?.domainpart()
+            == remote_domain,
         "MIX-PAM remote domain does not own the channel"
     );
     validate_pam_outbound(

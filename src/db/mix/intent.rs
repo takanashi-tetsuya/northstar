@@ -203,12 +203,13 @@ pub enum FederatedMixIqReplay {
 
 pub(super) fn validate_federated_mix_mutation(context: &FederatedMixMutation) -> Result<()> {
     anyhow::ensure!(
-        crate::jid::prepare_domainpart(&context.authenticated_domain)?
+        northstar_xmpp_types::jid::prepare_domainpart(&context.authenticated_domain)?
             == context.authenticated_domain,
         "non-canonical federated MIX authenticated domain"
     );
     anyhow::ensure!(
-        crate::jid::CanonicalJid::parse(&context.actor_jid)?.to_string() == context.actor_jid,
+        northstar_xmpp_types::jid::CanonicalJid::parse(&context.actor_jid)?.to_string()
+            == context.actor_jid,
         "non-canonical federated MIX actor JID"
     );
     anyhow::ensure!(
@@ -331,8 +332,8 @@ pub async fn federated_mix_iq_replay(
     request_id: &str,
     request_digest: &[u8; 32],
 ) -> Result<FederatedMixIqReplay> {
-    let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
-    let actor_jid = crate::jid::CanonicalJid::parse(actor_jid)?.to_string();
+    let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
+    let actor_jid = northstar_xmpp_types::jid::CanonicalJid::parse(actor_jid)?.to_string();
     anyhow::ensure!(
         !request_id.is_empty() && request_id.len() <= 1_024,
         "invalid federated MIX IQ id"
@@ -369,8 +370,8 @@ pub async fn admit_federated_mix_iq_result(
     response: &str,
     policy: super::super::S2sOutboxPolicy,
 ) -> Result<FederatedMixIqReplay> {
-    let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
-    let actor_jid = crate::jid::CanonicalJid::parse(actor_jid)?.to_string();
+    let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
+    let actor_jid = northstar_xmpp_types::jid::CanonicalJid::parse(actor_jid)?.to_string();
     anyhow::ensure!(
         !request_id.is_empty() && request_id.len() <= 1_024,
         "invalid federated MIX IQ id"

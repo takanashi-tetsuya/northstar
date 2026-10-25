@@ -56,9 +56,9 @@ pub(super) async fn store_mix_presence_with_policy(
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<PresenceOutcome> {
     let actor_bare = canonical_user_bare(actor_bare)?;
-    let actor_full = crate::jid::canonicalize(actor_full)?;
+    let actor_full = northstar_xmpp_types::jid::canonicalize(actor_full)?;
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(&actor_full)? == actor_bare,
+        northstar_xmpp_types::jid::canonical_bare_key(&actor_full)? == actor_bare,
         "MIX presence full JID does not belong to participant"
     );
     anyhow::ensure!(payload.len() <= 1_048_576, "MIX presence payload too large");
@@ -109,7 +109,7 @@ pub(super) async fn store_mix_presence_with_policy(
         transaction.commit().await?;
         return Ok(PresenceOutcome::Unchanged);
     }
-    let actor = crate::jid::CanonicalJid::parse(&actor_full)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(&actor_full)?;
     let public_resource = if participant_jid_visible(&channel, &preference) {
         actor
             .resourcepart()
@@ -441,7 +441,7 @@ pub(super) async fn authorize_mix_node_read_tx(
 ) -> Result<MixReadOutcome<MixChannel>> {
     anyhow::ensure!(ALL_NODES.contains(&node), "unknown MIX node");
     let actor = canonical_user_bare(actor)?;
-    let actor_domain = crate::jid::CanonicalJid::parse_bare(&actor)?
+    let actor_domain = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&actor)?
         .domainpart()
         .to_owned();
     let row = sqlx::query(

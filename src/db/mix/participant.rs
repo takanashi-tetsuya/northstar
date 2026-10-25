@@ -38,7 +38,7 @@ pub async fn mix_presence_source_jid(
     channel_id: Uuid,
     item_id: &str,
 ) -> Result<Option<String>> {
-    let item_id = crate::jid::CanonicalJid::parse(item_id)?.to_string();
+    let item_id = northstar_xmpp_types::jid::CanonicalJid::parse(item_id)?.to_string();
     sqlx::query_scalar(
         "SELECT source_full_jid FROM mix_events WHERE channel_id = $1 AND node = $2 AND item_id = $3 AND source_full_jid IS NOT NULL",
     )
@@ -59,7 +59,7 @@ pub async fn prepare_mix_presence_after_restart(
     pool: &PgPool,
     local_domain: &str,
 ) -> Result<(DateTime<Utc>, Vec<MixPresenceProbeTarget>)> {
-    let _local_domain = crate::jid::prepare_domainpart(local_domain)?;
+    let _local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let mut transaction = pool.begin().await?;
     let cutoff = Utc::now();
     let rows = sqlx::query(

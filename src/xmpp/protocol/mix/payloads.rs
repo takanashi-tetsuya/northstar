@@ -115,12 +115,12 @@ pub(super) fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -
         crate::services::mix::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
     );
-    let channel = crate::jid::CanonicalJid::parse_bare(channel_jid)?;
+    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
     let channel_localpart = channel
         .localpart()
         .context("MIX channel JID requires a localpart")?;
     let encoded_localpart = format!("{participant_id}#{channel_localpart}");
-    let encoded = crate::jid::CanonicalJid::parse_bare(&format!(
+    let encoded = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
         "{encoded_localpart}@{}",
         channel.domainpart()
     ))?;
@@ -136,7 +136,7 @@ pub(super) fn decode_participant_jid(value: &str) -> Result<(String, String)> {
         .split_once('@')
         .map(|(localpart, _)| localpart)
         .context("encoded MIX participant JID requires a localpart")?;
-    let encoded = crate::jid::CanonicalJid::parse_bare(value)?;
+    let encoded = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)?;
     anyhow::ensure!(
         encoded.localpart() == Some(raw_localpart),
         "encoded MIX participant JID is not in canonical localpart form"
@@ -149,7 +149,7 @@ pub(super) fn decode_participant_jid(value: &str) -> Result<(String, String)> {
         crate::services::mix::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
     );
-    let channel = crate::jid::CanonicalJid::parse_bare(&format!(
+    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
         "{channel_localpart}@{}",
         encoded.domainpart()
     ))?;
@@ -158,7 +158,7 @@ pub(super) fn decode_participant_jid(value: &str) -> Result<(String, String)> {
 
 pub(super) fn participant_id_from_encoded_jid(value: &str, channel_jid: &str) -> Result<String> {
     let (participant_id, encoded_channel) = decode_participant_jid(value)?;
-    let channel = crate::jid::CanonicalJid::parse_bare(channel_jid)?;
+    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
     anyhow::ensure!(
         encoded_channel == channel.to_string(),
         "encoded MIX participant JID has the wrong channel"

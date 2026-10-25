@@ -322,7 +322,7 @@ async fn tcp_connection(
 fn channel_bindings(
     secure: &tokio_rustls::server::TlsStream<TcpStream>,
     tls_server_end_point: Option<Vec<u8>>,
-) -> Result<Option<crate::auth::ChannelBindings>> {
+) -> Result<Option<northstar_auth_core::ChannelBindings>> {
     let tls_exporter = secure
         .get_ref()
         .1
@@ -333,7 +333,7 @@ fn channel_bindings(
             error
         })
         .ok();
-    crate::auth::ChannelBindings::from_available(tls_server_end_point, tls_exporter)
+    northstar_auth_core::ChannelBindings::from_available(tls_server_end_point, tls_exporter)
 }
 
 fn tls_session_evidence(

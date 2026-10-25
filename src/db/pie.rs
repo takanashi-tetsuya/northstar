@@ -5,8 +5,8 @@
 //! rolls the complete transaction back.
 
 use self::model::{ConflictPolicy, PieUser, PreparedUser};
-use crate::jid;
 use anyhow::{bail, Context, Result};
+use northstar_xmpp_types::jid;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 

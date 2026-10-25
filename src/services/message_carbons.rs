@@ -198,7 +198,8 @@ pub(crate) async fn send_sent_carbons<P: CarbonDeliveryPort + Sync>(
     if !port.enabled() {
         return;
     }
-    let current = crate::jid::canonical_session_key(from).unwrap_or_else(|_| from.to_owned());
+    let current =
+        northstar_xmpp_types::jid::canonical_session_key(from).unwrap_or_else(|_| from.to_owned());
     let bare = from.split('/').next().unwrap_or(from);
     // Invalid forwarded stanzas must not reach local or remote resources.
     let Some(peer) = Direction::Sent.peer(forwarded) else {

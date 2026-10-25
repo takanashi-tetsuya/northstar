@@ -1,7 +1,7 @@
-use crate::auth;
 pub use crate::services::reports::ReportEvidenceInput;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_auth_core as auth;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::Row;
@@ -325,7 +325,11 @@ pub async fn create_report_in_tx(
                     "archive_id is not owned by the reporter",
                 ))?;
         let peer_jid = archive.peer_jid;
-        if crate::jid::canonical_bare_key(&peer_jid).ok().as_deref() != Some(reported_jid) {
+        if northstar_xmpp_types::jid::canonical_bare_key(&peer_jid)
+            .ok()
+            .as_deref()
+            != Some(reported_jid)
+        {
             return Err(ReportCreateError::InvalidEvidence(
                 "archive_id is not associated with the reported JID",
             ));
@@ -392,7 +396,7 @@ fn evidence_from_archive(
         .ok_or(ReportCreateError::InvalidEvidence(
             "archived message has no authoritative sender",
         ))?;
-    let sender = crate::jid::canonicalize(sender)
+    let sender = northstar_xmpp_types::jid::canonicalize(sender)
         .map_err(|_| ReportCreateError::InvalidEvidence("archived message sender is invalid"))?;
     if encrypted {
         return Ok((

@@ -264,13 +264,14 @@ impl<R: ReplayLeaseRepository> ReplayService<R> {
             .username(recipient_id)
             .await?
             .context("offline replay account disappeared")?;
-        let owner_bare_jid = crate::jid::canonicalize_bare(&format!("{username}@{}", self.domain))?;
-        let owner_full_jid = crate::jid::canonical_session_key(current_full_jid)?;
+        let owner_bare_jid =
+            northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{}", self.domain))?;
+        let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(current_full_jid)?;
         anyhow::ensure!(
-            crate::jid::canonical_bare_key(&owner_full_jid)? == owner_bare_jid,
+            northstar_xmpp_types::jid::canonical_bare_key(&owner_full_jid)? == owner_bare_jid,
             "offline replay resource does not belong to recipient account"
         );
-        let parsed = crate::jid::CanonicalJid::parse(&owner_full_jid)?;
+        let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?;
         let owner_resource = parsed
             .resourcepart()
             .expect("canonical_session_key requires a resourcepart");

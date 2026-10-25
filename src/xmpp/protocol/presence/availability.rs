@@ -15,7 +15,7 @@ impl ProtocolSession {
         if kind != "available" {
             return Ok(DirectedPresencePlan::None);
         }
-        let target_bare = crate::jid::canonical_bare_key(target)?;
+        let target_bare = northstar_xmpp_types::jid::canonical_bare_key(target)?;
         let receives_broadcast = self
             .available
             .as_ref()
@@ -151,10 +151,10 @@ impl ProtocolSession {
             return Ok(());
         }
 
-        let owner_identity = crate::jid::CanonicalJid::parse(owner_full)
+        let owner_identity = northstar_xmpp_types::jid::CanonicalJid::parse(owner_full)
             .ok()
             .and_then(|jid| jid.localpart().map(str::to_owned));
-        let recipient_identity = crate::jid::CanonicalJid::parse(requester)
+        let recipient_identity = northstar_xmpp_types::jid::CanonicalJid::parse(requester)
             .ok()
             .and_then(|jid| jid.localpart().map(str::to_owned));
         let authority = match (owner_identity, recipient_identity) {
@@ -203,7 +203,7 @@ impl ProtocolSession {
         self.directed_presence.clear();
         for target in targets {
             let delivery = set_to(unavailable, &target);
-            let Ok(jid) = crate::jid::CanonicalJid::parse(&target) else {
+            let Ok(jid) = northstar_xmpp_types::jid::CanonicalJid::parse(&target) else {
                 continue;
             };
             if jid.domainpart() == self.state.local_domain() {
@@ -265,7 +265,7 @@ impl ProtocolSession {
         expected_recipient_id: Option<uuid::Uuid>,
         expected_recipient_auth_generation: Option<i64>,
     ) {
-        let Ok(owner_jid) = crate::jid::CanonicalJid::parse(owner) else {
+        let Ok(owner_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(owner) else {
             return;
         };
         let owner_bare = owner_jid.bare();
@@ -290,7 +290,7 @@ impl ProtocolSession {
         let expected_owner_id = expected_owner_id.or_else(|| resolved_owner.as_ref().map(|a| a.id));
         let expected_owner_auth_generation = expected_owner_auth_generation
             .or_else(|| resolved_owner.as_ref().map(|a| a.auth_generation));
-        let Ok(recipient_jid) = crate::jid::CanonicalJid::parse(recipient) else {
+        let Ok(recipient_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(recipient) else {
             return;
         };
         let resolved_recipient = if expected_recipient_id.is_none() {
@@ -332,7 +332,7 @@ impl ProtocolSession {
                 .await
                 .ok()
         };
-        let Ok(recipient) = crate::jid::canonicalize(recipient) else {
+        let Ok(recipient) = northstar_xmpp_types::jid::canonicalize(recipient) else {
             return;
         };
         let recipients = self
@@ -352,7 +352,7 @@ impl ProtocolSession {
         for owner_key in owner_keys {
             if !owner_full.as_ref().map_or_else(
                 || {
-                    crate::jid::canonical_bare_key(&owner_key)
+                    northstar_xmpp_types::jid::canonical_bare_key(&owner_key)
                         .is_ok_and(|session_owner| session_owner == owner_bare)
                 },
                 |owner_full| &owner_key == owner_full,
@@ -447,7 +447,7 @@ impl ProtocolSession {
     }
 
     pub(super) async fn probe_contact_presence(&self, contact: &str, requester_bare: &str) {
-        let Ok(contact_jid) = crate::jid::CanonicalJid::parse_bare(contact) else {
+        let Ok(contact_jid) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact) else {
             return;
         };
         if contact_jid.domainpart() == self.state.local_domain() {

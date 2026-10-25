@@ -369,7 +369,7 @@ pub(super) async fn handle_hostname_binding(
         // defines no interoperable routing semantics for it.
         return Ok(Some(component_iq_error(&id, "not-allowed")));
     }
-    let hostname = match crate::jid::prepare_domainpart(hostname) {
+    let hostname = match northstar_xmpp_types::jid::prepare_domainpart(hostname) {
         Ok(hostname) => hostname,
         Err(_) => return Ok(Some(component_iq_error(&id, "bad-request"))),
     };

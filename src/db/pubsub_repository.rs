@@ -48,8 +48,8 @@ impl PostgresPubSubRepository {
         actor: &PepSubscriptionActor<'_>,
         subscriber_jid: &str,
     ) -> Result<Option<LockedPepSubscriptionPrincipal>> {
-        let actor_jid = crate::jid::CanonicalJid::parse(actor.jid)?;
-        let subscriber = crate::jid::CanonicalJid::parse(subscriber_jid)?;
+        let actor_jid = northstar_xmpp_types::jid::CanonicalJid::parse(actor.jid)?;
+        let subscriber = northstar_xmpp_types::jid::CanonicalJid::parse(subscriber_jid)?;
         if actor_jid.bare() != subscriber.bare()
             || subscriber.resourcepart().is_some()
                 && actor_jid.to_string() != subscriber.to_string()
@@ -64,9 +64,11 @@ impl PostgresPubSubRepository {
             (false, None) => None,
             _ => return Ok(None),
         };
-        let owner_bare =
-            crate::jid::CanonicalJid::parse_bare(&format!("{}@{}", owner.username, self.domain))?
-                .to_string();
+        let owner_bare = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+            "{}@{}",
+            owner.username, self.domain
+        ))?
+        .to_string();
 
         // Node configuration/deletion takes the owner advisory first. Account
         // rows follow in UUID order, then subscriber/node advisories and block
@@ -146,14 +148,14 @@ impl PostgresPubSubRepository {
         let deliveries = factory.build(snapshot)?;
         anyhow::ensure!(
             deliveries.iter().all(|(recipient, _)| {
-                crate::jid::canonicalize(recipient)
+                northstar_xmpp_types::jid::canonicalize(recipient)
                     .is_ok_and(|recipient| authorized.contains(&recipient))
             }),
             "PEP direct-state renderer escaped the transaction-owned recipients"
         );
         let mut localparts = authorized
             .iter()
-            .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
+            .filter_map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok())
             .filter(|jid| jid.domainpart() == self.domain)
             .filter_map(|jid| jid.localpart().map(str::to_owned))
             .collect::<Vec<_>>();
@@ -172,9 +174,11 @@ impl PostgresPubSubRepository {
         for row in rows {
             let id: Uuid = row.try_get("id")?;
             let username: String = row.try_get("username")?;
-            let bare =
-                crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                    .to_string();
+            let bare = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+                "{username}@{}",
+                self.domain
+            ))?
+            .to_string();
             local_accounts.insert(bare, id);
         }
         let event_id = Uuid::new_v4();
@@ -182,17 +186,18 @@ impl PostgresPubSubRepository {
         let mut seen = HashSet::new();
         let mut outbox = Vec::new();
         for (recipient, payload) in deliveries {
-            let recipient = crate::jid::canonicalize(&recipient)?;
+            let recipient = northstar_xmpp_types::jid::canonicalize(&recipient)?;
             if !seen.insert(recipient.clone()) {
                 continue;
             }
-            let recipient_bare = crate::jid::canonical_bare_key(&recipient)?;
+            let recipient_bare = northstar_xmpp_types::jid::canonical_bare_key(&recipient)?;
             let recipient_account_id = if recipient_bare == snapshot.owner_bare_jid {
                 Some(owner_id)
             } else {
                 local_accounts.get(&recipient_bare).copied()
             };
-            if crate::jid::CanonicalJid::parse(&recipient)?.domainpart() == self.domain
+            if northstar_xmpp_types::jid::CanonicalJid::parse(&recipient)?.domainpart()
+                == self.domain
                 && recipient_account_id.is_none()
             {
                 // Account deletion/disable committed before this mutation's
@@ -281,9 +286,11 @@ impl PostgresPubSubRepository {
         factory: &dyn PepOutboxFactory,
         published_items: Option<&[(&str, &str)]>,
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
-        let owner_bare_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{owner_username}@{}", self.domain))?
-                .to_string();
+        let owner_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+            "{owner_username}@{}",
+            self.domain
+        ))?
+        .to_string();
         let policy = sqlx::query(
             "SELECT access_model,deliver_notifications,roster_groups_allowed,access_whitelist
                FROM pep_nodes
@@ -303,7 +310,7 @@ impl PostgresPubSubRepository {
         let access_whitelist = policy
             .try_get::<Vec<String>, _>("access_whitelist")?
             .into_iter()
-            .map(|jid| crate::jid::canonical_bare_key(&jid))
+            .map(|jid| northstar_xmpp_types::jid::canonical_bare_key(&jid))
             .collect::<Result<HashSet<_>>>()?;
 
         // The owner users row is held FOR SHARE by the caller. Production
@@ -321,7 +328,9 @@ impl PostgresPubSubRepository {
         .await?;
         let mut roster = BTreeMap::new();
         for row in roster_rows {
-            let jid = crate::jid::canonicalize_bare(&row.try_get::<String, _>("contact_jid")?)?;
+            let jid = northstar_xmpp_types::jid::canonicalize_bare(
+                &row.try_get::<String, _>("contact_jid")?,
+            )?;
             roster.insert(
                 jid,
                 PepRosterAudienceEntry {
@@ -345,13 +354,13 @@ impl PostgresPubSubRepository {
         .fetch_all(&mut **transaction)
         .await?
         .into_iter()
-        .map(|jid| crate::jid::canonicalize(&jid))
+        .map(|jid| northstar_xmpp_types::jid::canonicalize(&jid))
         .collect::<Result<Vec<_>>>()?;
 
         let mut localparts = roster
             .keys()
             .chain(explicit.iter())
-            .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
+            .filter_map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok())
             .filter(|jid| jid.domainpart() == self.domain.as_str())
             .filter_map(|jid| jid.localpart().map(str::to_owned))
             .collect::<Vec<_>>();
@@ -369,9 +378,11 @@ impl PostgresPubSubRepository {
         for row in local_rows {
             let id: Uuid = row.try_get("id")?;
             let username: String = row.try_get("username")?;
-            let bare =
-                crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                    .to_string();
+            let bare = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+                "{username}@{}",
+                self.domain
+            ))?
+            .to_string();
             local_accounts.insert(bare, id);
             block_owners.push(id);
         }
@@ -399,11 +410,11 @@ impl PostgresPubSubRepository {
         let authorized = |jid: &str,
                           roster_entry: Option<&PepRosterAudienceEntry>|
          -> Result<bool> {
-            let bare = crate::jid::canonical_bare_key(jid)?;
+            let bare = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
             if bare == owner_bare_jid {
                 return Ok(true);
             }
-            let parsed = crate::jid::CanonicalJid::parse(jid)?;
+            let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(jid)?;
             if parsed.domainpart() == self.domain && !local_accounts.contains_key(&bare) {
                 return Ok(false);
             }
@@ -448,7 +459,7 @@ impl PostgresPubSubRepository {
         }
         let mut explicit_jids = Vec::new();
         for jid in explicit {
-            let bare = crate::jid::canonical_bare_key(&jid)?;
+            let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
             if authorized(&jid, roster.get(&bare))? {
                 explicit_jids.push(jid);
             }
@@ -474,12 +485,12 @@ impl PostgresPubSubRepository {
         deliveries
             .into_iter()
             .filter_map(|(recipient, payload)| {
-                let recipient = crate::jid::canonicalize(&recipient).ok()?;
+                let recipient = northstar_xmpp_types::jid::canonicalize(&recipient).ok()?;
                 seen.insert(recipient.clone())
                     .then_some((recipient, payload))
             })
             .map(|(recipient, payload)| {
-                let recipient_bare = crate::jid::canonical_bare_key(&recipient)?;
+                let recipient_bare = northstar_xmpp_types::jid::canonical_bare_key(&recipient)?;
                 let recipient_account_id = if recipient_bare == owner_bare_jid {
                     Some(owner_id)
                 } else {
@@ -527,9 +538,11 @@ impl PostgresPubSubRepository {
             return Ok(None);
         };
         lock_pep_audience(&mut transaction, owner.id, node).await?;
-        let owner_bare_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                .to_string();
+        let owner_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+            "{username}@{}",
+            self.domain
+        ))?
+        .to_string();
         Ok(Some((transaction, owner_bare_jid)))
     }
     async fn locked_pep_node_config(

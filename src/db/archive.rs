@@ -140,7 +140,7 @@ pub async fn set_mam_preferences(
     );
     let mut always = Vec::with_capacity(preferences.always.len());
     for jid in &preferences.always {
-        let jid = crate::jid::canonicalize(jid)?;
+        let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
         anyhow::ensure!(
             all_jids.insert(jid.clone()),
             "duplicate canonical JID in MAM preferences: {jid}"
@@ -149,7 +149,7 @@ pub async fn set_mam_preferences(
     }
     let mut never = Vec::with_capacity(preferences.never.len());
     for jid in &preferences.never {
-        let jid = crate::jid::canonicalize(jid)?;
+        let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
         anyhow::ensure!(
             all_jids.insert(jid.clone()),
             "duplicate canonical JID in MAM preferences: {jid}"
@@ -185,8 +185,8 @@ pub async fn set_mam_preferences(
 }
 
 pub async fn archive_allowed(pool: &PgPool, owner_id: Uuid, peer_jid: &str) -> Result<bool> {
-    let peer_jid = crate::jid::canonicalize(peer_jid)?;
-    let peer_bare = crate::jid::canonical_bare_key(&peer_jid)?;
+    let peer_jid = northstar_xmpp_types::jid::canonicalize(peer_jid)?;
+    let peer_bare = northstar_xmpp_types::jid::canonical_bare_key(&peer_jid)?;
     // Read every policy input in one statement. The pure domain rule chooses
     // full JID, bare JID, then account default without mixing snapshots.
     let row = sqlx::query(
@@ -222,8 +222,8 @@ pub async fn archive_message(
     encrypted: bool,
     stanza_id: Option<&str>,
 ) -> Result<()> {
-    let peer_full_jid = crate::jid::canonicalize(peer_jid)?;
-    let peer_bare_jid = crate::jid::canonical_bare_key(&peer_full_jid)?;
+    let peer_full_jid = northstar_xmpp_types::jid::canonicalize(peer_jid)?;
+    let peer_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&peer_full_jid)?;
     sqlx::query("INSERT INTO message_archive (id, owner_id, peer_jid, peer_full_jid, stanza, encrypted, stanza_id) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(id).bind(owner_id).bind(peer_bare_jid).bind(peer_full_jid).bind(stanza).bind(encrypted).bind(stanza_id)
         .execute(pool).await?;

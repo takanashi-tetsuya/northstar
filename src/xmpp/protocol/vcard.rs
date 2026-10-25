@@ -245,7 +245,7 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "not-authorized")));
         };
         let (owner_name, response_from, is_self) = if let Some(to) = iq.attribute("to") {
-            let Ok(target) = crate::jid::CanonicalJid::parse_bare(to) else {
+            let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(to) else {
                 return Ok(Action::Send(iq_error(id, "jid-malformed")));
             };
             if target.domainpart() != self.state.local_domain() {
@@ -303,7 +303,7 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "bad-request")));
         }
         if iq.attribute("to").is_some_and(|to| {
-            !crate::jid::CanonicalJid::parse_bare(to).is_ok_and(|target| {
+            !northstar_xmpp_types::jid::CanonicalJid::parse_bare(to).is_ok_and(|target| {
                 target.localpart() == Some(user.username.as_str())
                     && target.domainpart() == self.state.local_domain()
             })

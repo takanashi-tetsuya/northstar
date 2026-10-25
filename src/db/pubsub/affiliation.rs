@@ -7,7 +7,7 @@ pub async fn get_node_affiliation(
     node_id: Uuid,
     jid: &str,
 ) -> Result<Option<String>> {
-    let jid = crate::jid::canonical_bare_key(jid)?;
+    let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
     let row =
         sqlx::query("SELECT affiliation FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2")
             .bind(node_id)
@@ -22,7 +22,7 @@ pub async fn affiliations_for_jid(
     jid: &str,
     node: Option<&str>,
 ) -> Result<Vec<PubSubAffiliation>> {
-    let jid = crate::jid::canonical_bare_key(jid)?;
+    let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
     let rows = sqlx::query("SELECT n.node, a.jid, a.affiliation FROM pubsub_affiliations a JOIN pubsub_nodes n ON n.id = a.node_id WHERE a.jid = $1 AND a.affiliation <> 'none' AND ($2::TEXT IS NULL OR n.node = $2) ORDER BY n.node")
         .bind(jid)
         .bind(node)
@@ -55,12 +55,12 @@ pub async fn set_affiliations_with_renderer(
     expected_approved: Option<&[(String, String)]>,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<SetAffiliationsOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut seen = std::collections::BTreeSet::new();
     let changes = changes
         .iter()
         .map(|(jid, affiliation)| {
-            let jid = crate::jid::canonical_bare_key(jid)?;
+            let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
             if !seen.insert(jid.clone()) {
                 anyhow::bail!(
                     "PubSub affiliation batch contains canonically equivalent duplicate {jid}"

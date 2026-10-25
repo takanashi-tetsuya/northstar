@@ -121,7 +121,7 @@ pub(super) fn parse_federated_owner_action(
         }
         let alternate = child
             .attribute("jid")
-            .map(crate::jid::canonicalize_bare)
+            .map(northstar_xmpp_types::jid::canonicalize_bare)
             .transpose()
             .map_err(|_| "jid-malformed")?;
         let reason = child_text(child, "reason").map(str::to_owned);

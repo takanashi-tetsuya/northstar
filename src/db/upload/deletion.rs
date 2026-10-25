@@ -185,7 +185,7 @@ pub async fn queue_user_upload_delete_authorized(
         sqlx::query_scalar::<_, String>("SELECT northstar_upload_delete_owned($1,$2,$3,$4,$5)")
             .bind(user_id)
             .bind(expected_auth_generation)
-            .bind(crate::auth::token_hash(presented_session))
+            .bind(northstar_auth_core::token_hash(presented_session))
             .bind(id)
             .bind(request_id)
             .fetch_one(pool)

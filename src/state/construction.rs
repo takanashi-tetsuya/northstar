@@ -510,7 +510,7 @@ impl AppState {
             secret
         });
         anyhow::ensure!(
-            !crate::auth::constant_time_bytes_eq(
+            !northstar_auth_core::constant_time_bytes_eq(
                 fast_token_secret.as_slice(),
                 dummy_scram_secret.as_slice(),
             ),

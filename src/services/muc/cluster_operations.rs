@@ -218,7 +218,7 @@ impl<R: MucRepository> MucService<R> {
         changes: &[MucAdminBatchChange],
     ) -> Result<MucAdminBatchResult> {
         anyhow::ensure!(!iq_id.is_empty() && iq_id.len() <= 256, "invalid MUC IQ id");
-        let canonical_room = crate::jid::CanonicalJid::parse_bare(room_jid)?;
+        let canonical_room = northstar_xmpp_types::jid::CanonicalJid::parse_bare(room_jid)?;
         anyhow::ensure!(
             canonical_room.to_string() == room_jid,
             "noncanonical MUC room JID"

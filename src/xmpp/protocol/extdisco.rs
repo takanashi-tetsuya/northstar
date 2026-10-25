@@ -72,7 +72,7 @@ impl ProtocolSession {
 
         // Authorization and selector matching deliberately happen before the
         // stateful issuance/rate-limit capability is invoked.
-        let bare_jid = crate::jid::CanonicalJid::parse(
+        let bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse(
             self.full_jid
                 .as_deref()
                 .expect("authorization requires a bound JID"),

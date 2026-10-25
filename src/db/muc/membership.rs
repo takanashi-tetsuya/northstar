@@ -39,7 +39,7 @@ pub async fn federated_muc_reserved_nick(
     room_id: Uuid,
     actor_bare_jid: &str,
 ) -> Result<Option<String>> {
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
     sqlx::query_scalar(
         "SELECT reserved_nick FROM muc_external_affiliations
           WHERE room_id=$1 AND jid=$2 AND reserved_nick IS NOT NULL",
@@ -167,7 +167,7 @@ pub async fn register_federated_muc_member(
     actor_bare_jid: &str,
     nick: &str,
 ) -> Result<MucRegistrationOutcome> {
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
     anyhow::ensure!(
         actor.localpart().is_some(),
         "MUC registration requires a user JID"
@@ -240,7 +240,7 @@ pub async fn unregister_federated_muc_member(
     room_id: Uuid,
     actor_bare_jid: &str,
 ) -> Result<bool> {
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_bare_jid)?.to_string();
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_bare_jid)?.to_string();
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 23))")
         .bind(room_id.to_string())
@@ -308,7 +308,7 @@ pub async fn federated_muc_nick_reserved_for_other(
     actor_bare_jid: &str,
     nick: &str,
 ) -> Result<bool> {
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
     anyhow::ensure!(
         actor.localpart().is_some(),
         "a federated MUC registration requires a user bare JID"
@@ -444,8 +444,9 @@ pub async fn admit_local_muc_invite(
         transaction.rollback().await?;
         return Ok(DurableMucInviteOutcome::RecipientUnavailable);
     }
-    let recipient_bare_jid = crate::jid::canonicalize_bare(recipient_bare_jid)?;
-    let recipient_authority = crate::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
+    let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(recipient_bare_jid)?;
+    let recipient_authority =
+        northstar_xmpp_types::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
     if let Some(authority) = cluster_authority {
         anyhow::ensure!(
             matches!(
@@ -472,7 +473,7 @@ pub async fn admit_local_muc_invite(
         root.tag_name().name() == "message",
         "MUC invite is not a message"
     );
-    let target = crate::jid::CanonicalJid::parse(
+    let target = northstar_xmpp_types::jid::CanonicalJid::parse(
         root.attribute("to")
             .context("local MUC invite is missing to")?,
     )?;
@@ -630,7 +631,7 @@ pub async fn admit_federated_muc_invite(
     policy: super::super::S2sOutboxPolicy,
     cluster_authority: Option<&super::super::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<bool> {
-    let invitee = crate::jid::CanonicalJid::parse_bare(invitee_bare_jid)?;
+    let invitee = northstar_xmpp_types::jid::CanonicalJid::parse_bare(invitee_bare_jid)?;
     anyhow::ensure!(
         invitee.localpart().is_some(),
         "MUC invitee requires a user JID"
@@ -697,7 +698,7 @@ pub(crate) async fn grant_federated_muc_invite_affiliation_in_transaction(
     invitee_bare_jid: &str,
     cluster_authority: Option<&super::super::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<FederatedMucInviteAffiliationOutcome> {
-    let invitee = crate::jid::CanonicalJid::parse_bare(invitee_bare_jid)?;
+    let invitee = northstar_xmpp_types::jid::CanonicalJid::parse_bare(invitee_bare_jid)?;
     anyhow::ensure!(
         invitee.localpart().is_some(),
         "MUC invitee requires a user JID"
@@ -765,7 +766,7 @@ pub async fn federated_muc_affiliation(
     room_id: Uuid,
     bare_jid: &str,
 ) -> Result<Option<String>> {
-    let jid = crate::jid::CanonicalJid::parse_bare(bare_jid)?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(bare_jid)?;
     anyhow::ensure!(
         jid.localpart().is_some(),
         "a federated MUC affiliation requires a user bare JID"

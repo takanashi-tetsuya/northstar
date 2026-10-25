@@ -38,7 +38,8 @@ impl SmTeardownRuntime {
         &self,
         snapshot: &db::SmTeardownSnapshot,
     ) -> anyhow::Result<()> {
-        let Ok(full_jid) = crate::jid::canonical_session_key(&snapshot.full_jid) else {
+        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&snapshot.full_jid)
+        else {
             tracing::warn!(sm_session_id = %snapshot.session_id, "discarded invalid durable SM teardown JID");
             anyhow::bail!("invalid durable SM teardown JID");
         };
@@ -107,7 +108,8 @@ impl SmTeardownRuntime {
 
         let mut memberships = HashSet::new();
         for membership in &snapshot.joined_rooms {
-            let Ok(room_jid) = crate::jid::canonicalize_bare(&membership.room_jid) else {
+            let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid)
+            else {
                 continue;
             };
             let Ok(nick) = crate::services::xml_util::prepare_muc_nick(&membership.nick) else {

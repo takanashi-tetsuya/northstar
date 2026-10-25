@@ -29,7 +29,7 @@ pub async fn enqueue_pubsub_digest_snapshot(
     if show_values.is_empty() || show_values.len() > 8 {
         anyhow::bail!("PubSub digest event has an invalid show-value snapshot");
     }
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 3))")
         .bind(&subscriber_jid)
@@ -107,7 +107,7 @@ pub async fn enqueue_pubsub_digest(
     if event_xml.is_empty() || event_xml.len() > 4_000_000 {
         anyhow::bail!("PubSub digest event violates the durable queue size bound");
     }
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     // One subscriber can have many digest-enabled nodes.  Serialize and cap
     // the aggregate as well as each node so an attacker cannot multiply the

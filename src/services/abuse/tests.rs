@@ -1898,7 +1898,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         "message-admission-test-password-42",
         false,
         true,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -2521,7 +2521,7 @@ async fn postgres_message_admission_capacity_and_cleanup_are_bounded() {
         "message-capacity-test-password-42",
         false,
         true,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await

@@ -1395,9 +1395,11 @@ fn cluster_muc_epoch_is_backward_compatible_and_exact() {
 
 #[test]
 fn federation_entity_rules_follow_domain_bare_and_full_jid_specificity() {
-    let phone = crate::jid::CanonicalJid::parse("alice@remote.example/Phone").unwrap();
-    let laptop = crate::jid::CanonicalJid::parse("alice@remote.example/Laptop").unwrap();
-    let bob = crate::jid::CanonicalJid::parse("bob@remote.example/Phone").unwrap();
+    let phone =
+        northstar_xmpp_types::jid::CanonicalJid::parse("alice@remote.example/Phone").unwrap();
+    let laptop =
+        northstar_xmpp_types::jid::CanonicalJid::parse("alice@remote.example/Laptop").unwrap();
+    let bob = northstar_xmpp_types::jid::CanonicalJid::parse("bob@remote.example/Phone").unwrap();
     assert!(federation_rule_matches("remote.example", &phone));
     assert!(federation_rule_matches("alice@remote.example", &phone));
     assert!(federation_rule_matches(

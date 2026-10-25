@@ -147,7 +147,7 @@ impl MucRepository for PostgresMucRepository {
         let recipient = db::find_enabled_user_by_id(&self.pool, recipient_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("MUC offline recipient account is unavailable"))?;
-        let recipient_bare_jid = crate::jid::canonicalize_bare(&format!(
+        let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(&format!(
             "{}@{}",
             recipient.username, configured_domain
         ))?;
@@ -342,7 +342,7 @@ impl MucRepository for PostgresMucRepository {
         let recipient = db::find_enabled_user_by_id(&self.pool, recipient_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("local MUC invite recipient account is unavailable"))?;
-        let recipient_bare_jid = crate::jid::canonicalize_bare(&format!(
+        let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(&format!(
             "{}@{}",
             recipient.username, configured_domain
         ))?;

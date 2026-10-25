@@ -261,8 +261,10 @@ fn privacy_iq_addressed_to_account(root: Node<'_, '_>, full_jid: Option<&str>) -
     match root.attribute("to") {
         None => true,
         Some(to) => full_jid
-            .and_then(|jid| crate::jid::canonical_bare_key(jid).ok())
-            .is_some_and(|owner| crate::jid::canonical_bare_key(to).is_ok_and(|to| to == owner)),
+            .and_then(|jid| northstar_xmpp_types::jid::canonical_bare_key(jid).ok())
+            .is_some_and(|owner| {
+                northstar_xmpp_types::jid::canonical_bare_key(to).is_ok_and(|to| to == owner)
+            }),
     }
 }
 
@@ -362,7 +364,7 @@ fn parse_list(node: Node<'_, '_>) -> Result<PrivacyList, ()> {
         let (match_type, match_value) = match (item.attribute("type"), item.attribute("value")) {
             (None, None) => (None, None),
             (Some("jid"), Some(value)) => {
-                let value = crate::jid::canonicalize(value).map_err(|_| ())?;
+                let value = northstar_xmpp_types::jid::canonicalize(value).map_err(|_| ())?;
                 (Some(PrivacyMatchType::Jid), Some(value))
             }
             (Some("group"), Some(value)) if !value.is_empty() && value.len() <= 1023 => {

@@ -74,7 +74,7 @@ impl ProtocolSession {
             }
         }
         for contact in &audience.roster_jids {
-            let contact_jid = crate::jid::CanonicalJid::parse_bare(contact)?;
+            let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
             let contact_bare = contact_jid.to_string();
             if contact_jid.domainpart() == state.local_domain() {
                 for (full_jid, target) in state.session_entries_for(&contact_bare) {
@@ -96,7 +96,7 @@ impl ProtocolSession {
             }
         }
         for subscription_jid in &audience.explicit_jids {
-            let parsed = crate::jid::CanonicalJid::parse(subscription_jid)?;
+            let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(subscription_jid)?;
             if parsed.resourcepart().is_some() {
                 if delivered.insert(subscription_jid.clone()) {
                     plan.push((
@@ -158,7 +158,7 @@ impl ProtocolSession {
             }
         }
         for contact in &audience.roster_jids {
-            let contact_jid = crate::jid::CanonicalJid::parse_bare(contact)?;
+            let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
             let contact_bare = contact_jid.to_string();
             if contact_jid.domainpart() == state.local_domain() {
                 for (full_jid, target) in state.session_entries_for(&contact_bare) {
@@ -180,7 +180,7 @@ impl ProtocolSession {
             }
         }
         for subscription_jid in &audience.explicit_jids {
-            let parsed = crate::jid::CanonicalJid::parse(subscription_jid)?;
+            let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(subscription_jid)?;
             if parsed.resourcepart().is_some() {
                 if delivered.insert(subscription_jid.clone()) {
                     plan.push((
@@ -366,7 +366,7 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
     full_jid: &str,
     expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
 ) -> Result<()> {
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     for subscription in context
         .pubsub_service()
         .pep_subscriptions_for_available_resource(&full_jid)
@@ -406,7 +406,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
     if wanted.is_empty() {
         return Ok(());
     }
-    let full = crate::jid::CanonicalJid::parse(full_jid)?;
+    let full = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)?;
     let bare = full.bare();
     let Some(username) = full.localpart() else {
         return Ok(());
@@ -444,7 +444,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
         if !matches!(subscription.as_str(), "to" | "both") {
             continue;
         }
-        let Ok(contact_jid) = crate::jid::CanonicalJid::parse_bare(&contact) else {
+        let Ok(contact_jid) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&contact) else {
             continue;
         };
         if contact_jid.domainpart() != context.local_domain() {
@@ -497,7 +497,7 @@ pub(crate) async fn deliver_pep_last_items_for_federated_resource(
     if wanted.is_empty() {
         return Ok(());
     }
-    let remote = crate::jid::CanonicalJid::parse(full_jid)?;
+    let remote = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)?;
     if remote.resourcepart().is_none() || remote.domainpart() == context.local_domain() {
         return Ok(());
     }

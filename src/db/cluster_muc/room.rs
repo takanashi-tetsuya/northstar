@@ -19,7 +19,7 @@ pub async fn update_cluster_muc_config(
     config: super::super::muc::MucConfigUpdate<'_>,
 ) -> Result<ClusterMucConfigurationOutcome> {
     principal.validate()?;
-    let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
         muc_principal_owns_address(&actor_full_jid, principal)?,
         "MUC configuration actor does not belong to the authorized principal"
@@ -311,8 +311,8 @@ pub async fn set_cluster_muc_subject(
         mutation.subject.len() <= MAX_PAYLOAD_BYTES && mutation.stanza.len() <= MAX_PAYLOAD_BYTES,
         "MUC subject is oversized"
     );
-    let actor_scope = crate::jid::canonicalize_bare(mutation.actor_scope)?;
-    let sender_jid = crate::jid::canonicalize(mutation.sender_jid)?;
+    let actor_scope = northstar_xmpp_types::jid::canonicalize_bare(mutation.actor_scope)?;
+    let sender_jid = northstar_xmpp_types::jid::canonicalize(mutation.sender_jid)?;
     let digest = request_digest(&json!({
         "actor":actor,"room_epoch":expected_room_epoch,
         "config_version":expected_config_version,"subject":mutation.subject,
@@ -509,7 +509,9 @@ pub async fn destroy_cluster_muc_room(
             return Ok(ClusterMucTransitionOutcome::Unauthorized);
         };
         let current = occupancy_from_row(&row);
-        let claimed_actor = actor_jid.map(crate::jid::canonicalize).transpose()?;
+        let claimed_actor = actor_jid
+            .map(northstar_xmpp_types::jid::canonicalize)
+            .transpose()?;
         if claimed_actor.as_deref() != Some(current.full_jid.as_str())
             || (current.identity_kind == "local" && authorization_source != "local_database")
             || (current.identity_kind == "federated"
@@ -796,7 +798,7 @@ pub async fn revoke_cluster_muc_account_in_tx(
     user_id: Uuid,
     account_bare_jid: &str,
 ) -> Result<u64> {
-    let account_bare_jid = crate::jid::canonicalize_bare(account_bare_jid)?;
+    let account_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(account_bare_jid)?;
     let room_ids = sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT room_id FROM cluster_muc_occupancies
           WHERE local_user_id=$1 AND state IN ('active','suspended') ORDER BY room_id",

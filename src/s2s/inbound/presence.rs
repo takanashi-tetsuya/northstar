@@ -31,7 +31,7 @@ pub(crate) async fn route_inbound_presence(
     // routing; otherwise an older available could be delivered after a newer
     // unavailable even if the caps cache itself had already been cleaned.
     let federated_presence_epoch = if matches!(kind, "available" | "unavailable") {
-        match crate::jid::canonical_session_key(from) {
+        match northstar_xmpp_types::jid::canonical_session_key(from) {
             Ok(full_jid) => Some(state.federated_caps_gates().lock(&full_jid).await),
             Err(_) => None,
         }
@@ -304,7 +304,7 @@ pub(super) async fn route_inbound_presence_probe(
     target_jid: &CanonicalJid,
     recipient: &crate::services::presence::PresenceAccount,
 ) -> Result<Option<String>> {
-    let requester_bare = crate::jid::canonical_bare_key(requester)?;
+    let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
     let roster_authorized = state
         .s2s_roster_authorization_service()

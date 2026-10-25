@@ -128,13 +128,13 @@ pub async fn create_admin_command_session(
     node: &str,
     stage: &str,
 ) -> Result<Option<zeroize::Zeroizing<String>>> {
-    let owner_full_jid = crate::jid::canonical_session_key(owner_full_jid)?;
-    let server_domain = crate::jid::prepare_domainpart(server_domain)?;
-    let owner_username = crate::jid::CanonicalJid::parse(&owner_full_jid)?
+    let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(owner_full_jid)?;
+    let server_domain = northstar_xmpp_types::jid::prepare_domainpart(server_domain)?;
+    let owner_username = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?
         .localpart()
         .context("admin command owner JID has no localpart")?
         .to_owned();
-    let bearer = zeroize::Zeroizing::new(crate::auth::new_session_token());
+    let bearer = zeroize::Zeroizing::new(northstar_auth_core::new_session_token());
     let created: bool = sqlx::query_scalar(
         "SELECT northstar_admin_command_create_session(
            $1,$2,$3,$4,$5,$6,$7,$8,$9)",
@@ -162,8 +162,8 @@ pub async fn finish_admin_command_session(
     node: &str,
     final_stage: &str,
 ) -> Result<AdminCommandSessionState> {
-    let owner_full_jid = crate::jid::canonical_session_key(owner_full_jid)?;
-    let owner_username = crate::jid::CanonicalJid::parse(&owner_full_jid)?
+    let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(owner_full_jid)?;
+    let owner_username = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?
         .localpart()
         .context("admin command owner JID has no localpart")?
         .to_owned();
@@ -199,8 +199,8 @@ pub async fn complete_admin_count_command_session(
     node: &str,
     payload: &str,
 ) -> Result<AdminCommandSessionState> {
-    let owner_full_jid = crate::jid::canonical_session_key(owner_full_jid)?;
-    let owner_username = crate::jid::CanonicalJid::parse(&owner_full_jid)?
+    let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(owner_full_jid)?;
+    let owner_username = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?
         .localpart()
         .context("admin command owner JID has no localpart")?
         .to_owned();
@@ -240,13 +240,13 @@ pub async fn begin_admin_command_execution(
     node: &str,
     request_digest: &[u8],
 ) -> Result<AdminCommandExecutionState> {
-    let owner_full_jid = crate::jid::canonical_session_key(owner_full_jid)?;
-    let owner_username = crate::jid::CanonicalJid::parse(&owner_full_jid)?
+    let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(owner_full_jid)?;
+    let owner_username = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?
         .localpart()
         .context("admin command owner JID has no localpart")?
         .to_owned();
     anyhow::ensure!(request_digest.len() == 32, "invalid command target digest");
-    let claim_token = zeroize::Zeroizing::new(crate::auth::new_session_token());
+    let claim_token = zeroize::Zeroizing::new(northstar_auth_core::new_session_token());
     let requested_operation_id = Uuid::new_v4();
     let row = sqlx::query(
         "SELECT outcome,operation_id,result_payload

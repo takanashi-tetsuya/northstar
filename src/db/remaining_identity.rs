@@ -14,19 +14,19 @@ const MIGRATION: &str = "remaining-identity-metadata-rfc7622-ulabel-v2";
 const VERSION: i32 = 2;
 
 fn full(value: &str, field: &str, row: impl std::fmt::Display) -> Result<String> {
-    crate::jid::canonicalize(value).with_context(|| {
+    northstar_xmpp_types::jid::canonicalize(value).with_context(|| {
         format!("RFC 7622 migration rejected invalid {field} in row {row}: {value:?}")
     })
 }
 
 fn bare(value: &str, field: &str, row: impl std::fmt::Display) -> Result<String> {
-    crate::jid::canonicalize_bare(value).with_context(|| {
+    northstar_xmpp_types::jid::canonicalize_bare(value).with_context(|| {
         format!("RFC 7622 migration rejected invalid {field} in row {row}: {value:?}")
     })
 }
 
 fn domain(value: &str, field: &str, row: impl std::fmt::Display) -> Result<String> {
-    crate::jid::prepare_domainpart(value).with_context(|| {
+    northstar_xmpp_types::jid::prepare_domainpart(value).with_context(|| {
         format!("RFC 7622 migration rejected invalid {field} in row {row}: {value:?}")
     })
 }
@@ -144,9 +144,9 @@ async fn canonicalize_personal_archive(transaction: &mut Transaction<'_, Postgre
     let mut prepared = Vec::with_capacity(rows.len());
     for row in rows {
         let canonical_full = full(&row.peer_full, "message_archive.peer_full_jid", row.id)?;
-        let canonical_peer = crate::jid::canonical_bare_key(&canonical_full)?;
+        let canonical_peer = northstar_xmpp_types::jid::canonical_bare_key(&canonical_full)?;
         anyhow::ensure!(
-            crate::jid::canonical_bare_key(&row.peer)? == canonical_peer,
+            northstar_xmpp_types::jid::canonical_bare_key(&row.peer)? == canonical_peer,
             "message_archive row {} has inconsistent peer_jid and peer_full_jid",
             row.id
         );
@@ -377,7 +377,7 @@ async fn canonicalize_reports(transaction: &mut Transaction<'_, Postgres>) -> Re
     for row in reports {
         let id: Uuid = row.get("id");
         let original: String = row.get("reported_jid");
-        let canonical = crate::jid::canonical_bare_key(&original)?;
+        let canonical = northstar_xmpp_types::jid::canonical_bare_key(&original)?;
         if original != canonical {
             changed += sqlx::query("UPDATE abuse_reports SET reported_jid=$2 WHERE id=$1")
                 .bind(id)

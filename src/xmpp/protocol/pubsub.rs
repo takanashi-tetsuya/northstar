@@ -455,8 +455,10 @@ impl ProtocolSession {
         let Some(to) = root.attribute("to") else {
             return Ok(false);
         };
-        if crate::jid::canonicalize_bare(to).ok().as_deref()
-            != crate::jid::canonicalize_bare(&self.pubsub_domain())
+        if northstar_xmpp_types::jid::canonicalize_bare(to)
+            .ok()
+            .as_deref()
+            != northstar_xmpp_types::jid::canonicalize_bare(&self.pubsub_domain())
                 .ok()
                 .as_deref()
         {
@@ -1096,11 +1098,11 @@ fn pubsub_domain(state: &AppState) -> String {
 }
 
 fn normalized_bare(jid: &str) -> Result<String> {
-    crate::jid::canonical_bare_key(jid)
+    northstar_xmpp_types::jid::canonical_bare_key(jid)
 }
 
 fn normalized_jid(jid: &str) -> Result<String> {
-    crate::jid::canonicalize(jid)
+    northstar_xmpp_types::jid::canonicalize(jid)
 }
 
 fn parse_bool(value: Option<&str>) -> Option<bool> {

@@ -91,7 +91,7 @@ impl MucOccupancyLookup {
         occupant_incarnation: Uuid,
         connection_uuid: Uuid,
     ) -> Result<Self> {
-        let room = crate::jid::CanonicalJid::parse_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::CanonicalJid::parse_bare(room_jid)?;
         anyhow::ensure!(room.to_string() == room_jid, "noncanonical MUC room JID");
         let room_localpart = room
             .localpart()
@@ -332,7 +332,7 @@ impl<R: ClusterMucOccupancyDepartureRepository> ClusterMucOccupancyDepartureServ
         connection_uuid: Uuid,
         owner_node_id: &str,
     ) -> Result<Option<ClusterMucOccupancyTarget>> {
-        let room = crate::jid::CanonicalJid::parse_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::CanonicalJid::parse_bare(room_jid)?;
         anyhow::ensure!(room.to_string() == room_jid, "noncanonical MUC room JID");
         let localpart = room
             .localpart()

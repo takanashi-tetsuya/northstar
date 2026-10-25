@@ -112,7 +112,7 @@ impl ExtDiscoService {
 
     pub(crate) fn target_allowed(&self, target: Option<&str>) -> bool {
         target.is_none_or(|target| {
-            crate::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
+            northstar_xmpp_types::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
                 jid.localpart().is_none()
                     && jid.resourcepart().is_none()
                     && jid.domainpart() == self.inner.domain
@@ -129,7 +129,7 @@ impl ExtDiscoService {
         let (Some(username), Some(full_jid)) = (username, full_jid) else {
             return false;
         };
-        crate::jid::CanonicalJid::parse(full_jid).is_ok_and(|jid| {
+        northstar_xmpp_types::jid::CanonicalJid::parse(full_jid).is_ok_and(|jid| {
             jid.resourcepart().is_some()
                 && jid.localpart() == Some(username)
                 && jid.domainpart() == self.inner.domain

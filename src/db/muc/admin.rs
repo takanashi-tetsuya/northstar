@@ -78,7 +78,7 @@ pub async fn set_muc_affiliations_batch(
                 )
             }
             MucAffiliationTarget::FederatedBareJid(jid) => {
-                let jid = crate::jid::CanonicalJid::parse_bare(jid)?;
+                let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid)?;
                 anyhow::ensure!(
                     jid.localpart().is_some(),
                     "a federated MUC affiliation requires a user bare JID"
@@ -205,7 +205,7 @@ pub(super) async fn lock_local_admin_principal(
     actor_scope: &str,
     local_domain: &str,
 ) -> Result<LocalAdminPrincipalCheck> {
-    let local_domain = crate::jid::prepare_domainpart(local_domain)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     // Namespace 29 precedes every room/affiliation row lock.  See
     // `lock_muc_actor_authority` for the global writer lock order.
     lock_muc_affiliation_namespace(transaction, room_id).await?;
@@ -227,7 +227,7 @@ pub(super) async fn lock_local_admin_principal(
     {
         return Ok(LocalAdminPrincipalCheck::Stale);
     }
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_scope)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_scope)?;
     let name_matches: bool = sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
         .bind(user_id)
         .bind(actor.localpart().unwrap_or_default())
@@ -428,7 +428,7 @@ pub async fn authorized_muc_admin_affiliation_list(
         ),
         "invalid MUC admin affiliation list"
     );
-    let local_domain = crate::jid::prepare_domainpart(local_domain)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let actor_scope = canonical_history_actor(actor_scope)?;
     let mut transaction = pool.begin().await?;
     #[cfg(test)]

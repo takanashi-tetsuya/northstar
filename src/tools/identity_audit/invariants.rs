@@ -71,8 +71,8 @@ pub(super) async fn message_archive_invariants(
         let peer: String = row.try_get("peer_jid")?;
         let peer_full: String = row.try_get("peer_full_jid")?;
         if let (Ok(peer_key), Ok(full_key)) = (
-            crate::jid::canonical_bare_key(&peer),
-            crate::jid::canonical_bare_key(&peer_full),
+            northstar_xmpp_types::jid::canonical_bare_key(&peer),
+            northstar_xmpp_types::jid::canonical_bare_key(&peer_full),
         ) {
             if peer_key != full_key {
                 findings.push(invariant_finding(
@@ -94,7 +94,7 @@ pub(super) async fn message_archive_invariants(
         let source: Option<String> = row.try_get("source_by")?;
         let source_id: Option<String> = row.try_get("source_stanza_id")?;
         if let (Some(source), Some(source_id)) = (source, source_id) {
-            if let Ok(canonical) = crate::jid::canonicalize_bare(&source) {
+            if let Ok(canonical) = northstar_xmpp_types::jid::canonicalize_bare(&source) {
                 source_keys
                     .entry((owner.clone(), canonical, source_id))
                     .or_default()
@@ -163,8 +163,8 @@ pub(super) async fn personal_admission_collisions(
         let actor: String = row.try_get("actor_scope")?;
         let target: String = row.try_get("target_scope")?;
         if let (Ok(canonical_actor), Ok(canonical_target)) = (
-            crate::jid::canonicalize(&actor),
-            crate::jid::canonicalize(&target),
+            northstar_xmpp_types::jid::canonicalize(&actor),
+            northstar_xmpp_types::jid::canonicalize(&target),
         ) {
             let kind: String = row.try_get("identity_kind")?;
             let digest: Vec<u8> = row.try_get("identity_digest")?;
@@ -262,7 +262,7 @@ pub(super) async fn muc_origin_invariants(
         let actor: String = row.try_get("actor_scope")?;
         let origin: String = row.try_get("origin_id")?;
         let stored_digest: Vec<u8> = row.try_get("origin_digest")?;
-        if let Ok(canonical_actor) = crate::jid::canonicalize_bare(&actor) {
+        if let Ok(canonical_actor) = northstar_xmpp_types::jid::canonicalize_bare(&actor) {
             let canonical_digest = muc_origin_digest(&canonical_actor, &origin);
             if stored_digest != canonical_digest {
                 findings.push(invariant_finding(
@@ -362,7 +362,9 @@ pub(super) async fn muc_origin_invariants(
             match (actor, origin, digest) {
                 (None, None, None) | (Some(_), None, None) => {}
                 (Some(actor), Some(origin), Some(stored)) => {
-                    if let Ok(canonical_actor) = crate::jid::canonicalize_bare(&actor) {
+                    if let Ok(canonical_actor) =
+                        northstar_xmpp_types::jid::canonicalize_bare(&actor)
+                    {
                         let expected = muc_origin_digest(&canonical_actor, &origin);
                         let key = (
                             row.try_get::<String, _>("room_id")?,
@@ -538,7 +540,8 @@ pub(super) async fn muc_destroy_invariants(
     {
         return Ok(Vec::new());
     }
-    let conference = crate::jid::prepare_domainpart(&format!("conference.{domain}"))?;
+    let conference =
+        northstar_xmpp_types::jid::prepare_domainpart(&format!("conference.{domain}"))?;
     let rows = sqlx::query(
         "SELECT i.ctid::text AS locator,i.room_jid,i.localpart,o.kind,o.target
          FROM api_muc_destroy_intents i
@@ -553,10 +556,10 @@ pub(super) async fn muc_destroy_invariants(
         let local: String = row.try_get("localpart")?;
         let kind: Option<String> = row.try_get("kind")?;
         let target: Option<String> = row.try_get("target")?;
-        let valid = crate::jid::CanonicalJid::parse_bare(&room)
+        let valid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&room)
             .ok()
             .and_then(|jid| {
-                let prepared_local = crate::jid::prepare_localpart(&local).ok()?;
+                let prepared_local = northstar_xmpp_types::jid::prepare_localpart(&local).ok()?;
                 Some(
                     jid.localpart() == Some(prepared_local.as_str())
                         && jid.domainpart() == conference

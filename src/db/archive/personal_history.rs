@@ -443,8 +443,8 @@ pub(crate) async fn admit_personal_history_in_transaction(
                 "client stanza id must contain 1 to 128 non-control bytes"
             );
         }
-        let peer_full_jid = crate::jid::canonicalize(write.peer_jid)?;
-        let peer_bare_jid = crate::jid::canonical_bare_key(&peer_full_jid)?;
+        let peer_full_jid = northstar_xmpp_types::jid::canonicalize(write.peer_jid)?;
+        let peer_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&peer_full_jid)?;
         normalized.push((write, peer_bare_jid, peer_full_jid));
     }
 
@@ -457,12 +457,12 @@ pub(crate) async fn admit_personal_history_in_transaction(
             !identity.actor_scope_raw.is_empty() && identity.actor_scope_raw.len() <= 3071,
             "raw actor scope must contain 1 to 3071 bytes"
         );
-        let actor_scope = crate::jid::canonicalize(identity.actor_scope)?;
+        let actor_scope = northstar_xmpp_types::jid::canonicalize(identity.actor_scope)?;
         anyhow::ensure!(
             actor_scope == identity.actor_scope,
             "personal history actor scope must already be canonical"
         );
-        let target_scope = crate::jid::canonicalize(identity.target_scope)?;
+        let target_scope = northstar_xmpp_types::jid::canonicalize(identity.target_scope)?;
         anyhow::ensure!(
             target_scope == identity.target_scope,
             "personal history target scope must already be canonical"
@@ -487,7 +487,7 @@ pub(crate) async fn admit_personal_history_in_transaction(
             !delivery.stanza.is_empty() && delivery.stanza.len() <= 1_048_576,
             "C2S delivery stanza must contain 1 byte to 1 MiB"
         );
-        let sender_jid = crate::jid::canonicalize(delivery.sender_jid)?;
+        let sender_jid = northstar_xmpp_types::jid::canonicalize(delivery.sender_jid)?;
         anyhow::ensure!(
             delivery.policy.max_messages > 0
                 && delivery.policy.max_bytes > 0
@@ -685,7 +685,8 @@ pub(crate) async fn insert_c2s_delivery_in_transaction(
     sender_jid: &str,
 ) -> Result<()> {
     let (target_resource, stanza_target_bare_jid) = normalized_c2s_target_resource(delivery)?;
-    let recipient_bare_jid = crate::jid::canonicalize_bare(delivery.recipient_bare_jid)?;
+    let recipient_bare_jid =
+        northstar_xmpp_types::jid::canonicalize_bare(delivery.recipient_bare_jid)?;
     anyhow::ensure!(
         recipient_bare_jid == delivery.recipient_bare_jid,
         "C2S delivery recipient bare JID must already be canonical"
@@ -696,7 +697,7 @@ pub(crate) async fn insert_c2s_delivery_in_transaction(
             "C2S delivery target domain does not match recipient authority"
         );
     }
-    let recipient = crate::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
+    let recipient = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&recipient_bare_jid)?;
     let recipient_matches: bool =
         sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
             .bind(delivery.recipient_id)
@@ -810,7 +811,7 @@ pub(super) fn normalized_c2s_target_resource(
     );
     let target = root
         .attribute("to")
-        .map(crate::jid::CanonicalJid::parse)
+        .map(northstar_xmpp_types::jid::CanonicalJid::parse)
         .transpose()?;
     let target_bare_jid = target.as_ref().map(|target| target.bare().to_string());
     let expected = target
@@ -822,7 +823,7 @@ pub(super) fn normalized_c2s_target_resource(
         .map(ToString::to_string);
     let supplied = delivery
         .target_full_jid
-        .map(crate::jid::canonical_session_key)
+        .map(northstar_xmpp_types::jid::canonical_session_key)
         .transpose()?;
     anyhow::ensure!(
         supplied == expected,
@@ -836,7 +837,7 @@ pub(super) fn normalized_c2s_target_resource(
     }
     let target_resource = expected
         .as_deref()
-        .map(crate::jid::CanonicalJid::parse)
+        .map(northstar_xmpp_types::jid::CanonicalJid::parse)
         .transpose()?
         .and_then(|target| target.resourcepart().map(str::to_owned));
     Ok((target_resource, target_bare_jid))

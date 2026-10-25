@@ -6,8 +6,8 @@
 
 pub(crate) mod publication;
 
-use crate::auth;
 use northstar_archive_core::ArchiveBoundary;
+use northstar_auth_core as auth;
 use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};

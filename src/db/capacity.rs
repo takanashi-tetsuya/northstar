@@ -1148,7 +1148,7 @@ pub async fn reserve_live_session_in_transaction(
     lease_seconds: u64,
     allow_resumable_replacement: bool,
 ) -> Result<LiveSessionReservation> {
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     let lease_seconds = i64::try_from(lease_seconds).context("capacity lease is too large")?;
     let outcome: String =
         sqlx::query_scalar("SELECT northstar_session_reserve_live($1,$2,$3,$4,$5)")
@@ -1178,7 +1178,7 @@ pub async fn finalize_binding_live_session_in_transaction(
     full_jid: &str,
     lease_seconds: u64,
 ) -> Result<bool> {
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     let _ = lease_seconds;
     Ok(
         sqlx::query_scalar("SELECT northstar_session_finalize_binding($1,$2,$3)")
@@ -1199,7 +1199,7 @@ pub(crate) async fn publish_binding_live_session_in_transaction(
     full_jid: &str,
     lease_seconds: u64,
 ) -> Result<bool> {
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     let lease_seconds = i64::try_from(lease_seconds).context("capacity lease is too large")?;
     Ok(
         sqlx::query_scalar("SELECT northstar_session_publish_binding($1,$2,$3,$4)")
@@ -1223,7 +1223,7 @@ pub async fn transfer_claimed_sm_live_session_in_transaction(
     full_jid: &str,
     lease_seconds: u64,
 ) -> Result<LiveSessionReservation> {
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     let lease_seconds = i64::try_from(lease_seconds).context("capacity lease is too large")?;
     let outcome: String =
         sqlx::query_scalar("SELECT northstar_session_transfer_sm($1,$2,$3,$4,$5,$6,$7)")

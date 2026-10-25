@@ -43,7 +43,7 @@ impl ClusterSignedPublisher {
         let Some(pool) = &self.pool else {
             return Ok(Vec::new());
         };
-        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let mut conn = pool.get().await?;
         let key = self.key(format!("muc_nodes:{room}"));
         // Fan-out uses bounded live-node hints; full reconciliation belongs

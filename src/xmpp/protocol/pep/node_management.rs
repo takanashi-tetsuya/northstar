@@ -322,9 +322,9 @@ impl ProtocolSession {
                         {
                             return None;
                         }
-                        let jid = affiliation
-                            .attribute("jid")
-                            .and_then(|jid| crate::jid::canonical_bare_key(jid).ok())?;
+                        let jid = affiliation.attribute("jid").and_then(|jid| {
+                            northstar_xmpp_types::jid::canonical_bare_key(jid).ok()
+                        })?;
                         let value = affiliation.attribute("affiliation")?;
                         matches!(value, "member" | "none").then(|| (jid, value.to_owned()))
                     })
@@ -373,7 +373,7 @@ impl ProtocolSession {
                         }
                         let jid = subscription
                             .attribute("jid")
-                            .and_then(|jid| crate::jid::canonicalize(jid).ok())?;
+                            .and_then(|jid| northstar_xmpp_types::jid::canonicalize(jid).ok())?;
                         Some((jid, subscription.attribute("subid").map(ToOwned::to_owned)))
                     })
                     .collect::<Option<Vec<_>>>();
@@ -460,7 +460,7 @@ pub(super) fn pep_owner_target_allowed(
 ) -> bool {
     iq.attribute("to").is_none_or(|to| {
         canonical_account_jid(&user.username, session.state.local_domain()).is_ok_and(|owner| {
-            crate::jid::canonicalize_bare(to).is_ok_and(|target| target == owner)
+            northstar_xmpp_types::jid::canonicalize_bare(to).is_ok_and(|target| target == owner)
         })
     })
 }

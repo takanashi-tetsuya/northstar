@@ -16,7 +16,7 @@ pub(crate) struct ClusterListenerMixCaps {
 
 impl ClusterListenerMixCaps {
     pub(crate) fn capability(&self, full_jid: &str) -> ClusterMixCapability {
-        let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
+        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
             return ClusterMixCapability::Unknown;
         };
         let Some(observation) = self.verified.snapshot(&full_jid) else {

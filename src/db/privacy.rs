@@ -401,7 +401,7 @@ pub async fn privacy_denies(
         // session-only selection). Missing policy must fail closed.
         return Ok(true);
     };
-    let candidate = crate::jid::CanonicalJid::parse(candidate)?;
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
     let bare = candidate.bare();
     let roster = sqlx::query(
         "SELECT subscription, groups FROM roster_items WHERE owner_id=$1 AND contact_jid=$2",
@@ -532,7 +532,7 @@ pub(crate) async fn privacy_denies_in_transaction(
             presence_out: row.try_get("filter_presence_out")?,
         });
     }
-    let candidate = crate::jid::CanonicalJid::parse(candidate)?;
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
     let roster = sqlx::query(
         "SELECT subscription,groups FROM roster_items
           WHERE owner_id=$1 AND contact_jid=$2

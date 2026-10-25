@@ -13,8 +13,7 @@
         "composition",
         "adapter",
         "application",
-        "platform",
-        "facade"
+        "platform"
       ]
     },
     "adapter": {
@@ -31,8 +30,7 @@
       "may_use": [
         "adapter",
         "application",
-        "platform",
-        "facade"
+        "platform"
       ]
     },
     "application": {
@@ -42,8 +40,7 @@
       ],
       "may_use": [
         "application",
-        "platform",
-        "facade"
+        "platform"
       ]
     },
     "platform": {
@@ -53,23 +50,9 @@
         "security"
       ],
       "may_use": [
-        "platform",
-        "facade"
-      ]
-    },
-    "facade": {
-      "rank": 0,
-      "modules": [
-        "auth",
-        "jid"
-      ],
-      "may_use": [
-        "facade"
+        "platform"
       ]
     }
-  },
-  "aliases": {
-    "outbound": "xmpp"
   },
   "baseline": {
     "src/api/mod.rs": [

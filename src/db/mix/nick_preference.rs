@@ -322,7 +322,7 @@ pub async fn update_mix_participant_preference(
                     // be retracted, but must never be made newly JID-visible.
                     continue;
                 };
-                let source = crate::jid::CanonicalJid::parse(source_full_jid)?;
+                let source = northstar_xmpp_types::jid::CanonicalJid::parse(source_full_jid)?;
                 let public_resource = if new_visible {
                     source
                         .resourcepart()

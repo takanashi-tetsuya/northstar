@@ -30,7 +30,8 @@ fn federated_muc_occupants_for_closed_connection_in(
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
 ) -> Vec<MucOccupant> {
-    let Ok(expected_domain) = crate::jid::prepare_domainpart(authenticated_domain) else {
+    let Ok(expected_domain) = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)
+    else {
         return Vec::new();
     };
     occupants
@@ -43,7 +44,7 @@ fn federated_muc_occupants_for_closed_connection_in(
             else {
                 return None;
             };
-            (crate::jid::prepare_domainpart(authenticated_domain)
+            (northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)
                 .is_ok_and(|domain| domain == expected_domain)
                 && *bound_connection == connection_id)
                 .then(|| entry.value().clone())

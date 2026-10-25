@@ -31,7 +31,8 @@ impl PushNotificationRouter for AppState {
             delivery.options.as_deref(),
         )?;
         let mut delivered = false;
-        let service = crate::jid::CanonicalJid::parse_bare(&delivery.service_jid).ok();
+        let service =
+            northstar_xmpp_types::jid::CanonicalJid::parse_bare(&delivery.service_jid).ok();
         if service
             .as_ref()
             .is_some_and(|jid| jid.domainpart() == self.local_domain())

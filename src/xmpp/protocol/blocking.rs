@@ -224,7 +224,7 @@ fn blocking_change_payload(action: &str, jids: &[String]) -> Option<String> {
 
 fn patterns_from_jids(jids: &[String]) -> Result<Vec<BlockPattern>> {
     jids.iter()
-        .map(|jid| crate::jid::CanonicalJid::parse(jid).map(BlockPattern::new))
+        .map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).map(BlockPattern::new))
         .collect()
 }
 
@@ -241,13 +241,13 @@ fn blocking_presence_targets(
 ) -> Vec<String> {
     let patterns = patterns
         .iter()
-        .filter_map(|pattern| crate::jid::CanonicalJid::parse(pattern).ok())
+        .filter_map(|pattern| northstar_xmpp_types::jid::CanonicalJid::parse(pattern).ok())
         .map(BlockPattern::new)
         .collect::<Vec<_>>();
     let roster = roster
         .iter()
         .filter_map(|(jid, _, subscription, _)| {
-            let jid = crate::jid::CanonicalJid::parse(jid).ok()?;
+            let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok()?;
             let subscription = match subscription.as_str() {
                 "to" => Subscription::To,
                 "from" => Subscription::From,
@@ -335,7 +335,7 @@ where
             }
         }
         for target in targets {
-            let Ok(target_jid) = crate::jid::CanonicalJid::parse(&target) else {
+            let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(&target) else {
                 continue;
             };
             let delivery = set_to(&base_presence, &target);

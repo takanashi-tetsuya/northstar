@@ -478,7 +478,7 @@ fn auth_service(
     AuthenticationService::new(
         repository,
         Arc::new(zeroize::Zeroizing::new(vec![0; 32])),
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
 }

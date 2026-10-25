@@ -17,7 +17,7 @@ pub(crate) struct ClusterMucDeliveryEndpoints {
 
 impl ClusterMucDeliveryEndpoints {
     pub(crate) fn room_occupants(&self, room_jid: &str) -> Vec<MucOccupant> {
-        let Ok(room_jid) = crate::jid::canonicalize_bare(room_jid) else {
+        let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
             return Vec::new();
         };
         self.occupants
@@ -28,7 +28,7 @@ impl ClusterMucDeliveryEndpoints {
     }
 
     pub(crate) fn cached_recipient(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
-        let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         let key = crate::services::xml_util::muc_occupant_key(&room_jid, nick);
         self.occupants
             .get(&key)
@@ -90,7 +90,7 @@ impl ClusterMucDeliveryEndpoints {
     }
 
     pub(crate) fn actor_nick(&self, room_jid: &str, actor_full_jid: &str) -> Option<String> {
-        let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         self.occupants.iter().find_map(|entry| {
             let actor = entry.value();
             (actor.room_jid == room_jid && actor.full_jid == actor_full_jid)
@@ -149,7 +149,8 @@ impl ClusterMucDeliveryEndpoints {
     }
 
     pub(crate) fn remove_live_membership_exact(&self, occupant: &SerializableMucOccupant) -> bool {
-        let Ok(full_jid) = crate::jid::canonical_session_key(&occupant.full_jid) else {
+        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&occupant.full_jid)
+        else {
             return false;
         };
         let Some(session) = self.sessions.get(&full_jid) else {

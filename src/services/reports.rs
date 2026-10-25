@@ -68,8 +68,10 @@ impl<R: ReportRepository> ReportService<R> {
         let content = match report_validation_error(&input) {
             Some(error) => Err(error),
             None => Ok(ValidatedReport {
-                reported_jid: crate::jid::canonical_bare_key(input.reported_jid.trim())
-                    .expect("validated report JID is canonicalizable"),
+                reported_jid: northstar_xmpp_types::jid::canonical_bare_key(
+                    input.reported_jid.trim(),
+                )
+                .expect("validated report JID is canonicalizable"),
                 category: input.category,
                 description: input.description.unwrap_or_default().trim(),
                 evidence: input.evidence,
@@ -134,7 +136,7 @@ fn valid_client_message_id(value: &str) -> bool {
 }
 
 pub(crate) fn report_validation_error(body: &ReportInput<'_>) -> Option<&'static str> {
-    if crate::jid::canonical_bare_key(body.reported_jid.trim())
+    if northstar_xmpp_types::jid::canonical_bare_key(body.reported_jid.trim())
         .ok()
         .filter(|jid| jid.contains('@'))
         .is_none()

@@ -91,7 +91,7 @@ pub async fn publish_items_with_renderer(
     max_storage_bytes_per_owner: i64,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<PublishItemsOutcome> {
-    let publisher_jid = crate::jid::canonical_bare_key(publisher_jid)?;
+    let publisher_jid = northstar_xmpp_types::jid::canonical_bare_key(publisher_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1))")
         .bind(&node.creator_jid)
@@ -243,7 +243,7 @@ pub async fn retract_items_with_renderer(
     force_notification: bool,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<RetractItemsOutcome> {
-    let publisher_jid = crate::jid::canonical_bare_key(publisher_jid)?;
+    let publisher_jid = northstar_xmpp_types::jid::canonical_bare_key(publisher_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
         .execute(&mut *transaction)

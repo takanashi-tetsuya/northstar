@@ -134,7 +134,9 @@ impl RetractionRepository for PostgresRetractionRepository {
         for row in account_rows {
             let id: Uuid = row.get("id");
             let username: String = row.get("username");
-            let bare = crate::jid::canonical_bare_key(&format!("{username}@{configured_domain}"))?;
+            let bare = northstar_xmpp_types::jid::canonical_bare_key(&format!(
+                "{username}@{configured_domain}"
+            ))?;
             account_bares.insert(id, bare);
         }
         validate_owner_authority(

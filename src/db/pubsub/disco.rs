@@ -18,7 +18,7 @@ pub async fn leaf_disco_snapshot(
     node: &str,
     requester: &str,
 ) -> Result<Option<LeafDiscoSnapshot>> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     // The SQL gate skips item aggregation for denied requests. The service
     // still applies can_retrieve_pure to these same facts before returning IDs.
     let row = sqlx::query(
@@ -81,7 +81,7 @@ pub async fn collection_disco_snapshot(
     node: &str,
     requester: &str,
 ) -> Result<Option<CollectionDiscoSnapshot>> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let rows = sqlx::query(
         "WITH authority AS MATERIALIZED (
              SELECT n.id,n.node_type,n.access_model,
@@ -146,7 +146,7 @@ pub async fn root_disco_page(
     backwards: bool,
     limit: i64,
 ) -> Result<PubSubRootDiscoPage> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let order = if backwards { "DESC" } else { "ASC" };
     let comparison = if backwards { "<" } else { ">" };
     let sql = format!(

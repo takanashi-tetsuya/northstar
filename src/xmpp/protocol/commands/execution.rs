@@ -205,14 +205,15 @@ pub(super) async fn execute_form_command(
             let mut targets = Vec::with_capacity(values.len());
             for value in values {
                 let (username, exact_full) = if node == END_USER_SESSION {
-                    let Ok(jid) = crate::jid::CanonicalJid::parse(value.trim()) else {
+                    let Ok(jid) = northstar_xmpp_types::jid::CanonicalJid::parse(value.trim())
+                    else {
                         return Ok(None);
                     };
                     if jid.domainpart() != session.state.local_domain() || jid.localpart().is_none()
                     {
                         return Ok(None);
                     }
-                    let Ok(username) = crate::auth::normalize_username(
+                    let Ok(username) = northstar_auth_core::normalize_username(
                         jid.localpart().expect("localpart checked"),
                     ) else {
                         return Ok(None);
@@ -504,7 +505,7 @@ pub(super) async fn execute_form_command(
             };
             let mut entities = BTreeSet::new();
             for value in values {
-                let Ok(jid) = crate::jid::CanonicalJid::parse(value.trim()) else {
+                let Ok(jid) = northstar_xmpp_types::jid::CanonicalJid::parse(value.trim()) else {
                     return Ok(None);
                 };
                 entities.insert(jid.to_string());
@@ -607,15 +608,15 @@ pub(super) async fn execute_form_command(
 }
 
 pub(super) fn local_account_username(value: Option<&str>, domain: &str) -> Option<String> {
-    let jid = crate::jid::CanonicalJid::parse_bare(value?.trim()).ok()?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value?.trim()).ok()?;
     if jid.domainpart() != domain || jid.resourcepart().is_some() {
         return None;
     }
-    crate::auth::normalize_username(jid.localpart()?).ok()
+    northstar_auth_core::normalize_username(jid.localpart()?).ok()
 }
 
 pub(super) fn local_account_jid(username: &str, domain: &str) -> Result<String> {
-    let jid = crate::jid::CanonicalJid::parse_bare(&format!("{username}@{domain}"))?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!("{username}@{domain}"))?;
     anyhow::ensure!(
         jid.localpart() == Some(username) && jid.domainpart() == domain,
         "local account identity changed during JID preparation"

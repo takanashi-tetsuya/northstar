@@ -183,7 +183,7 @@ pub(super) fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> 
             }
             ("jid", Some(CORE_NS)) => {
                 anyhow::ensure!(jid.is_none(), "duplicate reflected MIX JID");
-                jid = Some(crate::jid::canonicalize_bare(
+                jid = Some(northstar_xmpp_types::jid::canonicalize_bare(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -194,7 +194,8 @@ pub(super) fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> 
 }
 
 pub(super) fn reflected_mix_stanza_id(root: Node<'_, '_>) -> Result<Uuid> {
-    let from = crate::jid::CanonicalJid::parse(root.attribute("from").unwrap_or_default())?;
+    let from =
+        northstar_xmpp_types::jid::CanonicalJid::parse(root.attribute("from").unwrap_or_default())?;
     anyhow::ensure!(
         from.localpart().is_some() && from.resourcepart().is_some(),
         "reflected MIX message requires a channel participant source"
@@ -221,7 +222,9 @@ pub(super) fn reflected_mix_stanza_id(root: Node<'_, '_>) -> Result<Uuid> {
             && stanza_id.text().is_none_or(|text| text.trim().is_empty()),
         "invalid reflected MIX stanza-id shape"
     );
-    let by = crate::jid::CanonicalJid::parse_bare(stanza_id.attribute("by").unwrap_or_default())?;
+    let by = northstar_xmpp_types::jid::CanonicalJid::parse_bare(
+        stanza_id.attribute("by").unwrap_or_default(),
+    )?;
     anyhow::ensure!(
         by.to_string() == channel,
         "reflected MIX stanza-id authority does not match the channel"
@@ -266,7 +269,9 @@ pub(super) fn validate_reflected_mix_presence_identity(root: Node<'_, '_>) -> Re
             }
             ("jid", Some(PRESENCE_NS)) => {
                 anyhow::ensure!(jid.is_none(), "duplicate reflected MIX presence JID");
-                jid = Some(crate::jid::canonicalize(child.text().unwrap_or_default())?);
+                jid = Some(northstar_xmpp_types::jid::canonicalize(
+                    child.text().unwrap_or_default(),
+                )?);
             }
             _ => anyhow::bail!("unknown reflected MIX presence identity child"),
         }

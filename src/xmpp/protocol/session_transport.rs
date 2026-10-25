@@ -74,7 +74,7 @@ impl StreamLimits {
 }
 
 pub(crate) struct TlsSessionEvidence {
-    pub channel_bindings: Option<crate::auth::ChannelBindings>,
+    pub channel_bindings: Option<northstar_auth_core::ChannelBindings>,
     pub client_certificate_identities: Vec<String>,
     pub client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
     pub generation: u64,

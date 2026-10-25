@@ -227,7 +227,7 @@ pub(super) async fn store_offline_idempotent_inner(
         return Ok(OfflineStoreOutcome::RecipientUnavailable);
     }
     if let Some(recipient_authority) = recipient_authority.as_ref() {
-        let recipient = crate::jid::CanonicalJid::parse_bare(recipient_authority)?;
+        let recipient = northstar_xmpp_types::jid::CanonicalJid::parse_bare(recipient_authority)?;
         let recipient_matches: bool =
             sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
                 .bind(recipient_id)
@@ -471,7 +471,7 @@ pub(super) fn normalized_offline_target_resource(
         "offline projection must contain one message stanza"
     );
     let recipient_authority = recipient_bare_jid
-        .map(crate::jid::canonicalize_bare)
+        .map(northstar_xmpp_types::jid::canonicalize_bare)
         .transpose()?;
     if let (Some(raw), Some(canonical)) = (recipient_bare_jid, recipient_authority.as_deref()) {
         anyhow::ensure!(
@@ -482,7 +482,7 @@ pub(super) fn normalized_offline_target_resource(
     let Some(raw_target) = root.attribute("to") else {
         return Ok((recipient_authority, None));
     };
-    let target = crate::jid::CanonicalJid::parse(raw_target)?;
+    let target = northstar_xmpp_types::jid::CanonicalJid::parse(raw_target)?;
     if let Some(recipient_authority) = recipient_authority.as_deref() {
         anyhow::ensure!(
             target.bare() == recipient_authority,

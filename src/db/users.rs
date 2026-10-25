@@ -1,10 +1,10 @@
 use crate::platform::config::Config;
-use crate::{
-    auth,
-    services::abuse::{AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome},
+use crate::services::abuse::{
+    AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_auth_core as auth;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
@@ -1033,7 +1033,7 @@ pub(super) async fn delete_user_with_roster_locked_in_transaction(
         })
         .collect();
     let account = format!("{username}@{domain}");
-    let account = crate::jid::canonicalize_bare(&account)?;
+    let account = northstar_xmpp_types::jid::canonicalize_bare(&account)?;
     let mut reverse_roster_changes = Vec::new();
     for (contact, _, subscription, _) in &roster {
         let Some((contact_id, contact_username)) = local_contacts.get(contact) else {

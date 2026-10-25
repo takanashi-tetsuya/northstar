@@ -42,7 +42,8 @@ fn exact_local_target(lookup: &MucOccupancyLookup, resolved: &MucResolvedOccupan
 }
 
 fn room_in_configured_domain(room_jid: &str, muc_domain: &str) -> bool {
-    crate::jid::CanonicalJid::parse_bare(room_jid).is_ok_and(|room| room.domainpart() == muc_domain)
+    northstar_xmpp_types::jid::CanonicalJid::parse_bare(room_jid)
+        .is_ok_and(|room| room.domainpart() == muc_domain)
 }
 
 fn remaining_lease(last_complete: Instant, now: Instant) -> Duration {

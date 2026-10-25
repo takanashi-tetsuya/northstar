@@ -360,8 +360,8 @@ pub(super) fn validate_server_chain(
     let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), crypto_provider())
         .build()
         .context("could not build local certificate verifier")?;
-    let server_name =
-        ServerName::try_from(crate::jid::domain_to_ascii(domain)?).context("invalid TLS domain")?;
+    let server_name = ServerName::try_from(northstar_xmpp_types::jid::domain_to_ascii(domain)?)
+        .context("invalid TLS domain")?;
     verifier
         .verify_server_cert(
             chain.first().expect("validated non-empty chain"),

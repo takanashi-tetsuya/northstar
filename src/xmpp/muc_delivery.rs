@@ -79,8 +79,8 @@ impl MucDeliveryContext {
         if connection_id.is_nil() || membership.cluster_epoch.is_nil() {
             return None;
         }
-        let full_jid = crate::jid::canonical_session_key(full_jid).ok()?;
-        let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
+        let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid).ok()?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         let session = self.sessions.get(&full_jid)?;
         if session.connection_id != connection_id
             || !session
@@ -156,7 +156,7 @@ impl MucDeliveryContext {
                 let root = document.root_element();
                 let mut senders = root
                     .attribute("from")
-                    .and_then(|sender| crate::jid::canonicalize(sender).ok())
+                    .and_then(|sender| northstar_xmpp_types::jid::canonicalize(sender).ok())
                     .into_iter()
                     .collect::<Vec<_>>();
                 if root.tag_name().name() == "presence" {
@@ -167,7 +167,7 @@ impl MucDeliveryContext {
                                 == Some("http://jabber.org/protocol/muc#user"))
                         .then(|| node.attribute("jid"))
                         .flatten()
-                        .and_then(|jid| crate::jid::canonicalize(jid).ok())
+                        .and_then(|jid| northstar_xmpp_types::jid::canonicalize(jid).ok())
                     }));
                 }
                 senders.sort_unstable();
@@ -179,7 +179,7 @@ impl MucDeliveryContext {
             let blocked = self
                 .blocked_muc_recipient_accounts(std::slice::from_ref(occupant), &senders)
                 .await;
-            if crate::jid::canonical_bare_key(&occupant.full_jid)
+            if northstar_xmpp_types::jid::canonical_bare_key(&occupant.full_jid)
                 .is_ok_and(|owner| blocked.contains(&owner))
             {
                 return false;
@@ -224,7 +224,7 @@ impl MucDeliveryContext {
                 );
                 occupant_jids
                     .iter()
-                    .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
+                    .filter_map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok())
                     .filter(|jid| jid.domainpart() == self.local_domain.as_str())
                     .map(|jid| jid.bare())
                     .collect()
@@ -303,7 +303,7 @@ impl MucDeliveryContext {
                 };
                 let peer = root
                     .attribute("from")
-                    .and_then(|from| crate::jid::canonicalize(from).ok())?;
+                    .and_then(|from| northstar_xmpp_types::jid::canonicalize(from).ok())?;
                 Some((peer, kind))
             });
         if let Some((peer, kind)) = privacy_peer_kind.as_ref() {

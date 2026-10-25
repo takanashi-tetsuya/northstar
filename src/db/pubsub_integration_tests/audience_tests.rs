@@ -72,7 +72,7 @@ async fn publish_audience_is_linearizable_with_unsubscribe() {
     assert_eq!(first.recipients, vec![subscriber.clone()]);
     let unsubscribe_pool = pool.clone();
     let unsubscribe_subscriber = subscriber.clone();
-    let unsubscribe_requester = crate::jid::canonical_bare_key(&subscriber).unwrap();
+    let unsubscribe_requester = northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap();
     let unsubscribe_subid = subscription.subid.clone();
     let unsubscribe_node_id = node.id;
     let mut unsubscribe = tokio::spawn(async move {
@@ -231,7 +231,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
             &pool,
             "example.test",
             collection.id,
-            &crate::jid::canonical_bare_key(&subscriber).unwrap(),
+            &northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap(),
             &subscriber,
             "subscribed",
             &collection.node_type,
@@ -455,7 +455,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
         collection.id,
         &owner,
         &[(
-            crate::jid::canonical_bare_key(&subscriber).unwrap(),
+            northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap(),
             "outcast".to_owned(),
         )],
         None,
@@ -646,7 +646,8 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
     let subscribe_pool = named_single_connection_pool(&url, &subscribe_application).await;
     let subscribe_node = purge_node.clone();
     let subscribe_jid = new_purge_subscriber.clone();
-    let subscribe_requester = crate::jid::canonical_bare_key(&subscribe_jid).unwrap();
+    let subscribe_requester =
+        northstar_xmpp_types::jid::canonical_bare_key(&subscribe_jid).unwrap();
     let subscribe_task = tokio::spawn({
         let subscribe_pool = subscribe_pool.clone();
         let requested_subid = format!("new-{suffix}");
@@ -778,7 +779,8 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
         let unsubscribe_pool = unsubscribe_pool.clone();
         let config_subscriber = config_subscriber.clone();
         let config_subid = config_subscription.subid.clone();
-        let config_requester = crate::jid::canonical_bare_key(&config_subscriber).unwrap();
+        let config_requester =
+            northstar_xmpp_types::jid::canonical_bare_key(&config_subscriber).unwrap();
         let unsubscribe_outbox = vec![unsubscribe_marker.clone()];
         async move {
             unsubscribe_checked_with_outbox(
@@ -915,7 +917,8 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
         let delete_unsubscribe_pool = delete_unsubscribe_pool.clone();
         let delete_subscriber = delete_subscriber.clone();
         let delete_subid = delete_subscription.subid.clone();
-        let delete_requester = crate::jid::canonical_bare_key(&delete_subscriber).unwrap();
+        let delete_requester =
+            northstar_xmpp_types::jid::canonical_bare_key(&delete_subscriber).unwrap();
         async move {
             unsubscribe_checked_with_outbox(
                 &delete_unsubscribe_pool,

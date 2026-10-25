@@ -32,7 +32,7 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
     .await
     .unwrap();
     let token = crate::db::create_api_session(&pool, user, 1).await.unwrap();
-    let session = crate::auth::token_hash(&token);
+    let session = northstar_auth_core::token_hash(&token);
     let state = serde_json::json!({"fixture":"database lifecycle; signature verification is tested separately"});
     assert!(
         challenge(&pool, user, generation, "register", Some(&[0; 32]), &state)
@@ -100,7 +100,7 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
     let repository = PostgresPasskeyRepository::new(
         pool.clone(),
         Arc::new(Zeroizing::new(
-            crate::auth::new_session_token().into_bytes(),
+            northstar_auth_core::new_session_token().into_bytes(),
         )),
     );
     assert_eq!(repository.account("Alice").await.unwrap().unwrap().id, user);

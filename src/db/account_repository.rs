@@ -682,7 +682,7 @@ mod registration_guard_tests {
                 .with_api_control(api_control),
             false,
             1_000_000,
-            crate::auth::MIN_SCRAM_ITERATIONS,
+            northstar_auth_core::MIN_SCRAM_ITERATIONS,
             false,
         );
         let closed = Arc::new(AtomicBool::new(false));
@@ -817,7 +817,7 @@ mod registration_guard_tests {
                 .with_api_control(api_control),
             false,
             1_000_000,
-            crate::auth::MIN_SCRAM_ITERATIONS,
+            northstar_auth_core::MIN_SCRAM_ITERATIONS,
             false,
         );
         let availability =

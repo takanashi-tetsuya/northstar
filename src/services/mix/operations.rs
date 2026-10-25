@@ -581,10 +581,10 @@ pub(crate) fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
     Ok(unique.into_iter().collect())
 }
 pub(crate) fn prepare_mix_nick(nick: &str) -> Result<String> {
-    crate::jid::prepare_resourcepart(nick)
+    northstar_xmpp_types::jid::prepare_resourcepart(nick)
 }
 pub(crate) fn canonical_mix_access_pattern(pattern: &str) -> Result<String> {
-    crate::jid::CanonicalJid::parse_bare(pattern).map(|jid| jid.to_string())
+    northstar_xmpp_types::jid::CanonicalJid::parse_bare(pattern).map(|jid| jid.to_string())
 }
 pub(crate) fn participant_jid_visible(
     channel: &MixChannel,

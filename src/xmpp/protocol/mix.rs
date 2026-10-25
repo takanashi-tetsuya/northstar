@@ -95,7 +95,6 @@ use self::session::push_mix_roster_update;
 #[cfg(test)]
 use self::session::{mix_broadcast_presence_action, MixBroadcastPresenceAction};
 use super::{Action, ProtocolSession};
-use crate::jid::{prepare_domainpart, CanonicalJid};
 use crate::services::mix::outbox::{self, core as mix_worker};
 use crate::services::mix::{
     ArchiveBoundary, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult,
@@ -121,6 +120,7 @@ use crate::state::AppState;
 use crate::xmpp::frame_execution::{SessionExecutions, Stage};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
+use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 pub(crate) use worker::start_mix_delivery_outbox;
 use worker::*;
 

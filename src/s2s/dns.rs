@@ -37,7 +37,8 @@ impl FederationDnsContext<'_> {
         self.overrides
             .iter()
             .find(|(candidate, _, _)| {
-                crate::jid::prepare_domainpart(candidate).is_ok_and(|candidate| candidate == domain)
+                northstar_xmpp_types::jid::prepare_domainpart(candidate)
+                    .is_ok_and(|candidate| candidate == domain)
             })
             .map(|(_, address, direct_tls)| (*address, *direct_tls))
     }
@@ -198,9 +199,9 @@ pub(crate) async fn resolve_federation_endpoints(
     dns: FederationDnsContext<'_>,
     domain: &str,
 ) -> Result<Vec<FederationEndpoint>> {
-    let domain = crate::jid::prepare_domainpart(domain)
+    let domain = northstar_xmpp_types::jid::prepare_domainpart(domain)
         .context("federation target is not a valid RFC 7622 domain")?;
-    let dns_domain = crate::jid::domain_to_ascii(&domain)
+    let dns_domain = northstar_xmpp_types::jid::domain_to_ascii(&domain)
         .context("federation target cannot be represented as a DNS name")?;
     if dns.dane_required {
         return resolve_dns_endpoints(dns, &domain).await;
@@ -329,7 +330,7 @@ async fn resolve_dns_endpoints(
     dns: FederationDnsContext<'_>,
     domain: &str,
 ) -> Result<Vec<FederationEndpoint>> {
-    let dns_domain = crate::jid::domain_to_ascii(domain)
+    let dns_domain = northstar_xmpp_types::jid::domain_to_ascii(domain)
         .context("federation target cannot be represented as a DNS name")?;
     // XEP-0368 defines Direct TLS and STARTTLS as two connection methods for
     // one service.  Query both concurrently and retain a usable method when
@@ -564,7 +565,7 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
 
 async fn fetch_xep_0487(dns: FederationDnsContext<'_>, domain: &str) -> Result<HostMetaDiscovery> {
     let mut location = HttpsLocation {
-        host: crate::jid::domain_to_ascii(domain)?,
+        host: northstar_xmpp_types::jid::domain_to_ascii(domain)?,
         port: 443,
         path_and_query: HOST_META_PATH.to_owned(),
     };
@@ -641,7 +642,7 @@ fn parse_https_redirect(current: &HttpsLocation, value: &str) -> Result<HttpsLoc
     } else {
         (authority, 443)
     };
-    let host = crate::jid::domain_to_ascii(host)
+    let host = northstar_xmpp_types::jid::domain_to_ascii(host)
         .context("XEP-0487 redirect host is not a valid domain")?;
     if host.parse::<IpAddr>().is_ok() || path_and_query.len() > 4_096 {
         anyhow::bail!("XEP-0487 redirect host or path is not policy-compliant");
@@ -953,7 +954,7 @@ fn parse_authoritative_xep_0487(
         let sni = link
             .get("sni")
             .and_then(Value::as_str)
-            .and_then(|sni| crate::jid::domain_to_ascii(sni).ok())
+            .and_then(|sni| northstar_xmpp_types::jid::domain_to_ascii(sni).ok())
             .filter(|sni| sni.parse::<IpAddr>().is_err())
             .context("XEP-0487 S2S TLS link has an invalid SNI domain")?;
         let ips = link
@@ -1217,7 +1218,7 @@ async fn lookup_srv(
                 target: if record.target.to_utf8() == "." {
                     ".".to_owned()
                 } else {
-                    crate::jid::domain_to_ascii(&record.target.to_utf8()).ok()?
+                    northstar_xmpp_types::jid::domain_to_ascii(&record.target.to_utf8()).ok()?
                 },
             }),
             _ => None,

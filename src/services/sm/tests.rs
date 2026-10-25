@@ -1359,7 +1359,7 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
             std::sync::Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
         ),
         std::sync::Arc::new(zeroize::Zeroizing::new(vec![0xa7; 32])),
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     );
     assert!(matches!(

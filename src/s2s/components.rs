@@ -140,8 +140,8 @@ impl Drop for ActiveComponentConnection<'_> {
 fn same_component_domain(left: &str, right: &str) -> bool {
     matches!(
         (
-            crate::jid::prepare_domainpart(left),
-            crate::jid::prepare_domainpart(right)
+            northstar_xmpp_types::jid::prepare_domainpart(left),
+            northstar_xmpp_types::jid::prepare_domainpart(right)
         ),
         (Ok(left), Ok(right)) if left == right
     )
@@ -299,7 +299,7 @@ pub(crate) fn registry() -> ComponentRegistry {
 }
 
 pub fn target_domain(jid: &str) -> Option<String> {
-    crate::jid::CanonicalJid::parse(jid)
+    northstar_xmpp_types::jid::CanonicalJid::parse(jid)
         .ok()
         .map(|jid| jid.domainpart().to_owned())
 }

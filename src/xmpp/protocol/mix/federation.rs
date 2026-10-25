@@ -12,7 +12,7 @@ pub(super) fn authenticated_actor(
     from: &str,
     authenticated_domain: &str,
 ) -> Result<AuthenticatedMixIqActor> {
-    let actor = crate::jid::CanonicalJid::parse(from)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(from)?;
     anyhow::ensure!(
         actor.localpart().is_some(),
         "federated MIX actor requires a user JID"
@@ -31,7 +31,7 @@ pub(super) fn authenticated_mix_disco_requester(
     from: &str,
     authenticated_domain: &str,
 ) -> Result<AuthenticatedMixIqActor> {
-    let actor = crate::jid::CanonicalJid::parse(from)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(from)?;
     anyhow::ensure!(
         same_jid_domain(actor.domainpart(), authenticated_domain),
         "federated MIX disco requester domain is not authenticated"
@@ -43,7 +43,7 @@ pub(super) fn authenticated_mix_disco_requester(
 }
 
 pub(super) fn authenticated_full_actor(from: &str, authenticated_domain: &str) -> Result<String> {
-    let actor = crate::jid::CanonicalJid::parse(from)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(from)?;
     anyhow::ensure!(
         actor.localpart().is_some(),
         "federated MIX actor requires a user JID"
@@ -574,7 +574,8 @@ pub(super) async fn federated_mix_iq_relay(
                     authenticated_mix_service(&source_domain, authenticated_domain),
                     "forged MIX IQ participant response"
                 );
-                let requester = crate::jid::CanonicalJid::parse(&requester_full_jid)?;
+                let requester =
+                    northstar_xmpp_types::jid::CanonicalJid::parse(&requester_full_jid)?;
                 let Some(username) = requester.localpart() else {
                     state.pending_mix_iq().remove(&request.id);
                     return Ok(true);
@@ -665,9 +666,9 @@ pub(super) async fn federated_mix_iq_relay(
     }
 
     let local_mix = local_mix_domain(state);
-    let to = crate::jid::CanonicalJid::parse(&request.to)?;
+    let to = northstar_xmpp_types::jid::CanonicalJid::parse(&request.to)?;
     if to.domainpart() == local_mix && decode_participant_jid(&to.bare()).is_ok() {
-        let actor = crate::jid::CanonicalJid::parse(&request.from)?;
+        let actor = northstar_xmpp_types::jid::CanonicalJid::parse(&request.from)?;
         anyhow::ensure!(
             actor.resourcepart().is_some()
                 && same_jid_domain(actor.domainpart(), authenticated_domain),
@@ -684,7 +685,7 @@ pub(super) async fn federated_mix_iq_relay(
     }
 
     if same_jid_domain(to.domainpart(), state.local_domain()) {
-        let source = crate::jid::CanonicalJid::parse(&request.from)?;
+        let source = northstar_xmpp_types::jid::CanonicalJid::parse(&request.from)?;
         let (_source_id, channel_jid) = decode_participant_jid(&source.bare())?;
         anyhow::ensure!(
             authenticated_mix_service(source.domainpart(), authenticated_domain),
@@ -789,7 +790,7 @@ pub(crate) async fn federated_mix_message(
     }
     if to_jid.domainpart() == local_mix {
         let actor_full = authenticated_full_actor(&from, authenticated_domain)?;
-        let actor_bare = crate::jid::CanonicalJid::parse(&actor_full)?.bare();
+        let actor_bare = northstar_xmpp_types::jid::CanonicalJid::parse(&actor_full)?.bare();
         if let Some(error) =
             process_channel_message(&state, &actor_bare, &actor_full, &raw, None).await?
         {
@@ -806,7 +807,7 @@ pub(crate) async fn federated_mix_message(
         }
         reflected_identity?;
         let authoritative_stanza_id = reflected_stanza_id?;
-        let from_jid = crate::jid::CanonicalJid::parse(&from)?;
+        let from_jid = northstar_xmpp_types::jid::CanonicalJid::parse(&from)?;
         let participant_id = from_jid
             .resourcepart()
             .context("reflected MIX message requires a stable participant resource")?;
@@ -823,7 +824,7 @@ pub(crate) async fn federated_mix_message(
             "forged federated MIX channel message"
         );
         let channel = from_jid.bare();
-        let to_jid = crate::jid::CanonicalJid::parse_bare(&to)?;
+        let to_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&to)?;
         let Some(username) = to_jid.localpart() else {
             return Ok(false);
         };
@@ -888,13 +889,13 @@ pub(crate) async fn federated_mix_presence(
     };
     let to_jid = CanonicalJid::parse(&to)?;
     if kind == "probe" && same_jid_domain(to_jid.domainpart(), state.local_domain()) {
-        let channel = crate::jid::CanonicalJid::parse_bare(&from)?;
+        let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&from)?;
         anyhow::ensure!(
             channel.localpart().is_some()
                 && authenticated_mix_service(channel.domainpart(), authenticated_domain),
             "forged federated MIX presence probe"
         );
-        let target = crate::jid::CanonicalJid::parse_bare(&to)?;
+        let target = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&to)?;
         let Some(username) = target.localpart() else {
             return Ok(false);
         };
@@ -929,7 +930,7 @@ pub(crate) async fn federated_mix_presence(
         }
         return Ok(true);
     }
-    let from_jid = crate::jid::CanonicalJid::parse(&from)?;
+    let from_jid = northstar_xmpp_types::jid::CanonicalJid::parse(&from)?;
     let local_mix = local_mix_domain(&state);
     if to_jid.domainpart() == local_mix {
         if from_jid.resourcepart().is_none() {
@@ -941,7 +942,7 @@ pub(crate) async fn federated_mix_presence(
         }
         let actor = authenticated_full_actor(&from, authenticated_domain)?;
         let _ = presence_children(&raw)?;
-        let actor_bare = crate::jid::CanonicalJid::parse(&actor)?.bare();
+        let actor_bare = northstar_xmpp_types::jid::CanonicalJid::parse(&actor)?.bare();
         if let Some(error) = process_channel_presence(&state, &actor_bare, &actor, &raw).await? {
             let _ = state
                 .federation_outbox()
@@ -967,7 +968,7 @@ pub(crate) async fn federated_mix_presence(
         }
         reflected_identity?;
         let (_participant_id, channel_jid) = decode_participant_jid(&from_jid.bare())?;
-        let to_jid = crate::jid::CanonicalJid::parse_bare(&to)?;
+        let to_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&to)?;
         let Some(username) = to_jid.localpart() else {
             return Ok(false);
         };

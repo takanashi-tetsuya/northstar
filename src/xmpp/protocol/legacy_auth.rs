@@ -83,22 +83,24 @@ impl ProtocolSession {
             }
         };
 
-        let mut sasl_mech: Box<dyn crate::auth::SaslMechanism> = match mechanism.as_str() {
-            "EXTERNAL" if !self.client_certificate_identities.is_empty() => Box::new(
-                crate::auth::ExternalMechanism::new(self.client_certificate_identities.clone()),
-            ),
-            "PLAIN" => Box::new(crate::auth::PlainMechanism::new(
+        let mut sasl_mech: Box<dyn northstar_auth_core::SaslMechanism> = match mechanism.as_str() {
+            "EXTERNAL" if !self.client_certificate_identities.is_empty() => {
+                Box::new(northstar_auth_core::ExternalMechanism::new(
+                    self.client_certificate_identities.clone(),
+                ))
+            }
+            "PLAIN" => Box::new(northstar_auth_core::PlainMechanism::new(
                 self.state.local_domain().to_owned(),
             )),
             "SCRAM-SHA-256" => {
                 if self.channel_bindings.is_some() {
                     Box::new(
-                        crate::auth::ScramSha256Mechanism::new_with_channel_binding_support(
+                        northstar_auth_core::ScramSha256Mechanism::new_with_channel_binding_support(
                             self.state.local_domain().to_owned(),
                         ),
                     )
                 } else {
-                    Box::new(crate::auth::ScramSha256Mechanism::new(
+                    Box::new(northstar_auth_core::ScramSha256Mechanism::new(
                         self.state.local_domain().to_owned(),
                     ))
                 }
@@ -110,7 +112,7 @@ impl ProtocolSession {
                         "invalid-mechanism",
                     )));
                 };
-                Box::new(crate::auth::ScramSha256Mechanism::new_plus(
+                Box::new(northstar_auth_core::ScramSha256Mechanism::new_plus(
                     self.state.local_domain().to_owned(),
                     bindings,
                 ))
@@ -118,12 +120,12 @@ impl ProtocolSession {
             "SCRAM-SHA-1" if self.state.c2s_scram_sha1_enabled() => {
                 if self.channel_bindings.is_some() {
                     Box::new(
-                        crate::auth::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
+                        northstar_auth_core::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
                             self.state.local_domain().to_owned(),
                         ),
                     )
                 } else {
-                    Box::new(crate::auth::ScramSha256Mechanism::new_sha1(
+                    Box::new(northstar_auth_core::ScramSha256Mechanism::new_sha1(
                         self.state.local_domain().to_owned(),
                     ))
                 }
@@ -135,7 +137,7 @@ impl ProtocolSession {
                         "invalid-mechanism",
                     )));
                 };
-                Box::new(crate::auth::ScramSha256Mechanism::new_sha1_plus(
+                Box::new(northstar_auth_core::ScramSha256Mechanism::new_sha1_plus(
                     self.state.local_domain().to_owned(),
                     bindings,
                 ))
@@ -152,7 +154,10 @@ impl ProtocolSession {
         let Some(payload) = payload else {
             self.legacy_sasl_awaiting_initial_response = true;
             return self
-                .process_sasl_step(sasl_mech, crate::auth::SaslStep::Challenge(String::new()))
+                .process_sasl_step(
+                    sasl_mech,
+                    northstar_auth_core::SaslStep::Challenge(String::new()),
+                )
                 .await;
         };
         let payload = match sasl2::normalize_base64_payload(payload) {
@@ -231,10 +236,10 @@ impl ProtocolSession {
 
     pub(super) async fn process_sasl_step(
         &mut self,
-        mut sasl_mech: Box<dyn crate::auth::SaslMechanism>,
-        mut step: crate::auth::SaslStep,
+        mut sasl_mech: Box<dyn northstar_auth_core::SaslMechanism>,
+        mut step: northstar_auth_core::SaslStep,
     ) -> Result<Action> {
-        if let crate::auth::SaslStep::NeedsCredentials(ref username) = step {
+        if let northstar_auth_core::SaslStep::NeedsCredentials(ref username) = step {
             let algorithm = sasl_mech
                 .scram_algorithm()
                 .expect("only SCRAM mechanisms request stored credentials");
@@ -297,7 +302,7 @@ impl ProtocolSession {
         }
 
         match step {
-            crate::auth::SaslStep::Success(username, mut data_opt) => {
+            northstar_auth_core::SaslStep::Success(username, mut data_opt) => {
                 let authenticated_with_external = sasl_mech.name() == "EXTERNAL";
                 self.legacy_sasl_awaiting_initial_response = false;
                 match self.sasl_login_is_limited(&username).await {
@@ -466,7 +471,7 @@ impl ProtocolSession {
                     }
                 }
             }
-            crate::auth::SaslStep::Challenge(challenge_data) => {
+            northstar_auth_core::SaslStep::Challenge(challenge_data) => {
                 use base64::Engine;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(challenge_data);
                 self.sasl_state = Some(sasl_mech);
@@ -482,7 +487,7 @@ impl ProtocolSession {
                         .finish(),
                 ))
             }
-            crate::auth::SaslStep::Failure(err) => {
+            northstar_auth_core::SaslStep::Failure(err) => {
                 tracing::warn!("SASL authentication failed: {}", err);
                 let condition = err.condition();
                 let attempted_username = sasl_mech.attempted_username().map(str::to_owned);
@@ -512,7 +517,7 @@ impl ProtocolSession {
                     )))
                 }
             }
-            crate::auth::SaslStep::NeedsCredentials(_) => {
+            northstar_auth_core::SaslStep::NeedsCredentials(_) => {
                 unreachable!("NeedsCredentials should be handled above")
             }
         }
@@ -573,7 +578,7 @@ impl ProtocolSession {
             %mechanism,
             %username,
             %operation,
-            integrity_failure = crate::auth::is_password_verifier_integrity_error(error),
+            integrity_failure = northstar_auth_core::is_password_verifier_integrity_error(error),
             ?error,
             "XMPP authentication backend failed"
         );

@@ -66,7 +66,7 @@ const VCARD4: &str = "urn:xmpp:vcard4";
 const CONTACTS: &str = "urn:xmpp:contacts";
 
 fn canonical_account_jid(username: &str, domain: &str) -> Result<String> {
-    crate::jid::canonicalize_bare(&format!("{username}@{domain}"))
+    northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{domain}"))
 }
 
 impl ProtocolSession {
@@ -98,7 +98,7 @@ impl ProtocolSession {
                 Some("jid-required"),
             )));
         };
-        let Ok(requested_jid) = crate::jid::canonicalize(requested_jid) else {
+        let Ok(requested_jid) = northstar_xmpp_types::jid::canonicalize(requested_jid) else {
             return Ok(Action::Send(pep_error(
                 id,
                 iq.attribute("to"),
@@ -212,7 +212,7 @@ impl ProtocolSession {
                 Some("jid-required"),
             )));
         };
-        let Ok(jid) = crate::jid::canonicalize(jid) else {
+        let Ok(jid) = northstar_xmpp_types::jid::canonicalize(jid) else {
             return Ok(Action::Send(pep_error(
                 id,
                 iq.attribute("to"),
@@ -292,7 +292,7 @@ impl ProtocolSession {
         requester: &crate::services::authentication::AuthenticatedAccount,
     ) -> Result<Option<crate::services::pubsub::PubSubAccount>> {
         let username = if let Some(to) = iq.attribute("to") {
-            let Ok(to) = crate::jid::CanonicalJid::parse(to) else {
+            let Ok(to) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
                 return Ok(None);
             };
             if to.resourcepart().is_some()
@@ -344,7 +344,7 @@ impl ProtocolSession {
             )));
         };
         let owner_name = match iq.attribute("to") {
-            Some(to) => match crate::jid::CanonicalJid::parse_bare(to) {
+            Some(to) => match northstar_xmpp_types::jid::CanonicalJid::parse_bare(to) {
                 Ok(target)
                     if target.domainpart() == self.state.local_domain()
                         && target.localpart().is_some() =>
@@ -538,7 +538,7 @@ async fn pep_access_allowed_for_owner(
     requester_jid: &str,
 ) -> Result<bool> {
     let owner_jid = canonical_account_jid(owner_username, domain)?;
-    let requester_bare = match crate::jid::canonical_bare_key(requester_jid) {
+    let requester_bare = match northstar_xmpp_types::jid::canonical_bare_key(requester_jid) {
         Ok(requester) => requester,
         Err(_) => return Ok(false),
     };
@@ -568,7 +568,7 @@ async fn pep_access_allowed_with_config(
     requester_jid: &str,
 ) -> Result<bool> {
     let owner_jid = canonical_account_jid(owner_username, domain)?;
-    let requester_bare = match crate::jid::canonical_bare_key(requester_jid) {
+    let requester_bare = match northstar_xmpp_types::jid::canonical_bare_key(requester_jid) {
         Ok(requester) => requester,
         Err(_) => return Ok(false),
     };
@@ -582,7 +582,8 @@ async fn pep_access_allowed_with_config(
         "open" => return Ok(true),
         "whitelist" => {
             return Ok(config.access_whitelist.iter().any(|jid| {
-                crate::jid::canonical_bare_key(jid).is_ok_and(|jid| jid == requester_bare)
+                northstar_xmpp_types::jid::canonical_bare_key(jid)
+                    .is_ok_and(|jid| jid == requester_bare)
             }));
         }
         "roster" => {

@@ -76,7 +76,7 @@ async fn multi_parent_create_emits_one_recursive_audience_snapshot() {
             &pool,
             "example.test",
             root.id,
-            &crate::jid::canonical_bare_key(&subscriber).unwrap(),
+            &northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap(),
             &subscriber,
             "subscribed",
             &root.node_type,

@@ -75,7 +75,7 @@ impl<R: AdminDispatchRepository> AdminDispatchService<R> {
         localpart: String,
     ) -> Result<RoomDestructionTarget, ApiMutationRejection> {
         let room_jid = format!("{}@conference.{}", localpart, self.domain);
-        let canonical = crate::jid::CanonicalJid::parse(&room_jid)
+        let canonical = northstar_xmpp_types::jid::CanonicalJid::parse(&room_jid)
             .map_err(|_| ApiMutationRejection::BadRequest("room localpart is invalid"))?;
         if canonical.resourcepart().is_some()
             || canonical.localpart().is_none()

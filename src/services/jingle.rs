@@ -102,8 +102,8 @@ fn valid_ncname(value: Option<&str>) -> bool {
 }
 
 fn full_jid(value: &str) -> Option<String> {
-    let canonical = crate::jid::canonicalize(value).ok()?;
-    crate::jid::CanonicalJid::parse(&canonical)
+    let canonical = northstar_xmpp_types::jid::canonicalize(value).ok()?;
+    northstar_xmpp_types::jid::CanonicalJid::parse(&canonical)
         .ok()?
         .resourcepart()?;
     Some(canonical)

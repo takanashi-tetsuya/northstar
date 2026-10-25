@@ -274,7 +274,7 @@ impl PasskeyRepository for PostgresPasskeyRepository {
             &self.pool,
             actor.id,
             actor.auth_generation,
-            &crate::auth::token_hash(actor.session_token),
+            &northstar_auth_core::token_hash(actor.session_token),
             credential_id,
             credential,
             label,
@@ -339,7 +339,7 @@ impl PasskeyRepository for PostgresPasskeyRepository {
             &self.pool,
             actor.id,
             actor.auth_generation,
-            &crate::auth::token_hash(actor.session_token),
+            &northstar_auth_core::token_hash(actor.session_token),
             id,
         )
         .await

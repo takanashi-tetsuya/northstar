@@ -30,6 +30,7 @@ use self::moderate::{parse_moderation_request, ModerationRequest};
 pub(super) use self::owner::muc_room_configuration_form;
 
 use super::{Action, ProtocolSession};
+use crate::platform::jid_text::{bare_jid, localpart};
 use crate::services::muc::fanout::{
     run_muc_discussion_fanout, run_muc_fanout, MucFanoutDisposition, MucFanoutPort, MucFanoutStage,
 };
@@ -49,16 +50,13 @@ use crate::services::xml_util::*;
 use crate::state::muc_cluster_effects::MucPresencePublication;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::{
-    jid::{canonical_bare_key, prepare_domainpart, CanonicalJid},
-    platform::jid_text::{bare_jid, localpart},
-};
 use anyhow::Result;
 use northstar_room_application::discussion as discussion_owner;
 #[cfg(test)]
 use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
 use northstar_room_core::MucJoinSnapshotError;
+use northstar_xmpp_types::jid::{canonical_bare_key, prepare_domainpart, CanonicalJid};
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 

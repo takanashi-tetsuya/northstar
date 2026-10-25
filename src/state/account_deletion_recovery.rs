@@ -86,7 +86,7 @@ impl AccountDeletionPresence {
             .attr("to", to)
             .attr("type", kind)
             .finish();
-        let Ok(target) = crate::jid::CanonicalJid::parse(to) else {
+        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
             return;
         };
         let domain = target.domainpart();

@@ -352,7 +352,7 @@ pub(crate) struct ClusterListenerPresenceRoutes {
 
 impl ClusterListenerPresenceRoutes {
     pub(super) async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
-        let jid = crate::jid::CanonicalJid::parse(jid)?;
+        let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid)?;
         if !self.enabled {
             return Ok(Vec::new());
         }
@@ -449,7 +449,7 @@ impl ClusterSmMucTeardownProjection {
             return Ok(true);
         };
         let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.process_instance_token()?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
@@ -510,7 +510,7 @@ impl ClusterSmMucTeardownProjection {
         let Some(pool) = &self.pool else {
             return Ok(HashMap::new());
         };
-        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         reconcile_muc_soft_state_in(self.pool.as_ref(), &self.key_prefix, &room).await?;
         let mut conn = pool.get().await?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));

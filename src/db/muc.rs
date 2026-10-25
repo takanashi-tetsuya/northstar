@@ -254,7 +254,7 @@ pub async fn get_or_create_muc_room(
     creator_id: Uuid,
     creator_full_jid: &str,
 ) -> Result<(MucRoom, bool)> {
-    let creator_full_jid = crate::jid::canonicalize(creator_full_jid)?;
+    let creator_full_jid = northstar_xmpp_types::jid::canonicalize(creator_full_jid)?;
     let mut transaction = pool.begin().await?;
     let room_id = Uuid::new_v4();
     let mut room_secret = vec![0_u8; 32];
@@ -313,7 +313,7 @@ pub async fn get_or_create_federated_muc_room(
     localpart: &str,
     creator_full_jid: &str,
 ) -> Result<(MucRoom, bool)> {
-    let creator = crate::jid::CanonicalJid::parse(creator_full_jid)?;
+    let creator = northstar_xmpp_types::jid::CanonicalJid::parse(creator_full_jid)?;
     anyhow::ensure!(
         creator.localpart().is_some(),
         "a federated MUC affiliation requires a user bare JID"
@@ -588,7 +588,7 @@ pub async fn update_muc_config(
     actor_full_jid: &str,
     config: MucConfigUpdate<'_>,
 ) -> Result<MucConfigurationOutcome> {
-    let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     let updated = sqlx::query(
         "UPDATE muc_rooms SET
              title = $2, persistent = $3, members_only = $4, public = $5,
@@ -666,7 +666,7 @@ pub async fn cancel_locked_muc_room(
     room_id: Uuid,
     actor_full_jid: &str,
 ) -> Result<bool> {
-    let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     let mut tx = pool.begin().await?;
     let matched = sqlx::query(
         "SELECT id FROM muc_rooms
@@ -998,7 +998,7 @@ pub async fn set_federated_muc_affiliation(
         ),
         "invalid federated MUC affiliation"
     );
-    let jid = crate::jid::CanonicalJid::parse_bare(bare_jid)?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(bare_jid)?;
     anyhow::ensure!(
         jid.localpart().is_some(),
         "a federated MUC affiliation requires a user bare JID"

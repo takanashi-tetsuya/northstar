@@ -1,5 +1,4 @@
 use super::{Action, ProtocolSession};
-use crate::jid::CanonicalJid;
 use crate::services::private_storage::{
     LegacyBookmarkSnapshot, PrivateXmlEntry, PrivateXmlWriteOutcome, MAX_BOOKMARK_ITEMS,
 };
@@ -12,6 +11,7 @@ use anyhow::Result;
 use northstar_pubsub_application::{
     plan_pep_bookmark_event, PepBookmarkEventPlan, PepCommitLegacyBookmarksCommand,
 };
+use northstar_xmpp_types::jid::CanonicalJid;
 use roxmltree::Node;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

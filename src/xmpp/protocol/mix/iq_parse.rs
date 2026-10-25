@@ -301,7 +301,9 @@ pub(super) fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                     "invalid MIX invitation request"
                 );
                 IqOperation::Invite {
-                    invitee: crate::jid::canonicalize_bare(invitees[0].text().unwrap_or_default())?,
+                    invitee: northstar_xmpp_types::jid::canonicalize_bare(
+                        invitees[0].text().unwrap_or_default(),
+                    )?,
                 }
             }
             Some((child, "query", Some(MAM_NS))) if kind == "get" => {

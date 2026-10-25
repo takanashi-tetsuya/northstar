@@ -356,7 +356,7 @@ async fn subscribe_for_race(
     subscriber: &str,
     subid: &str,
 ) -> PubSubSubscription {
-    let requester = crate::jid::canonical_bare_key(subscriber).unwrap();
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(subscriber).unwrap();
     match set_subscription_limited_with_options_and_outbox(
         pool,
         "example.test",

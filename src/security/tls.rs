@@ -385,8 +385,8 @@ fn bounded_log_metadata(value: &str, max_chars: usize) -> String {
 pub(crate) fn direct_tls_sni_matches(presented: Option<&str>, expected_domain: &str) -> bool {
     matches!(
         (
-            presented.and_then(|name| crate::jid::domain_to_ascii(name).ok()),
-            crate::jid::domain_to_ascii(expected_domain),
+            presented.and_then(|name| northstar_xmpp_types::jid::domain_to_ascii(name).ok()),
+            northstar_xmpp_types::jid::domain_to_ascii(expected_domain),
         ),
         (Some(presented), Ok(expected)) if presented == expected
     )
@@ -441,7 +441,7 @@ pub(crate) fn c2s_client_xmpp_identities(
     else {
         return Ok(Vec::new());
     };
-    let domain = crate::jid::prepare_domainpart(domain)?;
+    let domain = northstar_xmpp_types::jid::prepare_domainpart(domain)?;
     let mut identities = Vec::new();
     for name in &san.value.general_names {
         let GeneralName::OtherName(oid, encoded) = name else {
@@ -452,7 +452,7 @@ pub(crate) fn c2s_client_xmpp_identities(
         }
         let value = decode_explicit_utf8_string(encoded)
             .context("malformed id-on-xmppAddr C2S client identity")?;
-        let jid = crate::jid::CanonicalJid::parse_bare(value)
+        let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)
             .context("invalid id-on-xmppAddr C2S client identity")?;
         if jid.domainpart() == domain && jid.localpart().is_some() {
             let canonical = jid.to_string();

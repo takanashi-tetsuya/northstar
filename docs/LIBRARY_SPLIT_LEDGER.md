@@ -118,12 +118,12 @@ handler capability.
 ## 4. Compatibility facades and retained authorities
 
 Some root modules intentionally remain as compatibility facades while callers
-are migrated independently:
+are migrated independently. S17 (WP-171) retired the `auth` and `jid` facades:
+root modules import `northstar_auth_core` and `northstar_xmpp_types::jid`
+directly.
 
 | Root facade/adapter | Leaf crate | Authority intentionally retained in root |
 | --- | --- | --- |
-| `src/auth.rs`, `src/scram.rs` | `northstar-auth-core` | account lookup, password-work admission, credential persistence and TLS facts |
-| `src/jid.rs` | `northstar-xmpp-types` | route authorization and external effects |
 | `src/xmpp/framing.rs` | `northstar-xml-framing` | transport buffers, deadlines and socket closure |
 | `src/services/abuse.rs` | `northstar-abuse-policy` | actor-state storage, database locks, clock, randomness and challenge lifecycle |
 | `src/xmpp/protocol/*` | matching XEP crates | authentication, application authorization, transactions, delivery and error mapping |

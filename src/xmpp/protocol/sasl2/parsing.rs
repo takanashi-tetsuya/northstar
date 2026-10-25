@@ -432,13 +432,17 @@ pub(super) fn parse_stream_open(
     let Some(to) = root.attribute("to") else {
         return Err(StreamOpenError::ImproperAddressing);
     };
-    if crate::jid::prepare_domainpart(to).ok().as_deref() != Some(expected_domain) {
+    if northstar_xmpp_types::jid::prepare_domainpart(to)
+        .ok()
+        .as_deref()
+        != Some(expected_domain)
+    {
         return Err(StreamOpenError::HostUnknown);
     }
     let from = match root.attribute("from") {
         None => None,
         Some(value) => {
-            let jid = crate::jid::CanonicalJid::parse_bare(value)
+            let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)
                 .map_err(|_| StreamOpenError::InvalidFrom)?;
             if jid.domainpart() != expected_domain {
                 return Err(StreamOpenError::InvalidFrom);

@@ -60,7 +60,7 @@ pub(super) async fn federated_muc_moderate(
     }
     let room = &refreshed_room;
     let moderator = &refreshed_moderator;
-    let actor_scope = crate::jid::canonical_bare_key(&moderator.full_jid)?;
+    let actor_scope = northstar_xmpp_types::jid::canonical_bare_key(&moderator.full_jid)?;
     let current_affiliation = state
         .muc_service()
         .federated_affiliation(room.id, &actor_scope)

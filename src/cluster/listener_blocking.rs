@@ -60,7 +60,7 @@ impl ClusterListenerBlocking {
                 }
             }
             for target in targets {
-                let Ok(target_jid) = crate::jid::CanonicalJid::parse(&target) else {
+                let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(&target) else {
                     continue;
                 };
                 let delivery = crate::services::xml_util::set_to(&base_presence, &target);

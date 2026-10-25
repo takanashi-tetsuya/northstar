@@ -46,7 +46,7 @@ pub async fn roster_item(
     owner_id: Uuid,
     jid: &str,
 ) -> Result<Option<(String, Option<String>, String, Option<String>)>> {
-    let jid = crate::jid::canonicalize_bare(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
     let row = sqlx::query(
         "SELECT contact_jid, display_name, subscription, ask FROM roster_items WHERE owner_id = $1 AND contact_jid = $2",
     )
@@ -94,7 +94,7 @@ pub(super) async fn upsert_roster_in_transaction(
     name: Option<&str>,
     groups: &[String],
 ) -> Result<RosterChange> {
-    let jid = crate::jid::canonicalize_bare(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
     sqlx::query("INSERT INTO roster_items (owner_id, contact_jid, display_name, groups) VALUES ($1, $2, $3, $4) ON CONFLICT (owner_id, contact_jid) DO UPDATE SET display_name = EXCLUDED.display_name, groups = EXCLUDED.groups, updated_at = NOW()")
         .bind(owner_id).bind(&jid).bind(name).bind(serde_json::to_value(groups)?).execute(&mut **transaction).await?;
     cancel_inaccessible_pep_subscriptions(transaction, owner_id, &jid).await?;
@@ -130,7 +130,7 @@ pub(super) async fn remove_roster_item_in_transaction(
     jid: &str,
     route: RosterRemovalRoute<'_>,
 ) -> Result<AuthorizedRosterRemoval> {
-    let jid = crate::jid::canonicalize_bare(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
 
     // Resolve the local account incarnation inside the same transaction which
     // locks and mutates both rosters. The protocol layer must not perform a
@@ -268,7 +268,7 @@ pub(super) async fn remove_roster_item_in_transaction(
     {
         let contact_id = contact.id;
         if contact_id != owner_id && locked.contains(&contact_id) {
-            let owner_jid = crate::jid::canonicalize_bare(owner_jid)?;
+            let owner_jid = northstar_xmpp_types::jid::canonicalize_bare(owner_jid)?;
             let contact_row = sqlx::query(
                 "SELECT subscription,ask,approved FROM roster_items WHERE owner_id=$1 AND contact_jid=$2 FOR UPDATE",
             )
@@ -408,7 +408,7 @@ pub(in crate::db) async fn update_subscription_in_transaction(
     ask: Option<&str>,
     approved: Option<bool>,
 ) -> Result<RosterChange> {
-    let jid = crate::jid::canonicalize_bare(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
     sqlx::query("INSERT INTO roster_items (owner_id, contact_jid, subscription, ask, approved) VALUES ($1, $2, $3, $4, COALESCE($5, FALSE)) ON CONFLICT (owner_id, contact_jid) DO UPDATE SET subscription = $3, ask = $4, approved = COALESCE($5, roster_items.approved), updated_at = NOW()")
         .bind(owner_id)
         .bind(&jid)
@@ -470,7 +470,7 @@ pub(in crate::db) async fn record_roster_change(
     jid: &str,
     removed: bool,
 ) -> Result<RosterChange> {
-    let jid = crate::jid::canonicalize_bare(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
     if removed {
         sqlx::query("INSERT INTO roster_change_log (owner_id, version, contact_jid, removed) VALUES ($1, $2, $3, TRUE)")
             .bind(owner_id).bind(version).bind(&jid).execute(&mut **transaction).await?;
@@ -549,7 +549,7 @@ pub async fn latest_roster_change_for_contact(
     owner_id: Uuid,
     contact_jid: &str,
 ) -> Result<Option<RosterChange>> {
-    let contact_jid = crate::jid::canonicalize_bare(contact_jid)?;
+    let contact_jid = northstar_xmpp_types::jid::canonicalize_bare(contact_jid)?;
     let row = sqlx::query(
         "SELECT version, contact_jid, display_name, subscription, ask, groups, approved, removed FROM roster_change_log WHERE owner_id=$1 AND contact_jid=$2 ORDER BY version DESC LIMIT 1",
     )

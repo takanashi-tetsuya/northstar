@@ -249,7 +249,9 @@ impl S2sConnectionRegistry {
         let Some((local, remote)) = key.split_once('\0') else {
             return Err(session);
         };
-        let Ok(canonical_local) = crate::jid::prepare_domainpart(&session.local_domain) else {
+        let Ok(canonical_local) =
+            northstar_xmpp_types::jid::prepare_domainpart(&session.local_domain)
+        else {
             return Err(session);
         };
         if canonical_local != local

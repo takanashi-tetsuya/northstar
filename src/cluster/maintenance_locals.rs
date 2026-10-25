@@ -59,7 +59,7 @@ impl ClusterMaintenanceLocals {
     }
 
     pub(crate) fn remove_stale_muc_actor(&self, occupant: &MucOccupant) {
-        if let Ok(full_jid) = crate::jid::canonical_session_key(&occupant.full_jid) {
+        if let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&occupant.full_jid) {
             if let Some(session) = self.sessions.get(&full_jid) {
                 if !occupant.connection_id.is_nil()
                     && session.connection_id == occupant.connection_id

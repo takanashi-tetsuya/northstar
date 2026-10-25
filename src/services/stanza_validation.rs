@@ -32,7 +32,7 @@ pub(crate) fn validate_client_stanza(root: Node<'_, '_>) -> std::result::Result<
     }
     if root
         .attribute("to")
-        .is_some_and(|to| crate::jid::canonicalize(to).is_err())
+        .is_some_and(|to| northstar_xmpp_types::jid::canonicalize(to).is_err())
     {
         return Err("jid-malformed");
     }
@@ -196,7 +196,7 @@ fn validate_stanza_error(error: Node<'_, '_>) -> std::result::Result<(), &'stati
         attribute.namespace().is_none() && !matches!(attribute.name(), "type" | "by" | "code")
     }) || error
         .attribute("by")
-        .is_some_and(|jid| crate::jid::CanonicalJid::parse(jid).is_err())
+        .is_some_and(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).is_err())
     {
         return Err("bad-request");
     }

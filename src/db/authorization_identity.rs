@@ -2,7 +2,7 @@
 //!
 //! These tables predate the shared JID parser.  SQL case folding cannot
 //! reproduce PRECIS/IDNA and must never touch an opaque resourcepart, so the
-//! migration computes every key with `crate::jid`, rejects collisions before
+//! migration computes every key with `northstar_xmpp_types::jid`, rejects collisions before
 //! writing, and commits the rewrites and completion marker atomically.
 
 use anyhow::{Context, Result};
@@ -30,11 +30,12 @@ fn invalid_jid(table: &str, row_key: &str, value: &str, error: anyhow::Error) ->
 }
 
 fn canonical_bare(table: &str, row_key: &str, value: &str) -> Result<String> {
-    crate::jid::canonicalize_bare(value).map_err(|error| invalid_jid(table, row_key, value, error))
+    northstar_xmpp_types::jid::canonicalize_bare(value)
+        .map_err(|error| invalid_jid(table, row_key, value, error))
 }
 
 fn canonical_user_bare(table: &str, row_key: &str, value: &str) -> Result<String> {
-    let jid = crate::jid::CanonicalJid::parse_bare(value)
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)
         .map_err(|error| invalid_jid(table, row_key, value, error))?;
     anyhow::ensure!(
         jid.localpart().is_some(),
@@ -44,7 +45,8 @@ fn canonical_user_bare(table: &str, row_key: &str, value: &str) -> Result<String
 }
 
 fn canonical_exact(table: &str, row_key: &str, value: &str) -> Result<String> {
-    crate::jid::canonicalize(value).map_err(|error| invalid_jid(table, row_key, value, error))
+    northstar_xmpp_types::jid::canonicalize(value)
+        .map_err(|error| invalid_jid(table, row_key, value, error))
 }
 
 fn ensure_no_collisions(table: &str, rows: &[ScopedIdentity]) -> Result<()> {

@@ -388,7 +388,7 @@ fn supplied_room(command: &MucDiscussion) -> Result<(MucRoom, String)> {
         .root_element()
         .attribute("to")
         .context("missing actual live room address")?;
-    let jid = crate::jid::CanonicalJid::parse_bare(to)?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(to)?;
     let localpart = jid
         .localpart()
         .context("MUC room address lacks localpart")?

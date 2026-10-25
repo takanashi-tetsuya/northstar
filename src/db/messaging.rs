@@ -728,8 +728,8 @@ fn validate_local_recipient_authority_for_domain(
     recipient_bare_jid: &str,
     configured_domain: &str,
 ) -> Result<()> {
-    let recipient = crate::jid::CanonicalJid::parse_bare(recipient_bare_jid)?;
-    let configured_domain = crate::jid::prepare_domainpart(configured_domain)?;
+    let recipient = northstar_xmpp_types::jid::CanonicalJid::parse_bare(recipient_bare_jid)?;
+    let configured_domain = northstar_xmpp_types::jid::prepare_domainpart(configured_domain)?;
     anyhow::ensure!(
         recipient.to_string() == recipient_bare_jid,
         "local durable recipient authority must already be canonical"
@@ -769,7 +769,7 @@ fn durable_target_full_jid(stanza: &str) -> Result<Option<String>> {
     );
     match root.attribute("to") {
         Some(to) if root.attribute("type").unwrap_or("normal") == "normal" => {
-            let target = crate::jid::CanonicalJid::parse(to)?;
+            let target = northstar_xmpp_types::jid::CanonicalJid::parse(to)?;
             Ok(target.resourcepart().is_some().then(|| target.to_string()))
         }
         _ => Ok(None),

@@ -27,7 +27,7 @@ impl ProtocolSession {
                 "jid-malformed",
             )));
         };
-        let Ok(to_jid) = crate::jid::CanonicalJid::parse(to) else {
+        let Ok(to_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
             return Ok(Action::Send(muc_stanza_error(
                 root,
                 from,

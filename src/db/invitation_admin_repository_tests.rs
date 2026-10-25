@@ -99,7 +99,7 @@ async fn invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_on
             AND POSITION($4::bytea IN response.response_ciphertext)=0
          FROM api_idempotency_records response JOIN invitation_tokens invitation ON invitation.id=$1
          WHERE response.request_id=$2",
-    ).bind(id).bind(create.request_id).bind(crate::auth::token_hash(token)).bind(token.as_bytes())
+    ).bind(id).bind(create.request_id).bind(northstar_auth_core::token_hash(token)).bind(token.as_bytes())
         .fetch_one(&pool).await.unwrap();
     assert!(
         protected,

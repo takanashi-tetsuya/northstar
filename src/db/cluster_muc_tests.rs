@@ -59,7 +59,7 @@ fn authenticated_muc_principals_still_require_strict_bare_jids() {
     };
     assert!(principal.validate().is_err());
     assert!(!muc_principal_owns_address("alice@example.test/desktop", &principal).unwrap());
-    assert!(crate::jid::canonicalize_bare("alice@example.test/desktop").is_err());
+    assert!(northstar_xmpp_types::jid::canonicalize_bare("alice@example.test/desktop").is_err());
 }
 
 fn occupancy(nick: &str, incarnation: Uuid, connection: Uuid) -> ClusterMucOccupancy {

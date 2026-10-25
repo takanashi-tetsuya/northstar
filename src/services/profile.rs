@@ -84,7 +84,7 @@ pub(crate) struct ProfileAudienceSnapshot {
 
 impl ProfileAudienceSnapshot {
     pub(crate) fn authorizes_routed_jid(&self, recipient: &str) -> bool {
-        let Ok(recipient) = crate::jid::CanonicalJid::parse(recipient) else {
+        let Ok(recipient) = northstar_xmpp_types::jid::CanonicalJid::parse(recipient) else {
             return false;
         };
         let recipient_full = recipient.to_string();
@@ -95,7 +95,7 @@ impl ProfileAudienceSnapshot {
             return true;
         }
         self.explicit_jids.iter().any(|jid| {
-            crate::jid::CanonicalJid::parse(jid).is_ok_and(|explicit| {
+            northstar_xmpp_types::jid::CanonicalJid::parse(jid).is_ok_and(|explicit| {
                 if explicit.resourcepart().is_some() {
                     explicit.to_string() == recipient_full
                 } else {

@@ -33,7 +33,7 @@ struct AttemptKey {
 }
 
 fn canonical_service(table: &str, row_key: &str, value: &str) -> Result<String> {
-    crate::jid::canonicalize_bare(value).map_err(|error| {
+    northstar_xmpp_types::jid::canonicalize_bare(value).map_err(|error| {
         error.context(format!(
             "push JID migration rejected invalid service identity in {table} row {row_key}: {value:?}; correct or remove this row and restart"
         ))
@@ -316,7 +316,7 @@ mod tests {
             .unwrap();
         let request_id = Uuid::new_v4();
         let original = "PuSh@BÜCHER.Example";
-        let canonical = crate::jid::canonicalize_bare(original).unwrap();
+        let canonical = northstar_xmpp_types::jid::canonicalize_bare(original).unwrap();
         sqlx::query(
             "INSERT INTO push_subscriptions(user_id,service_jid,node) VALUES($1,$2,'primary')",
         )

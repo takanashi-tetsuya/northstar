@@ -78,7 +78,7 @@ pub(super) async fn archive_mix_message_once_inner(
             "client stanza id must contain 1 to 128 bytes"
         );
     }
-    let channel = crate::jid::CanonicalJid::parse_bare(channel_jid)?;
+    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
     anyhow::ensure!(
         channel.localpart().is_some(),
         "MIX channel authority must be a bare channel JID"

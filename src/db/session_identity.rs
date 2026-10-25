@@ -40,7 +40,7 @@ struct IntentRow {
 }
 
 fn expected_user_bare(username: &str, domain: &str) -> Result<String> {
-    crate::jid::canonicalize_bare(&format!("{username}@{domain}"))
+    northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{domain}"))
 }
 
 fn canonical_owned_full(
@@ -50,11 +50,11 @@ fn canonical_owned_full(
     username: &str,
     domain: &str,
 ) -> Result<String> {
-    let full = crate::jid::canonical_session_key(value).with_context(|| {
+    let full = northstar_xmpp_types::jid::canonical_session_key(value).with_context(|| {
         format!("session JID migration rejected invalid full JID in {table} row {row}: {value:?}")
     })?;
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(&full)? == expected_user_bare(username, domain)?,
+        northstar_xmpp_types::jid::canonical_bare_key(&full)? == expected_user_bare(username, domain)?,
         "session JID migration rejected ownership mismatch in {table} row {row}: {value:?} does not belong to {username:?}@{domain:?}; correct or remove this row and restart"
     );
     Ok(full)
@@ -76,10 +76,11 @@ pub(crate) async fn canonicalize_session_authorization_storage_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     configured_domain: &str,
 ) -> Result<()> {
-    let domain = crate::jid::prepare_domainpart(configured_domain)
+    let domain = northstar_xmpp_types::jid::prepare_domainpart(configured_domain)
         .context("configured XMPP domain is invalid during session identity migration")?;
     let migration = format!("session-authorization-rfc7622-ulabel-v2:{domain}");
-    let conference_domain = crate::jid::prepare_domainpart(&format!("conference.{domain}"))?;
+    let conference_domain =
+        northstar_xmpp_types::jid::prepare_domainpart(&format!("conference.{domain}"))?;
     sqlx::query("SET LOCAL lock_timeout='30s'")
         .execute(&mut **transaction)
         .await?;
@@ -196,13 +197,13 @@ async fn load_sm(transaction: &mut Transaction<'_, Postgres>, domain: &str) -> R
             &username,
             domain,
         )?;
-        let canonical_resource =
-            crate::jid::prepare_resourcepart(&resource).with_context(|| {
+        let canonical_resource = northstar_xmpp_types::jid::prepare_resourcepart(&resource)
+            .with_context(|| {
                 format!(
                     "session JID migration rejected invalid resource in SM row {id}: {resource:?}"
                 )
             })?;
-        let full_resource = crate::jid::CanonicalJid::parse(&canonical_full_jid)?
+        let full_resource = northstar_xmpp_types::jid::CanonicalJid::parse(&canonical_full_jid)?
             .resourcepart()
             .context("canonical SM full JID lost its resource")?
             .to_owned();
@@ -236,14 +237,15 @@ fn canonicalize_joined_rooms(id: Uuid, value: &Value) -> Result<Value> {
     let mut unique = BTreeMap::new();
     let mut canonical = Vec::with_capacity(memberships.len());
     for mut membership in memberships {
-        let room = crate::jid::canonicalize_bare(&membership.room_jid).with_context(|| {
-            format!(
-                "invalid joined room {:?} in SM row {id}",
-                membership.room_jid
-            )
-        })?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid)
+            .with_context(|| {
+                format!(
+                    "invalid joined room {:?} in SM row {id}",
+                    membership.room_jid
+                )
+            })?;
         anyhow::ensure!(
-            crate::jid::CanonicalJid::parse_bare(&room)?
+            northstar_xmpp_types::jid::CanonicalJid::parse_bare(&room)?
                 .localpart()
                 .is_some(),
             "SM row {id} joined room must have a localpart: {room:?}"
@@ -266,7 +268,7 @@ fn canonicalize_directed(id: Uuid, value: &Value) -> Result<Value> {
     let mut unique = BTreeMap::new();
     let mut canonical = Vec::with_capacity(values.len());
     for original in values {
-        let jid = crate::jid::canonicalize(&original).with_context(|| {
+        let jid = northstar_xmpp_types::jid::canonicalize(&original).with_context(|| {
             format!("invalid directed presence JID {original:?} in SM row {id}")
         })?;
         if let Some(previous) = unique.insert(jid.clone(), original.clone()) {
@@ -340,9 +342,9 @@ async fn load_intents(
     for row in rows {
         let room_jid: String = row.get("room_jid");
         let localpart: String = row.get("localpart");
-        let canonical_room_jid = crate::jid::canonicalize_bare(&room_jid)
+        let canonical_room_jid = northstar_xmpp_types::jid::canonicalize_bare(&room_jid)
             .with_context(|| format!("invalid MUC destroy intent room JID {room_jid:?}"))?;
-        let parsed = crate::jid::CanonicalJid::parse_bare(&canonical_room_jid)?;
+        let parsed = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&canonical_room_jid)?;
         let room_localpart = parsed
             .localpart()
             .context("MUC destroy intent room must contain a localpart")?;
@@ -350,7 +352,7 @@ async fn load_intents(
             parsed.domainpart() == conference_domain,
             "MUC destroy intent {room_jid:?} is outside configured service {conference_domain:?}"
         );
-        let canonical_localpart = crate::jid::prepare_localpart(&localpart)
+        let canonical_localpart = northstar_xmpp_types::jid::prepare_localpart(&localpart)
             .with_context(|| format!("invalid MUC destroy intent localpart {localpart:?}"))?;
         anyhow::ensure!(
             canonical_localpart == room_localpart,

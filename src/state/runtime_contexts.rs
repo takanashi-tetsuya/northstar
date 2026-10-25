@@ -362,7 +362,7 @@ impl AppState {
         &self,
         domain: &str,
     ) -> Option<crate::platform::config::ComponentCredential> {
-        let domain = crate::jid::prepare_domainpart(domain).ok()?;
+        let domain = northstar_xmpp_types::jid::prepare_domainpart(domain).ok()?;
         self.component_credentials
             .iter()
             .find(|credential| {

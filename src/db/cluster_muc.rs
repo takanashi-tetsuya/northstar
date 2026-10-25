@@ -71,7 +71,7 @@ impl ClusterMucAffiliationSubject {
     }
 
     fn validate(&self) -> Result<()> {
-        let jid = crate::jid::CanonicalJid::parse_bare(self.bare_jid())?;
+        let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(self.bare_jid())?;
         anyhow::ensure!(
             jid.localpart().is_some() && jid.to_string() == self.bare_jid(),
             "cluster MUC affiliation subject must be a canonical user bare JID"
@@ -153,7 +153,7 @@ impl ClusterMucPrincipal {
     }
 
     fn validate(&self) -> Result<()> {
-        let jid = crate::jid::CanonicalJid::parse_bare(self.bare_jid())?;
+        let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(self.bare_jid())?;
         anyhow::ensure!(
             jid.localpart().is_some(),
             "MUC principal must be a user JID"
@@ -167,7 +167,8 @@ impl ClusterMucPrincipal {
             ..
         } = self
         {
-            let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
+            let authenticated_domain =
+                northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
             anyhow::ensure!(
                 authenticated_domain == jid.domainpart(),
                 "federated MUC ownership is not proven by the authenticated S2S domain"
@@ -181,7 +182,7 @@ impl ClusterMucPrincipal {
 // address structurally; parse_bare/canonicalize_bare deliberately reject a
 // resource and remain required for the authenticated principal itself.
 fn muc_address_bare_jid(address: &str) -> Result<String> {
-    Ok(crate::jid::CanonicalJid::parse(address)?.bare())
+    Ok(northstar_xmpp_types::jid::CanonicalJid::parse(address)?.bare())
 }
 
 fn muc_principal_owns_address(address: &str, principal: &ClusterMucPrincipal) -> Result<bool> {

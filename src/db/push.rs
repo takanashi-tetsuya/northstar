@@ -59,7 +59,7 @@ pub async fn enable_push_subscription(
     node: &str,
     options: Option<&str>,
 ) -> Result<PushEnableOutcome> {
-    let service_jid = crate::jid::canonicalize_bare(service_jid)?;
+    let service_jid = northstar_xmpp_types::jid::canonicalize_bare(service_jid)?;
     let mut transaction = pool.begin().await?;
     lock_account(&mut transaction, user_id).await?;
 
@@ -145,7 +145,7 @@ pub async fn disable_push_subscriptions(
     service_jid: &str,
     node: Option<&str>,
 ) -> Result<u64> {
-    let service_jid = crate::jid::canonicalize_bare(service_jid)?;
+    let service_jid = northstar_xmpp_types::jid::canonicalize_bare(service_jid)?;
     let result = sqlx::query(
         "DELETE FROM push_subscriptions
          WHERE user_id = $1 AND service_jid = $2
@@ -270,7 +270,7 @@ pub async fn complete_push_response(
     sender_bare: &str,
     kind: PushResponseKind,
 ) -> Result<PushResponseOutcome> {
-    let sender_bare = crate::jid::canonicalize_bare(sender_bare)?;
+    let sender_bare = northstar_xmpp_types::jid::canonicalize_bare(sender_bare)?;
     let mut transaction = pool.begin().await?;
     let Some(attempt) = sqlx::query(
         "SELECT user_id, service_jid, node, expires_at

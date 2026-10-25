@@ -168,7 +168,7 @@ impl ClusterManager {
         tls_client_key_path: Option<&std::path::Path>,
         security: Option<Arc<crate::security::cluster_bus::ClusterSecurityConfig>>,
     ) -> Result<Self> {
-        let namespace = crate::jid::prepare_domainpart(namespace)
+        let namespace = northstar_xmpp_types::jid::prepare_domainpart(namespace)
             .context("cluster namespace must be a valid XMPP domain")?;
         let key_prefix = format!("northstar:{namespace}");
         let Some(redis_url) = redis_url else {

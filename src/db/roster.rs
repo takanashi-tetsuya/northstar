@@ -452,8 +452,8 @@ pub async fn transition_local_presence_subscription(
     ) {
         return Ok(None);
     }
-    let actor_jid = crate::jid::canonicalize_bare(actor_jid)?;
-    let target_jid = crate::jid::canonicalize_bare(target_jid)?;
+    let actor_jid = northstar_xmpp_types::jid::canonicalize_bare(actor_jid)?;
+    let target_jid = northstar_xmpp_types::jid::canonicalize_bare(target_jid)?;
     let mut transaction = pool.begin().await?;
     let locked = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM users WHERE id=ANY($1) ORDER BY id FOR UPDATE",
@@ -545,7 +545,7 @@ pub async fn add_federated_presence_pending_with_stanza(
     if stanza.is_some_and(|stanza| stanza.is_empty() || stanza.len() > 65_536) {
         anyhow::bail!("federated presence subscription stanza exceeds the persistence limit");
     }
-    let from_jid = crate::jid::canonicalize_bare(from_jid)?;
+    let from_jid = northstar_xmpp_types::jid::canonicalize_bare(from_jid)?;
     sqlx::query(
         "INSERT INTO federated_presence_pending (recipient_id, from_jid, stanza) VALUES ($1, $2, $3) ON CONFLICT (recipient_id, from_jid) DO UPDATE SET stanza=COALESCE(EXCLUDED.stanza,federated_presence_pending.stanza),created_at=NOW()",
     )

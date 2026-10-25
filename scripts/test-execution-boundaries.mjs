@@ -1561,7 +1561,7 @@ rejectsRoute("route activation must roll back false on a failed recheck", "sessi
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() {  return false; } true");
 rejectsRoute("route CAPS lookup must canonicalize the queried key", "mixOutboxState",
-  "let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else { return MixSessionCapability::Unknown; };",
+  "let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else { return MixSessionCapability::Unknown; };",
   "let full_jid = full_jid.to_owned();");
 rejectsRoute("route CAPS snapshot uses the canonical queried key", "mixOutboxState",
   "let Some(observation) = caps_by_jid.snapshot(&full_jid) else { return MixSessionCapability::Unknown; };",

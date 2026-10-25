@@ -201,7 +201,7 @@ impl ProtocolSession {
             return Err("not-authorized");
         };
         let full_jid = self.full_jid.clone().expect("checked above");
-        let Ok(parsed_full_jid) = crate::jid::CanonicalJid::parse(&full_jid) else {
+        let Ok(parsed_full_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(&full_jid) else {
             self.reset_sm();
             return Err("unexpected-request");
         };
@@ -1452,9 +1452,9 @@ fn muc_resume_failure_stanza(
 }
 
 fn validated_sm_session_key(full_jid: &str, resource: &str, account: &str) -> Option<String> {
-    let key = crate::jid::canonical_session_key(full_jid).ok()?;
-    let jid = crate::jid::CanonicalJid::parse(&key).ok()?;
-    (jid.bare() == crate::jid::canonical_bare_key(account).ok()?
+    let key = northstar_xmpp_types::jid::canonical_session_key(full_jid).ok()?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse(&key).ok()?;
+    (jid.bare() == northstar_xmpp_types::jid::canonical_bare_key(account).ok()?
         && jid.resourcepart() == Some(resource))
     .then_some(key)
 }

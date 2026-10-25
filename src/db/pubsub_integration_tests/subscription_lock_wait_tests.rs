@@ -9,7 +9,7 @@ async fn subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
     let suffix = Uuid::new_v4().simple().to_string();
     let owner = format!("retry-owner-{suffix}@example.test");
     let subscriber = format!("retry-subscriber-{suffix}@example.test/desktop");
-    let requester = crate::jid::canonical_bare_key(&subscriber).unwrap();
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap();
     let node = create_default_test_node(&pool, &format!("retry-{suffix}"), &owner).await;
     assert_eq!(
         publish_items(
@@ -178,7 +178,7 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
     let suffix = Uuid::new_v4().simple().to_string();
     let owner = format!("options-owner-{suffix}@example.test");
     let subscriber = format!("options-reader-{suffix}@example.test/phone");
-    let requester = crate::jid::canonical_bare_key(&subscriber).unwrap();
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap();
     let node = create_default_test_node(&pool, &format!("options-{suffix}"), &owner).await;
     let atom = "http://www.w3.org/2005/Atom";
     sqlx::query("UPDATE pubsub_nodes SET payload_type=$2 WHERE id=$1")
@@ -271,7 +271,8 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
         .await
         .unwrap();
     let subscribe_jid = format!("options-new-{suffix}@example.test/phone");
-    let subscribe_requester = crate::jid::canonical_bare_key(&subscribe_jid).unwrap();
+    let subscribe_requester =
+        northstar_xmpp_types::jid::canonical_bare_key(&subscribe_jid).unwrap();
     let before_outbox: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
             .bind(&node.node)
@@ -387,7 +388,7 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
     assert_eq!(subscription_type, "items");
 
     let remote = format!("remote-options-{suffix}@remote.test/phone");
-    let remote_bare = crate::jid::canonical_bare_key(&remote).unwrap();
+    let remote_bare = northstar_xmpp_types::jid::canonical_bare_key(&remote).unwrap();
     let remote_subscription = set_subscription_limited_with_options(
         &pool,
         "example.test",
@@ -459,7 +460,7 @@ async fn subscribe_options_recheck_remote_show_values_after_lock_wait() {
     let suffix = Uuid::new_v4().simple().to_string();
     let owner = format!("show-owner-{suffix}@example.test");
     let subscriber = format!("show-reader-{suffix}@remote.test/phone");
-    let requester = crate::jid::canonical_bare_key(&subscriber).unwrap();
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap();
     let node = create_default_test_node(&pool, &format!("show-{suffix}"), &owner).await;
     sqlx::query("UPDATE pubsub_nodes SET notify_sub=true WHERE id=$1")
         .bind(node.id)

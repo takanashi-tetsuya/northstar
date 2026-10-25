@@ -440,12 +440,12 @@ pub(crate) fn validate_message_admission_request(
         "message admission actor must not be nil"
     );
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(request.account_bare)
+        northstar_xmpp_types::jid::canonical_bare_key(request.account_bare)
             .is_ok_and(|value| value == request.account_bare),
         "message admission account must be a canonical bare JID"
     );
     anyhow::ensure!(
-        crate::jid::canonicalize(request.normalized_target)
+        northstar_xmpp_types::jid::canonicalize(request.normalized_target)
             .is_ok_and(|value| value == request.normalized_target),
         "message admission target must already be canonical"
     );

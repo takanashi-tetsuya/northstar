@@ -84,7 +84,7 @@ fn invalid(table: &str, row: &str, value: &str, error: anyhow::Error) -> anyhow:
 }
 
 fn canonical_user_bare(table: &str, row: &str, value: &str) -> Result<String> {
-    let jid = crate::jid::CanonicalJid::parse_bare(value)
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)
         .map_err(|error| invalid(table, row, value, error))?;
     anyhow::ensure!(
         jid.localpart().is_some(),
@@ -94,11 +94,13 @@ fn canonical_user_bare(table: &str, row: &str, value: &str) -> Result<String> {
 }
 
 fn canonical_bare(table: &str, row: &str, value: &str) -> Result<String> {
-    crate::jid::canonicalize_bare(value).map_err(|error| invalid(table, row, value, error))
+    northstar_xmpp_types::jid::canonicalize_bare(value)
+        .map_err(|error| invalid(table, row, value, error))
 }
 
 fn canonical_full(table: &str, row: &str, value: &str) -> Result<String> {
-    crate::jid::canonical_session_key(value).map_err(|error| invalid(table, row, value, error))
+    northstar_xmpp_types::jid::canonical_session_key(value)
+        .map_err(|error| invalid(table, row, value, error))
 }
 
 fn ensure_no_collisions(table: &str, rows: &[ScopedJid]) -> Result<()> {
@@ -244,17 +246,19 @@ async fn load_channels(transaction: &mut Transaction<'_, Postgres>) -> Result<Ve
         let localpart: String = row.get("localpart");
         let creator: String = row.get("creator_jid");
         let contacts: Value = row.get("contacts");
-        let canonical_domain = crate::jid::prepare_domainpart(&domain).map_err(|error| {
-            invalid(
-                "mix_channels.service_domain",
-                &id.to_string(),
-                &domain,
-                error,
-            )
-        })?;
-        let canonical_localpart = crate::jid::prepare_localpart(&localpart).map_err(|error| {
-            invalid("mix_channels.localpart", &id.to_string(), &localpart, error)
-        })?;
+        let canonical_domain =
+            northstar_xmpp_types::jid::prepare_domainpart(&domain).map_err(|error| {
+                invalid(
+                    "mix_channels.service_domain",
+                    &id.to_string(),
+                    &domain,
+                    error,
+                )
+            })?;
+        let canonical_localpart = northstar_xmpp_types::jid::prepare_localpart(&localpart)
+            .map_err(|error| {
+                invalid("mix_channels.localpart", &id.to_string(), &localpart, error)
+            })?;
         if let Some(previous) =
             channel_keys.insert((canonical_domain.clone(), canonical_localpart.clone()), id)
         {
@@ -558,9 +562,10 @@ async fn load_registered_nicks(
         let jid: String = row.get("jid");
         let nick: String = row.get("nick");
         let key = format!("{domain}/{jid}");
-        let canonical_domain = crate::jid::prepare_domainpart(&domain).map_err(|error| {
-            invalid("mix_registered_nicks.service_domain", &key, &domain, error)
-        })?;
+        let canonical_domain =
+            northstar_xmpp_types::jid::prepare_domainpart(&domain).map_err(|error| {
+                invalid("mix_registered_nicks.service_domain", &key, &domain, error)
+            })?;
         let canonical_jid = canonical_user_bare("mix_registered_nicks.jid", &key, &jid)?;
         Ok(RegisteredNickRow {
             domain,
@@ -997,8 +1002,9 @@ mod tests {
         .unwrap();
 
         canonicalize_mix_identity_storage(&pool).await.unwrap();
-        let canonical_domain = crate::jid::prepare_domainpart(legacy_domain).unwrap();
-        let canonical_actor = crate::jid::canonicalize_bare(legacy_actor).unwrap();
+        let canonical_domain =
+            northstar_xmpp_types::jid::prepare_domainpart(legacy_domain).unwrap();
+        let canonical_actor = northstar_xmpp_types::jid::canonicalize_bare(legacy_actor).unwrap();
         let channel: (String, String, Value) = sqlx::query_as(
             "SELECT service_domain,creator_jid,contacts FROM mix_channels WHERE id=$1",
         )

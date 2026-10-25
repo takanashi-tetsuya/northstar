@@ -1,11 +1,9 @@
-use crate::{
-    jid::prepare_domainpart,
-    security::{
-        dane::{DaneMatch, DanePolicy},
-        tls::TlsContext,
-    },
+use crate::security::{
+    dane::{DaneMatch, DanePolicy},
+    tls::TlsContext,
 };
 use anyhow::{Context, Result};
+use northstar_xmpp_types::jid::prepare_domainpart;
 use sha2::{Digest, Sha256};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;

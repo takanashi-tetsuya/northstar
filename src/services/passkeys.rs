@@ -301,7 +301,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
                 actor.id,
                 actor.auth_generation,
                 "register",
-                Some(&crate::auth::token_hash(actor.session_token)),
+                Some(&northstar_auth_core::token_hash(actor.session_token)),
                 &stored,
             )
             .await?
@@ -319,7 +319,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
         credential: RegisterPublicKeyCredential,
     ) -> Result<Uuid, PasskeyError> {
         let party = self.party()?;
-        let session = crate::auth::token_hash(actor.session_token);
+        let session = northstar_auth_core::token_hash(actor.session_token);
         let challenge = self
             .repository
             .consume(challenge_id, "register", Some(&session))

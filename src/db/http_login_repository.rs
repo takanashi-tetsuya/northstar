@@ -1,7 +1,7 @@
 //! Durable REST login: idempotency, abuse admission, verifier work, and
 //! session publication. Password work occurs outside SQL transactions.
 use crate::{
-    auth, db,
+    db,
     services::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{json_replay_headers, StoredApiResponse},
@@ -12,6 +12,7 @@ use crate::{
     },
 };
 use anyhow::{anyhow, Result};
+use northstar_auth_core as auth;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::{collections::BTreeMap, sync::Arc};

@@ -29,7 +29,7 @@ pub(super) fn parse_external_service(value: &str) -> Result<(String, u16)> {
     let host = if let Ok(address) = host.parse::<IpAddr>() {
         address.to_string()
     } else {
-        crate::jid::prepare_domainpart(host)
+        northstar_xmpp_types::jid::prepare_domainpart(host)
             .context("service host is not a valid IP or IDNA domain")?
     };
     Ok((host, port))

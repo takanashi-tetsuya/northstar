@@ -207,7 +207,7 @@ mod tests {
         // The HTTP identity lookup has already succeeded. Revocation before the
         // repository read must still prevent either projection from escaping.
         sqlx::query("DELETE FROM api_sessions WHERE token_hash=$1")
-            .bind(crate::auth::token_hash(&token))
+            .bind(northstar_auth_core::token_hash(&token))
             .execute(&pool)
             .await
             .unwrap();

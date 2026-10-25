@@ -30,7 +30,7 @@ pub async fn create_node_with_renderer(
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<CreateNodeOutcome> {
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
-    let creator_jid = crate::jid::canonical_bare_key(creator_jid)?;
+    let creator_jid = northstar_xmpp_types::jid::canonical_bare_key(creator_jid)?;
     let association_whitelist = canonical_bare_jids(&config.children_association_whitelist)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(&creator_jid)
@@ -287,7 +287,7 @@ pub async fn owner_read(
     requester: &str,
     kind: PubSubOwnerReadKind,
 ) -> Result<PubSubOwnerRead> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *transaction)
@@ -413,7 +413,7 @@ pub async fn update_node_config_and_graph_with_outbox(
     config: &PubSubNodeConfig,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<PubSubConfigOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let association_whitelist = canonical_bare_jids(&config.children_association_whitelist)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
@@ -848,7 +848,7 @@ pub async fn purge_node_as_owner_with_outbox(
     requester: &str,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<OwnerMutationOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
         .execute(&mut *transaction)
@@ -972,7 +972,7 @@ pub async fn delete_node_as_owner_with_redirect_and_outbox(
     redirect: Option<&str>,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<OwnerMutationOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
         .execute(&mut *transaction)

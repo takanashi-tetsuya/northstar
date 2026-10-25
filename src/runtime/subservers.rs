@@ -177,8 +177,8 @@ pub(crate) async fn claim_maintenance_on_connection(
 pub(crate) async fn run_maintenance() -> Result<()> {
     let mut config: MaintenanceConfig =
         envy::from_env().context("invalid maintenance configuration")?;
-    config.xmpp_domain =
-        crate::jid::prepare_domainpart(config.xmpp_domain.trim()).context("invalid XMPP_DOMAIN")?;
+    config.xmpp_domain = northstar_xmpp_types::jid::prepare_domainpart(config.xmpp_domain.trim())
+        .context("invalid XMPP_DOMAIN")?;
     config.validate()?;
     anyhow::ensure!(
         config.database_url.is_empty() || config.database_url_file.is_none(),

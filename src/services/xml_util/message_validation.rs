@@ -43,7 +43,8 @@ pub(super) fn validate_sticker(root: Node<'_, '_>) -> Result<(), &'static str> {
     if jid.is_some() != node.is_some() || (jid.is_some() && pack.is_none()) {
         return Err("bad-request");
     }
-    if jid.is_some_and(|value| crate::jid::CanonicalJid::parse_bare(value).is_err()) {
+    if jid.is_some_and(|value| northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_err())
+    {
         return Err("jid-malformed");
     }
 
@@ -138,7 +139,8 @@ pub(super) fn validate_trust_message(root: Node<'_, '_>) -> Result<(), &'static 
             .attribute("jid")
             .ok_or("bad-request")
             .and_then(|value| {
-                crate::jid::CanonicalJid::parse_bare(value).map_err(|_| "jid-malformed")
+                northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)
+                    .map_err(|_| "jid-malformed")
             })?;
         if !owner_jids.insert(owner_jid.to_string()) {
             return Err("bad-request");
@@ -301,7 +303,8 @@ pub(super) fn validate_omemo2_envelope(root: Node<'_, '_>) -> Result<(), &'stati
             .attribute("jid")
             .ok_or("bad-request")
             .and_then(|jid| {
-                crate::jid::CanonicalJid::parse_bare(jid).map_err(|_| "jid-malformed")
+                northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid)
+                    .map_err(|_| "jid-malformed")
             })?;
         if recipient.localpart().is_none() || !recipient_jids.insert(recipient.to_string()) {
             return Err("bad-request");
@@ -616,7 +619,7 @@ pub(super) fn validate_reply(root: Node<'_, '_>) -> Result<(), &'static str> {
     if let Some(reply) = northstar_xep_0461::parse_message(root).map_err(|_| "bad-request")? {
         // Canonical JID parsing is a server identity policy, deliberately kept
         // outside the capability-free wire crate.
-        if crate::jid::CanonicalJid::parse(reply.to()).is_err() {
+        if northstar_xmpp_types::jid::CanonicalJid::parse(reply.to()).is_err() {
             return Err("bad-request");
         }
     }

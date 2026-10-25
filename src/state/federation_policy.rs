@@ -51,19 +51,23 @@ pub(super) struct RuntimeFederationPolicy {
 impl RuntimeFederationPolicy {
     pub(super) fn allows_domain(&self, domain: &str) -> bool {
         let domain_denied = self.blacklist.iter().any(|entry| {
-            crate::jid::CanonicalJid::parse(entry)
+            northstar_xmpp_types::jid::CanonicalJid::parse(entry)
                 .is_ok_and(|jid| jid.localpart().is_none() && jid.domainpart() == domain)
         });
         let domain_admitted = self.whitelist.is_empty()
             || self.whitelist.iter().any(|entry| {
-                crate::jid::CanonicalJid::parse(entry).is_ok_and(|jid| jid.domainpart() == domain)
+                northstar_xmpp_types::jid::CanonicalJid::parse(entry)
+                    .is_ok_and(|jid| jid.domainpart() == domain)
             });
         !domain_denied && domain_admitted
     }
 }
 
-pub(super) fn federation_rule_matches(rule: &str, entity: &crate::jid::CanonicalJid) -> bool {
-    crate::jid::CanonicalJid::parse(rule).is_ok_and(|rule| {
+pub(super) fn federation_rule_matches(
+    rule: &str,
+    entity: &northstar_xmpp_types::jid::CanonicalJid,
+) -> bool {
+    northstar_xmpp_types::jid::CanonicalJid::parse(rule).is_ok_and(|rule| {
         if rule.domainpart() != entity.domainpart() {
             false
         } else if rule.localpart().is_none() {
@@ -87,7 +91,7 @@ pub(super) fn service_control_applies(
 
 impl AppState {
     pub fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
         let policy = self.federation_runtime_policy.load();
@@ -98,7 +102,7 @@ impl AppState {
     /// domain rule matches the whole domain, a bare JID matches all of its
     /// resources, and a full JID matches exactly one resource.
     pub fn federation_entity_allowed(&self, entity: &str) -> bool {
-        let Ok(entity) = crate::jid::CanonicalJid::parse(entity) else {
+        let Ok(entity) = northstar_xmpp_types::jid::CanonicalJid::parse(entity) else {
             return false;
         };
         if !self.config.federation_domain_allowed(entity.domainpart()) {

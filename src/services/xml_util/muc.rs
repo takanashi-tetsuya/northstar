@@ -21,8 +21,8 @@ pub(crate) fn prepare_muc_nick(value: &str) -> anyhow::Result<String> {
 
 pub(crate) fn muc_occupant_key(room_jid: &str, nick: &str) -> String {
     northstar_xep_0045::occupant_key(room_jid, nick).unwrap_or_else(|_| {
-        let room_jid =
-            crate::jid::canonicalize_bare(room_jid).unwrap_or_else(|_| room_jid.to_owned());
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid)
+            .unwrap_or_else(|_| room_jid.to_owned());
         let nick = prepare_muc_nick(nick).unwrap_or_else(|_| nick.to_owned());
         format!("{room_jid}/{nick}")
     })
@@ -206,7 +206,7 @@ pub(crate) fn muc_destroy_presence(
 pub(crate) fn muc_occupant_id(room_secret: &[u8], user_bare_jid: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(room_secret)
         .expect("HMAC accepts XEP-0421 room secrets of any length");
-    let user_bare_jid = crate::jid::canonical_bare_key(user_bare_jid)
+    let user_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(user_bare_jid)
         .unwrap_or_else(|_| bare_jid(user_bare_jid).to_owned());
     mac.update(user_bare_jid.as_bytes());
     mac.finalize()

@@ -9,10 +9,12 @@ use crate::db::pie::model::{
     ArchiveItem, ConflictPolicy, OfflineMessage, PendingPresence, PepItem, PepNode,
     PepSubscription, PieUser, PreparedUser, PrivateXml, RosterItem, ScramCredential,
 };
-use crate::{auth, db, jid, platform::config::Config};
+use crate::{db, platform::config::Config};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
+use northstar_auth_core as auth;
+use northstar_xmpp_types::jid;
 use roxmltree::{Document, Node};
 use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};

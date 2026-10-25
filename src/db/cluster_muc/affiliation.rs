@@ -145,7 +145,7 @@ async fn mutate_cluster_muc_affiliation_in_tx(
         reason.is_none_or(|value| value.len() <= 4096),
         "invite reason is oversized"
     );
-    let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
         muc_principal_owns_address(&actor_full_jid, actor)?,
         "MUC affiliation actor does not own the authenticated full JID"

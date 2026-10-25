@@ -700,7 +700,7 @@ impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
                 "whitelist" => {
                     let whitelist: Vec<String> = policy.try_get("access_whitelist")?;
                     whitelist.iter().any(|jid| {
-                        crate::jid::canonical_bare_key(jid)
+                        northstar_xmpp_types::jid::canonical_bare_key(jid)
                             .is_ok_and(|jid| jid == principal.subscriber_bare)
                     })
                 }
@@ -930,7 +930,7 @@ impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
             let mut canonical = Vec::with_capacity(changes.len());
             let mut unique = HashSet::new();
             for (jid, requested_subid) in changes {
-                let jid = crate::jid::canonicalize(jid)?;
+                let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
                 if !unique.insert((jid.clone(), requested_subid.clone())) {
                     transaction.rollback().await?;
                     return Ok(PepOwnerMutationOutcome::NotSubscribed);
@@ -1040,7 +1040,7 @@ impl PepAffiliationRepository for PostgresPubSubRepository {
             let mut transitions = Vec::with_capacity(changes.len());
             let mut seen = HashSet::new();
             for (jid, affiliation) in changes {
-                let jid = crate::jid::canonicalize_bare(jid)?;
+                let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
                 if jid == owner_bare_jid
                     || !matches!(affiliation.as_str(), "member" | "none")
                     || !seen.insert(jid.clone())

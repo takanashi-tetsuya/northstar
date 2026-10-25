@@ -104,7 +104,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                 lease_token,
             } => {
                 anyhow::ensure!(
-                    crate::jid::CanonicalJid::parse(target_jid)?
+                    northstar_xmpp_types::jid::CanonicalJid::parse(target_jid)?
                         .resourcepart()
                         .is_none(),
                     "durable cluster MIX delivery requires a bare target"
@@ -120,8 +120,8 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                     "cluster durable MIX delivery source is no longer active"
                 );
                 anyhow::ensure!(
-                    crate::jid::canonicalize_bare(&projection.recipient_jid)?
-                        == crate::jid::canonicalize_bare(target_jid)?,
+                    northstar_xmpp_types::jid::canonicalize_bare(&projection.recipient_jid)?
+                        == northstar_xmpp_types::jid::canonicalize_bare(target_jid)?,
                     "cluster durable MIX recipient does not match the target"
                 );
                 anyhow::ensure!(

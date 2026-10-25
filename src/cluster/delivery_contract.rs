@@ -481,7 +481,7 @@ pub(super) fn outbound_delivery_contract(
     }
     if let Some(delivery) = mix_delivery {
         anyhow::ensure!(
-            crate::jid::CanonicalJid::parse(target_jid)?
+            northstar_xmpp_types::jid::CanonicalJid::parse(target_jid)?
                 .resourcepart()
                 .is_none(),
             "durable cluster MIX delivery requires a bare target"
@@ -580,12 +580,12 @@ pub(super) fn validated_delivery_ack(
     let accepted_full_jid = ack
         .accepted_full_jid
         .as_deref()
-        .map(crate::jid::canonical_session_key)
+        .map(northstar_xmpp_types::jid::canonical_session_key)
         .transpose()
         .ok()?;
     if let Some(accepted) = accepted_full_jid.as_deref() {
-        let target = crate::jid::CanonicalJid::parse(expected.target_jid).ok()?;
-        let accepted_jid = crate::jid::CanonicalJid::parse(accepted).ok()?;
+        let target = northstar_xmpp_types::jid::CanonicalJid::parse(expected.target_jid).ok()?;
+        let accepted_jid = northstar_xmpp_types::jid::CanonicalJid::parse(accepted).ok()?;
         if accepted_jid.resourcepart().is_none()
             || (target.resourcepart().is_some() && accepted != target.to_string())
             || (target.resourcepart().is_none() && accepted_jid.bare() != target.bare())
@@ -608,8 +608,8 @@ pub(super) fn validated_delivery_ack(
 }
 
 pub(super) fn session_route_keys(full_jid: &str) -> Result<(String, String)> {
-    let full = crate::jid::canonical_session_key(full_jid)?;
-    let bare = crate::jid::canonical_bare_key(&full)?;
+    let full = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
+    let bare = northstar_xmpp_types::jid::canonical_bare_key(&full)?;
     Ok((full, bare))
 }
 
@@ -617,7 +617,7 @@ pub(super) fn node_delivery_stanza(stanza: &str, carbons_only: bool, session_key
     if !carbons_only {
         return stanza.to_owned();
     }
-    let Ok(exact_full_jid) = crate::jid::canonical_session_key(session_key) else {
+    let Ok(exact_full_jid) = northstar_xmpp_types::jid::canonical_session_key(session_key) else {
         return stanza.to_owned();
     };
     crate::services::xml_util::set_to(stanza, &exact_full_jid)

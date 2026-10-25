@@ -17,7 +17,7 @@ pub(super) fn muc_sender_is_blocked(
         .into_iter()
         .flatten()
         .filter(|sender| {
-            crate::jid::canonical_bare_key(sender)
+            northstar_xmpp_types::jid::canonical_bare_key(sender)
                 .is_ok_and(|sender_bare| sender_bare != owner_bare)
         })
         .any(|sender| {
@@ -74,7 +74,7 @@ impl ProtocolSession {
                 "jid-malformed",
             )));
         };
-        let Ok(to_jid) = crate::jid::CanonicalJid::parse(to) else {
+        let Ok(to_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
             return Ok(Action::Send(muc_stanza_error(
                 root,
                 &full_jid,

@@ -148,7 +148,7 @@ async fn authorize_recovery_mutation(
     )
     .bind(user_id)
     .bind(expected_auth_generation)
-    .bind(crate::auth::token_hash(presented_session))
+    .bind(northstar_auth_core::token_hash(presented_session))
     .fetch_optional(&mut **tx)
     .await?
     .is_some())
@@ -535,7 +535,7 @@ pub async fn consume_omemo_recovery_transfer(
         sqlx::query_scalar("SELECT northstar_user_consume_recovery_generation($1,$2,$3)")
             .bind(user_id)
             .bind(expected_auth_generation)
-            .bind(crate::auth::token_hash(presented_session))
+            .bind(northstar_auth_core::token_hash(presented_session))
             .fetch_one(&mut *tx)
             .await?;
     let consumed_auth_generation = consumed_auth_generation

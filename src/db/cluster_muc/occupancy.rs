@@ -26,7 +26,7 @@ pub async fn claim_cluster_muc_occupancy(
         request.presence_payload.len() <= MAX_PAYLOAD_BYTES,
         "MUC presence payload is oversized"
     );
-    let full_jid = crate::jid::canonicalize(request.full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonicalize(request.full_jid)?;
     anyhow::ensure!(
         full_jid == request.full_jid,
         "MUC full JID must be canonical"
@@ -465,7 +465,7 @@ pub async fn suspended_cluster_muc_occupancy(
     full_jid: &str,
     nick: &str,
 ) -> Result<Option<ClusterMucOccupancy>> {
-    let full_jid = crate::jid::canonicalize(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonicalize(full_jid)?;
     validate_nick(nick)?;
     let row = sqlx::query(
         "SELECT * FROM cluster_muc_occupancies
@@ -541,8 +541,8 @@ pub async fn rebind_federated_cluster_muc_occupancy(
     new_connection_uuid: Uuid,
     lease: Duration,
 ) -> Result<ClusterMucTransitionOutcome> {
-    let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
-    let actor = crate::jid::CanonicalJid::parse(&target.full_jid)?;
+    let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(&target.full_jid)?;
     anyhow::ensure!(
         actor.domainpart() == authenticated_domain,
         "federated MUC rebind requires the authenticated actor domain"

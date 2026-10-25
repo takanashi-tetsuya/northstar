@@ -1,6 +1,6 @@
-use crate::auth;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_auth_core as auth;
 use rand::RngCore;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;

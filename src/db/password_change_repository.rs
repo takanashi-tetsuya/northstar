@@ -255,7 +255,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
                     return Ok(Outcome::LeaseLost);
                 }
                 tracing::error!(
-                    integrity_failure = crate::auth::is_password_verifier_integrity_error(&error),
+                    integrity_failure = northstar_auth_core::is_password_verifier_integrity_error(&error),
                     ?error,
                     user_id = %user.id,
                     "password-change verifier backend failed"
@@ -434,7 +434,7 @@ mod tests {
             "password-before-change",
             false,
             true,
-            crate::auth::MIN_SCRAM_ITERATIONS,
+            northstar_auth_core::MIN_SCRAM_ITERATIONS,
             false,
         )
         .await
@@ -459,7 +459,7 @@ mod tests {
         ));
         let service = PasswordChangeService::new(
             PostgresPasswordChangeRepository::new(pool.clone(), keyring, guard),
-            crate::auth::MIN_SCRAM_ITERATIONS,
+            northstar_auth_core::MIN_SCRAM_ITERATIONS,
             false,
         );
         let key = format!("password-{suffix}");

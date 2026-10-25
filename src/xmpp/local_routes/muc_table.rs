@@ -17,7 +17,7 @@ pub(crate) fn remove_local_muc_occupant_exact_from(
     if identity.connection_id.is_nil() || identity.cluster_epoch.is_nil() {
         return None;
     }
-    let room_jid = crate::jid::canonicalize_bare(identity.room_jid).ok()?;
+    let room_jid = northstar_xmpp_types::jid::canonicalize_bare(identity.room_jid).ok()?;
     let key = crate::services::xml_util::muc_occupant_key(&room_jid, identity.nick);
     occupants
         .remove_if(&key, |_, current| {
@@ -40,7 +40,7 @@ pub(crate) fn with_local_muc_occupant_exact<R>(
     if identity.connection_id.is_nil() || identity.cluster_epoch.is_nil() {
         return None;
     }
-    let room_jid = crate::jid::canonicalize_bare(identity.room_jid).ok()?;
+    let room_jid = northstar_xmpp_types::jid::canonicalize_bare(identity.room_jid).ok()?;
     let key = crate::services::xml_util::muc_occupant_key(&room_jid, identity.nick);
     let mut occupant = occupants.get_mut(&key)?;
     if occupant.room_jid != room_jid
@@ -205,7 +205,8 @@ pub(crate) fn publish_local_muc_join_if_vacant_in(
     occupants: &DashMap<String, MucOccupant>,
     joining: &MucOccupant,
 ) -> LocalMucJoinPublication {
-    let Some(room_jid) = crate::jid::canonicalize_bare(&joining.room_jid).ok() else {
+    let Some(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(&joining.room_jid).ok()
+    else {
         return LocalMucJoinPublication::Occupied;
     };
     if joining.connection_id.is_nil() || joining.cluster_epoch.is_nil() {
@@ -239,7 +240,7 @@ pub(crate) fn move_local_muc_nickname_exact_in(
     renamed: &MucOccupant,
     cluster_committed: bool,
 ) -> LocalMucNicknameMove {
-    let Some(room_jid) = crate::jid::canonicalize_bare(old.room_jid).ok() else {
+    let Some(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(old.room_jid).ok() else {
         return LocalMucNicknameMove::OldMissing;
     };
     if old.nick == renamed.nick
@@ -299,7 +300,7 @@ pub(crate) fn remove_live_muc_membership_in(
     sessions: &DashMap<String, OnlineSession>,
     occupant: &SerializableMucOccupant,
 ) -> bool {
-    let Ok(full_jid) = crate::jid::canonical_session_key(&occupant.full_jid) else {
+    let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&occupant.full_jid) else {
         return false;
     };
     let Some(session) = sessions.get(&full_jid) else {

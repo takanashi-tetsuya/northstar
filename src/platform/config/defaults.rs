@@ -26,7 +26,7 @@ pub(super) fn default_db_min_connections() -> u32 {
     2
 }
 pub(super) fn default_scram_iterations() -> u32 {
-    crate::auth::DEFAULT_SCRAM_ITERATIONS
+    northstar_auth_core::DEFAULT_SCRAM_ITERATIONS
 }
 pub(super) fn default_fast_token_ttl() -> i64 {
     30

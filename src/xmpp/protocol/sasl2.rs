@@ -1,7 +1,7 @@
-use crate::auth;
 use crate::services::xml_util::valid_language_tag;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
+use northstar_auth_core as auth;
 use roxmltree::{Document, Node};
 use uuid::{Uuid, Variant};
 use zeroize::Zeroizing;
@@ -407,13 +407,15 @@ impl ProtocolSession {
         }
         let bind_plan = if let Some(bind) = context.request.bind.clone() {
             let tag = match bind.tag.as_deref() {
-                Some(tag) if !tag.is_empty() => match crate::jid::prepare_resourcepart(tag) {
-                    Ok(tag) => Some(tag),
-                    Err(_) => {
-                        self.user_agent_id = None;
-                        return Ok(Action::Send(failure_xml("malformed-request", None)));
+                Some(tag) if !tag.is_empty() => {
+                    match northstar_xmpp_types::jid::prepare_resourcepart(tag) {
+                        Ok(tag) => Some(tag),
+                        Err(_) => {
+                            self.user_agent_id = None;
+                            return Ok(Action::Send(failure_xml("malformed-request", None)));
+                        }
                     }
-                },
+                }
                 _ => None,
             };
             let generated = Uuid::new_v4().simple().to_string();

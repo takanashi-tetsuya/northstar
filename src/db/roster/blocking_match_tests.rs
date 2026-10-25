@@ -55,7 +55,7 @@ fn blocking_preserves_opaque_resource_case() {
         "someone@example.test/\u{0007}"
     ));
     let candidates = blocking_match_candidates(
-        &crate::jid::CanonicalJid::parse("Alice@Example.test/Phone").unwrap(),
+        &northstar_xmpp_types::jid::CanonicalJid::parse("Alice@Example.test/Phone").unwrap(),
     );
     assert_eq!(
         candidates,

@@ -90,7 +90,7 @@ impl RouteMap {
     ) -> Result<(RouteHandle, mpsc::Receiver<OutboundItem>)> {
         ensure!((1..=2).contains(&capacity), "route queue cap");
         ensure!(self.0.sessions.len() < 2, "route count cap");
-        let key = crate::jid::canonical_session_key(input.full_jid.as_str())?;
+        let key = northstar_xmpp_types::jid::canonical_session_key(input.full_jid.as_str())?;
         ensure!(key == input.full_jid.as_str(), "noncanonical route key");
         ensure!(
             !self.0.sessions.contains_key(&key),

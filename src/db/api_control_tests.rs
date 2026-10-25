@@ -1247,14 +1247,14 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
          (id,token_hash,label,max_uses) VALUES($1,$2,'idempotency-test',1)",
     )
     .bind(invitation_id)
-    .bind(crate::auth::token_hash(&invitation))
+    .bind(northstar_auth_core::token_hash(&invitation))
     .execute(&pool)
     .await
     .unwrap();
     let prepared_a = crate::db::prepare_registration(
         &username,
         password,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -1262,7 +1262,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     let prepared_b = crate::db::prepare_registration(
         &username,
         password,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -1378,7 +1378,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         &pool,
         &username,
         password,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -1388,7 +1388,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         &pool,
         &username,
         password,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -1564,7 +1564,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     let race_prepared = crate::db::prepare_registration(
         &race_name,
         "registration-toggle-race-password",
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -1651,7 +1651,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     let blocked = crate::db::prepare_registration(
         &blocked_name,
         "closed-registration-password",
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
         false,
     )
     .await
@@ -1711,7 +1711,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         None,
         false,
         100,
-        crate::auth::MIN_SCRAM_ITERATIONS,
+        northstar_auth_core::MIN_SCRAM_ITERATIONS,
     )
     .await;
     assert!(matches!(
@@ -1778,7 +1778,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
     // Its replay lifetime is capped by PostgreSQL's resource expiry and
     // every replay revalidates revocation and remaining uses.
     let invitation_id = Uuid::new_v4();
-    let invitation_token = crate::auth::new_session_token();
+    let invitation_token = northstar_auth_core::new_session_token();
     let invitation_body = serde_json::to_vec(&serde_json::json!({
         "id": invitation_id,
         "token": invitation_token,

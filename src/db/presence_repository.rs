@@ -236,9 +236,9 @@ impl PresenceRepository for PostgresPresenceRepository {
         recipient_id: Uuid,
         recipient_auth_generation: i64,
     ) -> Result<bool> {
-        let domain = crate::jid::prepare_domainpart(local_domain)?;
-        let owner = crate::jid::CanonicalJid::parse(owner_jid)?;
-        let recipient = crate::jid::CanonicalJid::parse(recipient_jid)?;
+        let domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+        let owner = northstar_xmpp_types::jid::CanonicalJid::parse(owner_jid)?;
+        let recipient = northstar_xmpp_types::jid::CanonicalJid::parse(recipient_jid)?;
         if owner.domainpart() != domain || recipient.domainpart() != domain {
             return Ok(false);
         }

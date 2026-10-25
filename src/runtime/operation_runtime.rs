@@ -264,7 +264,7 @@ async fn execute_admin_session_cleanup(
                 .bare_jid
                 .as_deref()
                 .context("generation cleanup has no bare JID")?;
-            let bare_jid = crate::jid::CanonicalJid::parse_bare(bare_jid)
+            let bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(bare_jid)
                 .context("generation cleanup has an invalid bare JID")?;
             anyhow::ensure!(
                 bare_jid.localpart().is_some() && bare_jid.domainpart() == context.local_domain(),
@@ -290,7 +290,7 @@ async fn execute_admin_session_cleanup(
                 .full_jid
                 .as_deref()
                 .context("exact cleanup has no full JID")?;
-            let full_jid = crate::jid::CanonicalJid::parse(full_jid)
+            let full_jid = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)
                 .context("exact cleanup has an invalid full JID")?;
             anyhow::ensure!(
                 full_jid.localpart().is_some()

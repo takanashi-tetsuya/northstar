@@ -41,7 +41,6 @@ pub(crate) type SecureS2sConnection = (
 );
 
 use crate::{
-    jid::{prepare_domainpart, CanonicalJid},
     state::{
         s2s_outbox_dispatch::{S2sOutboxDispatchContext, S2sOutboxFailureEffects},
         AppState,
@@ -49,6 +48,7 @@ use crate::{
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
+use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{

@@ -211,7 +211,7 @@ impl ClusterMaintenanceRedis {
         anyhow::ensure!(
             !incoming.cluster_epoch.is_nil()
                 && !incoming.connection_id.is_nil()
-                && incoming.room_jid == crate::jid::canonicalize_bare(room_jid)?
+                && incoming.room_jid == northstar_xmpp_types::jid::canonicalize_bare(room_jid)?
                 && incoming.nick == crate::services::xml_util::prepare_muc_nick(nick)?,
             "MUC refresh requires the exact non-nil occupancy identity"
         );
@@ -219,7 +219,7 @@ impl ClusterMaintenanceRedis {
             return Ok(true);
         };
         let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.process_instance_token()?;
         let occupants_key = self.key(format!("muc_occupants:{room}"));
@@ -301,7 +301,7 @@ impl ClusterMaintenanceRedis {
         };
         self.touch_node().await?;
         let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let key = self.key(format!("muc_nodes:{room}"));
         let script = redis::Script::new(
             r#"
@@ -436,7 +436,7 @@ pub(super) async fn reconcile_muc_soft_state_in(
         return Ok(());
     };
     let key = |suffix: String| format!("{key_prefix}:{suffix}");
-    let room = crate::jid::canonicalize_bare(room_jid)?;
+    let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
     let occupants_key = key(format!("muc_occupants:{room}"));
     let owners_key = key(format!("muc_occupant_nodes:{room}"));
     let nodes_key = key(format!("muc_nodes:{room}"));
@@ -559,7 +559,7 @@ pub(super) async fn leave_muc_node_projection(
         return Ok(());
     };
     let mut conn = pool.get().await?;
-    let room = crate::jid::canonicalize_bare(room_jid)?;
+    let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
     let key = |suffix: &str| format!("{key_prefix}:{suffix}");
     let owners_key = key(&format!("muc_occupant_nodes:{room}"));
     let nodes_key = key(&format!("muc_nodes:{room}"));

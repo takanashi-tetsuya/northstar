@@ -144,7 +144,10 @@ impl ProtocolSession {
         if matches!(primary.tag_name().name(), "publish" | "retract" | "create")
             && iq.attribute("to").is_some_and(|to| {
                 !canonical_account_jid(&user.username, self.state.local_domain()).is_ok_and(
-                    |owner| crate::jid::canonicalize_bare(to).is_ok_and(|target| target == owner),
+                    |owner| {
+                        northstar_xmpp_types::jid::canonicalize_bare(to)
+                            .is_ok_and(|target| target == owner)
+                    },
                 )
             })
         {

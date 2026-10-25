@@ -20,7 +20,7 @@ pub async fn remove_live_sm_muc_memberships(
     let mut canonical = Vec::with_capacity(memberships.len());
     let mut rooms = std::collections::BTreeSet::new();
     for membership in memberships {
-        let room_jid = crate::jid::canonicalize_bare(&membership.room_jid)?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid)?;
         let nick = crate::services::xml_util::prepare_muc_nick(&membership.nick)?;
         anyhow::ensure!(
             rooms.insert((room_jid.clone(), nick.clone())),
@@ -632,16 +632,15 @@ pub(super) fn validate_snapshot(
         anyhow::bail!("SM MUC membership snapshot is too large");
     }
     if snapshot.joined_rooms.iter().any(|membership| {
-        crate::jid::CanonicalJid::parse_bare(&membership.room_jid).is_err()
+        northstar_xmpp_types::jid::CanonicalJid::parse_bare(&membership.room_jid).is_err()
             || crate::services::xml_util::prepare_muc_nick(&membership.nick).is_err()
     }) {
         anyhow::bail!("SM MUC membership snapshot is invalid");
     }
     if snapshot.directed_presence.len() > 1_024
-        || snapshot
-            .directed_presence
-            .iter()
-            .any(|jid| jid.len() > 3_071 || crate::jid::CanonicalJid::parse(jid).is_err())
+        || snapshot.directed_presence.iter().any(|jid| {
+            jid.len() > 3_071 || northstar_xmpp_types::jid::CanonicalJid::parse(jid).is_err()
+        })
     {
         anyhow::bail!("SM directed-presence snapshot is invalid or too large");
     }
@@ -661,9 +660,9 @@ pub(super) fn canonical_snapshot_identities(
     let mut rooms = std::collections::BTreeSet::new();
     let mut joined_rooms = Vec::with_capacity(snapshot.joined_rooms.len());
     for membership in &snapshot.joined_rooms {
-        let room_jid = crate::jid::canonicalize_bare(&membership.room_jid)?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid)?;
         anyhow::ensure!(
-            crate::jid::CanonicalJid::parse_bare(&room_jid)?
+            northstar_xmpp_types::jid::CanonicalJid::parse_bare(&room_jid)?
                 .localpart()
                 .is_some(),
             "SM MUC room must contain a localpart"
@@ -680,7 +679,7 @@ pub(super) fn canonical_snapshot_identities(
     let mut directed_keys = std::collections::BTreeSet::new();
     let mut directed_presence = Vec::with_capacity(snapshot.directed_presence.len());
     for target in &snapshot.directed_presence {
-        let target = crate::jid::canonicalize(target)?;
+        let target = northstar_xmpp_types::jid::canonicalize(target)?;
         anyhow::ensure!(
             directed_keys.insert(target.clone()),
             "duplicate canonical SM directed-presence target"

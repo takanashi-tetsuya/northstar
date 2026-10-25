@@ -325,7 +325,7 @@ pub(crate) enum SessionLookup {
 }
 
 pub(crate) fn session_lookup(jid: &str) -> Option<SessionLookup> {
-    let jid = crate::jid::CanonicalJid::parse(jid).ok()?;
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok()?;
     Some(if jid.resourcepart().is_some() {
         SessionLookup::Full(jid.to_string())
     } else {

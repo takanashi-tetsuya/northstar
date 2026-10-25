@@ -144,7 +144,7 @@ async fn mutate_admin_accounts_authorized_inner(
 ) -> Result<AdminBatchAccountWriteOutcome> {
     anyhow::ensure!(!targets.is_empty(), "account mutation target list is empty");
     anyhow::ensure!(targets.len() <= 200, "too many account mutation targets");
-    let domain = crate::jid::prepare_domainpart(domain)?;
+    let domain = northstar_xmpp_types::jid::prepare_domainpart(domain)?;
     let mut target_ids = targets.iter().map(|target| target.id).collect::<Vec<_>>();
     target_ids.sort_unstable();
     target_ids.dedup();
@@ -162,7 +162,7 @@ async fn mutate_admin_accounts_authorized_inner(
     }
     for target in targets {
         if let Some(full_jid) = target.exact_full_jid.as_deref() {
-            let full_jid = crate::jid::CanonicalJid::parse(full_jid)?;
+            let full_jid = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)?;
             anyhow::ensure!(
                 full_jid.localpart() == Some(target.username.as_str())
                     && full_jid.domainpart() == domain
@@ -322,8 +322,10 @@ async fn mutate_admin_accounts_authorized_inner(
     let mut ordered = targets.to_vec();
     ordered.sort_by_key(|target| target.id);
     for (index, target) in ordered.iter().enumerate() {
-        let bare_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{}@{}", target.username, domain))?;
+        let bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+            "{}@{}",
+            target.username, domain
+        ))?;
         anyhow::ensure!(
             bare_jid.localpart() == Some(target.username.as_str())
                 && bare_jid.domainpart() == domain,
@@ -573,7 +575,7 @@ pub async fn replace_federation_runtime_rules_and_snapshot(
     let mut seen = HashSet::with_capacity(domains.len());
     let mut canonical_domains = Vec::with_capacity(domains.len());
     for domain in domains {
-        let domain = crate::jid::canonicalize(domain)?;
+        let domain = northstar_xmpp_types::jid::canonicalize(domain)?;
         anyhow::ensure!(
             seen.insert(domain.clone()),
             "duplicate canonical federation rule: {domain}"

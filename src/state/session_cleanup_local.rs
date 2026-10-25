@@ -75,7 +75,7 @@ impl SessionCleanupLocal {
     }
 
     pub(crate) fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
-        let Ok(room_jid) = crate::jid::canonicalize_bare(room_jid) else {
+        let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
             return Vec::new();
         };
         self.occupants

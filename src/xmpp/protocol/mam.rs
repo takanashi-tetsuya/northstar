@@ -110,10 +110,10 @@ impl ProtocolSession {
         let Some(to) = to else {
             return true;
         };
-        let Ok(target) = crate::jid::CanonicalJid::parse(to) else {
+        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
             return false;
         };
-        let Ok(owner) = crate::jid::CanonicalJid::parse(full_jid) else {
+        let Ok(owner) = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid) else {
             return false;
         };
         (target.localpart().is_none()
@@ -129,7 +129,7 @@ impl ProtocolSession {
     /// result injection.  An omitted `to` retains normal C2S implicit-server
     /// reply semantics for compatibility.
     fn personal_archive_reply_from(&self, to: Option<&str>) -> Option<String> {
-        to.and_then(|to| crate::jid::CanonicalJid::parse(to).ok())
+        to.and_then(|to| northstar_xmpp_types::jid::CanonicalJid::parse(to).ok())
             .map(|target| target.to_string())
     }
 
@@ -200,7 +200,7 @@ impl ProtocolSession {
         let Some(to) = to else {
             return Ok(None);
         };
-        let Ok(target) = crate::jid::CanonicalJid::parse(to) else {
+        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
             return Err(Action::Send(iq_error(id, "jid-malformed")));
         };
         if target.domainpart() != self.muc_domain() {
@@ -552,7 +552,7 @@ mod tests {
                 .iter()
                 .filter(|node| {
                     node.attribute("by").is_some_and(|by| {
-                        crate::jid::canonicalize(by).ok().as_deref()
+                        northstar_xmpp_types::jid::canonicalize(by).ok().as_deref()
                             == Some("alice@example.test")
                     })
                 })

@@ -81,8 +81,8 @@ pub(crate) type FederationRouter = crate::services::federation_outbox::Federatio
 pub const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub(crate) fn bidi_connection_key(local_domain: &str, remote_domain: &str) -> Option<String> {
-    let local_domain = crate::jid::prepare_domainpart(local_domain).ok()?;
-    let remote_domain = crate::jid::prepare_domainpart(remote_domain).ok()?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain).ok()?;
+    let remote_domain = northstar_xmpp_types::jid::prepare_domainpart(remote_domain).ok()?;
     Some(format!("{local_domain}\0{remote_domain}"))
 }
 

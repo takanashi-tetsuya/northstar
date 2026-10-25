@@ -20,13 +20,13 @@ use crate::api::contexts::{
     MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
     RetentionPolicyContext, UploadHttpReadContext,
 };
-use crate::auth;
 use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
 use crate::state::AppState;
+use northstar_auth_core as auth;
 
 use crate::services::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;

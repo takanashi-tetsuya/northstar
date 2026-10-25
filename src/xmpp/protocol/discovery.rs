@@ -135,7 +135,7 @@ impl ProtocolSession {
         request: roxmltree::Node<'_, '_>,
     ) -> Result<Action> {
         let requested_from = to.unwrap_or(self.state.local_domain());
-        let Ok(target) = crate::jid::CanonicalJid::parse(requested_from) else {
+        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(requested_from) else {
             return Ok(Action::Send(iq_error(id, "jid-malformed")));
         };
         let from = target.to_string();
@@ -649,7 +649,7 @@ impl ProtocolSession {
         request: roxmltree::Node<'_, '_>,
     ) -> Result<Action> {
         let requested_from = to.unwrap_or(self.state.local_domain());
-        let Ok(target) = crate::jid::CanonicalJid::parse(requested_from) else {
+        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(requested_from) else {
             return Ok(Action::Send(iq_error(id, "jid-malformed")));
         };
         let from = target.to_string();

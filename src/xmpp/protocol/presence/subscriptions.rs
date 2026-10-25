@@ -16,7 +16,7 @@ impl ProtocolSession {
             stanza,
             bounce_to,
         } = request;
-        let contact = crate::jid::canonicalize_bare(contact)?;
+        let contact = northstar_xmpp_types::jid::canonicalize_bare(contact)?;
         let outcome = self
             .state
             .presence_service()
@@ -58,7 +58,7 @@ impl ProtocolSession {
         contact: &str,
         kind: &str,
     ) -> Result<SubscriptionMutationDisposition> {
-        let contact = crate::jid::canonicalize_bare(contact)?;
+        let contact = northstar_xmpp_types::jid::canonicalize_bare(contact)?;
         let outcome = self
             .state
             .presence_service()
@@ -124,7 +124,7 @@ impl ProtocolSession {
         kind: &str,
         raw: &str,
     ) -> Result<SubscriptionMutationDisposition> {
-        let target_jid = crate::jid::CanonicalJid::parse_bare(target_jid)?;
+        let target_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(target_jid)?;
         if target_jid.domainpart() != self.state.local_domain() {
             return Ok(SubscriptionMutationDisposition::Missing);
         }

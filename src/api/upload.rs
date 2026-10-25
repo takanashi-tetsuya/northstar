@@ -18,7 +18,6 @@ use crate::api::contexts::{
     upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
     UploadHttpReadContext, UploadHttpReplayReadContext,
 };
-use crate::auth;
 use crate::platform::error::{AppError, Result};
 use crate::services::upload::{
     AcquirePromotionOutcome, FinalizePromotionCommand, FinalizePromotionOutcome,
@@ -26,6 +25,7 @@ use crate::services::upload::{
     UploadReplayCommand, UploadReplayOutcome, UploadSlot, UploadStageCleanup,
     UploadStageHandoffOutcome, UploadStageProjection, UserUploadDeleteOutcome,
 };
+use northstar_auth_core as auth;
 
 const UPLOAD_LEASE_SECONDS: i64 = 90;
 const UPLOAD_RENEW_SECONDS: u64 = 30;

@@ -211,7 +211,7 @@ async fn send_caps_disco_query(
             }
         }
         CapsObservationOwner::Federated { .. } => {
-            let domain = crate::jid::CanonicalJid::parse(&job.full_jid)?
+            let domain = northstar_xmpp_types::jid::CanonicalJid::parse(&job.full_jid)?
                 .domainpart()
                 .to_owned();
             context.send_federated_disco(&domain, query).await
@@ -531,7 +531,7 @@ impl ProtocolSession {
         {
             return super::mix::MixSessionCapability::Unknown;
         }
-        let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
+        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
             return super::mix::MixSessionCapability::Unknown;
         };
         let Some(key) = observed_caps_key(presence, &full_jid) else {
@@ -581,7 +581,7 @@ impl ProtocolSession {
         {
             return;
         }
-        let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
+        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
             return;
         };
         let connection_is_current = self
@@ -818,11 +818,12 @@ fn effective_c2s_caps_sender(
     authenticated_full_jid: Option<&str>,
     explicit_from: Option<&str>,
 ) -> Option<String> {
-    let authenticated = crate::jid::canonical_session_key(authenticated_full_jid?).ok()?;
+    let authenticated =
+        northstar_xmpp_types::jid::canonical_session_key(authenticated_full_jid?).ok()?;
     match explicit_from {
         None => Some(authenticated),
         Some(from) => {
-            let claimed = crate::jid::canonical_session_key(from).ok()?;
+            let claimed = northstar_xmpp_types::jid::canonical_session_key(from).ok()?;
             (claimed == authenticated).then_some(authenticated)
         }
     }
@@ -854,7 +855,7 @@ pub(crate) async fn observe_federated_caps(
     if !state.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) {
         return FederatedCapsObservationResult::Accepted;
     }
-    let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
+    let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
         return FederatedCapsObservationResult::StaleOwner;
     };
     if resource_epoch.resource() != full_jid {
@@ -880,7 +881,7 @@ pub(crate) async fn observe_federated_caps(
             .remove_federated_resource_if_connection(&full_jid, connection_id);
         return FederatedCapsObservationResult::Accepted;
     }
-    let domain = crate::jid::CanonicalJid::parse(&full_jid)
+    let domain = northstar_xmpp_types::jid::CanonicalJid::parse(&full_jid)
         .expect("canonical full JID was parsed above")
         .domainpart()
         .to_owned();
@@ -977,7 +978,7 @@ pub(crate) async fn handle_federated_caps_response(
     }
     let response_from = root
         .attribute("from")
-        .and_then(|jid| crate::jid::canonical_session_key(jid).ok());
+        .and_then(|jid| northstar_xmpp_types::jid::canonical_session_key(jid).ok());
     if pending.expires_at <= Instant::now()
         || response_from.as_deref() != Some(pending.full_jid.as_str())
     {
@@ -1069,7 +1070,7 @@ pub(crate) fn cached_disco_result(
     target: &str,
     requested_node: Option<&str>,
 ) -> Option<String> {
-    let target = crate::jid::canonical_session_key(target).ok()?;
+    let target = northstar_xmpp_types::jid::canonical_session_key(target).ok()?;
     let observation = current_caps_observation(state, &target)?;
     let key = observation.key?;
     if observation.summary.is_none() {
@@ -1101,7 +1102,7 @@ pub(crate) fn verified_caps_has_any_feature(
     target: &str,
     features: &[&str],
 ) -> Option<bool> {
-    let Ok(target) = crate::jid::canonical_session_key(target) else {
+    let Ok(target) = northstar_xmpp_types::jid::canonical_session_key(target) else {
         return None;
     };
     current_caps_observation(state, &target)
@@ -1120,7 +1121,7 @@ fn scoped_algorithm(algorithm: &str, full_jid: &str) -> String {
 }
 
 pub(crate) fn wants_pep_node(state: &AppState, target: &str, node: &str) -> bool {
-    let Ok(target) = crate::jid::canonical_session_key(target) else {
+    let Ok(target) = northstar_xmpp_types::jid::canonical_session_key(target) else {
         return false;
     };
     current_caps_observation(state, &target)

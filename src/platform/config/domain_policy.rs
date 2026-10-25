@@ -25,7 +25,7 @@ impl ExternalRouteDomainPolicy {
     }
 
     pub(crate) fn external_route_domain_allowed(&self, domain: &str) -> bool {
-        crate::jid::prepare_domainpart(domain)
+        northstar_xmpp_types::jid::prepare_domainpart(domain)
             .is_ok_and(|domain| self.component_domains.iter().any(|entry| entry == &domain))
             || self.federation_domain_allowed(domain)
     }
@@ -41,7 +41,7 @@ pub(super) fn federation_domain_allowed_in(
     if !enabled {
         return false;
     }
-    let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+    let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
         return false;
     };
     if domain == local_domain
@@ -73,7 +73,7 @@ pub(super) fn domain_list(value: &str) -> Result<Vec<String>> {
             let (wildcard, domain) = pattern
                 .strip_prefix("*.")
                 .map_or((false, pattern), |domain| (true, domain));
-            let domain = crate::jid::prepare_domainpart(domain)?;
+            let domain = northstar_xmpp_types::jid::prepare_domainpart(domain)?;
             Ok(if wildcard {
                 format!("*.{domain}")
             } else {

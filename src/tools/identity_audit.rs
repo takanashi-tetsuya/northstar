@@ -77,19 +77,19 @@ impl IdentityKind {
 
     fn canonicalize(self, value: &str) -> Result<String> {
         match self {
-            Self::Full => crate::jid::canonicalize(value),
-            Self::SessionFull => crate::jid::canonical_session_key(value),
-            Self::Bare => crate::jid::canonicalize_bare(value),
-            Self::BareKey => crate::jid::canonical_bare_key(value),
+            Self::Full => northstar_xmpp_types::jid::canonicalize(value),
+            Self::SessionFull => northstar_xmpp_types::jid::canonical_session_key(value),
+            Self::Bare => northstar_xmpp_types::jid::canonicalize_bare(value),
+            Self::BareKey => northstar_xmpp_types::jid::canonical_bare_key(value),
             Self::UserBare => {
-                let jid = crate::jid::CanonicalJid::parse_bare(value)?;
+                let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)?;
                 anyhow::ensure!(jid.localpart().is_some(), "identity requires a localpart");
                 Ok(jid.to_string())
             }
-            Self::Domain => crate::jid::prepare_domainpart(value),
-            Self::Localpart => crate::jid::prepare_localpart(value),
-            Self::Resource => crate::jid::prepare_resourcepart(value),
-            Self::AccessPattern => crate::jid::canonicalize_bare(value),
+            Self::Domain => northstar_xmpp_types::jid::prepare_domainpart(value),
+            Self::Localpart => northstar_xmpp_types::jid::prepare_localpart(value),
+            Self::Resource => northstar_xmpp_types::jid::prepare_resourcepart(value),
+            Self::AccessPattern => northstar_xmpp_types::jid::canonicalize_bare(value),
         }
     }
 }
@@ -340,7 +340,7 @@ fn parse_options(arguments: &[String]) -> Result<AuditOptions> {
         dry_run,
         "--dry-run is mandatory; this command never repairs or merges identities"
     );
-    domain = crate::jid::prepare_domainpart(&domain)
+    domain = northstar_xmpp_types::jid::prepare_domainpart(&domain)
         .context("audit XMPP domain is not a valid RFC 7622 domainpart")?;
     Ok(AuditOptions {
         domain,

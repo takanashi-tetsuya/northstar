@@ -35,11 +35,11 @@ async fn federated_muc_presence_owned(
             "not-authorized",
         ));
     }
-    let actor = crate::jid::CanonicalJid::parse(from)
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(from)
         .expect("authenticated_remote_actor already validated the full JID");
     let actor_full_jid = actor.to_string();
     let actor_bare_jid = actor.bare();
-    let Ok(to_jid) = crate::jid::CanonicalJid::parse(to) else {
+    let Ok(to_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
         return Ok(federated_error(
             &request.stanza,
             from,

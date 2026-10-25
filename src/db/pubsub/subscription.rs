@@ -3,8 +3,8 @@
 use super::*;
 
 pub async fn is_subscribed(pool: &PgPool, node_id: Uuid, jid: &str) -> Result<bool> {
-    let jid = crate::jid::canonicalize(jid)?;
-    let bare = crate::jid::canonical_bare_key(&jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
+    let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
     sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM pubsub_subscriptions WHERE node_id = $1 AND (jid = $2 OR split_part(jid, '/', 1) = $3) AND state = 'subscribed' AND (expire IS NULL OR expire > NOW()))",
     )
@@ -24,8 +24,8 @@ pub(crate) async fn node_authorization_facts(
     node_id: Uuid,
     requester: &str,
 ) -> Result<(Option<String>, bool)> {
-    let full = crate::jid::canonicalize(requester)?;
-    let bare = crate::jid::canonical_bare_key(&full)?;
+    let full = northstar_xmpp_types::jid::canonicalize(requester)?;
+    let bare = northstar_xmpp_types::jid::canonical_bare_key(&full)?;
     let row = sqlx::query(
         "SELECT (SELECT affiliation FROM pubsub_affiliations \
                  WHERE node_id = $1 AND jid = $2) AS affiliation, \
@@ -48,8 +48,8 @@ pub async fn subscriptions_for_jid(
     jid: &str,
     node: Option<&str>,
 ) -> Result<Vec<PubSubSubscription>> {
-    let jid = crate::jid::canonicalize(jid)?;
-    let bare = crate::jid::canonical_bare_key(&jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
+    let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
     let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE split_part(s.jid, '/', 1) = $1 AND ($2::TEXT IS NULL OR n.node = $2) AND (s.expire IS NULL OR s.expire > NOW()) ORDER BY n.node, s.jid")
         .bind(bare)
         .bind(node)
@@ -67,8 +67,8 @@ pub async fn subscriptions_addressing_jid_page(
     after: Option<(&str, &str)>,
     limit: i64,
 ) -> Result<Vec<PubSubSubscription>> {
-    let jid = crate::jid::canonicalize(jid)?;
-    let bare = crate::jid::canonical_bare_key(&jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
+    let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
     let (after_node, after_jid) = after.unzip();
     let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE (s.jid = $1 OR s.jid = $2) AND (s.expire IS NULL OR s.expire > NOW()) AND ($3::TEXT IS NULL OR (n.node, s.jid) > ($3, $4)) ORDER BY n.node, s.jid LIMIT $5")
         .bind(jid)
@@ -94,7 +94,7 @@ pub async fn set_subscription_with_outbox(
     state: &str,
     outbox: &[super::super::PubSubOutboxInsert],
 ) -> Result<()> {
-    let jid = crate::jid::canonicalize(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("INSERT INTO pubsub_subscriptions (node_id, jid, state, subid) VALUES ($1, $2, $3, $4) ON CONFLICT (node_id, jid) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()")
         .bind(node_id)
@@ -121,8 +121,8 @@ pub async fn resolve_pending_subscription_with_renderer(
     allow: bool,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<SubscriptionAuthorizationOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     if sqlx::query_scalar::<_, Uuid>("SELECT id FROM pubsub_nodes WHERE id = $1 FOR UPDATE")
         .bind(node_id)
@@ -162,7 +162,7 @@ pub async fn resolve_pending_subscription_with_renderer(
         return Ok(SubscriptionAuthorizationOutcome::Stale);
     }
     if allow {
-        let subscriber_bare = crate::jid::canonical_bare_key(&subscriber_jid)?;
+        let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(&subscriber_jid)?;
         let prohibited = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                 SELECT 1 FROM pubsub_affiliations
@@ -242,12 +242,12 @@ pub async fn set_subscriptions_with_renderer(
     expected_transitions: Option<&[(String, String, String)]>,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<SetSubscriptionsOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut seen = std::collections::BTreeSet::new();
     let changes = changes
         .iter()
         .map(|(jid, state, expected_subid)| {
-            let jid = crate::jid::canonicalize(jid)?;
+            let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
             if !seen.insert(jid.clone()) {
                 anyhow::bail!(
                     "PubSub subscription batch contains canonically equivalent duplicate {jid}"
@@ -290,7 +290,7 @@ pub async fn set_subscriptions_with_renderer(
         if *state == "none" {
             continue;
         }
-        let bare = crate::jid::canonical_bare_key(jid)?;
+        let bare = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
         let prohibited: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                  SELECT 1 FROM pubsub_affiliations
@@ -453,7 +453,7 @@ pub async fn unsubscribe_with_outbox(
     jid: &str,
     outbox: &[super::super::PubSubOutboxInsert],
 ) -> Result<bool> {
-    let jid = crate::jid::canonicalize(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     let deleted = sqlx::query("DELETE FROM pubsub_subscriptions WHERE node_id = $1 AND jid = $2")
         .bind(node_id)
@@ -485,9 +485,9 @@ pub async fn unsubscribe_checked_with_renderer(
     expected_subid: &str,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<UnsubscribeOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
-    if crate::jid::canonical_bare_key(&subscriber_jid)? != requester {
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
+    if northstar_xmpp_types::jid::canonical_bare_key(&subscriber_jid)? != requester {
         return Ok(UnsubscribeOutcome::Forbidden);
     }
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
@@ -571,7 +571,7 @@ pub async fn get_subscription(
     node_id: Uuid,
     jid: &str,
 ) -> Result<Option<PubSubSubscription>> {
-    let jid = crate::jid::canonicalize(jid)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let row = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE s.node_id = $1 AND s.jid = $2")
         .bind(node_id)
         .bind(jid)
@@ -618,7 +618,7 @@ pub async fn set_subscription_limited_with_options(
     let node = get_node_by_id(pool, node_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("PubSub test node does not exist"))?;
-    let requester = crate::jid::canonical_bare_key(jid)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
     Ok(
         match set_subscription_limited_with_options_and_outbox(
             pool,
@@ -658,9 +658,9 @@ pub async fn set_subscription_limited_with_options_and_renderer(
     requested_subid: &str,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<SubscribeOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    let jid = crate::jid::canonicalize(jid)?;
-    let bare = crate::jid::canonical_bare_key(&jid)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
+    let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
+    let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
     if bare != requester {
         return Ok(SubscribeOutcome::Forbidden);
     }
@@ -730,7 +730,7 @@ pub async fn set_subscription_limited_with_options_and_renderer(
         return Ok(SubscribeOutcome::PreconditionFailed);
     }
     if let Some(options) = options {
-        let requester_jid = crate::jid::CanonicalJid::parse_bare(&requester)?;
+        let requester_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?;
         let core_options: northstar_pubsub_core::PubSubSubscriptionOptions = options.clone().into();
         // Subscribe-and-configure starts from the node defaults, not an old
         // subscription's depth. Leaf forms cannot set a depth and write 1.
@@ -863,9 +863,9 @@ pub async fn update_subscription_options_checked(
     expected_subid: Option<&str>,
     options: &PubSubSubscriptionOptions,
 ) -> Result<SubscriptionOptionsOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
-    if crate::jid::canonical_bare_key(&subscriber_jid)? != requester {
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
+    if northstar_xmpp_types::jid::canonical_bare_key(&subscriber_jid)? != requester {
         return Ok(SubscriptionOptionsOutcome::Forbidden);
     }
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
@@ -909,7 +909,7 @@ pub async fn update_subscription_options_checked(
         current.get("subscription_depth"),
         &core_options,
     ) || !northstar_xep_0060::subscription_show_values_allowed(
-        crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
+        northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
         local_domain,
         &options.show_values,
     ) {

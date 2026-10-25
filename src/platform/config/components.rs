@@ -110,12 +110,12 @@ pub(super) fn load_component_credentials(
         if aliases.len() > 64 {
             anyhow::bail!("a component cannot configure more than 64 aliases");
         }
-        let primary_domain = crate::jid::prepare_domainpart(jid.trim())
+        let primary_domain = northstar_xmpp_types::jid::prepare_domainpart(jid.trim())
             .context("component JID must be a domain identifier")?;
         let mut allowed_domains = Vec::with_capacity(aliases.len() + 1);
         allowed_domains.push(primary_domain.clone());
         for alias in aliases {
-            let alias = crate::jid::prepare_domainpart(alias.trim())
+            let alias = northstar_xmpp_types::jid::prepare_domainpart(alias.trim())
                 .context("component alias must be a domain identifier")?;
             if !allowed_domains.contains(&alias) {
                 allowed_domains.push(alias);

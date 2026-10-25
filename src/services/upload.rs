@@ -4,11 +4,11 @@
 //! the reservation and safety gate, creates the bearer, and commits only its
 //! hash through the atomic reservation port.
 
-use crate::auth;
 use crate::services::upload_maintenance::CommittedUploadIdentity;
 pub(crate) use crate::services::upload_maintenance::PromotedUploadProjection;
 use crate::services::upload_safety::UploadSafetyGate;
 use anyhow::Result;
+use northstar_auth_core as auth;
 use northstar_upload_application::{validate_upload_slot_request, UploadRepository};
 pub(crate) use northstar_upload_application::{
     UploadIoClass, UploadSlotAdmission, UploadSlotRequest, UploadSlotRequestCommand,

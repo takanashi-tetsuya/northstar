@@ -260,8 +260,8 @@ pub async fn subscribe_pep_node_with_outbox(
     requested_subid: &str,
     outbox: &[super::PubSubOutboxInsert],
 ) -> Result<Option<PepSubscription>> {
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
-    let subscriber_bare = crate::jid::canonical_bare_key(&subscriber_jid)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
+    let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(&subscriber_jid)?;
     let mut transaction = super::pubsub::begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 4))")
         .bind(&subscriber_bare)
@@ -327,7 +327,7 @@ pub async fn unsubscribe_pep_node(
     subscriber_jid: &str,
     subid: Option<&str>,
 ) -> Result<Option<String>> {
-    let subscriber_jid = crate::jid::canonicalize(subscriber_jid)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
     let mut transaction = super::pubsub::begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 5))")
         .bind(format!("{owner_id}:{node}"))
@@ -380,7 +380,7 @@ async fn unsubscribe_pep_nodes_batch_inner(
     let mut canonical = Vec::with_capacity(changes.len());
     let mut unique = std::collections::BTreeSet::new();
     for (jid, subid) in changes {
-        let jid = crate::jid::canonicalize(jid)?;
+        let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
         if !unique.insert((jid.clone(), subid.clone())) {
             return Ok(false);
         }
@@ -393,7 +393,7 @@ async fn unsubscribe_pep_nodes_batch_inner(
         let mut canonical_expected = Vec::with_capacity(expected.len());
         let mut unique_expected = std::collections::BTreeSet::new();
         for (jid, subid) in expected {
-            let jid = crate::jid::canonicalize(jid)?;
+            let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
             if subid.is_empty() || !unique_expected.insert(jid.clone()) {
                 return Ok(false);
             }
@@ -469,8 +469,8 @@ pub async fn pep_subscriptions_for_available_resource(
     pool: &PgPool,
     subscriber_jid: &str,
 ) -> Result<Vec<PepPresenceSubscription>> {
-    let subscriber_jid = crate::jid::canonical_session_key(subscriber_jid)?;
-    let subscriber_bare = crate::jid::canonical_bare_key(&subscriber_jid)?;
+    let subscriber_jid = northstar_xmpp_types::jid::canonical_session_key(subscriber_jid)?;
+    let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(&subscriber_jid)?;
     let rows = sqlx::query(
         "SELECT p.owner_id, u.username, p.node FROM pep_subscriptions p JOIN users u ON u.id=p.owner_id WHERE p.state='subscribed' AND p.subscriber_jid IN ($1,$2) ORDER BY p.owner_id,p.node LIMIT 1000",
     )
@@ -497,7 +497,7 @@ pub async fn roster_group_allowed(
     if groups.is_empty() {
         return Ok(false);
     }
-    let jid = crate::jid::canonical_bare_key(jid)?;
+    let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roster_items r, jsonb_array_elements_text(r.groups) g(name) WHERE r.owner_id=$1 AND r.contact_jid=$2 AND g.name = ANY($3))")
         .bind(owner_id).bind(&jid).bind(groups).fetch_one(pool).await.map_err(Into::into)
 }
@@ -911,7 +911,7 @@ pub async fn pep_owner_usernames_for_presence_subscriber(
     pool: &PgPool,
     subscriber_bare: &str,
 ) -> Result<Vec<String>> {
-    let subscriber_bare = crate::jid::canonical_bare_key(subscriber_bare)?;
+    let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(subscriber_bare)?;
     let rows = sqlx::query(
         "SELECT u.username FROM roster_items r JOIN users u ON u.id=r.owner_id WHERE r.contact_jid=$1 AND r.subscription IN ('from','both') ORDER BY u.username LIMIT 10000",
     )

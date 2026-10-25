@@ -148,10 +148,10 @@ async fn project_federated_join<P: FederatedJoinProjectionPort>(
 }
 
 fn authenticated_remote_actor(authenticated_domain: &str, from: &str) -> bool {
-    let Ok(actor) = crate::jid::CanonicalJid::parse(from) else {
+    let Ok(actor) = northstar_xmpp_types::jid::CanonicalJid::parse(from) else {
         return false;
     };
-    let Ok(domain) = crate::jid::prepare_domainpart(authenticated_domain) else {
+    let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain) else {
         return false;
     };
     actor.localpart().is_some() && actor.resourcepart().is_some() && actor.domainpart() == domain
@@ -160,8 +160,8 @@ fn authenticated_remote_actor(authenticated_domain: &str, from: &str) -> bool {
 fn same_remote_actor(left: &str, right: &str) -> bool {
     matches!(
         (
-            crate::jid::canonicalize(left),
-            crate::jid::canonicalize(right)
+            northstar_xmpp_types::jid::canonicalize(left),
+            northstar_xmpp_types::jid::canonicalize(right)
         ),
         (Ok(left), Ok(right)) if left == right
     )
@@ -170,20 +170,20 @@ fn same_remote_actor(left: &str, right: &str) -> bool {
 fn same_authenticated_domain(left: &str, right: &str) -> bool {
     matches!(
         (
-            crate::jid::prepare_domainpart(left),
-            crate::jid::prepare_domainpart(right)
+            northstar_xmpp_types::jid::prepare_domainpart(left),
+            northstar_xmpp_types::jid::prepare_domainpart(right)
         ),
         (Ok(left), Ok(right)) if left == right
     )
 }
 
 fn canonical_authenticated_domain(domain: &str) -> String {
-    crate::jid::prepare_domainpart(domain)
+    northstar_xmpp_types::jid::prepare_domainpart(domain)
         .expect("authenticated S2S domain must already satisfy RFC 7622")
 }
 
 fn muc_domain(state: &AppState) -> String {
-    crate::jid::prepare_domainpart(&format!("conference.{}", state.local_domain()))
+    northstar_xmpp_types::jid::prepare_domainpart(&format!("conference.{}", state.local_domain()))
         .expect("configured XMPP domain must form a valid MUC service domain")
 }
 
@@ -621,8 +621,8 @@ fn federated_iq_result(stanza: &FederatedStanza, from: &str, to: &str, payload: 
 fn same_bare_jid(left: &str, right: &str) -> bool {
     matches!(
         (
-            crate::jid::canonical_bare_key(left),
-            crate::jid::canonical_bare_key(right)
+            northstar_xmpp_types::jid::canonical_bare_key(left),
+            northstar_xmpp_types::jid::canonical_bare_key(right)
         ),
         (Ok(left), Ok(right)) if left == right
     )

@@ -72,10 +72,10 @@ pub async fn create_admin_account_authorized(
     scram_iterations: u32,
     scram_sha1_enabled: bool,
 ) -> Result<AdminCreateAccountOutcome> {
-    let username = crate::auth::normalize_username(username)?;
+    let username = northstar_auth_core::normalize_username(username)?;
     let password = zeroize::Zeroizing::new(password.to_owned());
     let credentials = crate::security::password_work::run(move || {
-        crate::auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
+        northstar_auth_core::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await
     .map_err(anyhow::Error::from)
@@ -143,14 +143,14 @@ pub async fn reset_admin_account_password_authorized(
     scram_sha1_enabled: bool,
     bare_jid: &str,
 ) -> Result<AdminAccountWriteOutcome> {
-    let bare_jid = crate::jid::CanonicalJid::parse_bare(bare_jid)?;
+    let bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(bare_jid)?;
     anyhow::ensure!(
         bare_jid.localpart() == Some(target.username.as_str()),
         "password-reset JID does not match the target account"
     );
     let password = zeroize::Zeroizing::new(password.to_owned());
     let credentials = crate::security::password_work::run(move || {
-        crate::auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
+        northstar_auth_core::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
     })
     .await
     .map_err(anyhow::Error::from)

@@ -151,7 +151,7 @@ impl ClusterManager {
                 let Some(candidate) = key.strip_prefix(&prefix) else {
                     continue;
                 };
-                let Ok(bare) = crate::jid::canonicalize_bare(candidate) else {
+                let Ok(bare) = northstar_xmpp_types::jid::canonicalize_bare(candidate) else {
                     continue;
                 };
                 let full_jids: Vec<String> = conn.smembers(&key).await?;
@@ -210,7 +210,7 @@ impl ClusterManager {
             if owner.is_none() {
                 continue;
             }
-            if let Ok(bare) = crate::jid::canonical_bare_key(&full_jid) {
+            if let Ok(bare) = northstar_xmpp_types::jid::canonical_bare_key(&full_jid) {
                 users.insert(bare);
             }
         }
@@ -340,8 +340,8 @@ impl ClusterManager {
         availability_only: bool,
         authority: ClusterPresenceAuthority,
     ) -> Result<()> {
-        let owner = crate::jid::canonicalize(owner)?;
-        let recipient = crate::jid::canonicalize(recipient)?;
+        let owner = northstar_xmpp_types::jid::canonicalize(owner)?;
+        let recipient = northstar_xmpp_types::jid::canonicalize(recipient)?;
         self.send_control_to_node(
             node_id,
             &owner,
@@ -449,7 +449,7 @@ impl ClusterManager {
         let (Some(pool), _) = (&self.pool, &self.client) else {
             return Ok(());
         };
-        let owner = crate::jid::canonicalize_bare(owner)?;
+        let owner = northstar_xmpp_types::jid::canonicalize_bare(owner)?;
         if targets.len() > northstar_xep_0191::MAX_ITEMS
             || patterns.len() > northstar_xep_0191::MAX_ITEMS
         {
@@ -457,11 +457,11 @@ impl ClusterManager {
         }
         let targets = targets
             .iter()
-            .map(|target| crate::jid::canonicalize(target))
+            .map(|target| northstar_xmpp_types::jid::canonicalize(target))
             .collect::<Result<Vec<_>>>()?;
         let patterns = patterns
             .iter()
-            .map(|pattern| crate::jid::canonicalize(pattern))
+            .map(|pattern| northstar_xmpp_types::jid::canonicalize(pattern))
             .collect::<Result<Vec<_>>>()?;
         let payload = serde_json::json!({
             "target": owner,
@@ -585,7 +585,7 @@ impl ClusterManager {
         minimum_epoch: i64,
     ) -> Result<()> {
         anyhow::ensure!(minimum_epoch > 0, "invalid user-agent epoch");
-        let bare_jid = crate::jid::canonicalize_bare(bare_jid)?;
+        let bare_jid = northstar_xmpp_types::jid::canonicalize_bare(bare_jid)?;
         if self.pool.is_none() {
             return Ok(());
         }

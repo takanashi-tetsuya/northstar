@@ -1,6 +1,5 @@
 //! Finite repository replies only. No SQL, executor, timer or bearer issue.
 use super::*;
-use crate::auth;
 use crate::platform::config::SmIpPolicy;
 use crate::services::authentication::publication::{
     self as observation, CredentialInvocation, CredentialPreparation, PreparationResult,
@@ -8,6 +7,7 @@ use crate::services::authentication::publication::{
 use crate::services::authentication::*;
 use crate::services::sm::*;
 use northstar_archive_core::ArchiveBoundary;
+use northstar_auth_core as auth;
 
 /// One supplied repository COMMIT child, with no timer or task. Its destructor
 /// observes this child's actual lifetime, not the lifetime of the whole actor.

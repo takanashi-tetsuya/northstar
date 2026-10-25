@@ -388,10 +388,9 @@ pub(super) async fn federated_muc_admin_set(
         // Keep that validation when the shared parser normalizes targets.
         if items.iter().any(|item| {
             item.affiliation.is_some()
-                && item
-                    .jid
-                    .as_deref()
-                    .is_some_and(|jid| crate::jid::CanonicalJid::parse_bare(jid).is_err())
+                && item.jid.as_deref().is_some_and(|jid| {
+                    northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid).is_err()
+                })
         }) {
             return Ok(federated_error(
                 stanza,
@@ -412,7 +411,7 @@ pub(super) async fn federated_muc_admin_set(
                 "bad-request",
             ));
         };
-        let room_jid = crate::jid::CanonicalJid::parse(&stanza.to)?.bare();
+        let room_jid = northstar_xmpp_types::jid::CanonicalJid::parse(&stanza.to)?.bare();
         state.federated_muc_admit_mutation()?;
         let actor_target = if let Some(requester) = requester.filter(|occupant| {
             occupant.connection_id == connection_id
@@ -535,7 +534,7 @@ pub(super) async fn federated_muc_admin_set(
                     "not-allowed",
                 ));
             }
-            let Ok(target) = crate::jid::CanonicalJid::parse_bare(target_jid) else {
+            let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(target_jid) else {
                 return Ok(federated_error(
                     stanza,
                     &stanza.from,
@@ -866,7 +865,7 @@ pub(super) async fn federated_muc_admin_set(
                     "not-allowed",
                 ));
             }
-            let Ok(target) = crate::jid::CanonicalJid::parse_bare(target_jid) else {
+            let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(target_jid) else {
                 return Ok(federated_error(
                     stanza,
                     &stanza.from,

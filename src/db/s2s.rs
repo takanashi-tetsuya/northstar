@@ -224,13 +224,13 @@ pub(crate) async fn enqueue_s2s_outbox_with_id_in_transaction(
     bounce_to: Option<&str>,
     policy: S2sOutboxPolicy,
 ) -> Result<()> {
-    let target_domain = crate::jid::prepare_domainpart(target_domain)
+    let target_domain = northstar_xmpp_types::jid::prepare_domainpart(target_domain)
         .context("federation target domain is invalid")?;
     if stanza.is_empty() || stanza.len() > MAX_S2S_STANZA_BYTES {
         anyhow::bail!("federation stanza must contain 1 byte to 1 MiB");
     }
     let bounce_to = bounce_to
-        .map(crate::jid::canonicalize)
+        .map(northstar_xmpp_types::jid::canonicalize)
         .transpose()
         .context("federation bounce address is invalid")?;
     // XMPP does not define byte-identical stanzas as duplicates.  Every
@@ -299,12 +299,12 @@ fn durable_federation_stanza(stanza: &str, outbox_id: Uuid) -> Result<String> {
     let from = root
         .attribute("from")
         .context("durable federation message is missing its from address")?;
-    let authority = crate::jid::CanonicalJid::parse(from)
+    let authority = northstar_xmpp_types::jid::CanonicalJid::parse(from)
         .context("federation message from JID is invalid")?
         .bare();
     let sanitized = crate::services::xml_util::strip_stanza_ids_by_domain(
         stanza,
-        crate::jid::CanonicalJid::parse(&authority)
+        northstar_xmpp_types::jid::CanonicalJid::parse(&authority)
             .expect("authority was parsed above")
             .domainpart(),
     );

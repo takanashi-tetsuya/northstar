@@ -287,14 +287,14 @@ pub(super) async fn claim_offline_replay_page_once(
     _test_hook: ReplayClaimHookRef<'_>,
 ) -> Result<OfflineReplayPageOutcome> {
     validate_replay_lease_seconds(lease_seconds)?;
-    let owner_bare_jid = crate::jid::canonicalize_bare(owner_bare_jid)?;
+    let owner_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(owner_bare_jid)?;
     let raw_owner_full_jid = owner_full_jid;
-    let owner_full_jid = crate::jid::canonical_session_key(raw_owner_full_jid)?;
+    let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(raw_owner_full_jid)?;
     anyhow::ensure!(
         owner_full_jid == raw_owner_full_jid,
         "offline replay resource must already be canonical"
     );
-    let owner_full = crate::jid::CanonicalJid::parse(&owner_full_jid)?;
+    let owner_full = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?;
     anyhow::ensure!(
         owner_full.bare() == owner_bare_jid,
         "offline replay resource does not belong to replay owner"

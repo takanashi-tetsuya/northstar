@@ -309,8 +309,8 @@ impl ProtocolSession {
         if !self.ibr_pow_enabled && submission.proof.is_some() {
             return IbrCompletion::Failed("bad-request");
         }
-        if crate::auth::normalize_username(&submission.username).is_err()
-            || crate::auth::validate_password(&submission.password).is_err()
+        if northstar_auth_core::normalize_username(&submission.username).is_err()
+            || northstar_auth_core::validate_password(&submission.password).is_err()
         {
             return IbrCompletion::Failed("not-acceptable");
         }

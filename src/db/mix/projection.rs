@@ -83,7 +83,7 @@ pub(super) async fn enqueue_mix_presence_event_tx(
     } = projection;
     let mut recipients = mix_node_audience_tx(transaction, channel.id, NODE_PRESENCE).await?;
     extend_unique_mix_recipients(&mut recipients, extra_recipients);
-    let encoded = crate::jid::CanonicalJid::parse(&item.item_id)?;
+    let encoded = northstar_xmpp_types::jid::CanonicalJid::parse(&item.item_id)?;
     let resource = encoded
         .resourcepart()
         .context("stored MIX presence item has no resource")?;
@@ -194,7 +194,7 @@ pub(super) async fn reproject_mix_presence_visibility_tx(
         let Some(source_full_jid) = old_item.source_full_jid.as_deref() else {
             continue;
         };
-        let source = crate::jid::CanonicalJid::parse(source_full_jid)?;
+        let source = northstar_xmpp_types::jid::CanonicalJid::parse(source_full_jid)?;
         let public_resource = if participant_jid_visible(new_channel, &preference) {
             source
                 .resourcepart()

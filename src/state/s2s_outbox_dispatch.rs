@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
-    jid::{prepare_domainpart, CanonicalJid},
     platform::config::ExternalRouteDomainPolicy,
     s2s::{
         telemetry::OutboundDispositionTelemetry, BidiRouteSnapshot, FederationEnvelope,
@@ -15,6 +14,7 @@ use crate::{
     services::s2s_outbox_dispatch::S2sOutboxDispatchService,
 };
 use dashmap::DashMap;
+use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::sync::{atomic::AtomicU64, Arc};
 
 pub(crate) type DispatchService = S2sOutboxDispatchService<PostgresS2sOutboxDispatchRepository>;

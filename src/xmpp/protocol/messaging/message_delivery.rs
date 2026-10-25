@@ -52,7 +52,7 @@ impl ProtocolSession {
         // consumption and all other message side effects. During degradation,
         // even a long-lived C2S stream cannot admit an unsupported direct.
         let raw_to = root.attribute("to").unwrap_or_else(|| bare_jid(from));
-        let target_jid = match crate::jid::CanonicalJid::parse(raw_to) {
+        let target_jid = match northstar_xmpp_types::jid::CanonicalJid::parse(raw_to) {
             Ok(target) => target,
             Err(_) => return Ok(message_error(root, "modify", "jid-malformed")),
         };

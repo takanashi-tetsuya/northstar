@@ -1,13 +1,11 @@
 #![forbid(unsafe_code)]
 
 mod api;
-mod auth;
 mod bosh;
 mod cluster;
 mod db;
 #[cfg(test)]
 mod direct_replay;
-mod jid;
 mod platform;
 mod runtime;
 mod s2s;
@@ -74,7 +72,8 @@ fn migration_environment_from_values(
         "migrator database URL must not be empty"
     );
     let domain = domain.context("XMPP_DOMAIN is required for `xmpp-server migrate`")?;
-    let domain = jid::prepare_domainpart(domain.trim()).context("XMPP_DOMAIN is invalid")?;
+    let domain = northstar_xmpp_types::jid::prepare_domainpart(domain.trim())
+        .context("XMPP_DOMAIN is invalid")?;
     let allow_unsafe_role_for_development = match allow_unsafe_role_for_development.as_deref() {
         None | Some("false") => false,
         Some("true") => true,

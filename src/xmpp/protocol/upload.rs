@@ -31,8 +31,11 @@ impl ProtocolSession {
     }
 
     pub(crate) fn upload_domain(&self) -> String {
-        crate::jid::prepare_domainpart(&format!("upload.{}", self.state.local_domain()))
-            .expect("configured XMPP domain must form a valid upload service domain")
+        northstar_xmpp_types::jid::prepare_domainpart(&format!(
+            "upload.{}",
+            self.state.local_domain()
+        ))
+        .expect("configured XMPP domain must form a valid upload service domain")
     }
 
     pub(crate) async fn http_upload_slot(
@@ -46,7 +49,7 @@ impl ProtocolSession {
         };
         let upload_domain = self.upload_domain();
         if !to.is_some_and(|value| {
-            crate::jid::CanonicalJid::parse_bare(value).is_ok_and(|target| {
+            northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok_and(|target| {
                 target.localpart().is_none() && target.domainpart() == upload_domain
             })
         }) {

@@ -468,7 +468,7 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
         &pool,
         first_id,
         &[(
-            crate::jid::canonical_bare_key(&pending_jid).unwrap(),
+            northstar_xmpp_types::jid::canonical_bare_key(&pending_jid).unwrap(),
             "publisher".to_owned(),
         )],
     )
@@ -881,7 +881,7 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
             .await
             .unwrap()[0]
             .publisher_jid,
-        crate::jid::canonical_bare_key(&owner).unwrap()
+        northstar_xmpp_types::jid::canonical_bare_key(&owner).unwrap()
     );
     assert_eq!(
         retract_items(

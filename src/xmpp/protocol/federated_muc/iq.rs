@@ -41,11 +41,11 @@ async fn federated_muc_iq_owned(
             "not-authorized",
         ));
     }
-    let actor_full_jid = crate::jid::canonicalize(from)
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(from)
         .expect("authenticated_remote_actor already validated the full JID");
-    let actor_bare_jid = crate::jid::canonical_bare_key(&actor_full_jid)?;
+    let actor_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;
     let conference_domain = muc_domain(state);
-    let Ok(to_jid) = crate::jid::CanonicalJid::parse(to) else {
+    let Ok(to_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
         return Ok(federated_error(
             &request.stanza,
             from,
@@ -581,7 +581,7 @@ async fn federated_muc_iq_owned(
                     serde_json::from_str::<SerializableMucOccupant>(json)
                         .ok()
                         .is_some_and(|occupant| {
-                            crate::jid::canonical_bare_key(&occupant.full_jid)
+                            northstar_xmpp_types::jid::canonical_bare_key(&occupant.full_jid)
                                 .ok()
                                 .as_deref()
                                 != Some(actor_bare_jid.as_str())
@@ -891,7 +891,7 @@ async fn federated_muc_iq_owned(
                 &[format!("{room_jid}/{}", own.nick), actor_full_jid.clone()],
             )
             .await;
-        if !crate::jid::canonical_bare_key(&target.full_jid)
+        if !northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
             .is_ok_and(|owner| blocked.contains(&owner))
         {
             let _ = state

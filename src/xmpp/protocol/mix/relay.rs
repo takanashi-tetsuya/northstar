@@ -117,9 +117,9 @@ pub(super) fn parse_relay_iq(raw: &str) -> Result<Option<RelayIq>> {
         from: if from.is_empty() {
             String::new()
         } else {
-            crate::jid::canonicalize(from)?
+            northstar_xmpp_types::jid::canonicalize(from)?
         },
-        to: crate::jid::canonicalize(to)?,
+        to: northstar_xmpp_types::jid::canonicalize(to)?,
         payload_xml,
         request,
     }))
@@ -238,7 +238,7 @@ pub(super) fn encoded_participant_full_jid(
     resource: &str,
 ) -> Result<String> {
     let bare = encoded_participant_jid(channel_jid, participant_id)?;
-    crate::jid::canonicalize(&format!("{bare}/{resource}"))
+    northstar_xmpp_types::jid::canonicalize(&format!("{bare}/{resource}"))
 }
 
 pub(super) async fn handle_channel_relay_request(
@@ -246,11 +246,11 @@ pub(super) async fn handle_channel_relay_request(
     request: &RelayIq,
     actor_full: &str,
 ) -> Result<String> {
-    let actor = crate::jid::CanonicalJid::parse(actor_full)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(actor_full)?;
     let actor_resource = actor
         .resourcepart()
         .context("MIX IQ relay requires a full participant JID")?;
-    let target = crate::jid::CanonicalJid::parse(&request.to)?;
+    let target = northstar_xmpp_types::jid::CanonicalJid::parse(&request.to)?;
     let (target_id, channel_jid) = decode_participant_jid(&target.bare())?;
     let channel = CanonicalJid::parse_bare(&channel_jid)?;
     let channel_domain = channel.domainpart();

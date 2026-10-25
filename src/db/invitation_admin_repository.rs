@@ -28,7 +28,7 @@ impl InvitationAdminRepository for PostgresInvitationAdminRepository {
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
         let id = Uuid::new_v4();
-        let token = crate::auth::new_session_token();
+        let token = northstar_auth_core::new_session_token();
         db::create_invitation_in_tx(
             &mut tx,
             command.admission.authority.user_id,

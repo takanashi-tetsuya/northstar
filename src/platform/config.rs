@@ -266,7 +266,7 @@ impl Config {
     }
 
     pub fn component_credential(&self, domain: &str) -> Option<&ComponentCredential> {
-        let domain = crate::jid::prepare_domainpart(domain).ok()?;
+        let domain = northstar_xmpp_types::jid::prepare_domainpart(domain).ok()?;
         self.components.iter().find(|credential| {
             credential
                 .allowed_domains

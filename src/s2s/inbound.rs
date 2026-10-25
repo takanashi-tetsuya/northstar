@@ -3,7 +3,6 @@ use crate::state::s2s_direct_route::S2sDirectRoutePort;
 use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    jid::{prepare_domainpart, CanonicalJid},
     services::xml_util::*,
     services::{
         messaging::{
@@ -22,6 +21,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use futures::FutureExt;
+use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
 use std::borrow::Cow;
 use std::panic::AssertUnwindSafe;

@@ -175,7 +175,7 @@ impl MixEventPayloadRenderer for MixPayloads {
             children,
             unavailable,
         } = delivery;
-        let encoded = crate::jid::CanonicalJid::parse(item_id)?;
+        let encoded = northstar_xmpp_types::jid::CanonicalJid::parse(item_id)?;
         anyhow::ensure!(
             encoded.resourcepart().is_some(),
             "MIX reflected presence requires an encoded full JID"
@@ -302,13 +302,15 @@ impl MixEventPayloadRenderer for MixPayloads {
             valid_stable_participant_id(participant_id),
             "invalid MIX stable participant id"
         );
-        let channel = crate::jid::CanonicalJid::parse_bare(channel_jid)?;
+        let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
         let channel_localpart = channel
             .localpart()
             .ok_or_else(|| anyhow::anyhow!("MIX channel requires a localpart"))?;
         let localpart = format!("{participant_id}#{channel_localpart}");
-        let participant_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{localpart}@{}", channel.domainpart()))?;
+        let participant_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+            "{localpart}@{}",
+            channel.domainpart()
+        ))?;
         anyhow::ensure!(
             participant_jid.localpart() == Some(localpart.as_str()),
             "MIX participant identifier is not a canonical localpart"

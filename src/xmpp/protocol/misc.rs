@@ -2,7 +2,6 @@ use super::{Action, ProtocolSession};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::{
-    auth,
     platform::jid_text::bare_jid,
     services::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::{
@@ -15,6 +14,7 @@ use crate::{
     },
 };
 use anyhow::Result;
+use northstar_auth_core as auth;
 use roxmltree::Node;
 use std::sync::{atomic::AtomicBool, atomic::AtomicU64, atomic::Ordering, Arc};
 use zeroize::Zeroizing;
@@ -357,7 +357,8 @@ impl ProtocolSession {
             Err(()) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
         };
         let password = Zeroizing::new(password);
-        if !crate::jid::prepare_localpart(&username).is_ok_and(|username| username == user.username)
+        if !northstar_xmpp_types::jid::prepare_localpart(&username)
+            .is_ok_and(|username| username == user.username)
             || auth::validate_password(&password).is_err()
         {
             return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
@@ -523,7 +524,7 @@ impl ProtocolSession {
         };
         let generated = uuid::Uuid::new_v4().to_string();
         let resource = match child_text(bind, "resource") {
-            Some(resource) => match crate::jid::prepare_resourcepart(resource) {
+            Some(resource) => match northstar_xmpp_types::jid::prepare_resourcepart(resource) {
                 Ok(resource) => resource,
                 Err(_) => return Ok(Action::Send(iq_error(id, "bad-request"))),
             },
@@ -586,11 +587,11 @@ impl ProtocolSession {
             self.state.local_domain(),
             resource
         );
-        let key = match crate::jid::canonical_session_key(&jid) {
+        let key = match northstar_xmpp_types::jid::canonical_session_key(&jid) {
             Ok(key) => key,
             Err(_) => return Ok(Err(ResourceBindingFailure::JidMalformed)),
         };
-        let resource = crate::jid::CanonicalJid::parse(&key)
+        let resource = northstar_xmpp_types::jid::CanonicalJid::parse(&key)
             .expect("canonical session key must parse")
             .resourcepart()
             .expect("canonical session key must contain a resource")
@@ -847,10 +848,11 @@ impl ProtocolSession {
             return Ok(addressed_error("bad-request"));
         }
         let valid_from = iq.attribute("from").is_none_or(|from| {
-            crate::jid::canonicalize(from).is_ok_and(|from| from.as_str() == full_jid)
+            northstar_xmpp_types::jid::canonicalize(from)
+                .is_ok_and(|from| from.as_str() == full_jid)
         });
         let valid_to = iq.attribute("to").is_none_or(|to| {
-            crate::jid::canonicalize(to).is_ok_and(|to| {
+            northstar_xmpp_types::jid::canonicalize(to).is_ok_and(|to| {
                 to.as_str() == full_jid
                     || to.as_str() == own_bare
                     || to.as_str() == self.state.local_domain()
@@ -1009,7 +1011,7 @@ pub(crate) async fn handle_push_delivery_response(
     else {
         return Ok(false);
     };
-    let Ok(sender) = crate::jid::canonical_bare_key(from) else {
+    let Ok(sender) = northstar_xmpp_types::jid::canonical_bare_key(from) else {
         return Ok(false);
     };
     let response_kind = if kind == "result" {
@@ -1094,24 +1096,23 @@ pub(crate) async fn handle_push_disable(
     {
         return Ok(false);
     }
-    let Ok(target) = crate::jid::CanonicalJid::parse_bare(to) else {
+    let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(to) else {
         return Ok(false);
     };
     let target = target.bare();
-    if affiliation
-        .attribute("jid")
-        .is_none_or(|jid| !crate::jid::canonical_bare_key(jid).is_ok_and(|jid| jid == target))
-    {
+    if affiliation.attribute("jid").is_none_or(|jid| {
+        !northstar_xmpp_types::jid::canonical_bare_key(jid).is_ok_and(|jid| jid == target)
+    }) {
         return Ok(false);
     }
-    let target_jid = crate::jid::CanonicalJid::parse_bare(&target)?;
+    let target_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&target)?;
     if target_jid.domainpart() != state.local_domain() {
         return Ok(false);
     }
     let Some(target_username) = target_jid.localpart() else {
         return Ok(false);
     };
-    let service = crate::jid::canonical_bare_key(from)?;
+    let service = northstar_xmpp_types::jid::canonical_bare_key(from)?;
     if !state
         .push_service()
         .disable_from_service(target_username, &service, node)

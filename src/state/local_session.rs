@@ -191,7 +191,7 @@ impl AppState {
                 && entry.priority.load(Ordering::Acquire) >= 0
                 && entry.sender.try_send(stanza.to_owned()).is_ok()
             {
-                if let Ok(bare) = crate::jid::canonical_bare_key(entry.key()) {
+                if let Ok(bare) = northstar_xmpp_types::jid::canonical_bare_key(entry.key()) {
                     recipients.insert(bare);
                 }
             }
@@ -203,7 +203,7 @@ impl AppState {
         self.sessions
             .iter()
             .filter(|entry| entry.routable.load(Ordering::Acquire))
-            .filter_map(|entry| crate::jid::canonical_bare_key(entry.key()).ok())
+            .filter_map(|entry| northstar_xmpp_types::jid::canonical_bare_key(entry.key()).ok())
             .collect()
     }
 
@@ -220,7 +220,7 @@ impl AppState {
             if !entry.routable.load(Ordering::Acquire) {
                 continue;
             }
-            let Ok(bare) = crate::jid::canonical_bare_key(entry.key()) else {
+            let Ok(bare) = northstar_xmpp_types::jid::canonical_bare_key(entry.key()) else {
                 continue;
             };
             online.insert(bare.clone());

@@ -89,7 +89,7 @@ pub(super) async fn upsert_mix_roster_tx(
     display_name: Option<&str>,
     share_presence: bool,
 ) -> Result<super::super::RosterChange> {
-    let channel_jid = crate::jid::canonicalize_bare(channel_jid)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
     sqlx::query(
         "INSERT INTO roster_items (owner_id, contact_jid, display_name, subscription, ask) VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (owner_id, contact_jid) DO UPDATE SET display_name = EXCLUDED.display_name, subscription = EXCLUDED.subscription, ask = NULL, updated_at = NOW()",
     )
@@ -112,7 +112,7 @@ pub(super) async fn delete_mix_roster_tx(
     user_id: Uuid,
     channel_jid: &str,
 ) -> Result<Option<super::super::RosterChange>> {
-    let channel_jid = crate::jid::canonicalize_bare(channel_jid)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
     let deleted = sqlx::query("DELETE FROM roster_items WHERE owner_id = $1 AND contact_jid = $2")
         .bind(user_id)
         .bind(&channel_jid)
@@ -210,7 +210,7 @@ pub async fn join_mix_channel(
             return Ok(JoinChannelOutcome::NickConflict);
         }
     }
-    let actor_domain = crate::jid::CanonicalJid::parse_bare(&actor_jid)?
+    let actor_domain = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&actor_jid)?
         .domainpart()
         .to_owned();
     let banned: bool = sqlx::query_scalar(
@@ -236,7 +236,8 @@ pub async fn join_mix_channel(
         .await?;
         if !allowed {
             if let Some(invitation) = request.invitation {
-                let channel_jid = crate::jid::canonicalize_bare(&invitation.channel_jid)?;
+                let channel_jid =
+                    northstar_xmpp_types::jid::canonicalize_bare(&invitation.channel_jid)?;
                 let inviter_jid = canonical_user_bare(&invitation.inviter_jid)?;
                 let invitee_jid = canonical_user_bare(&invitation.invitee_jid)?;
                 anyhow::ensure!(

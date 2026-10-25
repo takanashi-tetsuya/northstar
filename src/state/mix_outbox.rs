@@ -53,7 +53,7 @@ pub(crate) fn session_mix_capability_in(
     pending_caps: &PendingCapsIndex,
     full_jid: &str,
 ) -> MixSessionCapability {
-    let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
+    let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
         return MixSessionCapability::Unknown;
     };
     let Some(observation) = caps_by_jid.snapshot(&full_jid) else {
@@ -115,7 +115,7 @@ impl MixOutboxContext {
     }
 
     pub(crate) fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
         self.static_policy.federation_domain_allowed(&domain)

@@ -142,7 +142,7 @@ pub(super) fn authentication_master_secrets_are_independent(
 ) -> bool {
     !fast.is_some_and(|fast| {
         dummy_scram.is_some_and(|dummy| {
-            crate::auth::constant_time_bytes_eq(fast.as_bytes(), dummy.as_bytes())
+            northstar_auth_core::constant_time_bytes_eq(fast.as_bytes(), dummy.as_bytes())
         })
     })
 }

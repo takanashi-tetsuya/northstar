@@ -75,7 +75,7 @@ impl ProtocolSession {
         };
         let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
         if let Some(asserted) = request.from.as_deref() {
-            let asserted = crate::jid::canonicalize(asserted).ok();
+            let asserted = northstar_xmpp_types::jid::canonicalize(asserted).ok();
             if asserted.as_deref() != Some(full_jid)
                 && asserted.as_deref() != Some(actor_bare.as_str())
             {
@@ -132,7 +132,7 @@ impl ProtocolSession {
         if request.kind != "get" || request.request.is_none() {
             return Ok(None);
         }
-        let target = match crate::jid::CanonicalJid::parse(&request.to) {
+        let target = match northstar_xmpp_types::jid::CanonicalJid::parse(&request.to) {
             Ok(target) if target.localpart().is_some() => target,
             _ => return Ok(None),
         };

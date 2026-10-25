@@ -105,7 +105,7 @@ pub async fn mix_muc_mirror_service_complete(pool: &PgPool, mix_domain: &str) ->
              )
          )",
     )
-    .bind(crate::jid::prepare_domainpart(mix_domain)?)
+    .bind(northstar_xmpp_types::jid::prepare_domainpart(mix_domain)?)
     .fetch_one(pool)
     .await
     .map_err(Into::into)
@@ -121,10 +121,10 @@ pub async fn link_mix_muc_by_localpart(
     actor_bare_jid: &str,
     local_domain: &str,
 ) -> Result<LinkMixMucOutcome> {
-    let mix_domain = crate::jid::prepare_domainpart(mix_domain)?;
-    let local_domain = crate::jid::prepare_domainpart(local_domain)?;
-    let localpart = crate::jid::prepare_localpart(localpart)?;
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
+    let mix_domain = northstar_xmpp_types::jid::prepare_domainpart(mix_domain)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+    let localpart = northstar_xmpp_types::jid::prepare_localpart(localpart)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
     let Some(actor_localpart) = actor.localpart() else {
         return Ok(LinkMixMucOutcome::NotCommonOwner);
     };
@@ -231,8 +231,8 @@ pub async fn reconcile_mix_muc_mirrors(
     mix_domain: &str,
     local_domain: &str,
 ) -> Result<u64> {
-    let mix_domain = crate::jid::prepare_domainpart(mix_domain)?;
-    let local_domain = crate::jid::prepare_domainpart(local_domain)?;
+    let mix_domain = northstar_xmpp_types::jid::prepare_domainpart(mix_domain)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let result = sqlx::query(
         "INSERT INTO mix_muc_mirrors (mix_channel_id, muc_room_id, created_by)
          SELECT c.id, r.id, c.creator_jid

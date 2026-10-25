@@ -499,9 +499,9 @@ fn no_records(error: &NetError) -> bool {
 }
 
 fn canonical_dns_host(value: &str) -> Result<String> {
-    let prepared = crate::jid::prepare_domainpart(value.trim_end_matches('.'))
+    let prepared = northstar_xmpp_types::jid::prepare_domainpart(value.trim_end_matches('.'))
         .context("DANE host is not a valid RFC 7622 domain")?;
-    crate::jid::domain_to_ascii(&prepared)
+    northstar_xmpp_types::jid::domain_to_ascii(&prepared)
         .context("DANE host cannot be represented as an A-label")
         .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
 }

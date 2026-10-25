@@ -76,7 +76,7 @@ impl LockedMucExpiryContext {
 
 impl LockedMucExpiryLocal {
     fn occupants_for(&self, room_jid: &str) -> Vec<MucOccupant> {
-        let Ok(room_jid) = crate::jid::canonicalize_bare(room_jid) else {
+        let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
             return Vec::new();
         };
         self.occupants

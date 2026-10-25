@@ -213,13 +213,14 @@ pub async fn create_sm_session_with_ownership_resolution(
 ) -> Result<CreatedSmSession> {
     validate_snapshot(snapshot, usize::MAX, usize::MAX)?;
     let (joined_rooms, directed_presence) = canonical_snapshot_identities(snapshot)?;
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
-    let resource = crate::jid::prepare_resourcepart(resource)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
+    let resource = northstar_xmpp_types::jid::prepare_resourcepart(resource)?;
     anyhow::ensure!(
-        crate::jid::CanonicalJid::parse(&full_jid)?.resourcepart() == Some(resource.as_str()),
+        northstar_xmpp_types::jid::CanonicalJid::parse(&full_jid)?.resourcepart()
+            == Some(resource.as_str()),
         "SM resource does not match full JID"
     );
-    let server_domain = crate::jid::prepare_domainpart(server_domain)?;
+    let server_domain = northstar_xmpp_types::jid::prepare_domainpart(server_domain)?;
     let ttl = seconds_i64(ttl_seconds, "SM resume TTL")?;
     let live_lease = seconds_i64(live_lease_seconds, "SM live lease")?;
     let mut transaction = pool.begin().await?;
@@ -260,8 +261,10 @@ pub async fn create_sm_session_with_ownership_resolution(
         anyhow::bail!("durable SM authorization changed");
     };
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(&full_jid)?
-            == crate::jid::canonicalize_bare(&format!("{username}@{server_domain}"))?,
+        northstar_xmpp_types::jid::canonical_bare_key(&full_jid)?
+            == northstar_xmpp_types::jid::canonicalize_bare(&format!(
+                "{username}@{server_domain}"
+            ))?,
         "durable SM full JID does not belong to its account on this server"
     );
     let id = Uuid::new_v4();
@@ -680,7 +683,7 @@ pub async fn take_sm_sessions_for_full_jid_teardown(
     full_jid: &str,
     lease_seconds: u64,
 ) -> Result<SmTeardownBatch> {
-    let full_jid = crate::jid::canonical_session_key(full_jid)?;
+    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     take_sm_teardown_scope(
         pool,
         "full",

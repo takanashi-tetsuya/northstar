@@ -83,7 +83,7 @@ pub(super) async fn connect_component_endpoint(
         .context("connect-mode component omitted its endpoint")?;
     let dns_host = match endpoint.host.parse::<IpAddr>() {
         Ok(address) => address.to_string(),
-        Err(_) => crate::jid::domain_to_ascii(&endpoint.host)
+        Err(_) => northstar_xmpp_types::jid::domain_to_ascii(&endpoint.host)
             .context("component endpoint cannot be represented as a DNS host")?,
     };
     let deadline = Instant::now() + state.component_runtime_policy().handshake_timeout;
@@ -189,7 +189,7 @@ pub(super) async fn legacy_connection(
     let handshake_timeout = state.component_runtime_policy().handshake_timeout;
     let component_domain =
         match component_stream_attribute(&opening, "to", COMPONENT_ACCEPT_NS, false)
-            .and_then(|domain| crate::jid::prepare_domainpart(&domain).ok())
+            .and_then(|domain| northstar_xmpp_types::jid::prepare_domainpart(&domain).ok())
         {
             Some(domain) => domain,
             None => {
@@ -296,7 +296,7 @@ pub(super) async fn modern_connection(
         anyhow::bail!("XEP-0225 component did not open a version 1.0 stream");
     }
     let asserted_domain = match component_stream_attribute(&opening, "from", "jabber:client", true)
-        .and_then(|domain| crate::jid::prepare_domainpart(&domain).ok())
+        .and_then(|domain| northstar_xmpp_types::jid::prepare_domainpart(&domain).ok())
     {
         Some(domain) => domain,
         None => {
@@ -307,7 +307,7 @@ pub(super) async fn modern_connection(
         }
     };
     let target = match component_stream_attribute(&opening, "to", "jabber:client", true)
-        .and_then(|domain| crate::jid::prepare_domainpart(&domain).ok())
+        .and_then(|domain| northstar_xmpp_types::jid::prepare_domainpart(&domain).ok())
     {
         Some(domain) => domain,
         None => {

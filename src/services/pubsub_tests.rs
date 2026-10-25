@@ -1133,7 +1133,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     };
     let service = Arc::new(PubSubService::new(pool.clone(), "example.test"));
     let subscriber = format!("remote{}@remote.test/phone", Uuid::new_v4().simple());
-    let subscriber_bare = crate::jid::canonical_bare_key(&subscriber).unwrap();
+    let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap();
 
     // Subscription-first: every revocation input must wait until the
     // subscription and its outbox projection commit from one snapshot.

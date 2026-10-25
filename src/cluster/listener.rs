@@ -265,9 +265,10 @@ pub(super) async fn listen_once(
             let instance = json["connection_id"]
                 .as_str()
                 .and_then(|value| uuid::Uuid::parse_str(value).ok());
-            if let (Ok(target), Some(instance)) =
-                (crate::jid::canonical_session_key(target), instance)
-            {
+            if let (Ok(target), Some(instance)) = (
+                northstar_xmpp_types::jid::canonical_session_key(target),
+                instance,
+            ) {
                 match dispatch.terminate_exact_session(&target, instance).await? {
                     SessionTerminationEffect::Absent => {
                         control_processed = Some(true);
@@ -285,7 +286,7 @@ pub(super) async fn listen_once(
                 }
             }
         } else if is_user_agent_replacement {
-            let parsed = crate::jid::canonicalize_bare(target)
+            let parsed = northstar_xmpp_types::jid::canonicalize_bare(target)
                 .ok()
                 .zip(
                     json["user_id"]
@@ -315,11 +316,13 @@ pub(super) async fn listen_once(
                 control_processed = Some(true);
             }
         } else if is_account_generation_teardown {
-            let parsed = crate::jid::canonicalize_bare(target).ok().zip(
-                json["user_id"]
-                    .as_str()
-                    .and_then(|value| uuid::Uuid::parse_str(value).ok()),
-            );
+            let parsed = northstar_xmpp_types::jid::canonicalize_bare(target)
+                .ok()
+                .zip(
+                    json["user_id"]
+                        .as_str()
+                        .and_then(|value| uuid::Uuid::parse_str(value).ok()),
+                );
             let generation = json["minimum_generation"]
                 .as_i64()
                 .filter(|value| *value >= 0);
@@ -333,7 +336,7 @@ pub(super) async fn listen_once(
                 .as_str()
                 .and_then(|value| uuid::Uuid::parse_str(value).ok())
             {
-                if let Ok(target) = crate::jid::canonical_session_key(target) {
+                if let Ok(target) = northstar_xmpp_types::jid::canonical_session_key(target) {
                     if dispatch.fence_sm_session(&target, sm_session_id) {
                         delivered = 1;
                     }
@@ -348,10 +351,10 @@ pub(super) async fn listen_once(
                 );
                 continue;
             }
-            let owner = crate::jid::canonicalize(target).ok();
+            let owner = northstar_xmpp_types::jid::canonicalize(target).ok();
             let recipient = json["recipient"]
                 .as_str()
-                .and_then(|recipient| crate::jid::canonicalize(recipient).ok());
+                .and_then(|recipient| northstar_xmpp_types::jid::canonicalize(recipient).ok());
             let availability_only = json["availability_only"].as_bool().unwrap_or(false);
             let authority = match presence_authority(json) {
                 Ok(Some(authority)) => Some(authority),
@@ -513,7 +516,7 @@ pub(super) async fn listen_once(
                 control_processed = Some(processed);
             }
         } else if is_blocking_presence_change {
-            let owner = crate::jid::canonicalize_bare(target).ok();
+            let owner = northstar_xmpp_types::jid::canonicalize_bare(target).ok();
             let targets = json["blocking_targets"]
                 .as_array()
                 .filter(|items| items.len() <= northstar_xep_0191::MAX_ITEMS)
@@ -522,7 +525,7 @@ pub(super) async fn listen_once(
                         .iter()
                         .map(|item| {
                             item.as_str()
-                                .and_then(|jid| crate::jid::canonicalize(jid).ok())
+                                .and_then(|jid| northstar_xmpp_types::jid::canonicalize(jid).ok())
                         })
                         .collect::<Option<Vec<_>>>()
                 });
@@ -534,7 +537,7 @@ pub(super) async fn listen_once(
                         .iter()
                         .map(|item| {
                             item.as_str()
-                                .and_then(|jid| crate::jid::canonicalize(jid).ok())
+                                .and_then(|jid| northstar_xmpp_types::jid::canonicalize(jid).ok())
                         })
                         .collect::<Option<Vec<_>>>()
                 });
@@ -567,7 +570,7 @@ pub(super) async fn listen_once(
                     .ok(),
                 );
             if let Some((sm_session_id, occupant)) = parsed {
-                let target_matches = crate::jid::canonicalize_bare(target)
+                let target_matches = northstar_xmpp_types::jid::canonicalize_bare(target)
                     .ok()
                     .is_some_and(|room| room == occupant.room_jid);
                 if target_matches {
@@ -629,10 +632,10 @@ pub(super) async fn listen_once(
                 }
             }
         } else if is_muc_destroy {
-            if let Ok(room) = crate::jid::canonicalize_bare(target) {
+            if let Ok(room) = northstar_xmpp_types::jid::canonicalize_bare(target) {
                 let alternate = json["alternate"]
                     .as_str()
-                    .and_then(|jid| crate::jid::canonicalize_bare(jid).ok());
+                    .and_then(|jid| northstar_xmpp_types::jid::canonicalize_bare(jid).ok());
                 let reason = json["reason"]
                     .as_str()
                     .filter(|reason| reason.len() <= 4096);
@@ -847,17 +850,17 @@ pub(super) async fn listen_once(
                 };
                 let endpoints = root
                     .attribute("from")
-                    .and_then(|from| crate::jid::canonicalize(from).ok())
+                    .and_then(|from| northstar_xmpp_types::jid::canonicalize(from).ok())
                     .zip(
                         root.attribute("to")
-                            .and_then(|to| crate::jid::canonicalize(to).ok()),
+                            .and_then(|to| northstar_xmpp_types::jid::canonicalize(to).ok()),
                     );
                 let Some((owner, recipient)) = endpoints else {
                     continue;
                 };
                 if !presence_delivery_stanza_matches(document, expected_delivery)
-                    || crate::jid::canonical_bare_key(&recipient).ok()
-                        != crate::jid::canonical_bare_key(target).ok()
+                    || northstar_xmpp_types::jid::canonical_bare_key(&recipient).ok()
+                        != northstar_xmpp_types::jid::canonical_bare_key(target).ok()
                     || !message_policy
                         .presence_authority_is_current(
                             &owner,
@@ -940,7 +943,7 @@ pub(super) async fn listen_once(
                 .collect::<Vec<_>>();
             if let Some(real_sender) = json["real_sender"]
                 .as_str()
-                .and_then(|sender| crate::jid::canonicalize(sender).ok())
+                .and_then(|sender| northstar_xmpp_types::jid::canonicalize(sender).ok())
             {
                 muc_senders.push(real_sender);
             }
@@ -954,7 +957,7 @@ pub(super) async fn listen_once(
                                 &muc_senders,
                             )
                             .await;
-                        if !crate::jid::canonical_bare_key(&session.full_jid)
+                        if !northstar_xmpp_types::jid::canonical_bare_key(&session.full_jid)
                             .is_ok_and(|owner| blocked.contains(&owner))
                         {
                             delivered += usize::from(
@@ -971,7 +974,7 @@ pub(super) async fn listen_once(
                     .blocked_muc_recipient_accounts(&sessions, &muc_senders)
                     .await;
                 for session in sessions {
-                    if crate::jid::canonical_bare_key(&session.full_jid)
+                    if northstar_xmpp_types::jid::canonical_bare_key(&session.full_jid)
                         .is_ok_and(|owner| blocked.contains(&owner))
                     {
                         continue;
@@ -1087,8 +1090,8 @@ pub(super) async fn listen_once(
                             && root.attribute("to").is_some_and(|to| {
                                 matches!(
                                     (
-                                        crate::jid::canonical_session_key(to),
-                                        crate::jid::canonical_session_key(target),
+                                        northstar_xmpp_types::jid::canonical_session_key(to),
+                                        northstar_xmpp_types::jid::canonical_session_key(target),
                                     ),
                                     (Ok(addressed), Ok(expected)) if addressed == expected
                                 )
@@ -1128,7 +1131,7 @@ pub(super) async fn listen_once(
                             Some(ResolvedNodeMessageDelivery::Mix(_))
                         )
                         || !mix_capable_only
-                        || crate::jid::CanonicalJid::parse(target)
+                        || northstar_xmpp_types::jid::CanonicalJid::parse(target)
                             .map_or(true, |jid| jid.resourcepart().is_some())
                         || carbons_only
                         || blocklist_requested_only

@@ -233,7 +233,7 @@ impl<R: RetractionRepository> RetractionService<R> {
             "retraction semantic payload must contain 1 byte to 1 MiB"
         );
 
-        let canonical_sender = crate::jid::canonical_bare_key(sender_jid)?;
+        let canonical_sender = northstar_xmpp_types::jid::canonical_bare_key(sender_jid)?;
         let mut normalized_owners = Vec::with_capacity(owners.len());
         let mut owner_ids = HashSet::new();
         for owner in owners {
@@ -243,7 +243,7 @@ impl<R: RetractionRepository> RetractionService<R> {
             );
             normalized_owners.push(NormalizedOwner {
                 owner_id: owner.owner_id,
-                peer_bare_jid: crate::jid::canonical_bare_key(owner.peer_jid)?,
+                peer_bare_jid: northstar_xmpp_types::jid::canonical_bare_key(owner.peer_jid)?,
             });
         }
         normalized_owners.sort_by_key(|owner| owner.owner_id);
@@ -258,7 +258,8 @@ impl<R: RetractionRepository> RetractionService<R> {
             .context("retraction command is invalid XML")?;
         let command_encrypted =
             crate::services::xml_util::is_encrypted(command_document.root_element());
-        let configured_domain = crate::jid::prepare_domainpart(&self.configured_domain)?;
+        let configured_domain =
+            northstar_xmpp_types::jid::prepare_domainpart(&self.configured_domain)?;
         anyhow::ensure!(
             delivery.is_none() || outbound.is_none(),
             "one retraction cannot request local C2S and S2S delivery projections"
@@ -312,8 +313,8 @@ impl<R: RetractionRepository> RetractionService<R> {
                 !write.stanza.is_empty() && write.stanza.len() <= 1_048_576,
                 "retraction action archive must contain 1 byte to 1 MiB"
             );
-            let peer_full_jid = crate::jid::canonicalize(write.peer_jid)?;
-            let peer_bare_jid = crate::jid::canonical_bare_key(&peer_full_jid)?;
+            let peer_full_jid = northstar_xmpp_types::jid::canonicalize(write.peer_jid)?;
+            let peer_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&peer_full_jid)?;
             anyhow::ensure!(
                 normalized_owners.iter().any(|owner| {
                     owner.owner_id == write.owner_id && owner.peer_bare_jid == peer_bare_jid
@@ -418,8 +419,8 @@ fn normalize_delivery_projection<'a>(
         delivery.max_messages > 0 && delivery.max_bytes > 0 && delivery.ttl_days >= 0,
         "retraction delivery policy is invalid"
     );
-    let sender_full = crate::jid::canonicalize(delivery.sender_jid)?;
-    let sender_bare_jid = crate::jid::canonical_bare_key(&sender_full)?;
+    let sender_full = northstar_xmpp_types::jid::canonicalize(delivery.sender_jid)?;
+    let sender_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&sender_full)?;
     anyhow::ensure!(
         sender_bare_jid == canonical_sender,
         "retraction delivery sender does not match authenticated sender"
@@ -435,7 +436,7 @@ fn normalize_delivery_projection<'a>(
         .attribute("from")
         .context("retraction delivery is missing from")?;
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(stanza_from)? == canonical_sender,
+        northstar_xmpp_types::jid::canonical_bare_key(stanza_from)? == canonical_sender,
         "retraction delivery from does not match authenticated sender"
     );
     // RFC 6120 section 10.3.1 gives a locally authenticated C2S message
@@ -444,11 +445,11 @@ fn normalize_delivery_projection<'a>(
     // server from rewriting a client stanza's `to` while delivering it. S2S
     // stanzas, in contrast, are required to carry an explicit destination.
     let recipient_full_jid = match root.attribute("to") {
-        Some(to) => crate::jid::canonicalize(to)?,
+        Some(to) => northstar_xmpp_types::jid::canonicalize(to)?,
         None if delivery.local_actor_id.is_some() => canonical_sender.to_owned(),
         None => anyhow::bail!("federated retraction delivery is missing to"),
     };
-    let recipient_jid = crate::jid::CanonicalJid::parse(&recipient_full_jid)?;
+    let recipient_jid = northstar_xmpp_types::jid::CanonicalJid::parse(&recipient_full_jid)?;
     anyhow::ensure!(
         recipient_jid.localpart().is_some() && recipient_jid.domainpart() == configured_domain,
         "retraction C2S delivery target is not a local account"
@@ -520,7 +521,7 @@ fn normalize_outbound_projection<'a>(
     canonical_command_semantics: &[u8],
     command: &RetractionCommand<'_>,
 ) -> Result<NormalizedOutbound<'a>> {
-    let target_domain = crate::jid::prepare_domainpart(outbound.target_domain)?;
+    let target_domain = northstar_xmpp_types::jid::prepare_domainpart(outbound.target_domain)?;
     anyhow::ensure!(
         target_domain != configured_domain,
         "retraction outbox target must be a remote domain"
@@ -533,11 +534,13 @@ fn normalize_outbound_projection<'a>(
     );
     anyhow::ensure!(
         root.attribute("from")
-            .is_some_and(|from| crate::jid::canonical_bare_key(from).ok().as_deref()
+            .is_some_and(|from| northstar_xmpp_types::jid::canonical_bare_key(from)
+                .ok()
+                .as_deref()
                 == Some(canonical_sender)),
         "retraction outbox from does not match authenticated sender"
     );
-    let recipient = crate::jid::CanonicalJid::parse(
+    let recipient = northstar_xmpp_types::jid::CanonicalJid::parse(
         root.attribute("to")
             .context("retraction outbox is missing to")?,
     )?;
@@ -547,7 +550,7 @@ fn normalize_outbound_projection<'a>(
     );
     if let Some(bounce_to) = outbound.bounce_to {
         anyhow::ensure!(
-            crate::jid::canonical_bare_key(bounce_to)? == canonical_sender,
+            northstar_xmpp_types::jid::canonical_bare_key(bounce_to)? == canonical_sender,
             "retraction outbox bounce authority does not belong to sender"
         );
     }
@@ -586,7 +589,7 @@ pub(crate) fn validate_owner_authority(
             .all(|owner| account_bares.contains_key(&owner.owner_id)),
         "retraction owner UUID is not an enabled local account"
     );
-    let sender = crate::jid::CanonicalJid::parse_bare(canonical_sender)?;
+    let sender = northstar_xmpp_types::jid::CanonicalJid::parse_bare(canonical_sender)?;
     let sender_is_local = sender.domainpart() == configured_domain;
     let sender_owner = account_bares
         .iter()
@@ -733,7 +736,10 @@ fn canonical_retraction_semantics_inner(
     );
     if let Some(from) = root.attribute("from") {
         anyhow::ensure!(
-            crate::jid::canonical_bare_key(from).ok().as_deref() == Some(sender),
+            northstar_xmpp_types::jid::canonical_bare_key(from)
+                .ok()
+                .as_deref()
+                == Some(sender),
             "retraction action sender changed"
         );
     }
@@ -876,10 +882,12 @@ pub(crate) fn classify_target(
             TargetClassification::ConflictingTombstone
         });
     }
-    if !root
-        .attribute("from")
-        .is_some_and(|from| crate::jid::canonical_bare_key(from).ok().as_deref() == Some(sender))
-    {
+    if !root.attribute("from").is_some_and(|from| {
+        northstar_xmpp_types::jid::canonical_bare_key(from)
+            .ok()
+            .as_deref()
+            == Some(sender)
+    }) {
         return Ok(TargetClassification::ForeignOriginal);
     }
     if !retractable_message(root) {
@@ -958,7 +966,7 @@ pub(crate) fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> 
         let id = node.attribute("id")?;
         let by = node.attribute("by")?;
         if validate_stable_id(id, "archived stanza id").is_err()
-            || crate::jid::CanonicalJid::parse(by).is_err()
+            || northstar_xmpp_types::jid::CanonicalJid::parse(by).is_err()
         {
             return None;
         }

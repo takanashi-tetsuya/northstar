@@ -76,7 +76,7 @@ impl<R: PasswordChangeRepository> PasswordChangeService<R> {
     ) -> Result<PasswordChangeResult> {
         let invalid_input = command.current_password.is_empty()
             || command.current_password.len() > 1024
-            || crate::auth::validate_password(command.new_password).is_err();
+            || northstar_auth_core::validate_password(command.new_password).is_err();
         self.repository
             .execute(command, self.policy, invalid_input)
             .await

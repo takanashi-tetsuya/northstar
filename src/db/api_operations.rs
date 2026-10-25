@@ -236,7 +236,7 @@ fn validate_operation_payload(kind: &str, version: i16, value: &Value) -> Result
 }
 
 fn validate_canonical_muc_room_jid(value: &str, field: &str) -> Result<()> {
-    let jid = crate::jid::CanonicalJid::parse_bare(value)
+    let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)
         .with_context(|| format!("{field} must be a valid bare JID"))?;
     anyhow::ensure!(
         jid.localpart().is_some(),

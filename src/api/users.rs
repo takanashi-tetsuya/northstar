@@ -145,7 +145,7 @@ impl TryFrom<crate::services::mam::ArchiveRow> for HistoryMessageView {
     type Error = anyhow::Error;
 
     fn try_from(value: crate::services::mam::ArchiveRow) -> std::result::Result<Self, Self::Error> {
-        let peer_jid = crate::jid::canonical_bare_key(&value.peer_jid)?;
+        let peer_jid = northstar_xmpp_types::jid::canonical_bare_key(&value.peer_jid)?;
         Ok(Self {
             id: value.id,
             peer_jid,
@@ -190,7 +190,7 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
     let with_jid = query
         .r#with
         .as_deref()
-        .map(crate::jid::canonicalize)
+        .map(northstar_xmpp_types::jid::canonicalize)
         .transpose()
         .map_err(|_| AppError::BadRequest("with filter is not a valid JID".into()))?;
     if matches!((query.start, query.end), (Some(start), Some(end)) if start > end) {

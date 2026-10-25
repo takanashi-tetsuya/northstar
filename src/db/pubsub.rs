@@ -599,7 +599,7 @@ fn canonical_bare_jids(values: &[String]) -> Result<Vec<String>> {
     let mut seen = std::collections::BTreeSet::new();
     let mut canonical = Vec::with_capacity(values.len());
     for value in values {
-        let jid = crate::jid::canonical_bare_key(value)?;
+        let jid = northstar_xmpp_types::jid::canonical_bare_key(value)?;
         if !seen.insert(jid.clone()) {
             anyhow::bail!("PubSub JID list contains canonically equivalent duplicate {jid}");
         }

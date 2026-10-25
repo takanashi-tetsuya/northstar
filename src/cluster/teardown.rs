@@ -89,7 +89,7 @@ impl ClusterAccountTeardownNotifier {
         minimum_generation: i64,
     ) -> Result<()> {
         anyhow::ensure!(minimum_generation >= 0, "invalid auth generation");
-        let bare_jid = crate::jid::canonicalize_bare(bare_jid)?;
+        let bare_jid = northstar_xmpp_types::jid::canonicalize_bare(bare_jid)?;
         if !self.sender.publisher.is_enabled() {
             return Ok(());
         }
@@ -119,7 +119,7 @@ impl ClusterAccountTeardownNotifier {
             !expected_connection_id.is_nil(),
             "session termination requires a non-nil connection identity"
         );
-        let full_jid = crate::jid::canonical_session_key(full_jid)?;
+        let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
         if !self.sender.publisher.is_enabled() {
             return Ok(false);
         }
@@ -170,7 +170,7 @@ impl ClusterSmSessionTeardownNotifier {
         full_jid: &str,
         sm_session_id: uuid::Uuid,
     ) -> Result<()> {
-        let full_jid = crate::jid::canonical_session_key(full_jid)?;
+        let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
         if !self.sender.publisher.is_enabled() {
             return Ok(());
         }
@@ -210,7 +210,7 @@ impl ClusterSmMucTeardown {
         let Some(pool) = &self.sender.publisher.pool else {
             return Ok(());
         };
-        let room_jid = crate::jid::canonicalize_bare(room_jid)?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let nick = crate::services::xml_util::prepare_muc_nick(&occupant.nick)?;
         let nodes = self.sender.publisher.active_muc_nodes(&room_jid).await?;
         let occupants_key = self
@@ -337,7 +337,7 @@ impl ClusterSmSuspension {
             return Ok(true);
         };
         let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let nick = crate::services::xml_util::prepare_muc_nick(nick)?;
         let process_instance = self.publisher.process_instance_token()?;
         let occupants_key = self.publisher.key(format!("muc_occupants:{room}"));

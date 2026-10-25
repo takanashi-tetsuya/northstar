@@ -28,7 +28,7 @@ impl AppState {
         room_jid: &str,
         nick: &str,
     ) -> Option<MucOccupant> {
-        let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         let key = crate::services::xml_util::muc_occupant_key(&room_jid, nick);
         self.muc_occupants
             .get(&key)
@@ -162,8 +162,8 @@ impl AppState {
         if connection_id.is_nil() || membership.cluster_epoch.is_nil() {
             return None;
         }
-        let full_jid = crate::jid::canonical_session_key(full_jid).ok()?;
-        let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
+        let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid).ok()?;
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         let session = self.sessions.get(&full_jid)?;
         if session.connection_id != connection_id
             || !session

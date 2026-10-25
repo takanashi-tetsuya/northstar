@@ -200,7 +200,7 @@ pub(super) fn validate_cluster_muc_admin_batch_details(
                     .as_str()
                     .context("cluster MUC batch offline target has no bare JID")?;
                 anyhow::ensure!(
-                    crate::jid::canonicalize_bare(bare_jid)? == bare_jid,
+                    northstar_xmpp_types::jid::canonicalize_bare(bare_jid)? == bare_jid,
                     "cluster MUC batch offline target is not canonical"
                 );
                 let affiliation = change["affiliation"]

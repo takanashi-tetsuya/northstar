@@ -7,7 +7,6 @@ use super::{
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
-    jid::CanonicalJid,
     platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::{messaging::MessageService, privacy::PrivacyStanzaKind, pubsub::PubSubService},
@@ -16,6 +15,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_session_core::LocalCapsEpoch;
+use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 
 pub(crate) struct PepLastItemsContext {
@@ -60,7 +60,7 @@ impl PepLastItemsContext {
     }
 
     pub(crate) fn pep_notify_nodes(&self, target: &str) -> Vec<String> {
-        let Ok(target) = crate::jid::canonical_session_key(target) else {
+        let Ok(target) = northstar_xmpp_types::jid::canonical_session_key(target) else {
             return Vec::new();
         };
         let Some(snapshot) = self.observations.snapshot(&target) else {
@@ -115,7 +115,7 @@ impl PepLastItemsContext {
     }
 
     fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
         self.static_policy.federation_domain_allowed(&domain)
@@ -129,7 +129,7 @@ impl PepLastItemsContext {
         message: String,
         expected_local_epoch: Option<LocalCapsEpoch>,
     ) -> Result<()> {
-        let sender_bare_jid = crate::jid::canonicalize_bare(sender_bare_jid)?;
+        let sender_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(sender_bare_jid)?;
         let recipient_jid = CanonicalJid::parse(recipient)?;
         let domain = recipient_jid.domainpart();
         if domain == self.local_domain {

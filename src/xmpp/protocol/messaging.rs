@@ -457,7 +457,7 @@ impl ProtocolSession {
                     && node.tag_name().namespace() == Some("jabber:x:conference")
             })
             .and_then(|node| node.attribute("jid"))
-            .and_then(|jid| crate::jid::CanonicalJid::parse_bare(jid).ok())
+            .and_then(|jid| northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid).ok())
             .filter(|jid| jid.domainpart() == self.muc_domain() && jid.localpart().is_some())
         else {
             return Ok(DirectInviteAdmission::None);

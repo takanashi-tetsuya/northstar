@@ -13,9 +13,9 @@ pub async fn complete_remote_pam_success(
     join: Option<RemotePamJoin<'_>>,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<RemotePamCompletionOutcome> {
-    let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
-    let channel_jid = crate::jid::canonicalize_bare(channel_jid)?;
-    let recipient_bare = crate::jid::canonicalize_bare(recipient_bare)?;
+    let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
+    let recipient_bare = northstar_xmpp_types::jid::canonicalize_bare(recipient_bare)?;
     let mut transaction = pool.begin().await?;
     let row = sqlx::query(
         "SELECT operation_id,user_id,channel_jid,remote_domain,operation,
@@ -53,7 +53,7 @@ pub async fn complete_remote_pam_success(
     let user_id: Uuid = row.get("user_id");
     let operation: String = row.get("operation");
     let requester: String = row.get("requester_full_jid");
-    let actor = crate::jid::canonical_bare_key(&requester)?;
+    let actor = northstar_xmpp_types::jid::canonical_bare_key(&requester)?;
     if actor != recipient_bare {
         transaction.rollback().await?;
         return Ok(RemotePamCompletionOutcome::Conflict);
@@ -212,7 +212,7 @@ pub async fn pam_membership(
     user_id: Uuid,
     channel_jid: &str,
 ) -> Result<Option<PamMembership>> {
-    let channel_jid = crate::jid::canonicalize_bare(channel_jid)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
     let row = sqlx::query(
         "SELECT id, user_id, channel_jid, participant_id, state, request_id, client_request_id, requester_full_jid FROM mix_pam_memberships WHERE user_id = $1 AND channel_jid = $2",
     )
@@ -227,7 +227,7 @@ pub async fn pam_membership(
 }
 
 pub async fn local_pam_users_for_channel(pool: &PgPool, channel_jid: &str) -> Result<Vec<Uuid>> {
-    let channel_jid = crate::jid::canonicalize_bare(channel_jid)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
     sqlx::query_scalar(
         "SELECT user_id FROM mix_pam_memberships WHERE channel_jid = $1 ORDER BY user_id",
     )
@@ -242,11 +242,12 @@ pub async fn begin_remote_pam_leave(
     request: BeginRemotePamLeave<'_>,
 ) -> Result<PamOperationReplay> {
     let actor_jid = canonical_user_bare(request.actor_jid)?;
-    let channel_jid = crate::jid::canonicalize_bare(request.channel_jid)?;
-    let requester_full_jid = crate::jid::canonical_session_key(request.requester_full_jid)?;
-    let remote_domain = crate::jid::prepare_domainpart(request.remote_domain)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(request.channel_jid)?;
+    let requester_full_jid =
+        northstar_xmpp_types::jid::canonical_session_key(request.requester_full_jid)?;
+    let remote_domain = northstar_xmpp_types::jid::prepare_domainpart(request.remote_domain)?;
     anyhow::ensure!(
-        crate::jid::canonical_bare_key(&requester_full_jid)? == actor_jid,
+        northstar_xmpp_types::jid::canonical_bare_key(&requester_full_jid)? == actor_jid,
         "MIX-PAM requester resource does not belong to authenticated actor"
     );
     anyhow::ensure!(
@@ -258,7 +259,8 @@ pub async fn begin_remote_pam_leave(
         "invalid PAM client request id"
     );
     anyhow::ensure!(
-        crate::jid::CanonicalJid::parse_bare(&channel_jid)?.domainpart() == remote_domain,
+        northstar_xmpp_types::jid::CanonicalJid::parse_bare(&channel_jid)?.domainpart()
+            == remote_domain,
         "MIX-PAM remote domain does not own the channel"
     );
     validate_pam_outbound(
@@ -342,9 +344,9 @@ pub async fn complete_remote_pam_error(
     condition: &str,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<RemotePamCompletionOutcome> {
-    let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
-    let channel_jid = crate::jid::canonicalize_bare(channel_jid)?;
-    let recipient_bare = crate::jid::canonicalize_bare(recipient_bare)?;
+    let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
+    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
+    let recipient_bare = northstar_xmpp_types::jid::canonicalize_bare(recipient_bare)?;
     let mut transaction = pool.begin().await?;
     let row = sqlx::query(
         "SELECT operation_id,user_id,channel_jid,remote_domain,operation,
@@ -379,7 +381,7 @@ pub async fn complete_remote_pam_error(
     );
     let user_id: Uuid = row.get("user_id");
     let requester: String = row.get("requester_full_jid");
-    let actor = crate::jid::canonical_bare_key(&requester)?;
+    let actor = northstar_xmpp_types::jid::canonical_bare_key(&requester)?;
     if actor != recipient_bare {
         transaction.rollback().await?;
         return Ok(RemotePamCompletionOutcome::Conflict);
@@ -503,7 +505,7 @@ pub async fn reconcile_expired_remote_pam(
     .await?;
     for row in &rows {
         let requester: String = row.get("requester_full_jid");
-        let actor = crate::jid::canonical_bare_key(&requester)?;
+        let actor = northstar_xmpp_types::jid::canonical_bare_key(&requester)?;
         let response = payloads.pam_error_result(
             row.get::<String, _>("client_request_id").as_str(),
             &actor,

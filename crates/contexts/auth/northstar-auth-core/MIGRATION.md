@@ -33,7 +33,7 @@ The monolithic structure of `src/auth.rs` has been decomposed into five coherent
 
 ## 3. Callers in `src/` (Migration Ledger)
 
-The following existing callers in `src/` reference `crate::auth` and will cleanly consume `northstar_auth_core` once root integration is unified:
+These callers in `src/` used the former `crate::auth` facade; since S17 (WP-171) they import `northstar_auth_core` directly. The paths are those of the extraction:
 
 | Caller File | Referenced Symbols | Usage Description |
 |---|---|---|
@@ -65,19 +65,9 @@ The following existing callers in `src/` reference `crate::auth` and will cleanl
 
 ## 4. Root Integration
 
-The root workspace now owns this crate and `src/auth.rs` is the following
-minimal compatibility facade:
-
-```rust
-//! Cryptographic authentication and SASL state-machines for Northstar.
-//!
-//! Re-exported from the capability-free `northstar-auth-core` crate.
-
-pub use northstar_auth_core::*;
-```
-
-All existing `crate::auth::*` callers therefore execute this crate's
-implementation. The former monolithic duplicate was deleted.
+S17 (WP-171) removed the `src/auth.rs` compatibility facade. Root modules import
+`northstar_auth_core` directly (some as `use northstar_auth_core as auth;`);
+this crate is the only implementation.
 
 ---
 
@@ -124,6 +114,6 @@ members = [
 
 ## 8. Remaining Migration Work
 
-- Application services still refer to the compatibility facade instead of
-  importing `northstar-auth-core` directly. This is intentional while service
-  crates are extracted; it is no longer an implementation duplication.
+- The account, SASL and credential persistence code in the root crate moves
+  into the `auth` context in S24 of the
+  [target architecture](../../../../docs/architecture/target-architecture.zh-TW.md).

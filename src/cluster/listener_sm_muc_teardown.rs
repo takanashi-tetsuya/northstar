@@ -52,7 +52,7 @@ impl ClusterListenerSmMucTeardown {
             .await?;
         let mut delivered = 0;
         for (_, target) in &remaining {
-            if crate::jid::canonical_bare_key(&target.full_jid)
+            if northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
                 .is_ok_and(|owner| blocked.contains(&owner))
             {
                 continue;

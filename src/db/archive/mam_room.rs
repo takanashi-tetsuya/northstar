@@ -256,7 +256,7 @@ pub async fn authorize_federated_mam_room(
     viewer_bare_jid: &str,
     currently_joined: bool,
 ) -> Result<MamRoomReadOutcome<()>> {
-    let viewer_bare_jid = crate::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
+    let viewer_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
     anyhow::ensure!(
         viewer_bare_jid.localpart().is_some(),
         "federated MAM viewer must be a user bare JID"
@@ -366,7 +366,7 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
     viewer_bare_jid: &str,
     currently_joined: bool,
 ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-    let viewer_bare_jid = crate::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
+    let viewer_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
     anyhow::ensure!(
         viewer_bare_jid.localpart().is_some(),
         "federated MAM viewer must be a user bare JID"
@@ -443,7 +443,7 @@ pub(crate) async fn mam_federated_room_archive_page_authorized_in_transaction(
     currently_joined: bool,
     query: &MamArchiveQuery,
 ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
-    let viewer_bare_jid = crate::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
+    let viewer_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
     anyhow::ensure!(
         viewer_bare_jid.localpart().is_some(),
         "federated MAM viewer must be a user bare JID"

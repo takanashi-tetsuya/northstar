@@ -553,7 +553,7 @@ impl ProtocolSession {
                     &[format!("{room_jid}/{}", own.nick), from.to_owned()],
                 )
                 .await;
-            if crate::jid::canonical_bare_key(&target.full_jid)
+            if northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
                 .is_ok_and(|owner| blocked.contains(&owner))
             {
                 return Ok(Action::None);

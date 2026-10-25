@@ -64,7 +64,8 @@ impl<R: MucDestroyRepository> MucDestroyService<R> {
             .get("room_jid")
             .and_then(Value::as_str)
             .context("room JID is missing")?;
-        let jid = crate::jid::CanonicalJid::parse(room_jid).context("room JID is invalid")?;
+        let jid = northstar_xmpp_types::jid::CanonicalJid::parse(room_jid)
+            .context("room JID is invalid")?;
         anyhow::ensure!(jid.resourcepart().is_none(), "room JID must be bare");
         let localpart = jid.localpart().context("room JID has no localpart")?;
         anyhow::ensure!(

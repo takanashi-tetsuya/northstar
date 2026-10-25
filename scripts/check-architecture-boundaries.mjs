@@ -2162,7 +2162,7 @@ if (!/\.mam_service\s*\(\s*\)/.test(federatedMucSource)) {
 const federatedIqHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
 const federatedMetadataCall = federatedIqHandler.indexOf('.execute_federated_mam_metadata(command)');
 const federatedActorCheck = federatedIqHandler.indexOf('authenticated_remote_actor(authenticated_domain, from)');
-const federatedBareActor = federatedIqHandler.indexOf('let actor_bare_jid = crate::jid::canonical_bare_key(&actor_full_jid)?;');
+const federatedBareActor = federatedIqHandler.indexOf('let actor_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;');
 const federatedMetadataCommand = federatedIqHandler.indexOf('FederatedMamMetadataCommand::from_authenticated_actor(');
 if (federatedMetadataCall < 0
   || federatedActorCheck < 0

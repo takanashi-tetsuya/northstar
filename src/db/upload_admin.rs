@@ -139,7 +139,7 @@ pub async fn retry_upload_dead_letter_in_tx(
         UploadDeadLetterId::StorageJob(id) => (UploadDeadLetterKind::StorageJob, Some(id), None),
         UploadDeadLetterId::Cleanup(id) => (UploadDeadLetterKind::Cleanup, None, Some(id)),
     };
-    let session_hash = crate::auth::token_hash(presented_session);
+    let session_hash = northstar_auth_core::token_hash(presented_session);
     let outcome = sqlx::query_scalar::<_, String>(
         "SELECT northstar_upload_retry_dead_letter($1,$2,$3,$4,$5,$6,$7)",
     )

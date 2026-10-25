@@ -29,7 +29,7 @@ pub async fn collection_visible_items(
     global_item_limit: i64,
     xml_byte_limit: i64,
 ) -> Result<Vec<CollectionVisibleItem>> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let rows = sqlx::query(
         "WITH RECURSIVE authorized_root(id) AS (
              SELECT root.id
@@ -167,7 +167,7 @@ pub async fn associate_collection_child_with_renderer(
     requester: &str,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<CollectionUpdateOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     // Serialize all graph changes so two valid-looking concurrent inserts
     // cannot jointly violate the child quota or create a cycle.
@@ -329,7 +329,7 @@ pub async fn dissociate_collection_child_with_renderer(
     requester: &str,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<CollectionUpdateOutcome> {
-    let requester = crate::jid::canonical_bare_key(requester)?;
+    let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
         .execute(&mut *transaction)

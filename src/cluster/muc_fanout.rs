@@ -25,7 +25,7 @@ impl ClusterManager {
         stanza: &str,
         real_sender: &str,
     ) -> Result<()> {
-        let real_sender = crate::jid::canonicalize(real_sender)?;
+        let real_sender = northstar_xmpp_types::jid::canonicalize(real_sender)?;
         self.send_to_muc_internal(room_jid, stanza, Some(&real_sender))
             .await
     }
@@ -86,7 +86,7 @@ impl ClusterManager {
         stanza: &str,
         real_sender: &str,
     ) -> Result<()> {
-        let real_sender = crate::jid::canonicalize(real_sender)?;
+        let real_sender = northstar_xmpp_types::jid::canonicalize(real_sender)?;
         self.send_muc_private_internal(room_jid, target_nick, stanza, Some(&real_sender))
             .await
     }
@@ -189,8 +189,10 @@ impl ClusterManager {
         alternate: Option<&str>,
         reason: Option<&str>,
     ) -> Result<()> {
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let alternate = alternate.map(crate::jid::canonicalize_bare).transpose()?;
+        let room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
+        let alternate = alternate
+            .map(northstar_xmpp_types::jid::canonicalize_bare)
+            .transpose()?;
         anyhow::ensure!(
             reason.is_none_or(|value| value.len() <= 4096),
             "MUC destroy reason exceeds 4096 bytes"

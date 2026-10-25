@@ -53,8 +53,8 @@ where
     ) {
         return Ok(AuthorizedLocalPresenceTransition::Missing);
     }
-    let actor_domain = crate::jid::prepare_domainpart(actor_domain)?;
-    let target_username = crate::auth::normalize_username(target_username)?;
+    let actor_domain = northstar_xmpp_types::jid::prepare_domainpart(actor_domain)?;
+    let target_username = northstar_auth_core::normalize_username(target_username)?;
     let mut transaction = pool.begin().await?;
 
     // Resolve the target incarnation inside this transaction, then lock the
@@ -479,8 +479,8 @@ pub async fn transition_inbound_remote_presence_subscription(
     ) {
         return Ok(AuthorizedInboundRemotePresenceTransition::Missing);
     }
-    let recipient_domain = crate::jid::prepare_domainpart(recipient_domain)?;
-    let from_jid = crate::jid::canonicalize_bare(from_jid)?;
+    let recipient_domain = northstar_xmpp_types::jid::prepare_domainpart(recipient_domain)?;
+    let from_jid = northstar_xmpp_types::jid::canonicalize_bare(from_jid)?;
     if kind == "subscribe" && (stamped_stanza.is_empty() || stamped_stanza.len() > 65_536) {
         anyhow::bail!("federated presence subscription stanza exceeds the persistence limit");
     }
@@ -746,8 +746,8 @@ pub(super) async fn transition_remote_presence_subscription_authorized_inner(
         "invalid presence subscription transition"
     );
     let mut transaction = pool.begin().await?;
-    let actor_domain = crate::jid::prepare_domainpart(actor_domain)?;
-    let contact = crate::jid::canonicalize_bare(contact)?;
+    let actor_domain = northstar_xmpp_types::jid::prepare_domainpart(actor_domain)?;
+    let contact = northstar_xmpp_types::jid::canonicalize_bare(contact)?;
     let actor = sqlx::query(
         "SELECT id,username,auth_generation FROM users
           WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
@@ -823,7 +823,7 @@ pub(super) async fn transition_remote_presence_subscription_in_transaction(
     kind: &str,
     outbox: Option<(&str, &str, Option<&str>, super::super::S2sOutboxPolicy)>,
 ) -> Result<Option<RemotePresenceTransition>> {
-    let from_jid = crate::jid::canonicalize_bare(from_jid)?;
+    let from_jid = northstar_xmpp_types::jid::canonicalize_bare(from_jid)?;
     let existing = sqlx::query(
         "SELECT subscription, ask, approved FROM roster_items WHERE owner_id=$1 AND contact_jid=$2 FOR UPDATE",
     )

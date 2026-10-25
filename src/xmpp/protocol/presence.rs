@@ -64,7 +64,7 @@ impl ProtocolSession {
         };
         let kind = root.attribute("type").unwrap_or("available");
         if let Some(raw_to) = root.attribute("to") {
-            let target_jid = match crate::jid::CanonicalJid::parse(raw_to) {
+            let target_jid = match northstar_xmpp_types::jid::CanonicalJid::parse(raw_to) {
                 Ok(target) => target,
                 Err(_) => return Ok(Action::Send(stanza_error(root, "modify", "jid-malformed"))),
             };
@@ -565,7 +565,7 @@ impl ProtocolSession {
                 {
                     continue;
                 }
-                let contact_jid = crate::jid::CanonicalJid::parse_bare(&jid).ok();
+                let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&jid).ok();
                 let local_contact = match contact_jid.as_ref().and_then(|jid| jid.localpart()) {
                     Some(username)
                         if contact_jid
@@ -658,7 +658,7 @@ impl ProtocolSession {
                 if matches!(subscription.as_str(), "from" | "both") {
                     self.remove_directed_presence_for_bare(&jid);
                     let delivery = set_to(&rewritten, &jid);
-                    if let Ok(contact) = crate::jid::CanonicalJid::parse_bare(&jid) {
+                    if let Ok(contact) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&jid) {
                         if contact.domainpart() == self.state.local_domain() {
                             for (_, target) in self
                                 .state

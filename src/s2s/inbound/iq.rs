@@ -124,7 +124,7 @@ pub(crate) async fn route_inbound_iq(
         // IQ get/set addressed to a matching full JID.  This includes Jingle
         // and unknown extension IQs; capability discovery is not special.
         if matches!(kind, "get" | "set") {
-            let requester_bare = crate::jid::canonical_bare_key(from)?;
+            let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(from)?;
             let subscribed = state
                 .s2s_roster_authorization_service()
                 .allows_presence(recipient.id, &requester_bare)
@@ -403,7 +403,7 @@ pub(crate) async fn route_inbound_iq(
             let Some(requested) = operation.attribute("jid") else {
                 return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
             };
-            let Ok(requested) = crate::jid::canonicalize(requested) else {
+            let Ok(requested) = northstar_xmpp_types::jid::canonicalize(requested) else {
                 return Ok(Some(s2s_iq_error(id, to, from, "jid-malformed")));
             };
             if operation.tag_name().name() == "subscribe" {

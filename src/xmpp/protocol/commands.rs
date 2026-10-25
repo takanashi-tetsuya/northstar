@@ -269,7 +269,7 @@ pub(crate) async fn handle(
         )));
     }
     if root.attribute("to").is_some_and(|to| {
-        !crate::jid::CanonicalJid::parse_bare(to)
+        !northstar_xmpp_types::jid::CanonicalJid::parse_bare(to)
             .is_ok_and(|target| target.localpart().is_none() && target.domainpart() == responder)
     }) {
         return Ok(Action::Send(command_error(

@@ -109,13 +109,14 @@ pub(super) async fn ownership_and_composite_findings(
             let username: String = row.try_get("username")?;
             let full: String = row.try_get("full_jid")?;
             let resource: String = row.try_get("resource")?;
-            let Ok(canonical_full) = crate::jid::canonical_session_key(&full) else {
+            let Ok(canonical_full) = northstar_xmpp_types::jid::canonical_session_key(&full) else {
                 continue;
             };
-            let Ok(parsed) = crate::jid::CanonicalJid::parse(&canonical_full) else {
+            let Ok(parsed) = northstar_xmpp_types::jid::CanonicalJid::parse(&canonical_full) else {
                 continue;
             };
-            let expected_bare = crate::jid::canonicalize_bare(&format!("{username}@{domain}"));
+            let expected_bare =
+                northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{domain}"));
             if expected_bare
                 .as_deref()
                 .is_ok_and(|expected| expected != parsed.bare())
@@ -133,7 +134,10 @@ pub(super) async fn ownership_and_composite_findings(
                     },
                 ));
             }
-            if crate::jid::prepare_resourcepart(&resource).ok().as_deref() != parsed.resourcepart()
+            if northstar_xmpp_types::jid::prepare_resourcepart(&resource)
+                .ok()
+                .as_deref()
+                != parsed.resourcepart()
             {
                 findings.push(semantic_finding(
                     reporter,
@@ -163,8 +167,9 @@ pub(super) async fn ownership_and_composite_findings(
             let locator: String = row.try_get("locator")?;
             let username: String = row.try_get("username")?;
             let full: String = row.try_get("owner_full_jid")?;
-            let expected = crate::jid::canonicalize_bare(&format!("{username}@{domain}"));
-            let actual = crate::jid::canonical_bare_key(&full);
+            let expected =
+                northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{domain}"));
+            let actual = northstar_xmpp_types::jid::canonical_bare_key(&full);
             if matches!((&expected, &actual), (Ok(expected), Ok(actual)) if expected != actual) {
                 findings.push(semantic_finding(
                     reporter,
@@ -243,8 +248,8 @@ pub(super) async fn mix_channel_collisions(
         let service: String = row.try_get("service_domain")?;
         let local: String = row.try_get("localpart")?;
         if let (Ok(service), Ok(local)) = (
-            crate::jid::prepare_domainpart(&service),
-            crate::jid::prepare_localpart(&local),
+            northstar_xmpp_types::jid::prepare_domainpart(&service),
+            northstar_xmpp_types::jid::prepare_localpart(&local),
         ) {
             keys.entry((service, local)).or_default().push((
                 locator,
@@ -287,7 +292,7 @@ pub(super) async fn mix_registered_nick_collisions(
         let original_jid: String = row.try_get("jid")?;
         let nick: String = row.try_get("nick")?;
         if let (Ok(service), Ok(jid)) = (
-            crate::jid::prepare_domainpart(&original_service),
+            northstar_xmpp_types::jid::prepare_domainpart(&original_service),
             IdentityKind::UserBare.canonicalize(&original_jid),
         ) {
             owner_keys

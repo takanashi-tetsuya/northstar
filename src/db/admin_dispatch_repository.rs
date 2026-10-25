@@ -103,7 +103,7 @@ impl AdminCommandStore {
         }
         let actor_id = admission.authority.user_id;
         let auth_generation = admission.authority.auth_generation;
-        let session_hash = crate::auth::token_hash(admission.authority.session_token);
+        let session_hash = northstar_auth_core::token_hash(admission.authority.session_token);
         let admit_sql = match route {
             db::api_control::AdminCommandRoute::TlsReload =>
                 "SELECT * FROM northstar_admin_tls_reload_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",

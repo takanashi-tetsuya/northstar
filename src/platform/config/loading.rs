@@ -229,7 +229,10 @@ impl Config {
                 ),
             ] {
                 if other.is_some_and(|other| {
-                    crate::auth::constant_time_bytes_eq(gateway.as_bytes(), other.as_bytes())
+                    northstar_auth_core::constant_time_bytes_eq(
+                        gateway.as_bytes(),
+                        other.as_bytes(),
+                    )
                 }) {
                     anyhow::bail!(
                         "WEB_ADMIN_GATEWAY_TOKEN_FILE must not reuse {name} key material"
@@ -301,7 +304,7 @@ impl Config {
             .take()
             .filter(|value| !value.trim().is_empty());
 
-        let domain = crate::jid::prepare_domainpart(raw.xmpp_domain.trim())
+        let domain = northstar_xmpp_types::jid::prepare_domainpart(raw.xmpp_domain.trim())
             .context("XMPP_DOMAIN is invalid")?;
         let cluster_fields_present = raw
             .cluster_node_id
@@ -634,13 +637,13 @@ impl Config {
             }
         }
         validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;
-        if !(crate::auth::MIN_SCRAM_ITERATIONS..=crate::auth::MAX_SCRAM_ITERATIONS)
+        if !(northstar_auth_core::MIN_SCRAM_ITERATIONS..=northstar_auth_core::MAX_SCRAM_ITERATIONS)
             .contains(&raw.scram_iterations)
         {
             anyhow::bail!(
                 "SCRAM_ITERATIONS must be between {} and {}",
-                crate::auth::MIN_SCRAM_ITERATIONS,
-                crate::auth::MAX_SCRAM_ITERATIONS
+                northstar_auth_core::MIN_SCRAM_ITERATIONS,
+                northstar_auth_core::MAX_SCRAM_ITERATIONS
             );
         }
         validate_shared_runtime_secret("FAST_TOKEN_SECRET", raw.fast_token_secret.as_deref())?;
@@ -1038,7 +1041,7 @@ impl Config {
                 continue;
             }
             let (d, endpoint) = entry.split_once('=').context("invalid DNS override")?;
-            let d = crate::jid::prepare_domainpart(d.trim())
+            let d = northstar_xmpp_types::jid::prepare_domainpart(d.trim())
                 .context("invalid domain in DNS override")?;
             let endpoint = endpoint.trim();
             let (endpoint, direct_tls) = endpoint

@@ -432,7 +432,10 @@ pub(super) fn validated_bosh_restart_target(
 ) -> Result<String, &'static str> {
     match requested {
         Some(value)
-            if crate::jid::prepare_domainpart(value).ok().as_deref() == Some(configured_domain) =>
+            if northstar_xmpp_types::jid::prepare_domainpart(value)
+                .ok()
+                .as_deref()
+                == Some(configured_domain) =>
         {
             Ok(configured_domain.to_owned())
         }

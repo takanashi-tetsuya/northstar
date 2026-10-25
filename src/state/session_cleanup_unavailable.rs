@@ -88,7 +88,7 @@ impl SessionCleanupUnavailable {
         target: &str,
         recipient_privacy: bool,
     ) -> Result<()> {
-        let Ok(target_jid) = crate::jid::CanonicalJid::parse(target) else {
+        let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(target) else {
             anyhow::bail!("invalid SM teardown presence target");
         };
         let canonical_target = target_jid.to_string();

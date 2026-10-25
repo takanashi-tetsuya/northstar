@@ -148,7 +148,8 @@ impl AccountRevocationRoutes {
         bare_account_jid: &str,
         auth_generation_exclusive: Option<i64>,
     ) -> usize {
-        let Ok(bare_account_jid) = crate::jid::canonicalize_bare(bare_account_jid) else {
+        let Ok(bare_account_jid) = northstar_xmpp_types::jid::canonicalize_bare(bare_account_jid)
+        else {
             return 0;
         };
         let mut revoked = 0;

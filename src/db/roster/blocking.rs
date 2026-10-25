@@ -31,8 +31,8 @@ pub(super) async fn is_blocked_for_account_in_transaction(
     owner_bare_jid: &str,
     candidate: &str,
 ) -> Result<bool> {
-    let owner = crate::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
-    let candidate = crate::jid::CanonicalJid::parse(candidate)?;
+    let owner = northstar_xmpp_types::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
     if candidate.localpart().is_some() && candidate.bare() == owner.bare() {
         return Ok(false);
     }
@@ -84,7 +84,7 @@ pub(super) fn canonical_blocking_jids(jids: &[String]) -> Result<Vec<String>> {
     let mut seen = HashSet::with_capacity(jids.len());
     let mut canonical = Vec::with_capacity(jids.len());
     for jid in jids {
-        let jid = crate::jid::canonicalize(jid)?;
+        let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
         if seen.insert(jid.clone()) {
             canonical.push(jid);
         }
@@ -174,8 +174,8 @@ pub async fn is_blocked_for_account(
     owner_bare_jid: &str,
     candidate: &str,
 ) -> Result<bool> {
-    let owner = crate::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
-    let candidate = crate::jid::CanonicalJid::parse(candidate)?;
+    let owner = northstar_xmpp_types::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
     // XEP-0191 forbids blocking communication between two resources of the
     // same account, even when a broader domain rule matches.
     if candidate.localpart().is_some() && candidate.bare() == owner.bare() {
@@ -187,14 +187,14 @@ pub async fn is_blocked_for_account(
 /// Fast indexed XEP-0191 lookup for contexts that cannot represent traffic
 /// between two resources of the owner (PEP, MIX, and other service actors).
 pub async fn is_blocked(pool: &PgPool, owner_id: Uuid, candidate: &str) -> Result<bool> {
-    let candidate = crate::jid::CanonicalJid::parse(candidate)?;
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
     is_blocked_candidates(pool, owner_id, &candidate).await
 }
 
 pub(super) async fn is_blocked_candidates(
     pool: &PgPool,
     owner_id: Uuid,
-    candidate: &crate::jid::CanonicalJid,
+    candidate: &northstar_xmpp_types::jid::CanonicalJid,
 ) -> Result<bool> {
     let candidates = blocking_match_candidates(candidate);
     sqlx::query_scalar(
@@ -218,10 +218,10 @@ pub async fn blocked_local_accounts_for_candidates(
     occupant_jids: &[String],
     stanza_senders: &[String],
 ) -> Result<HashSet<String>> {
-    let local_domain = crate::jid::prepare_domainpart(local_domain)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let mut usernames = occupant_jids
         .iter()
-        .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
+        .filter_map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok())
         .filter(|jid| jid.domainpart() == local_domain)
         .filter_map(|jid| jid.localpart().map(str::to_owned))
         .collect::<Vec<_>>();
@@ -232,7 +232,7 @@ pub async fn blocked_local_accounts_for_candidates(
     }
     let senders = stanza_senders
         .iter()
-        .map(|sender| crate::jid::CanonicalJid::parse(sender))
+        .map(|sender| northstar_xmpp_types::jid::CanonicalJid::parse(sender))
         .collect::<Result<Vec<_>>>()?;
     let mut lookup_keys = senders
         .iter()
@@ -264,7 +264,9 @@ pub async fn blocked_local_accounts_for_candidates(
     Ok(blocked)
 }
 
-pub(super) fn blocking_match_candidates(candidate: &crate::jid::CanonicalJid) -> Vec<String> {
+pub(super) fn blocking_match_candidates(
+    candidate: &northstar_xmpp_types::jid::CanonicalJid,
+) -> Vec<String> {
     let mut candidates = Vec::with_capacity(4);
     if let Some(resource) = candidate.resourcepart() {
         candidates.push(candidate.to_string());

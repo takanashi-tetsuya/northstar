@@ -5,8 +5,8 @@
 //! authorization generations, operation claims and terminal audit persistence
 //! stay behind this boundary.
 
-use crate::jid::CanonicalJid;
 use anyhow::Result;
+use northstar_xmpp_types::jid::CanonicalJid;
 use uuid::Uuid;
 
 const MAX_ADMIN_ACCOUNT_PAGE_SIZE: i64 = 200;

@@ -7,7 +7,7 @@ pub(super) fn canonical_history_actor(actor_scope: &str) -> Result<String> {
         !actor_scope.is_empty() && actor_scope.len() <= 3071,
         "MUC history actor scope must contain 1 to 3071 bytes"
     );
-    let actor = crate::jid::CanonicalJid::parse_bare(actor_scope)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_scope)?;
     anyhow::ensure!(
         actor.localpart().is_some(),
         "MUC history actor scope must be a user bare JID"
@@ -25,7 +25,7 @@ pub(super) fn canonical_history_sender(sender_jid: &str) -> Result<String> {
         !sender_jid.is_empty() && sender_jid.len() <= 3071,
         "MUC history sender JID must contain 1 to 3071 bytes"
     );
-    let canonical = crate::jid::canonicalize(sender_jid)?;
+    let canonical = northstar_xmpp_types::jid::canonicalize(sender_jid)?;
     anyhow::ensure!(
         canonical == sender_jid,
         "MUC history sender JID must already be canonical"
@@ -128,7 +128,8 @@ pub(super) async fn lock_muc_actor_authority(
     }
     if authority.actor_scope != canonical_history_actor(authority.actor_scope)?
         || authority.full_jid != canonical_history_sender(authority.full_jid)?
-        || crate::jid::canonical_bare_key(authority.full_jid)? != authority.actor_scope
+        || northstar_xmpp_types::jid::canonical_bare_key(authority.full_jid)?
+            != authority.actor_scope
         || authority.nick.is_empty()
         || authority.nick.len() > MAX_MUC_NICK_BYTES
         || !matches!(
@@ -202,9 +203,9 @@ pub(super) async fn lock_muc_actor_authority(
             user_id,
             local_domain,
         } => {
-            let local_domain = crate::jid::prepare_domainpart(local_domain)?;
+            let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
             let principal_matches = if let Ok(actor) =
-                crate::jid::CanonicalJid::parse_bare(authority.actor_scope)
+                northstar_xmpp_types::jid::CanonicalJid::parse_bare(authority.actor_scope)
             {
                 let name_matches: bool =
                     sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
@@ -233,8 +234,9 @@ pub(super) async fn lock_muc_actor_authority(
             bare_jid,
             authenticated_domain,
         } => {
-            let actor = crate::jid::CanonicalJid::parse_bare(bare_jid)?;
-            let authenticated_domain = crate::jid::prepare_domainpart(authenticated_domain)?;
+            let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(bare_jid)?;
+            let authenticated_domain =
+                northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
             let principal_matches = actor.localpart().is_some()
                 && actor.resourcepart().is_none()
                 && actor.to_string() == *bare_jid
@@ -268,11 +270,11 @@ pub(super) async fn lock_muc_actor_authority(
                 user_id,
                 local_domain,
             } => {
-                let local_domain = crate::jid::prepare_domainpart(local_domain)?;
+                let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
                 row.get::<String, _>("identity_kind") == "local"
                     && row.get::<Option<Uuid>, _>("local_user_id") == Some(*user_id)
                     && row.get::<String, _>("bare_jid") == authority.actor_scope
-                    && crate::jid::CanonicalJid::parse_bare(authority.actor_scope)
+                    && northstar_xmpp_types::jid::CanonicalJid::parse_bare(authority.actor_scope)
                         .is_ok_and(|actor| actor.domainpart() == local_domain)
                     && row
                         .get::<Option<String>, _>("authenticated_domain")

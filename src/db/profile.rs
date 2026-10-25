@@ -24,9 +24,11 @@ impl PostgresProfileRepository {
         node: &str,
         factory: &dyn ProfileOutboxFactory,
     ) -> Result<Vec<db::PubSubOutboxInsert>> {
-        let owner_bare_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{owner_username}@{}", self.domain))?
-                .to_string();
+        let owner_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+            "{owner_username}@{}",
+            self.domain
+        ))?
+        .to_string();
         let policy = stored_profile_node_policy(transaction, user_id, node).await?;
         anyhow::ensure!(
             policy.deliver_notifications,
@@ -49,7 +51,7 @@ impl PostgresProfileRepository {
         let mut roster = HashMap::with_capacity(roster_rows.len());
         for row in roster_rows {
             let jid: String = row.try_get("contact_jid")?;
-            let jid = crate::jid::CanonicalJid::parse_bare(&jid)?.to_string();
+            let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&jid)?.to_string();
             let groups = serde_json::from_value::<Vec<String>>(row.try_get("groups")?)
                 .context("stored roster groups are not a string array")?;
             roster.insert(
@@ -76,7 +78,7 @@ impl PostgresProfileRepository {
         .await?;
         let explicit = explicit_rows
             .into_iter()
-            .map(|jid| crate::jid::canonicalize(&jid))
+            .map(|jid| northstar_xmpp_types::jid::canonicalize(&jid))
             .collect::<Result<Vec<_>>>()?;
 
         // XEP-0191 writes use the same seed-0 account locks. Take every local
@@ -86,7 +88,7 @@ impl PostgresProfileRepository {
         let mut localparts = roster
             .keys()
             .chain(explicit.iter())
-            .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
+            .filter_map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok())
             .filter(|jid| jid.domainpart() == self.domain)
             .filter_map(|jid| jid.localpart().map(str::to_owned))
             .collect::<Vec<_>>();
@@ -104,9 +106,11 @@ impl PostgresProfileRepository {
         for row in local_rows {
             let id: Uuid = row.try_get("id")?;
             let username: String = row.try_get("username")?;
-            let bare =
-                crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                    .to_string();
+            let bare = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
+                "{username}@{}",
+                self.domain
+            ))?
+            .to_string();
             local_accounts.insert(bare, id);
             block_owners.push(id);
         }
@@ -133,8 +137,8 @@ impl PostgresProfileRepository {
         let privacy = owner_privacy_policy(transaction, user_id, connection_id).await?;
 
         let authorized = |jid: &str, roster_entry: Option<&RosterAudienceEntry>| -> Result<bool> {
-            let bare = crate::jid::canonical_bare_key(jid)?;
-            let parsed = crate::jid::CanonicalJid::parse(jid)?;
+            let bare = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
+            let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(jid)?;
             if bare != owner_bare_jid
                 && parsed.domainpart() == self.domain
                 && !local_accounts.contains_key(&bare)
@@ -171,7 +175,7 @@ impl PostgresProfileRepository {
         }
         let mut explicit_jids = Vec::new();
         for jid in explicit {
-            let bare = crate::jid::canonical_bare_key(&jid)?;
+            let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
             if authorized(&jid, roster.get(&bare))? {
                 explicit_jids.push(jid);
             }
@@ -915,7 +919,7 @@ fn profile_access_allowed(
         })),
         "whitelist" => {
             for allowed in &policy.access_whitelist {
-                if crate::jid::canonical_bare_key(allowed)? == candidate_bare {
+                if northstar_xmpp_types::jid::canonical_bare_key(allowed)? == candidate_bare {
                     return Ok(true);
                 }
             }
@@ -973,7 +977,7 @@ fn profile_outbox(
     deliveries
         .iter()
         .map(|(recipient, message)| {
-            let recipient_bare = crate::jid::canonical_bare_key(recipient)?;
+            let recipient_bare = northstar_xmpp_types::jid::canonical_bare_key(recipient)?;
             let recipient_account_id = if recipient_bare == owner_bare_jid {
                 Some(user_id)
             } else {

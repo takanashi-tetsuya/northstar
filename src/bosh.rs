@@ -259,7 +259,11 @@ impl BoshManager {
             .try_acquire_owned()
             .map_err(|_| "policy-violation")?;
         let to = request.to.as_deref().ok_or("improper-addressing")?;
-        if crate::jid::prepare_domainpart(to).ok().as_deref() != Some(state.local_domain()) {
+        if northstar_xmpp_types::jid::prepare_domainpart(to)
+            .ok()
+            .as_deref()
+            != Some(state.local_domain())
+        {
             return Err("host-unknown");
         }
         if !request.payloads.is_empty()

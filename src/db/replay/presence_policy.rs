@@ -146,7 +146,9 @@ pub(super) async fn replay_policy_snapshot(
 
     let mut candidate_bares = candidates
         .iter()
-        .map(|candidate| crate::jid::CanonicalJid::parse(candidate).map(|jid| jid.bare()))
+        .map(|candidate| {
+            northstar_xmpp_types::jid::CanonicalJid::parse(candidate).map(|jid| jid.bare())
+        })
         .collect::<Result<Vec<_>>>()?;
     candidate_bares.sort_unstable();
     candidate_bares.dedup();
@@ -181,8 +183,8 @@ pub(super) fn replay_policy_denies(
     privacy: &ReplayPrivacyPolicy,
     roster: &HashMap<String, ReplayRosterPolicy>,
 ) -> Result<bool> {
-    let owner = crate::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
-    let candidate = crate::jid::CanonicalJid::parse(candidate)?;
+    let owner = northstar_xmpp_types::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
     let same_account = candidate.localpart().is_some() && candidate.bare() == owner.bare();
     if !same_account
         && blocked_patterns
@@ -243,8 +245,8 @@ pub async fn pending_presence_replay_page_filtered(
     active_privacy_list: Option<&str>,
     after: Option<&PendingPresenceCursor>,
 ) -> Result<PendingPresenceReplayPage> {
-    let local_domain = crate::jid::prepare_domainpart(local_domain)?;
-    let owner_bare_jid = crate::jid::canonicalize_bare(owner_bare_jid)?;
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+    let owner_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(owner_bare_jid)?;
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)

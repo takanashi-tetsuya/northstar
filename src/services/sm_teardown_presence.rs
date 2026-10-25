@@ -77,7 +77,7 @@ impl<R: SmTeardownPresenceRepository> SmTeardownPresenceService<R> {
         {
             return Ok(false);
         }
-        let Ok(target_jid) = crate::jid::CanonicalJid::parse(policy.target) else {
+        let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(policy.target) else {
             bail!("invalid SM teardown presence target");
         };
         if target_jid.domainpart() == policy.local_domain {

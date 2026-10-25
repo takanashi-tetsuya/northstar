@@ -421,11 +421,14 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         .bind(Uuid::new_v4()).bind(alice.id)
         .bind("<message xmlns='jabber:client' from='alice@example.test/phone' to='bob@example.test' type='chat' id='origin-1'><encrypted xmlns='urn:xmpp:omemo:2'><header sid='1'/><payload>Yg==</payload></encrypted></message>")
         .execute(&pool).await.unwrap();
-    let expected_scram =
-        crate::db::get_scram_credentials(&pool, "alice", crate::auth::ScramAlgorithm::Sha256)
-            .await
-            .unwrap()
-            .unwrap();
+    let expected_scram = crate::db::get_scram_credentials(
+        &pool,
+        "alice",
+        northstar_auth_core::ScramAlgorithm::Sha256,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let tree = TestTree::new();
     let output = tree.0.join("portable.xml");
     export(&pool, "example.test", &output, true).await.unwrap();
@@ -459,11 +462,14 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
     import(&pool, &runtime, &options).await.unwrap();
     let restored_alice = crate::db::find_user(&pool, "alice").await.unwrap().unwrap();
     let restored_bob = crate::db::find_user(&pool, "bob").await.unwrap().unwrap();
-    let restored_scram =
-        crate::db::get_scram_credentials(&pool, "alice", crate::auth::ScramAlgorithm::Sha256)
-            .await
-            .unwrap()
-            .unwrap();
+    let restored_scram = crate::db::get_scram_credentials(
+        &pool,
+        "alice",
+        northstar_auth_core::ScramAlgorithm::Sha256,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(restored_scram.iterations, expected_scram.iterations);
     assert_eq!(restored_scram.salt, expected_scram.salt);
     assert_eq!(restored_scram.stored_key, expected_scram.stored_key);

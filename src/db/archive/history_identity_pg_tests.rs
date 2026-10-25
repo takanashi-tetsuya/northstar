@@ -66,7 +66,7 @@ fn maximum_canonical_full_jid(localpart: char, resourcepart: char) -> String {
         resourcepart.to_string().repeat(1023)
     );
     assert_eq!(jid.len(), 2301);
-    assert_eq!(crate::jid::canonicalize(&jid).unwrap(), jid);
+    assert_eq!(northstar_xmpp_types::jid::canonicalize(&jid).unwrap(), jid);
     jid
 }
 

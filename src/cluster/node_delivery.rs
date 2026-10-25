@@ -121,7 +121,7 @@ pub(super) fn delivery_privacy_peer(
     } else {
         root.attribute("from")
     };
-    crate::jid::canonicalize(peer?)
+    northstar_xmpp_types::jid::canonicalize(peer?)
         .ok()
         .map(|peer| (peer, kind))
 }
@@ -136,7 +136,7 @@ pub(super) fn delivery_exclusions(json: &serde_json::Value) -> HashSet<String> {
             .map(|value| {
                 value
                     .as_str()
-                    .and_then(|jid| crate::jid::canonical_session_key(jid).ok())
+                    .and_then(|jid| northstar_xmpp_types::jid::canonical_session_key(jid).ok())
             })
             .collect::<Option<HashSet<_>>>();
         if let Some(parsed) = parsed {
@@ -145,7 +145,7 @@ pub(super) fn delivery_exclusions(json: &serde_json::Value) -> HashSet<String> {
     }
     json["exclude_jid"]
         .as_str()
-        .and_then(|jid| crate::jid::canonical_session_key(jid).ok())
+        .and_then(|jid| northstar_xmpp_types::jid::canonical_session_key(jid).ok())
         .into_iter()
         .collect()
 }
@@ -159,7 +159,7 @@ pub(super) fn delivery_carbon_muc_scope(
     ) {
         (None, None) => Ok(None),
         (Some(room), Some(nick)) => Ok(Some((
-            crate::jid::canonicalize_bare(room).map_err(|_| ())?,
+            northstar_xmpp_types::jid::canonicalize_bare(room).map_err(|_| ())?,
             crate::services::xml_util::prepare_muc_nick(nick).map_err(|_| ())?,
         ))),
         _ => Err(()),
@@ -250,7 +250,7 @@ impl ClusterNodeDelivery {
         stanza: &str,
         expected_user_id: uuid::Uuid,
     ) -> Result<bool> {
-        let target = crate::jid::CanonicalJid::parse(target_full_jid)?;
+        let target = northstar_xmpp_types::jid::CanonicalJid::parse(target_full_jid)?;
         anyhow::ensure!(
             target.resourcepart().is_some(),
             "exact cluster delivery requires a full JID"
@@ -265,7 +265,9 @@ impl ClusterNodeDelivery {
                 && matches!(root.attribute("type"), Some("result" | "error"))
                 && root.attribute("id").is_some_and(|id| !id.is_empty())
                 && root.attribute("to").is_some_and(|to| {
-                    crate::jid::canonical_session_key(to).ok().as_deref()
+                    northstar_xmpp_types::jid::canonical_session_key(to)
+                        .ok()
+                        .as_deref()
                         == Some(canonical_target.as_str())
                 }),
             "exact cluster delivery must be an IQ addressed to the target resource"
@@ -486,7 +488,7 @@ impl ClusterNodeDelivery {
                 ClusterOperation::VolatileDelivery
             },
         )?;
-        let target_jid = crate::jid::canonicalize(target_jid)?;
+        let target_jid = northstar_xmpp_types::jid::canonicalize(target_jid)?;
         let delivery_contract = outbound_delivery_contract(
             stanza,
             &target_jid,
@@ -499,13 +501,13 @@ impl ClusterNodeDelivery {
         let exclude_jids = options
             .exclude_jids
             .iter()
-            .map(|jid| crate::jid::canonical_session_key(jid))
+            .map(|jid| northstar_xmpp_types::jid::canonical_session_key(jid))
             .collect::<Result<Vec<_>>>()?;
         let carbon_muc_scope = options
             .carbon_muc_scope
             .map(|(room, nick)| {
                 Ok::<_, anyhow::Error>((
-                    crate::jid::canonicalize_bare(room)?,
+                    northstar_xmpp_types::jid::canonicalize_bare(room)?,
                     crate::services::xml_util::prepare_muc_nick(nick)?,
                 ))
             })
@@ -518,7 +520,7 @@ impl ClusterNodeDelivery {
             anyhow::ensure!(
                 delivery_contract.is_none()
                     && options.expected_user_id.is_some()
-                    && crate::jid::CanonicalJid::parse(&target_jid)?
+                    && northstar_xmpp_types::jid::CanonicalJid::parse(&target_jid)?
                         .resourcepart()
                         .is_some()
                     && !options.carbons_only
@@ -540,7 +542,7 @@ impl ClusterNodeDelivery {
                     delivery_contract,
                     Some(NodeDeliveryContract::DurableMix { .. })
                 ) && options.mix_capable_only
-                    && crate::jid::CanonicalJid::parse(&target_jid)?
+                    && northstar_xmpp_types::jid::CanonicalJid::parse(&target_jid)?
                         .resourcepart()
                         .is_none()
                     && !options.carbons_only

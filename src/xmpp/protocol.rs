@@ -404,7 +404,7 @@ pub struct ProtocolSession {
     /// legacy offline queue again on their initial presence.
     pub(crate) bind2_mam_catchup: bool,
     sm: SmSubstate,
-    pub(crate) sasl_state: Option<Box<dyn crate::auth::SaslMechanism>>,
+    pub(crate) sasl_state: Option<Box<dyn northstar_auth_core::SaslMechanism>>,
     /// Exact account incarnation which supplied the verifier for the current
     /// SCRAM exchange. `Some(None)` records a dummy verifier for an unknown or
     /// disabled identity, preventing delete/recreate between challenge and
@@ -426,7 +426,7 @@ pub struct ProtocolSession {
     /// failure paths must close rather than manufacture a contradictory SASL
     /// failure or execute the commit a second time.
     pub(crate) pending_credential_commit: Option<super::auth_publication::KnownCredentialOwner>,
-    channel_bindings: Option<crate::auth::ChannelBindings>,
+    channel_bindings: Option<northstar_auth_core::ChannelBindings>,
     /// Bare JIDs authenticated by the optional C2S client-certificate PKIX
     /// verifier and id-on-xmppAddr SAN parser for this exact TLS connection.
     client_certificate_identities: Vec<String>,

@@ -90,7 +90,7 @@ pub(crate) async fn publish_verified_mix_presence_with(
     expected_connection_id: Uuid,
     expected_caps_generation: u64,
 ) -> Result<()> {
-    let actor = crate::jid::CanonicalJid::parse(actor_full)?;
+    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(actor_full)?;
     let actor_full = actor.to_string();
     // Snapshot only the epoch identity and its shared gate. The authoritative
     // route is deliberately re-read after the async lock acquisition; using a

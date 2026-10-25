@@ -2429,9 +2429,11 @@ name = "northstar-xep-0359"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
  "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

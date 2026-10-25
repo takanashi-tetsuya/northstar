@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod escape;
+pub mod rewrite;
 pub mod stanza;
 
 use anyhow::{bail, Context, Result};

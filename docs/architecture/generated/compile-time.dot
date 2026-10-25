@@ -1191,9 +1191,11 @@ digraph compile_time {
   "northstar-xep-0357" -> "roxmltree";
   "northstar-xep-0357" -> "thiserror";
   "northstar-xep-0359" -> "northstar-xep-core";
+  "northstar-xep-0359" -> "northstar-xml-builder";
   "northstar-xep-0359" -> "northstar-xmpp-types";
   "northstar-xep-0359" -> "roxmltree";
   "northstar-xep-0359" -> "thiserror";
+  "northstar-xep-0359" -> "uuid";
   "northstar-xep-0363" -> "northstar-xep-core";
   "northstar-xep-0363" -> "northstar-xml-builder";
   "northstar-xep-0363" -> "roxmltree";

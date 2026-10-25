@@ -1,8 +1,10 @@
-//! Preserves serialized XML while rewriting stanza attributes, namespaces, children, and avatar presence updates.
+//! Preserves serialized XML while rewriting a stanza's root attributes and namespace or appending children.
 
-use super::*;
+use crate::escape::attr_escape;
+use crate::{ValidatedXmlFragment, XmlElement};
+use roxmltree::Document;
 
-pub(super) fn remove_root_attribute(raw: &str, name: &str) -> String {
+pub fn remove_root_attribute(raw: &str, name: &str) -> String {
     if Document::parse(raw).is_err() {
         return raw.to_owned();
     }
@@ -23,11 +25,11 @@ pub(super) fn remove_root_attribute(raw: &str, name: &str) -> String {
     rewritten
 }
 
-pub(crate) fn set_from(raw: &str, from: &str) -> String {
+pub fn set_from(raw: &str, from: &str) -> String {
     rewrite_root_attribute(raw, "from", from, true)
 }
 
-pub(crate) fn set_to(raw: &str, to: &str) -> String {
+pub fn set_to(raw: &str, to: &str) -> String {
     rewrite_root_attribute(raw, "to", to, false)
 }
 
@@ -35,7 +37,7 @@ pub(crate) fn set_to(raw: &str, to: &str) -> String {
 /// client stanza namespace while preserving the serialized payload. This is
 /// used at the authenticated S2S-to-C2S boundary, where forwarding an
 /// explicit `jabber:server` root would make the stanza foreign to clients.
-pub(crate) fn set_client_namespace(raw: &str) -> String {
+pub fn set_client_namespace(raw: &str) -> String {
     let Ok(document) = Document::parse(raw) else {
         return raw.to_owned();
     };
@@ -72,23 +74,23 @@ pub(crate) fn set_client_namespace(raw: &str) -> String {
 }
 
 #[derive(Debug)]
-pub(super) struct RootOpeningAttribute {
-    pub(super) name: String,
-    pub(super) value: String,
+pub struct RootOpeningAttribute {
+    pub name: String,
+    pub value: String,
     /// Includes the XML whitespace immediately preceding this attribute so
     /// removing it cannot concatenate the neighbouring attributes.
-    pub(super) removal_start: usize,
-    pub(super) end: usize,
+    pub removal_start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug)]
-pub(super) struct RootOpening {
-    pub(super) element_name: String,
-    pub(super) insertion: usize,
-    pub(super) attributes: Vec<RootOpeningAttribute>,
+pub struct RootOpening {
+    pub element_name: String,
+    pub insertion: usize,
+    pub attributes: Vec<RootOpeningAttribute>,
 }
 
-pub(super) fn rewrite_root_attribute(
+pub fn rewrite_root_attribute(
     raw: &str,
     name: &str,
     value: &str,
@@ -132,15 +134,15 @@ pub(super) fn rewrite_root_attribute(
     rewritten
 }
 
-pub(crate) fn set_root_attribute(raw: &str, name: &str, value: &str) -> String {
+pub fn set_root_attribute(raw: &str, name: &str, value: &str) -> String {
     rewrite_root_attribute(raw, name, value, false)
 }
 
-pub(super) fn append_root_element(raw: &str, child: &XmlElement) -> Option<String> {
+pub fn append_root_element(raw: &str, child: &XmlElement) -> Option<String> {
     append_root_validated_fragment(raw, &child.finish())
 }
 
-pub(super) fn append_root_validated_fragment(raw: &str, child: &str) -> Option<String> {
+pub fn append_root_validated_fragment(raw: &str, child: &str) -> Option<String> {
     // `raw` is commonly a stanza restored from durable storage. Validate it
     // under the same size/depth/node/attribute and restricted-XML policy as
     // the child before performing the lexical-preservation splice.
@@ -150,7 +152,7 @@ pub(super) fn append_root_validated_fragment(raw: &str, child: &str) -> Option<S
     append_validated_child_to_range(raw, document.root_element().range(), child.as_str())
 }
 
-pub(super) fn append_element_child(
+pub fn append_element_child(
     raw: &str,
     element_range: std::ops::Range<usize>,
     child: &XmlElement,
@@ -160,7 +162,7 @@ pub(super) fn append_element_child(
     append_validated_child_to_range(raw, element_range, child.as_str())
 }
 
-pub(super) fn append_validated_child_to_range(
+pub fn append_validated_child_to_range(
     raw: &str,
     element_range: std::ops::Range<usize>,
     child: &str,
@@ -182,7 +184,7 @@ pub(super) fn append_validated_child_to_range(
 /// Locate only attributes on the document's root start tag. This is a lexical
 /// preservation pass performed after a real XML parse; it deliberately never
 /// searches payload text or nested elements.
-pub(super) fn parse_root_opening(raw: &str) -> Option<RootOpening> {
+pub fn parse_root_opening(raw: &str) -> Option<RootOpening> {
     let bytes = raw.as_bytes();
     let mut cursor = raw.len() - raw.trim_start().len();
     if bytes.get(cursor) != Some(&b'<') {
@@ -269,78 +271,11 @@ pub(super) fn parse_root_opening(raw: &str) -> Option<RootOpening> {
 /// A TCP stanza with no namespace declaration inherits `jabber:client` from
 /// the surrounding stream. An explicit empty default namespace is different:
 /// it resets that inherited namespace and therefore cannot be a core stanza.
-pub(crate) fn root_resets_default_namespace(raw: &str) -> bool {
+pub fn root_resets_default_namespace(raw: &str) -> bool {
     parse_root_opening(raw).is_some_and(|opening| {
         opening
             .attributes
             .iter()
             .any(|attribute| attribute.name == "xmlns" && attribute.value.is_empty())
     })
-}
-
-pub(crate) fn inject_vcard_avatar_hash(
-    raw: &str,
-    _node: Node<'_, '_>,
-    hash: Option<&str>,
-) -> String {
-    let Ok(document) = Document::parse(raw) else {
-        return raw.to_owned();
-    };
-    let node = document.root_element();
-    let updates = node
-        .children()
-        .filter(|child| {
-            child.is_element()
-                && child.tag_name().name() == "x"
-                && child.tag_name().namespace() == Some("vcard-temp:x:update")
-        })
-        .collect::<Vec<_>>();
-    // XEP-0398 preserves the sender's explicit empty-photo opt-out only when
-    // it is an unambiguous, schema-shaped update. A second update, attributes,
-    // extra elements or a second photo must not let a client smuggle a forged
-    // hash past the server-authoritative conversion.
-    if let [update] = updates.as_slice() {
-        let elements = update
-            .children()
-            .filter(|child| child.is_element())
-            .collect::<Vec<_>>();
-        let explicit_empty = update.attributes().len() == 0
-            && update
-                .children()
-                .filter(|child| child.is_text())
-                .all(|child| child.text().is_none_or(|text| text.trim().is_empty()))
-            && matches!(elements.as_slice(), [photo]
-                if photo.tag_name().name() == "photo"
-                    && photo.tag_name().namespace() == Some("vcard-temp:x:update")
-                    && photo.attributes().len() == 0
-                    && !photo.children().any(|child| child.is_element())
-                    && photo.text().is_none_or(|text| text.trim().is_empty()));
-        if explicit_empty {
-            return raw.to_owned();
-        }
-    }
-    let mut x_ranges = updates
-        .iter()
-        .map(|child| child.range())
-        .collect::<Vec<_>>();
-
-    let mut photo = XmlElement::new("photo");
-    if let Some(hash) = hash {
-        photo = photo.text(hash.to_owned());
-    }
-    let extension = XmlElement::namespaced("x", "vcard-temp:x:update").child(photo);
-
-    let Some(first) = x_ranges.first().cloned() else {
-        return append_root_element(raw, &extension).unwrap_or_else(|| raw.to_owned());
-    };
-    if ValidatedXmlFragment::parse(raw).is_err() {
-        return raw.to_owned();
-    }
-    x_ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
-    let extension = extension.finish();
-    let mut rewritten = raw.to_owned();
-    for range in x_ranges {
-        rewritten.replace_range(range.clone(), if range == first { &extension } else { "" });
-    }
-    rewritten
 }

@@ -7,6 +7,7 @@
 //! routes, query discovery, store replay identities, mutate archives or route
 //! messages.
 
+pub mod annotate;
 pub mod builder;
 pub mod constants;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod model;
 pub mod policy;
 pub mod wire;
 
+pub use annotate::{add_stanza_id, strip_stanza_ids_by_domain};
 pub use builder::{build_origin_id, build_referenced_stanza, build_stanza_id};
 pub use constants::{DESCRIPTOR, MAX_ID_BYTES, MAX_ID_ELEMENTS, NAMESPACE, XEP_ID};
 pub use error::SidError;

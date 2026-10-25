@@ -3003,6 +3003,10 @@
       ],
       [
         "northstar-xep-0359",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-xep-0359",
         "northstar-xmpp-types"
       ],
       [
@@ -3012,6 +3016,10 @@
       [
         "northstar-xep-0359",
         "thiserror"
+      ],
+      [
+        "northstar-xep-0359",
+        "uuid"
       ],
       [
         "northstar-xep-0363",

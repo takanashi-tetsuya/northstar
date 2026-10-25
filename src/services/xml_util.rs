@@ -1,7 +1,6 @@
 use crate::services::abuse::WorkRequirement;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
-use northstar_xml_builder::escape::attr_escape;
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
     iq_error, iq_error_from, iq_error_to, iq_result, iq_result_from, iq_result_to,
@@ -12,12 +11,12 @@ use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
 
+mod avatar_update;
 mod message_validation;
 mod muc;
-mod stanza_rewrite;
 
+pub(crate) use self::avatar_update::inject_vcard_avatar_hash;
 use self::message_validation::{
     validate_chat_states, validate_correction, validate_displayed_marker,
     validate_explicit_encryption, validate_fallbacks, validate_file_sharing,
@@ -31,13 +30,14 @@ pub(crate) use self::muc::{
     muc_presence_stanza_with_status, muc_stanza_error, prepare_muc_nick, set_muc_occupant_id,
     valid_muc_nick, valid_muc_room,
 };
-use self::stanza_rewrite::{
+pub(crate) use northstar_xep_0313::build_extended_form as mam_extended_form;
+pub(crate) use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
+use northstar_xml_builder::rewrite::{
     append_element_child, append_root_element, append_root_validated_fragment,
     remove_root_attribute,
 };
-pub(crate) use self::stanza_rewrite::{
-    inject_vcard_avatar_hash, root_resets_default_namespace, set_client_namespace, set_from,
-    set_root_attribute, set_to,
+pub(crate) use northstar_xml_builder::rewrite::{
+    root_resets_default_namespace, set_client_namespace, set_from, set_root_attribute, set_to,
 };
 
 /// Unicode bidi embeddings, overrides, isolates and their terminators can
@@ -201,40 +201,6 @@ pub(crate) fn bool_value(value: bool) -> &'static str {
 /// variants are rejected.
 pub(crate) fn valid_language_tag(value: &str) -> bool {
     crate::services::stanza_validation::valid_language_tag(value)
-}
-
-pub(crate) fn mam_extended_form() -> &'static str {
-    static FORM: LazyLock<String> = LazyLock::new(|| {
-        let mut form = XmlElement::namespaced("x", "jabber:x:data").attr("type", "form");
-        form.push_child(xdata_value_field("FORM_TYPE", "hidden", "urn:xmpp:mam:2"));
-        for (variable, kind) in [
-            ("with", "jid-single"),
-            ("start", "text-single"),
-            ("end", "text-single"),
-            ("before-id", "text-single"),
-            ("after-id", "text-single"),
-        ] {
-            form.push_child(
-                XmlElement::new("field")
-                    .attr("var", variable)
-                    .attr("type", kind),
-            );
-        }
-        form.push_child(
-            XmlElement::new("field")
-                .attr("var", "ids")
-                .attr("type", "list-multi")
-                .child(
-                    XmlElement::namespaced("validate", "http://jabber.org/protocol/xdata-validate")
-                        .attr("datatype", "xs:string")
-                        .child(XmlElement::new("open")),
-                ),
-        );
-        XmlElement::namespaced("query", "urn:xmpp:mam:2")
-            .child(form)
-            .finish()
-    });
-    FORM.as_str()
 }
 
 /// Reject a client-provided Carbon wrapper.  A server must be the only entity
@@ -685,67 +651,6 @@ pub(crate) fn strip_pow_element(raw: &str) -> String {
     }
     ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
     let mut cleaned = raw.to_owned();
-    for range in ranges {
-        cleaned.replace_range(range, "");
-    }
-    cleaned
-}
-
-pub(crate) fn add_stanza_id(stanza: &str, by: &str, id: uuid::Uuid) -> String {
-    let Ok(document) = Document::parse(stanza) else {
-        return stanza.to_owned();
-    };
-    let Ok(canonical_by) = northstar_xmpp_types::jid::CanonicalJid::parse(by) else {
-        return stanza.to_owned();
-    };
-    let mut ranges = document
-        .root_element()
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "stanza-id"
-                && node.tag_name().namespace() == Some("urn:xmpp:sid:0")
-                && northstar_xep_0359::parse_stanza_id(*node)
-                    .is_ok_and(|existing| existing.by == canonical_by)
-        })
-        .map(|node| node.range())
-        .collect::<Vec<_>>();
-    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
-    let mut annotated = stanza.to_owned();
-    for range in ranges {
-        annotated.replace_range(range, "");
-    }
-    let Ok(extension) = northstar_xep_0359::build_stanza_id(&id.to_string(), &canonical_by) else {
-        return annotated;
-    };
-    append_root_validated_fragment(&annotated, &extension).unwrap_or(annotated)
-}
-
-/// Remove every XEP-0359 authority assertion for a domain controlled by this
-/// server. A client or remote peer must not be able to avoid deduplication by
-/// adding a second, forged local-account issuer next to the server's ID.
-/// Foreign-domain IDs are preserved as forwarded provenance.
-pub(crate) fn strip_stanza_ids_by_domain(stanza: &str, domain: &str) -> String {
-    let Ok(document) = Document::parse(stanza) else {
-        return stanza.to_owned();
-    };
-    let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
-        return stanza.to_owned();
-    };
-    let mut ranges = document
-        .root_element()
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "stanza-id"
-                && node.tag_name().namespace() == Some(northstar_xep_0359::NAMESPACE)
-                && northstar_xep_0359::parse_stanza_id(*node)
-                    .is_ok_and(|stanza_id| stanza_id.by.domainpart() == domain)
-        })
-        .map(|node| node.range())
-        .collect::<Vec<_>>();
-    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
-    let mut cleaned = stanza.to_owned();
     for range in ranges {
         cleaned.replace_range(range, "");
     }

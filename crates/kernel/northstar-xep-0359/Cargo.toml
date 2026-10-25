@@ -18,6 +18,8 @@ worker-ids = []
 
 [dependencies]
 northstar-xep-core = { path = "../northstar-xep-core" }
+northstar-xml-builder = { path = "../northstar-xml-builder" }
 northstar-xmpp-types = { path = "../northstar-xmpp-types" }
 roxmltree = "0.20"
 thiserror = "2.0"
+uuid = "1.12"

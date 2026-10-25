@@ -22,8 +22,8 @@ section 4.1.
 | `tools/<crate>` | tooling | anything; only tooling may depend on tooling |
 
 A context crate's role follows its name: `application` for `*-application` and
-`northstar-protocol-runtime`, `adapter` for `*-postgres`, `*-xmpp` and
-`*-http`, `core` otherwise.
+`northstar-protocol-runtime`, `adapter` for `*-postgres`, `*-xmpp`, `*-http`
+and `*-storage` (object storage), `core` otherwise.
 
 | Role | May depend on (workspace crates) |
 | --- | --- |

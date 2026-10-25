@@ -456,7 +456,10 @@ fn expected_tier(path: &str, package: &str) -> Option<(String, Option<String>, O
         };
         let role = if name.ends_with("-application") || name == "northstar-protocol-runtime" {
             "application"
-        } else if name.ends_with("-postgres") || name.ends_with("-xmpp") || name.ends_with("-http")
+        } else if name.ends_with("-postgres")
+            || name.ends_with("-xmpp")
+            || name.ends_with("-http")
+            || name.ends_with("-storage")
         {
             "adapter"
         } else {
@@ -940,6 +943,17 @@ mod tests {
                 "context".to_string(),
                 Some("session".to_string()),
                 Some("application".to_string())
+            ))
+        );
+        assert_eq!(
+            expected_tier(
+                "crates/contexts/upload/northstar-upload-storage",
+                "northstar-upload-storage"
+            ),
+            Some((
+                "context".to_string(),
+                Some("upload".to_string()),
+                Some("adapter".to_string())
             ))
         );
         assert_eq!(

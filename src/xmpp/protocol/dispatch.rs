@@ -730,9 +730,6 @@ impl ProtocolSession {
                 return Ok(Action::Send(iq_error(id, "feature-not-implemented")));
             }
         }
-        let is_local_muc_room = root
-            .attribute("to")
-            .is_some_and(|to| super::muc::canonical_local_muc_room(to, &muc_domain).is_some());
         let targets_local_muc = root.attribute("to").is_some_and(|to| {
             northstar_xmpp_types::jid::CanonicalJid::parse(to)
                 .is_ok_and(|jid| jid.domainpart() == muc_domain)
@@ -760,86 +757,32 @@ impl ProtocolSession {
         let element = child.tag_name().name();
         if let Some(iq_kind) = northstar_stream::IqKind::parse(kind) {
             if let Some(route) = iq_routes::IQ_ROUTES.route(element, ns, iq_kind) {
-                if route.admits(self, element, ns, iq_kind) {
-                    let request = northstar_stream::IqRequest {
-                        id,
-                        kind: iq_kind,
-                        stanza: root,
-                        payload: child,
-                        raw,
-                    };
-                    return (route.handler)(self, request).await;
+                match route.admission(self, element, ns, iq_kind) {
+                    iq_routes::Admission::Handle => {
+                        let request = northstar_stream::IqRequest {
+                            id,
+                            kind: iq_kind,
+                            stanza: root,
+                            payload: child,
+                            raw,
+                        };
+                        return (route.handler)(self, request).await;
+                    }
+                    iq_routes::Admission::Unavailable => {
+                        return Ok(Action::Send(iq_error(id, "service-unavailable")));
+                    }
+                    iq_routes::Admission::Unsupported => {}
                 }
             }
         }
-        match (child.tag_name().name(), ns, kind) {
-            ("query", "jabber:iq:register", "get") if is_local_muc_room => {
-                self.muc_register_get(id, root).await
-            }
-            ("query", "jabber:iq:register", "set") if is_local_muc_room => {
-                self.muc_register_set(id, root, child).await
-            }
-            ("query", "jabber:iq:register", "get") => self.registration_form(id, child).await,
-            ("query", "jabber:iq:register", "set") if self.authenticated.is_none() => {
-                self.register(id, child).await
-            }
-            ("query", "jabber:iq:register", "set") => self.change_password(id, child).await,
-            ("unique", "http://jabber.org/protocol/muc#unique", "get") => {
-                Ok(Action::Send(iq_result_from(
-                    id,
-                    root.attribute("to").unwrap_or(&muc_domain),
-                    &format!(
-                        "<unique xmlns='http://jabber.org/protocol/muc#unique'>{}</unique>",
-                        uuid::Uuid::new_v4()
-                    ),
-                )))
-            }
-            ("ping", northstar_xep_0199::NAMESPACE, "get")
-            | ("time", northstar_xep_0202::NAMESPACE, "get")
-            | ("query", northstar_xep_0092::NAMESPACE, "get") => {
-                Ok(Action::Send(iq_error(id, "service-unavailable")))
-            }
-            ("request", northstar_xep_0363::NAMESPACE, "get") if self.http_upload_enabled() => {
-                self.http_upload_slot(id, root.attribute("to"), child).await
-            }
-            // XEP-0363 defines slot allocation as an IQ-get. The upload
-            // service is known and implemented, so using IQ-set is a
-            // malformed request rather than an unknown feature.
-            ("request", northstar_xep_0363::NAMESPACE, _) if self.http_upload_enabled() => Ok(
-                Action::Send(iq_error_from(id, &self.upload_domain(), "bad-request")),
-            ),
-            ("pubsub", "http://jabber.org/protocol/pubsub#owner", "set")
-                if root
-                    .attribute("to")
-                    .is_some_and(|to| is_service_jid(to, &self.pubsub_domain())) =>
-            {
-                self.pubsub_owner_set(id, child).await
-            }
-            ("pubsub", "http://jabber.org/protocol/pubsub#owner", "set") => {
-                let result = self.pep_owner_set(id, root, child).await;
-                map_pubsub_capacity_result(id, result)
-            }
-            ("pubsub", "http://jabber.org/protocol/pubsub#owner", "get")
-                if root
-                    .attribute("to")
-                    .is_some_and(|to| is_service_jid(to, &self.pubsub_domain())) =>
-            {
-                self.pubsub_owner_get(id, child).await
-            }
-            ("pubsub", "http://jabber.org/protocol/pubsub#owner", "get") => {
-                self.pep_owner_get(id, root, child).await
-            }
-            _ => {
-                tracing::debug!(
-                    element = child.tag_name().name(),
-                    namespace = ns,
-                    iq_type = kind,
-                    iq_id = id,
-                    "unsupported IQ"
-                );
-                Ok(Action::Send(iq_error(id, "feature-not-implemented")))
-            }
-        }
+        tracing::debug!(
+            element,
+            namespace = ns,
+            iq_type = kind,
+            iq_id = id,
+            "unsupported IQ"
+        );
+        Ok(Action::Send(iq_error(id, "feature-not-implemented")))
     }
 }
 

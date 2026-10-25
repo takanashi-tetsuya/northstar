@@ -1,8 +1,9 @@
 //! The routing table of the client IQ dispatch.
 //!
-//! Routes are registered once, a route gated by its XEP route switch dispatches
-//! only while `xmpp_route_enabled` admits it, and requests without a route fall
-//! through to the remaining arms of `ProtocolSession::iq`.
+//! Routes are registered once. A route's gate decides whether its handler answers
+//! the request, the request is answered `service-unavailable`, or it is treated
+//! like a request without a route, which `ProtocolSession::iq` answers
+//! `feature-not-implemented`.
 
 use super::*;
 use northstar_stream::{HandlerFuture, IqKind, IqRequest, IqRoute, IqRouter};
@@ -12,11 +13,32 @@ use std::sync::LazyLock;
 pub(super) type RootIqHandler =
     for<'a> fn(&'a mut ProtocolSession, IqRequest<'a>) -> HandlerFuture<'a, Action>;
 
-/// Whether a route dispatches unconditionally or only while its XEP route switch is on.
+/// Whether a route dispatches unconditionally or only while its conditions are met.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RouteGate {
+    /// The route always handles the request.
     Always,
+    /// The route handles the request while its XEP route switch is on; otherwise the request is
+    /// unsupported.
     RouteEnabled,
+    /// The route handles the request while its XEP route switch is on; otherwise the request is
+    /// answered `service-unavailable`.
+    RouteEnabledOrUnavailable,
+    /// The route handles the request while the HTTP upload service is enabled
+    /// (`session.http_upload_enabled()`, the same call the XEP-0363 arms use as their guard);
+    /// otherwise the request is unsupported.
+    HttpUpload,
+}
+
+/// What the dispatch does with a request that has a route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Admission {
+    /// The route's handler answers the request.
+    Handle,
+    /// The request is answered like one without a route.
+    Unsupported,
+    /// The request is answered `service-unavailable`.
+    Unavailable,
 }
 
 /// A registered route: its handler and its gate.
@@ -27,24 +49,50 @@ pub(super) struct RootIqRoute {
 }
 
 impl RootIqRoute {
-    /// Whether this route handles the request now; a declined request falls through to the match.
-    pub(super) fn admits(
+    /// What the dispatch does with a request for this route.
+    pub(super) fn admission(
         &self,
         session: &ProtocolSession,
         element: &str,
         namespace: &str,
         kind: IqKind,
-    ) -> bool {
+    ) -> Admission {
         match self.gate {
-            RouteGate::Always => true,
+            RouteGate::Always => Admission::Handle,
             RouteGate::RouteEnabled => {
                 let stanza_kind = match kind {
                     IqKind::Get => northstar_xep_core::StanzaKind::IqGet,
                     IqKind::Set => northstar_xep_core::StanzaKind::IqSet,
                 };
-                session
+                if session
                     .state
                     .xmpp_route_enabled(stanza_kind, namespace, element)
+                {
+                    Admission::Handle
+                } else {
+                    Admission::Unsupported
+                }
+            }
+            RouteGate::RouteEnabledOrUnavailable => {
+                let stanza_kind = match kind {
+                    IqKind::Get => northstar_xep_core::StanzaKind::IqGet,
+                    IqKind::Set => northstar_xep_core::StanzaKind::IqSet,
+                };
+                if session
+                    .state
+                    .xmpp_route_enabled(stanza_kind, namespace, element)
+                {
+                    Admission::Handle
+                } else {
+                    Admission::Unavailable
+                }
+            }
+            RouteGate::HttpUpload => {
+                if session.http_upload_enabled() {
+                    Admission::Handle
+                } else {
+                    Admission::Unsupported
+                }
             }
         }
     }
@@ -190,17 +238,17 @@ const ROUTES: &[(IqRoute, RootIqHandler, RouteGate)] = &[
     (
         IqRoute::new("ping", northstar_xep_0199::NAMESPACE, IqKind::Get),
         ping,
-        RouteGate::RouteEnabled,
+        RouteGate::RouteEnabledOrUnavailable,
     ),
     (
         IqRoute::new("time", northstar_xep_0202::NAMESPACE, IqKind::Get),
         time,
-        RouteGate::RouteEnabled,
+        RouteGate::RouteEnabledOrUnavailable,
     ),
     (
         IqRoute::new("query", northstar_xep_0092::NAMESPACE, IqKind::Get),
         version,
-        RouteGate::RouteEnabled,
+        RouteGate::RouteEnabledOrUnavailable,
     ),
     (
         IqRoute::new("services", northstar_xep_0215::NAMESPACE, IqKind::Get),
@@ -271,6 +319,53 @@ const ROUTES: &[(IqRoute, RootIqHandler, RouteGate)] = &[
         IqRoute::new("unblock", northstar_xep_0191::NAMESPACE, IqKind::Set),
         unblock,
         RouteGate::RouteEnabled,
+    ),
+    (
+        IqRoute::new("query", "jabber:iq:register", IqKind::Get),
+        register_get,
+        RouteGate::Always,
+    ),
+    (
+        IqRoute::new("query", "jabber:iq:register", IqKind::Set),
+        register_set,
+        RouteGate::Always,
+    ),
+    (
+        IqRoute::new(
+            "unique",
+            "http://jabber.org/protocol/muc#unique",
+            IqKind::Get,
+        ),
+        muc_unique,
+        RouteGate::Always,
+    ),
+    (
+        IqRoute::new("request", northstar_xep_0363::NAMESPACE, IqKind::Get),
+        http_upload_slot,
+        RouteGate::HttpUpload,
+    ),
+    (
+        IqRoute::new("request", northstar_xep_0363::NAMESPACE, IqKind::Set),
+        http_upload_set,
+        RouteGate::HttpUpload,
+    ),
+    (
+        IqRoute::new(
+            "pubsub",
+            "http://jabber.org/protocol/pubsub#owner",
+            IqKind::Set,
+        ),
+        pubsub_owner_set,
+        RouteGate::Always,
+    ),
+    (
+        IqRoute::new(
+            "pubsub",
+            "http://jabber.org/protocol/pubsub#owner",
+            IqKind::Get,
+        ),
+        pubsub_owner_get,
+        RouteGate::Always,
     ),
 ];
 
@@ -695,13 +790,130 @@ fn unblock<'a>(
     Box::pin(session.unblock(request.id, request.stanza, request.payload))
 }
 
+fn register_get<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(async move {
+        let muc_domain = session.muc_domain();
+        let is_local_muc_room = request.stanza.attribute("to").is_some_and(|to| {
+            crate::xmpp::protocol::muc::canonical_local_muc_room(to, &muc_domain).is_some()
+        });
+        if is_local_muc_room {
+            session.muc_register_get(request.id, request.stanza).await
+        } else {
+            session.registration_form(request.id, request.payload).await
+        }
+    })
+}
+
+fn register_set<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(async move {
+        let muc_domain = session.muc_domain();
+        let is_local_muc_room = request.stanza.attribute("to").is_some_and(|to| {
+            crate::xmpp::protocol::muc::canonical_local_muc_room(to, &muc_domain).is_some()
+        });
+        if is_local_muc_room {
+            session
+                .muc_register_set(request.id, request.stanza, request.payload)
+                .await
+        } else if session.authenticated.is_none() {
+            session.register(request.id, request.payload).await
+        } else {
+            session.change_password(request.id, request.payload).await
+        }
+    })
+}
+
+fn muc_unique<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(async move {
+        let muc_domain = session.muc_domain();
+        Ok(Action::Send(iq_result_from(
+            request.id,
+            request.stanza.attribute("to").unwrap_or(&muc_domain),
+            &format!(
+                "<unique xmlns='http://jabber.org/protocol/muc#unique'>{}</unique>",
+                uuid::Uuid::new_v4()
+            ),
+        )))
+    })
+}
+
+fn http_upload_slot<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(session.http_upload_slot(request.id, request.stanza.attribute("to"), request.payload))
+}
+
+/// XEP-0363 defines slot allocation as an IQ-get. The upload
+/// service is known and implemented, so using IQ-set is a
+/// malformed request rather than an unknown feature.
+fn http_upload_set<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(async move {
+        Ok(Action::Send(iq_error_from(
+            request.id,
+            &session.upload_domain(),
+            "bad-request",
+        )))
+    })
+}
+
+fn pubsub_owner_set<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(async move {
+        if request
+            .stanza
+            .attribute("to")
+            .is_some_and(|to| is_service_jid(to, &session.pubsub_domain()))
+        {
+            session.pubsub_owner_set(request.id, request.payload).await
+        } else {
+            let result = session
+                .pep_owner_set(request.id, request.stanza, request.payload)
+                .await;
+            map_pubsub_capacity_result(request.id, result)
+        }
+    })
+}
+
+fn pubsub_owner_get<'a>(
+    session: &'a mut ProtocolSession,
+    request: IqRequest<'a>,
+) -> HandlerFuture<'a, Action> {
+    Box::pin(async move {
+        if request
+            .stanza
+            .attribute("to")
+            .is_some_and(|to| is_service_jid(to, &session.pubsub_domain()))
+        {
+            session.pubsub_owner_get(request.id, request.payload).await
+        } else {
+            session
+                .pep_owner_get(request.id, request.stanza, request.payload)
+                .await
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn every_route_registers_once() {
-        assert_eq!(ROUTES.len(), 41);
+        assert_eq!(ROUTES.len(), 48);
         assert_eq!(build_routes().len(), ROUTES.len());
     }
 }

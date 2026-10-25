@@ -1448,6 +1448,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-security";
   "rust-xmpp-server" -> "northstar-session-application";
   "rust-xmpp-server" -> "northstar-session-core";
+  "rust-xmpp-server" -> "northstar-stream";
   "rust-xmpp-server" -> "northstar-telemetry";
   "rust-xmpp-server" -> "northstar-upload-application";
   "rust-xmpp-server" -> "northstar-upload-core";

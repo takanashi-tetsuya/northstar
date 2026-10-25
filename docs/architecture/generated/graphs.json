@@ -4047,6 +4047,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-stream"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-telemetry"
       ],
       [

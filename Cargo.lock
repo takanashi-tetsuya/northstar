@@ -3243,6 +3243,7 @@ dependencies = [
  "northstar-security",
  "northstar-session-application",
  "northstar-session-core",
+ "northstar-stream",
  "northstar-telemetry",
  "northstar-upload-application",
  "northstar-upload-core",

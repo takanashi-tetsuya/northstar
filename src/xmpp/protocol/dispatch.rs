@@ -757,10 +757,22 @@ impl ProtocolSession {
                 "service-unavailable",
             )));
         }
-        match (child.tag_name().name(), ns, kind) {
-            ("command", "http://jabber.org/protocol/commands", "set") => {
-                super::commands::handle(self, id, root, child).await
+        let element = child.tag_name().name();
+        if let Some(iq_kind) = northstar_stream::IqKind::parse(kind) {
+            if let Some(route) = iq_routes::IQ_ROUTES.route(element, ns, iq_kind) {
+                if route.admits(self, element, ns, iq_kind) {
+                    let request = northstar_stream::IqRequest {
+                        id,
+                        kind: iq_kind,
+                        stanza: root,
+                        payload: child,
+                        raw,
+                    };
+                    return (route.handler)(self, request).await;
+                }
             }
+        }
+        match (child.tag_name().name(), ns, kind) {
             ("query", "jabber:iq:register", "get") if is_local_muc_room => {
                 self.muc_register_get(id, root).await
             }
@@ -772,52 +784,6 @@ impl ProtocolSession {
                 self.register(id, child).await
             }
             ("query", "jabber:iq:register", "set") => self.change_password(id, child).await,
-            ("register", crate::xmpp::protocol::ibr::IBR2_NS, "get") => {
-                Ok(self.ibr_flows_iq(id, child))
-            }
-            ("register", crate::xmpp::protocol::ibr::IBR2_NS, "set") => {
-                self.select_ibr_flow_iq(id, child).await
-            }
-            ("response", crate::xmpp::protocol::ibr::IBR2_NS, "set") => {
-                self.handle_ibr_response_iq(id, child).await
-            }
-            ("cancel", crate::xmpp::protocol::ibr::IBR2_NS, "set") => {
-                Ok(self.handle_ibr_cancel_iq(id, child))
-            }
-            ("bind", "urn:ietf:params:xml:ns:xmpp-bind", "set") => {
-                if !valid_bind_payload(child) {
-                    Ok(Action::Send(iq_error(id, "bad-request")))
-                } else {
-                    self.bind(id, child).await
-                }
-            }
-            ("session", "urn:ietf:params:xml:ns:xmpp-session", "set") => {
-                if valid_empty_iq_payload(child) {
-                    Ok(Action::Send(iq_result(id, "")))
-                } else {
-                    Ok(Action::Send(iq_error(id, "bad-request")))
-                }
-            }
-            ("query", "jabber:iq:roster", "get") => self.roster_get(id, root, child).await,
-            ("query", "jabber:iq:roster", "set") => self.roster_set(id, root, child).await,
-            ("query", northstar_xep_0016::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0016::NAMESPACE,
-                    "query",
-                ) =>
-            {
-                self.privacy_get(id, root, child).await
-            }
-            ("query", northstar_xep_0016::NAMESPACE, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0016::NAMESPACE,
-                    "query",
-                ) =>
-            {
-                self.privacy_set(id, root, child).await
-            }
             ("unique", "http://jabber.org/protocol/muc#unique", "get") => {
                 Ok(Action::Send(iq_result_from(
                     id,
@@ -828,133 +794,10 @@ impl ProtocolSession {
                     ),
                 )))
             }
-            ("query", "http://jabber.org/protocol/muc#owner", "get") => {
-                self.muc_owner_get(id, root).await
-            }
-            ("query", "http://jabber.org/protocol/muc#owner", "set") => {
-                self.muc_owner_set(id, root, child).await
-            }
-            ("query", "http://jabber.org/protocol/muc#admin", "get") => {
-                self.muc_admin_get(id, root, child).await
-            }
-            ("query", "http://jabber.org/protocol/muc#admin", "set") => {
-                self.muc_admin_set(id, root, child).await
-            }
-            ("moderate", "urn:xmpp:message-moderate:1", "set") => {
-                self.muc_moderate(id, root, child).await
-            }
-            ("query", "http://jabber.org/protocol/disco#info", "get") => {
-                self.disco_info(id, root.attribute("to"), child).await
-            }
-            ("query", "http://jabber.org/protocol/disco#items", "get") => {
-                self.disco_items(id, root.attribute("to"), child).await
-            }
-            ("ping", northstar_xep_0199::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0199::NAMESPACE,
-                    "ping",
-                ) =>
-            {
-                if northstar_xep_0199::parse_ping_element(child).is_err() {
-                    Ok(Action::Send(iq_error(id, "bad-request")))
-                } else {
-                    Ok(Action::Send(iq_result(
-                        id,
-                        northstar_xep_0199::build_response(),
-                    )))
-                }
-            }
-            ("time", northstar_xep_0202::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0202::NAMESPACE,
-                    "time",
-                ) =>
-            {
-                if northstar_xep_0202::parse_time_request_element(child).is_err() {
-                    return Ok(Action::Send(iq_error(id, "bad-request")));
-                }
-                let now = chrono::Utc::now();
-                match northstar_xep_0202::build_response_from_parts(
-                    northstar_xep_0202::DEFAULT_TZO,
-                    &now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-                ) {
-                    Ok(payload) => Ok(Action::Send(iq_result(id, &payload))),
-                    Err(error) => {
-                        tracing::error!(%error, "failed to build validated XEP-0202 response");
-                        Ok(Action::Send(iq_error(id, "internal-server-error")))
-                    }
-                }
-            }
-            ("query", northstar_xep_0092::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0092::NAMESPACE,
-                    "query",
-                ) =>
-            {
-                if northstar_xep_0092::parse_query_request_element(child).is_err() {
-                    return Ok(Action::Send(iq_error(id, "bad-request")));
-                }
-                let os = self
-                    .state
-                    .xmpp_version_includes_os()
-                    .then_some(xmpp_version_os());
-                match northstar_xep_0092::build_response_from_parts(
-                    self.state.server_name(),
-                    env!("CARGO_PKG_VERSION"),
-                    os,
-                ) {
-                    Ok(payload) => Ok(Action::Send(iq_result(id, &payload))),
-                    Err(error) => {
-                        tracing::error!(%error, "failed to build validated XEP-0092 response");
-                        Ok(Action::Send(iq_error(id, "internal-server-error")))
-                    }
-                }
-            }
             ("ping", northstar_xep_0199::NAMESPACE, "get")
             | ("time", northstar_xep_0202::NAMESPACE, "get")
             | ("query", northstar_xep_0092::NAMESPACE, "get") => {
                 Ok(Action::Send(iq_error(id, "service-unavailable")))
-            }
-            ("services", northstar_xep_0215::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0215::NAMESPACE,
-                    "services",
-                ) =>
-            {
-                self.external_services(id, root, child)
-            }
-            ("credentials", northstar_xep_0215::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0215::NAMESPACE,
-                    "credentials",
-                ) =>
-            {
-                self.external_credentials(id, root, child)
-            }
-            ("vCard", "vcard-temp", "get") => self.vcard_get(id, root).await,
-            ("vCard", "vcard-temp", "set") => self.vcard_set(id, root, child, raw).await,
-            ("enable", northstar_xep_0357::XMLNS_PUSH, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0357::XMLNS_PUSH,
-                    "enable",
-                ) =>
-            {
-                self.enable_push(id, root, child, raw).await
-            }
-            ("disable", northstar_xep_0357::XMLNS_PUSH, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0357::XMLNS_PUSH,
-                    "disable",
-                ) =>
-            {
-                self.disable_push(id, root, child).await
             }
             ("request", northstar_xep_0363::NAMESPACE, "get") if self.http_upload_enabled() => {
                 self.http_upload_slot(id, root.attribute("to"), child).await
@@ -965,120 +808,6 @@ impl ProtocolSession {
             ("request", northstar_xep_0363::NAMESPACE, _) if self.http_upload_enabled() => Ok(
                 Action::Send(iq_error_from(id, &self.upload_domain(), "bad-request")),
             ),
-            ("query", northstar_xep_0313::XMLNS_MAM, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0313::XMLNS_MAM,
-                    "query",
-                ) =>
-            {
-                self.mam(id, child, root.attribute("to")).await
-            }
-            ("query", northstar_xep_0313::XMLNS_MAM, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0313::XMLNS_MAM,
-                    "query",
-                ) =>
-            {
-                self.mam_query_form(id, root.attribute("to"), child).await
-            }
-            ("metadata", northstar_xep_0313::XMLNS_MAM, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0313::XMLNS_MAM,
-                    "metadata",
-                ) =>
-            {
-                self.mam_metadata(id, root.attribute("to"), child).await
-            }
-            ("prefs", northstar_xep_0313::XMLNS_MAM, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0313::XMLNS_MAM,
-                    "prefs",
-                ) =>
-            {
-                self.mam_preferences_get(id, root.attribute("to"), child)
-                    .await
-            }
-            ("prefs", northstar_xep_0313::XMLNS_MAM, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0313::XMLNS_MAM,
-                    "prefs",
-                ) =>
-            {
-                self.mam_preferences_set(id, root.attribute("to"), child)
-                    .await
-            }
-            ("enable", northstar_xep_0280::NAMESPACE, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0280::NAMESPACE,
-                    "enable",
-                ) =>
-            {
-                self.set_carbons(id, root, child, true)
-            }
-            ("disable", northstar_xep_0280::NAMESPACE, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0280::NAMESPACE,
-                    "disable",
-                ) =>
-            {
-                self.set_carbons(id, root, child, false)
-            }
-            ("blocklist", northstar_xep_0191::NAMESPACE, "get")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqGet,
-                    northstar_xep_0191::NAMESPACE,
-                    "blocklist",
-                ) =>
-            {
-                self.blocklist(id, root, child).await
-            }
-            ("block", northstar_xep_0191::NAMESPACE, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0191::NAMESPACE,
-                    "block",
-                ) =>
-            {
-                self.block(id, root, child).await
-            }
-            ("unblock", northstar_xep_0191::NAMESPACE, "set")
-                if self.state.xmpp_route_enabled(
-                    northstar_xep_core::StanzaKind::IqSet,
-                    northstar_xep_0191::NAMESPACE,
-                    "unblock",
-                ) =>
-            {
-                self.unblock(id, root, child).await
-            }
-            ("pubsub", "http://jabber.org/protocol/pubsub", "set") => {
-                if root
-                    .attribute("to")
-                    .is_some_and(|to| is_service_jid(to, &self.pubsub_domain()))
-                {
-                    self.pubsub_iq_set(id, child, root.attribute("to").unwrap_or(""))
-                        .await
-                } else {
-                    let result = self.pep_publish(id, root, child, raw).await;
-                    map_pubsub_capacity_result(id, result)
-                }
-            }
-            ("pubsub", "http://jabber.org/protocol/pubsub", "get") => {
-                if root
-                    .attribute("to")
-                    .is_some_and(|to| is_service_jid(to, &self.pubsub_domain()))
-                {
-                    self.pubsub_iq_get(id, child).await
-                } else {
-                    self.pep_get(id, root, child).await
-                }
-            }
             ("pubsub", "http://jabber.org/protocol/pubsub#owner", "set")
                 if root
                     .attribute("to")
@@ -1099,12 +828,6 @@ impl ProtocolSession {
             }
             ("pubsub", "http://jabber.org/protocol/pubsub#owner", "get") => {
                 self.pep_owner_get(id, root, child).await
-            }
-            ("query", "jabber:iq:private", "get") => {
-                self.private_get(id, root.attribute("to"), child).await
-            }
-            ("query", "jabber:iq:private", "set") => {
-                self.private_set(id, root.attribute("to"), child, raw).await
             }
             _ => {
                 tracing::debug!(
@@ -1248,6 +971,8 @@ fn valid_client_stanza_namespace(root: Node<'_, '_>, websocket: bool, raw: &str)
         _ => false,
     }
 }
+
+mod iq_routes;
 
 #[cfg(test)]
 mod tests;

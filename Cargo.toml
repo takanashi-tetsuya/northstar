@@ -178,6 +178,7 @@ northstar-archive-application = { path = "crates/contexts/archive/northstar-arch
 northstar-upload-core = { path = "crates/contexts/upload/northstar-upload-core" }
 northstar-upload-application = { path = "crates/contexts/upload/northstar-upload-application" }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application" }
+northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }
 northstar-federation-application = { path = "crates/contexts/federation/northstar-federation-application" }
 northstar-protocol-runtime = { path = "crates/contexts/session/northstar-protocol-runtime" }

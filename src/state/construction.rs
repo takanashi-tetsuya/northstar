@@ -502,9 +502,9 @@ impl AppState {
             db::profile::PostgresProfileRepository::new(pool.clone(), config.domain.clone()),
             pubsub_service.mutation_admission(),
         );
-        let mam_service = crate::services::mam::MamService::new(
+        let mam_service = northstar_archive_application::MamService::new(
             db::mam::PostgresMamRepository::new(pool.clone()),
-            crate::services::mam::FederatedMamOutboxLimits {
+            northstar_archive_application::FederatedMamOutboxLimits {
                 ttl_seconds: config.s2s_outbox_ttl_seconds,
                 max_rows: config.s2s_outbox_max_rows,
                 max_bytes: config.s2s_outbox_max_bytes,

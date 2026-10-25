@@ -1845,10 +1845,12 @@ dependencies = [
 name = "northstar-archive-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "northstar-archive-core",
  "northstar-xep-0313",
  "northstar-xmpp-types",
+ "tokio",
  "uuid",
 ]
 

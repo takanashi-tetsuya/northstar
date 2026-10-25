@@ -2192,8 +2192,8 @@ for (const forbidden of [
     throw new Error(`federated_muc.rs regained transactional authority via db::${forbidden}`);
   }
 }
-const mamServiceSource = read('src/services/mam.rs');
-const mamServiceBody = structBody(mamServiceSource, 'pub(crate) struct MamService');
+const mamServiceSource = read('crates/contexts/archive/northstar-archive-application/src/service.rs');
+const mamServiceBody = structBody(mamServiceSource, 'pub struct MamService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mamServiceBody)) {
   throw new Error('MamService must receive its repository port');
 }

@@ -4,7 +4,6 @@
 //! account. Remote occupants therefore live in the room map with a federated
 //! endpoint and use a separate persistent-affiliation table.
 
-use crate::services::mam::{FederatedMamMetadataCommand, MamMetadataResult};
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucPrincipal, ClusterMucRegistrationOutcome,
@@ -19,6 +18,7 @@ use crate::state::AppState;
 use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
+use northstar_archive_application::{FederatedMamMetadataCommand, MamMetadataResult};
 use northstar_room_core::MucJoinSnapshotError;
 use northstar_xmpp_types::jid_text::{bare_jid, localpart};
 use roxmltree::Node;

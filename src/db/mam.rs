@@ -1,7 +1,8 @@
 //! Archive snapshots and atomic federation response admission.
 
-use crate::{db, services::mam::*};
+use crate::db;
 use anyhow::Result;
+use northstar_archive_application::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 

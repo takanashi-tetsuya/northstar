@@ -1,13 +1,13 @@
 use super::{Action, ProtocolSession};
-use crate::services::mam::{
-    ArchiveBoundary, ArchiveRow, MamArchiveQuery, MamMetadataCommand, MamMetadataResult,
-    MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand,
-    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRsmPage,
-};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_archive_application::{
+    ArchiveBoundary, ArchiveRow, MamArchiveQuery, MamMetadataCommand, MamMetadataResult,
+    MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand,
+    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRsmPage,
+};
 #[cfg(test)]
 use northstar_xep_0313::MAX_MAM_RESULTS;
 use northstar_xep_0313::{

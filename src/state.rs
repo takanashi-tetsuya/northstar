@@ -326,7 +326,7 @@ pub struct AppState {
     retraction_service: crate::services::retractions::RetractionService<
         db::retractions::PostgresRetractionRepository,
     >,
-    mam_service: crate::services::mam::MamService<db::mam::PostgresMamRepository>,
+    mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
     mix_service: crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     blocking_service:

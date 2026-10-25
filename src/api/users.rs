@@ -123,7 +123,7 @@ enum HistoryQueryMode {
 
 #[derive(Debug)]
 struct PreparedHistoryQuery {
-    mam: crate::services::mam::MamArchiveQuery,
+    mam: northstar_archive_application::MamArchiveQuery,
     mode: HistoryQueryMode,
     flip: bool,
 }
@@ -141,10 +141,12 @@ struct HistoryMessageView {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl TryFrom<crate::services::mam::ArchiveRow> for HistoryMessageView {
+impl TryFrom<northstar_archive_application::ArchiveRow> for HistoryMessageView {
     type Error = anyhow::Error;
 
-    fn try_from(value: crate::services::mam::ArchiveRow) -> std::result::Result<Self, Self::Error> {
+    fn try_from(
+        value: northstar_archive_application::ArchiveRow,
+    ) -> std::result::Result<Self, Self::Error> {
         let peer_jid = northstar_xmpp_types::jid::canonical_bare_key(&value.peer_jid)?;
         Ok(Self {
             id: value.id,
@@ -237,27 +239,27 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
     }
     let page = if let Some(page) = query.page.as_deref() {
         match page {
-            "first" => crate::services::mam::MamRsmPage::First,
-            "last" => crate::services::mam::MamRsmPage::Last,
+            "first" => northstar_archive_application::MamRsmPage::First,
+            "last" => northstar_archive_application::MamRsmPage::Last,
             _ => {
                 return Err(AppError::BadRequest("page must be first or last".into()));
             }
         }
     } else if let Some(id) = query.before {
-        crate::services::mam::MamRsmPage::Before(id)
+        northstar_archive_application::MamRsmPage::Before(id)
     } else if let Some(id) = query.after {
-        crate::services::mam::MamRsmPage::After(id)
+        northstar_archive_application::MamRsmPage::After(id)
     } else if let Some(index) = query.index {
         if !(0..=MAX_HISTORY_INDEX).contains(&index) {
             return Err(AppError::BadRequest(format!(
                 "index must be between 0 and {MAX_HISTORY_INDEX}"
             )));
         }
-        crate::services::mam::MamRsmPage::Index(index)
+        northstar_archive_application::MamRsmPage::Index(index)
     } else if mode == HistoryQueryMode::Legacy {
-        crate::services::mam::MamRsmPage::Last
+        northstar_archive_application::MamRsmPage::Last
     } else {
-        crate::services::mam::MamRsmPage::First
+        northstar_archive_application::MamRsmPage::First
     };
 
     let max = if let Some(max) = query.max {
@@ -272,7 +274,7 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
     };
 
     Ok(PreparedHistoryQuery {
-        mam: crate::services::mam::MamArchiveQuery {
+        mam: northstar_archive_application::MamArchiveQuery {
             with_jid,
             start: query.start,
             end: query.end,
@@ -307,7 +309,7 @@ pub async fn history(
         if let Some(boundary) =
             pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?
         {
-            prepared.mam.page = crate::services::mam::MamRsmPage::Before(boundary.id);
+            prepared.mam.page = northstar_archive_application::MamRsmPage::Before(boundary.id);
         }
     }
 
@@ -405,7 +407,10 @@ mod history_tests {
             prepared.mam.with_jid.as_deref(),
             Some("bob@example.test/Phone")
         );
-        assert_eq!(prepared.mam.page, crate::services::mam::MamRsmPage::Last);
+        assert_eq!(
+            prepared.mam.page,
+            northstar_archive_application::MamRsmPage::Last
+        );
         assert_eq!(prepared.mam.max, 25);
         assert!(prepared.flip);
     }
@@ -436,7 +441,7 @@ mod history_tests {
         assert_eq!(prepared.mam.ids, vec![first, second]);
         assert_eq!(
             prepared.mam.page,
-            crate::services::mam::MamRsmPage::Before(before)
+            northstar_archive_application::MamRsmPage::Before(before)
         );
         assert_eq!(prepared.mam.max, 0);
         assert!(prepared.flip);

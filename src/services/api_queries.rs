@@ -4,9 +4,9 @@ pub(crate) use crate::services::operations::{
     OperationTargetRecord,
 };
 
-pub(crate) use crate::services::mam::{ArchivePage, MamArchiveQuery};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+pub(crate) use northstar_archive_application::{ArchivePage, MamArchiveQuery};
 pub(crate) use northstar_upload_application::admin::{
     UploadDeadLetterBoundary, UploadDeadLetterId, UploadDeadLetterKind, UploadDeadLetterPage,
     UploadDeadLetterRecord,

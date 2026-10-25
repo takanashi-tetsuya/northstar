@@ -6,6 +6,8 @@
 pub use northstar_archive_core::*;
 pub mod repository;
 pub use repository::*;
+pub mod service;
+pub use service::MamService;
 use uuid::Uuid;
 
 /// Query scope representing the archive target (Personal, local MUC Room, or Federated Room).

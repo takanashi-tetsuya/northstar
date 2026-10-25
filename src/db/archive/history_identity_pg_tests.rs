@@ -843,7 +843,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
 
     // Rejecting the terminal response rolls back the prefix and must not
     // wake delivery. Exercise the application port as well as the SQL.
-    use crate::services::mam::{
+    use northstar_archive_application::{
         FederatedMamAdmissionOutcome, FederatedMamOutboxLimits, FederatedMamStreamRequest,
         MamService,
     };
@@ -867,7 +867,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         false,
         &query,
     );
-    let render = |_: &crate::services::mam::FederatedMamStreamPage| {
+    let render = |_: &northstar_archive_application::FederatedMamStreamPage| {
         Ok(vec![
                 "<message xmlns='jabber:server' from='snapshot-room@conference.local.test' to='remote@remote.test' id='first'/>".to_owned(),
                 "<iq xmlns='jabber:server' type='result' id='fin'/>".to_owned(),

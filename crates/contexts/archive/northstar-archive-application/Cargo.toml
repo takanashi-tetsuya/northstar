@@ -8,8 +8,10 @@ description = "Typed commands, validation rules, and repository contracts for No
 publish = false
 
 [dependencies]
+anyhow = "1.0"
 northstar-archive-core = { path = "../northstar-archive-core" }
 northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 chrono = { version = "0.4" }
+tokio = { version = "1.43", features = ["sync"] }
 uuid = { version = "1.12", features = ["v4"] }

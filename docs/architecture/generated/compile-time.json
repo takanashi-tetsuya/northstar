@@ -2339,6 +2339,10 @@
     ],
     [
       "northstar-archive-application",
+      "anyhow"
+    ],
+    [
+      "northstar-archive-application",
       "chrono"
     ],
     [
@@ -2352,6 +2356,10 @@
     [
       "northstar-archive-application",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-archive-application",
+      "tokio"
     ],
     [
       "northstar-archive-application",

@@ -683,7 +683,7 @@ async fn federated_muc_iq_owned(
                 .authorize_federated_room(&room.localpart, &actor_bare_jid, joined)
                 .await?
             {
-                crate::services::mam::MamRoomAccessOutcome::Allowed(_) => {
+                northstar_archive_application::MamRoomAccessOutcome::Allowed(_) => {
                     Ok(Some(federated_iq_result(
                         &request.stanza,
                         &room_jid,
@@ -691,13 +691,10 @@ async fn federated_muc_iq_owned(
                         mam_extended_form(),
                     )))
                 }
-                crate::services::mam::MamRoomAccessOutcome::Missing => Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    "cancel",
-                    "item-not-found",
-                )),
-                crate::services::mam::MamRoomAccessOutcome::Forbidden => {
+                northstar_archive_application::MamRoomAccessOutcome::Missing => Ok(
+                    federated_error(&request.stanza, from, "cancel", "item-not-found"),
+                ),
+                northstar_archive_application::MamRoomAccessOutcome::Forbidden => {
                     Ok(federated_error(&request.stanza, from, "auth", "forbidden"))
                 }
             },
@@ -775,8 +772,8 @@ async fn federated_muc_iq_owned(
                     .authorize_federated_room(&room.localpart, &actor_bare_jid, joined)
                     .await?
                 {
-                    crate::services::mam::MamRoomAccessOutcome::Allowed(_) => {}
-                    crate::services::mam::MamRoomAccessOutcome::Missing => {
+                    northstar_archive_application::MamRoomAccessOutcome::Allowed(_) => {}
+                    northstar_archive_application::MamRoomAccessOutcome::Missing => {
                         return Ok(federated_error(
                             &request.stanza,
                             from,
@@ -784,7 +781,7 @@ async fn federated_muc_iq_owned(
                             "item-not-found",
                         ));
                     }
-                    crate::services::mam::MamRoomAccessOutcome::Forbidden => {
+                    northstar_archive_application::MamRoomAccessOutcome::Forbidden => {
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
                 }
@@ -1046,7 +1043,7 @@ async fn federated_muc_mam(
     let outcome = state
         .mam_service()
         .admit_federated_room_stream(
-            crate::services::mam::FederatedMamStreamRequest::new(
+            northstar_archive_application::FederatedMamStreamRequest::new(
                 authenticated_domain,
                 room_localpart,
                 actor_bare_jid,
@@ -1112,22 +1109,16 @@ async fn federated_muc_mam(
         )
         .await?;
     match outcome {
-        crate::services::mam::FederatedMamAdmissionOutcome::Queued => Ok(None),
-        crate::services::mam::FederatedMamAdmissionOutcome::Missing
-        | crate::services::mam::FederatedMamAdmissionOutcome::PageMissing => Ok(federated_error(
-            stanza,
-            &stanza.from,
-            "cancel",
-            "item-not-found",
-        )),
-        crate::services::mam::FederatedMamAdmissionOutcome::Forbidden => {
+        northstar_archive_application::FederatedMamAdmissionOutcome::Queued => Ok(None),
+        northstar_archive_application::FederatedMamAdmissionOutcome::Missing
+        | northstar_archive_application::FederatedMamAdmissionOutcome::PageMissing => Ok(
+            federated_error(stanza, &stanza.from, "cancel", "item-not-found"),
+        ),
+        northstar_archive_application::FederatedMamAdmissionOutcome::Forbidden => {
             Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"))
         }
-        crate::services::mam::FederatedMamAdmissionOutcome::OutboxRejected => Ok(federated_error(
-            stanza,
-            &stanza.from,
-            "wait",
-            "remote-server-timeout",
-        )),
+        northstar_archive_application::FederatedMamAdmissionOutcome::OutboxRejected => Ok(
+            federated_error(stanza, &stanza.from, "wait", "remote-server-timeout"),
+        ),
     }
 }

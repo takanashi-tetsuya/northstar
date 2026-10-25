@@ -43,15 +43,13 @@ S16 起 workspace 的 crate 結構以[目標架構](target-architecture.zh-TW.md
 4 組合          main.rs、runtime（程序角色、operation runtime、維護 worker）、state（AppState 組裝）、tools
 3 介面卡        持久化 db；協議／傳輸 xmpp、bosh、s2s；HTTP api；物件儲存 storage；叢集控制面 cluster
 2 應用服務      services（呼叫 crates/*-application 與注入的 port）
-1 平台橫切      platform（config、error、logging、metrics、JID 文字工具、worker 與連線 actor 監督）、
-                security（tls／crl／ocsp、password_work、abuse、account_recovery）
-0 相容 facade   auth、jid（轉出 crates/* 的型別）
 函式庫          crates/{kernel,platform,contexts/*}/*，不得依賴根 crate
 測試專用        只在 #[cfg(test)]；受控重播與 Stage 4 實驗程式只在既有 cfg(test) 模組
 ```
 
 介面卡呼叫應用服務，應用服務經 port 使用持久化與傳輸，因此介面卡在應用服務之上。S10 之前本節把兩者
-的順序寫反，平台層也沒有列出 worker 監督；S10 依呼叫方向修正，並量測現有的違規（5.6）。
+的順序寫反，平台層也沒有列出 worker 監督；S10 依呼叫方向修正，並量測現有的違規（5.6）。S17 把平台層與相容
+facade 移出根 crate（5.13），根 crate 只剩上面三層。
 
 ### 3.1 根 crate 目標目錄（S4 階段才搬動）
 
@@ -107,6 +105,7 @@ S16 起 workspace 的 crate 結構以[目標架構](target-architecture.zh-TW.md
 | S14 叢集介面卡解耦 | WP-140–144 | 核對 5.9 中 `cluster` 的 4 條：它們不持有組合根做事，只是 worker 與監聽器的 context 定義在 `state`，或 worker 啟動時以 `AppState` 建構 context。先把 S13 留在 `state`、不碰 `AppState` 的即時路由表操作移到 `xmpp::local_routes`（WP-141），再依 S13 的做法把 context 的定義移到 `cluster`／`xmpp`、建構子留在 `state`：MUC 遞送與 outbox worker（WP-142）、叢集維護（WP-143）、監聽器與故障監督（WP-144）；`cluster` 的 worker 改收組合根建好的 context。盤點見 5.10 | 搬移只改路徑；測試名稱依路徑對應後不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 31 條降到 27 條，`cluster` 不再引用組合層 |
 | S15 介面卡參數收窄 | WP-150–154 | 核對 5.10 剩下的 27 條中只讀少數設定或句柄的介面卡函式：不再收整個組合根，改收實際用到的值，或收介面卡定義、`state` 建構的小 context。S2S 的 TLS 函式改收 `&TlsContext`，DNS 函式改收 `FederationDnsContext`（WP-151）；dialback 的 stream features 改收 `S2sFeaturePolicy`，向權威伺服器驗證金鑰的 `verify_remote` 移到 `s2s::outbound`（WP-152）；S2S 直送路由的 port 介面卡移到 `state`（WP-153）；MIX／MUC 鏡像連結改收 MIX 服務（WP-154）。盤點見 5.11 | 函式行為不變，複製的只有固定設定，共享狀態仍以借用在原處讀取；測試名稱不變；基線只刪不增；全部門禁與完整 CI 通過。已完成：基線由 27 條降到 22 條，`s2s` 只剩持有組合根的 4 個檔案 |
 | S16 地基 | WP-160–165 | 依[目標架構](target-architecture.zh-TW.md)開始整體重構（WP-160）。刪除未整合的 `services/*` 微服務原型與只為它存在的 crate、工具、契約、目錄、部署檔與 CI 步驟，ADR 0002–0007 標為 superseded（WP-161）；56 個 crate 以 `git mv` 移入 `crates/{kernel,platform,contexts/<context>}` 與 `tools/`，套件名稱不變（WP-162）；crate 依賴圖依層級檢查（R10，WP-163）；解除 Stage 4 對 `src/` 的釘選與 S4 的 `crate::outbound` shim（WP-164）；記錄建置時間基準（WP-165）。盤點見 5.12 | 測試名稱不變；根 crate 行數不變；全部門禁與完整 CI 通過。已完成 |
+| S17 平台 | WP-171–178 | 根 crate 的平台橫切移為 crate：`jid`、`auth` 相容 facade 退役，呼叫端直接引用 `northstar-xmpp-types`、`northstar-auth-core`（WP-171）；worker 監督與連線 actor 移入 `northstar-runtime`，日誌、指標登錄、遞送計數器與 PubSub 准入計量移入 `northstar-telemetry`（WP-172）；`src/security` 的安全機制與受保護的秘密檔讀取移入 `northstar-security`（WP-173）；XEP 擴充目錄成為 kernel 的 `northstar-xep-catalog`，JID 與 XML 文字工具併入 `northstar-xmpp-types`、`northstar-xml-builder`，`AppError` 移到 `api::error`（WP-174）；設定模組不再引用 auth core（WP-175），原始碼讀取器支援 crate 根 `lib.rs`（WP-176），設定移入 `northstar-config`（WP-177）；記錄階段與建置時間（WP-178）。`src/storage` 只服務上傳，改隨 S19 進 upload 上下文。盤點見 5.13 | 搬移只改路徑與可見性；測試名稱依路徑對應後不變；R9 基線不增；全部門禁與完整 CI 通過。已完成：`src/platform`、`src/security` 與兩個 facade 不再存在 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -468,6 +467,48 @@ public100 lane 重新綁定它的大小與雜湊。`src/` 的釘選解除後，`
 
 根 crate 單一編譯單元的時間（`--timings`）：測試版 binary 151.8 秒、正式 binary 87.7 秒，兩者都在第 51.9 秒（依賴編完）才開始，是乾淨建置的關鍵路徑。之後每個階段以同樣方式量測並比較。
 
+### 5.13 S17 盤點：平台橫切移為 crate（`a0ebe279`）
+
+| 原位置 | 去處 | 層 |
+| --- | --- | --- |
+| `src/jid.rs`、`src/auth.rs`（只轉出型別） | 刪除，呼叫端直接引用 `northstar_xmpp_types::jid`、`northstar_auth_core` | — |
+| `src/platform/workers.rs`、`connection_actors.rs` | `northstar-runtime` | platform |
+| `src/platform/{logging,metrics,delivery_counters}.rs`；`northstar-pubsub-application` 的准入計量 | `northstar-telemetry` | platform |
+| `src/security/*`、`src/platform/config/secret_files.rs` | `northstar-security` | platform |
+| `src/platform/extensions.rs` | `northstar-xep-catalog` | kernel |
+| `src/platform/jid_text.rs` | `northstar_xmpp_types::jid_text`（JID 切分）、`northstar_xml_builder::escape`（XML 跳脫） | kernel |
+| `src/platform/error.rs` | `src/api/error.rs` | 根 crate（介面卡） |
+| `src/platform/config.rs` 與 `config/` | `northstar-config` | platform |
+
+搬移由腳本完成：`git mv`、`pub(crate)` 改為 `pub`、把 `crate::<舊路徑>` 改寫為新 crate 的路徑（`use crate::{...}`
+群組中搬走的項目拆成自己的 `use`），基底變了就在新基底上重跑腳本，而不是解衝突。依層級規則需要調整的有三處：
+PubSub 准入計量原本在上下文 crate、由指標登錄讀取，platform 不能依賴上下文，因此計量移到 `northstar-telemetry`、由
+PubSub 更新（WP-172）；設定比對秘密改用 `subtle::ConstantTimeEq`，SCRAM 迭代次數的上下限成為設定常數，由驗證服務的
+測試確認與 auth core 一致（WP-175）；根 crate 測試使用的建構子與探測改放在 `test-support` feature 後面，只由根 crate
+的 dev-dependencies 開啟，執行期 binary 不含它們（WP-172、173）。
+
+讀原始碼的門禁跟著路徑改：執行期實驗可以指名 workspace 套件（`cargo test --locked -p <套件> <選擇器>`，WP-172）；
+`readProductionModule` 把 crate 根 `lib.rs` 當作 `mod.rs`，子模組是同目錄的檔案，同目錄的 `main.rs` 與 `bin/` 是另一個
+crate 根而略過（WP-176）；R9 的層級清單刪除平台層與 facade 層，基線維持 22 條。
+
+根 crate 由 834 檔 396,498 行降到 797 檔 381,964 行；五個新 crate 共 14,716 行（config 4,447、security 5,759、
+runtime 2,203、telemetry 1,862、xep-catalog 445）。`src/storage`（物件儲存、S3、備份、遷移）只有上傳使用，屬於
+upload 上下文的介面卡，S19 隨上傳一起移出；目標架構因此不再列 `northstar-object-store`。
+
+建置時間（`a0ebe279`，量法同 5.12）。這次量測時機器同時執行其他工作（負載約 6），因此在同樣條件下重測了 S16，
+兩個階段以同一次重測比較：
+
+| 量測 | S16（5.12，閒置） | S16（同負載重測） | S17 |
+| --- | --- | --- | --- |
+| 乾淨建置 | 203.7 秒 | 240.7 秒 | 243.6 秒 |
+| 改動根 crate（`src/main.rs`）後重建 | 25.4 秒 | 43.8 秒 | 34.8 秒 |
+| 改動 `northstar-xmpp-types` 後重建 | 35.5 秒 | 37.3 秒 | 44.6 秒 |
+| 無變更 | 1.1 秒 | 0.6 秒 | 2.0 秒 |
+
+同負載下乾淨建置持平；改動根 crate 後的重建由 43.8 秒降到 34.8 秒，平台程式碼不再隨根 crate 重新編譯；改動
+`northstar-xmpp-types` 後的重建由 37.3 秒增為 44.6 秒，新的平台 crate 也依賴它而要重新編譯。負載下的單次量測有誤差，
+之後的階段在機器閒置時量測。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -604,6 +645,10 @@ public100 lane 重新綁定它的大小與雜湊。`src/` 的釘選解除後，`
      列出呼叫端，也要搜尋門禁中被收窄函式原本使用的 accessor 名稱：WP-154 讓 `mix_muc.rs` 不再呼叫
      `.mix_service()`，架構門禁因此失敗，匯入它的三個門禁也一併失敗；由架構負責人把規則改為要求新的參數與呼叫，
      並以變異確認仍會拒絕。
+   - crate 搬移（S17）：以 `current_exe()` 與 `--exact <模組路徑>` 重新執行自己的測試，模組搬走後選擇器要跟著改
+     （WP-172 的 logging、WP-177 的 environment），否則子程序找不到測試而以成功結束；workspace 測試因此以
+     `--no-fail-fast` 執行，避免第一個失敗的測試 binary 讓其餘 binary 不跑。多個 WP 同時進行：各自一個 worktree，
+     搬移腳本與 agy 平行，cargo 工作經 flock 佇列依序執行；鏈上的 WP 以搬移後的測試名稱對應表串接比對。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -767,3 +812,13 @@ Stage 證據仍綁定其原提交。
 | WP-163 | 完成：`catalog/crates.yaml` 3.0.0 記錄目錄推得的層級、上下文與角色；`architecture-validator` 拒絕違反 R10 的依賴與外部 crate，新增 7 個測試；`crate-policy.md` 改寫 | 見 `git log --grep '\[WP-163\]'` |
 | WP-164 | 完成：基線移除 `pinned`，門禁移除釘選與 `crate::outbound` 規則；`main.rs` 移除 S4 shim；`response_owner.rs`、`stage4_replay.rs` 改用 `crate::xmpp::outbound`，內嵌測試移為子檔；historical75 lane 改用凍結副本 | 見 `git log --grep '\[WP-164\]'` |
 | WP-165 | 完成：記錄 S16 的階段、盤點（5.12）、R10 與建置時間基準。WP-161–164 依序整合；整合後 fmt、clippy、workspace 測試（2,863 個）、全部門禁與完整 CI 通過 | 見 `git log --grep '\[WP-165\]'` |
+| WP-166 | 完成：行程群組測試等到 PID 檔可解析才讀取（shell 先建立檔案再寫入 PID，慢的 runner 會讀到空字串） | 見 `git log --grep '\[WP-166\]'` |
+| WP-167 | 完成：tokio 鎖定版本升到 1.53.3（RUSTSEC-2026-0386），只改 `Cargo.lock` 的 tokio 項目 | 見 `git log --grep '\[WP-167\]'` |
+| WP-171 | 完成：刪除 `src/jid.rs`、`src/auth.rs`，呼叫端以腳本改為直接引用 crate；層級清單刪除 facade 層與過時的 `outbound` 別名 | 見 `git log --grep '\[WP-171\]'` |
+| WP-172 | 完成：`northstar-runtime`（workers、connection_actors）與 `northstar-telemetry`（logging、metrics、delivery_counters、准入計量）；`test-support` feature；執行期實驗可指名套件 | 見 `git log --grep '\[WP-172\]'` |
+| WP-173 | 完成：`northstar-security` 收下 `src/security` 的九個模組與設定的 `secret_files`；cluster bus 的測試金鑰放在 `test-support` 後面 | 見 `git log --grep '\[WP-173\]'` |
+| WP-174 | 完成：`northstar-xep-catalog`；`jid_text` 拆入 `northstar-xmpp-types` 與 `northstar-xml-builder`；`AppError` 移到 `api::error` | 見 `git log --grep '\[WP-174\]'` |
+| WP-175 | 完成：設定以 `subtle` 比對秘密，SCRAM 迭代次數上下限成為設定常數，驗證服務測試確認與 auth core 一致 | 見 `git log --grep '\[WP-175\]'` |
+| WP-176 | 完成：`source-module.mjs` 讀 crate 根 `lib.rs` 與同目錄子模組，略過 `main.rs` 與 `bin/`；新增 1 個測試 | 見 `git log --grep '\[WP-176\]'` |
+| WP-177 | 完成：`northstar-config` 收下設定模組；`src/platform/` 刪除；R9 刪除平台層；兩個門禁改讀 crate 根 | 見 `git log --grep '\[WP-177\]'` |
+| WP-178 | 完成：記錄 S17 的階段、盤點（5.13）與建置時間；目標架構刪除 `northstar-object-store`、加入 `northstar-xep-catalog`。WP-171–177 依序整合；每步 fmt、clippy、workspace 測試、層級與全部門禁通過 | 見 `git log --grep '\[WP-178\]'` |

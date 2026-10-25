@@ -837,8 +837,8 @@
       "id": "upload",
       "title": "Upload, object storage and reconciliation",
       "production_owner": {
-        "path": "src/services/upload.rs",
-        "anchor": "pub(crate) struct UploadService<R> {"
+        "path": "crates/contexts/upload/northstar-upload-application/src/service.rs",
+        "anchor": "pub struct UploadService<R> {"
       },
       "runtime_identities": [
         {
@@ -874,9 +874,9 @@
           "id": "upload-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server services::upload",
+          "command": "cargo test --locked -p northstar-upload-application service::tests",
           "test": {
-            "path": "src/services/upload.rs",
+            "path": "crates/contexts/upload/northstar-upload-application/src/service.rs",
             "anchor": "async fn finalization_cleanup_tracks_authority_and_stage_identity() {"
           },
           "assertions": [

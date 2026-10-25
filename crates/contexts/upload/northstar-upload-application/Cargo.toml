@@ -8,6 +8,13 @@ description = "Typed commands, validation rules, and application boundaries for 
 publish = false
 
 [dependencies]
+anyhow = "1.0"
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-upload-core = { path = "../northstar-upload-core" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["sync"] }
 uuid = { version = "1.12", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt", "time"] }

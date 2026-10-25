@@ -10,9 +10,8 @@ use std::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::services::upload_safety::{
-    UploadAuthorityGeneration, UploadIoClass, UploadIoPermit, UploadSafetyError, UploadSafetyGate,
-};
+use northstar_upload_application::safety::{UploadIoPermit, UploadSafetyError, UploadSafetyGate};
+use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 
 #[derive(Debug, thiserror::Error)]
 #[error("upload object integrity verification failed: {0}")]

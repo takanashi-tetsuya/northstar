@@ -2308,8 +2308,8 @@ for (const [name, accessor, forbiddenAuthority, route] of [
   }
 }
 
-const uploadServiceSource = read('src/services/upload.rs');
-const uploadServiceBody = structBody(uploadServiceSource, 'pub(crate) struct UploadService');
+const uploadServiceSource = read('crates/contexts/upload/northstar-upload-application/src/service.rs');
+const uploadServiceBody = structBody(uploadServiceSource, 'pub struct UploadService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(uploadServiceBody)) {
   throw new Error('UploadService must receive its repository port');
 }
@@ -2337,7 +2337,7 @@ for (const [name, source] of [
   ['RetentionContext', read('src/runtime/retention.rs')],
   ['SubscriptionCleanupContext', read('src/runtime/subscription_cleanup.rs')],
   ['UploadMaintenanceContext', read('src/runtime/upload_worker.rs')],
-  ['UploadMaintenanceRepository', read('src/services/upload_maintenance.rs')],
+  ['UploadMaintenanceRepository', read('crates/contexts/upload/northstar-upload-application/src/maintenance.rs')],
   ['CapacityMaintenanceService', read('src/services/capacity_maintenance.rs')],
   ['CapacityMaintenanceContexts', read('src/state/capacity_maintenance.rs')],
   ['CapacityMaintenanceWorkers', read('src/runtime/capacity_maintenance.rs')],

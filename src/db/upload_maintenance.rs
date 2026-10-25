@@ -1,6 +1,7 @@
 //! PostgreSQL adapter for the upload reconciliation worker.
-use crate::{db, services::upload_maintenance::*};
+use crate::db;
 use anyhow::Result;
+use northstar_upload_application::maintenance::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 #[derive(Clone)]

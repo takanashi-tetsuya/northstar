@@ -213,12 +213,12 @@ fn readiness_response(snapshot: ReadinessSnapshot) -> Result<&'static str, AppEr
     }
 }
 
-fn upload_storage_ready(state: crate::services::upload_safety::UploadSafetyState) -> bool {
+fn upload_storage_ready(state: northstar_upload_application::UploadSafetyState) -> bool {
     matches!(
         state,
-        crate::services::upload_safety::UploadSafetyState::Disabled
-            | crate::services::upload_safety::UploadSafetyState::Healthy
-            | crate::services::upload_safety::UploadSafetyState::RecoveryDraining
+        northstar_upload_application::UploadSafetyState::Disabled
+            | northstar_upload_application::UploadSafetyState::Healthy
+            | northstar_upload_application::UploadSafetyState::RecoveryDraining
     )
 }
 

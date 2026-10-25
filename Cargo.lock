@@ -2138,8 +2138,12 @@ dependencies = [
 name = "northstar-upload-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "northstar-auth-core",
  "northstar-upload-core",
  "northstar-xmpp-types",
+ "thiserror 2.0.20",
+ "tokio",
  "uuid",
 ]
 

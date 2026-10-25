@@ -15,9 +15,7 @@ use std::{
 
 use tokio::sync::watch;
 
-pub(crate) use northstar_upload_core::{
-    UploadAuthorityGeneration, UploadIoClass, UploadSafetyState,
-};
+use northstar_upload_core::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyState};
 
 #[derive(Clone, Debug)]
 struct UploadSafetySnapshot {
@@ -46,23 +44,23 @@ impl UploadSafetySnapshot {
 
 #[derive(Debug, thiserror::Error)]
 #[error("upload object I/O is unavailable: {reason}")]
-pub(crate) struct UploadSafetyError {
+pub struct UploadSafetyError {
     reason: Arc<str>,
 }
 
 #[derive(Clone)]
-pub(crate) struct UploadSafetyGate {
+pub struct UploadSafetyGate {
     snapshot: Arc<RwLock<UploadSafetySnapshot>>,
     changes: watch::Sender<u64>,
 }
 
 #[derive(Clone)]
-pub(crate) struct UploadSafetyReadiness {
+pub struct UploadSafetyReadiness {
     snapshot: Arc<RwLock<UploadSafetySnapshot>>,
 }
 
 impl UploadSafetyReadiness {
-    pub(crate) fn state(&self) -> UploadSafetyState {
+    pub fn state(&self) -> UploadSafetyState {
         self.snapshot
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -71,14 +69,14 @@ impl UploadSafetyReadiness {
 }
 
 impl UploadSafetyGate {
-    pub(crate) fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Self::with_initial_state(
             UploadSafetyState::Unproven,
             "upload authority has not been proved",
         )
     }
 
-    pub(crate) fn disabled() -> Arc<Self> {
+    pub fn disabled() -> Arc<Self> {
         Self::with_initial_state(UploadSafetyState::Disabled, "upload capability is disabled")
     }
 
@@ -95,20 +93,20 @@ impl UploadSafetyGate {
         })
     }
 
-    pub(crate) fn state(&self) -> UploadSafetyState {
+    pub fn state(&self) -> UploadSafetyState {
         self.snapshot
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .state
     }
 
-    pub(crate) fn readiness_probe(&self) -> UploadSafetyReadiness {
+    pub fn readiness_probe(&self) -> UploadSafetyReadiness {
         UploadSafetyReadiness {
             snapshot: Arc::clone(&self.snapshot),
         }
     }
 
-    pub(crate) fn metric_code(&self) -> u64 {
+    pub fn metric_code(&self) -> u64 {
         match self.state() {
             UploadSafetyState::Disabled => 6,
             UploadSafetyState::Healthy => 0,
@@ -120,14 +118,14 @@ impl UploadSafetyGate {
         }
     }
 
-    pub(crate) fn generation(&self) -> Option<UploadAuthorityGeneration> {
+    pub fn generation(&self) -> Option<UploadAuthorityGeneration> {
         self.snapshot
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .generation
     }
 
-    pub(crate) fn establish(&self, generation: UploadAuthorityGeneration, recovery_draining: bool) {
+    pub fn establish(&self, generation: UploadAuthorityGeneration, recovery_draining: bool) {
         self.transition(
             if recovery_draining {
                 UploadSafetyState::RecoveryDraining
@@ -143,11 +141,11 @@ impl UploadSafetyGate {
         );
     }
 
-    pub(crate) fn mark_namespace_unsafe(&self, reason: impl Into<Arc<str>>) {
+    pub fn mark_namespace_unsafe(&self, reason: impl Into<Arc<str>>) {
         self.transition(UploadSafetyState::NamespaceUnsafe, None, reason);
     }
 
-    pub(crate) fn mark_capacity_authority_unsafe(&self, reason: impl Into<Arc<str>>) {
+    pub fn mark_capacity_authority_unsafe(&self, reason: impl Into<Arc<str>>) {
         let generation = self.generation();
         self.transition(
             UploadSafetyState::CapacityAuthorityUnsafe,
@@ -156,7 +154,7 @@ impl UploadSafetyGate {
         );
     }
 
-    pub(crate) fn mark_ledger_mismatch(&self, reason: impl Into<Arc<str>>) {
+    pub fn mark_ledger_mismatch(&self, reason: impl Into<Arc<str>>) {
         let generation = self.generation();
         self.transition(UploadSafetyState::LedgerMismatch, generation, reason);
     }
@@ -199,7 +197,7 @@ impl UploadSafetyGate {
         self.changes.send_replace(revision);
     }
 
-    pub(crate) fn permit(
+    pub fn permit(
         self: &Arc<Self>,
         class: UploadIoClass,
     ) -> Result<UploadIoPermit, UploadSafetyError> {
@@ -225,7 +223,7 @@ impl UploadSafetyGate {
         })
     }
 
-    pub(crate) fn permits_generation(
+    pub fn permits_generation(
         &self,
         class: UploadIoClass,
         generation: UploadAuthorityGeneration,
@@ -237,7 +235,7 @@ impl UploadSafetyGate {
         snapshot.permits(class) && snapshot.generation == Some(generation)
     }
 
-    pub(crate) fn invalidation_future(
+    pub fn invalidation_future(
         self: &Arc<Self>,
         class: UploadIoClass,
         generation: UploadAuthorityGeneration,
@@ -257,7 +255,7 @@ impl UploadSafetyGate {
     }
 }
 
-pub(crate) struct UploadIoPermit {
+pub struct UploadIoPermit {
     gate: Arc<UploadSafetyGate>,
     class: UploadIoClass,
     generation: UploadAuthorityGeneration,
@@ -266,11 +264,11 @@ pub(crate) struct UploadIoPermit {
 }
 
 impl UploadIoPermit {
-    pub(crate) fn generation(&self) -> UploadAuthorityGeneration {
+    pub fn generation(&self) -> UploadAuthorityGeneration {
         self.generation
     }
 
-    pub(crate) fn ensure_current(&self) -> Result<(), UploadSafetyError> {
+    pub fn ensure_current(&self) -> Result<(), UploadSafetyError> {
         let snapshot = self
             .gate
             .snapshot
@@ -288,7 +286,7 @@ impl UploadIoPermit {
         }
     }
 
-    pub(crate) fn authority_changed_error(&self) -> UploadSafetyError {
+    pub fn authority_changed_error(&self) -> UploadSafetyError {
         let snapshot = self
             .gate
             .snapshot
@@ -299,7 +297,7 @@ impl UploadIoPermit {
         }
     }
 
-    pub(crate) async fn invalidated(&mut self) {
+    pub async fn invalidated(&mut self) {
         loop {
             if self.ensure_current().is_err() {
                 return;

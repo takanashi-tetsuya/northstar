@@ -6,7 +6,7 @@
 pub(crate) struct ReadinessContext {
     pub(crate) connection: northstar_runtime::connection_actors::ConnectionAdmissionReadiness,
     pub(crate) sm: crate::services::sm_capacity::SmMemoryReadiness,
-    pub(crate) upload: crate::services::upload_safety::UploadSafetyReadiness,
+    pub(crate) upload: northstar_upload_application::safety::UploadSafetyReadiness,
     pub(crate) cluster: crate::cluster::ClusterReadinessProbe,
     pub(crate) workers: northstar_runtime::workers::WorkerReadinessProbe,
     pub(crate) abuse_key_deployment:
@@ -25,7 +25,7 @@ impl ReadinessContext {
         self.sm.is_ready()
     }
 
-    pub(crate) fn upload_state(&self) -> crate::services::upload_safety::UploadSafetyState {
+    pub(crate) fn upload_state(&self) -> northstar_upload_application::UploadSafetyState {
         self.upload.state()
     }
 

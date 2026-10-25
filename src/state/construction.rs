@@ -771,7 +771,7 @@ impl AppState {
             federation.outbox_wakeup(),
         );
         let upload_service = config.upload_mode.keeps_storage_runtime().then(|| {
-            crate::services::upload::UploadService::new(
+            northstar_upload_application::service::UploadService::new(
                 db::upload::PostgresUploadRepository::new(
                     upload_storage_pool
                         .as_ref()

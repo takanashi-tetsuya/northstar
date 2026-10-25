@@ -1,8 +1,9 @@
-use crate::services::upload_maintenance::*;
-use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
 use northstar_runtime::workers::WorkerHeartbeat;
+use northstar_upload_application::maintenance::*;
+use northstar_upload_application::safety::UploadSafetyGate;
+use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,

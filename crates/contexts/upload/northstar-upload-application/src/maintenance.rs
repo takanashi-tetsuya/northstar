@@ -175,7 +175,7 @@ pub struct UploadAuthorityProbe {
     pub capacity_matches: bool,
     pub recovery_draining: bool,
 }
-pub(crate) trait UploadMaintenanceRepository: Send + Sync {
+pub trait UploadMaintenanceRepository: Send + Sync {
     #[allow(clippy::too_many_arguments)]
     fn upload_storage_authority_matches(
         &self,

@@ -68,12 +68,8 @@ pub(crate) mod sm_teardown;
 pub(crate) mod sm_teardown_muc;
 pub(crate) mod sm_teardown_presence;
 pub(crate) mod stanza_validation;
-pub(crate) mod upload;
 pub(crate) mod upload_admin;
-pub(crate) mod upload_safety;
 pub(crate) mod xml_util;
-
-pub(crate) mod upload_maintenance;
 
 pub(crate) mod sm_suspension;
 

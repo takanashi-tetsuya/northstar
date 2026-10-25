@@ -2931,11 +2931,27 @@
     ],
     [
       "northstar-upload-application",
+      "anyhow"
+    ],
+    [
+      "northstar-upload-application",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-upload-application",
       "northstar-upload-core"
     ],
     [
       "northstar-upload-application",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-upload-application",
+      "thiserror"
+    ],
+    [
+      "northstar-upload-application",
+      "tokio"
     ],
     [
       "northstar-upload-application",

@@ -1,8 +1,8 @@
 use super::{Action, ProtocolSession};
-use crate::services::upload::{UploadSlotAdmission, UploadSlotRequestCommand};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_upload_application::{UploadSlotAdmission, UploadSlotRequestCommand};
 use roxmltree::Node;
 
 fn file_too_large(id: &str, from: &str, maximum: u64) -> String {

@@ -1,11 +1,12 @@
 use super::{
     StagedUpload, StoreFuture, StoredUpload, StoredUploadReader, UploadIntegrityError, UploadStore,
 };
-use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
 use anyhow::{Context, Result};
 use axum::http::{Method, Request, StatusCode};
 use bytes::BytesMut;
 use futures::TryStreamExt;
+use northstar_upload_application::safety::UploadSafetyGate;
+use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 use object_store::{
     aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsAuthorizer},
     client::{ClientOptions, HttpClient, HttpConnector, HttpRequestBody, ReqwestConnector},

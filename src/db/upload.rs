@@ -4,8 +4,8 @@ use sqlx::{PgPool, Row};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::services::upload::{PromotionClaim, UploadLifecycleRepository};
-pub use crate::services::upload::{
+use northstar_upload_application::service::{PromotionClaim, UploadLifecycleRepository};
+pub use northstar_upload_application::service::{
     UploadClaimOutcome, UploadLease, UploadRenewOutcome, UploadSlot, UploadStageProjection,
     UserUploadDeleteOutcome,
 };
@@ -183,9 +183,9 @@ const TEST_UPLOAD_RETAINED_FILES_LIMIT: i64 = 10_000;
 #[cfg(test)]
 const TEST_UPLOAD_RETAINED_BYTES_LIMIT: i64 = 1024 * 1024 * 1024;
 
-pub use crate::services::upload_maintenance::CommittedUploadIdentity;
-pub use crate::services::upload_maintenance::PromotedUploadProjection;
-pub use crate::services::upload_maintenance::UploadAuthorityProbe;
+pub use northstar_upload_application::maintenance::CommittedUploadIdentity;
+pub use northstar_upload_application::maintenance::PromotedUploadProjection;
+pub use northstar_upload_application::maintenance::UploadAuthorityProbe;
 
 /// Lightweight catalog proof for the upload-capacity enforcement boundary.
 ///
@@ -194,18 +194,18 @@ pub use crate::services::upload_maintenance::UploadAuthorityProbe;
 /// trigger, changed routine authority, owner drift, public EXECUTE grant, or
 /// deployment-policy change before a later write can silently corrupt the
 /// trigger-maintained ledger.
-pub use crate::services::upload_maintenance::UploadCapacityAuthorityAudit;
+pub use northstar_upload_application::maintenance::UploadCapacityAuthorityAudit;
 /// Low-frequency proof that the trigger-maintained O(1) capacity authority
 /// still equals a statement-consistent projection of the underlying facts.
 /// Hot admission must never perform these scans; the supervised upload worker
 /// uses them only as an integrity alarm and deliberately does not rewrite the
 /// authority automatically.
-pub use crate::services::upload_maintenance::UploadCapacityReconciliation;
-pub use crate::services::upload_maintenance::UploadCleanupJob;
-pub use crate::services::upload_maintenance::UploadQueueMetrics;
-pub use crate::services::upload_maintenance::UploadStorageJob;
+pub use northstar_upload_application::maintenance::UploadCapacityReconciliation;
+pub use northstar_upload_application::maintenance::UploadCleanupJob;
+pub use northstar_upload_application::maintenance::UploadQueueMetrics;
+pub use northstar_upload_application::maintenance::UploadStorageJob;
 
-pub use crate::services::upload_maintenance::UploadScrubJob;
+pub use northstar_upload_application::maintenance::UploadScrubJob;
 
 /// Production source of this module: the file itself followed by each
 /// production child module file, so source-contract tests keep reading the

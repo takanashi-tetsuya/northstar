@@ -4,15 +4,14 @@
 //! the reservation and safety gate, creates the bearer, and commits only its
 //! hash through the atomic reservation port.
 
-use crate::services::upload_maintenance::CommittedUploadIdentity;
-pub(crate) use crate::services::upload_maintenance::PromotedUploadProjection;
-use crate::services::upload_safety::UploadSafetyGate;
+use crate::maintenance::{CommittedUploadIdentity, PromotedUploadProjection};
+use crate::safety::UploadSafetyGate;
+use crate::{
+    validate_upload_slot_request, UploadIoClass, UploadRepository, UploadSlotAdmission,
+    UploadSlotRequest, UploadSlotRequestCommand,
+};
 use anyhow::Result;
 use northstar_auth_core as auth;
-use northstar_upload_application::{validate_upload_slot_request, UploadRepository};
-pub(crate) use northstar_upload_application::{
-    UploadIoClass, UploadSlotAdmission, UploadSlotRequest, UploadSlotRequestCommand,
-};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -52,7 +51,7 @@ pub enum UploadClaimOutcome {
 
 /// Confirm a replay only after the request and the stored object have both
 /// been checked against the immutable digest returned by the slot claim.
-pub(crate) struct UploadReplayCommand<'a> {
+pub struct UploadReplayCommand<'a> {
     pub id: Uuid,
     pub token_hash: &'a [u8],
     pub committed_sha256: [u8; 32],
@@ -60,13 +59,13 @@ pub(crate) struct UploadReplayCommand<'a> {
 }
 
 impl UploadReplayCommand<'_> {
-    pub(crate) fn presented_bytes_match(&self) -> bool {
+    pub fn presented_bytes_match(&self) -> bool {
         self.presented_sha256 == self.committed_sha256
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UploadReplayOutcome {
+pub enum UploadReplayOutcome {
     Confirmed,
     DifferentBytes,
     StoredObjectMismatch,
@@ -93,13 +92,13 @@ pub struct UploadStageProjection<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UploadStageHandoffOutcome {
+pub enum UploadStageHandoffOutcome {
     Recorded,
     NotRecorded { cleanup: UploadStageCleanup },
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct PromotionClaim {
+pub struct PromotionClaim {
     pub id: Uuid,
     pub storage_attempt: Uuid,
     pub storage_fence: i64,
@@ -107,21 +106,21 @@ pub(crate) struct PromotionClaim {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AcquirePromotionOutcome {
+pub enum AcquirePromotionOutcome {
     Busy,
     Ready(Uuid),
     Retired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FinalizePromotionOutcome {
+pub enum FinalizePromotionOutcome {
     Committed,
     ConcurrentlyCommitted,
     Retired,
     Indeterminate,
 }
 
-pub(crate) struct FinalizePromotionCommand<'a> {
+pub struct FinalizePromotionCommand<'a> {
     pub projection: PromotedUploadProjection<'a>,
     /// Cleanup follows the identity returned by the write, not a fresh
     /// inference from the promoted object's locator.
@@ -130,13 +129,13 @@ pub(crate) struct FinalizePromotionCommand<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UploadStageCleanup {
+pub enum UploadStageCleanup {
     Abort,
     Retain,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FinalizePromotionResult {
+pub struct FinalizePromotionResult {
     pub outcome: FinalizePromotionOutcome,
     pub stage_cleanup: UploadStageCleanup,
 }
@@ -149,7 +148,7 @@ pub enum UserUploadDeleteOutcome {
 
 /// Upload request lease and replay authority; each operation owns its SQL
 /// connection and completes before the caller can touch object storage.
-pub(crate) trait UploadLifecycleRepository: Send + Sync {
+pub trait UploadLifecycleRepository: Send + Sync {
     fn claim_slot(
         &self,
         id: Uuid,
@@ -230,18 +229,14 @@ pub(crate) trait UploadLifecycleRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct UploadService<R> {
+pub struct UploadService<R> {
     repository: R,
     safety_gate: Arc<UploadSafetyGate>,
     max_upload_bytes: u64,
 }
 
 impl<R: UploadRepository<Error = anyhow::Error>> UploadService<R> {
-    pub(crate) fn new(
-        repository: R,
-        safety_gate: Arc<UploadSafetyGate>,
-        max_upload_bytes: u64,
-    ) -> Self {
+    pub fn new(repository: R, safety_gate: Arc<UploadSafetyGate>, max_upload_bytes: u64) -> Self {
         Self {
             repository,
             safety_gate,
@@ -249,7 +244,7 @@ impl<R: UploadRepository<Error = anyhow::Error>> UploadService<R> {
         }
     }
 
-    pub(crate) async fn execute_upload_slot_reservation(
+    pub async fn execute_upload_slot_reservation(
         &self,
         command: UploadSlotRequestCommand<'_>,
     ) -> Result<UploadSlotAdmission> {
@@ -272,7 +267,7 @@ impl<R: UploadRepository<Error = anyhow::Error>> UploadService<R> {
 }
 
 impl<R: UploadLifecycleRepository> UploadService<R> {
-    pub(crate) async fn claim_slot(
+    pub async fn claim_slot(
         &self,
         id: Uuid,
         token_hash: &[u8],
@@ -283,7 +278,7 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
             .await
     }
 
-    pub(crate) async fn execute_upload_replay(
+    pub async fn execute_upload_replay(
         &self,
         command: UploadReplayCommand<'_>,
         stored_sha256: [u8; 32],
@@ -305,7 +300,7 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
         }
     }
 
-    pub(crate) async fn renew_claim(
+    pub async fn renew_claim(
         &self,
         id: Uuid,
         claim_token: Uuid,
@@ -316,11 +311,11 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
             .await
     }
 
-    pub(crate) async fn release_claim(&self, id: Uuid, claim_token: Uuid) -> Result<bool> {
+    pub async fn release_claim(&self, id: Uuid, claim_token: Uuid) -> Result<bool> {
         self.repository.release_claim(id, claim_token).await
     }
 
-    pub(crate) async fn execute_stage_handoff(
+    pub async fn execute_stage_handoff(
         &self,
         projection: UploadStageProjection<'_>,
     ) -> Result<UploadStageHandoffOutcome> {
@@ -340,7 +335,7 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
         }
     }
 
-    pub(crate) async fn acquire_promotion(
+    pub async fn acquire_promotion(
         &self,
         id: Uuid,
         storage_attempt: Uuid,
@@ -368,11 +363,11 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
         }
     }
 
-    pub(crate) async fn defer_promotion(&self, claim: PromotionClaim) -> Result<bool> {
+    pub async fn defer_promotion(&self, claim: PromotionClaim) -> Result<bool> {
         self.repository.defer_promotion(claim).await
     }
 
-    pub(crate) async fn finalize_promotion(
+    pub async fn finalize_promotion(
         &self,
         command: FinalizePromotionCommand<'_>,
     ) -> Result<FinalizePromotionResult> {
@@ -421,11 +416,11 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
         })
     }
 
-    pub(crate) async fn public_file(&self, id: Uuid) -> Result<Option<UploadSlot>> {
+    pub async fn public_file(&self, id: Uuid) -> Result<Option<UploadSlot>> {
         self.repository.public_file(id).await
     }
 
-    pub(crate) async fn delete_authorized(
+    pub async fn delete_authorized(
         &self,
         user_id: Uuid,
         auth_generation: i64,
@@ -442,7 +437,7 @@ impl<R: UploadLifecycleRepository> UploadService<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use northstar_upload_application::UploadAuthorityGeneration;
+    use crate::UploadAuthorityGeneration;
     use std::sync::Mutex;
     use uuid::Uuid;
 

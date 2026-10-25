@@ -85,8 +85,9 @@ pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
 
 pub(crate) type PasskeyService =
     crate::services::passkeys::PasskeyService<crate::db::passkeys::PostgresPasskeyRepository>;
-pub(crate) type UploadService =
-    crate::services::upload::UploadService<crate::db::upload::PostgresUploadRepository>;
+pub(crate) type UploadService = northstar_upload_application::service::UploadService<
+    crate::db::upload::PostgresUploadRepository,
+>;
 
 pub(crate) type RegistrationAdminContext = crate::services::account_admin::RegistrationAdminService<
     crate::db::account_admin_repository::PostgresRegistrationAdminRepository,

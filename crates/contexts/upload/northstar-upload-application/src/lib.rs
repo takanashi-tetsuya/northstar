@@ -1,10 +1,14 @@
-//! Capability-injected HTTP upload application boundary, typed commands,
-//! and validation rules.
+//! Capability-injected HTTP upload application boundary: typed commands and
+//! validation rules, the slot service, the maintenance ports and the
+//! process-wide upload safety gate.
 
 #![forbid(unsafe_code)]
 
 pub use northstar_upload_core::*;
+pub mod maintenance;
 pub mod repository;
+pub mod safety;
+pub mod service;
 pub use repository::*;
 use uuid::Uuid;
 

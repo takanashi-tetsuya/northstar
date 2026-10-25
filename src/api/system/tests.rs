@@ -103,7 +103,7 @@ fn metrics_authorization_precedes_cache_and_collection() {
 
 #[test]
 fn upload_readiness_is_fail_closed_but_allows_bounded_recovery_drain() {
-    use crate::services::upload_safety::UploadSafetyState;
+    use northstar_upload_application::UploadSafetyState;
 
     assert!(upload_storage_ready(UploadSafetyState::Disabled));
     assert!(upload_storage_ready(UploadSafetyState::Healthy));

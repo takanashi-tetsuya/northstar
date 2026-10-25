@@ -186,7 +186,6 @@ use crate::{
     db,
     s2s::FederationRouter,
     services::abuse::{AbuseConfig, AbuseGuard},
-    services::upload_safety::{UploadAuthorityGeneration, UploadSafetyGate},
     storage::{GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore},
 };
 use anyhow::Context;
@@ -202,6 +201,8 @@ use northstar_config::{
     SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
 };
 use northstar_telemetry::metrics::Metrics;
+use northstar_upload_application::safety::UploadSafetyGate;
+use northstar_upload_application::UploadAuthorityGeneration;
 use sqlx::{
     pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},

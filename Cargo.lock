@@ -2498,6 +2498,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "roxmltree",
+ "tracing",
 ]
 
 [[package]]

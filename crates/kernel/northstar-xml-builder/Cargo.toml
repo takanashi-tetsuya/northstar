@@ -10,3 +10,4 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 roxmltree = "0.20"
+tracing = "0.1"

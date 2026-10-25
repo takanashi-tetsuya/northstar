@@ -3585,6 +3585,10 @@
       "roxmltree"
     ],
     [
+      "northstar-xml-builder",
+      "tracing"
+    ],
+    [
       "northstar-xml-framing",
       "anyhow"
     ],

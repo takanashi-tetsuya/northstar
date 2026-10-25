@@ -1225,6 +1225,7 @@ digraph compile_time {
   "northstar-xep-catalog" -> "northstar-xep-core";
   "northstar-xml-builder" -> "anyhow";
   "northstar-xml-builder" -> "roxmltree";
+  "northstar-xml-builder" -> "tracing";
   "northstar-xml-framing" -> "anyhow";
   "northstar-xml-framing" -> "thiserror";
   "northstar-xmpp-types" -> "anyhow";

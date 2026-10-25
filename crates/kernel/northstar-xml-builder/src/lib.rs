@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod escape;
+pub mod stanza;
 
 use anyhow::{bail, Context, Result};
 use std::borrow::Cow;

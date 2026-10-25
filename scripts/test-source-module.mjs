@@ -74,6 +74,36 @@ test('mod.rs style module excludes mod.rs from its children', () => {
   }
 });
 
+test('lib.rs crate root reads its sibling modules and skips other crate roots', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
+  try {
+    fs.mkdirSync(path.join(root, 'crates/x/src/nested'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'crates/x/src/bin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'crates/x/src/lib.rs'), 'mod a;\nmod nested;\n#[cfg(test)]\nmod tests;\n');
+    fs.writeFileSync(path.join(root, 'crates/x/src/a.rs'), '');
+    fs.writeFileSync(path.join(root, 'crates/x/src/nested.rs'), '');
+    fs.writeFileSync(path.join(root, 'crates/x/src/nested/deep.rs'), '');
+    fs.writeFileSync(path.join(root, 'crates/x/src/tests.rs'), '');
+    fs.writeFileSync(path.join(root, 'crates/x/src/main.rs'), '');
+    fs.writeFileSync(path.join(root, 'crates/x/src/bin/tool.rs'), '');
+    assert.deepEqual(moduleFiles('crates/x/src/lib.rs', { root }), [
+      'crates/x/src/lib.rs',
+      'crates/x/src/a.rs',
+      'crates/x/src/nested.rs',
+      'crates/x/src/nested/deep.rs',
+      'crates/x/src/tests.rs'
+    ]);
+    assert.deepEqual(productionModuleFiles('crates/x/src/lib.rs', { root }), [
+      'crates/x/src/lib.rs',
+      'crates/x/src/a.rs',
+      'crates/x/src/nested.rs',
+      'crates/x/src/nested/deep.rs'
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('missing module, absolute path, .. path, and non-.rs path each throw', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
   try {

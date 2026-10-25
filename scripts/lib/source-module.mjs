@@ -11,6 +11,7 @@ const roleSplitCatalogPath = 'catalog/source-role-splits.json';
 
 /**
  * Returns the normalized module path and its child directory after checking path guards.
+ * The children of mod.rs and of a crate root lib.rs are its siblings; the children of foo.rs are under foo/.
  */
 function modulePaths(modulePath) {
   if (path.isAbsolute(modulePath)) throw new Error(`absolute path rejected: ${modulePath}`);
@@ -22,6 +23,10 @@ function modulePaths(modulePath) {
   if (normalizedModulePath.endsWith('/mod.rs')) {
     childDir = normalizedModulePath.slice(0, -7);
   } else if (normalizedModulePath === 'mod.rs') {
+    childDir = '.';
+  } else if (normalizedModulePath.endsWith('/lib.rs')) {
+    childDir = normalizedModulePath.slice(0, -7);
+  } else if (normalizedModulePath === 'lib.rs') {
     childDir = '.';
   } else {
     childDir = normalizedModulePath.slice(0, -3);
@@ -109,9 +114,11 @@ function getTestModules(source) {
 
 /**
  * Returns the module file and all recursively nested .rs files in its child directory.
+ * For a crate root lib.rs, the sibling main.rs and bin/ are other crate roots and are skipped.
  */
 export function moduleFiles(modulePath, { root = repositoryRoot, includeTests = true } = {}) {
   const { normalizedModulePath, childDir } = modulePaths(modulePath);
+  const isLibraryRoot = normalizedModulePath === 'lib.rs' || normalizedModulePath.endsWith('/lib.rs');
 
   const absoluteModulePath = path.join(root, modulePath);
   if (!fs.existsSync(absoluteModulePath) || !fs.statSync(absoluteModulePath).isFile()) {
@@ -136,6 +143,11 @@ export function moduleFiles(modulePath, { root = repositoryRoot, includeTests = 
         
         const isRsFile = entry.isFile() && entry.name.endsWith('.rs');
         const isDir = entry.isDirectory();
+
+        if (isLibraryRoot && dir === absoluteChildDir &&
+          ((isRsFile && entry.name === 'main.rs') || (isDir && entry.name === 'bin'))) {
+          continue;
+        }
         
         let moduleName = entry.name;
         if (isRsFile) {

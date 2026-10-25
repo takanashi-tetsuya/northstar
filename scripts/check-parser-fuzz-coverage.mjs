@@ -9,6 +9,9 @@ const repositoryRoot = path.resolve(path.dirname(scriptPath), "..");
 // This manifest deliberately names the production boundary and the entry
 // points each fuzz target must execute. A target cannot silently regress into
 // testing a hand-written shadow parser while retaining a plausible filename.
+// A crate requirement may name one of the target's production modules as a
+// third element: the crate is then referenced by that included source, which
+// names it by path, rather than by an import in the target.
 const targets = new Map([
   [
     "xml_framing",
@@ -56,7 +59,7 @@ const targets = new Map([
       ],
       crates: [
         ["northstar-xml-framing", /\buse\s+northstar_xml_framing\s+as\s+framing\s*;/],
-        ["northstar-xmpp-types", /\buse\s+northstar_xmpp_types::jid\s*;/],
+        ["northstar-xmpp-types", /\bnorthstar_xmpp_types::jid::/, "stanza_validation"],
       ],
       entryPoints: [
         [
@@ -111,6 +114,12 @@ const productionCrates = new Set(
   [...targets.values()].flatMap((requirement) => (requirement.crates ?? []).map(([name]) => name)),
 );
 
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+}
+
 function escaped(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -132,17 +141,24 @@ export function loadParserFuzzModel(root = repositoryRoot) {
     if (fs.existsSync(manifest)) crateManifests.set(name, fs.readFileSync(manifest, "utf8"));
     productionPaths.push(path.join(root, directory, "src", "lib.rs"));
   }
+  const moduleSources = new Map();
   for (const file of productionPaths) {
     if (fs.existsSync(file) && fs.statSync(file).isFile()) existingPaths.add(file);
   }
+  for (const requirement of targets.values()) {
+    for (const [, modulePath] of requirement.modules) {
+      const file = path.resolve(targetDirectory, modulePath);
+      if (existingPaths.has(file)) moduleSources.set(file, fs.readFileSync(file, "utf8"));
+    }
+  }
   return {
-    root, sources, existingPaths, crateManifests, crateDirectories,
+    root, sources, existingPaths, crateManifests, crateDirectories, moduleSources,
     cargoManifest: fs.readFileSync(path.join(root, "fuzz", "Cargo.toml"), "utf8"),
   };
 }
 
 export function validateParserFuzzCoverage(model) {
-  const { root, cargoManifest, sources, existingPaths, crateManifests, crateDirectories } = model;
+  const { root, cargoManifest, sources, existingPaths, crateManifests, crateDirectories, moduleSources } = model;
   const targetDirectory = path.join(root, "fuzz", "fuzz_targets");
   const violations = [];
   const expectedFiles = [...targets.keys()].map((name) => `${name}.rs`).sort();
@@ -185,9 +201,7 @@ export function validateParserFuzzCoverage(model) {
     const relativeFile = `fuzz/fuzz_targets/${target}.rs`;
     if (!sources.has(`${target}.rs`)) continue;
     const source = sources.get(`${target}.rs`);
-    const code = source
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const code = stripComments(source);
 
     const registered = binSections.some(
       (section) =>
@@ -207,9 +221,17 @@ export function validateParserFuzzCoverage(model) {
         violations.push(`${relativeFile}: unregistered source include ${match[1]} as ${match[2]}`);
       }
     }
-    for (const [name, productionReference] of requirement.crates ?? []) {
-      if (!productionReference.test(code)) {
-        violations.push(`${relativeFile}: must directly reference production crate ${name}`);
+    for (const [name, productionReference, viaModule] of requirement.crates ?? []) {
+      let referencing = code;
+      if (viaModule !== undefined) {
+        const modulePath = requirement.modules.find(([moduleName]) => moduleName === viaModule)?.[1];
+        referencing = stripComments(
+          (modulePath && moduleSources?.get(path.resolve(targetDirectory, modulePath))) ?? "",
+        );
+      }
+      if (!productionReference.test(referencing)) {
+        violations.push(`${relativeFile}: must directly reference production crate ${name}`
+          + (viaModule === undefined ? "" : ` through ${viaModule}`));
       }
       const namespace = name.replaceAll("-", "_");
       if (new RegExp(`\\bmod\\s+${namespace}\\b|\\bas\\s+${namespace}\\b`).test(code)) {

@@ -531,7 +531,9 @@ upload 上下文的介面卡，S19 隨上傳一起移出；目標架構因此不
 根 crate 由 797 檔 381,964 行變為 799 檔 382,566 行：match 分支改寫為具名的處理器函式，並新增路由註冊與 port 實作。
 S17 推上 dev 後 CI 的模糊測試編譯失敗：`rest_extractors` 以 `#[path]` 讀 `src/api/extract.rs`，它的 `AppError` 替身
 模組仍叫 `platform`；本地驗證沒有編譯模糊測試。WP-179 修正替身並刪除 WP-171 留下的未使用匯入，驗證腳本也加入
-`cargo check --manifest-path fuzz/Cargo.toml --bins`。
+`cargo check --manifest-path fuzz/Cargo.toml --bins`。刪掉的匯入卻是 `check-parser-fuzz-coverage` 要求的：被納入的
+驗證器原本以 `crate::jid` 引用 JID crate，門禁因此要求模糊測試匯入它；WP-171 後驗證器以完整路徑引用，匯入成為未使用。
+WP-179 只跑了模糊測試編譯、沒有重跑門禁，dev 的 CI 仍失敗；WP-186 讓 crate 需求可以指定由被納入的正式模組引用。
 
 ## 6. 委派與驗收協議
 
@@ -848,9 +850,10 @@ Stage 證據仍綁定其原提交。
 | WP-176 | 完成：`source-module.mjs` 讀 crate 根 `lib.rs` 與同目錄子模組，略過 `main.rs` 與 `bin/`；新增 1 個測試 | 見 `git log --grep '\[WP-176\]'` |
 | WP-177 | 完成：`northstar-config` 收下設定模組；`src/platform/` 刪除；R9 刪除平台層；兩個門禁改讀 crate 根 | 見 `git log --grep '\[WP-177\]'` |
 | WP-178 | 完成：記錄 S17 的階段、盤點（5.13）與建置時間；目標架構刪除 `northstar-object-store`、加入 `northstar-xep-catalog`。WP-171–177 依序整合；每步 fmt、clippy、workspace 測試、層級與全部門禁通過 | 見 `git log --grep '\[WP-178\]'` |
-| WP-179 | 完成：模糊測試 `rest_extractors` 的 `AppError` 替身模組改名為 `api`，刪除 `semantic_stanza` 未使用的 `jid` 匯入；dev 的 CI 恢復通過 | 見 `git log --grep '\[WP-179\]'` |
+| WP-179 | 完成：模糊測試 `rest_extractors` 的 `AppError` 替身模組改名為 `api`，刪除 `semantic_stanza` 未使用的 `jid` 匯入；該匯入是門禁要求的，CI 改為門禁失敗（WP-186） | 見 `git log --grep '\[WP-179\]'` |
 | WP-181 | 完成：edge crate `northstar-stream`：`IqRoute`、`IqRouter`、`IqHandler`；7 個測試 | 見 `git log --grep '\[WP-181\]'` |
 | WP-182 | 完成：session 應用層的 `RemoteRoutePort`，`AppState` 以已驗證的 S2S 路由實作；訊息遞送不再呼叫 `crate::s2s` | 見 `git log --grep '\[WP-182\]'` |
 | WP-183 | 完成：只依鍵或自身 XEP 路由開關的 41 個 IQ 分支改為路由；`iq_routes.rs` | 見 `git log --grep '\[WP-183\]'` |
 | WP-184 | 完成：註冊、MUC unique、HTTP upload、PubSub owner 改為路由；閘門決定未准入請求的回應；match 刪除，共 48 條路由 | 見 `git log --grep '\[WP-184\]'` |
 | WP-185 | 完成：記錄 S18 的階段與盤點（5.14）；S17 的 CI 失敗與驗證腳本加入模糊測試編譯。WP-181–184 依序接到 S17 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-185\]'` |
+| WP-186 | 完成：模糊測試覆蓋門禁的 crate 需求可以指定被納入的正式模組，`semantic_stanza` 改為要求 `stanza_validation.rs` 以 `northstar_xmpp_types::jid::` 引用 JID crate；新增 1 個變異測試；dev 的 CI 恢復通過 | 見 `git log --grep '\[WP-186\]'` |

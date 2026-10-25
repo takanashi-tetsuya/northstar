@@ -54,6 +54,13 @@ rejects((model) => {
 }, /must directly reference production crate northstar-xml-framing/);
 
 rejects((model) => {
+  const validator = path.join(model.root, "src", "services", "stanza_validation.rs");
+  model.moduleSources.set(validator, model.moduleSources.get(validator)
+    .replaceAll("northstar_xmpp_types::jid::", "jid::")
+    + "\n// northstar_xmpp_types::jid:: only appears in a comment.\n");
+}, /semantic_stanza.rs: must directly reference production crate northstar-xmpp-types through stanza_validation/);
+
+rejects((model) => {
   model.sources.set("mam_pubsub_parsing.rs", model.sources.get("mam_pubsub_parsing.rs")
     .replace("northstar_xep_0313::parse_mam_query(node)", "model_mam_query(node)")
     + "\n// northstar_xep_0313::parse_mam_query(node) only appears in a comment.\n");

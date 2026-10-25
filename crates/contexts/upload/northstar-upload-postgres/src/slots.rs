@@ -2,7 +2,7 @@
 
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) async fn lock_upload_capacity_ledger(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<()> {
@@ -19,13 +19,13 @@ pub(super) async fn lock_upload_capacity_ledger(
     }
 }
 
-#[cfg(test)]
-pub(super) fn is_retryable_upload_capacity_lock(error: &sqlx::Error) -> bool {
+#[cfg(any(test, feature = "test-support"))]
+pub fn is_retryable_upload_capacity_lock(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(database_error)
         if database_error.code().as_deref()==Some("55P03"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn cleanup_object_version(
     storage_backend: &str,
     object_key: &str,
@@ -52,7 +52,7 @@ pub struct UploadReservation<'a> {
     pub storage_backend: &'a str,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn create_upload_slot(
     pool: &PgPool,
     reservation: UploadReservation<'_>,

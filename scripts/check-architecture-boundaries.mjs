@@ -2300,7 +2300,7 @@ for (const [name, accessor, forbiddenAuthority, route] of [
     readProtocolSource(name),
     `${name} production`,
   );
-  if (new RegExp(`\\bdb\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
+  if (new RegExp(`\\b(?:db|northstar_upload_postgres)\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
     throw new Error(`${name} bypasses ${accessor} via db::${forbiddenAuthority}`);
   }
   if (!route.test(production)) {

@@ -378,12 +378,12 @@ impl AppState {
         &self,
     ) -> Option<
         northstar_upload_application::worker::UploadMaintenanceContext<
-            db::upload_maintenance::PostgresUploadMaintenanceRepository,
+            northstar_upload_postgres::maintenance::PostgresUploadMaintenanceRepository,
         >,
     > {
         Some(
             northstar_upload_application::worker::UploadMaintenanceContext::new(
-                db::upload_maintenance::PostgresUploadMaintenanceRepository::new(
+                northstar_upload_postgres::maintenance::PostgresUploadMaintenanceRepository::new(
                     self.upload_storage_pool.as_ref()?.clone(),
                 ),
                 Arc::clone(self.upload_store.as_ref()?),

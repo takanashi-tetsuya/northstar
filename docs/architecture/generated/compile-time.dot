@@ -195,6 +195,7 @@ digraph compile_time {
   "northstar-test-harness";
   "northstar-upload-application";
   "northstar-upload-core";
+  "northstar-upload-postgres";
   "northstar-upload-storage";
   "northstar-web-surface";
   "northstar-xep-0016";
@@ -1077,6 +1078,14 @@ digraph compile_time {
   "northstar-upload-core" -> "northstar-xmpp-types";
   "northstar-upload-core" -> "serde";
   "northstar-upload-core" -> "uuid";
+  "northstar-upload-postgres" -> "anyhow";
+  "northstar-upload-postgres" -> "northstar-auth-core";
+  "northstar-upload-postgres" -> "northstar-postgres";
+  "northstar-upload-postgres" -> "northstar-upload-application";
+  "northstar-upload-postgres" -> "serde_json";
+  "northstar-upload-postgres" -> "sqlx";
+  "northstar-upload-postgres" -> "tokio";
+  "northstar-upload-postgres" -> "uuid";
   "northstar-upload-storage" -> "anyhow";
   "northstar-upload-storage" -> "axum";
   "northstar-upload-storage" -> "bytes";
@@ -1482,6 +1491,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-telemetry";
   "rust-xmpp-server" -> "northstar-upload-application";
   "rust-xmpp-server" -> "northstar-upload-core";
+  "rust-xmpp-server" -> "northstar-upload-postgres";
   "rust-xmpp-server" -> "northstar-upload-storage";
   "rust-xmpp-server" -> "northstar-web-surface";
   "rust-xmpp-server" -> "northstar-xep-0016";

@@ -326,9 +326,14 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::validate_upload_capacity_policy(&pool, 10_000, 1_000_000, 1_099_511_627_776)
-            .await
-            .unwrap();
+        northstar_upload_postgres::validate_upload_capacity_policy(
+            &pool,
+            10_000,
+            1_000_000,
+            1_099_511_627_776,
+        )
+        .await
+        .unwrap();
         let (admin_id, admin_token) = insert_user(&pool, true).await;
         let actor_scope = admin_id.as_bytes();
         let keys = crate::db::ApiControlKeyring::new(
@@ -568,9 +573,14 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::validate_upload_capacity_policy(&pool, 10_000, 1_000_000, 1_099_511_627_776)
-            .await
-            .unwrap();
+        northstar_upload_postgres::validate_upload_capacity_policy(
+            &pool,
+            10_000,
+            1_000_000,
+            1_099_511_627_776,
+        )
+        .await
+        .unwrap();
         let (admin_id, admin_token) = insert_user(&pool, true).await;
         let (user_id, user_token) = insert_user(&pool, false).await;
 

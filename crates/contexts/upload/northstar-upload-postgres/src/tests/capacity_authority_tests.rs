@@ -75,7 +75,7 @@ async fn capacity_reconciliation_reads_bigint_facts_and_detects_ledger_drift() {
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,
@@ -122,7 +122,7 @@ async fn capacity_authority_audit_detects_trigger_function_acl_and_policy_drift(
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,
@@ -286,7 +286,7 @@ async fn capacity_reconciliation_detects_rows_written_while_trigger_was_bypassed
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,
@@ -376,8 +376,9 @@ async fn upload_capacity_migration_rejects_disabled_or_reused_trigger_authority(
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
-    let migration = include_str!("../../../migrations/0105_upload_cascade_cleanup_capacity.sql");
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
+    let migration =
+        include_str!("../../../../../../migrations/0105_upload_cascade_cleanup_capacity.sql");
     let marker = "$northstar_upload_delete_trigger_precondition$;";
     let start = migration
         .find("DO $northstar_upload_delete_trigger_precondition$")

@@ -158,15 +158,16 @@ impl AppState {
                 let startup_phase = northstar_telemetry::logging::StartupPhase::begin(
                     "upload_namespace_and_policy",
                 );
-                let namespace_generation = db::validate_upload_storage_backend(
-                    upload_db,
-                    &config.upload_storage_backend,
-                    &upload_namespace,
-                )
-                .await
-                .context("upload storage backend does not match durable metadata")?;
+                let namespace_generation =
+                    northstar_upload_postgres::validate_upload_storage_backend(
+                        upload_db,
+                        &config.upload_storage_backend,
+                        &upload_namespace,
+                    )
+                    .await
+                    .context("upload storage backend does not match durable metadata")?;
                 let (capacity_policy_generation, recovery_draining) =
-                    db::validate_upload_capacity_policy(
+                    northstar_upload_postgres::validate_upload_capacity_policy(
                         upload_db,
                         config.upload_storage_max_pending_jobs,
                         config.upload_storage_max_retained_files,
@@ -184,7 +185,7 @@ impl AppState {
                 let startup_phase =
                     northstar_telemetry::logging::StartupPhase::begin("upload_authority_audit");
                 let authority_audit_started_at = tokio::time::Instant::now();
-                let authority_audit = db::audit_upload_capacity_authority(
+                let authority_audit = northstar_upload_postgres::audit_upload_capacity_authority(
                     upload_db,
                     config.upload_storage_max_pending_jobs,
                     config.upload_storage_max_retained_files,
@@ -207,9 +208,12 @@ impl AppState {
                     "upload_ledger_reconciliation",
                 );
                 let ledger_audit_started_at = tokio::time::Instant::now();
-                let capacity_reconciliation = db::reconcile_upload_capacity_ledger(upload_db)
-                    .await
-                    .context("could not reconcile upload capacity facts before storage startup")?;
+                let capacity_reconciliation =
+                    northstar_upload_postgres::reconcile_upload_capacity_ledger(upload_db)
+                        .await
+                        .context(
+                            "could not reconcile upload capacity facts before storage startup",
+                        )?;
                 if capacity_reconciliation.mismatch_count() != 0 {
                     upload_safety_gate.mark_ledger_mismatch(Arc::<str>::from(format!(
                         "upload capacity ledger differs from {} durable facts",
@@ -259,7 +263,7 @@ impl AppState {
                             )?;
                             if tokio::time::timeout(
                             remaining,
-                            db::upload_claim_is_live(upload_db, object_id, claim_token),
+                            northstar_upload_postgres::upload_claim_is_live(upload_db, object_id, claim_token),
                         )
                         .await
                         .context(
@@ -350,9 +354,10 @@ impl AppState {
                     Some(upload_store),
                 )
             } else {
-                let durable_upload_state_exists = db::durable_upload_state_exists(&pool)
-                    .await
-                    .context("could not verify that disabled upload storage is empty")?;
+                let durable_upload_state_exists =
+                    northstar_upload_postgres::durable_upload_state_exists(&pool)
+                        .await
+                        .context("could not verify that disabled upload storage is empty")?;
                 anyhow::ensure!(
                     !durable_upload_state_exists,
                     "UPLOAD_MODE=disabled requires empty durable upload state; use drain_read_only until historical downloads and cleanup jobs have drained"
@@ -772,7 +777,7 @@ impl AppState {
         );
         let upload_service = config.upload_mode.keeps_storage_runtime().then(|| {
             northstar_upload_application::service::UploadService::new(
-                db::upload::PostgresUploadRepository::new(
+                northstar_upload_postgres::PostgresUploadRepository::new(
                     upload_storage_pool
                         .as_ref()
                         .expect("enabled or draining uploads require a storage pool")

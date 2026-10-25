@@ -8,7 +8,7 @@ use super::*;
 /// indistinguishable to the caller.  The object worker may run after this
 /// function returns; on Unix an already-open download remains readable, while
 /// stores which cannot delete an open object retry from the durable queue.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) async fn queue_user_upload_delete_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -197,7 +197,7 @@ pub async fn queue_user_upload_delete_authorized(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn queue_user_upload_delete(
     pool: &PgPool,
     user_id: Uuid,

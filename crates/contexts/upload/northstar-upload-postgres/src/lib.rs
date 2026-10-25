@@ -1,6 +1,12 @@
+//! PostgreSQL adapter of the upload context: slots and claims, stage and promotion lifecycle, user
+//! deletion, storage and cleanup jobs, the capacity authority audit, and the maintenance repository
+//! the upload worker uses.
+
+#![forbid(unsafe_code)]
+
 use anyhow::Result;
 use sqlx::{PgPool, Row};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -16,6 +22,8 @@ mod lifecycle;
 mod slots;
 mod storage_jobs;
 
+pub mod maintenance;
+
 pub use self::capacity_audit::*;
 pub use self::deletion::*;
 pub use self::lifecycle::*;
@@ -23,12 +31,12 @@ pub use self::slots::*;
 pub use self::storage_jobs::*;
 
 #[derive(Clone)]
-pub(crate) struct PostgresUploadRepository {
+pub struct PostgresUploadRepository {
     pool: PgPool,
 }
 
 impl PostgresUploadRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -173,15 +181,15 @@ impl UploadLifecycleRepository for PostgresUploadRepository {
     }
 }
 
-const MAX_UPLOAD_ATTEMPTS: i64 = 8;
+pub const MAX_UPLOAD_ATTEMPTS: i64 = 8;
 const MAX_UPLOAD_REPLAYS: i64 = 3;
 const UPLOAD_HEALTH_COUNT_SATURATION: i64 = 1001;
-#[cfg(test)]
-const TEST_UPLOAD_PENDING_LIMIT: i64 = 128;
-#[cfg(test)]
-const TEST_UPLOAD_RETAINED_FILES_LIMIT: i64 = 10_000;
-#[cfg(test)]
-const TEST_UPLOAD_RETAINED_BYTES_LIMIT: i64 = 1024 * 1024 * 1024;
+#[cfg(any(test, feature = "test-support"))]
+pub const TEST_UPLOAD_PENDING_LIMIT: i64 = 128;
+#[cfg(any(test, feature = "test-support"))]
+pub const TEST_UPLOAD_RETAINED_FILES_LIMIT: i64 = 10_000;
+#[cfg(any(test, feature = "test-support"))]
+pub const TEST_UPLOAD_RETAINED_BYTES_LIMIT: i64 = 1024 * 1024 * 1024;
 
 pub use northstar_upload_application::maintenance::CommittedUploadIdentity;
 pub use northstar_upload_application::maintenance::PromotedUploadProjection;
@@ -214,18 +222,18 @@ pub use northstar_upload_application::maintenance::UploadScrubJob;
 /// contracts split the source on a marker that occurs in more than one child.
 /// `module_source_lists_every_child_module` keeps this list in step with the
 /// non-test `mod` declarations above.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const MODULE_SOURCE: &[(&str, &str)] = &[
-    ("upload", include_str!("upload.rs")),
-    ("slots", include_str!("upload/slots.rs")),
-    ("lifecycle", include_str!("upload/lifecycle.rs")),
-    ("capacity_audit", include_str!("upload/capacity_audit.rs")),
-    ("storage_jobs", include_str!("upload/storage_jobs.rs")),
-    ("deletion", include_str!("upload/deletion.rs")),
+    ("upload", include_str!("lib.rs")),
+    ("slots", include_str!("slots.rs")),
+    ("lifecycle", include_str!("lifecycle.rs")),
+    ("capacity_audit", include_str!("capacity_audit.rs")),
+    ("storage_jobs", include_str!("storage_jobs.rs")),
+    ("deletion", include_str!("deletion.rs")),
 ];
 
-#[cfg(test)]
-fn module_source() -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn module_source() -> String {
     MODULE_SOURCE
         .iter()
         .map(|(_, text)| *text)
@@ -234,7 +242,6 @@ fn module_source() -> String {
 }
 
 #[cfg(test)]
-#[path = "upload_tests.rs"]
 mod tests;
 
 #[cfg(test)]

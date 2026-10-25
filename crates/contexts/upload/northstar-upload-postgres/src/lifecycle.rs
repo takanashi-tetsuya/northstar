@@ -312,7 +312,7 @@ pub async fn retire_upload_promotion_for_cleanup(
     .await?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn complete_upload(
     pool: &PgPool,
     id: Uuid,

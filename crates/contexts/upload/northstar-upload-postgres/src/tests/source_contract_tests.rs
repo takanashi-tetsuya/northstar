@@ -136,7 +136,7 @@ fn cleanup_debt_converts_once_and_survives_every_slot_lifecycle() {
 
 #[test]
 fn shared_storage_migration_contains_cleanup_debt_atomicity_guards() {
-    let sql = include_str!("../../../migrations/0091_shared_upload_storage.sql");
+    let sql = include_str!("../../../../../../migrations/0091_shared_upload_storage.sql");
     for required in [
         "storage_cleanup_debt_reserved BOOLEAN NOT NULL DEFAULT FALSE",
         "cleanup_obligation_debt BIGINT NOT NULL CHECK(cleanup_obligation_debt>=0)",
@@ -295,242 +295,11 @@ fn shared_storage_migration_contains_cleanup_debt_atomicity_guards() {
 }
 
 #[test]
-fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
-    let migration = include_str!("../../../migrations/0105_upload_cascade_cleanup_capacity.sql");
-    for required in [
-        "ADD COLUMN slot_delete_projection pg_catalog.bool NOT NULL DEFAULT FALSE",
-        "ADD COLUMN recovery_retained_files pg_catalog.int8 NOT NULL DEFAULT 0",
-        "ADD COLUMN recovery_retained_bytes pg_catalog.int8 NOT NULL DEFAULT 0",
-        "ADD COLUMN configured_retained_files_limit pg_catalog.int8",
-        "ADD COLUMN configured_retained_bytes_limit pg_catalog.int8",
-        "ADD COLUMN recovery_overcommit_draining pg_catalog.bool NOT NULL DEFAULT FALSE",
-        "ALTER TABLE upload_storage_jobs ALTER COLUMN expected_size SET NOT NULL",
-        "matching_triggers<>1",
-        "trigger_row.tgname='upload_storage_delete_queue'",
-        "function_row.proname='queue_upload_storage_delete'",
-        "trigger_row.tgenabled IN ('O','A')",
-        "trigger_row.tgqual IS NULL",
-        "trigger_row.tgtype::pg_catalog.int4=11",
-        "'upload_storage_job_identity_guard'",
-        "'upload_cleanup_identity_guard'",
-        "'upload_capacity_policy_guard'",
-        "must have one exact attachment in the installation schema",
-        "must have exactly one INSERT and one DELETE attachment",
-        "ON CONFLICT(object_id) DO NOTHING",
-        "IF OLD.storage_cleanup_debt_reserved THEN",
-        "NEW.slot_delete_projection IS DISTINCT FROM OLD.slot_delete_projection",
-        "IF pg_catalog.pg_trigger_depth()<=1 THEN",
-        "IF NOT converts_debt THEN",
-        "IF converts_debt AND NOT NEW.slot_delete_projection THEN",
-        "recovery_retained_files=recovery_retained_files+1",
-        "recovery_retained_files=recovery_retained_files+locator_units",
-        "recovery_retained_files=recovery_retained_files-1",
-        "recovery_retained_files=recovery_retained_files-locator_units",
-        "hand ownership back to",
-        "requested_retained_files_limit pg_catalog.int8",
-        "requested_retained_bytes_limit pg_catalog.int8",
-        "upload retained-file and retained-byte limits must also be bound",
-        "upload storage capacity policy is not fully bound",
-        "COALESCE(OLD.storage_object_version,OLD.storage_stage_version)",
-        "SECURITY DEFINER",
-        "SET search_path TO pg_catalog, %I, pg_temp",
-        "REVOKE ALL ON FUNCTION %I.%I() FROM PUBLIC",
-        "pg_catalog.count(*)=11",
-        "'reserve_upload_cleanup_debt'",
-    ] {
-        assert!(
-            migration.contains(required),
-            "missing cascade-capacity invariant: {required}"
-        );
-    }
-    assert_eq!(
-        migration
-            .matches("ADD COLUMN slot_delete_projection")
-            .count(),
-        1
-    );
-    assert_eq!(
-        migration
-            .matches("NEW.slot_delete_projection IS DISTINCT FROM OLD.slot_delete_projection")
-            .count(),
-        1
-    );
-    assert_eq!(
-        migration
-            .matches("IF pg_catalog.pg_trigger_depth()<=1 THEN")
-            .count(),
-        1
-    );
-    let delete_trigger = migration
-        .split("CREATE OR REPLACE FUNCTION queue_upload_storage_delete()")
-        .nth(1)
-        .and_then(|tail| tail.split("$$ LANGUAGE plpgsql;").next())
-        .expect("replacement upload delete trigger");
-    assert!(delete_trigger.contains("TRUE"));
-    assert!(!delete_trigger.contains("INSERT INTO upload_storage_jobs"));
-    assert!(!delete_trigger.contains("DO UPDATE SET"));
-    assert_eq!(
-        delete_trigger
-            .matches("GET DIAGNOSTICS inserted_count=ROW_COUNT")
-            .count(),
-        1
-    );
-    assert_eq!(delete_trigger.matches("existing upload ").count(), 1);
-    assert!(delete_trigger.contains("queue.storage_fence=OLD.storage_fence"));
-    assert_eq!(
-        migration
-            .matches("RAISE EXCEPTION 'upload storage capacity policy is not fully bound'")
-            .count(),
-        3
-    );
-
-    let storage_capacity = migration
-        .split("CREATE OR REPLACE FUNCTION account_upload_storage_job_capacity()")
-        .nth(1)
-        .and_then(|tail| tail.split("$$ LANGUAGE plpgsql;").next())
-        .expect("replacement storage-job capacity trigger");
-    assert!(!storage_capacity.contains("slot_delete_projection"));
-    assert!(storage_capacity.contains("IF NOT policy_bound THEN"));
-    assert!(!storage_capacity.contains("AND configured_pending_limit IS NOT NULL"));
-    let cleanup_capacity = migration
-        .split("CREATE OR REPLACE FUNCTION account_upload_cleanup_capacity()")
-        .nth(1)
-        .and_then(|tail| tail.split("$$ LANGUAGE plpgsql;").next())
-        .expect("replacement cleanup capacity trigger");
-    assert!(cleanup_capacity.contains("locator_units"));
-    assert!(cleanup_capacity.contains("IF NOT policy_bound THEN"));
-    assert!(!cleanup_capacity.contains("AND configured_pending_limit IS NOT NULL"));
-
-    // Deletion has exactly one queue authority. Neither application path
-    // may race it by pre-inserting a second cleanup projection.
-    for source in [
-        crate::db::users::module_source().as_str(),
-        crate::tools::pie::module_source().as_str(),
-        include_str!("../pie.rs"),
-    ] {
-        assert!(!source.contains("INSERT INTO upload_cleanup_queue"));
-    }
-    let account_delete = include_str!("../users.rs")
-        .split("async fn delete_user_with_roster_inner(")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(super) async fn delete_user_with_roster_locked_in_transaction(")
-                .next()
-        })
-        .expect("self-service account deletion implementation");
-    let capacity_lock = account_delete
-        .find("SELECT northstar_upload_capacity_lock()")
-        .expect("account deletion capacity lock");
-    let mutation_timeout = account_delete
-        .find("SET LOCAL lock_timeout='2s'")
-        .expect("account deletion post-admission mutation timeout");
-    assert!(
-            !account_delete.contains("SET LOCAL lock_timeout='50ms'")
-                && capacity_lock < mutation_timeout,
-            "account deletion must use SQL-native NOWAIT capacity admission before its normal mutation bound"
-        );
-    let pie = include_str!("../pie.rs");
-    let capacity_lock = pie
-        .find("SELECT northstar_upload_capacity_lock()")
-        .expect("PIE replacement capacity lock");
-    let domain_lock = pie
-        .find("pg_advisory_xact_lock(hashtextextended($1, 227))")
-        .expect("PIE domain lock");
-    let user_lock = pie
-        .find("SELECT id,is_admin FROM users WHERE username=$1 FOR UPDATE")
-        .expect("PIE user lock");
-    assert!(
-        !pie.contains("SET LOCAL lock_timeout='50ms'")
-            && capacity_lock < domain_lock
-            && domain_lock < user_lock,
-        "PIE must use SQL-native NOWAIT admission without shortening replacement work"
-    );
-
-    let upload_source = super::super::module_source();
-    let authority = include_str!("../../../migrations/0113_upload_authority_capabilities.sql");
-    for capability in [
-        "northstar_upload_reserve_slot(",
-        "northstar_upload_claim_slot(",
-        "northstar_upload_record_stage(",
-        "northstar_upload_complete_promotion(",
-        "northstar_upload_admit_expired_cleanup(",
-        "northstar_upload_delete_owned(",
-    ] {
-        assert!(
-            authority.contains(&format!("CREATE FUNCTION {capability}")),
-            "missing owner-held upload capability: {capability}"
-        );
-    }
-    for invariant in [
-        "ON CONFLICT(object_id,storage_attempt,action) DO NOTHING",
-        "ON CONFLICT(object_id) DO NOTHING",
-        "existing upload promotion projection has different identity",
-        "existing upload cleanup projection differs or retained debt",
-        "REVOKE ALL ON TABLE upload_storage_authority",
-    ] {
-        assert!(
-            authority.contains(invariant),
-            "missing upload invariant: {invariant}"
-        );
-    }
-    // `upload_slots.content_type` is VARCHAR(255), while the public
-    // capabilities intentionally expose TEXT. PL/pgSQL RETURN QUERY does
-    // not apply that conversion implicitly, so every projection must keep
-    // an explicit cast or the first PUT fails at runtime.
-    assert_eq!(
-        authority
-            .matches("slot_row.content_type::pg_catalog.text")
-            .count(),
-        2,
-        "upload claim replay/acquire projections must cast VARCHAR to TEXT"
-    );
-    assert!(
-        authority.contains("slot.content_type::pg_catalog.text"),
-        "public upload-file projection must cast VARCHAR to TEXT"
-    );
-    for (function_name, terminator) in [
-        (
-            "northstar_upload_confirm_cleanup_absence",
-            "$northstar_upload_confirm_cleanup_absence$;",
-        ),
-        (
-            "northstar_upload_confirm_stage_absence",
-            "$northstar_upload_confirm_stage_absence$;",
-        ),
-    ] {
-        let body = authority
-            .split(&format!("CREATE FUNCTION {function_name}("))
-            .nth(1)
-            .and_then(|tail| tail.split(terminator).next())
-            .expect("absence-fence capability");
-        assert_eq!(
-            body.matches("attempts=GREATEST(attempts-1,0)").count(),
-            1,
-            "a successful quiet-window observation must preserve retry capacity"
-        );
-    }
-    let authorized_delete = upload_source
-        .split("pub async fn queue_user_upload_delete_authorized(")
-        .nth(1)
-        .and_then(|tail| tail.split("#[cfg(test)]").next())
-        .expect("authorized upload-delete implementation");
-    let input_validation = authorized_delete
-        .find("presented_session.len() != 64")
-        .expect("authorized upload-delete bearer validation");
-    let session_hash = authorized_delete
-        .find("northstar_auth_core::token_hash(presented_session)")
-        .expect("authorized upload-delete bearer hashing");
-    let capability = authorized_delete
-        .find("northstar_upload_delete_owned")
-        .expect("authorized upload-delete typed capability");
-    assert!(input_validation < capability && capability < session_hash);
-}
-
-#[test]
 fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
     let source = super::super::module_source();
-    let authority = include_str!("../../../migrations/0113_upload_authority_capabilities.sql");
-    let nowait = include_str!("../../../migrations/0131_upload_capacity_nowait.sql");
+    let authority =
+        include_str!("../../../../../../migrations/0113_upload_authority_capabilities.sql");
+    let nowait = include_str!("../../../../../../migrations/0131_upload_capacity_nowait.sql");
     let trigger = nowait
         .split("CREATE OR REPLACE FUNCTION reserve_upload_cleanup_debt()")
         .nth(1)
@@ -682,7 +451,10 @@ fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
             "claim_upload_scrub_jobs",
             "pub async fn complete_upload_scrub(",
         ),
-        ("finish_upload_scrub", "#[cfg(test)]"),
+        (
+            "finish_upload_scrub",
+            "#[cfg(any(test, feature = \"test-support\"))]",
+        ),
     ] {
         let prefix = if name == "finish_upload_scrub" {
             "async fn"
@@ -756,7 +528,7 @@ fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
         ),
         (
             "retire_upload_promotion_for_cleanup",
-            "#[cfg(test)]",
+            "#[cfg(any(test, feature = \"test-support\"))]",
             "northstar_upload_retire_promotion_for_cleanup",
         ),
         (
@@ -776,7 +548,7 @@ fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
         ),
         (
             "queue_user_upload_delete_authorized",
-            "#[cfg(test)]",
+            "#[cfg(any(test, feature = \"test-support\"))]",
             "northstar_upload_delete_owned",
         ),
     ] {
@@ -824,7 +596,8 @@ fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
 
 #[test]
 fn upload_projection_release_migration_uses_predelete_last_owner_cas() {
-    let migration = include_str!("../../../migrations/0140_upload_projection_release_order.sql");
+    let migration =
+        include_str!("../../../../../../migrations/0140_upload_projection_release_order.sql");
     for trigger in [
             "DROP TRIGGER upload_job_capacity_delete ON upload_storage_jobs;\nCREATE TRIGGER upload_job_capacity_delete\nBEFORE DELETE ON upload_storage_jobs",
             "DROP TRIGGER upload_cleanup_capacity_delete ON upload_cleanup_queue;\nCREATE TRIGGER upload_cleanup_capacity_delete\nBEFORE DELETE ON upload_cleanup_queue",
@@ -857,7 +630,7 @@ fn upload_projection_release_migration_uses_predelete_last_owner_cas() {
 #[test]
 fn upload_runtime_health_scans_are_bounded_and_timeout_fail_closed() {
     let migration =
-        include_str!("../../../migrations/0115_upload_runtime_reconciliation_bounds.sql");
+        include_str!("../../../../../../migrations/0115_upload_runtime_reconciliation_bounds.sql");
     assert!(!migration.contains("public."));
     assert_eq!(migration.matches("LIMIT 1001").count(), 4);
     for invariant in [
@@ -918,8 +691,7 @@ fn upload_runtime_health_scans_are_bounded_and_timeout_fail_closed() {
             "missing health-scan bound: {bound}"
         );
     }
-    let worker =
-        include_str!("../../../crates/contexts/upload/northstar-upload-application/src/worker.rs");
+    let worker = include_str!("../../../northstar-upload-application/src/worker.rs");
     assert!(worker.contains("snapshot.dead_letter_jobs_capped"));
     assert!(worker.contains("snapshot.scrub_failures_capped"));
 }

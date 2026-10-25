@@ -2169,6 +2169,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-upload-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "northstar-auth-core",
+ "northstar-postgres",
+ "northstar-upload-application",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-upload-storage"
 version = "0.1.0"
 dependencies = [
@@ -3287,6 +3301,7 @@ dependencies = [
  "northstar-telemetry",
  "northstar-upload-application",
  "northstar-upload-core",
+ "northstar-upload-postgres",
  "northstar-upload-storage",
  "northstar-web-surface",
  "northstar-xep-0016",

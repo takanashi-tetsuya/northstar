@@ -2554,6 +2554,38 @@
         "uuid"
       ],
       [
+        "northstar-upload-postgres",
+        "anyhow"
+      ],
+      [
+        "northstar-upload-postgres",
+        "northstar-auth-core"
+      ],
+      [
+        "northstar-upload-postgres",
+        "northstar-postgres"
+      ],
+      [
+        "northstar-upload-postgres",
+        "northstar-upload-application"
+      ],
+      [
+        "northstar-upload-postgres",
+        "serde_json"
+      ],
+      [
+        "northstar-upload-postgres",
+        "sqlx"
+      ],
+      [
+        "northstar-upload-postgres",
+        "tokio"
+      ],
+      [
+        "northstar-upload-postgres",
+        "uuid"
+      ],
+      [
         "northstar-upload-storage",
         "anyhow"
       ],
@@ -4172,6 +4204,10 @@
       [
         "rust-xmpp-server",
         "northstar-upload-core"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-upload-postgres"
       ],
       [
         "rust-xmpp-server",
@@ -6588,6 +6624,7 @@
       "northstar-test-harness",
       "northstar-upload-application",
       "northstar-upload-core",
+      "northstar-upload-postgres",
       "northstar-upload-storage",
       "northstar-web-surface",
       "northstar-xep-0016",

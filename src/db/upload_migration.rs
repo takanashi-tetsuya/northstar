@@ -715,7 +715,7 @@ mod tests {
         .await
         .is_err());
         tampered_marker.rollback().await.unwrap();
-        crate::db::upload::validate_upload_capacity_policy(&pool, 4096, 4096, 1 << 30)
+        northstar_upload_postgres::validate_upload_capacity_policy(&pool, 4096, 4096, 1 << 30)
             .await
             .unwrap();
         let local_namespace = [1_u8; 32];

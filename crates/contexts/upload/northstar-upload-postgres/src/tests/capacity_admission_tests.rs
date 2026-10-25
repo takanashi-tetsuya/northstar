@@ -24,7 +24,7 @@ async fn upload_cascade_converts_reserved_debt_at_the_hard_limit() {
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,
@@ -192,7 +192,7 @@ async fn upload_recovery_capacity_counts_every_locator_and_releases_last_owner()
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,
@@ -580,271 +580,6 @@ async fn upload_recovery_capacity_counts_every_locator_and_releases_last_owner()
 
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-async fn account_delete_and_upload_mutations_share_retryable_ledger_first_order() {
-    let url = std::env::var("TEST_DATABASE_URL")
-        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .unwrap();
-    db::migrate(&pool).await.unwrap();
-    validate_upload_capacity_policy(
-        &pool,
-        TEST_UPLOAD_PENDING_LIMIT,
-        TEST_UPLOAD_RETAINED_FILES_LIMIT,
-        TEST_UPLOAD_RETAINED_BYTES_LIMIT,
-    )
-    .await
-    .unwrap();
-    let user_id = insert_user(&pool).await;
-    let token = b"lock-order-token";
-    let slot_id = create_upload_slot(
-        &pool,
-        UploadReservation {
-            user_id,
-            filename: "lock-order.bin",
-            content_type: "application/octet-stream",
-            size: 1,
-            token_hash: token,
-            max_files_per_user: 10,
-            max_bytes_per_user: 10,
-            storage_backend: "local",
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let active_lease = match claim_upload_slot(&pool, slot_id, token, 90).await.unwrap() {
-        UploadClaimOutcome::Acquired(lease) => lease,
-        other => panic!("unexpected initial upload claim outcome: {other:?}"),
-    };
-
-    // Model the prefix of account deletion: global ledger, then user.
-    // Claim's SQL capability has a NOWAIT ledger admission; ordinary lease
-    // renewal does not touch capacity authority. Generic capacity paths
-    // and implicit trigger accounting must return SQLSTATE 55P03 without
-    // waiting behind this owner.
-    let mut account_tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE")
-        .fetch_one(&mut *account_tx)
-        .await
-        .unwrap();
-    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
-        .bind(user_id)
-        .fetch_one(&mut *account_tx)
-        .await
-        .unwrap();
-    assert!(matches!(
-        claim_upload_slot(&pool, slot_id, token, 90).await.unwrap(),
-        UploadClaimOutcome::InProgress { .. }
-    ));
-    assert_eq!(
-        renew_upload_claim(&pool, slot_id, active_lease.claim_token, 90)
-            .await
-            .unwrap(),
-        UploadRenewOutcome::Renewed,
-        "a healthy lease renewal must remain independent of unrelated capacity work"
-    );
-    let queue_error = queue_user_upload_delete(&pool, user_id, slot_id, Uuid::new_v4())
-        .await
-        .unwrap_err();
-    assert!(queue_error
-        .to_string()
-        .contains("upload storage capacity busy; retry"));
-    let trigger_error = tokio::time::timeout(
-        Duration::from_secs(1),
-        sqlx::query(
-            "INSERT INTO upload_cleanup_queue(
-                     object_id,storage_backend,object_key,expected_size,storage_fence)
-                 VALUES($1,'local',$1::text,1,0)",
-        )
-        .bind(Uuid::new_v4())
-        .execute(&pool),
-    )
-    .await
-    .expect("implicit cleanup accounting must reject a held ledger promptly")
-    .unwrap_err();
-    assert!(
-        is_retryable_upload_capacity_lock(&trigger_error),
-        "implicit upload cleanup accounting must expose SQLSTATE 55P03: {trigger_error}"
-    );
-    let completion_error = tokio::time::timeout(
-        Duration::from_secs(1),
-        complete_queued_upload_cleanup(&pool, Uuid::new_v4(), Uuid::new_v4()),
-    )
-    .await
-    .expect("cleanup completion must reject ledger contention without waiting for the outer test")
-    .unwrap_err();
-    assert!(
-            completion_error
-                .chain()
-                .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
-                .any(is_retryable_upload_capacity_lock),
-            "generic cleanup completion must preserve SQLSTATE 55P03 for central retry mapping: {completion_error:#}"
-        );
-    account_tx.rollback().await.unwrap();
-
-    // A committed replay cannot establish another cleanup obligation: it
-    // must remain available while unrelated work holds the singleton.
-    let replay_digest = [7_u8; 32];
-    assert!(complete_upload(
-        &pool,
-        slot_id,
-        active_lease.claim_token,
-        &replay_digest,
-        600,
-    )
-    .await
-    .unwrap());
-    let mut healthy_tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE")
-        .fetch_one(&mut *healthy_tx)
-        .await
-        .unwrap();
-    assert!(
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            record_upload_replay(&pool, slot_id, token, &replay_digest),
-        )
-        .await
-        .expect("committed replay must not wait for unrelated capacity authority")
-        .unwrap(),
-        "committed replay must retain normal dedupe accounting"
-    );
-    healthy_tx.rollback().await.unwrap();
-
-    // `reserve_slot` takes ledger then user internally. Both acquisitions
-    // are SQL NOWAIT, so user-row contention preserves the established
-    // unavailable result and releases the singleton with no Rust-side
-    // timeout or pre-acquisition.
-    let mut user_tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
-        .bind(user_id)
-        .fetch_one(&mut *user_tx)
-        .await
-        .unwrap();
-    let reservation = tokio::time::timeout(
-        Duration::from_secs(1),
-        create_upload_slot(
-            &pool,
-            UploadReservation {
-                user_id,
-                filename: "user-row-contention.bin",
-                content_type: "application/octet-stream",
-                size: 1,
-                token_hash: b"user-row-contention",
-                max_files_per_user: 10,
-                max_bytes_per_user: 10,
-                storage_backend: "local",
-            },
-        ),
-    )
-    .await
-    .expect("reservation must not retain the ledger behind a user-row lock")
-    .unwrap();
-    assert!(reservation.is_none());
-    sqlx::query(
-        "SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE NOWAIT",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("reservation contention must release the global ledger");
-    user_tx.rollback().await.unwrap();
-
-    // The same requirement applies to the sole debt-creating claim
-    // transition: its SQL capability uses NOWAIT for both the ledger and
-    // target slot, returning the established retry result without holding
-    // the capability transaction behind either owner.
-    let contention_slot = create_upload_slot(
-        &pool,
-        UploadReservation {
-            user_id,
-            filename: "slot-row-contention.bin",
-            content_type: "application/octet-stream",
-            size: 1,
-            token_hash: b"slot-row-contention",
-            max_files_per_user: 10,
-            max_bytes_per_user: 10,
-            storage_backend: "local",
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let mut slot_tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM upload_slots WHERE id=$1 FOR UPDATE")
-        .bind(contention_slot)
-        .fetch_one(&mut *slot_tx)
-        .await
-        .unwrap();
-    let claim = tokio::time::timeout(
-        Duration::from_secs(1),
-        claim_upload_slot(&pool, contention_slot, b"slot-row-contention", 90),
-    )
-    .await
-    .expect("claim must not retain the ledger behind a slot-row lock")
-    .unwrap();
-    assert!(matches!(
-        claim,
-        UploadClaimOutcome::InProgress {
-            retry_after_seconds: 1
-        }
-    ));
-    sqlx::query(
-        "SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE NOWAIT",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("claim contention must release the global ledger");
-    slot_tx.rollback().await.unwrap();
-
-    // Reverse pressure: a cleanup owner holds ledger then its queue row.
-    // Account deletion must surface the SQL-native 55P03 before it locks
-    // the user and can form a cycle.
-    let cleanup_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO upload_cleanup_queue(
-                 object_id,storage_backend,object_key,expected_size,storage_fence)
-             VALUES($1,'local',$1::text,1,0)",
-    )
-    .bind(cleanup_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    let mut cleanup_tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE")
-        .fetch_one(&mut *cleanup_tx)
-        .await
-        .unwrap();
-    sqlx::query("SELECT object_id FROM upload_cleanup_queue WHERE object_id=$1 FOR UPDATE")
-        .bind(cleanup_id)
-        .fetch_one(&mut *cleanup_tx)
-        .await
-        .unwrap();
-    let delete_error = crate::db::users::delete_user_with_roster(&pool, user_id, "example.test")
-        .await
-        .unwrap_err();
-    assert!(delete_error
-        .to_string()
-        .contains("upload storage capacity busy; retry account deletion"));
-    cleanup_tx.rollback().await.unwrap();
-
-    sqlx::query("DELETE FROM upload_cleanup_queue WHERE object_id=$1")
-        .bind(cleanup_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert!(
-        crate::db::users::delete_user_with_roster(&pool, user_id, "example.test",)
-            .await
-            .unwrap()
-            .is_some()
-    );
-}
-
-#[tokio::test]
-#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn typed_upload_admission_results_release_capacity_lock_from_outer_transaction() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
@@ -853,7 +588,7 @@ async fn typed_upload_admission_results_release_capacity_lock_from_outer_transac
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,
@@ -1045,7 +780,7 @@ async fn upload_quota_reservation_is_serialized_and_expiry_releases_capacity() {
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     validate_upload_capacity_policy(
         &pool,
         TEST_UPLOAD_PENDING_LIMIT,

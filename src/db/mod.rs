@@ -118,7 +118,6 @@ pub mod sm_repository;
 pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
-pub mod upload;
 pub mod upload_admin;
 pub(crate) mod upload_migration;
 pub mod users;
@@ -150,7 +149,6 @@ pub use roster::*;
 pub use s2s::*;
 pub use schema::*;
 pub use sm::*;
-pub use upload::*;
 pub use upload_admin::*;
 pub use upload_migration::upload_migration_active;
 pub use users::*;
@@ -247,7 +245,8 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
 }
 
 pub(crate) mod muc_delivery_repository;
-pub(crate) mod upload_maintenance;
+#[cfg(test)]
+mod upload_account_tests;
 
 pub(crate) mod sm_suspension;
 

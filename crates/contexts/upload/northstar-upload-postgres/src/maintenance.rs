@@ -1,15 +1,14 @@
 //! PostgreSQL adapter for the upload reconciliation worker.
-use crate::db;
 use anyhow::Result;
 use northstar_upload_application::maintenance::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 #[derive(Clone)]
-pub(crate) struct PostgresUploadMaintenanceRepository {
+pub struct PostgresUploadMaintenanceRepository {
     pool: PgPool,
 }
 impl PostgresUploadMaintenanceRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -25,7 +24,7 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         retained_files_limit: i64,
         retained_bytes_limit: i64,
     ) -> Result<UploadAuthorityProbe> {
-        db::upload_storage_authority_matches(
+        crate::upload_storage_authority_matches(
             &self.pool,
             backend,
             namespace_sha256,
@@ -43,7 +42,7 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         retained_files_limit: i64,
         retained_bytes_limit: i64,
     ) -> Result<UploadCapacityAuthorityAudit> {
-        db::audit_upload_capacity_authority(
+        crate::audit_upload_capacity_authority(
             &self.pool,
             pending_limit,
             retained_files_limit,
@@ -52,16 +51,16 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         .await
     }
     async fn reconcile_upload_capacity_ledger(&self) -> Result<UploadCapacityReconciliation> {
-        db::reconcile_upload_capacity_ledger(&self.pool).await
+        crate::reconcile_upload_capacity_ledger(&self.pool).await
     }
     async fn cleanup_expired_upload_slots(&self) -> Result<Vec<Uuid>> {
-        db::cleanup_expired_upload_slots(&self.pool).await
+        crate::cleanup_expired_upload_slots(&self.pool).await
     }
     async fn claim_upload_storage_jobs(&self) -> Result<Vec<UploadStorageJob>> {
-        db::claim_upload_storage_jobs(&self.pool).await
+        crate::claim_upload_storage_jobs(&self.pool).await
     }
     async fn defer_upload_storage_job(&self, id: i64, claim_token: Uuid) -> Result<bool> {
-        db::defer_upload_storage_job(&self.pool, id, claim_token).await
+        crate::defer_upload_storage_job(&self.pool, id, claim_token).await
     }
     async fn fail_upload_storage_job(
         &self,
@@ -69,13 +68,13 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         claim_token: Uuid,
         error: &str,
     ) -> Result<bool> {
-        db::fail_upload_storage_job(&self.pool, id, claim_token, error).await
+        crate::fail_upload_storage_job(&self.pool, id, claim_token, error).await
     }
     async fn queued_upload_cleanup(&self) -> Result<Vec<UploadCleanupJob>> {
-        db::queued_upload_cleanup(&self.pool).await
+        crate::queued_upload_cleanup(&self.pool).await
     }
     async fn defer_queued_upload_cleanup(&self, id: Uuid, claim_token: Uuid) -> Result<bool> {
-        db::defer_queued_upload_cleanup(&self.pool, id, claim_token).await
+        crate::defer_queued_upload_cleanup(&self.pool, id, claim_token).await
     }
     async fn fail_queued_upload_cleanup(
         &self,
@@ -83,22 +82,22 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         claim_token: Uuid,
         error: &str,
     ) -> Result<bool> {
-        db::fail_queued_upload_cleanup(&self.pool, id, claim_token, error).await
+        crate::fail_queued_upload_cleanup(&self.pool, id, claim_token, error).await
     }
     async fn claim_upload_scrub_jobs(&self) -> Result<Vec<UploadScrubJob>> {
-        db::claim_upload_scrub_jobs(&self.pool).await
+        crate::claim_upload_scrub_jobs(&self.pool).await
     }
     async fn complete_upload_scrub(&self, id: Uuid, claim: Uuid) -> Result<bool> {
-        db::complete_upload_scrub(&self.pool, id, claim).await
+        crate::complete_upload_scrub(&self.pool, id, claim).await
     }
     async fn defer_upload_scrub(&self, id: Uuid, claim: Uuid) -> Result<bool> {
-        db::defer_upload_scrub(&self.pool, id, claim).await
+        crate::defer_upload_scrub(&self.pool, id, claim).await
     }
     async fn fail_upload_scrub(&self, id: Uuid, claim: Uuid) -> Result<bool> {
-        db::fail_upload_scrub(&self.pool, id, claim).await
+        crate::fail_upload_scrub(&self.pool, id, claim).await
     }
     async fn upload_queue_metrics(&self) -> Result<UploadQueueMetrics> {
-        db::upload_queue_metrics(&self.pool).await
+        crate::upload_queue_metrics(&self.pool).await
     }
     async fn begin_upload_promotion(
         &self,
@@ -107,7 +106,7 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         storage_fence: i64,
         promotion_claim_token: Uuid,
     ) -> Result<bool> {
-        db::begin_upload_promotion(
+        crate::begin_upload_promotion(
             &self.pool,
             id,
             claim_token,
@@ -120,10 +119,10 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         &self,
         identity: CommittedUploadIdentity<'_>,
     ) -> Result<bool> {
-        db::upload_attempt_is_committed(&self.pool, identity).await
+        crate::upload_attempt_is_committed(&self.pool, identity).await
     }
     async fn complete_upload_storage_job(&self, id: i64, claim_token: Uuid) -> Result<bool> {
-        db::complete_upload_storage_job(&self.pool, id, claim_token).await
+        crate::complete_upload_storage_job(&self.pool, id, claim_token).await
     }
     async fn retire_upload_promotion_for_cleanup(
         &self,
@@ -132,7 +131,7 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         storage_fence: i64,
         promotion_claim_token: Uuid,
     ) -> Result<bool> {
-        db::retire_upload_promotion_for_cleanup(
+        crate::retire_upload_promotion_for_cleanup(
             &self.pool,
             id,
             storage_attempt,
@@ -145,7 +144,7 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         &self,
         projection: PromotedUploadProjection<'_>,
     ) -> Result<bool> {
-        db::complete_promoted_upload(&self.pool, projection).await
+        crate::complete_promoted_upload(&self.pool, projection).await
     }
     async fn confirm_upload_stage_absence(
         &self,
@@ -154,7 +153,7 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         removed_now: bool,
         quiet_seconds: i64,
     ) -> Result<bool> {
-        db::confirm_upload_stage_absence(&self.pool, id, claim_token, removed_now, quiet_seconds)
+        crate::confirm_upload_stage_absence(&self.pool, id, claim_token, removed_now, quiet_seconds)
             .await
     }
     async fn upload_cleanup_generation_is_quiescent(
@@ -163,7 +162,8 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         claim_token: Uuid,
         storage_fence: i64,
     ) -> Result<bool> {
-        db::upload_cleanup_generation_is_quiescent(&self.pool, id, claim_token, storage_fence).await
+        crate::upload_cleanup_generation_is_quiescent(&self.pool, id, claim_token, storage_fence)
+            .await
     }
     async fn confirm_upload_cleanup_absence(
         &self,
@@ -172,10 +172,16 @@ impl UploadMaintenanceRepository for PostgresUploadMaintenanceRepository {
         removed_now: bool,
         quiet_seconds: i64,
     ) -> Result<bool> {
-        db::confirm_upload_cleanup_absence(&self.pool, id, claim_token, removed_now, quiet_seconds)
-            .await
+        crate::confirm_upload_cleanup_absence(
+            &self.pool,
+            id,
+            claim_token,
+            removed_now,
+            quiet_seconds,
+        )
+        .await
     }
     async fn complete_queued_upload_cleanup(&self, id: Uuid, claim_token: Uuid) -> Result<bool> {
-        db::complete_queued_upload_cleanup(&self.pool, id, claim_token).await
+        crate::complete_queued_upload_cleanup(&self.pool, id, claim_token).await
     }
 }

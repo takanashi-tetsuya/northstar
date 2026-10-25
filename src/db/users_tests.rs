@@ -214,9 +214,14 @@ async fn scram_families_hide_unknown_and_disabled_accounts_but_surface_corruptio
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    crate::db::upload::validate_upload_capacity_policy(&pool, 128, 10_000, 1024 * 1024 * 1024)
-        .await
-        .unwrap();
+    northstar_upload_postgres::validate_upload_capacity_policy(
+        &pool,
+        128,
+        10_000,
+        1024 * 1024 * 1024,
+    )
+    .await
+    .unwrap();
 
     let suffix = Uuid::new_v4().simple().to_string();
     let username = format!("scramdb{}", &suffix[..12]);
@@ -1439,9 +1444,14 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
     // rather than relying on a preceding test command to have bound state
     // in this schema.
     let (policy_generation, recovery_draining) =
-        crate::db::upload::validate_upload_capacity_policy(&pool, 128, 10_000, 1024 * 1024 * 1024)
-            .await
-            .unwrap();
+        northstar_upload_postgres::validate_upload_capacity_policy(
+            &pool,
+            128,
+            10_000,
+            1024 * 1024 * 1024,
+        )
+        .await
+        .unwrap();
     assert!(policy_generation > 0);
     assert!(!recovery_draining);
 

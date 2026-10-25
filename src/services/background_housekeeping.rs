@@ -134,7 +134,7 @@ impl<R: BackgroundHousekeepingRepository> BackgroundHousekeepingContext<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::metrics::Metrics;
+    use northstar_telemetry::metrics::Metrics;
     use std::{collections::BTreeSet, sync::Mutex};
 
     struct RecordingRepository {

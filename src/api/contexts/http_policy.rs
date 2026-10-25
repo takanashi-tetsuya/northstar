@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn transport_rejections_use_the_original_process_counter() {
-        let metrics = Arc::new(crate::platform::metrics::Metrics::default());
+        let metrics = Arc::new(northstar_telemetry::metrics::Metrics::default());
         metrics
             .http_insecure_requests_rejected_total
             .store(7, Ordering::Relaxed);

@@ -3,11 +3,12 @@
 
 use super::upload_admission::{UploadAdmission, UploadRequestGuard};
 use super::UploadService;
-use crate::platform::metrics::{DurationHistogram, DurationTimer};
 use crate::services::upload_safety::{
     UploadIoClass, UploadIoPermit, UploadSafetyError, UploadSafetyGate,
 };
 use crate::storage::UploadStore;
+use northstar_telemetry::metrics::DurationHistogram;
+use northstar_telemetry::metrics::DurationTimer;
 use std::net::IpAddr;
 use std::sync::Arc;
 

@@ -5,8 +5,7 @@ use super::{
     pep_last_items::PepLastItemsContext, AppState, OnlineSession,
 };
 use crate::{
-    platform::metrics::DurationHistogram, s2s::FederationRouter,
-    xmpp::capabilities::CapsEffectTelemetry, xmpp::outbound::OutboundSender,
+    s2s::FederationRouter, xmpp::capabilities::CapsEffectTelemetry, xmpp::outbound::OutboundSender,
 };
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{
@@ -14,6 +13,7 @@ use northstar_protocol_runtime::caps::{
     FederatedCapsGuard, PendingCapsIndex,
 };
 use northstar_session_core::LocalCapsEpoch;
+use northstar_telemetry::metrics::DurationHistogram;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,

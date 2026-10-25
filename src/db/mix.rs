@@ -1,7 +1,3 @@
-use crate::platform::delivery_counters::{
-    MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL, MIX_DELIVERY_DEAD_LETTERS_TOTAL,
-    MIX_DELIVERY_LEASE_LOST_TOTAL, MIX_DELIVERY_RETRIES_TOTAL,
-};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
@@ -9,6 +5,10 @@ use northstar_archive_core::{
     classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, mix_mam_peer_filter_allowed,
     resolve_mam_query, MamBlockedIdentitySource, MamBlockedPattern,
 };
+use northstar_telemetry::delivery_counters::MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL;
+use northstar_telemetry::delivery_counters::MIX_DELIVERY_DEAD_LETTERS_TOTAL;
+use northstar_telemetry::delivery_counters::MIX_DELIVERY_LEASE_LOST_TOTAL;
+use northstar_telemetry::delivery_counters::MIX_DELIVERY_RETRIES_TOTAL;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::{

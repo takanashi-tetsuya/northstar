@@ -39,7 +39,7 @@ impl AppState {
 
     pub(crate) fn c2s_backpressure_telemetry(
         &self,
-    ) -> crate::platform::metrics::C2sBackpressureTelemetry {
+    ) -> northstar_telemetry::metrics::C2sBackpressureTelemetry {
         self.metrics.c2s_backpressure_telemetry()
     }
 
@@ -240,7 +240,7 @@ impl AppState {
 
     pub(crate) fn sasl2_authentication_timer(
         &self,
-    ) -> crate::platform::metrics::OwnedDurationTimer {
+    ) -> northstar_telemetry::metrics::OwnedDurationTimer {
         self.metrics
             .authentication_duration_seconds
             .start_owned_timer()

@@ -346,7 +346,7 @@ fn saturated_ready_queue_is_reconstructible_from_observations() {
     let coalesced = std::sync::atomic::AtomicU64::new(0);
     let queue_saturated = std::sync::atomic::AtomicU64::new(0);
     let failures = std::sync::atomic::AtomicU64::new(0);
-    let latency = crate::platform::metrics::DurationHistogram::default();
+    let latency = northstar_telemetry::metrics::DurationHistogram::default();
     let telemetry = CapsEffectTelemetry::new(&coalesced, &queue_saturated, &failures, &latency);
     let dispatcher = CapsEffectDispatcher::with_limits(1, 1);
     let index = CapsResourceIndex::with_limits(4, 4);

@@ -19,8 +19,8 @@ mod tools;
 mod xmpp;
 
 use anyhow::{Context, Result};
+use northstar_runtime::workers::{WorkerCriticality, WorkerMode};
 use platform::config::Config;
-use platform::workers::{WorkerCriticality, WorkerMode};
 use runtime::service_tasks::{
     await_shutdown_notifications, drain_service_tasks, spawn_service_task,
     unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
@@ -143,7 +143,7 @@ fn install_crypto_provider() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    platform::logging::report_result(run().await)
+    northstar_telemetry::logging::report_result(run().await)
 }
 
 async fn run() -> Result<()> {
@@ -271,7 +271,8 @@ async fn run() -> Result<()> {
     // every startup database operation.  Runtime policy and service-control
     // authority must survive a cold-start cohort that would otherwise fill
     // the traffic pool before it can establish its own isolated connection.
-    let startup_phase = platform::logging::StartupPhase::begin("runtime_control_reservation");
+    let startup_phase =
+        northstar_telemetry::logging::StartupPhase::begin("runtime_control_reservation");
     let mut runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
     if process_role.embeds_retention() {
         // Retention ownership shares this already-reserved physical session;
@@ -281,7 +282,8 @@ async fn run() -> Result<()> {
             .await?;
     }
     startup_phase.complete();
-    let startup_phase = platform::logging::StartupPhase::begin("primary_pool_and_role_attestation");
+    let startup_phase =
+        northstar_telemetry::logging::StartupPhase::begin("primary_pool_and_role_attestation");
     let pool_options = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
@@ -303,7 +305,7 @@ async fn run() -> Result<()> {
         db::attest_runtime_role(&pool).await?;
     }
     startup_phase.complete();
-    let startup_phase = platform::logging::StartupPhase::begin("schema_verification");
+    let startup_phase = northstar_telemetry::logging::StartupPhase::begin("schema_verification");
     db::verify_schema(&pool, &config.domain)
         .await
         .context("database schema verification failed")?;
@@ -315,7 +317,7 @@ async fn run() -> Result<()> {
     // yet received CPU time. The database lock remains fail-closed and is
     // released automatically if its owner dies.
     let startup_phase =
-        platform::logging::StartupPhase::begin("deployment_capacity_reconciliation");
+        northstar_telemetry::logging::StartupPhase::begin("deployment_capacity_reconciliation");
     db::reconcile_deployment_capacity(
         &pool,
         db::DeploymentCapacityConfiguration::from_config(&config)?,
@@ -323,7 +325,7 @@ async fn run() -> Result<()> {
     .await
     .context("could not establish deployment-wide capacity authority")?;
     startup_phase.complete();
-    let startup_phase = platform::logging::StartupPhase::begin("credential_maintenance");
+    let startup_phase = northstar_telemetry::logging::StartupPhase::begin("credential_maintenance");
     if !config.scram_sha1_enabled {
         let removed = db::clear_scram_sha1_credentials(&pool).await?;
         if removed > 0 {
@@ -349,7 +351,7 @@ async fn run() -> Result<()> {
             .collect(),
     );
     let cancel = CancellationToken::new();
-    let startup_phase = platform::logging::StartupPhase::begin("application_state");
+    let startup_phase = northstar_telemetry::logging::StartupPhase::begin("application_state");
     let state = AppState::new(
         config,
         pool,
@@ -972,7 +974,7 @@ async fn container_healthcheck(address: &str) -> Result<()> {
     }
 }
 
-fn init_logging(config: &Config) -> Result<platform::logging::LogGuards> {
+fn init_logging(config: &Config) -> Result<northstar_telemetry::logging::LogGuards> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let rotation = match config.log_rotation.to_lowercase().as_str() {
@@ -990,8 +992,8 @@ fn init_logging(config: &Config) -> Result<platform::logging::LogGuards> {
         .context("failed to build rolling file appender")?;
 
     let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
-    let (console, console_guard) = platform::logging::console(std::io::stderr());
-    let guards = platform::logging::LogGuards::new(vec![file_guard, console_guard]);
+    let (console, console_guard) = northstar_telemetry::logging::console(std::io::stderr());
+    let guards = northstar_telemetry::logging::LogGuards::new(vec![file_guard, console_guard]);
 
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

@@ -127,14 +127,14 @@ pub struct WorkerRegistry {
 /// Read-only worker health capability for the private readiness endpoint.
 /// The registry remains private and cannot be used to register or stop work.
 #[derive(Clone)]
-pub(crate) struct WorkerReadinessProbe {
+pub struct WorkerReadinessProbe {
     workers: Arc<RwLock<HashMap<&'static str, WorkerHealth>>>,
     supervisors: Arc<Mutex<HashMap<&'static str, SupervisorTask>>>,
     shutting_down: Arc<AtomicBool>,
 }
 
 impl WorkerReadinessProbe {
-    pub(crate) fn readiness_error(&self) -> Option<String> {
+    pub fn readiness_error(&self) -> Option<String> {
         worker_readiness_error(&self.workers, &self.supervisors, &self.shutting_down)
     }
 }
@@ -266,7 +266,7 @@ impl WorkerRegistry {
         Arc::new(Self::default())
     }
 
-    pub(crate) fn readiness_probe(self: &Arc<Self>) -> WorkerReadinessProbe {
+    pub fn readiness_probe(self: &Arc<Self>) -> WorkerReadinessProbe {
         WorkerReadinessProbe {
             workers: Arc::clone(&self.workers),
             supervisors: Arc::clone(&self.supervisors),

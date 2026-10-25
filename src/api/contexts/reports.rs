@@ -1,11 +1,9 @@
 //! Identity lookup and submission capabilities for report and appeal handlers.
-use crate::{
-    platform::metrics::Metrics,
-    services::{
-        api_queries::{ApiPrincipal, ApiQueryRepository, ApiQueryService},
-        reports::{ReportEffect, ReportRepository, ReportService},
-    },
+use crate::services::{
+    api_queries::{ApiPrincipal, ApiQueryRepository, ApiQueryService},
+    reports::{ReportEffect, ReportRepository, ReportService},
 };
+use northstar_telemetry::metrics::Metrics;
 use std::{
     net::IpAddr,
     sync::{atomic::Ordering, Arc},

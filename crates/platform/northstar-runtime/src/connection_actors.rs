@@ -119,13 +119,13 @@ pub struct ConnectionActorRegistry {
 }
 
 #[derive(Clone)]
-pub(crate) struct ConnectionAdmissionReadiness {
+pub struct ConnectionAdmissionReadiness {
     accepting: Arc<AtomicBool>,
     shutdown: CancellationToken,
 }
 
 impl ConnectionAdmissionReadiness {
-    pub(crate) fn is_accepting(&self) -> bool {
+    pub fn is_accepting(&self) -> bool {
         self.accepting.load(Ordering::Acquire) && !self.shutdown.is_cancelled()
     }
 }
@@ -187,7 +187,7 @@ impl ConnectionActorRegistry {
         ))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(capacity: usize) -> Self {
         Self::with_capacities(capacity, capacity, capacity, capacity)
     }
@@ -219,12 +219,12 @@ impl ConnectionActorRegistry {
         self.inner.shutdown.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn is_accepting(&self) -> bool {
         self.inner.accepting.load(Ordering::Acquire) && !self.inner.shutdown.is_cancelled()
     }
 
-    pub(crate) fn readiness_probe(&self) -> ConnectionAdmissionReadiness {
+    pub fn readiness_probe(&self) -> ConnectionAdmissionReadiness {
         ConnectionAdmissionReadiness {
             accepting: Arc::clone(&self.inner.accepting),
             shutdown: self.inner.shutdown.clone(),

@@ -457,7 +457,7 @@ for (const line of traceability.split(/\r?\n/)) {
     throw new Error(`invalid traceability state for ${issueId}: ${state}`);
   }
   if (['Implemented', 'Verified-local', 'Verified-external'].includes(state)) {
-    if (!line.includes('../src/') && !line.includes('../scripts/')) {
+    if (!['../src/', '../crates/', '../scripts/'].some((prefix) => line.includes(prefix))) {
       throw new Error(`implemented issue lacks code/test evidence: ${issueId}`);
     }
   }

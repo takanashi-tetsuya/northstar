@@ -5,10 +5,11 @@
 //! receives protocol state, routing capabilities, or a separate database pool.
 
 use crate::{
-    platform::metrics::SubscriptionCleanupMetrics, platform::workers::WorkerHeartbeat,
     runtime::retention::RetentionReadiness,
     services::maintenance_repositories::SubscriptionCleanupRepository,
 };
+use northstar_runtime::workers::WorkerHeartbeat;
+use northstar_telemetry::metrics::SubscriptionCleanupMetrics;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -159,7 +160,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+    use northstar_runtime::workers::WorkerCriticality;
+    use northstar_runtime::workers::WorkerMode;
+    use northstar_runtime::workers::WorkerRegistry;
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tokio::sync::oneshot;

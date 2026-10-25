@@ -13,12 +13,12 @@ pub struct SubscriptionCleanupMetrics {
 /// The transport can record a queue-pressure disconnect without owning the
 /// metrics registry or application state.
 #[derive(Clone)]
-pub(crate) struct C2sBackpressureTelemetry {
+pub struct C2sBackpressureTelemetry {
     disconnects: Arc<AtomicU64>,
 }
 
 impl C2sBackpressureTelemetry {
-    pub(crate) fn record_disconnect(&self) {
+    pub fn record_disconnect(&self) {
         self.disconnects.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -75,7 +75,7 @@ impl DurationHistogram {
 
     /// Keep one timer alive across a mutable session operation without
     /// retaining its AppState or the full metrics registry.
-    pub(crate) fn start_owned_timer(self: &Arc<Self>) -> OwnedDurationTimer {
+    pub fn start_owned_timer(self: &Arc<Self>) -> OwnedDurationTimer {
         OwnedDurationTimer {
             histogram: Arc::clone(self),
             started: Instant::now(),
@@ -118,7 +118,7 @@ impl Drop for DurationTimer<'_> {
     }
 }
 
-pub(crate) struct OwnedDurationTimer {
+pub struct OwnedDurationTimer {
     histogram: Arc<DurationHistogram>,
     started: Instant,
 }
@@ -306,7 +306,7 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub(crate) fn c2s_backpressure_telemetry(&self) -> C2sBackpressureTelemetry {
+    pub fn c2s_backpressure_telemetry(&self) -> C2sBackpressureTelemetry {
         C2sBackpressureTelemetry {
             disconnects: Arc::clone(&self.c2s_backpressure_disconnects_total),
         }
@@ -537,24 +537,24 @@ impl Metrics {
             read(&self.carbon_post_accept_delivery_failures_total),
             read(&self.carbon_fanout_target_timeouts_total),
             read(&self.pubsub_post_commit_delivery_failures_total),
-            northstar_pubsub_application::pubsub_mutation_admission_rejections_total(),
-            northstar_pubsub_application::pubsub_mutation_admission_waiters(),
-            northstar_pubsub_application::pubsub_mutation_admission_active(),
+            crate::admission_gauges::pubsub_mutation_admission_rejections_total(),
+            crate::admission_gauges::pubsub_mutation_admission_waiters(),
+            crate::admission_gauges::pubsub_mutation_admission_active(),
             read(&self.pep_post_commit_delivery_failures_total),
             read(&self.pubsub_event_outbox_pending_rows),
             read(&self.pubsub_event_outbox_pending_bytes),
             read(&self.pubsub_event_outbox_dead_letter_rows),
-            crate::platform::delivery_counters::pubsub_outbox_retries_total(),
-            crate::platform::delivery_counters::pubsub_outbox_dead_letters_total(),
-            crate::platform::delivery_counters::pubsub_outbox_lease_lost_total(),
-            crate::platform::delivery_counters::pubsub_outbox_capacity_rejections_total(),
-            crate::platform::delivery_counters::pubsub_outbox_unverifiable_pep_drops_total(),
+            crate::delivery_counters::pubsub_outbox_retries_total(),
+            crate::delivery_counters::pubsub_outbox_dead_letters_total(),
+            crate::delivery_counters::pubsub_outbox_lease_lost_total(),
+            crate::delivery_counters::pubsub_outbox_capacity_rejections_total(),
+            crate::delivery_counters::pubsub_outbox_unverifiable_pep_drops_total(),
             read(&self.muc_post_commit_delivery_failures_total),
             read(&self.mix_post_commit_delivery_failures_total),
-            crate::platform::delivery_counters::mix_delivery_capacity_rejections_total(),
-            crate::platform::delivery_counters::mix_delivery_lease_lost_total(),
-            crate::platform::delivery_counters::mix_delivery_retries_total(),
-            crate::platform::delivery_counters::mix_delivery_dead_letters_total(),
+            crate::delivery_counters::mix_delivery_capacity_rejections_total(),
+            crate::delivery_counters::mix_delivery_lease_lost_total(),
+            crate::delivery_counters::mix_delivery_retries_total(),
+            crate::delivery_counters::mix_delivery_dead_letters_total(),
             read(&self.federation_inbound_connections_total),
             read(&self.federation_outbound_deliveries_total),
             read(&self.federation_failures_total),
@@ -562,7 +562,7 @@ impl Metrics {
             read(&self.s2s_outbox_expired_total),
             read(&self.s2s_outbox_permanent_failures_total),
             read(&self.s2s_outbox_lease_lost_total),
-            crate::platform::delivery_counters::s2s_outbox_capacity_rejections_total(),
+            crate::delivery_counters::s2s_outbox_capacity_rejections_total(),
             read(&self.component_connections_active),
             read(&self.component_deliveries_total),
             read(&self.component_failures_total),

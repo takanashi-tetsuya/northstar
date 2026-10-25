@@ -13,7 +13,7 @@ const recoveryRepository = fs.readFileSync(new URL('../src/db/omemo_recovery_rep
 const recoveryPoll = fs.readFileSync(new URL('../src/api/contexts/omemo_poll.rs', import.meta.url), 'utf8');
 const api = readRoleSplitFile('src/api/mod.rs');
 const serverState = readProductionModule('src/state.rs'); // whole production module
-const metrics = fs.readFileSync(new URL('../src/platform/metrics.rs', import.meta.url), 'utf8');
+const metrics = fs.readFileSync(new URL('../crates/platform/northstar-telemetry/src/metrics.rs', import.meta.url), 'utf8');
 
 function requirePattern(source, pattern, message) {
   if (!pattern.test(source)) throw new Error(message);

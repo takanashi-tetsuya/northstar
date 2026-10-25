@@ -1,7 +1,8 @@
+use crate::services::upload_maintenance::*;
 use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
-use crate::{platform::workers::WorkerHeartbeat, services::upload_maintenance::*};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
+use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -24,7 +25,7 @@ pub(crate) struct UploadMaintenanceContext<R> {
     policy: UploadMaintenancePolicy,
     safety_gate: Arc<UploadSafetyGate>,
     startup_audits: Arc<StartupAuditHandoff>,
-    metrics: Arc<crate::platform::metrics::Metrics>,
+    metrics: Arc<northstar_telemetry::metrics::Metrics>,
 }
 
 impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
@@ -34,7 +35,7 @@ impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
         policy: UploadMaintenancePolicy,
         safety_gate: Arc<UploadSafetyGate>,
         startup_audits: Arc<StartupAuditHandoff>,
-        metrics: Arc<crate::platform::metrics::Metrics>,
+        metrics: Arc<northstar_telemetry::metrics::Metrics>,
     ) -> Self {
         Self {
             repository,

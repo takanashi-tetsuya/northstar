@@ -1,7 +1,8 @@
 //! Borrowed telemetry capabilities for specific federation delivery steps.
 //! These ports do not expose the process-wide metric registry.
 
-use crate::platform::metrics::{DurationHistogram, DurationTimer};
+use northstar_telemetry::metrics::DurationHistogram;
+use northstar_telemetry::metrics::DurationTimer;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy)]

@@ -1954,6 +1954,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "northstar-pubsub-core",
+ "northstar-telemetry",
  "roxmltree",
  "tokio",
  "uuid",
@@ -2011,6 +2012,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-session-application"
 version = "0.1.0"
 dependencies = [
@@ -2028,6 +2043,18 @@ dependencies = [
  "northstar-xmpp-types",
  "serde",
  "uuid",
+]
+
+[[package]]
+name = "northstar-telemetry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3120,8 +3147,10 @@ dependencies = [
  "northstar-room-core",
  "northstar-roster-application",
  "northstar-roster-core",
+ "northstar-runtime",
  "northstar-session-application",
  "northstar-session-core",
+ "northstar-telemetry",
  "northstar-upload-application",
  "northstar-upload-core",
  "northstar-web-surface",

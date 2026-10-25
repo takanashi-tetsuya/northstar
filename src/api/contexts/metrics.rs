@@ -35,7 +35,7 @@ pub(crate) struct MetricsContext {
 
 #[derive(Clone)]
 pub(crate) struct MetricsRenderProbe {
-    pub(crate) registry: Arc<crate::platform::metrics::Metrics>,
+    pub(crate) registry: Arc<northstar_telemetry::metrics::Metrics>,
 }
 
 /// The number of entries in a live map; keys and values stay private to the owner.

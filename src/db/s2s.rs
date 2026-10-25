@@ -1,5 +1,5 @@
-use crate::platform::delivery_counters::S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL;
 use anyhow::{Context, Result};
+use northstar_telemetry::delivery_counters::S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL;
 
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};

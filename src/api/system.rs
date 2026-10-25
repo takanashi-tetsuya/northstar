@@ -378,7 +378,7 @@ async fn collect_metrics(context: &MetricsContext) -> String {
     body.push_str(&render_password_work_metrics(
         crate::security::password_work::rejections_total(),
     ));
-    body.push_str(&crate::platform::logging::render_metrics());
+    body.push_str(&northstar_telemetry::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));
     let sm = context.sm_snapshot();
     body.push_str(&crate::services::metrics_snapshot::render_sm_recovery_gauges(&sm));
@@ -575,7 +575,7 @@ pub async fn websocket(
             let actors = state.connection_actors().clone();
             let actor_shutdown = actors.shutdown_token().child_token();
             let result = actors.try_spawn(
-                crate::platform::connection_actors::ConnectionActorKind::C2sWebSocket,
+                northstar_runtime::connection_actors::ConnectionActorKind::C2sWebSocket,
                 Some(peer_ip.to_string()),
                 async move {
                     let _connection_guard = connection_guard;

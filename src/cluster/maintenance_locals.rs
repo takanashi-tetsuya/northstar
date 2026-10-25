@@ -1,7 +1,6 @@
 //! Process-local projections needed by the cluster maintenance pass.
 //! No database pool, Redis client, or signing authority crosses this boundary.
 
-use crate::platform::metrics::{DurationTimer, Metrics};
 use crate::services::muc::SerializableMucOccupant;
 use crate::xmpp::local_routes::{
     muc::MucOccupant,
@@ -17,6 +16,8 @@ use crate::xmpp::local_routes::{
 };
 use dashmap::DashMap;
 use northstar_session_core::JoinedMucMembership;
+use northstar_telemetry::metrics::DurationTimer;
+use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use tokio_util::sync::CancellationToken;
 

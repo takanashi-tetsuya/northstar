@@ -78,7 +78,7 @@ async fn catalog_scenario(
     steps: Vec<(u64, AuditResult, bool)>,
 ) -> (
     Vec<AuditStep>,
-    std::sync::Arc<crate::platform::workers::WorkerRegistry>,
+    std::sync::Arc<northstar_runtime::workers::WorkerRegistry>,
     tokio_util::sync::CancellationToken,
 ) {
     capacity_scenario(
@@ -94,7 +94,7 @@ async fn ledger_scenario(
     steps: Vec<(u64, AuditResult, bool)>,
 ) -> (
     Vec<AuditStep>,
-    std::sync::Arc<crate::platform::workers::WorkerRegistry>,
+    std::sync::Arc<northstar_runtime::workers::WorkerRegistry>,
     tokio_util::sync::CancellationToken,
 ) {
     capacity_scenario(
@@ -113,10 +113,12 @@ async fn capacity_scenario(
     steps: Vec<(AuditKind, u64, AuditResult, bool)>,
 ) -> (
     Vec<AuditStep>,
-    std::sync::Arc<crate::platform::workers::WorkerRegistry>,
+    std::sync::Arc<northstar_runtime::workers::WorkerRegistry>,
     tokio_util::sync::CancellationToken,
 ) {
-    use crate::platform::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+    use northstar_runtime::workers::WorkerCriticality;
+    use northstar_runtime::workers::WorkerMode;
+    use northstar_runtime::workers::WorkerRegistry;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,

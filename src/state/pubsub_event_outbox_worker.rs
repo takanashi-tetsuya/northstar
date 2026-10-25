@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     db::pubsub_repository::PostgresPubSubRepository,
-    platform::metrics::{DurationHistogram, DurationTimer},
     services::pubsub::{
         ClaimedPubSubOutboxDelivery, PepOutboxAuthorizationOutcome, PubSubOutboxDeliveryKind,
         PubSubService,
@@ -14,6 +13,8 @@ use crate::{
     xmpp::capabilities::PubSubOutboxTelemetry,
 };
 use anyhow::Result;
+use northstar_telemetry::metrics::DurationHistogram;
+use northstar_telemetry::metrics::DurationTimer;
 use std::sync::{atomic::AtomicU64, Arc};
 
 pub(crate) struct PubSubEventOutboxWorkerContext {

@@ -1,11 +1,8 @@
 //! Retention endpoints receive policy operations and their read timers.
-use crate::{
-    platform::metrics::Metrics,
-    services::retention_policy::{
-        RetentionPolicyError, RetentionPolicyRepository, RetentionPolicyService,
-        UserRetentionPolicy,
-    },
+use crate::services::retention_policy::{
+    RetentionPolicyError, RetentionPolicyRepository, RetentionPolicyService, UserRetentionPolicy,
 };
+use northstar_telemetry::metrics::Metrics;
 use std::sync::Arc;
 use uuid::Uuid;
 

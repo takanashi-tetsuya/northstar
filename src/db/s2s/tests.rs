@@ -1,5 +1,5 @@
 use super::*;
-use crate::platform::delivery_counters::s2s_outbox_capacity_rejections_total;
+use northstar_telemetry::delivery_counters::s2s_outbox_capacity_rejections_total;
 
 async fn route_recovery_test_pool() -> (PgPool, PgPool, String) {
     let url = std::env::var("TEST_DATABASE_URL")

@@ -1,9 +1,9 @@
 //! TLS reload authority for committed administrator operations.
 
 use super::AppState;
-use crate::platform::metrics::Metrics;
 use crate::security::tls::{TlsContext, TlsReloadOutcome};
 use anyhow::Result;
+use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 
 pub(crate) struct OperationTlsReloadEffects {

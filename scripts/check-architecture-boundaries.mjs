@@ -418,7 +418,7 @@ for (const [call, description] of [
 }
 if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
-    || !/"runtime-control-refresh",\s*crate::platform::workers::WorkerCriticality::Critical,\s*crate::platform::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
+    || !/"runtime-control-refresh",\s*northstar_runtime::workers::WorkerCriticality::Critical,\s*northstar_runtime::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
     || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRun)
     || /\bArc<AppState>\b/.test(runtimeControlContext)
     || !runtimeControlRun.includes('Duration::from_millis(500)')
@@ -481,7 +481,7 @@ if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<
   throw new Error('AppState must receive the already-reserved runtime-control connection');
 }
 const terminalMain = structBody(mainSource, 'async fn main()');
-if (terminalMain.replace(/\s+/g, '') !== 'platform::logging::report_result(run().await)') {
+if (terminalMain.replace(/\s+/g, '') !== 'northstar_telemetry::logging::report_result(run().await)') {
   throw new Error('main must report its final result through the bounded console owner');
 }
 const runtimeMain = structBody(mainSource, 'async fn run()');
@@ -746,7 +746,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     startup.includes('run_mix_outbox_lane(context,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
     startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
   'production lanes must share a fresh independent hard token and receive the parent stop separately');
-  requireMix(startup.includes('registry.supervise_draining(,crate::platform::workers::WorkerCriticality::Restartable,crate::platform::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
+  requireMix(startup.includes('registry.supervise_draining(,northstar_runtime::workers::WorkerCriticality::Restartable,northstar_runtime::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
   'supervisor must enforce the existing 14-second whole-worker drain');
   const deliveryWrapper = compact(structBody(mixProtocolProduction, 'async fn process_claimed_mix_delivery('));
   requireMix(deliveryWrapper ===
@@ -3706,7 +3706,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext>')
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');
-if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:(?:crate::)?(?:platform::)?metrics::)?Metrics\b/.test(capsEffectSource)
+if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:(?:northstar_telemetry::)?metrics::)?Metrics\b/.test(capsEffectSource)
     || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }

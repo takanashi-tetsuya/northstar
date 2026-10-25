@@ -1,9 +1,7 @@
 //! Supervised local lease renewal and deployment-wide expiry maintenance.
-use crate::{
-    platform::workers::WorkerHeartbeat,
-    state::{CapacityLeaseReaperContext, CapacityLeaseRenewalContext},
-};
+use crate::state::{CapacityLeaseReaperContext, CapacityLeaseRenewalContext};
 use anyhow::Result;
+use northstar_runtime::workers::WorkerHeartbeat;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) async fn serve_renewal(

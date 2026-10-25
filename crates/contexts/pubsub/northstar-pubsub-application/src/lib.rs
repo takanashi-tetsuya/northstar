@@ -24,11 +24,15 @@ pub use list_page::{page_pubsub_list, PubSubListPage, PubSubListPageError, PubSu
 mod root_discovery;
 pub use root_discovery::{discover_roots, PubSubRootDiscoQuery, PubSubRootDiscoResult};
 mod publish_policy;
+use northstar_telemetry::admission_gauges::{
+    PUBSUB_MUTATION_ADMISSION_ACTIVE, PUBSUB_MUTATION_ADMISSION_REJECTIONS_TOTAL,
+    PUBSUB_MUTATION_ADMISSION_WAITERS,
+};
 pub use publish_policy::{existing_node_publish_admission_outcome, publish_validation_outcome};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -38,10 +42,6 @@ use uuid::Uuid;
 const PUBSUB_MUTATION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(2);
 const PUBSUB_MUTATION_OWNER_STRIPES: usize = 64;
 const PUBSUB_MUTATION_MAX_TRANSACTIONS: usize = 8;
-
-static PUBSUB_MUTATION_ADMISSION_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static PUBSUB_MUTATION_ADMISSION_WAITERS: AtomicU64 = AtomicU64::new(0);
-static PUBSUB_MUTATION_ADMISSION_ACTIVE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub struct PubSubMutationBusy;
@@ -53,18 +53,6 @@ impl std::fmt::Display for PubSubMutationBusy {
 }
 
 impl std::error::Error for PubSubMutationBusy {}
-
-pub fn pubsub_mutation_admission_rejections_total() -> u64 {
-    PUBSUB_MUTATION_ADMISSION_REJECTIONS_TOTAL.load(Ordering::Relaxed)
-}
-
-pub fn pubsub_mutation_admission_waiters() -> u64 {
-    PUBSUB_MUTATION_ADMISSION_WAITERS.load(Ordering::Relaxed)
-}
-
-pub fn pubsub_mutation_admission_active() -> u64 {
-    PUBSUB_MUTATION_ADMISSION_ACTIVE.load(Ordering::Relaxed)
-}
 
 /// True only for retryable PubSub capacity/lock pressure errors.
 pub fn is_pubsub_mutation_busy(error: &Error) -> bool {

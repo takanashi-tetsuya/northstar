@@ -1,8 +1,6 @@
 //! Governance handlers own use-case calls and the existing outcome counters.
-use crate::{
-    platform::metrics::Metrics,
-    services::{api_mutations::*, api_queries::ApiReadAuthority, governance::*},
-};
+use crate::services::{api_mutations::*, api_queries::ApiReadAuthority, governance::*};
+use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

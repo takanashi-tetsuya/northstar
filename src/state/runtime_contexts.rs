@@ -221,7 +221,7 @@ impl AppState {
         )
     }
 
-    pub(crate) fn worker_registry(&self) -> &Arc<crate::platform::workers::WorkerRegistry> {
+    pub(crate) fn worker_registry(&self) -> &Arc<northstar_runtime::workers::WorkerRegistry> {
         &self.workers
     }
 
@@ -253,7 +253,7 @@ impl AppState {
 
     pub(crate) fn connection_actors(
         &self,
-    ) -> &crate::platform::connection_actors::ConnectionActorRegistry {
+    ) -> &northstar_runtime::connection_actors::ConnectionActorRegistry {
         &self.connection_actors
     }
 

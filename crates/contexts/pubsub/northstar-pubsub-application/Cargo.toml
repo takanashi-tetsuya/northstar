@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 northstar-pubsub-core = { path = "../northstar-pubsub-core" }
+northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 roxmltree = "0.20"
 tokio = { version = "1.43", features = ["sync", "time"] }
 uuid = { version = "1.12", features = ["v4"] }

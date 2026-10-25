@@ -71,7 +71,7 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
     ) -> Result<PepOutboxAuthorizationOutcome> {
         let outcome: Result<_> = async {
             let drop_unverifiable = || {
-                crate::platform::delivery_counters::record_unverifiable_pep_drop();
+                northstar_telemetry::delivery_counters::record_unverifiable_pep_drop();
                 PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::UnverifiableIdentity)
             };
             if item.delivery_kind != PubSubOutboxDeliveryKind::PepStanza

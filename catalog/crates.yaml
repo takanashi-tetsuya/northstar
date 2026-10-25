@@ -236,6 +236,14 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-runtime
+    package: northstar-runtime
+    path: crates/platform/northstar-runtime
+    tier: platform
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-session-application
     package: northstar-session-application
     path: crates/contexts/session/northstar-session-application
@@ -254,6 +262,14 @@ crates:
     role: core
     owner_team: identity-session
     api_stability: internal-stable
+    publish_policy: never
+
+  - crate_id: northstar-telemetry
+    package: northstar-telemetry
+    path: crates/platform/northstar-telemetry
+    tier: platform
+    owner_team: platform
+    api_stability: internal
     publish_policy: never
 
   - crate_id: northstar-test-harness

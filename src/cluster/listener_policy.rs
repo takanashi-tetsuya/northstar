@@ -1,6 +1,7 @@
 //! Typed message policy and command outcomes the cluster listener receives from the composition root.
 
-use crate::{db, platform::metrics::Metrics};
+use crate::db;
+use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 
@@ -20,7 +21,9 @@ pub(crate) struct ClusterListenerMessagePolicy {
 }
 
 impl ClusterListenerMessagePolicy {
-    pub(crate) fn start_redis_setup_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
+    pub(crate) fn start_redis_setup_timer(
+        &self,
+    ) -> northstar_telemetry::metrics::DurationTimer<'_> {
         self.metrics.redis_operation_duration_seconds.start_timer()
     }
 

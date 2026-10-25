@@ -1,7 +1,7 @@
-use crate::platform::connection_actors::{
-    ConnectionActorKind, ConnectionActorRegistry, ConnectionActorSpawnError,
-};
 use crate::xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundItem, OutboundSender};
+use northstar_runtime::connection_actors::ConnectionActorKind;
+use northstar_runtime::connection_actors::ConnectionActorRegistry;
+use northstar_runtime::connection_actors::ConnectionActorSpawnError;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;

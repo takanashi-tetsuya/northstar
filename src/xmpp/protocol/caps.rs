@@ -314,7 +314,7 @@ async fn execute_caps_effects(
 async fn run_caps_effect_dispatcher(
     context: Arc<CapsEffectDispatchContext>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
     let dispatcher = context.dispatcher.as_ref();
     context.observations.recover_interrupted(Instant::now());
@@ -451,13 +451,13 @@ async fn run_caps_effect_dispatcher(
 
 pub(crate) fn start_caps_effect_dispatcher(
     context: Arc<CapsEffectDispatchContext>,
-    worker_registry: Arc<crate::platform::workers::WorkerRegistry>,
+    worker_registry: Arc<northstar_runtime::workers::WorkerRegistry>,
     cancel: CancellationToken,
 ) {
     worker_registry.supervise_draining(
         "caps-side-effects",
-        crate::platform::workers::WorkerCriticality::Restartable,
-        crate::platform::workers::WorkerMode::Continuous,
+        northstar_runtime::workers::WorkerCriticality::Restartable,
+        northstar_runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(60)),
         CAPS_EFFECT_DRAIN_GRACE,
         cancel.clone(),

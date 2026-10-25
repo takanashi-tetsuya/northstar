@@ -219,7 +219,7 @@ impl Drop for RuntimeControlDiagnostics {
 }
 
 pub(super) fn report_runtime_control_health(
-    heartbeat: &crate::platform::workers::WorkerHeartbeat,
+    heartbeat: &northstar_runtime::workers::WorkerHeartbeat,
     observed_database: bool,
     error: Option<anyhow::Error>,
 ) {

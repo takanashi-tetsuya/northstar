@@ -5,11 +5,11 @@
 //! silently drift into two implementations.
 
 use crate::{
-    platform::workers::WorkerHeartbeat,
     state::{AccountDeletionRecoveryContext, AppState},
     xmpp::protocol::roster::deliver_roster_change_with,
 };
 use anyhow::{Context, Result};
+use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},

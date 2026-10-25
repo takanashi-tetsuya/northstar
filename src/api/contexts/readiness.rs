@@ -4,11 +4,11 @@
 /// and the existing typed persistence service, never AppState or a mutable
 /// cluster, worker, connection, upload, or SM owner.
 pub(crate) struct ReadinessContext {
-    pub(crate) connection: crate::platform::connection_actors::ConnectionAdmissionReadiness,
+    pub(crate) connection: northstar_runtime::connection_actors::ConnectionAdmissionReadiness,
     pub(crate) sm: crate::services::sm_capacity::SmMemoryReadiness,
     pub(crate) upload: crate::services::upload_safety::UploadSafetyReadiness,
     pub(crate) cluster: crate::cluster::ClusterReadinessProbe,
-    pub(crate) workers: crate::platform::workers::WorkerReadinessProbe,
+    pub(crate) workers: northstar_runtime::workers::WorkerReadinessProbe,
     pub(crate) abuse_key_deployment:
         Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
     pub(crate) persistence: crate::services::readiness::ReadinessService<

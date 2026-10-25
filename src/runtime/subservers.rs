@@ -6,11 +6,13 @@
 
 use crate::{
     db,
-    platform::metrics::Metrics,
-    platform::workers::{WorkerCriticality, WorkerMode, WorkerRegistry},
     runtime::retention::{RetentionContext, RetentionPolicy, RetentionReadiness},
 };
 use anyhow::{Context, Result};
+use northstar_runtime::workers::WorkerCriticality;
+use northstar_runtime::workers::WorkerMode;
+use northstar_runtime::workers::WorkerRegistry;
+use northstar_telemetry::metrics::Metrics;
 use serde::Deserialize;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -192,8 +194,8 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         !url.trim().is_empty(),
         "maintenance requires DATABASE_URL_FILE or DATABASE_URL"
     );
-    let (console, console_guard) = crate::platform::logging::console(std::io::stdout());
-    let _log_guard = crate::platform::logging::LogGuards::new(vec![console_guard]);
+    let (console, console_guard) = northstar_telemetry::logging::console(std::io::stdout());
+    let _log_guard = northstar_telemetry::logging::LogGuards::new(vec![console_guard]);
     tracing_subscriber::fmt()
         .with_writer(console)
         .json()
@@ -397,7 +399,7 @@ async fn private_health(
                             "GET /healthz HTTP/1.1" | "GET /healthz HTTP/1.0" => ("200 OK", "ok\n".to_owned()),
                             "GET /readyz HTTP/1.1" | "GET /readyz HTTP/1.0" if retention_readiness.is_ready() && subscription_readiness.is_ready() && workers.readiness_error().is_none() => ("200 OK", "ready\n".to_owned()),
                             "GET /readyz HTTP/1.1" | "GET /readyz HTTP/1.0" => ("503 Service Unavailable", "maintenance-not-ready\n".to_owned()),
-                            "GET /metrics HTTP/1.1" | "GET /metrics HTTP/1.0" => ("200 OK", metrics.render() + &crate::platform::logging::render_metrics()),
+                            "GET /metrics HTTP/1.1" | "GET /metrics HTTP/1.0" => ("200 OK", metrics.render() + &northstar_telemetry::logging::render_metrics()),
                             _ => ("404 Not Found", "not-found\n".to_owned()),
                         };
                         stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}", body.len()).as_bytes()).await?;

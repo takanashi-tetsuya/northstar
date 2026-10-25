@@ -1,6 +1,7 @@
+use crate::platform::config::Config;
 use crate::services::maintenance_repositories::{RetentionRepository, RetentionStore};
-use crate::{platform::config::Config, platform::metrics::Metrics};
 use chrono::Utc;
+use northstar_telemetry::metrics::Metrics;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -191,7 +192,7 @@ pub(crate) async fn run_once_context<R: RetentionRepository>(
 pub(crate) async fn serve_context<R: RetentionRepository>(
     context: Arc<RetentionContext<R>>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
     serve_with(
         &context.policy,
@@ -376,7 +377,7 @@ async fn serve_with<F, Fut>(
     counters: &RetentionCounters,
     mut run_pass: F,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()>
 where
     F: FnMut() -> Fut,

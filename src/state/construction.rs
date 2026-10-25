@@ -104,18 +104,19 @@ impl AppState {
         };
         let api_control = Arc::new(api_control);
         let startup_phase =
-            crate::platform::logging::StartupPhase::begin("mix_delivery_capacity_audit");
+            northstar_telemetry::logging::StartupPhase::begin("mix_delivery_capacity_audit");
         db::audit_mix_delivery_capacity_ledger(&pool)
             .await
             .context("MIX delivery capacity ledger failed startup reconciliation")?;
         startup_phase.complete();
-        let startup_phase = crate::platform::logging::StartupPhase::begin("mix_pam_capacity_audit");
+        let startup_phase =
+            northstar_telemetry::logging::StartupPhase::begin("mix_pam_capacity_audit");
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
         startup_phase.complete();
         let upload_startup_phase =
-            crate::platform::logging::StartupPhase::begin("upload_storage_initialization");
+            northstar_telemetry::logging::StartupPhase::begin("upload_storage_initialization");
         anyhow::ensure!(
             !db::upload_migration_active(&pool).await?,
             "offline upload migration is active; keep all nodes stopped"
@@ -154,8 +155,9 @@ impl AppState {
                     .expect("enabled or draining uploads require an attested storage pool");
                 let upload_safety_gate = UploadSafetyGate::new();
                 let upload_namespace = upload_storage_namespace_id(&config)?;
-                let startup_phase =
-                    crate::platform::logging::StartupPhase::begin("upload_namespace_and_policy");
+                let startup_phase = northstar_telemetry::logging::StartupPhase::begin(
+                    "upload_namespace_and_policy",
+                );
                 let namespace_generation = db::validate_upload_storage_backend(
                     upload_db,
                     &config.upload_storage_backend,
@@ -180,7 +182,7 @@ impl AppState {
                 };
                 startup_phase.complete();
                 let startup_phase =
-                    crate::platform::logging::StartupPhase::begin("upload_authority_audit");
+                    northstar_telemetry::logging::StartupPhase::begin("upload_authority_audit");
                 let authority_audit_started_at = tokio::time::Instant::now();
                 let authority_audit = db::audit_upload_capacity_authority(
                     upload_db,
@@ -201,8 +203,9 @@ impl AppState {
                     );
                 }
                 startup_phase.complete();
-                let startup_phase =
-                    crate::platform::logging::StartupPhase::begin("upload_ledger_reconciliation");
+                let startup_phase = northstar_telemetry::logging::StartupPhase::begin(
+                    "upload_ledger_reconciliation",
+                );
                 let ledger_audit_started_at = tokio::time::Instant::now();
                 let capacity_reconciliation = db::reconcile_upload_capacity_ledger(upload_db)
                     .await
@@ -521,7 +524,7 @@ impl AppState {
         let s2s_connection_attempts = Arc::new(Semaphore::new(config.max_s2s_connections));
         let component_connections = Arc::new(Semaphore::new(config.max_component_connections));
         let connection_actors =
-            crate::platform::connection_actors::ConnectionActorRegistry::for_transport_limits(
+            northstar_runtime::connection_actors::ConnectionActorRegistry::for_transport_limits(
                 config.max_client_connections,
                 config.max_s2s_connections,
                 config.max_component_connections,
@@ -1291,11 +1294,11 @@ impl AppState {
             )),
             service_shutdown: Arc::new(std::sync::OnceLock::new()),
             runtime_control_liveness: Arc::new(()),
-            workers: crate::platform::workers::WorkerRegistry::new(),
+            workers: northstar_runtime::workers::WorkerRegistry::new(),
         });
         state.worker_registry().register_observer(
             "session-cleanup",
-            crate::platform::workers::WorkerCriticality::Restartable,
+            northstar_runtime::workers::WorkerCriticality::Restartable,
         );
         db::authority_listener::start_database_authority_listener(
             state.sm_service().authority_broker(),

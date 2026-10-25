@@ -29,7 +29,7 @@ pub(crate) struct ApiQueryRuntime {
     pub(crate) registration_closed: Arc<AtomicBool>,
     pub(crate) island_mode: Arc<AtomicBool>,
     pub(crate) presence: Arc<dyn LocalPresenceDirectory>,
-    pub(crate) metrics: Arc<crate::platform::metrics::Metrics>,
+    pub(crate) metrics: Arc<northstar_telemetry::metrics::Metrics>,
     pub(crate) started_at: Instant,
 }
 
@@ -113,13 +113,13 @@ impl<R: ApiQueryRepository> ApiQueryContext<R> {
         let room_jid = format!("{}@conference.{}", localpart, self.runtime.domain);
         self.runtime.presence.room_occupant_count(&room_jid)
     }
-    pub(crate) fn authentication_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
+    pub(crate) fn authentication_timer(&self) -> northstar_telemetry::metrics::DurationTimer<'_> {
         self.runtime
             .metrics
             .authentication_duration_seconds
             .start_timer()
     }
-    pub(crate) fn database_timer(&self) -> crate::platform::metrics::DurationTimer<'_> {
+    pub(crate) fn database_timer(&self) -> northstar_telemetry::metrics::DurationTimer<'_> {
         self.runtime
             .metrics
             .database_operation_duration_seconds

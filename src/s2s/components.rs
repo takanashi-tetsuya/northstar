@@ -1,6 +1,5 @@
 use crate::{
     platform::config::{ComponentConnectionMode, ComponentCredential},
-    platform::metrics::{DurationHistogram, DurationTimer},
     s2s,
     services::federation_outbox::ComponentRoute,
     state::AppState,
@@ -9,6 +8,8 @@ use crate::{
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use dashmap::{mapref::entry::Entry, DashMap};
+use northstar_telemetry::metrics::DurationHistogram;
+use northstar_telemetry::metrics::DurationTimer;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::{Document, Node};
 use sha1::Sha1;
@@ -385,7 +386,7 @@ pub async fn serve(
             connection_cancel,
         );
         let result = actors.try_spawn(
-            crate::platform::connection_actors::ConnectionActorKind::ComponentAccept,
+            northstar_runtime::connection_actors::ConnectionActorKind::ComponentAccept,
             Some(peer.to_string()),
             actor,
         );
@@ -444,7 +445,7 @@ async fn outbound_component_supervisor(
         );
         actors
             .try_spawn(
-                crate::platform::connection_actors::ConnectionActorKind::ComponentConnect,
+                northstar_runtime::connection_actors::ConnectionActorKind::ComponentConnect,
                 Some(domain.clone()),
                 actor,
             )

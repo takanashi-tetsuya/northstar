@@ -554,7 +554,7 @@ impl ClusterManager {
 }
 
 pub fn start_muc_outbox_delivery(
-    worker_registry: Arc<crate::platform::workers::WorkerRegistry>,
+    worker_registry: Arc<northstar_runtime::workers::WorkerRegistry>,
     context: Arc<muc_outbox_worker::ClusterMucOutboxWorkerContext>,
     cancel: CancellationToken,
 ) {
@@ -564,8 +564,8 @@ pub fn start_muc_outbox_delivery(
     // are no cross-node audience rows and no signing key is required.
     worker_registry.supervise(
         "cluster-muc-outbox",
-        crate::platform::workers::WorkerCriticality::Restartable,
-        crate::platform::workers::WorkerMode::Continuous,
+        northstar_runtime::workers::WorkerCriticality::Restartable,
+        northstar_runtime::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {

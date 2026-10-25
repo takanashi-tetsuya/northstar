@@ -5,7 +5,7 @@ use super::*;
 pub(super) async fn run_muc_outbox_delivery(
     context: Arc<super::muc_outbox_worker::ClusterMucOutboxWorkerContext>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let mut poll = tokio::time::interval(Duration::from_secs(1));
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

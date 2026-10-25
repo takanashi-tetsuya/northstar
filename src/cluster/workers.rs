@@ -9,7 +9,7 @@ pub(crate) async fn run_account_revocations<
 >(
     context: Arc<AccountRevocationWorkerContext<R>>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -72,7 +72,7 @@ pub(crate) async fn run_account_revocations<
 pub(crate) async fn run_maintenance(
     context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let wake_context = Arc::clone(&context);
     let wake_cancel = cancel.clone();
@@ -146,7 +146,7 @@ pub(super) async fn run_direct_spool_wake_loop(
 pub(super) async fn run_maintenance_passes(
     context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let control = &context.control;
     let locals = &context.locals;
@@ -434,7 +434,7 @@ pub(crate) async fn run_pubsub_listener(
     admission: Arc<ClusterListenerAdmission>,
     runtime: ClusterListenerRuntime,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     if !transport.is_enabled() {
         return Ok(());
@@ -466,7 +466,7 @@ pub(crate) async fn run_pubsub_listener(
 pub async fn run_failure_supervisor(
     context: Arc<super::failure_supervisor_context::ClusterFailureSupervisorContext>,
     cancel: CancellationToken,
-    heartbeat: crate::platform::workers::WorkerHeartbeat,
+    heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
     let authority = &context.authority;
     if !authority.is_enabled() {

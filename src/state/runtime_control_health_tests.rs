@@ -1,5 +1,7 @@
 use super::report_runtime_control_health;
-use crate::platform::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+use northstar_runtime::workers::WorkerCriticality;
+use northstar_runtime::workers::WorkerMode;
+use northstar_runtime::workers::WorkerRegistry;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 

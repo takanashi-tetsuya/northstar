@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifiedRuntimeInventory } from './check-architecture-boundaries.mjs';
 import { readRoleSplitFile } from './lib/source-module.mjs';
+import { workspaceMemberDirectories } from './lib/workspace-members.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Files listed in catalog/source-role-splits.json sit next to independently
@@ -25,7 +26,8 @@ export function readRuntimeExperiments() {
 }
 export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeInventory,
   read = relative => roleSplitSources.has(relative)
-    ? readRoleSplitFile(relative, { root }) : fs.readFileSync(path.join(root, relative), 'utf8') } = {}) {
+    ? readRoleSplitFile(relative, { root }) : fs.readFileSync(path.join(root, relative), 'utf8'),
+  packages } = {}) {
   fields(catalog, ['schema', 'purpose', 'required_families', 'families', 'executable_contract', 'controlled_contract'], 'catalog');
   requireValue(catalog.schema === 'northstar-runtime-experiments-v2', 'unsupported schema');
   text(catalog.purpose, 'purpose');
@@ -34,6 +36,17 @@ export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeI
   const owners = new Map(inventory.map(item => [item.id, item.owner]));
   requireValue(owners.size === inventory.length, 'verified inventory has duplicate IDs');
   const families = new Set(), identities = new Set(), experiments = new Set();
+  let resolvedPackages = packages;
+  function getPackages() {
+    if (resolvedPackages == null) {
+      resolvedPackages = new Map();
+      for (const dir of workspaceMemberDirectories(root)) {
+        const match = /^name\s*=\s*"([^"]+)"/m.exec(read(`${dir}/Cargo.toml`));
+        if (match) resolvedPackages.set(match[1], dir);
+      }
+    }
+    return resolvedPackages;
+  }
   function reference(value, label) {
     fields(value, ['path', 'anchor'], label);
     text(value.path, `${label} path`); text(value.anchor, `${label} anchor`);
@@ -138,10 +151,21 @@ export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeI
       text(experiment.command, 'command'); reference(experiment.test, `${experiment.id} test`);
       const argv = experiment.command.split(/\s+/);
       if (argv[0] === 'cargo') {
-        requireValue(argv.slice(0, 5).join(' ') === 'cargo test --locked --bin rust-xmpp-server' && argv.length === 6,
-          'Cargo experiment must declare one explicit binary/selector');
+        const isBin = argv.length === 6 && argv.slice(0, 5).join(' ') === 'cargo test --locked --bin rust-xmpp-server';
+        const isPkg = argv.length === 6 && argv.slice(0, 4).join(' ') === 'cargo test --locked -p' && argv[4] !== 'rust-xmpp-server';
+        requireValue(isBin || isPkg, 'Cargo experiment must declare one explicit binary/selector');
+        let relativePath;
+        if (isBin) {
+          requireValue(experiment.test.path.startsWith('src/'), `${experiment.id} test path must start with src/`);
+          relativePath = experiment.test.path.slice('src/'.length);
+        } else {
+          const dir = getPackages().get(argv[4]);
+          requireValue(dir, `${experiment.id} unknown Cargo package ${argv[4]}`);
+          requireValue(experiment.test.path.startsWith(`${dir}/src/`), `${experiment.id} test path must start with ${dir}/src/`);
+          relativePath = experiment.test.path.slice(`${dir}/src/`.length);
+        }
         const selector = argv[5];
-        const module = experiment.test.path.replace(/^src\//, '').replace(/\.rs$/, '')
+        const module = relativePath.replace(/\.rs$/, '')
           .replace(/_tests$/, '/tests').replaceAll('/', '::');
         const testName = /\bfn\s+([a-zA-Z_][a-zA-Z0-9_]*)\b/.exec(experiment.test.anchor)?.[1];
         const parts = selector.split('::'), leaf = parts.at(-1);

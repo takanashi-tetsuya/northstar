@@ -1,7 +1,3 @@
-use crate::platform::delivery_counters::{
-    PUBSUB_OUTBOX_CAPACITY_REJECTIONS_TOTAL, PUBSUB_OUTBOX_DEAD_LETTERS_TOTAL,
-    PUBSUB_OUTBOX_LEASE_LOST_TOTAL, PUBSUB_OUTBOX_RETRIES_TOTAL,
-};
 use anyhow::{Context, Result};
 use chrono::Utc;
 pub use northstar_pubsub_core::{
@@ -9,6 +5,10 @@ pub use northstar_pubsub_core::{
     PepOutboxEventKind, PepOutboxSubject, PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition,
     PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
 };
+use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_CAPACITY_REJECTIONS_TOTAL;
+use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_DEAD_LETTERS_TOTAL;
+use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_LEASE_LOST_TOTAL;
+use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_RETRIES_TOTAL;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{collections::HashMap, sync::atomic::Ordering};
 use uuid::Uuid;

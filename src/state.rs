@@ -187,7 +187,6 @@ use crate::{
         AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
         SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
     },
-    platform::metrics::Metrics,
     s2s::FederationRouter,
     services::abuse::{AbuseConfig, AbuseGuard},
     services::upload_safety::{UploadAuthorityGeneration, UploadSafetyGate},
@@ -201,6 +200,7 @@ use hickory_resolver::{
     system_conf::read_system_conf,
     TokioResolver,
 };
+use northstar_telemetry::metrics::Metrics;
 use sqlx::{
     pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -489,7 +489,7 @@ pub struct AppState {
     s2s_connections: Arc<Semaphore>,
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
-    connection_actors: crate::platform::connection_actors::ConnectionActorRegistry,
+    connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
     challenge_issue_service: crate::services::challenge_issuance::ChallengeIssueService<
         db::challenge_issuance_repository::PostgresChallengeRepository,
     >,
@@ -520,7 +520,7 @@ pub struct AppState {
     federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
     service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
     runtime_control_liveness: Arc<()>,
-    workers: Arc<crate::platform::workers::WorkerRegistry>,
+    workers: Arc<northstar_runtime::workers::WorkerRegistry>,
 }
 
 impl AppState {
@@ -533,8 +533,8 @@ impl AppState {
         );
         state.worker_registry().supervise(
             "locked-muc-expiry",
-            crate::platform::workers::WorkerCriticality::Restartable,
-            crate::platform::workers::WorkerMode::Continuous,
+            northstar_runtime::workers::WorkerCriticality::Restartable,
+            northstar_runtime::workers::WorkerMode::Continuous,
             Some(Duration::from_secs(20)),
             cancel,
             move |heartbeat| {
@@ -556,8 +556,8 @@ impl AppState {
         let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
             "runtime-control-refresh",
-            crate::platform::workers::WorkerCriticality::Critical,
-            crate::platform::workers::WorkerMode::Continuous,
+            northstar_runtime::workers::WorkerCriticality::Critical,
+            northstar_runtime::workers::WorkerMode::Continuous,
             Some(max_silence),
             cancel,
             move |heartbeat| {

@@ -1,0 +1,25 @@
+[package]
+name = "northstar-runtime"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Worker supervision, shutdown and connection-actor admission for the Northstar runtime"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+futures = "0.3"
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }
+
+[features]
+# Constructors and probes that tests in dependent crates use.
+test-support = []
+
+[dev-dependencies]
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["test-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

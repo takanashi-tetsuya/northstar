@@ -17,7 +17,6 @@ pub(crate) mod transport_parsing;
 mod websocket_action;
 pub(crate) mod xml_builder;
 
-use crate::platform::metrics::C2sBackpressureTelemetry;
 use crate::state::AppState;
 use crate::xmpp::transport_parsing::{
     take_websocket_frame, websocket_close_has_content,
@@ -28,6 +27,7 @@ use axum::extract::ws::{Message, WebSocket};
 use frame_execution::FrameFailure;
 use framing::XmlEntityFramer;
 use futures::FutureExt;
+use northstar_telemetry::metrics::C2sBackpressureTelemetry;
 use protocol::{ProtocolSession, SessionTerminationSignals};
 use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
@@ -104,7 +104,7 @@ pub async fn serve_tcp(
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
-            crate::platform::connection_actors::ConnectionActorKind::C2sTcp,
+            northstar_runtime::connection_actors::ConnectionActorKind::C2sTcp,
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
@@ -155,7 +155,7 @@ pub async fn serve_xmpps_tcp(
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
-            crate::platform::connection_actors::ConnectionActorKind::C2sDirectTls,
+            northstar_runtime::connection_actors::ConnectionActorKind::C2sDirectTls,
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;

@@ -370,7 +370,7 @@ fn transport_failure_drops_resume_capacity_with_the_failed_action() {
 
 #[tokio::test]
 async fn post_transport_resume_publication_cannot_run_while_replay_is_pending() {
-    let metrics = crate::platform::metrics::Metrics::default();
+    let metrics = northstar_telemetry::metrics::Metrics::default();
     let telemetry = PostActionTelemetry::new(
         &metrics.post_action_tasks_started_total,
         &metrics.post_action_tasks_completed_total,
@@ -412,7 +412,7 @@ async fn post_transport_resume_publication_cannot_run_while_replay_is_pending() 
 
 #[tokio::test]
 async fn external_recovery_task_waits_for_current_transport_action() {
-    let metrics = crate::platform::metrics::Metrics::default();
+    let metrics = northstar_telemetry::metrics::Metrics::default();
     let telemetry = PostActionTelemetry::new(
         &metrics.post_action_tasks_started_total,
         &metrics.post_action_tasks_completed_total,

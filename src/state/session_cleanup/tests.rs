@@ -5,11 +5,11 @@ use super::{
 use std::sync::Arc;
 use uuid::Uuid;
 
-fn cleanup_observer() -> Arc<crate::platform::workers::WorkerRegistry> {
-    let registry = crate::platform::workers::WorkerRegistry::new();
+fn cleanup_observer() -> Arc<northstar_runtime::workers::WorkerRegistry> {
+    let registry = northstar_runtime::workers::WorkerRegistry::new();
     registry.register_observer(
         "session-cleanup",
-        crate::platform::workers::WorkerCriticality::Restartable,
+        northstar_runtime::workers::WorkerCriticality::Restartable,
     );
     registry
 }

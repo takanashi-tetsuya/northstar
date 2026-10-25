@@ -12,6 +12,12 @@ test('complete production index has 16 families and 71 exact runtime identities'
   assert.equal(result.families, 16); assert.equal(result.runtimeIdentities, 71);
   assert.match(result.interpretation, /no experiment was executed/);
 });
+test('accepts a package-qualified Cargo experiment', () => {
+  const c = clone();
+  assert.equal(c.families.find(f => f.id === 'workers').experiments.find(e => e.id === 'workers-regression').command,
+    'cargo test --locked -p northstar-runtime workers::tests');
+  assert.doesNotThrow(() => verifyRuntimeExperiments(clone()));
+});
 for (const [label, mutate] of [
   ['missing family', c => c.families.pop()],
   ['duplicate family', c => c.families.push(structuredClone(c.families[0]))],
@@ -31,6 +37,11 @@ for (const [label, mutate] of [
   ['missing privacy', c => c.families[0].privacy = ''],
   ['hidden gaps', c => c.families[0].gaps = []],
   ['stale command selector', c => c.families[0].experiments[0].command = 'cargo test --locked --bin rust-xmpp-server no_such_selector_exists'],
+  ['package selector for a root test', c => c.families.find(f => f.id === 'workers').experiments[0].command = 'cargo test --locked -p rust-xmpp-server workers::tests'],
+  ['unknown package', c => c.families.find(f => f.id === 'workers').experiments[0].command = 'cargo test --locked -p northstar-invented workers::tests'],
+  ['package that does not own the test path', c => c.families.find(f => f.id === 'workers').experiments[0].command = 'cargo test --locked -p northstar-telemetry workers::tests'],
+  ['stale package selector', c => c.families.find(f => f.id === 'workers').experiments[0].command = 'cargo test --locked -p northstar-runtime no_such_selector_exists'],
+  ['extra cargo argument', c => c.families.find(f => f.id === 'workers').experiments[0].command = 'cargo test --locked -p northstar-runtime --lib workers::tests'],
   ['wrong executable script', c => c.families.find(f => f.id === 'mix').experiments[0].command = 'bash scripts/muc-db-wsl.sh'],
   ['stale test selector', c => c.families[0].experiments[0].test.anchor = 'removed_test'],
   ['duplicate experiment', c => c.families[1].experiments[0].id = c.families[0].experiments[0].id],

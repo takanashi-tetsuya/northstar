@@ -10,7 +10,7 @@ pub(crate) trait LoginFailureMetrics: Send + Sync {
     fn record_authentication_backend_failure(&self);
 }
 
-impl LoginFailureMetrics for crate::platform::metrics::Metrics {
+impl LoginFailureMetrics for northstar_telemetry::metrics::Metrics {
     fn record_authentication_backend_failure(&self) {
         self.authentication_backend_failures_total
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

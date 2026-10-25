@@ -11,8 +11,8 @@ use std::time::Duration;
 use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::fmt::MakeWriter;
 
-pub(crate) const CONSOLE_QUEUE_EVENTS: usize = 256;
-pub(crate) const CONSOLE_EVENT_BYTES: usize = 64 * 1024;
+pub const CONSOLE_QUEUE_EVENTS: usize = 256;
+pub const CONSOLE_EVENT_BYTES: usize = 64 * 1024;
 const LOG_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(2500);
 static CONSOLE_COUNTERS: OnceLock<ConsoleCounters> = OnceLock::new();
 static SHUTDOWN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
@@ -21,19 +21,19 @@ static SHUTDOWN_SPAWN_FAILURES: AtomicU64 = AtomicU64::new(0);
 /// Startup-only timing, with fixed labels and no configuration or SQL values.
 /// A missing completion leaves the last started phase visible after a failure.
 /// This never adds a task, query, retry, or deadline to the operation it measures.
-pub(crate) struct StartupPhase {
+pub struct StartupPhase {
     name: &'static str,
     started: std::time::Instant,
 }
 
 impl StartupPhase {
-    pub(crate) fn begin(name: &'static str) -> Self {
+    pub fn begin(name: &'static str) -> Self {
         let started = std::time::Instant::now();
         tracing::info!(startup_phase = name, "startup phase started");
         Self { name, started }
     }
 
-    pub(crate) fn complete(self) {
+    pub fn complete(self) {
         tracing::info!(
             startup_phase = self.name,
             elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0,
@@ -49,13 +49,13 @@ struct ConsoleCounters {
 }
 
 #[derive(Clone)]
-pub(crate) struct ConsoleWriter {
+pub struct ConsoleWriter {
     writer: NonBlocking,
     counters: ConsoleCounters,
     event_bytes: usize,
 }
 
-pub(crate) struct ConsoleEventWriter {
+pub struct ConsoleEventWriter {
     sink: ConsoleWriter,
     bytes: Vec<u8>,
     oversized: bool,
@@ -134,7 +134,7 @@ fn console_with_writer(
     )
 }
 
-pub(crate) fn console(output: impl Write + Send + 'static) -> (ConsoleWriter, WorkerGuard) {
+pub fn console(output: impl Write + Send + 'static) -> (ConsoleWriter, WorkerGuard) {
     let (writer, guard) = console_with_writer(output, CONSOLE_QUEUE_EVENTS, CONSOLE_EVENT_BYTES);
     CONSOLE_COUNTERS
         .set(writer.counters.clone())
@@ -145,7 +145,7 @@ pub(crate) fn console(output: impl Write + Send + 'static) -> (ConsoleWriter, Wo
 /// Match Result's terminal Debug error report without invoking its synchronous
 /// stderr writer after the runtime's logger guards have already been dropped.
 /// This final sink does not install a subscriber, touch OnceLock, or read config.
-pub(crate) fn report_result(result: anyhow::Result<()>) -> std::process::ExitCode {
+pub fn report_result(result: anyhow::Result<()>) -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
@@ -171,14 +171,14 @@ fn enqueue_terminal_error(writer: &ConsoleWriter, error: &anyhow::Error) {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ConsoleLoggingMetrics {
+pub struct ConsoleLoggingMetrics {
     pub queue_dropped_events: u64,
     pub oversized_events: u64,
     pub shutdown_timeouts: u64,
     pub shutdown_spawn_failures: u64,
 }
 
-pub(crate) fn metrics() -> ConsoleLoggingMetrics {
+pub fn metrics() -> ConsoleLoggingMetrics {
     ConsoleLoggingMetrics {
         queue_dropped_events: CONSOLE_COUNTERS.get().map_or(0, |counters| {
             u64::try_from(counters.queue.dropped_lines()).unwrap_or(u64::MAX)
@@ -191,7 +191,7 @@ pub(crate) fn metrics() -> ConsoleLoggingMetrics {
     }
 }
 
-pub(crate) fn render_metrics() -> String {
+pub fn render_metrics() -> String {
     render_snapshot(metrics())
 }
 
@@ -216,12 +216,12 @@ fn render_snapshot(snapshot: ConsoleLoggingMetrics) -> String {
 /// One process-lifetime owner; no per-event task or shutdown thread is created.
 /// At final teardown, at most one helper drops both existing appender guards.
 #[must_use]
-pub(crate) struct LogGuards {
+pub struct LogGuards {
     guards: Option<Vec<WorkerGuard>>,
 }
 
 impl LogGuards {
-    pub(crate) fn new(guards: Vec<WorkerGuard>) -> Self {
+    pub fn new(guards: Vec<WorkerGuard>) -> Self {
         Self {
             guards: Some(guards),
         }
@@ -508,7 +508,7 @@ mod tests {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "platform::logging::tests::stalled_stdio_child",
+                "logging::tests::stalled_stdio_child",
                 "--nocapture",
             ])
             .env("NORTHSTAR_LOGGING_STALL_CHILD", "1")

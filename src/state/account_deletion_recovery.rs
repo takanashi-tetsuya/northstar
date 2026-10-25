@@ -119,7 +119,7 @@ pub(crate) struct AccountDeletionRecoveryContext {
     roster: RosterPushDelivery,
     presence: AccountDeletionPresence,
     teardown: AccountTeardownRuntime,
-    metrics: Arc<crate::platform::metrics::Metrics>,
+    metrics: Arc<northstar_telemetry::metrics::Metrics>,
     domain: String,
 }
 

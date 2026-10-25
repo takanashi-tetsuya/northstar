@@ -7,9 +7,10 @@ use super::{
 use crate::xmpp::muc_delivery::MucDeliveryContext;
 use crate::{
     db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
-    platform::workers::WorkerHeartbeat, services::locked_muc_expiry::LockedMucExpiryService,
+    services::locked_muc_expiry::LockedMucExpiryService,
 };
 use dashmap::DashMap;
+use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     sync::{Arc, Weak},
     time::Duration,

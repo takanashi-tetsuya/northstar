@@ -1087,7 +1087,7 @@
       "id": "workers",
       "title": "Worker supervision, maintenance and shutdown",
       "production_owner": {
-        "path": "src/platform/workers.rs",
+        "path": "crates/platform/northstar-runtime/src/workers.rs",
         "anchor": "pub struct WorkerRegistry {"
       },
       "runtime_identities": [
@@ -1284,7 +1284,7 @@
       "budgets": {
         "contract": "Per-worker source contracts are checked by existing architecture gate; no blanket end-to-end worker budget.",
         "source": {
-          "path": "src/platform/workers.rs",
+          "path": "crates/platform/northstar-runtime/src/workers.rs",
           "anchor": "const ABORT_DRAIN_GRACE: Duration = Duration::from_secs(1);"
         }
       },
@@ -1293,9 +1293,9 @@
           "id": "workers-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server workers::tests",
+          "command": "cargo test --locked -p northstar-runtime workers::tests",
           "test": {
-            "path": "src/platform/workers/tests.rs",
+            "path": "crates/platform/northstar-runtime/src/workers/tests.rs",
             "anchor": "async fn shutdown_joins_every_supervisor_and_drops_inflight_attempts() {"
           },
           "assertions": [

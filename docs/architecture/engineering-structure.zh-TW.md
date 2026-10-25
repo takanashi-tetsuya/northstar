@@ -107,6 +107,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S16 地基 | WP-160–165 | 依[目標架構](target-architecture.zh-TW.md)開始整體重構（WP-160）。刪除未整合的 `services/*` 微服務原型與只為它存在的 crate、工具、契約、目錄、部署檔與 CI 步驟，ADR 0002–0007 標為 superseded（WP-161）；56 個 crate 以 `git mv` 移入 `crates/{kernel,platform,contexts/<context>}` 與 `tools/`，套件名稱不變（WP-162）；crate 依賴圖依層級檢查（R10，WP-163）；解除 Stage 4 對 `src/` 的釘選與 S4 的 `crate::outbound` shim（WP-164）；記錄建置時間基準（WP-165）。盤點見 5.12 | 測試名稱不變；根 crate 行數不變；全部門禁與完整 CI 通過。已完成 |
 | S17 平台 | WP-171–178 | 根 crate 的平台橫切移為 crate：`jid`、`auth` 相容 facade 退役，呼叫端直接引用 `northstar-xmpp-types`、`northstar-auth-core`（WP-171）；worker 監督與連線 actor 移入 `northstar-runtime`，日誌、指標登錄、遞送計數器與 PubSub 准入計量移入 `northstar-telemetry`（WP-172）；`src/security` 的安全機制與受保護的秘密檔讀取移入 `northstar-security`（WP-173）；XEP 擴充目錄成為 kernel 的 `northstar-xep-catalog`，JID 與 XML 文字工具併入 `northstar-xmpp-types`、`northstar-xml-builder`，`AppError` 移到 `api::error`（WP-174）；設定模組不再引用 auth core（WP-175），原始碼讀取器支援 crate 根 `lib.rs`（WP-176），設定移入 `northstar-config`（WP-177）；記錄階段與建置時間（WP-178）。`src/storage` 只服務上傳，改隨 S19 進 upload 上下文。盤點見 5.13 | 搬移只改路徑與可見性；測試名稱依路徑對應後不變；R9 基線不增；全部門禁與完整 CI 通過。已完成：`src/platform`、`src/security` 與兩個 facade 不再存在 |
 | S18 會話核心介面 | WP-181–185 | 新的 edge crate `northstar-stream` 提供 IQ 路由表：`IqRoute`（酬載元素、命名空間、get／set）、`IqRouter`（排序後以借用的鍵二分搜尋）與 `IqHandler`（WP-181）；訊息遞送經 session 應用層的 `RemoteRoutePort` 送往遠端網域，協定處理器不再引用 `crate::s2s`（WP-182）；`ProtocolSession::iq` 的 match 改為 48 條各註冊一次的路由，路由的閘門決定請求交給處理器、回 `service-unavailable`，或與沒有路由一樣回 `feature-not-implemented`（WP-183、184）；記錄階段（WP-185）。盤點見 5.14 | 測試名稱只增加；全部門禁、模糊測試編譯與完整 CI 通過。已完成：client IQ 只經路由表分派；協定處理器的生產程式碼不再引用 `bosh`、`s2s` |
+| S19 upload 上下文 | WP-191–203 | 上傳的槽服務、維護 port 與安全閘門移入 `northstar-upload-application`（WP-191）；`-storage` 成為介面卡角色（WP-192），`src/storage` 成為 `northstar-upload-storage`（WP-193），儲存 port 移入 application（WP-194），上傳維護 worker 移入 application（WP-195）；migration 集合移入新的 platform crate `northstar-postgres`（WP-196）；`db/upload*` 成為 `northstar-upload-postgres`（WP-197–199）；IQ 回應與 stanza 錯誤移入 `northstar_xml_builder::stanza`（WP-200）；XEP-0363 槽處理移入 `northstar-upload-xmpp`，會話能力是窄 trait `UploadSlotSession`（WP-201）；`AppState` 的上傳欄位與啟動程式成為組合根的 `UploadModule`（WP-202）；記錄階段（WP-203）。盤點見 5.15 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：上傳的應用、儲存、持久化與 XMPP 程式碼不再在根 crate；HTTP 端點與管理員重試的去處見 5.15 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -535,6 +536,46 @@ S17 推上 dev 後 CI 的模糊測試編譯失敗：`rest_extractors` 以 `#[pat
 驗證器原本以 `crate::jid` 引用 JID crate，門禁因此要求模糊測試匯入它；WP-171 後驗證器以完整路徑引用，匯入成為未使用。
 WP-179 只跑了模糊測試編譯、沒有重跑門禁，dev 的 CI 仍失敗；WP-186 讓 crate 需求可以指定由被納入的正式模組引用。
 
+### 5.15 S19 盤點：upload 上下文（`aef5f0cc`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `services/upload*`：槽服務、維護 port、安全閘門 | `northstar_upload_application::{service, maintenance, safety}` | application |
+| `src/storage.rs` 與子模組：本機與 S3 儲存、I/O 准入守衛、物件完整性、離線物件備份 | `northstar-upload-storage` | adapter（`-storage`） |
+| 儲存 port：`UploadStore`、暫存與已存物件、完整性錯誤、`GuardedUploadStore` | `northstar_upload_application::store` | application |
+| `runtime/upload_worker.rs` | `northstar_upload_application::worker` | application |
+| `db/mod.rs` 的 migration 集合；`db/api_pages.rs` 的交易時鐘 | `northstar-postgres` 的 `MIGRATOR` 與 `database_cursor_clock_in_tx`（根 crate 轉出為 `db::MIGRATOR`） | platform |
+| `db/upload.rs` 與子模組、`db/upload_maintenance.rs`、`db/upload_migration.rs` | `northstar-upload-postgres`，`maintenance`、`migration` 模組 | adapter |
+| 死信型別（`services/api_queries.rs`）與查詢（`db/upload_admin.rs`） | `northstar_upload_application::admin`、`northstar_upload_postgres::admin` | application、adapter |
+| `services/xml_util.rs` 的 IQ 回應與 stanza 錯誤 | `northstar_xml_builder::stanza`（`xml_util` 轉出） | kernel |
+| `xmpp/protocol/upload.rs` 的 XEP-0363 槽處理 | `northstar-upload-xmpp`：`UploadSlotSession` 與 `http_upload_slot` | adapter |
+| `AppState` 的 8 個上傳欄位與 `AppState::new` 中的上傳啟動區塊 | `src/state/upload_module.rs` 的 `UploadModule` | 組合根 |
+
+上傳的四個 crate 共 13,084 行（application 4,318、storage 3,246、postgres 5,313、xmpp 207）。`northstar-upload-xmpp` 只依賴 upload application、kernel 與
+`anyhow`、`roxmltree`、`tracing`、`uuid`，不依賴 `-postgres`、`-storage` 與根 crate，由 crate 圖門禁保證。
+`UploadSlotSession` 是 S18 決定的第一個會話能力 trait：處理器需要的已驗證使用者、上傳服務網域與公開 URL、槽限制、
+儲存後端與槽保留，由 `ProtocolSession` 實作並委派。
+
+根 crate 中仍與上傳有關的程式碼與去處：
+
+- HTTP 端點（`api/upload.rs`、`api/upload_admin.rs`、`api/contexts/upload_*`）：依 4.3 由 `northstar-http` 提供，
+  S30 移出。端點使用的應用層型別隨上下文移動（死信型別，WP-199）。
+- 管理員重試死信（`services/upload_admin.rs`、`db/upload_admin_repository.rs`）：在同一交易中使用 operations 的
+  管理命令冪等儲存與上傳的重試查詢，依 4.5 屬於 `northstar-workflows`，隨 S25 移出。
+- 讀寫其他上下文的 PostgreSQL 測試：`db/upload_account_tests.rs`（帳號刪除、PIE 匯入、API session）與
+  `db/upload_admin_tests.rs`（冪等重播、API session、授權）。`northstar-upload-postgres` 以 `test-support` feature
+  提供它們需要的容量常數與原始碼；依 4.6，它們隨組合根移到 `northstar-server/tests`。
+- `ProtocolSession` 對 `UploadSlotSession` 的實作：S30 拆解 `ProtocolSession` 時處理。
+- `state/upload_module.rs` 與離線遷移命令 `tools/storage_migration.rs`：組合根與二進位檔的子命令（4.4）。
+
+與目標架構 S19–S28 列的差異：該列要求把 `api` 的程式碼也移入上下文 crate，但 4.3 把 REST、管理 API 與上傳端點
+放在 `northstar-http`。端點共用 `AppError`、抽取器、API session 驗證與冪等框架，後兩者屬於 auth 與 operations；
+介面卡不能依賴其他上下文的 application，逐上下文的 `-http` crate 因此要先有不屬於任何上下文的 HTTP 驗證 port。
+本階段依 4.3：端點留到 S30，S19–S28 列改為只移 `services`、`db`、`xmpp/protocol`。「`AppState` 不再持有它的
+服務」改為由組合根建構上下文模組、`AppState` 只持有該模組（4.4）。
+
+根 crate 由 799 檔 382,566 行變為 776 檔 369,707 行。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -677,6 +718,10 @@ WP-179 只跑了模糊測試編譯、沒有重跑門禁，dev 的 CI 仍失敗�
      搬移腳本與 agy 平行，cargo 工作經 flock 佇列依序執行；鏈上的 WP 以搬移後的測試名稱對應表串接比對。
    - 以 `#[path]` 讀根 crate 原始碼的程式（模糊測試、部分門禁）不在 workspace 的編譯範圍內，搬移改了它們引用的
      路徑時，workspace 全綠也看不出來；每個階段的驗證因此也編譯 `fuzz/` 的全部 target（S18）。
+   - 即使只改一行，WP 也要跑全部門禁：WP-179 刪除的匯入是門禁要求的，dev 的 CI 直到 WP-186 才恢復（S19）。
+   - 移出 crate 的測試若仍需要根 crate 的程式碼，留在根 crate；crate 以 `test-support` feature 提供測試需要的項目，
+     只由根 crate 的 dev-dependencies 開啟。來源契約測試以 `#[cfg(test)]` 等文字定位時，cfg 改變要同步更新定位文字。
+     建立門禁夾具的自我測試要涵蓋 crate 路徑：WP-201 新增的基線項目在 `crates/` 下，自我測試原本只為 `src/` 建立檔案（S19）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -857,3 +902,16 @@ Stage 證據仍綁定其原提交。
 | WP-184 | 完成：註冊、MUC unique、HTTP upload、PubSub owner 改為路由；閘門決定未准入請求的回應；match 刪除，共 48 條路由 | 見 `git log --grep '\[WP-184\]'` |
 | WP-185 | 完成：記錄 S18 的階段與盤點（5.14）；S17 的 CI 失敗與驗證腳本加入模糊測試編譯。WP-181–184 依序接到 S17 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-185\]'` |
 | WP-186 | 完成：模糊測試覆蓋門禁的 crate 需求可以指定被納入的正式模組，`semantic_stanza` 改為要求 `stanza_validation.rs` 以 `northstar_xmpp_types::jid::` 引用 JID crate；新增 1 個變異測試；dev 的 CI 恢復通過 | 見 `git log --grep '\[WP-186\]'` |
+| WP-191 | 完成：上傳槽服務、維護 port 與安全閘門移入 `northstar-upload-application` 的 `service`、`maintenance`、`safety` | 見 `git log --grep '\[WP-191\]'` |
+| WP-192 | 完成：上下文 crate 名稱以 `-storage` 結尾者為介面卡；驗證器、目錄產生器、crate 政策與目標架構一致 | 見 `git log --grep '\[WP-192\]'` |
+| WP-193 | 完成：`src/storage` 成為 `northstar-upload-storage`；離線儲存遷移需要 PostgreSQL 遷移紀錄，留在根 crate 的 `tools/storage_migration.rs` | 見 `git log --grep '\[WP-193\]'` |
+| WP-194 | 完成：儲存 port 與 `GuardedUploadStore` 移入 `northstar_upload_application::store`；暫存物件改持有各儲存提供的 `StageCleanup` | 見 `git log --grep '\[WP-194\]'` |
+| WP-195 | 完成：上傳維護 worker 移入 `northstar_upload_application::worker` | 見 `git log --grep '\[WP-195\]'` |
+| WP-196 | 完成：platform crate `northstar-postgres` 內嵌 migration 集合，根 crate 轉出為 `db::MIGRATOR` | 見 `git log --grep '\[WP-196\]'` |
+| WP-197 | 完成：`db/upload*` 與維護 repository 成為 `northstar-upload-postgres`；3 個跨上下文測試留在根 crate 的 `db/upload_account_tests.rs`；`test-support` feature | 見 `git log --grep '\[WP-197\]'` |
+| WP-198 | 完成：離線遷移紀錄成為 `northstar_upload_postgres::migration` | 見 `git log --grep '\[WP-198\]'` |
+| WP-199 | 完成：死信型別與查詢成為兩個 crate 的 `admin` 模組；交易時鐘移入 `northstar-postgres`；重試的 PostgreSQL 測試留在根 crate 的 `db/upload_admin_tests.rs` | 見 `git log --grep '\[WP-199\]'` |
+| WP-200 | 完成：IQ 回應與 stanza 錯誤建構移入 `northstar_xml_builder::stanza`，`xml_util` 轉出 | 見 `git log --grep '\[WP-200\]'` |
+| WP-201 | 完成：`northstar-upload-xmpp`：`UploadSlotSession` 與 `http_upload_slot`；槽限制成為 application 型別 `UploadSlotLimits`；outbound XML 門禁與其自我測試涵蓋新 crate | 見 `git log --grep '\[WP-201\]'` |
+| WP-202 | 完成：`AppState` 的 8 個上傳欄位與啟動區塊成為 `src/state/upload_module.rs` 的 `UploadModule` | 見 `git log --grep '\[WP-202\]'` |
+| WP-203 | 完成：記錄 S19 的階段與盤點（5.15），目標架構的 S19–S28 列改為 HTTP 端點留給 `northstar-http`。WP-191–202 依序接到 WP-186 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-203\]'` |

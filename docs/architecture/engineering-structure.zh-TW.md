@@ -108,6 +108,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S17 平台 | WP-171–178 | 根 crate 的平台橫切移為 crate：`jid`、`auth` 相容 facade 退役，呼叫端直接引用 `northstar-xmpp-types`、`northstar-auth-core`（WP-171）；worker 監督與連線 actor 移入 `northstar-runtime`，日誌、指標登錄、遞送計數器與 PubSub 准入計量移入 `northstar-telemetry`（WP-172）；`src/security` 的安全機制與受保護的秘密檔讀取移入 `northstar-security`（WP-173）；XEP 擴充目錄成為 kernel 的 `northstar-xep-catalog`，JID 與 XML 文字工具併入 `northstar-xmpp-types`、`northstar-xml-builder`，`AppError` 移到 `api::error`（WP-174）；設定模組不再引用 auth core（WP-175），原始碼讀取器支援 crate 根 `lib.rs`（WP-176），設定移入 `northstar-config`（WP-177）；記錄階段與建置時間（WP-178）。`src/storage` 只服務上傳，改隨 S19 進 upload 上下文。盤點見 5.13 | 搬移只改路徑與可見性；測試名稱依路徑對應後不變；R9 基線不增；全部門禁與完整 CI 通過。已完成：`src/platform`、`src/security` 與兩個 facade 不再存在 |
 | S18 會話核心介面 | WP-181–185 | 新的 edge crate `northstar-stream` 提供 IQ 路由表：`IqRoute`（酬載元素、命名空間、get／set）、`IqRouter`（排序後以借用的鍵二分搜尋）與 `IqHandler`（WP-181）；訊息遞送經 session 應用層的 `RemoteRoutePort` 送往遠端網域，協定處理器不再引用 `crate::s2s`（WP-182）；`ProtocolSession::iq` 的 match 改為 48 條各註冊一次的路由，路由的閘門決定請求交給處理器、回 `service-unavailable`，或與沒有路由一樣回 `feature-not-implemented`（WP-183、184）；記錄階段（WP-185）。盤點見 5.14 | 測試名稱只增加；全部門禁、模糊測試編譯與完整 CI 通過。已完成：client IQ 只經路由表分派；協定處理器的生產程式碼不再引用 `bosh`、`s2s` |
 | S19 upload 上下文 | WP-191–203 | 上傳的槽服務、維護 port 與安全閘門移入 `northstar-upload-application`（WP-191）；`-storage` 成為介面卡角色（WP-192），`src/storage` 成為 `northstar-upload-storage`（WP-193），儲存 port 移入 application（WP-194），上傳維護 worker 移入 application（WP-195）；migration 集合移入新的 platform crate `northstar-postgres`（WP-196）；`db/upload*` 成為 `northstar-upload-postgres`（WP-197–199）；IQ 回應與 stanza 錯誤移入 `northstar_xml_builder::stanza`（WP-200）；XEP-0363 槽處理移入 `northstar-upload-xmpp`，會話能力是窄 trait `UploadSlotSession`（WP-201）；`AppState` 的上傳欄位與啟動程式成為組合根的 `UploadModule`（WP-202）；記錄階段（WP-203）。盤點見 5.15 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：上傳的應用、儲存、持久化與 XMPP 程式碼不再在根 crate；HTTP 端點與管理員重試的去處見 5.15 |
+| S20 archive 上下文 | WP-210–214 | `services/xml_util` 中不依賴伺服器狀態的根元素改寫移入 `northstar_xml_builder::rewrite`，XEP-0359 的權威改寫移入 `northstar_xep_0359::annotate`（WP-210）；`MamService` 移入 `northstar-archive-application`（WP-211）；個人封存、偏好與 MAM 查詢成為 `northstar-archive-postgres`（WP-212）；XEP-0313 處理移入 `northstar-archive-xmpp`，會話能力是窄 trait `MamSession`（WP-213）；記錄階段（WP-214）。盤點見 5.16 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：archive 自有的應用、持久化與 XMPP 程式碼不再在根 crate；與房間、訊息、聯邦共用交易的部分及保存期限清理的去處見 5.16 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -576,6 +577,39 @@ WP-179 只跑了模糊測試編譯、沒有重跑門禁，dev 的 CI 仍失敗�
 
 根 crate 由 799 檔 382,566 行變為 776 檔 369,707 行。
 
+### 5.16 S20 盤點：archive 上下文（`1d5bdf16`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `services/xml_util/stanza_rewrite.rs` 的根元素改寫 | `northstar_xml_builder::rewrite`（`xml_util` 轉出） | kernel |
+| `add_stanza_id`、`strip_stanza_ids_by_domain` | `northstar_xep_0359::annotate`（`xml_util` 轉出） | kernel |
+| `mam_extended_form` | 逐位元組相同的 `northstar_xep_0313::build_extended_form` | kernel |
+| `services/mam.rs` 的 `MamService` | `northstar_archive_application::service` | application |
+| `db/archive.rs` 的個人封存邊界、偏好與封存判斷；`db/archive/mam_query.rs` | `northstar-archive-postgres` | adapter |
+| `xmpp/protocol/mam.rs` 的 XEP-0313 解析與處理 | `northstar-archive-xmpp`：`MamSession`、`MamReply` 與五個處理函式 | adapter |
+
+archive 的四個 crate 共 2,887 行（core 817、application 647、postgres 710、xmpp 713）。`northstar-archive-xmpp` 只依賴 archive application、kernel 與
+`anyhow`、`chrono`、`roxmltree`、`uuid`，不依賴 `-postgres` 與根 crate。`MamSession` 是第二個會話能力 trait：
+處理器需要的帳號、完整 JID、網域、已加入的房間與 MAM 服務由 `ProtocolSession` 提供，MAM 服務以不透明的
+repository 型別（`impl MamQueryRepository + MamPreferencesWriter`）回傳，協定層不命名 PostgreSQL repository；房間訊息的呈現（occupant id
+與真實 JID 揭露）屬於 room 上下文，經 `MamSession::mam_room_stanza` 由根 crate 提供。`AppState` 的 archive 欄位
+只有 `mam_service`，它本身就是組合根建構的上下文模組，不另設模組型別。
+
+根 crate 中仍與 archive 有關的程式碼與去處：
+
+- `db/archive/mam_room.rs`（房間 MAM 授權）與 `db/archive/mix_archive.rs`（MIX 反射封存，由 MIX outbox 觀察提交
+  錯誤）：屬於 room，隨 S26 移出。
+- `db/archive/offline.rs` 與 `db/archive/personal_history.rs`：離線佇列與個人歷史准入屬於 message，隨 S27 移出。
+- `db/mam.rs` 的 `PostgresMamRepository`：在同一 PostgreSQL 交易中讀寫封存、房間政策與 S2S outbox，依 4.5 屬於
+  `northstar-workflows`。
+- `db/retention.rs` 與 `runtime/retention.rs`：保存期限清理跨封存、離線、房間、帳號與法律保留，屬於 operations
+  （4.2 已改），隨 S25 移出。
+- `services/xml_util` 中的 occupant id 與房間 MAM 呈現屬於 room，XEP-0153 頭像更新（`avatar_update.rs`）屬於
+  pubsub，隨各上下文移出。
+- `ProtocolSession` 對 `MamSession` 的實作：S30 拆解 `ProtocolSession` 時處理。
+
+根 crate 由 776 檔 369,707 行變為 774 檔 367,951 行。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -722,6 +756,11 @@ WP-179 只跑了模糊測試編譯、沒有重跑門禁，dev 的 CI 仍失敗�
    - 移出 crate 的測試若仍需要根 crate 的程式碼，留在根 crate；crate 以 `test-support` feature 提供測試需要的項目，
      只由根 crate 的 dev-dependencies 開啟。來源契約測試以 `#[cfg(test)]` 等文字定位時，cfg 改變要同步更新定位文字。
      建立門禁夾具的自我測試要涵蓋 crate 路徑：WP-201 新增的基線項目在 `crates/` 下，自我測試原本只為 `src/` 建立檔案（S19）。
+   - 試跑也要跑全部門禁，不只 fmt、clippy 與測試：WP-202 的門禁失敗直到完整驗證才發現（S20）。
+   - 搬移把轉出（`pub(crate) use`）改成一般匯入時，不再使用的名稱會被 `-D warnings` 擋下；搬移腳本要同時移除，
+     並把根 crate 測試仍要用的私有函式改為公開（S20）。
+   - 會話能力 trait 不以關聯型別要求具體 repository：協定層既不能引用 `db`（門禁預算為 0），也不能引用組合層的
+     `state`，關聯型別還必須公開（E0446）。trait 方法回傳 `impl Trait`，具體綁定留在 `AppState`（S20）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -915,3 +954,8 @@ Stage 證據仍綁定其原提交。
 | WP-201 | 完成：`northstar-upload-xmpp`：`UploadSlotSession` 與 `http_upload_slot`；槽限制成為 application 型別 `UploadSlotLimits`；outbound XML 門禁與其自我測試涵蓋新 crate | 見 `git log --grep '\[WP-201\]'` |
 | WP-202 | 完成：`AppState` 的 8 個上傳欄位與啟動區塊成為 `src/state/upload_module.rs` 的 `UploadModule` | 見 `git log --grep '\[WP-202\]'` |
 | WP-203 | 完成：記錄 S19 的階段與盤點（5.15），目標架構的 S19–S28 列改為 HTTP 端點留給 `northstar-http`。WP-191–202 依序接到 WP-186 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-203\]'` |
+| WP-210 | 完成：根元素改寫移入 `northstar_xml_builder::rewrite`，XEP-0359 權威改寫移入 `northstar_xep_0359::annotate`；`mam_extended_form` 改用 `northstar_xep_0313::build_extended_form`；頭像更新留在根 crate 的 `xml_util/avatar_update.rs` | 見 `git log --grep '\[WP-210\]'` |
+| WP-211 | 完成：`MamService` 移入 `northstar_archive_application::service`；根 crate 直接引用 application 型別 | 見 `git log --grep '\[WP-211\]'` |
+| WP-212 | 完成：個人封存、偏好與 MAM 查詢成為 `northstar-archive-postgres`；`test-support` feature；來源契約測試留在根 crate 的 `db/archive/source_contract_tests.rs` | 見 `git log --grep '\[WP-212\]'` |
+| WP-213 | 完成：`northstar-archive-xmpp`：`MamSession`、`MamReply` 與 XEP-0313 處理函式；outbound XML 門禁涵蓋新 crate | 見 `git log --grep '\[WP-213\]'` |
+| WP-214 | 完成：記錄 S20 的階段與盤點（5.16），目標架構的保存期限清理改屬 operations。WP-210–213 依序接到 WP-203 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-214\]'` |

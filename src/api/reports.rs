@@ -11,8 +11,8 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::api::contexts::ReportContext;
+use crate::api::error::{AppError, Result};
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
-use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
 use crate::services::{
     api_mutations::*,

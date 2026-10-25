@@ -1,5 +1,8 @@
 use super::{Action, ProtocolSession};
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
+use crate::services::abuse::{
+    MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof,
+};
 #[cfg(test)]
 use crate::services::messaging::direct_workflow::PreparedHandoffNext;
 use crate::services::messaging::{
@@ -22,12 +25,6 @@ use crate::services::{
     },
 };
 use crate::xmpp::frame_execution::Stage;
-use crate::{
-    platform::jid_text::bare_jid,
-    services::abuse::{
-        MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart, PowProof,
-    },
-};
 use anyhow::Result;
 use northstar_message_application::{
     direct_commit::TransactionOutcome,
@@ -38,6 +35,7 @@ pub(crate) use northstar_message_core::{
     missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
     DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
 };
+use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::{future::Future, sync::atomic::Ordering};
 

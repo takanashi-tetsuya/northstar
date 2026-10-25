@@ -2,12 +2,12 @@
 //! epoch predicates, fences and routable lookups. The composition root owns the table itself.
 
 use super::session::{OnlineSession, SmPresenceEpoch, SmStagedRouteClaim};
-use crate::platform::jid_text::bare_jid;
 use dashmap::{DashMap, DashSet};
 use northstar_session_core::{
     staged_route_activation_allowed, LocalCapsEpoch, StagedRouteActivationCheck,
     StagedRouteIdentity,
 };
+use northstar_xmpp_types::jid_text::bare_jid;
 use std::sync::{
     atomic::{AtomicU8, Ordering},
     Arc,

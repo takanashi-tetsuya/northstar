@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod jid;
+pub mod jid_text;
 
 pub use jid::{
     canonical_bare_key, canonical_session_key, canonicalize, canonicalize_bare, domain_to_ascii,

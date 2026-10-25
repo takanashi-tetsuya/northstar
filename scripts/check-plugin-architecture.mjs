@@ -7,6 +7,8 @@ const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..');
 const XEP_CRATE_PREFIX = 'northstar-xep-';
 const XEP_CORE_PACKAGE = 'northstar-xep-core';
+// Assembles the built-in plugins for the root server; it is not a plugin itself.
+const XEP_CATALOG_PACKAGE = 'northstar-xep-catalog';
 const ALLOWED_CAPABILITY_FREE_SHARED_CRATES = new Set([
   XEP_CORE_PACKAGE,
   'northstar-xmpp-types',
@@ -387,7 +389,15 @@ export function validatePluginArchitecture(model) {
 
   const core = xepPackages.find((packageRecord) => packageRecord.name === XEP_CORE_PACKAGE);
   if (!core) recordViolation(violations, `workspace is missing ${XEP_CORE_PACKAGE}`);
-  const concrete = xepPackages.filter((packageRecord) => packageRecord.name !== XEP_CORE_PACKAGE);
+  const concrete = xepPackages.filter(
+    (packageRecord) =>
+      packageRecord.name !== XEP_CORE_PACKAGE && packageRecord.name !== XEP_CATALOG_PACKAGE,
+  );
+  // The root server and the XEP catalog it uses are where plugins are called.
+  const catalog = model.crates.get(XEP_CATALOG_PACKAGE);
+  const assemblySource = maskRustCommentsAndStrings(
+    [model.rootSource, ...(catalog ? catalog.sources.values() : [])].join('\n'),
+  );
   if (concrete.length === 0) {
     recordViolation(violations, 'workspace has no independently compiled concrete XEP plugin');
   }
@@ -403,10 +413,10 @@ export function validatePluginArchitecture(model) {
       );
     }
     const rustModuleName = packageRecord.name.replaceAll('-', '_');
-    if (!new RegExp(`\\b${rustModuleName}\\b`).test(maskRustCommentsAndStrings(model.rootSource))) {
+    if (!new RegExp(`\\b${rustModuleName}\\b`).test(assemblySource)) {
       recordViolation(
         violations,
-        `${packageRecord.name} is declared as a dependency but has no root-server call site`,
+        `${packageRecord.name} is declared as a dependency but has no root-server or XEP catalog call site`,
       );
     }
     if (!packageRecord.dependencies.some((dependency) => dependency.name === XEP_CORE_PACKAGE)) {

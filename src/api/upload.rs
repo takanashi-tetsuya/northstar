@@ -18,7 +18,7 @@ use crate::api::contexts::{
     upload_http_delete::UploadHttpDeleteContext, upload_http_write::UploadHttpWriteContext,
     UploadHttpReadContext, UploadHttpReplayReadContext,
 };
-use crate::platform::error::{AppError, Result};
+use crate::api::error::{AppError, Result};
 use crate::services::upload::{
     AcquirePromotionOutcome, FinalizePromotionCommand, FinalizePromotionOutcome,
     PromotedUploadProjection, PromotionClaim, UploadClaimOutcome, UploadRenewOutcome,

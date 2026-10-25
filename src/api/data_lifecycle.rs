@@ -1,7 +1,7 @@
 use crate::api::contexts::GovernanceContext;
+use crate::api::error::AppError;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::*;
-use crate::platform::error::AppError;
 use crate::services::{
     api_mutations::{
         AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,

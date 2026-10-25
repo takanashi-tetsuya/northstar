@@ -245,7 +245,6 @@ pub(crate) use self::local_muc::count_shutdown_notification_completions;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 use self::upload_runtime::*;
-use crate::platform::jid_text::*;
 use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use crate::xmpp::local_routes::{
     muc::{
@@ -256,6 +255,8 @@ use crate::xmpp::local_routes::{
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };
 use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
+use northstar_xml_builder::escape::attr_escape;
+use northstar_xmpp_types::jid_text::*;
 
 #[cfg(test)]
 #[path = "state/runtime_control_startup_tests.rs"]

@@ -16,9 +16,9 @@ use crate::api::contexts::{
     api_session_http::ApiSessionHttpContext, http_challenge_endpoint::HttpChallengeEndpointContext,
     http_registration_endpoint::HttpRegistrationEndpointContext, HttpLoginEndpointContext,
 };
+use crate::api::error::{AppError, Result};
 #[cfg(test)]
 use crate::db;
-use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
 use crate::services::challenge_issuance::ChallengeIssueRequest;
 use northstar_auth_core as auth;

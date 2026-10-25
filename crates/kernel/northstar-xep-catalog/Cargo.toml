@@ -1,0 +1,35 @@
+[package]
+name = "northstar-xep-catalog"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "The built-in XEP extension catalog and its runtime activation for Northstar"
+publish = false
+
+[dependencies]
+northstar-xep-core = { path = "../northstar-xep-core" }
+northstar-xep-0016 = { path = "../northstar-xep-0016" }
+northstar-xep-0045 = { path = "../northstar-xep-0045" }
+northstar-xep-0059 = { path = "../northstar-xep-0059" }
+northstar-xep-0060 = { path = "../northstar-xep-0060" }
+northstar-xep-0085 = { path = "../northstar-xep-0085" }
+northstar-xep-0092 = { path = "../northstar-xep-0092" }
+northstar-xep-0115 = { path = "../northstar-xep-0115" }
+northstar-xep-0184 = { path = "../northstar-xep-0184" }
+northstar-xep-0191 = { path = "../northstar-xep-0191" }
+northstar-xep-0198 = { path = "../northstar-xep-0198" }
+northstar-xep-0199 = { path = "../northstar-xep-0199" }
+northstar-xep-0202 = { path = "../northstar-xep-0202" }
+northstar-xep-0215 = { path = "../northstar-xep-0215" }
+northstar-xep-0280 = { path = "../northstar-xep-0280" }
+northstar-xep-0308 = { path = "../northstar-xep-0308" }
+northstar-xep-0313 = { path = "../northstar-xep-0313" }
+northstar-xep-0333 = { path = "../northstar-xep-0333" }
+northstar-xep-0352 = { path = "../northstar-xep-0352" }
+northstar-xep-0357 = { path = "../northstar-xep-0357" }
+northstar-xep-0359 = { path = "../northstar-xep-0359" }
+northstar-xep-0363 = { path = "../northstar-xep-0363" }
+northstar-xep-0380 = { path = "../northstar-xep-0380" }
+northstar-xep-0444 = { path = "../northstar-xep-0444" }
+northstar-xep-0461 = { path = "../northstar-xep-0461" }

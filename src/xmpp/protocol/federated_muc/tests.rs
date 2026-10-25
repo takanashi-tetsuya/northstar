@@ -187,9 +187,9 @@ fn federated_affiliation_lists_follow_shared_muc_permissions() {
     }
 }
 
-fn extension_runtime() -> crate::platform::extensions::ExtensionRuntime {
-    crate::platform::extensions::ExtensionRuntime::resolve(
-        crate::platform::extensions::ExtensionSwitches::default(),
+fn extension_runtime() -> northstar_xep_catalog::ExtensionRuntime {
+    northstar_xep_catalog::ExtensionRuntime::resolve(
+        northstar_xep_catalog::ExtensionSwitches::default(),
     )
 }
 

@@ -14,7 +14,7 @@ use axum::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::platform::error::AppError;
+use crate::api::error::AppError;
 
 const INVALID_PARAMETERS_MESSAGE: &str = "request parameters are invalid";
 

@@ -189,7 +189,7 @@ pub struct Config {
     pub websocket_allowed_origins: Vec<String>,
     pub trusted_proxy_ips: Vec<IpAddr>,
     pub xep_0487_ips: Vec<IpAddr>,
-    pub(crate) xmpp_extensions: Arc<crate::platform::extensions::ExtensionRuntime>,
+    pub(crate) xmpp_extensions: Arc<northstar_xep_catalog::ExtensionRuntime>,
     pub federation_allowlist: Vec<String>,
     pub federation_denylist: Vec<String>,
     /// Test/private-network endpoint overrides. The boolean selects Direct TLS.

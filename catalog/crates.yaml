@@ -508,6 +508,14 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-xep-catalog
+    package: northstar-xep-catalog
+    path: crates/kernel/northstar-xep-catalog
+    tier: kernel
+    owner_team: platform
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-xep-core
     package: northstar-xep-core
     path: crates/kernel/northstar-xep-core

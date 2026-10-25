@@ -219,6 +219,7 @@
     "northstar-xep-0380",
     "northstar-xep-0444",
     "northstar-xep-0461",
+    "northstar-xep-catalog",
     "northstar-xep-core",
     "northstar-xml-builder",
     "northstar-xml-framing",
@@ -3227,6 +3228,106 @@
       "roxmltree"
     ],
     [
+      "northstar-xep-catalog",
+      "northstar-xep-0016"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0045"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0059"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0060"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0085"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0092"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0115"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0184"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0191"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0198"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0199"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0202"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0215"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0280"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0308"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0313"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0333"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0352"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0357"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0359"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0363"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0380"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0444"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-0461"
+    ],
+    [
+      "northstar-xep-catalog",
+      "northstar-xep-core"
+    ],
+    [
       "northstar-xml-builder",
       "anyhow"
     ],
@@ -4413,6 +4514,10 @@
     [
       "rust-xmpp-server",
       "northstar-xep-0461"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-xep-catalog"
     ],
     [
       "rust-xmpp-server",

@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/contexts/abuse/northstar-abuse-policy",
     "crates/kernel/northstar-xep-core",
+    "crates/kernel/northstar-xep-catalog",
     "crates/kernel/northstar-xep-0045",
     "crates/kernel/northstar-xep-0016",
     "crates/contexts/auth/northstar-auth-core",
@@ -135,6 +136,7 @@ northstar-xep-0380 = { path = "crates/kernel/northstar-xep-0380" }
 northstar-xep-0444 = { path = "crates/kernel/northstar-xep-0444" }
 northstar-xep-0461 = { path = "crates/kernel/northstar-xep-0461" }
 northstar-xep-core = { path = "crates/kernel/northstar-xep-core" }
+northstar-xep-catalog = { path = "crates/kernel/northstar-xep-catalog" }
 northstar-xep-0045 = { path = "crates/kernel/northstar-xep-0045" }
 northstar-xep-0016 = { path = "crates/kernel/northstar-xep-0016" }
 northstar-auth-core = { path = "crates/contexts/auth/northstar-auth-core" }

@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::api::contexts::{MetricsContext, ReadinessContext};
-use crate::platform::error::{AppError, Result};
+use crate::api::error::{AppError, Result};
 use crate::xmpp;
 
 use crate::services::metrics_snapshot::DatabaseMetricsSnapshot;
@@ -738,13 +738,13 @@ pub async fn host_meta_xml(
     let bosh_link = bosh_href.as_deref().map_or_else(String::new, |href| {
         format!(
             "\x20\x20<Link rel=\"urn:xmpp:alt-connections:xbosh\" href=\"{}\" />\n",
-            crate::platform::jid_text::attr_escape(href)
+            northstar_xml_builder::escape::attr_escape(href)
         )
     });
     let websocket_link = ws_href.as_deref().map_or_else(String::new, |href| {
         format!(
             "\x20\x20<Link rel=\"urn:xmpp:alt-connections:websocket\" href=\"{}\" />\n",
-            crate::platform::jid_text::attr_escape(href)
+            northstar_xml_builder::escape::attr_escape(href)
         )
     });
     let xml = format!(

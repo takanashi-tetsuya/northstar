@@ -1,11 +1,9 @@
-use crate::{
-    platform::jid_text::attr_escape,
-    services::replay::{
-        RecoveryReplayAuthority, RecoveryReplayAuthorizationGuard, ReplayBusyUntil,
-        ReplayPageOutcome, ReplayRepository, ReplayService, ReplaySession, ReplayStartOutcome,
-    },
+use crate::services::replay::{
+    RecoveryReplayAuthority, RecoveryReplayAuthorizationGuard, ReplayBusyUntil, ReplayPageOutcome,
+    ReplayRepository, ReplayService, ReplaySession, ReplayStartOutcome,
 };
 use anyhow::{Context, Result};
+use northstar_xml_builder::escape::attr_escape;
 use rand::Rng;
 use std::{
     sync::{

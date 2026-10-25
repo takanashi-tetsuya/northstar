@@ -12,6 +12,7 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use self::error::{AppError, Result};
 use crate::api::contexts::{
     api_session_http::ApiSessionHttpContext,
     http_registration_endpoint::HttpRegistrationEndpointContext,
@@ -20,7 +21,6 @@ use crate::api::contexts::{
     MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
     RetentionPolicyContext, UploadHttpReadContext,
 };
-use crate::platform::error::{AppError, Result};
 use crate::services::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
@@ -294,6 +294,7 @@ pub use models::*;
 pub mod auth_routes;
 pub mod cursor;
 pub mod data_lifecycle;
+pub(crate) mod error;
 pub(crate) mod idempotency;
 pub mod pagination;
 mod passkeys;

@@ -3,9 +3,9 @@
 use crate::api::cursor::{
     CanonicalScope, CursorBinding, CursorDirection, CursorPosition, CursorValue,
 };
+use crate::api::error::AppError;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::{idempotency_replay_response, pagination, ApiAdmin, ApiEmpty, ApiPath, ApiQuery};
-use crate::platform::error::AppError;
 pub(crate) use crate::services::upload_admin::admin_generation_bound_request_fingerprint;
 use crate::services::{
     api_mutations::{AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind},

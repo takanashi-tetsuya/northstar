@@ -1,9 +1,9 @@
 //! Local C2S session records, the SM route-claim result and the account revocation route handle.
 
-use crate::platform::jid_text::bare_jid;
 use dashmap::{DashMap, DashSet};
 use northstar_session_application::RouteIncarnationSignal;
 use northstar_session_core::JoinedMucMembership;
+use northstar_xmpp_types::jid_text::bare_jid;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicI16, AtomicU64, AtomicU8, Ordering},

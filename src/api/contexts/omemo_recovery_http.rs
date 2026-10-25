@@ -1,12 +1,12 @@
 //! Bearer identity and recovery transfer authority for authenticated REST routes.
 
+use crate::api::error::AppError;
 use crate::{
     api::bearer_token,
     db::{
         api_queries::PostgresApiQueryRepository,
         omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     },
-    platform::error::AppError,
     services::{
         api_queries::ApiQueryService,
         omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService},

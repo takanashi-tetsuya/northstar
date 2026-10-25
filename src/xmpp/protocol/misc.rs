@@ -2,7 +2,6 @@ use super::{Action, ProtocolSession};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::{
-    platform::jid_text::bare_jid,
     services::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::{
         account::{
@@ -15,6 +14,7 @@ use crate::{
 };
 use anyhow::Result;
 use northstar_auth_core as auth;
+use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::sync::{atomic::AtomicBool, atomic::AtomicU64, atomic::Ordering, Arc};
 use zeroize::Zeroizing;

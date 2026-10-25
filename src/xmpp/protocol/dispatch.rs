@@ -1,9 +1,9 @@
-use crate::platform::jid_text::bare_jid;
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::xml_util::*;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use anyhow::Result;
+use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
 
 fn xmpp_version_os() -> &'static str {

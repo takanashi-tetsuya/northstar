@@ -1,8 +1,9 @@
-use crate::platform::jid_text::{attr_escape, bare_jid};
 use crate::services::abuse::WorkRequirement;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
+use northstar_xml_builder::escape::attr_escape;
 use northstar_xml_builder::{ValidatedXmlFragment, XmlElement};
+use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
@@ -252,7 +253,7 @@ pub(crate) fn validate_no_client_carbon(root: Node<'_, '_>) -> Result<(), &'stat
 /// controls merely because they entered through different transports.
 pub(crate) fn validate_routed_message(
     root: Node<'_, '_>,
-    extensions: &crate::platform::extensions::ExtensionRuntime,
+    extensions: &northstar_xep_catalog::ExtensionRuntime,
 ) -> Result<(), &'static str> {
     validate_enabled_message_extensions(root, extensions)?;
     validate_delivery_receipts(root)?;
@@ -266,7 +267,7 @@ pub(crate) fn validate_routed_message(
 /// federated MUC or federated MIX instead of C2S.
 fn validate_enabled_message_extensions(
     root: Node<'_, '_>,
-    extensions: &crate::platform::extensions::ExtensionRuntime,
+    extensions: &northstar_xep_catalog::ExtensionRuntime,
 ) -> Result<(), &'static str> {
     for (id, namespace) in [
         (northstar_xep_0085::XEP_ID, northstar_xep_0085::NAMESPACE),

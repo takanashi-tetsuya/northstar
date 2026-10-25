@@ -65,9 +65,12 @@ impl Case {
             if root.tag_name().name() != "message"
                 || root
                     .attribute("to")
-                    .unwrap_or(crate::platform::jid_text::bare_jid(&original.sender_full))
+                    .unwrap_or(northstar_xmpp_types::jid_text::bare_jid(
+                        &original.sender_full,
+                    ))
                     != original.target
-                || crate::platform::jid_text::bare_jid(&original.target) != policy.recipient_bare
+                || northstar_xmpp_types::jid_text::bare_jid(&original.target)
+                    != policy.recipient_bare
             {
                 return Err(Rejection::IdentityBinding);
             }
@@ -145,7 +148,7 @@ impl Case {
                 return Err(Rejection::Limit);
             }
             for target in &route.targets {
-                if crate::platform::jid_text::bare_jid(&target.jid) != policy.recipient_bare
+                if northstar_xmpp_types::jid_text::bare_jid(&target.jid) != policy.recipient_bare
                     || Some(&target.connection_id) != self.identities.connection_id.get()
                 {
                     return Err(Rejection::IdentityBinding);

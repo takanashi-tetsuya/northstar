@@ -4,11 +4,13 @@
 //! independently compiled extensions are assembled. Transport handlers query
 //! the resolved result; they do not reinterpret environment switches.
 
+#![forbid(unsafe_code)]
+
 use northstar_xep_core::{
     resolve_features, ExtensionDescriptor, FeatureResolution, FeatureSelection, StanzaKind, XepId,
 };
 
-pub(crate) const XEP_0030: XepId = XepId::new(30);
+pub const XEP_0030: XepId = XepId::new(30);
 
 /// Register built-in XEP-0030 discovery with the dependency resolver.
 /// The implementation lives in `protocol::discovery`.
@@ -54,7 +56,7 @@ static CATALOG: &[&ExtensionDescriptor] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ExtensionSwitches {
+pub struct ExtensionSwitches {
     pub xep_0016: bool,
     pub xep_0045: bool,
     pub xep_0059: bool,
@@ -113,12 +115,12 @@ impl Default for ExtensionSwitches {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ExtensionRuntime {
+pub struct ExtensionRuntime {
     resolution: FeatureResolution,
 }
 
 impl ExtensionRuntime {
-    pub(crate) fn resolve(switches: ExtensionSwitches) -> Self {
+    pub fn resolve(switches: ExtensionSwitches) -> Self {
         let mut selection = FeatureSelection::default();
         for (id, enabled) in [
             (northstar_xep_0016::XEP_ID, switches.xep_0016),
@@ -157,22 +159,17 @@ impl ExtensionRuntime {
         }
     }
 
-    pub(crate) fn enabled(&self, id: XepId) -> bool {
+    pub fn enabled(&self, id: XepId) -> bool {
         self.resolution.is_enabled(id)
     }
 
-    pub(crate) fn route_enabled(
-        &self,
-        stanza: StanzaKind,
-        namespace: &str,
-        local_name: &str,
-    ) -> bool {
+    pub fn route_enabled(&self, stanza: StanzaKind, namespace: &str, local_name: &str) -> bool {
         self.resolution.routes.iter().any(|(_, route)| {
             route.stanza == stanza && route.namespace == namespace && route.local_name == local_name
         })
     }
 
-    pub(crate) fn server_disco_features(&self) -> impl Iterator<Item = &'static str> + '_ {
+    pub fn server_disco_features(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.resolution
             .disco_features
             .iter()
@@ -192,7 +189,7 @@ impl ExtensionRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn resolution(&self) -> &FeatureResolution {
+    pub fn resolution(&self) -> &FeatureResolution {
         &self.resolution
     }
 }

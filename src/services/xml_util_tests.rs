@@ -56,8 +56,8 @@ fn addressed_iq_builder_preserves_routing_and_rejects_malformed_payloads() {
 
 #[test]
 fn disabled_message_extensions_fail_closed_at_the_shared_ingress_boundary() {
-    let disabled = crate::platform::extensions::ExtensionRuntime::resolve(
-        crate::platform::extensions::ExtensionSwitches {
+    let disabled = northstar_xep_catalog::ExtensionRuntime::resolve(
+        northstar_xep_catalog::ExtensionSwitches {
             xep_0016: true,
             xep_0045: true,
             xep_0059: true,
@@ -105,8 +105,8 @@ fn disabled_message_extensions_fail_closed_at_the_shared_ingress_boundary() {
 
 #[test]
 fn enabled_message_extensions_delegate_wire_validation_to_their_crates() {
-    let enabled = crate::platform::extensions::ExtensionRuntime::resolve(
-        crate::platform::extensions::ExtensionSwitches::default(),
+    let enabled = northstar_xep_catalog::ExtensionRuntime::resolve(
+        northstar_xep_catalog::ExtensionSwitches::default(),
     );
     let malformed = Document::parse(
         "<message><reply xmlns='urn:xmpp:reply:0' to='not a jid' id='m1'/></message>",

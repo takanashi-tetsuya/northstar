@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::api::contexts::password_change_http::PasswordChangeHttpContext;
-use crate::platform::error::{AppError, Result};
+use crate::api::error::{AppError, Result};
 
 pub async fn me(
     State(state): State<crate::api::contexts::ApiQueryContext>,

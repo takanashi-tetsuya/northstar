@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::api::error::AppError;
 use crate::{
     api::{
         contexts::{
@@ -21,7 +22,6 @@ use crate::{
         ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
         OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
     },
-    platform::error::AppError,
     services::omemo_recovery::*,
 };
 

@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod escape;
+
 use anyhow::{bail, Context, Result};
 use std::borrow::Cow;
 

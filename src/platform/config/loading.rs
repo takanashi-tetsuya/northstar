@@ -11,8 +11,8 @@ impl Config {
         let mut raw: RawConfig =
             envy::from_env().context("Failed to parse config from environment")?;
         apply_test_listener_defaults(&mut raw, test_listener_bind_explicitness);
-        let xmpp_extensions = Arc::new(crate::platform::extensions::ExtensionRuntime::resolve(
-            crate::platform::extensions::ExtensionSwitches {
+        let xmpp_extensions = Arc::new(northstar_xep_catalog::ExtensionRuntime::resolve(
+            northstar_xep_catalog::ExtensionSwitches {
                 xep_0016: raw.xep_0016_enabled,
                 xep_0045: raw.xep_0045_enabled,
                 xep_0059: raw.xep_0059_enabled,

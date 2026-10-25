@@ -76,7 +76,7 @@ assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
   const model = cleanModel();
   model.rootSource = '// northstar_xep_0184::parse_message is intentionally only prose';
   const result = validatePluginArchitecture(model).violations.join('\n');
-  assert.match(result, /has no root-server call site/);
+  assert.match(result, /has no root-server or XEP catalog call site/);
 }
 
 {

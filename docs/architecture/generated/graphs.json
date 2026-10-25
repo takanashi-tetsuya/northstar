@@ -2091,6 +2091,10 @@
       ],
       [
         "northstar-pubsub-application",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-pubsub-application",
         "roxmltree"
       ],
       [
@@ -2186,6 +2190,38 @@
         "uuid"
       ],
       [
+        "northstar-runtime",
+        "anyhow"
+      ],
+      [
+        "northstar-runtime",
+        "futures"
+      ],
+      [
+        "northstar-runtime",
+        "serde_json"
+      ],
+      [
+        "northstar-runtime",
+        "tokio"
+      ],
+      [
+        "northstar-runtime",
+        "tokio-util"
+      ],
+      [
+        "northstar-runtime",
+        "tracing"
+      ],
+      [
+        "northstar-runtime",
+        "tracing-subscriber"
+      ],
+      [
+        "northstar-runtime",
+        "uuid"
+      ],
+      [
         "northstar-session-application",
         "northstar-session-core"
       ],
@@ -2216,6 +2252,30 @@
       [
         "northstar-session-core",
         "uuid"
+      ],
+      [
+        "northstar-telemetry",
+        "anyhow"
+      ],
+      [
+        "northstar-telemetry",
+        "serde_json"
+      ],
+      [
+        "northstar-telemetry",
+        "tokio"
+      ],
+      [
+        "northstar-telemetry",
+        "tracing"
+      ],
+      [
+        "northstar-telemetry",
+        "tracing-appender"
+      ],
+      [
+        "northstar-telemetry",
+        "tracing-subscriber"
       ],
       [
         "northstar-test-harness",
@@ -3699,11 +3759,19 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-runtime"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-session-application"
       ],
       [
         "rust-xmpp-server",
         "northstar-session-core"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-telemetry"
       ],
       [
         "rust-xmpp-server",
@@ -6113,8 +6181,10 @@
       "northstar-room-core",
       "northstar-roster-application",
       "northstar-roster-core",
+      "northstar-runtime",
       "northstar-session-application",
       "northstar-session-core",
+      "northstar-telemetry",
       "northstar-test-harness",
       "northstar-upload-application",
       "northstar-upload-core",
